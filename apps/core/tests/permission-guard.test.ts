@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { filterFragmentsByLivePermission } from "../src/permissions/permission-guard.js";
 
 describe("filterFragmentsByLivePermission", () => {
@@ -29,5 +29,41 @@ describe("filterFragmentsByLivePermission", () => {
 
     expect(result.allowedFragments).toEqual([]);
     expect(result.deniedDocumentIds).toEqual(["doc-timeout"]);
+  });
+
+  it("checks duplicate allowed document IDs once and keeps all allowed fragments", async () => {
+    const fragments = [
+      { id: "frag-1", documentId: "doc-allowed", text: "Allowed content A" },
+      { id: "frag-2", documentId: "doc-allowed", text: "Allowed content B" }
+    ];
+    const canReadDocument = vi.fn(async () => true);
+
+    const result = await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument
+    });
+
+    expect(canReadDocument).toHaveBeenCalledTimes(1);
+    expect(canReadDocument).toHaveBeenCalledWith("doc-allowed");
+    expect(result.allowedFragments).toEqual(fragments);
+    expect(result.deniedDocumentIds).toEqual([]);
+  });
+
+  it("checks duplicate denied document IDs once, excludes all denied fragments, and reports the document once", async () => {
+    const fragments = [
+      { id: "frag-1", documentId: "doc-denied", text: "Denied content A" },
+      { id: "frag-2", documentId: "doc-denied", text: "Denied content B" }
+    ];
+    const canReadDocument = vi.fn(async () => false);
+
+    const result = await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument
+    });
+
+    expect(canReadDocument).toHaveBeenCalledTimes(1);
+    expect(canReadDocument).toHaveBeenCalledWith("doc-denied");
+    expect(result.allowedFragments).toEqual([]);
+    expect(result.deniedDocumentIds).toEqual(["doc-denied"]);
   });
 });
