@@ -1034,6 +1034,7 @@ Replace `apps/core/src/app.ts`:
 
 ```ts
 import Fastify from "fastify";
+import { pathToFileURL } from "node:url";
 import { createFeishuGateway } from "./feishu/feishu-gateway.js";
 import type { EventQueue } from "./queues/event-queue.js";
 import { InMemoryEventQueue } from "./queues/in-memory-event-queue.js";
@@ -1070,7 +1071,7 @@ function normalizeHeaders(headers: Record<string, unknown>): Record<string, stri
   );
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const app = buildApp();
   await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
 }
