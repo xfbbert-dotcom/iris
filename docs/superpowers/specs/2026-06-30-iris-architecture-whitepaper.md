@@ -50,6 +50,8 @@ Feishu Gateway receives Feishu events, validates signatures, parses group messag
 
 Feishu Gateway translates between Feishu and Iris. It must not make agent decisions by itself.
 
+Feishu Gateway must acknowledge Feishu event callbacks immediately. The gateway should validate only the minimum required request authenticity, enqueue the raw event, perform idempotency recording, and return HTTP 200 within the platform timeout budget. Signal filtering, denoising, classification, memory extraction, and agent decisions must happen asynchronously after the gateway response.
+
 ### 3.2 Conversation Memory
 
 Conversation Memory stores the context Iris is allowed to know:
@@ -128,9 +130,12 @@ Document source types:
 
 Iris must not use a document link to bypass Feishu permissions. If a document is deleted or its permissions change, Iris's index must be invalidated, refreshed, or downgraded.
 
+Local permission state is never enough for sensitive retrieval. Before document fragments retrieved from pgvector are passed into the LLM, TypeScript Core App must run a real-time permission guard against Feishu for the candidate document IDs whenever the answer depends on document content. This guard exists because indirect permission changes, such as parent-folder permission changes or group membership changes, may lag behind or bypass clean webhook notifications.
+
 Constitutional principle:
 
 > Iris reads both chat text and readable document bodies. Every document entering memory must preserve source, permission, version, and visibility scope.
+> Retrieval must re-check live permissions before document content reaches the model. Cached permission state can accelerate recall, but cannot authorize final context injection.
 
 ## 5. Data Flow And Memory
 
@@ -139,6 +144,8 @@ Iris's data flow has four layers: event, fact, semantic, and action.
 ### 5.1 Event Layer
 
 Feishu messages, document links, files, mentions, user submissions, wiki updates, and admin changes enter through Feishu Gateway or Admin Console.
+
+Feishu Gateway's event ingestion path must be designed for overload. In high-volume groups, the gateway must avoid heavy signal filtering before acknowledgment. Raw events should be placed into Redis Queue or an equivalent durable queue first, then processed by asynchronous workers with idempotency keys, retry limits, backpressure, and dead-letter handling.
 
 Every event must preserve:
 
@@ -202,9 +209,24 @@ When answering, Iris should search in this order:
 
 If group discussion conflicts with the Feishu knowledge base, Iris must expose the conflict rather than pretending certainty. It should explain the knowledge-base version, explain the newer group discussion, and suggest creating an update draft.
 
+The retrieval order is not the same as prompt assembly order. Agent Orchestrator must protect live conversation context from being diluted by large recalled documents. Recent raw group messages, such as the latest 20 relevant messages, must be treated as the context anchor and placed closest to the model's answer position. Background documents and knowledge-base passages must be separated from live chat with explicit structured tags, for example:
+
+```xml
+<background_documents>
+  <!-- retrieved document and knowledge-base passages with citations -->
+</background_documents>
+
+<live_chat_context>
+  <!-- recent raw group messages and current thread context -->
+</live_chat_context>
+```
+
+Document recall must be budgeted and ranked so large PDFs or technical specifications cannot flood the context window and erase the user's current intent.
+
 Constitutional principle:
 
 > Iris may use semantic memory for recall, but must use fact-layer sources for important claims. Long-term memory must be traceable, deletable, correctable, and permission-bounded.
+> Live chat context is the anchor of an answer. Background documents inform the answer, but must not overwrite the immediate conversational intent.
 
 ## 6. Permission, Safety, And Proactive Behavior
 
@@ -516,3 +538,64 @@ Requirement classes:
 Constitutional principle:
 
 > New requirements cannot only ask "can we build this?" They must ask whether the requirement changes Iris's visibility, action power, knowledge authority, memory boundary, or deployment boundary. If it does, update architecture before writing code.
+
+## 12. Architecture Pressure Tests And Evolution Simulations
+
+Iris architecture decisions must be tested against real collaboration pressure, not only ideal flows.
+
+### 12.1 Permission Invalidation Delay
+
+Pressure:
+
+Feishu may provide clean webhook notifications for direct document deletion or updates, but indirect permission changes can be delayed or incomplete. Examples include permission changes inherited from parent folders, wiki-space permission changes, or group membership changes that indirectly remove a user's or group's document access.
+
+Required architectural response:
+
+- Do not trust local permission cache as final authorization for retrieved document content.
+- Run a real-time permission guard before injecting retrieved document fragments into the model context.
+- If real-time permission verification fails or times out for sensitive content, exclude that fragment from the prompt.
+- Record permission-guard denials and timeouts in audit logs.
+- Keep background invalidation jobs, but treat them as cleanup and acceleration rather than final enforcement.
+
+Evolution signal:
+
+If real-time permission checks become a latency bottleneck, Iris may introduce a dedicated Permission Guard Service with short-lived permission tokens, request coalescing, and per-document permission freshness policies. This service must remain on the critical path before model context injection.
+
+### 12.2 Feishu Callback Timeout And Message Overload
+
+Pressure:
+
+Feishu event callbacks have strict response-time expectations. If high-volume group traffic triggers heavy signal filtering inside Feishu Gateway, callback responses can time out and cause Feishu to retry, creating duplicate events and additional load.
+
+Required architectural response:
+
+- Feishu Gateway must be "ack-first": validate minimally, enqueue raw events, record idempotency keys, and return HTTP 200 quickly.
+- Signal filtering, denoising, categorization, memory extraction, and agent decisions must happen after acknowledgment.
+- Async workers must support idempotency, retry limits, backpressure, and dead-letter handling.
+- Queue overload must degrade Iris's intelligence gracefully rather than breaking Feishu callback handling.
+
+Evolution signal:
+
+If event throughput grows beyond the Core App's ingestion capacity, split Feishu Ingestion Service first. It should specialize in callback reliability, deduplication, rate limits, and event delivery guarantees while keeping Agent Orchestrator separate.
+
+### 12.3 Long-Document Context Washout
+
+Pressure:
+
+Large documents, such as long technical PDFs or specifications, may produce many chunks. If too many retrieved chunks enter the prompt, the live group conversation can be diluted and Iris may answer the background document rather than the current user intent.
+
+Required architectural response:
+
+- Treat recent group conversation as the Context Anchor.
+- Keep live chat close to the model answer position in prompt assembly.
+- Separate background documents from live chat with explicit structured tags.
+- Budget document recall aggressively by source, recency, relevance, and question intent.
+- Prefer citations and concise extracted evidence over raw bulk context.
+
+Evolution signal:
+
+If document-heavy groups become common, introduce a Context Assembly module or service responsible for ranking, compression, source budgeting, prompt layout, and evaluation of answer faithfulness to live-chat intent.
+
+Constitutional principle:
+
+> Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
