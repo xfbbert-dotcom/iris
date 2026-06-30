@@ -17,14 +17,19 @@ describe("InMemoryEventQueue", () => {
 
   it("deduplicates events by idempotency key", async () => {
     const queue = new InMemoryEventQueue();
-    const event = {
+    const firstEvent = {
       idempotencyKey: "event-1",
       receivedAt: new Date("2026-06-30T00:00:00.000Z"),
       body: { event_id: "event-1" }
     };
+    const duplicateEvent = {
+      idempotencyKey: "event-1",
+      receivedAt: new Date("2026-06-30T00:00:01.000Z"),
+      body: { event_id: "event-1", retry: true }
+    };
 
-    await queue.enqueueRawFeishuEvent(event);
-    await queue.enqueueRawFeishuEvent(event);
+    await queue.enqueueRawFeishuEvent(firstEvent);
+    await queue.enqueueRawFeishuEvent(duplicateEvent);
 
     expect(queue.events).toHaveLength(1);
   });
