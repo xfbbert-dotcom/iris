@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildApp } from "../src/app.js";
 import { createFeishuGateway } from "../src/feishu/feishu-gateway.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
 
@@ -116,5 +117,23 @@ describe("FeishuGateway", () => {
 
     expect(queue.events[0]?.idempotencyKey).not.toBe("");
     expect(queue.events[0]?.idempotencyKey).not.toBe("   ");
+  });
+});
+
+describe("Core App Feishu route", () => {
+  it("returns 200 from the Feishu callback route", async () => {
+    const queue = new InMemoryEventQueue();
+    const app = buildApp({ queue });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      headers: { "x-iris-event-id": "event-route-1" },
+      payload: { event_id: "event-route-1" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true });
+    expect(queue.events).toHaveLength(1);
   });
 });
