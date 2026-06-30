@@ -68,4 +68,53 @@ describe("FeishuGateway", () => {
 
     expect(signalFilterCalled).toBe(false);
   });
+
+  it("uses the header key before body event_id", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: { "x-iris-event-id": " header-event " },
+      body: { event_id: "body-event" }
+    });
+
+    expect(queue.events[0]?.idempotencyKey).toBe("header-event");
+  });
+
+  it("uses body event_id when the header is missing", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: { event_id: " body-event " }
+    });
+
+    expect(queue.events[0]?.idempotencyKey).toBe("body-event");
+  });
+
+  it("ignores a whitespace header and uses body event_id", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: { "x-iris-event-id": "   " },
+      body: { event_id: "body-event" }
+    });
+
+    expect(queue.events[0]?.idempotencyKey).toBe("body-event");
+  });
+
+  it("falls back to a generated key when body event_id is blank", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: { event_id: "   " }
+    });
+
+    expect(queue.events[0]?.idempotencyKey).not.toBe("");
+    expect(queue.events[0]?.idempotencyKey).not.toBe("   ");
+  });
 });

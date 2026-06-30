@@ -41,16 +41,28 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
 }
 
 function resolveIdempotencyKey(request: FeishuCallbackRequest): string {
-  const headerKey = request.headers["x-iris-event-id"];
+  const headerKey = normalizeIdempotencyKey(request.headers["x-iris-event-id"]);
   if (headerKey) {
     return headerKey;
   }
 
-  if (isRecord(request.body) && typeof request.body.event_id === "string") {
-    return request.body.event_id;
+  if (isRecord(request.body)) {
+    const bodyKey = normalizeIdempotencyKey(request.body.event_id);
+    if (bodyKey) {
+      return bodyKey;
+    }
   }
 
   return randomUUID();
+}
+
+function normalizeIdempotencyKey(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
