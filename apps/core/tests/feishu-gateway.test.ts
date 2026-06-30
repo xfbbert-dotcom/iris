@@ -70,6 +70,42 @@ describe("FeishuGateway", () => {
     expect(signalFilterCalled).toBe(false);
   });
 
+  it("returns 401 and does not enqueue when verifier returns false", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({
+      queue,
+      verifyRequest: () => false
+    });
+
+    const response = await gateway.handleCallback({
+      headers: { "x-iris-event-id": "event-invalid" },
+      body: { event_id: "event-invalid" }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.body).toEqual({ ok: false });
+    expect(queue.events).toHaveLength(0);
+  });
+
+  it("returns 401 and does not enqueue when verifier throws", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({
+      queue,
+      verifyRequest: () => {
+        throw new Error("invalid signature");
+      }
+    });
+
+    const response = await gateway.handleCallback({
+      headers: { "x-iris-event-id": "event-throwing-verifier" },
+      body: { event_id: "event-throwing-verifier" }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.body).toEqual({ ok: false });
+    expect(queue.events).toHaveLength(0);
+  });
+
   it("uses the header key before body event_id", async () => {
     const queue = new InMemoryEventQueue();
     const gateway = createFeishuGateway({ queue });
@@ -135,5 +171,24 @@ describe("Core App Feishu route", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true });
     expect(queue.events).toHaveLength(1);
+  });
+
+  it("returns 401 and does not enqueue when the Feishu verifier rejects", async () => {
+    const queue = new InMemoryEventQueue();
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: () => false
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      headers: { "x-iris-event-id": "event-route-invalid" },
+      payload: { event_id: "event-route-invalid" }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ ok: false });
+    expect(queue.events).toHaveLength(0);
   });
 });

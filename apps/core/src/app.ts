@@ -1,16 +1,23 @@
 import Fastify from "fastify";
 import { pathToFileURL } from "node:url";
-import { createFeishuGateway } from "./feishu/feishu-gateway.js";
+import {
+  createFeishuGateway,
+  type FeishuCallbackRequest
+} from "./feishu/feishu-gateway.js";
 import type { EventQueue } from "./queues/event-queue.js";
 import { InMemoryEventQueue } from "./queues/in-memory-event-queue.js";
 
 export type BuildAppDependencies = {
   queue?: EventQueue;
+  verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
 };
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
-  const gateway = createFeishuGateway({ queue });
+  const gateway = createFeishuGateway({
+    queue,
+    verifyRequest: dependencies.verifyFeishuRequest
+  });
   const app = Fastify({ logger: false });
 
   app.post("/feishu/events", async (request, reply) => {
