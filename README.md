@@ -14,3 +14,31 @@ The first implementation slice builds:
 - real-time permission guard
 - context assembly with live chat anchoring
 - Python AI worker job contracts
+
+## Local Development
+
+Install TypeScript dependencies:
+
+```powershell
+npm install
+```
+
+Run TypeScript tests:
+
+```powershell
+npm test
+```
+
+Run Python worker tests:
+
+```powershell
+cd workers/ai
+python -m pytest
+cd ../..
+```
+
+Start local infrastructure:
+
+```powershell
+docker compose up -d
+```
