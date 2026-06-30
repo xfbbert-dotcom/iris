@@ -34,4 +34,91 @@ describe("assemblePromptContext", () => {
     expect(context).toContain("message-6");
     expect(context).toContain("message-25");
   });
+
+  it("keeps live chat tags but excludes messages when liveChatLimit is 0", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: [
+        { speaker: "User", text: "hidden message" }
+      ],
+      liveChatLimit: 0
+    });
+
+    expect(context).toContain("<live_chat_context>");
+    expect(context).toContain("</live_chat_context>");
+    expect(context).not.toContain("<message");
+    expect(context).not.toContain("hidden message");
+  });
+
+  it("excludes live messages when liveChatLimit is negative", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: [
+        { speaker: "User", text: "negative limit should hide this" },
+        { speaker: "Iris", text: "negative limit should hide this too" }
+      ],
+      liveChatLimit: -1
+    });
+
+    expect(context).not.toContain("<message");
+    expect(context).not.toContain("negative limit should hide this");
+    expect(context).not.toContain("negative limit should hide this too");
+  });
+
+  it("floors fractional liveChatLimit values before selecting live messages", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: [
+        { speaker: "User", text: "message-1" },
+        { speaker: "User", text: "message-2" },
+        { speaker: "User", text: "message-3" }
+      ],
+      liveChatLimit: 1.9
+    });
+
+    expect(context).not.toContain('<message speaker="User">message-1</message>');
+    expect(context).not.toContain('<message speaker="User">message-2</message>');
+    expect(context).toContain('<message speaker="User">message-3</message>');
+  });
+
+  it("falls back to the latest 20 messages for non-finite liveChatLimit values", () => {
+    const liveChatMessages = Array.from({ length: 25 }, (_, index) => ({
+      speaker: "User",
+      text: `message-${index + 1}`
+    }));
+
+    for (const liveChatLimit of [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN]) {
+      const context = assemblePromptContext({
+        backgroundDocuments: [],
+        liveChatMessages,
+        liveChatLimit
+      });
+
+      expect(context).not.toContain('<message speaker="User">message-1</message>');
+      expect(context).toContain('<message speaker="User">message-6</message>');
+      expect(context).toContain('<message speaker="User">message-25</message>');
+    }
+  });
+
+  it("escapes XML in background documents and live chat messages", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [
+        {
+          source: 'doc"><escape',
+          text: "Document </background_documents> & evidence"
+        }
+      ],
+      liveChatMessages: [
+        {
+          speaker: 'Alice"><script',
+          text: "Chat </live_chat_context> & reply"
+        }
+      ]
+    });
+
+    expect(context).toContain('<document source="doc&quot;&gt;&lt;escape">Document &lt;/background_documents&gt; &amp; evidence</document>');
+    expect(context).toContain('<message speaker="Alice&quot;&gt;&lt;script">Chat &lt;/live_chat_context&gt; &amp; reply</message>');
+    expect(context).not.toContain("Document </background_documents>");
+    expect(context).not.toContain("Chat </live_chat_context>");
+  });
 });

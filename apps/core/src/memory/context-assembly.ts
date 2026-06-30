@@ -15,8 +15,10 @@ export type PromptContextInput = {
 };
 
 export function assemblePromptContext(input: PromptContextInput): string {
-  const liveChatLimit = input.liveChatLimit ?? 20;
-  const liveMessages = input.liveChatMessages.slice(-liveChatLimit);
+  const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
+  const liveMessages = liveChatLimit === 0
+    ? []
+    : input.liveChatMessages.slice(-liveChatLimit);
 
   return [
     "<background_documents>",
@@ -35,6 +37,14 @@ function formatBackgroundDocument(document: BackgroundDocument): string {
 
 function formatLiveChatMessage(message: LiveChatMessage): string {
   return `<message speaker="${escapeXml(message.speaker)}">${escapeXml(message.text)}</message>`;
+}
+
+function sanitizeLiveChatLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return 20;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 function escapeXml(value: string): string {
