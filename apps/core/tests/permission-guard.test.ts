@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import { filterFragmentsByLivePermission } from "../src/permissions/permission-guard.js";
 
 describe("filterFragmentsByLivePermission", () => {
@@ -65,5 +66,56 @@ describe("filterFragmentsByLivePermission", () => {
     expect(canReadDocument).toHaveBeenCalledWith("doc-denied");
     expect(result.allowedFragments).toEqual([]);
     expect(result.deniedDocumentIds).toEqual(["doc-denied"]);
+  });
+
+  it("records one audit event per denied document with all fragment IDs from the call", async () => {
+    const fragments = [
+      { id: "frag-1", documentId: "doc-denied", text: "Denied content A" },
+      { id: "frag-2", documentId: "doc-denied", text: "Denied content B" }
+    ];
+    const auditLog = new InMemoryAuditLog();
+
+    const result = await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async () => false,
+      auditLog
+    });
+
+    expect(result.allowedFragments).toEqual([]);
+    expect(result.deniedDocumentIds).toEqual(["doc-denied"]);
+    expect(auditLog.events).toEqual([
+      {
+        type: "permission_guard_denied",
+        documentId: "doc-denied",
+        fragmentIds: ["frag-1", "frag-2"]
+      }
+    ]);
+  });
+
+  it("records one audit event per errored document with all fragment IDs and the error message", async () => {
+    const fragments = [
+      { id: "frag-1", documentId: "doc-timeout", text: "Uncertain content A" },
+      { id: "frag-2", documentId: "doc-timeout", text: "Uncertain content B" }
+    ];
+    const auditLog = new InMemoryAuditLog();
+
+    const result = await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async () => {
+        throw new Error("Feishu permission timeout");
+      },
+      auditLog
+    });
+
+    expect(result.allowedFragments).toEqual([]);
+    expect(result.deniedDocumentIds).toEqual(["doc-timeout"]);
+    expect(auditLog.events).toEqual([
+      {
+        type: "permission_guard_error",
+        documentId: "doc-timeout",
+        fragmentIds: ["frag-1", "frag-2"],
+        message: "Feishu permission timeout"
+      }
+    ]);
   });
 });
