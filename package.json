@@ -1,0 +1,12 @@
+{
+  "name": "iris",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/core"
+  ],
+  "scripts": {
+    "test": "npm --workspace apps/core test",
+    "typecheck": "npm --workspace apps/core run typecheck"
+  }
+}
