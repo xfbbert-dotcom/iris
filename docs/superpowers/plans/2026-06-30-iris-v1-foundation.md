@@ -76,6 +76,7 @@ Responsibilities:
 - Create: `apps/core/package.json`
 - Create: `apps/core/tsconfig.json`
 - Create: `apps/core/vitest.config.ts`
+- Create: `apps/core/src/app.ts`
 - Create: `workers/ai/pyproject.toml`
 - Create: `README.md`
 
@@ -165,7 +166,28 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 5: Create Python worker package config**
+- [ ] **Step 5: Create minimal Core App entrypoint**
+
+Create `apps/core/src/app.ts`:
+
+```ts
+import Fastify from "fastify";
+
+export function buildApp() {
+  const app = Fastify({ logger: false });
+
+  app.get("/health", async () => ({ ok: true, service: "iris-core" }));
+
+  return app;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const app = buildApp();
+  await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
+}
+```
+
+- [ ] **Step 6: Create Python worker package config**
 
 Create `workers/ai/pyproject.toml`:
 
@@ -184,7 +206,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 ```
 
-- [ ] **Step 6: Create README**
+- [ ] **Step 7: Create README**
 
 Create `README.md`:
 
@@ -207,7 +229,7 @@ The first implementation slice builds:
 - Python AI worker job contracts
 ```
 
-- [ ] **Step 7: Install dependencies**
+- [ ] **Step 8: Install dependencies**
 
 Run:
 
@@ -217,7 +239,7 @@ npm install
 
 Expected: `package-lock.json` is created and dependencies install without errors.
 
-- [ ] **Step 8: Verify empty test command state**
+- [ ] **Step 9: Verify empty test command state**
 
 Run:
 
@@ -227,12 +249,32 @@ npm test
 
 Expected: Vitest starts but reports no test files or exits after test discovery. If Vitest exits non-zero because no tests exist, continue; Task 2 will add tests.
 
-- [ ] **Step 9: Commit scaffold**
+- [ ] **Step 10: Verify typecheck and dev entrypoint**
 
 Run:
 
 ```powershell
-git add package.json package-lock.json apps/core/package.json apps/core/tsconfig.json apps/core/vitest.config.ts workers/ai/pyproject.toml README.md
+npm run typecheck
+```
+
+Expected: exit code 0.
+
+Run:
+
+```powershell
+$proc = Start-Process -FilePath "npm" -ArgumentList @("--workspace","apps/core","run","dev") -PassThru -WindowStyle Hidden
+Start-Sleep -Seconds 3
+Stop-Process -Id $proc.Id -Force
+```
+
+Expected: the process starts without an immediate missing-module error.
+
+- [ ] **Step 11: Commit scaffold**
+
+Run:
+
+```powershell
+git add package.json package-lock.json apps/core/package.json apps/core/tsconfig.json apps/core/vitest.config.ts apps/core/src/app.ts workers/ai/pyproject.toml README.md
 git commit -m "chore: scaffold Iris foundation workspace"
 ```
 
@@ -946,7 +988,7 @@ git commit -m "feat: add anchored context assembly"
 ## Task 7: Fastify App Wiring
 
 **Files:**
-- Create: `apps/core/src/app.ts`
+- Modify: `apps/core/src/app.ts`
 - Modify: `apps/core/tests/feishu-gateway.test.ts`
 
 - [ ] **Step 1: Add app route test**
@@ -987,7 +1029,7 @@ Expected: FAIL because `buildApp` does not exist.
 
 - [ ] **Step 3: Implement Fastify app**
 
-Create `apps/core/src/app.ts`:
+Replace `apps/core/src/app.ts`:
 
 ```ts
 import Fastify from "fastify";
