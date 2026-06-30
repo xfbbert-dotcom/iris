@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { pathToFileURL } from "node:url";
 
 export function buildApp() {
   const app = Fastify({ logger: false });
@@ -8,7 +9,7 @@ export function buildApp() {
   return app;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const app = buildApp();
   await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
 }
