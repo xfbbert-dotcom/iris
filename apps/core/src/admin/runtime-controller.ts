@@ -23,6 +23,18 @@ export class RuntimeController {
     this.config.capabilities.proactiveSpeech = false;
   }
 
+  pauseDocumentReading(): void {
+    this.config.capabilities.readGroupDocuments = false;
+  }
+
+  pauseKnowledgeBaseWriting(): void {
+    this.config.capabilities.writeKnowledgeBase = false;
+  }
+
+  pauseExternalToolCalls(): void {
+    this.config.capabilities.callExternalTools = false;
+  }
+
   canProcessGroupMessage(groupId: string): boolean {
     return this.config.globalEnabled && !this.config.disabledGroupIds.has(groupId);
   }
@@ -35,11 +47,27 @@ export class RuntimeController {
     return this.canProcessGroupMessage(groupId) && this.config.capabilities.proactiveSpeech;
   }
 
+  canReadGroupContext(groupId: string): boolean {
+    return this.canProcessGroupMessage(groupId) && this.config.capabilities.readGroupContext;
+  }
+
   canReadDocuments(): boolean {
     return this.config.globalEnabled && this.config.capabilities.readGroupDocuments;
   }
 
+  canRetrieveKnowledgeBase(): boolean {
+    return this.config.globalEnabled && this.config.capabilities.retrieveKnowledgeBase;
+  }
+
+  canGenerateKnowledgeDrafts(): boolean {
+    return this.config.globalEnabled && this.config.capabilities.generateKnowledgeDrafts;
+  }
+
   canWriteKnowledgeBase(): boolean {
     return this.config.globalEnabled && this.config.capabilities.writeKnowledgeBase;
+  }
+
+  canCallExternalTools(): boolean {
+    return this.config.globalEnabled && this.config.capabilities.callExternalTools;
   }
 }
