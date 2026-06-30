@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createFeishuGateway } from "../src/feishu/feishu-gateway.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
 
 describe("InMemoryEventQueue", () => {
@@ -32,5 +33,39 @@ describe("InMemoryEventQueue", () => {
     await queue.enqueueRawFeishuEvent(duplicateEvent);
 
     expect(queue.events).toHaveLength(1);
+  });
+});
+
+describe("FeishuGateway", () => {
+  it("returns HTTP 200 payload immediately after enqueueing", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    const response = await gateway.handleCallback({
+      headers: { "x-iris-event-id": "event-1" },
+      body: { event_id: "event-1", message: { chat_id: "chat-a" } }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(queue.events).toHaveLength(1);
+  });
+
+  it("does not run signal filtering before acknowledging", async () => {
+    const queue = new InMemoryEventQueue();
+    let signalFilterCalled = false;
+    const gateway = createFeishuGateway({
+      queue,
+      signalFilter: async () => {
+        signalFilterCalled = true;
+      }
+    });
+
+    await gateway.handleCallback({
+      headers: { "x-iris-event-id": "event-2" },
+      body: { event_id: "event-2", message: { chat_id: "chat-a" } }
+    });
+
+    expect(signalFilterCalled).toBe(false);
   });
 });
