@@ -263,7 +263,11 @@ export function createDocumentSourceRegistry(
     listSourcesByGroupId(groupId) {
       return cloneSources(
         sortSources(
-          Array.from(sourcesById.values()).filter((source) => source.originGroupId === groupId),
+          Array.from(sourcesById.values()).filter(
+            (source) =>
+              source.originGroupId === groupId ||
+              source.evidence.some((evidence) => evidence.groupId === groupId),
+          ),
         ),
       );
     },
@@ -271,7 +275,11 @@ export function createDocumentSourceRegistry(
     listSourcesByAuthorizedSpaceId(spaceId) {
       return cloneSources(
         sortSources(
-          Array.from(sourcesById.values()).filter((source) => source.authorizedSpaceId === spaceId),
+          Array.from(sourcesById.values()).filter(
+            (source) =>
+              source.authorizedSpaceId === spaceId ||
+              source.evidence.some((evidence) => evidence.spaceId === spaceId),
+          ),
         ),
       );
     },
@@ -279,7 +287,11 @@ export function createDocumentSourceRegistry(
     listSourcesBySubmittingUserId(userId) {
       return cloneSources(
         sortSources(
-          Array.from(sourcesById.values()).filter((source) => source.submittedByUserId === userId),
+          Array.from(sourcesById.values()).filter(
+            (source) =>
+              source.submittedByUserId === userId ||
+              source.evidence.some((evidence) => evidence.userId === userId),
+          ),
         ),
       );
     },

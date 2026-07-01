@@ -507,4 +507,44 @@ describe("createDocumentSourceRegistry", () => {
       userSource.id,
     );
   });
+
+  it("filters sources by evidence from repeated registrations", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+
+    registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+    registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-2",
+      originMessageId: "message-2",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+    registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      authorizedSpaceId: "space-2",
+      observedAt: new Date("2026-07-01T04:03:00.000Z"),
+    });
+    registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      submittedByUserId: "user-2",
+      observedAt: new Date("2026-07-01T04:04:00.000Z"),
+    });
+
+    expect(registry.listSourcesByGroupId("group-2").map((source) => source.sourceUri)).toEqual([
+      "https://example.com/docs/doc-1",
+    ]);
+    expect(registry.listSourcesByAuthorizedSpaceId("space-2").map((source) => source.sourceUri)).toEqual([
+      "https://example.com/docs/doc-1",
+    ]);
+    expect(registry.listSourcesBySubmittingUserId("user-2").map((source) => source.sourceUri)).toEqual([
+      "https://example.com/docs/doc-1",
+    ]);
+  });
 });
