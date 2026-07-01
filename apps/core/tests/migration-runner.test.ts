@@ -13,11 +13,21 @@ describe("runMigrations", () => {
     await writeFile(join(migrationsDir, "0001_first.sql"), "select 1;");
 
     const queries: string[] = [];
+    const applied = new Set<string>();
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       queries.push(sql);
 
       if (sql.includes("select name from schema_migrations")) {
-        return { rows: [] };
+        return {
+          rows: Array.from(applied).map((name) => ({ name })),
+        };
+      }
+
+      if (sql.includes("insert into schema_migrations")) {
+        const migrationName = values?.[0];
+        if (typeof migrationName === "string") {
+          applied.add(migrationName);
+        }
       }
 
       return { rows: [], values };
@@ -34,5 +44,6 @@ describe("runMigrations", () => {
     });
     expect(queries).toContain("select 1;");
     expect(queries).toContain("select 2;");
+    expect(Array.from(applied)).toEqual(["0001_first.sql", "0002_second.sql"]);
   });
 });
