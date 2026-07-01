@@ -317,6 +317,21 @@ const sourceTypePriority: Record<DocumentSourceType, number> = {
   authorized_wiki_document: 3,
 };
 
+export function documentSourceTypePriority(sourceType: DocumentSourceType): number {
+  return sourceTypePriority[sourceType];
+}
+
+export function higherPriorityDocumentSourceType(
+  first: DocumentSourceType,
+  second: DocumentSourceType,
+): DocumentSourceType {
+  return higherPrioritySourceType(first, second);
+}
+
+export function documentSourceEvidenceKey(evidence: DocumentSourceEvidence): string {
+  return evidenceKey(evidence);
+}
+
 function registerSource(
   sourcesById: Map<string, DocumentSource>,
   sourcesByUri: Map<string, DocumentSource>,

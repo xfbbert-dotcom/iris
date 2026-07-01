@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   createDocumentSourceRegistry,
+  documentSourceEvidenceKey,
+  documentSourceTypePriority,
+  higherPriorityDocumentSourceType,
   type DocumentPermissionState,
   type DocumentSourceEvidence,
   type DocumentSourceEvidenceKind,
@@ -36,6 +39,36 @@ const adminAuthorizationEvidence: DocumentSourceEvidence = {
 };
 
 const optionalDependencies = {} satisfies DocumentSourceRegistryDependencies;
+
+describe("document source merge helpers", () => {
+  it("exposes source type priority for merge decisions", () => {
+    expect(documentSourceTypePriority("authorized_wiki_document")).toBeGreaterThan(
+      documentSourceTypePriority("group_visible_document"),
+    );
+  });
+
+  it("returns the higher priority source type", () => {
+    expect(
+      higherPriorityDocumentSourceType("authorized_wiki_document", "group_visible_document"),
+    ).toBe("authorized_wiki_document");
+  });
+
+  it("builds evidence keys without observedAt", () => {
+    const first: DocumentSourceEvidence = {
+      kind: "group_message",
+      sourceUri: "https://example.com/docs/doc-1",
+      groupId: "group-1",
+      messageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    };
+    const second: DocumentSourceEvidence = {
+      ...first,
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    };
+
+    expect(documentSourceEvidenceKey(first)).toBe(documentSourceEvidenceKey(second));
+  });
+});
 
 describe("createDocumentSourceRegistry", () => {
   it("registers a group_visible_document with defaults and evidence", () => {
