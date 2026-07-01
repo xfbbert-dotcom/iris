@@ -1,4 +1,4 @@
-create table if not exists document_sources (
+create table document_sources (
   id text primary key,
   source_type text not null check (
     source_type in (
@@ -25,22 +25,22 @@ create table if not exists document_sources (
   updated_at timestamptz not null
 );
 
-create index if not exists document_sources_updated_at_id_idx
+create index document_sources_updated_at_id_idx
   on document_sources (updated_at desc, id asc);
 
-create index if not exists document_sources_source_type_idx
+create index document_sources_source_type_idx
   on document_sources (source_type);
 
-create index if not exists document_sources_origin_group_id_idx
+create index document_sources_origin_group_id_idx
   on document_sources (origin_group_id);
 
-create index if not exists document_sources_authorized_space_id_idx
+create index document_sources_authorized_space_id_idx
   on document_sources (authorized_space_id);
 
-create index if not exists document_sources_submitted_by_user_id_idx
+create index document_sources_submitted_by_user_id_idx
   on document_sources (submitted_by_user_id);
 
-create table if not exists document_source_evidence (
+create table document_source_evidence (
   id bigserial primary key,
   document_source_id text not null references document_sources(id) on delete cascade,
   kind text not null check (
@@ -55,7 +55,7 @@ create table if not exists document_source_evidence (
   created_at timestamptz not null
 );
 
-create unique index if not exists document_source_evidence_dedupe_idx
+create unique index document_source_evidence_dedupe_idx
   on document_source_evidence (
     kind,
     source_uri,
@@ -65,14 +65,14 @@ create unique index if not exists document_source_evidence_dedupe_idx
     coalesce(space_id, '')
   );
 
-create index if not exists document_source_evidence_document_source_id_idx
+create index document_source_evidence_document_source_id_idx
   on document_source_evidence (document_source_id);
 
-create index if not exists document_source_evidence_group_id_idx
+create index document_source_evidence_group_id_idx
   on document_source_evidence (group_id);
 
-create index if not exists document_source_evidence_space_id_idx
+create index document_source_evidence_space_id_idx
   on document_source_evidence (space_id);
 
-create index if not exists document_source_evidence_user_id_idx
+create index document_source_evidence_user_id_idx
   on document_source_evidence (user_id);
