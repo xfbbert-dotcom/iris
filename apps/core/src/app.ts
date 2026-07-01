@@ -33,7 +33,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         rawBody
       });
     } catch (error) {
-      done(error instanceof Error ? error : new Error("Invalid JSON"));
+      done(createBadJsonError());
     }
   });
 
@@ -70,6 +70,11 @@ function isParsedJsonBody(value: unknown): value is ParsedJsonBody {
     "parsedBody" in value &&
     typeof (value as { rawBody?: unknown }).rawBody === "string"
   );
+}
+
+function createBadJsonError(): Error & { statusCode: number } {
+  const error = new Error("Invalid JSON");
+  return Object.assign(error, { statusCode: 400 });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

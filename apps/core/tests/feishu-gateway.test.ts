@@ -192,6 +192,29 @@ describe("Core App Feishu route", () => {
     expect(queue.events).toHaveLength(0);
   });
 
+  it("returns 400 and skips Feishu handling when JSON is malformed", async () => {
+    const queue = new InMemoryEventQueue();
+    let verifierCalled = false;
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: () => {
+        verifierCalled = true;
+        return true;
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      headers: { "content-type": "application/json" },
+      payload: "{\"event_id\":"
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(verifierCalled).toBe(false);
+    expect(queue.events).toHaveLength(0);
+  });
+
   it("passes the raw JSON body to the Feishu verifier", async () => {
     const queue = new InMemoryEventQueue();
     let observedRawBody: string | undefined;
