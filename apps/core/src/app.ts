@@ -12,6 +12,11 @@ export type BuildAppDependencies = {
   verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
 };
 
+type ParsedJsonBody = {
+  parsedBody: unknown;
+  rawBody: string;
+};
+
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const gateway = createFeishuGateway({
@@ -20,10 +25,25 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   });
   const app = Fastify({ logger: false });
 
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, payload, done) => {
+    const rawBody = typeof payload === "string" ? payload : payload.toString("utf8");
+    try {
+      done(null, {
+        parsedBody: JSON.parse(rawBody),
+        rawBody
+      });
+    } catch (error) {
+      done(error instanceof Error ? error : new Error("Invalid JSON"));
+    }
+  });
+
   app.post("/feishu/events", async (request, reply) => {
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const rawBody = isParsedJsonBody(request.body) ? request.body.rawBody : undefined;
     const response = await gateway.handleCallback({
       headers: normalizeHeaders(request.headers),
-      body: request.body
+      body,
+      rawBody
     });
 
     return reply.code(response.statusCode).send(response.body);
@@ -40,6 +60,15 @@ function normalizeHeaders(headers: Record<string, unknown>): Record<string, stri
       key.toLowerCase(),
       Array.isArray(value) ? String(value[0]) : typeof value === "string" ? value : undefined
     ])
+  );
+}
+
+function isParsedJsonBody(value: unknown): value is ParsedJsonBody {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "parsedBody" in value &&
+    typeof (value as { rawBody?: unknown }).rawBody === "string"
   );
 }
 

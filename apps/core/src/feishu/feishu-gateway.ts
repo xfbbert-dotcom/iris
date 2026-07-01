@@ -4,6 +4,7 @@ import type { EventQueue } from "../queues/event-queue.js";
 export type FeishuCallbackRequest = {
   headers: Record<string, string | undefined>;
   body: unknown;
+  rawBody?: string;
 };
 
 export type FeishuCallbackResponse =

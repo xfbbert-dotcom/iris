@@ -191,4 +191,24 @@ describe("Core App Feishu route", () => {
     expect(response.json()).toEqual({ ok: false });
     expect(queue.events).toHaveLength(0);
   });
+
+  it("passes the raw JSON body to the Feishu verifier", async () => {
+    const queue = new InMemoryEventQueue();
+    let observedRawBody: string | undefined;
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: (request) => {
+        observedRawBody = request.rawBody;
+        return true;
+      }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload: { event_id: "raw-body-1" }
+    });
+
+    expect(observedRawBody).toBe(JSON.stringify({ event_id: "raw-body-1" }));
+  });
 });
