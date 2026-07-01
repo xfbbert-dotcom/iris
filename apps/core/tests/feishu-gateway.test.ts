@@ -106,6 +106,23 @@ describe("FeishuGateway", () => {
     expect(queue.events).toHaveLength(0);
   });
 
+  it("returns a URL verification challenge after verifier approval without enqueueing", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({
+      queue,
+      verifyRequest: () => true
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: { type: "url_verification", challenge: "challenge-a", token: "token-a" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ challenge: "challenge-a" });
+    expect(queue.events).toHaveLength(0);
+  });
+
   it("uses the header key before body event_id", async () => {
     const queue = new InMemoryEventQueue();
     const gateway = createFeishuGateway({ queue });
@@ -185,6 +202,42 @@ describe("Core App Feishu route", () => {
       url: "/feishu/events",
       headers: { "x-iris-event-id": "event-route-invalid" },
       payload: { event_id: "event-route-invalid" }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ ok: false });
+    expect(queue.events).toHaveLength(0);
+  });
+
+  it("returns the Feishu URL verification challenge without enqueueing", async () => {
+    const queue = new InMemoryEventQueue();
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: () => true
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload: { type: "url_verification", challenge: "challenge-a", token: "token-a" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ challenge: "challenge-a" });
+    expect(queue.events).toHaveLength(0);
+  });
+
+  it("rejects URL verification before challenge handling when the Feishu verifier rejects", async () => {
+    const queue = new InMemoryEventQueue();
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: () => false
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload: { type: "url_verification", challenge: "challenge-a", token: "token-a" }
     });
 
     expect(response.statusCode).toBe(401);
