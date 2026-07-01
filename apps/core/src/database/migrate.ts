@@ -59,7 +59,11 @@ create table if not exists schema_migrations (
     await client.query("commit");
     return result;
   } catch (error) {
-    await client.query("rollback");
+    try {
+      await client.query("rollback");
+    } catch {
+      // Preserve the original migration failure.
+    }
     throw error;
   }
 }
@@ -78,14 +82,16 @@ function readAppliedMigrationNames(queryResult: unknown): string[] {
 async function main(): Promise<void> {
   const config = readDatabaseConfig();
   const pool = createPostgresPool(config);
+  const client = await pool.connect();
 
   try {
     const result = await runMigrations({
-      client: pool,
+      client,
       migrationsDir: defaultMigrationsDir(),
     });
     console.log(JSON.stringify(result, null, 2));
   } finally {
+    client.release();
     await pool.end();
   }
 }

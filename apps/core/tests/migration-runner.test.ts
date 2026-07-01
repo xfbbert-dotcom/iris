@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { runMigrations } from "../src/database/migrate.js";
+import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 
 describe("runMigrations", () => {
   it("applies pending migrations in lexical order", async () => {
@@ -45,5 +45,109 @@ describe("runMigrations", () => {
     expect(queries).toContain("select 1;");
     expect(queries).toContain("select 2;");
     expect(Array.from(applied)).toEqual(["0001_first.sql", "0002_second.sql"]);
+  });
+
+  it("skips already applied migrations without executing SQL or inserting again", async () => {
+    const migrationsDir = await mkdtemp(join(tmpdir(), "iris-migrations-"));
+    await writeFile(
+      join(migrationsDir, "0001_already_applied.sql"),
+      "select should_not_run;",
+    );
+
+    const queries: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      queries.push(sql);
+
+      if (sql.includes("select name from schema_migrations")) {
+        return {
+          rows: [{ name: "0001_already_applied.sql" }],
+        };
+      }
+
+      return { rows: [] };
+    });
+
+    const result = await runMigrations({
+      client: { query },
+      migrationsDir,
+    });
+
+    expect(result).toEqual({
+      applied: [],
+      skipped: ["0001_already_applied.sql"],
+    });
+    expect(queries).not.toContain("select should_not_run;");
+    expect(
+      queries.some((sql) => sql.includes("insert into schema_migrations")),
+    ).toBe(false);
+  });
+
+  it("rolls back and does not record a migration when migration SQL fails", async () => {
+    const migrationsDir = await mkdtemp(join(tmpdir(), "iris-migrations-"));
+    await writeFile(join(migrationsDir, "0001_fails.sql"), "select explode;");
+    const migrationError = new Error("migration failed");
+
+    const queries: string[] = [];
+    const query = vi.fn(async (sql: string) => {
+      queries.push(sql);
+
+      if (sql.includes("select name from schema_migrations")) {
+        return { rows: [] };
+      }
+
+      if (sql === "select explode;") {
+        throw migrationError;
+      }
+
+      return { rows: [] };
+    });
+
+    await expect(
+      runMigrations({
+        client: { query },
+        migrationsDir,
+      }),
+    ).rejects.toBe(migrationError);
+
+    expect(queries).toContain("rollback");
+    expect(
+      queries.some((sql) => sql.includes("insert into schema_migrations")),
+    ).toBe(false);
+  });
+
+  it("throws the original migration error when rollback also fails", async () => {
+    const migrationsDir = await mkdtemp(join(tmpdir(), "iris-migrations-"));
+    await writeFile(join(migrationsDir, "0001_fails.sql"), "select explode;");
+    const migrationError = new Error("migration failed");
+    const rollbackError = new Error("rollback failed");
+
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("select name from schema_migrations")) {
+        return { rows: [] };
+      }
+
+      if (sql === "select explode;") {
+        throw migrationError;
+      }
+
+      if (sql === "rollback") {
+        throw rollbackError;
+      }
+
+      return { rows: [] };
+    });
+
+    await expect(
+      runMigrations({
+        client: { query },
+        migrationsDir,
+      }),
+    ).rejects.toBe(migrationError);
+  });
+});
+
+describe("defaultMigrationsDir", () => {
+  it("points at the migrations directory", () => {
+    expect(defaultMigrationsDir()).toMatch(/[\\/]migrations$/);
   });
 });
