@@ -276,4 +276,125 @@ describe("createDocumentSourceRegistry", () => {
       "group_message",
     ]);
   });
+
+  it("marks denied permissionState and disables answering", () => {
+    const updatedAt = new Date("2026-07-01T04:05:00.000Z");
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => updatedAt,
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const updated = registry.markPermissionState(source.id, "denied");
+
+    expect(updated.permissionState).toBe("denied");
+    expect(updated.canUseForAnswering).toBe(false);
+    expect(updated.updatedAt).toEqual(updatedAt);
+  });
+
+  it("marks stale permissionState without disabling answering", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:05:00.000Z"),
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const updated = registry.markPermissionState(source.id, "stale");
+
+    expect(updated.permissionState).toBe("stale");
+    expect(updated.canUseForAnswering).toBe(true);
+  });
+
+  it("marks syncState from syncing to synced", () => {
+    let now = new Date("2026-07-01T04:00:00.000Z");
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => now,
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    now = new Date("2026-07-01T04:05:00.000Z");
+    const syncing = registry.markSyncState(source.id, "syncing");
+    now = new Date("2026-07-01T04:06:00.000Z");
+    const synced = registry.markSyncState(source.id, "synced");
+
+    expect(syncing.syncState).toBe("syncing");
+    expect(synced.syncState).toBe("synced");
+    expect(synced.updatedAt).toEqual(new Date("2026-07-01T04:06:00.000Z"));
+  });
+
+  it("keeps answering disabled when re-registering the same group visible sourceUri", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    registry.setAnsweringEnabled(source.id, false);
+    const reregistered = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-2",
+      originMessageId: "message-2",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    expect(reregistered.canUseForAnswering).toBe(false);
+  });
+
+  it("enables knowledge drafts for user_submitted_document after opt-in", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const source = registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/uploads/user-guide.pdf",
+      submittedByUserId: "user-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const updated = registry.setKnowledgeDraftsEnabled(source.id, true);
+
+    expect(source.canUseForKnowledgeDrafts).toBe(false);
+    expect(updated.canUseForKnowledgeDrafts).toBe(true);
+  });
+
+  it("throws DocumentSourceValidationError when mutating an unknown id", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+
+    expect(() => registry.markPermissionState("missing-source", "denied")).toThrow(
+      DocumentSourceValidationError,
+    );
+    expect(() => registry.markSyncState("missing-source", "syncing")).toThrow(
+      DocumentSourceValidationError,
+    );
+    expect(() => registry.setAnsweringEnabled("missing-source", false)).toThrow(
+      DocumentSourceValidationError,
+    );
+    expect(() => registry.setKnowledgeDraftsEnabled("missing-source", true)).toThrow(
+      DocumentSourceValidationError,
+    );
+  });
 });

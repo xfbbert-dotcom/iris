@@ -80,6 +80,10 @@ export interface DocumentSourceRegistry {
   registerGroupVisibleDocument(input: RegisterGroupVisibleDocumentInput): DocumentSource;
   registerAuthorizedWikiDocument(input: RegisterAuthorizedWikiDocumentInput): DocumentSource;
   registerUserSubmittedDocument(input: RegisterUserSubmittedDocumentInput): DocumentSource;
+  markPermissionState(id: string, permissionState: DocumentPermissionState): DocumentSource;
+  markSyncState(id: string, syncState: DocumentSyncState): DocumentSource;
+  setAnsweringEnabled(id: string, enabled: boolean): DocumentSource;
+  setKnowledgeDraftsEnabled(id: string, enabled: boolean): DocumentSource;
 }
 
 export function createDocumentSourceRegistry(
@@ -189,6 +193,38 @@ export function createDocumentSourceRegistry(
 
       return cloneSource(source);
     },
+
+    markPermissionState(id, permissionState) {
+      const source = updateSourceById(sourcesById, sourcesByUri, resolvedDependencies, id, {
+        permissionState,
+      });
+
+      return cloneSource(source);
+    },
+
+    markSyncState(id, syncState) {
+      const source = updateSourceById(sourcesById, sourcesByUri, resolvedDependencies, id, {
+        syncState,
+      });
+
+      return cloneSource(source);
+    },
+
+    setAnsweringEnabled(id, enabled) {
+      const source = updateSourceById(sourcesById, sourcesByUri, resolvedDependencies, id, {
+        canUseForAnswering: enabled,
+      });
+
+      return cloneSource(source);
+    },
+
+    setKnowledgeDraftsEnabled(id, enabled) {
+      const source = updateSourceById(sourcesById, sourcesByUri, resolvedDependencies, id, {
+        canUseForKnowledgeDrafts: enabled,
+      });
+
+      return cloneSource(source);
+    },
   };
 }
 
@@ -264,6 +300,45 @@ function registerSource(
   sourcesByUri.set(merged.sourceUri, merged);
 
   return merged;
+}
+
+function getSourceById(sourcesById: Map<string, DocumentSource>, id: string): DocumentSource {
+  const source = sourcesById.get(id);
+  if (source === undefined) {
+    throw new DocumentSourceValidationError(`document source not found: ${id}`);
+  }
+
+  return source;
+}
+
+function updateSourceById(
+  sourcesById: Map<string, DocumentSource>,
+  sourcesByUri: Map<string, DocumentSource>,
+  dependencies: DocumentSourceRegistryDependencies,
+  id: string,
+  changes: Partial<
+    Pick<
+      DocumentSource,
+      "permissionState" | "syncState" | "canUseForAnswering" | "canUseForKnowledgeDrafts"
+    >
+  >,
+): DocumentSource {
+  const existing = getSourceById(sourcesById, id);
+  const updated: DocumentSource = {
+    ...existing,
+    ...changes,
+    createdAt: new Date(existing.createdAt),
+    updatedAt: new Date(dependencies.now()),
+    evidence: existing.evidence.map(cloneEvidence),
+  };
+  if (updated.permissionState === "denied") {
+    updated.canUseForAnswering = false;
+  }
+
+  sourcesById.set(updated.id, updated);
+  sourcesByUri.set(updated.sourceUri, updated);
+
+  return updated;
 }
 
 function higherPrioritySourceType(
