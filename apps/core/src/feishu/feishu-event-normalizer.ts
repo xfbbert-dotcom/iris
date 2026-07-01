@@ -31,21 +31,13 @@ export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
     };
   }
 
-  const messageType = readString(message, "message_type");
-  if (messageType !== "text") {
-    return {
-      kind: "unsupported",
-      eventId,
-      reason: "unsupported_message_type"
-    };
-  }
-
   const sender = readObject(event, "sender");
   const senderId = readObject(sender, "sender_id");
   const senderOpenId = readString(senderId, "open_id");
   const messageId = readString(message, "message_id");
   const chatId = readString(message, "chat_id");
   const createTime = readString(message, "create_time");
+  const messageType = readString(message, "message_type");
   const content = readString(message, "content");
 
   if (
@@ -53,12 +45,21 @@ export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
     chatId === undefined ||
     senderOpenId === undefined ||
     createTime === undefined ||
+    messageType === undefined ||
     content === undefined
   ) {
     return {
       kind: "unsupported",
       eventId,
       reason: "missing_required_fields"
+    };
+  }
+
+  if (messageType !== "text") {
+    return {
+      kind: "unsupported",
+      eventId,
+      reason: "unsupported_message_type"
     };
   }
 

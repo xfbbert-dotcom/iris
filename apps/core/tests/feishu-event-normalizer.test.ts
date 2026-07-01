@@ -113,6 +113,27 @@ describe("normalizeFeishuEvent", () => {
     });
   });
 
+  it("returns unsupported when message_type is missing", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-missing-message-type",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-missing-type",
+          chat_id: "chat-a",
+          create_time: "1710000000000",
+          content: "{\"text\":\"hello iris\"}"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-missing-message-type",
+      reason: "missing_required_fields"
+    });
+  });
+
   it("uses unknown when event_id is missing", () => {
     const result = normalizeFeishuEvent({
       event: {}
