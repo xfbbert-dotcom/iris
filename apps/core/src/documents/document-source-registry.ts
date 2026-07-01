@@ -65,8 +65,8 @@ export interface RegisterUserSubmittedDocumentInput {
 }
 
 export interface DocumentSourceRegistryDependencies {
-  createId: () => string;
-  now: () => Date;
+  createId?: () => string;
+  now?: () => Date;
 }
 
 export class DocumentSourceValidationError extends Error {
@@ -87,9 +87,9 @@ export interface DocumentSourceRegistry {
 }
 
 export function createDocumentSourceRegistry(
-  dependencies: Partial<DocumentSourceRegistryDependencies> = {},
+  dependencies: DocumentSourceRegistryDependencies = {},
 ): DocumentSourceRegistry {
-  const resolvedDependencies: DocumentSourceRegistryDependencies = {
+  const resolvedDependencies: Required<DocumentSourceRegistryDependencies> = {
     createId: dependencies.createId ?? randomUUID,
     now: dependencies.now ?? (() => new Date()),
   };
@@ -250,7 +250,7 @@ const sourceTypePriority: Record<DocumentSourceType, number> = {
 function registerSource(
   sourcesById: Map<string, DocumentSource>,
   sourcesByUri: Map<string, DocumentSource>,
-  dependencies: DocumentSourceRegistryDependencies,
+  dependencies: Required<DocumentSourceRegistryDependencies>,
   next: NextDocumentSource,
 ): DocumentSource {
   const now = new Date(dependencies.now());
@@ -314,7 +314,7 @@ function getSourceById(sourcesById: Map<string, DocumentSource>, id: string): Do
 function updateSourceById(
   sourcesById: Map<string, DocumentSource>,
   sourcesByUri: Map<string, DocumentSource>,
-  dependencies: DocumentSourceRegistryDependencies,
+  dependencies: Required<DocumentSourceRegistryDependencies>,
   id: string,
   changes: Partial<
     Pick<

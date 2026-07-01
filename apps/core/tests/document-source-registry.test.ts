@@ -4,6 +4,7 @@ import {
   type DocumentPermissionState,
   type DocumentSourceEvidence,
   type DocumentSourceEvidenceKind,
+  type DocumentSourceRegistryDependencies,
   type DocumentSourceType,
   DocumentSourceValidationError,
 } from "../src/documents/document-source-registry.js";
@@ -34,6 +35,8 @@ const adminAuthorizationEvidence: DocumentSourceEvidence = {
   observedAt: new Date("2026-07-01T04:02:00.000Z"),
 };
 
+const optionalDependencies = {} satisfies DocumentSourceRegistryDependencies;
+
 describe("createDocumentSourceRegistry", () => {
   it("registers a group_visible_document with defaults and evidence", () => {
     expect(documentSourceTypes).toContain("group_visible_document");
@@ -41,6 +44,7 @@ describe("createDocumentSourceRegistry", () => {
     expect(documentSourceEvidenceKinds).toContain("group_message");
     expect(adminAuthorizationEvidence.groupId).toBeUndefined();
     expect(adminAuthorizationEvidence.messageId).toBeUndefined();
+    expect(optionalDependencies).toEqual({});
 
     const createdAt = new Date("2026-07-01T04:00:00.000Z");
     const observedAt = new Date("2026-07-01T04:01:00.000Z");
@@ -359,6 +363,25 @@ describe("createDocumentSourceRegistry", () => {
     });
 
     expect(reregistered.canUseForAnswering).toBe(false);
+  });
+
+  it("keeps answering disabled while permission is denied", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    registry.markPermissionState(source.id, "denied");
+    const updated = registry.setAnsweringEnabled(source.id, true);
+
+    expect(updated.permissionState).toBe("denied");
+    expect(updated.canUseForAnswering).toBe(false);
   });
 
   it("enables knowledge drafts for user_submitted_document after opt-in", () => {
