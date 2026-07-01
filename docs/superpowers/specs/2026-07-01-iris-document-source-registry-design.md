@@ -90,6 +90,8 @@ For v1 in-memory implementation, each source should keep a compact `evidence` li
 
 Evidence lets Iris merge repeated sightings without losing provenance.
 
+Evidence must be idempotent. Feishu may retry delivery for the same message event during network jitter, so registering the same document link from the same `messageId` must not append duplicate evidence. For v1, evidence deduplication should treat entries with the same `kind`, `sourceUri`, `messageId`, `groupId`, `userId`, and `spaceId` as the same observation.
+
 ## 5. Registration Behavior
 
 ### 5.1 Group-Visible Document
@@ -168,6 +170,12 @@ Source type precedence:
 
 This means an admin-authorized wiki source can upgrade a prior group-visible or user-submitted source, but a casual group mention should not downgrade an admin-authorized source.
 
+Feishu retry handling:
+
+- repeated registration of the same source from the same Feishu message must be idempotent;
+- `evidence.messageId` is the primary retry signal for group-visible document observations;
+- repeated events may update `updatedAt`, but must not create duplicate evidence records.
+
 ## 7. State Mutations
 
 The registry supports explicit state changes:
@@ -182,6 +190,10 @@ Rules:
 - If `permissionState` becomes `denied`, `canUseForAnswering` must become `false`.
 - If `permissionState` becomes `stale`, `canUseForAnswering` may remain true only if a later real-time permission guard is required before context injection. For v1, keep it true but make the state visible.
 - If a source is disabled for answering by an admin, later registration should not silently re-enable it.
+
+Phase 2B known limitation:
+
+The v1 registry is intentionally in-memory. Admin mutations such as disabling a source for answering, disabling knowledge-draft usage, or manually changing permission/sync state will be lost if the Core App process restarts. This is acceptable for Phase 2B because the goal is to validate domain behavior and tests before persistence. Phase 2C must move registry state to Postgres so administrator changes survive restarts and become auditable.
 
 ## 8. Query Behavior
 
@@ -224,6 +236,7 @@ Unit tests should cover:
 - no downgrade from admin authorization to group/user source;
 - permission denied disables answering;
 - admin-disabled answering is not silently re-enabled by re-registration;
+- duplicate Feishu message retries do not append duplicate evidence;
 - querying by type, group, space, user, id, and URI;
 - deterministic ordering;
 - validation errors for missing required fields.
