@@ -1,12 +1,18 @@
 import { randomUUID } from "node:crypto";
 
-export type DocumentSourceType = "group_visible_document";
+export type DocumentSourceType =
+  | "group_visible_document"
+  | "authorized_wiki_document"
+  | "user_submitted_document";
 
-export type DocumentPermissionState = "unknown" | "allowed" | "denied";
+export type DocumentPermissionState = "unknown" | "readable" | "denied" | "stale";
 
 export type DocumentSyncState = "pending" | "syncing" | "synced" | "failed";
 
-export type DocumentSourceEvidenceKind = "group_message";
+export type DocumentSourceEvidenceKind =
+  | "group_message"
+  | "admin_authorization"
+  | "user_submission";
 
 export interface DocumentSourceEvidence {
   kind: DocumentSourceEvidenceKind;
@@ -20,9 +26,13 @@ export interface DocumentSourceEvidence {
 
 export interface DocumentSource {
   id: string;
-  type: DocumentSourceType;
+  sourceType: DocumentSourceType;
   sourceUri: string;
   title?: string;
+  originGroupId?: string;
+  originMessageId?: string;
+  submittedByUserId?: string;
+  authorizedSpaceId?: string;
   permissionState: DocumentPermissionState;
   syncState: DocumentSyncState;
   canUseForAnswering: boolean;
@@ -73,9 +83,13 @@ export function createDocumentSourceRegistry(
       const createdAt = new Date(resolvedDependencies.now());
       const source: DocumentSource = {
         id: resolvedDependencies.createId(),
-        type: "group_visible_document",
+        sourceType: "group_visible_document",
         sourceUri,
         title: normalizeOptional(input.title),
+        originGroupId,
+        originMessageId,
+        submittedByUserId: undefined,
+        authorizedSpaceId: undefined,
         permissionState: "unknown",
         syncState: "pending",
         canUseForAnswering: true,
