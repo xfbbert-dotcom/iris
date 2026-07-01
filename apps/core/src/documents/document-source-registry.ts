@@ -84,6 +84,14 @@ export interface DocumentSourceRegistry {
   markSyncState(id: string, syncState: DocumentSyncState): DocumentSource;
   setAnsweringEnabled(id: string, enabled: boolean): DocumentSource;
   setKnowledgeDraftsEnabled(id: string, enabled: boolean): DocumentSource;
+  listSources(): DocumentSource[];
+  listSourcesByType(sourceType: DocumentSourceType): DocumentSource[];
+  findSourceById(id: string): DocumentSource | undefined;
+  findSourceByUri(sourceUri: string): DocumentSource | undefined;
+  listSourcesUsableForAnswering(): DocumentSource[];
+  listSourcesByGroupId(groupId: string): DocumentSource[];
+  listSourcesByAuthorizedSpaceId(spaceId: string): DocumentSource[];
+  listSourcesBySubmittingUserId(userId: string): DocumentSource[];
 }
 
 export function createDocumentSourceRegistry(
@@ -224,6 +232,56 @@ export function createDocumentSourceRegistry(
       });
 
       return cloneSource(source);
+    },
+
+    listSources() {
+      return cloneSources(sortSources(Array.from(sourcesById.values())));
+    },
+
+    listSourcesByType(sourceType) {
+      return cloneSources(
+        sortSources(Array.from(sourcesById.values()).filter((source) => source.sourceType === sourceType)),
+      );
+    },
+
+    findSourceById(id) {
+      return cloneSourceIfFound(sourcesById.get(id));
+    },
+
+    findSourceByUri(sourceUri) {
+      return cloneSourceIfFound(sourcesByUri.get(sourceUri.trim()));
+    },
+
+    listSourcesUsableForAnswering() {
+      return cloneSources(
+        sortSources(
+          Array.from(sourcesById.values()).filter((source) => source.canUseForAnswering),
+        ),
+      );
+    },
+
+    listSourcesByGroupId(groupId) {
+      return cloneSources(
+        sortSources(
+          Array.from(sourcesById.values()).filter((source) => source.originGroupId === groupId),
+        ),
+      );
+    },
+
+    listSourcesByAuthorizedSpaceId(spaceId) {
+      return cloneSources(
+        sortSources(
+          Array.from(sourcesById.values()).filter((source) => source.authorizedSpaceId === spaceId),
+        ),
+      );
+    },
+
+    listSourcesBySubmittingUserId(userId) {
+      return cloneSources(
+        sortSources(
+          Array.from(sourcesById.values()).filter((source) => source.submittedByUserId === userId),
+        ),
+      );
     },
   };
 }
@@ -398,4 +456,23 @@ function cloneSource(source: DocumentSource): DocumentSource {
     updatedAt: new Date(source.updatedAt),
     evidence: source.evidence.map(cloneEvidence),
   };
+}
+
+function cloneSourceIfFound(source: DocumentSource | undefined): DocumentSource | undefined {
+  return source ? cloneSource(source) : undefined;
+}
+
+function cloneSources(sources: DocumentSource[]): DocumentSource[] {
+  return sources.map(cloneSource);
+}
+
+function sortSources(sources: DocumentSource[]): DocumentSource[] {
+  return [...sources].sort((left, right) => {
+    const updatedDelta = right.updatedAt.getTime() - left.updatedAt.getTime();
+    if (updatedDelta !== 0) {
+      return updatedDelta;
+    }
+
+    return left.id.localeCompare(right.id);
+  });
 }

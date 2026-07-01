@@ -420,4 +420,91 @@ describe("createDocumentSourceRegistry", () => {
       DocumentSourceValidationError,
     );
   });
+
+  it("lists sources in deterministic updatedAt order", () => {
+    let nowIndex = 0;
+    const times = [
+      new Date("2026-07-01T04:00:00.000Z"),
+      new Date("2026-07-01T04:01:00.000Z"),
+    ];
+    const registry = createDocumentSourceRegistry({
+      createId: (() => {
+        let id = 0;
+        return () => `doc-source-${++id}`;
+      })(),
+      now: () => times[nowIndex++] ?? times.at(-1)!,
+    });
+
+    const first = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+    const second = registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/uploads/user-guide.pdf",
+      submittedByUserId: "user-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    expect(registry.listSources().map((source) => source.id)).toEqual([second.id, first.id]);
+  });
+
+  it("finds sources by id and URI", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    expect(registry.findSourceById(source.id)?.sourceUri).toBe(source.sourceUri);
+    expect(registry.findSourceByUri(source.sourceUri)?.id).toBe(source.id);
+  });
+
+  it("filters sources by type, group, space, submitting user, and answering capability", () => {
+    let id = 0;
+    const registry = createDocumentSourceRegistry({
+      createId: () => `doc-source-${++id}`,
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+
+    const groupSource = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+    const wikiSource = registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/wiki/space-1",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+    const userSource = registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/uploads/user-guide.pdf",
+      submittedByUserId: "user-1",
+      observedAt: new Date("2026-07-01T04:03:00.000Z"),
+    });
+    registry.setAnsweringEnabled(userSource.id, false);
+
+    expect(registry.listSourcesByType("group_visible_document").map((source) => source.id)).toEqual([
+      groupSource.id,
+    ]);
+    expect(registry.listSourcesByGroupId("group-1").map((source) => source.id)).toEqual([
+      groupSource.id,
+    ]);
+    expect(registry.listSourcesByAuthorizedSpaceId("space-1").map((source) => source.id)).toEqual([
+      wikiSource.id,
+    ]);
+    expect(registry.listSourcesBySubmittingUserId("user-1").map((source) => source.id)).toEqual([
+      userSource.id,
+    ]);
+    expect(registry.listSourcesUsableForAnswering().map((source) => source.id)).not.toContain(
+      userSource.id,
+    );
+  });
 });
