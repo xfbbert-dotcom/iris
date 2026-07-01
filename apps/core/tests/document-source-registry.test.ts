@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDocumentSourceRegistry,
   type DocumentPermissionState,
+  type DocumentSourceEvidence,
   type DocumentSourceEvidenceKind,
   type DocumentSourceType,
   DocumentSourceValidationError,
@@ -26,11 +27,20 @@ const documentSourceEvidenceKinds = [
   "user_submission",
 ] satisfies DocumentSourceEvidenceKind[];
 
+const adminAuthorizationEvidence: DocumentSourceEvidence = {
+  kind: "admin_authorization",
+  sourceUri: "https://example.com/wiki/space-1",
+  spaceId: "space-1",
+  observedAt: new Date("2026-07-01T04:02:00.000Z"),
+};
+
 describe("createDocumentSourceRegistry", () => {
   it("registers a group_visible_document with defaults and evidence", () => {
     expect(documentSourceTypes).toContain("group_visible_document");
     expect(documentPermissionStates).toContain("unknown");
     expect(documentSourceEvidenceKinds).toContain("group_message");
+    expect(adminAuthorizationEvidence.groupId).toBeUndefined();
+    expect(adminAuthorizationEvidence.messageId).toBeUndefined();
 
     const createdAt = new Date("2026-07-01T04:00:00.000Z");
     const observedAt = new Date("2026-07-01T04:01:00.000Z");

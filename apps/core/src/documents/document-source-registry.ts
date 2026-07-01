@@ -17,8 +17,8 @@ export type DocumentSourceEvidenceKind =
 export interface DocumentSourceEvidence {
   kind: DocumentSourceEvidenceKind;
   sourceUri: string;
-  groupId: string;
-  messageId: string;
+  groupId?: string;
+  messageId?: string;
   userId?: string;
   spaceId?: string;
   observedAt: Date;
