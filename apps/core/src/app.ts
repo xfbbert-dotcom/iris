@@ -4,6 +4,8 @@ import {
   createFeishuGateway,
   type FeishuCallbackRequest
 } from "./feishu/feishu-gateway.js";
+import { readFeishuAuthConfig } from "./config/env.js";
+import { createFeishuRequestVerifier } from "./feishu/feishu-auth.js";
 import type { EventQueue } from "./queues/event-queue.js";
 import { InMemoryEventQueue } from "./queues/in-memory-event-queue.js";
 
@@ -19,9 +21,15 @@ type ParsedJsonBody = {
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
+  const feishuAuthConfig = readFeishuAuthConfig();
+  const verifyFeishuRequest =
+    dependencies.verifyFeishuRequest ??
+    (feishuAuthConfig.verificationToken || feishuAuthConfig.encryptKey
+      ? createFeishuRequestVerifier(feishuAuthConfig)
+      : undefined);
   const gateway = createFeishuGateway({
     queue,
-    verifyRequest: dependencies.verifyFeishuRequest
+    verifyRequest: verifyFeishuRequest
   });
   const app = Fastify({ logger: false });
 
