@@ -58,6 +58,29 @@ describe("normalizeFeishuEvent", () => {
     });
   });
 
+  it("does not extract Feishu-looking paths from non-Feishu URLs", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-evil-link",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-evil-link",
+          chat_id: "chat-a",
+          create_time: "1710000000000",
+          message_type: "text",
+          content: JSON.stringify({
+            text: "Ignore https://evil.com/?next=https://x.feishu.cn/docx/ABC"
+          })
+        }
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "group_message",
+      documentLinks: []
+    });
+  });
+
   it("returns unsupported when the message payload is missing", () => {
     const result = normalizeFeishuEvent({
       event_id: "event-a",
@@ -113,6 +136,28 @@ describe("normalizeFeishuEvent", () => {
     });
   });
 
+  it("returns unsupported when create_time is not a valid timestamp", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-invalid-time",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-invalid-time",
+          chat_id: "chat-a",
+          create_time: "not-a-date",
+          message_type: "text",
+          content: "{\"text\":\"hello iris\"}"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-invalid-time",
+      reason: "missing_required_fields"
+    });
+  });
+
   it("returns unsupported when message_type is missing", () => {
     const result = normalizeFeishuEvent({
       event_id: "event-missing-message-type",
@@ -131,6 +176,28 @@ describe("normalizeFeishuEvent", () => {
       kind: "unsupported",
       eventId: "event-missing-message-type",
       reason: "missing_required_fields"
+    });
+  });
+
+  it("returns unsupported when message_type is not text", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-non-text",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-non-text",
+          chat_id: "chat-a",
+          create_time: "1710000000000",
+          message_type: "image",
+          content: "{}"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-non-text",
+      reason: "unsupported_message_type"
     });
   });
 

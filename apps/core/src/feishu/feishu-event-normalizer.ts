@@ -63,6 +63,16 @@ export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
     };
   }
 
+  const timestampMs = Number(createTime);
+  const timestamp = new Date(timestampMs);
+  if (!Number.isFinite(timestampMs) || !Number.isFinite(timestamp.getTime())) {
+    return {
+      kind: "unsupported",
+      eventId,
+      reason: "missing_required_fields"
+    };
+  }
+
   const text = parseTextContent(content);
 
   return {
@@ -73,7 +83,7 @@ export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
     senderOpenId,
     messageType,
     text,
-    timestamp: new Date(Number(createTime)),
+    timestamp,
     documentLinks: extractFeishuDocumentLinks(text)
   };
 }
@@ -89,12 +99,30 @@ function parseTextContent(content: string): string {
 }
 
 function extractFeishuDocumentLinks(text: string): string[] {
-  const links = text.match(/https:\/\/[^\s"'<>]+\.feishu\.cn\/(?:docx|wiki|file|docs)\/[^\s"'<>]+/g);
-  return links?.map(trimTrailingPunctuation) ?? [];
+  const candidates = text.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
+  return candidates.map(trimTrailingPunctuation).filter(isFeishuDocumentLink);
 }
 
 function trimTrailingPunctuation(value: string): string {
   return value.replace(/[),.;:!?]+$/u, "");
+}
+
+function isFeishuDocumentLink(candidate: string): boolean {
+  let url: URL;
+
+  try {
+    url = new URL(candidate);
+  } catch {
+    return false;
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  if (hostname !== "feishu.cn" && !hostname.endsWith(".feishu.cn")) {
+    return false;
+  }
+
+  const firstPathSegment = url.pathname.split("/").filter(Boolean)[0];
+  return firstPathSegment === "docx" || firstPathSegment === "wiki" || firstPathSegment === "file" || firstPathSegment === "docs";
 }
 
 function readObject(source: unknown, key: string): Record<string, unknown> | undefined {
