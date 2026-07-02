@@ -4,6 +4,8 @@ import {
   readEmbeddingProviderConfig,
   readEventWorkerRuntimeConfig,
   readFeishuAuthConfig,
+  readFeishuOpenApiConfig,
+  readDocumentSyncWorkerRuntimeConfig,
   readModelProviderConfig,
   readReindexWorkerRuntimeConfig,
 } from "../src/config/env.js";
@@ -275,5 +277,91 @@ describe("readReindexWorkerRuntimeConfig", () => {
         IRIS_REINDEX_WORKER_BATCH_LIMIT: "-1",
       }),
     ).toThrow("IRIS_REINDEX_WORKER_BATCH_LIMIT must be a positive integer");
+  });
+});
+
+describe("readDocumentSyncWorkerRuntimeConfig", () => {
+  it("returns disabled config by default", () => {
+    expect(readDocumentSyncWorkerRuntimeConfig({})).toEqual({ enabled: false });
+    expect(
+      readDocumentSyncWorkerRuntimeConfig({ IRIS_DOCUMENT_SYNC_WORKER_ENABLED: "false" }),
+    ).toEqual({ enabled: false });
+  });
+
+  it("reads enabled worker config with defaults", () => {
+    expect(
+      readDocumentSyncWorkerRuntimeConfig({
+        IRIS_DOCUMENT_SYNC_WORKER_ENABLED: " true ",
+      }),
+    ).toEqual({
+      enabled: true,
+      intervalMs: 1000,
+      batchLimit: 10,
+    });
+  });
+
+  it("reads enabled worker config overrides", () => {
+    expect(
+      readDocumentSyncWorkerRuntimeConfig({
+        IRIS_DOCUMENT_SYNC_WORKER_ENABLED: "true",
+        IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS: " 2500 ",
+        IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT: " 4 ",
+      }),
+    ).toEqual({
+      enabled: true,
+      intervalMs: 2500,
+      batchLimit: 4,
+    });
+  });
+
+  it("rejects invalid interval and batch limit values", () => {
+    expect(() =>
+      readDocumentSyncWorkerRuntimeConfig({
+        IRIS_DOCUMENT_SYNC_WORKER_ENABLED: "true",
+        IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS: "0",
+      }),
+    ).toThrow("IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS must be a positive integer");
+
+    expect(() =>
+      readDocumentSyncWorkerRuntimeConfig({
+        IRIS_DOCUMENT_SYNC_WORKER_ENABLED: "true",
+        IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT: "-1",
+      }),
+    ).toThrow("IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT must be a positive integer");
+  });
+});
+
+describe("readFeishuOpenApiConfig", () => {
+  it("reads Feishu OpenAPI config and trims values", () => {
+    expect(
+      readFeishuOpenApiConfig({
+        FEISHU_APP_ID: " app-id ",
+        FEISHU_APP_SECRET: " app-secret ",
+        FEISHU_OPEN_BASE_URL: " https://open.example.com/ ",
+      }),
+    ).toEqual({
+      appId: "app-id",
+      appSecret: "app-secret",
+      baseUrl: "https://open.example.com",
+    });
+  });
+
+  it("defaults Feishu OpenAPI base URL", () => {
+    expect(
+      readFeishuOpenApiConfig({
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+      }),
+    ).toEqual({
+      appId: "app-id",
+      appSecret: "app-secret",
+      baseUrl: "https://open.feishu.cn",
+    });
+  });
+
+  it("requires Feishu app credentials", () => {
+    expect(() => readFeishuOpenApiConfig({ FEISHU_APP_ID: "app-id" })).toThrow(
+      "FEISHU_APP_SECRET is required",
+    );
   });
 });

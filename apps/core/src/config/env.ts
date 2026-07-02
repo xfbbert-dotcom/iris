@@ -41,6 +41,20 @@ export type EventWorkerRuntimeConfig =
       batchLimit: number;
     };
 
+export type DocumentSyncWorkerRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      intervalMs: number;
+      batchLimit: number;
+    };
+
+export type FeishuOpenApiConfig = {
+  appId: string;
+  appSecret: string;
+  baseUrl: string;
+};
+
 export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConfig {
   return {
     verificationToken: readOptionalEnv(env.FEISHU_VERIFICATION_TOKEN),
@@ -162,6 +176,37 @@ export function readEventWorkerRuntimeConfig(
       env.IRIS_EVENT_WORKER_BATCH_LIMIT,
       50,
     ),
+  };
+}
+
+export function readDocumentSyncWorkerRuntimeConfig(
+  env: EnvLike = process.env,
+): DocumentSyncWorkerRuntimeConfig {
+  const enabled = readOptionalEnv(env.IRIS_DOCUMENT_SYNC_WORKER_ENABLED);
+  if (enabled !== "true") {
+    return { enabled: false };
+  }
+
+  return {
+    enabled: true,
+    intervalMs: readPositiveIntegerEnv(
+      "IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS",
+      env.IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS,
+      1000,
+    ),
+    batchLimit: readPositiveIntegerEnv(
+      "IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT",
+      env.IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT,
+      10,
+    ),
+  };
+}
+
+export function readFeishuOpenApiConfig(env: EnvLike = process.env): FeishuOpenApiConfig {
+  return {
+    appId: readRequiredEnv("FEISHU_APP_ID", env.FEISHU_APP_ID),
+    appSecret: readRequiredEnv("FEISHU_APP_SECRET", env.FEISHU_APP_SECRET),
+    baseUrl: trimTrailingSlash(readOptionalEnv(env.FEISHU_OPEN_BASE_URL) ?? "https://open.feishu.cn"),
   };
 }
 
