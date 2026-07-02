@@ -95,6 +95,7 @@ function job(overrides: Partial<DocumentReindexJob> = {}): DocumentReindexJob {
     documentSnapshotId: "snapshot-1",
     reason: "manual_profile_reindex",
     enqueuedAt: new Date("2026-07-02T01:00:00.000Z"),
+    attempts: 0,
     ...overrides,
   };
 }

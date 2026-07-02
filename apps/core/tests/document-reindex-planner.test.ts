@@ -31,6 +31,7 @@ describe("DocumentReindexPlanner", () => {
       documentSnapshotId: "snapshot-1",
       reason: "manual_profile_reindex",
       enqueuedAt: new Date("2026-07-02T01:00:00.000Z"),
+      attempts: 0,
     });
   });
 
@@ -72,6 +73,7 @@ describe("DocumentReindexPlanner", () => {
       documentSnapshotId: "snapshot-1",
       reason: "document_synced",
       enqueuedAt: new Date("2026-07-02T01:00:00.000Z"),
+      attempts: 0,
     });
   });
 });

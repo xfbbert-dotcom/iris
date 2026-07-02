@@ -49,6 +49,28 @@ describe("InMemoryDocumentReindexQueue", () => {
     await queue.dequeueBatch(1);
     await expect(queue.getPendingCount()).resolves.toBe(1);
   });
+
+  it("requeues failed jobs below max attempts", async () => {
+    const queue = new InMemoryDocumentReindexQueue({ maxAttempts: 3 });
+    const job = jobFixture();
+
+    await expect(
+      queue.handleFailedJob({ job, errorMessage: "embedding failed" }),
+    ).resolves.toEqual({ action: "requeued", attempts: 1 });
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([{ ...job, attempts: 1 }]);
+    await expect(queue.getDeadLetterCount()).resolves.toBe(0);
+  });
+
+  it("moves failed jobs to DLQ at max attempts", async () => {
+    const queue = new InMemoryDocumentReindexQueue({ maxAttempts: 3 });
+    const job = jobFixture({ attempts: 2 });
+
+    await expect(
+      queue.handleFailedJob({ job, errorMessage: "embedding failed" }),
+    ).resolves.toEqual({ action: "dead_lettered", attempts: 3 });
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+    await expect(queue.getDeadLetterCount()).resolves.toBe(1);
+  });
 });
 
 function jobFixture(overrides: Partial<DocumentReindexJob> = {}): DocumentReindexJob {
@@ -64,6 +86,7 @@ function jobFixture(overrides: Partial<DocumentReindexJob> = {}): DocumentReinde
     documentSnapshotId,
     reason: "manual_profile_reindex",
     enqueuedAt: new Date("2026-07-02T01:00:00.000Z"),
+    attempts: 0,
     ...overrides,
   };
 }

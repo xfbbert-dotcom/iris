@@ -55,6 +55,7 @@ export function createDocumentReindexPlanner({
           documentSnapshotId: snapshot.id,
           reason: "manual_profile_reindex",
           enqueuedAt: now(),
+          attempts: 0,
         });
       }
 
@@ -68,6 +69,7 @@ export function createDocumentReindexPlanner({
         documentSnapshotId: input.documentSnapshotId,
         reason: "document_synced",
         enqueuedAt: now(),
+        attempts: 0,
       });
     },
   };

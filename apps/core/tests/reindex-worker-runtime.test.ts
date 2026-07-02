@@ -12,6 +12,7 @@ describe("createReindexWorkerRuntime", () => {
     const redisClient = {
       connect: vi.fn(async () => redisClient),
       eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
       lPop: vi.fn(async () => null),
       lLen: vi.fn(async () => 42),
       quit: vi.fn(async () => undefined),
@@ -168,6 +169,7 @@ function runtimeDependencies() {
   const redisClient = {
     connect: vi.fn(async () => redisClient),
     eval: vi.fn(async () => 1),
+    rPush: vi.fn(async () => 1),
     lPop: vi.fn(async () => null),
     lLen: vi.fn(async () => 0),
     quit: vi.fn(async () => undefined),

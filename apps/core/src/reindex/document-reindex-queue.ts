@@ -6,6 +6,17 @@ export type DocumentReindexJob = {
   documentSnapshotId: string;
   reason: DocumentReindexReason;
   enqueuedAt: Date;
+  attempts: number;
+};
+
+export type FailedDocumentReindexJobInput = {
+  job: DocumentReindexJob;
+  errorMessage: string;
+};
+
+export type FailedDocumentReindexJobResult = {
+  action: "requeued" | "dead_lettered";
+  attempts: number;
 };
 
 export type CreateDocumentReindexIdempotencyKeyInput = {
@@ -17,6 +28,10 @@ export interface DocumentReindexQueue {
   enqueue(job: DocumentReindexJob): Promise<void>;
   dequeueBatch(limit: number): Promise<DocumentReindexJob[]>;
   getPendingCount(): Promise<number>;
+  handleFailedJob(
+    input: FailedDocumentReindexJobInput,
+  ): Promise<FailedDocumentReindexJobResult>;
+  getDeadLetterCount(): Promise<number>;
 }
 
 export function createDocumentReindexIdempotencyKey(
