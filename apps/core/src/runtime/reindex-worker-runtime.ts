@@ -27,6 +27,10 @@ import {
   createEmbeddingProfileRepository,
   type EmbeddingProfileRepository,
 } from "../documents/embedding-profile-repository.js";
+import {
+  assertSupportedRuntimeEmbeddingDimension,
+  createEmbeddingProfileId,
+} from "../model/embedding-profile-id.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createDocumentReindexPlanner } from "../reindex/document-reindex-planner.js";
 import type {
@@ -146,11 +150,11 @@ export function createReindexWorkerRuntime({
     client: createLazyRedisQueueClient(redisConnection),
   });
   const profiles = createProfiles({ queryable: pool });
-  const activeEmbeddingProfileId = profileId(
-    "openai-compatible",
-    embeddingConfig.model,
-    embeddingConfig.dimensions,
-  );
+  const activeEmbeddingProfileId = createEmbeddingProfileId({
+    provider: "openai-compatible",
+    model: embeddingConfig.model,
+    dimensions: embeddingConfig.dimensions,
+  });
   const activeProfilePromise = profiles.findOrCreateProfile({
     provider: "openai-compatible",
     model: embeddingConfig.model,
@@ -261,14 +265,4 @@ function createLazyRedisQueueClient(
       return client.lRem(key, count, value);
     },
   };
-}
-
-function assertSupportedRuntimeEmbeddingDimension(dimension: number): void {
-  if (dimension !== 6 && dimension !== 1536) {
-    throw new Error(`Unsupported embedding dimension: ${dimension}`);
-  }
-}
-
-function profileId(provider: "openai-compatible", model: string, dimensions: number): string {
-  return `${provider}:${model}:${dimensions}`;
 }
