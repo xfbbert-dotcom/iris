@@ -3,11 +3,20 @@ import type {
   UpsertConversationMessageInput,
 } from "./conversation-message-repository.js";
 import type { RawEvent } from "../events/raw-event-queue.js";
+import type {
+  FeishuDocumentLink,
+  FeishuDocumentLinkExtractor,
+} from "../documents/feishu-document-link-extractor.js";
+import type { GroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
 
 export function createFeishuMessageEventProcessor({
   messages,
+  documentLinkExtractor,
+  groupVisibleDocumentRegistrar,
 }: {
   messages: Pick<ConversationMessageRepository, "upsertMessage">;
+  documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
+  groupVisibleDocumentRegistrar?: Pick<GroupVisibleDocumentRegistrar, "registerDiscoveredLinks">;
 }) {
   return {
     async process(event: RawEvent): Promise<void> {
@@ -17,8 +26,31 @@ export function createFeishuMessageEventProcessor({
       }
 
       await messages.upsertMessage(parsed);
+      const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
+      if (links.length === 0 || groupVisibleDocumentRegistrar === undefined) {
+        return;
+      }
+
+      await groupVisibleDocumentRegistrar.registerDiscoveredLinks({
+        chatId: parsed.chatId,
+        messageId: parsed.providerMessageId,
+        senderId: parsed.senderId,
+        observedAt: parsed.sentAt,
+        links,
+      });
     },
   };
+}
+
+function extractDocumentLinks(
+  text: string | undefined,
+  extractor: Pick<FeishuDocumentLinkExtractor, "extractLinks"> | undefined,
+): FeishuDocumentLink[] {
+  if (text === undefined || extractor === undefined) {
+    return [];
+  }
+
+  return extractor.extractLinks(text);
 }
 
 function parseFeishuMessageEvent(event: RawEvent): UpsertConversationMessageInput | undefined {

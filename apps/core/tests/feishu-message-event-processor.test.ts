@@ -12,7 +12,17 @@ describe("FeishuMessageEventProcessor", () => {
         ...input,
       })),
     };
-    const processor = createFeishuMessageEventProcessor({ messages });
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => [{ sourceUri: "https://docs.feishu.cn/docx/a" }]),
+    };
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => undefined),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+    });
 
     await processor.process(rawEventFixture());
 
@@ -26,6 +36,14 @@ describe("FeishuMessageEventProcessor", () => {
       sentAt: new Date("2026-07-01T17:00:00.000Z"),
       rawEventIdempotencyKey: "raw-event:feishu:event-1",
     });
+    expect(documentLinkExtractor.extractLinks).toHaveBeenCalledWith("Hello");
+    expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).toHaveBeenCalledWith({
+      chatId: "chat-1",
+      messageId: "message-1",
+      senderId: "open-1",
+      observedAt: new Date("2026-07-01T17:00:00.000Z"),
+      links: [{ sourceUri: "https://docs.feishu.cn/docx/a" }],
+    });
   });
 
   it("persists non-text messages without text", async () => {
@@ -36,7 +54,13 @@ describe("FeishuMessageEventProcessor", () => {
         ...input,
       })),
     };
-    const processor = createFeishuMessageEventProcessor({ messages });
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => undefined),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      groupVisibleDocumentRegistrar,
+    });
 
     await processor.process(
       rawEventFixture({
@@ -60,6 +84,7 @@ describe("FeishuMessageEventProcessor", () => {
         text: undefined,
       }),
     );
+    expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
   });
 
   it("ignores unsupported events", async () => {
