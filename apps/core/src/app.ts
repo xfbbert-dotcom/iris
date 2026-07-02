@@ -60,6 +60,12 @@ type DeadLetterBatchReplayRequest = {
   ids: string[];
 };
 
+type RegisterAuthorizedWikiDocumentRequest = {
+  sourceUri: string;
+  title?: string;
+  authorizedSpaceId: string;
+};
+
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const answerDraftRuntime =
@@ -210,6 +216,33 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       };
     } catch {
       return reply.code(500).send({ ok: false, error: "document_sync_enqueue_failed" });
+    }
+  });
+
+  app.post("/internal/document-sync/authorized-wiki-documents", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseRegisterAuthorizedWikiDocumentRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return {
+        ok: true,
+        ...(await documentSyncRuntime.registerAuthorizedWikiDocument({
+          ...parsedRequest,
+          observedAt: new Date(),
+        })),
+      };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "authorized_wiki_document_registration_failed"
+      });
     }
   });
 
@@ -481,6 +514,31 @@ function parseDeadLetterBatchReplayRequest(
   }
 
   return { ids: ids as string[] };
+}
+
+function parseRegisterAuthorizedWikiDocumentRequest(
+  value: unknown,
+): RegisterAuthorizedWikiDocumentRequest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const sourceUri = readNonBlankId(value.sourceUri);
+  const authorizedSpaceId = readNonBlankId(value.authorizedSpaceId);
+  const title = value.title === undefined ? undefined : readNonBlankId(value.title);
+  if (
+    sourceUri === undefined ||
+    authorizedSpaceId === undefined ||
+    (title === undefined && value.title !== undefined)
+  ) {
+    return undefined;
+  }
+
+  return {
+    sourceUri,
+    authorizedSpaceId,
+    ...(title === undefined ? {} : { title }),
+  };
 }
 
 function readNonBlankId(value: unknown): string | undefined {

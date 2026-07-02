@@ -31,6 +31,23 @@ describe("createDocumentSyncRuntime", () => {
     const documentSources = {
       findSourceById: vi.fn(),
       markSyncState: vi.fn(),
+      registerAuthorizedWikiDocument: vi.fn(async () => ({
+        id: "source-1",
+        sourceType: "authorized_wiki_document" as const,
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        title: "Handbook",
+        originGroupId: undefined,
+        originMessageId: undefined,
+        submittedByUserId: undefined,
+        authorizedSpaceId: "space-1",
+        permissionState: "unknown" as const,
+        syncState: "pending" as const,
+        canUseForAnswering: true,
+        canUseForKnowledgeDrafts: true,
+        createdAt: new Date("2026-07-03T03:00:00.000Z"),
+        updatedAt: new Date("2026-07-03T03:00:00.000Z"),
+        evidence: [],
+      })),
     };
     const snapshots = {
       insertSucceededSnapshot: vi.fn(),
@@ -241,6 +258,45 @@ describe("createDocumentSyncRuntime", () => {
     ).resolves.toEqual({
       status: "enqueued",
       documentSourceId: "source-1",
+    });
+    expect(manualPlanner.enqueueSource).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
+    });
+    await expect(
+      runtime?.registerAuthorizedWikiDocument({
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        title: "Handbook",
+        authorizedSpaceId: "space-1",
+        observedAt: new Date("2026-07-03T03:00:00.000Z"),
+      }),
+    ).resolves.toEqual({
+      source: {
+        id: "source-1",
+        sourceType: "authorized_wiki_document",
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        title: "Handbook",
+        originGroupId: undefined,
+        originMessageId: undefined,
+        submittedByUserId: undefined,
+        authorizedSpaceId: "space-1",
+        permissionState: "unknown",
+        syncState: "pending",
+        canUseForAnswering: true,
+        canUseForKnowledgeDrafts: true,
+        createdAt: new Date("2026-07-03T03:00:00.000Z"),
+        updatedAt: new Date("2026-07-03T03:00:00.000Z"),
+        evidence: [],
+      },
+      enqueue: {
+        status: "enqueued",
+        documentSourceId: "source-1",
+      },
+    });
+    expect(documentSources.registerAuthorizedWikiDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+      title: "Handbook",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-03T03:00:00.000Z"),
     });
     expect(manualPlanner.enqueueSource).toHaveBeenCalledWith({
       documentSourceId: "source-1",

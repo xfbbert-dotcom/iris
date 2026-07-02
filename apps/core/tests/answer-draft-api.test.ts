@@ -1126,6 +1126,128 @@ describe("document sync manual enqueue API", () => {
   });
 });
 
+describe("authorized wiki document registration API", () => {
+  it("returns 503 when document sync runtime is unavailable", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/authorized-wiki-documents",
+      payload: {
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        authorizedSpaceId: "space-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "document_sync_worker_unavailable" });
+  });
+
+  it("registers an authorized wiki document and enqueues sync", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      registerAuthorizedWikiDocument: vi.fn(async () => ({
+        source: authorizedWikiSource(),
+        enqueue: {
+          status: "enqueued" as const,
+          documentSourceId: "source-1",
+        },
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/authorized-wiki-documents",
+      payload: {
+        sourceUri: " https://docs.feishu.cn/docx/doc_token_1 ",
+        title: " Handbook ",
+        authorizedSpaceId: " space-1 ",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      source: {
+        id: "source-1",
+        sourceType: "authorized_wiki_document",
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        title: "Handbook",
+        authorizedSpaceId: "space-1",
+        permissionState: "unknown",
+        syncState: "pending",
+        canUseForAnswering: true,
+        canUseForKnowledgeDrafts: true,
+        createdAt: "2026-07-03T03:00:00.000Z",
+        updatedAt: "2026-07-03T03:00:00.000Z",
+        evidence: [],
+      },
+      enqueue: {
+        status: "enqueued",
+        documentSourceId: "source-1",
+      },
+    });
+    expect(runtime.registerAuthorizedWikiDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+      title: "Handbook",
+      authorizedSpaceId: "space-1",
+      observedAt: expect.any(Date),
+    });
+  });
+
+  it("rejects invalid authorized wiki document requests", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/authorized-wiki-documents",
+      payload: {
+        sourceUri: " ",
+        authorizedSpaceId: "space-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("returns 500 when authorized wiki registration fails", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      registerAuthorizedWikiDocument: vi.fn(async () => {
+        throw new Error("database unavailable");
+      }),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/authorized-wiki-documents",
+      payload: {
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        authorizedSpaceId: "space-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "authorized_wiki_document_registration_failed",
+    });
+  });
+});
+
 function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): ReindexWorkerRuntime {
   return {
     activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
@@ -1202,8 +1324,35 @@ function fakeDocumentSyncRuntime(
       status: "not_found" as const,
       documentSourceId: "missing",
     })),
+    registerAuthorizedWikiDocument: vi.fn(async () => ({
+      source: authorizedWikiSource(),
+      enqueue: {
+        status: "enqueued" as const,
+        documentSourceId: "source-1",
+      },
+    })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,
+  };
+}
+
+function authorizedWikiSource() {
+  return {
+    id: "source-1",
+    sourceType: "authorized_wiki_document" as const,
+    sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+    title: "Handbook",
+    originGroupId: undefined,
+    originMessageId: undefined,
+    submittedByUserId: undefined,
+    authorizedSpaceId: "space-1",
+    permissionState: "unknown" as const,
+    syncState: "pending" as const,
+    canUseForAnswering: true,
+    canUseForKnowledgeDrafts: true,
+    createdAt: new Date("2026-07-03T03:00:00.000Z"),
+    updatedAt: new Date("2026-07-03T03:00:00.000Z"),
+    evidence: [],
   };
 }

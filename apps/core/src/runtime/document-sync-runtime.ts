@@ -40,7 +40,10 @@ import {
   type ManualDocumentSyncEnqueueResult,
   type ManualDocumentSyncPlanner,
 } from "../documents/manual-document-sync-planner.js";
-import { createPostgresDocumentSourceRegistry } from "../documents/postgres-document-source-registry.js";
+import {
+  createPostgresDocumentSourceRegistry,
+  type AsyncDocumentSourceRegistry,
+} from "../documents/postgres-document-source-registry.js";
 import {
   createRedisDocumentSyncQueue,
   type RedisDocumentSyncQueueClient,
@@ -63,6 +66,12 @@ import {
 export type DocumentSyncRuntime = {
   getStatus(): Promise<DocumentSyncRuntimeStatus>;
   enqueueSource(input: { documentSourceId: string }): Promise<ManualDocumentSyncEnqueueResult>;
+  registerAuthorizedWikiDocument(
+    input: Parameters<AsyncDocumentSourceRegistry["registerAuthorizedWikiDocument"]>[0],
+  ): Promise<{
+    source: Awaited<ReturnType<AsyncDocumentSourceRegistry["registerAuthorizedWikiDocument"]>>;
+    enqueue: ManualDocumentSyncEnqueueResult;
+  }>;
   deadLetters: {
     list(input: { limit: number }): Promise<DocumentSyncDeadLetter[]>;
     replay(id: string): Promise<"replayed" | "not_found" | "unsupported_legacy_item">;
@@ -90,6 +99,8 @@ type DocumentSyncRuntimeSnapshots = DocumentSyncSnapshotWriter & {
     limit: number;
   }): Promise<DocumentSnapshot[]>;
 };
+type DocumentSyncRuntimeDocumentSources = DocumentSyncRunnerRegistry &
+  Pick<AsyncDocumentSourceRegistry, "registerAuthorizedWikiDocument">;
 type DocumentSyncRuntimeQueue = Pick<
   DocumentSyncQueue,
   | "dequeueBatch"
@@ -116,7 +127,7 @@ type RedisClient = RedisDocumentSyncQueueClient &
 export type DocumentSyncRuntimeDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => PostgresPool;
   createRedisClient?: (url: string) => RedisClient;
-  createDocumentSourceRegistry?: (pool: PostgresPool) => DocumentSyncRunnerRegistry;
+  createDocumentSourceRegistry?: (pool: PostgresPool) => DocumentSyncRuntimeDocumentSources;
   createDocumentSnapshotRepository?: (dependencies: {
     queryable: Queryable;
   }) => DocumentSyncRuntimeSnapshots;
@@ -262,6 +273,12 @@ function createEnabledDocumentSyncRuntime({
     enqueueSource(input) {
       return manualPlanner.enqueueSource(input);
     },
+    async registerAuthorizedWikiDocument(input) {
+      const source = await documentSources.registerAuthorizedWikiDocument(input);
+      const enqueue = await manualPlanner.enqueueSource({ documentSourceId: source.id });
+
+      return { source, enqueue };
+    },
     deadLetters: {
       list(input) {
         return queue.listDeadLetters(input);
@@ -284,7 +301,7 @@ function createEnabledDocumentSyncRuntime({
   };
 }
 
-function createDefaultDocumentSourceRegistry(pool: PostgresPool): DocumentSyncRunnerRegistry {
+function createDefaultDocumentSourceRegistry(pool: PostgresPool): DocumentSyncRuntimeDocumentSources {
   return createPostgresDocumentSourceRegistry(pool as unknown as pg.Pool);
 }
 
