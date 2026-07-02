@@ -386,7 +386,14 @@ insert into document_source_evidence (
   created_at
 )
 values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-on conflict do nothing
+on conflict (
+  kind,
+  source_uri,
+  (coalesce(group_id, '')),
+  (coalesce(message_id, '')),
+  (coalesce(user_id, '')),
+  (coalesce(space_id, ''))
+) do nothing
 `,
       [
         existing.id,
