@@ -38,6 +38,10 @@ export interface DocumentSyncSnapshotWriter {
   }): MaybePromise<DocumentSnapshot>;
 }
 
+export interface SyncedSnapshotReindexer {
+  enqueueSyncedSnapshotReindex(input: { documentSnapshotId: string }): MaybePromise<void>;
+}
+
 export interface DocumentSyncPlanner {
   listSyncCandidates(): Promise<DocumentSource[]>;
 }
@@ -84,11 +88,13 @@ export function createDocumentSyncRunner({
   registry,
   snapshots,
   fetcher,
+  syncedSnapshotReindexer,
   now = () => new Date(),
 }: {
   registry: DocumentSyncRunnerRegistry;
   snapshots: DocumentSyncSnapshotWriter;
   fetcher: DocumentBodyFetcher;
+  syncedSnapshotReindexer?: SyncedSnapshotReindexer;
   now?: () => Date;
 }): DocumentSyncRunner {
   return {
@@ -143,6 +149,9 @@ export function createDocumentSyncRunner({
         fetchedAt: fetchResult.fetchedAt,
       });
       await registry.markSyncState(source.id, "synced");
+      await syncedSnapshotReindexer?.enqueueSyncedSnapshotReindex({
+        documentSnapshotId: snapshot.id,
+      });
 
       return { status: "synced", source, snapshot };
     },

@@ -192,6 +192,95 @@ describe("createDocumentSyncRunner", () => {
     });
   });
 
+  it("enqueues reindex after a successful sync snapshot is marked synced", async () => {
+    const candidate = source({ id: "source-to-reindex" });
+    const calls: string[] = [];
+    const succeededSnapshot = snapshot({
+      id: "snapshot-to-reindex",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchedAt,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) => {
+        calls.push(`mark:${syncState}`);
+        return source({ id, syncState: syncState as DocumentSource["syncState"] });
+      }),
+    };
+    const syncedSnapshotReindexer = {
+      enqueueSyncedSnapshotReindex: vi.fn(async (input: unknown) => {
+        calls.push("reindex");
+      }),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots: {
+        insertSucceededSnapshot: vi.fn(async () => {
+          calls.push("snapshot:succeeded");
+          return succeededSnapshot;
+        }),
+        insertFailedSnapshot: vi.fn(),
+      },
+      fetcher: {
+        fetch: vi.fn(async () => ({
+          bodyText: "Document body",
+          fetchedAt,
+        })),
+      },
+      syncedSnapshotReindexer,
+    });
+
+    await expect(runner.syncSourceById("source-to-reindex")).resolves.toMatchObject({
+      status: "synced",
+      snapshot: succeededSnapshot,
+    });
+    expect(calls).toEqual(["mark:syncing", "snapshot:succeeded", "mark:synced", "reindex"]);
+    expect(syncedSnapshotReindexer.enqueueSyncedSnapshotReindex).toHaveBeenCalledWith({
+      documentSnapshotId: "snapshot-to-reindex",
+    });
+  });
+
+  it("does not enqueue reindex after a failed sync snapshot", async () => {
+    const candidate = source({ id: "source-with-fetch-failure" });
+    const syncedSnapshotReindexer = {
+      enqueueSyncedSnapshotReindex: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry: {
+        findSourceById: vi.fn(async () => candidate),
+        markSyncState: vi.fn(async (id: string, syncState: string) =>
+          source({ id, syncState: syncState as DocumentSource["syncState"] }),
+        ),
+      },
+      snapshots: {
+        insertSucceededSnapshot: vi.fn(),
+        insertFailedSnapshot: vi.fn(async () =>
+          snapshot({
+            id: "snapshot-failed-no-reindex",
+            documentSourceId: candidate.id,
+            sourceUri: candidate.sourceUri,
+            fetchStatus: "failed",
+            bodyText: undefined,
+            fetchedAt: failedAt,
+          }),
+        ),
+      },
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw new Error("network unavailable");
+        }),
+      },
+      now: () => failedAt,
+      syncedSnapshotReindexer,
+    });
+
+    await expect(runner.syncSourceById("source-with-fetch-failure")).resolves.toMatchObject({
+      status: "failed",
+    });
+    expect(syncedSnapshotReindexer.enqueueSyncedSnapshotReindex).not.toHaveBeenCalled();
+  });
+
   it("records a failed snapshot and marks failed when fetching throws", async () => {
     const candidate = source({ id: "source-to-fail" });
     const calls: string[] = [];
