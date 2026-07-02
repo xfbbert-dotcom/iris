@@ -21,6 +21,7 @@ describe("createAnswerDraftRuntime", () => {
       createEmbeddingProfileRepository: vi.fn(() => ({
         getStaticDevelopmentProfile: vi.fn(async () => profile()),
         findOrCreateProfile: vi.fn(),
+        getProfileById: vi.fn(),
       })),
     };
 
@@ -43,6 +44,9 @@ describe("createAnswerDraftRuntime", () => {
     });
     expect(dependencies.createDocumentFragmentRepository).toHaveBeenCalledWith({
       queryable: pool,
+      embeddingProfiles: expect.objectContaining({
+        getProfileById: expect.any(Function),
+      }),
     });
     expect(dependencies.createModelProvider).toHaveBeenCalledWith({
       provider: "openai-compatible",
@@ -85,6 +89,7 @@ describe("createAnswerDraftRuntime", () => {
         createEmbeddingProfileRepository: vi.fn(() => ({
           getStaticDevelopmentProfile: vi.fn(async () => profile()),
           findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
         })),
       },
     });
@@ -120,6 +125,7 @@ describe("createAnswerDraftRuntime", () => {
           displayName: "OpenAI-compatible text-embedding-small (6d)",
         }),
       ),
+      getProfileById: vi.fn(),
     };
     const fragments = { searchSimilarFragments: vi.fn(async () => []) };
     const runtime = createAnswerDraftRuntime({
@@ -179,6 +185,7 @@ describe("createAnswerDraftRuntime", () => {
         createEmbeddingProfileRepository: vi.fn(() => ({
           getStaticDevelopmentProfile: vi.fn(),
           findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
         })),
       },
     });
@@ -212,6 +219,7 @@ describe("createAnswerDraftRuntime", () => {
         createEmbeddingProfileRepository: vi.fn(() => ({
           getStaticDevelopmentProfile: vi.fn(),
           findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
         })),
       },
     });

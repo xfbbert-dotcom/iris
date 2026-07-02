@@ -29,25 +29,36 @@ describe("DocumentFragmentRepository", () => {
       if (normalizeSql(sql).startsWith("delete from document_fragments")) {
         return { rows: [] };
       }
-      return {
-        rows: [
-          {
-            id: "fragment-1",
-            document_source_id: "source-1",
-            document_snapshot_id: "snapshot-1",
-            source_uri: "https://example.com/doc",
-            chunk_index: 0,
-            text: "Alpha",
-            content_hash: "hash-alpha",
-            embedding: "[1,2,3,4,5,6]",
-            embedding_profile_id: "static-dev-6d",
-            created_at: createdAt,
-          },
-        ],
-      };
+      if (normalizeSql(sql).startsWith("insert into document_fragments")) {
+        return {
+          rows: [
+            {
+              id: "fragment-1",
+              document_source_id: "source-1",
+              document_snapshot_id: "snapshot-1",
+              source_uri: "https://example.com/doc",
+              chunk_index: 0,
+              text: "Alpha",
+              content_hash: "hash-alpha",
+              embedding_profile_id: "static-dev-6d",
+              created_at: createdAt,
+            },
+          ],
+        };
+      }
+      if (normalizeSql(sql).startsWith("insert into document_fragment_embeddings_6")) {
+        return { rows: [] };
+      }
+      return { rows: [] };
     });
     const repository = createDocumentFragmentRepository({
       queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({
+          id: "static-dev-6d",
+          dimensions: 6,
+        })),
+      },
       createId: () => "fragment-1",
       now: () => createdAt,
     });
@@ -74,10 +85,13 @@ describe("DocumentFragmentRepository", () => {
       0,
       "Alpha",
       "b1a96dd646bccaa24cef7a3db22a6f995f05658f4f1c3272913e258c03e6fb24",
-      "[1,2,3,4,5,6]",
       "static-dev-6d",
       createdAt,
     ]);
+    expect(normalizeSql(calls[2]?.sql ?? "")).toContain(
+      "insert into document_fragment_embeddings_6",
+    );
+    expect(calls[2]?.values).toEqual(["fragment-1", "static-dev-6d", "[1,2,3,4,5,6]", createdAt]);
     expect(fragments).toEqual<DocumentFragment[]>([
       {
         id: "fragment-1",
@@ -98,14 +112,82 @@ describe("DocumentFragmentRepository", () => {
     expect(serializeVector([1, 0.5, -2])).toBe("[1,0.5,-2]");
   });
 
+  it("routes 1536-dimensional writes to the 1536 embedding table", async () => {
+    const createdAt = new Date("2026-07-02T01:00:00.000Z");
+    const vector = Array.from({ length: 1536 }, (_, index) => index / 1536);
+    const calls: Array<{ sql: string; values?: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      calls.push({ sql, values });
+      if (normalizeSql(sql).startsWith("delete from document_fragments")) {
+        return { rows: [] };
+      }
+      if (normalizeSql(sql).startsWith("insert into document_fragments")) {
+        return {
+          rows: [
+            {
+              id: "fragment-1536",
+              document_source_id: "source-1",
+              document_snapshot_id: "snapshot-1",
+              source_uri: "https://example.com/doc",
+              chunk_index: 0,
+              text: "Alpha",
+              content_hash: "hash-alpha",
+              embedding_profile_id: "openai-compatible:text-embedding-small:1536",
+              created_at: createdAt,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({
+          id: "openai-compatible:text-embedding-small:1536",
+          dimensions: 1536,
+        })),
+      },
+      createId: () => "fragment-1536",
+      now: () => createdAt,
+    });
+
+    await repository.replaceFragmentsForSnapshot({
+      documentSourceId: "source-1",
+      documentSnapshotId: "snapshot-1",
+      sourceUri: "https://example.com/doc",
+      embeddingProfileId: "openai-compatible:text-embedding-small:1536",
+      chunks: [{ chunkIndex: 0, text: "Alpha" }],
+      embeddings: [vector],
+    });
+
+    expect(normalizeSql(calls[2]?.sql ?? "")).toContain(
+      "insert into document_fragment_embeddings_1536",
+    );
+    expect(calls[2]?.values).toEqual([
+      "fragment-1536",
+      "openai-compatible:text-embedding-small:1536",
+      `[${vector.join(",")}]`,
+      createdAt,
+    ]);
+  });
+
   it("builds vector search query with limit", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
-      expect(normalizeSql(sql)).toContain("where embedding_profile_id = $1");
-      expect(normalizeSql(sql)).toContain("order by embedding <=> $2::vector asc");
+      expect(normalizeSql(sql)).toContain("from document_fragments f");
+      expect(normalizeSql(sql)).toContain("join document_fragment_embeddings_6 e");
+      expect(normalizeSql(sql)).toContain("where f.embedding_profile_id = $1");
+      expect(normalizeSql(sql)).toContain("and e.embedding_profile_id = $1");
+      expect(normalizeSql(sql)).toContain("order by e.embedding <=> $2::vector asc");
       expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 3]);
       return { rows: [] };
     });
-    const repository = createDocumentFragmentRepository({ queryable: queryableFrom(query) });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
 
     await expect(
       repository.searchSimilarFragments({
@@ -114,6 +196,40 @@ describe("DocumentFragmentRepository", () => {
         limit: 3,
       }),
     ).resolves.toEqual([]);
+  });
+
+  it("rejects unsupported embedding dimensions", async () => {
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(vi.fn(async () => ({ rows: [] }))),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "profile-3072", dimensions: 3072 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "profile-3072",
+        embedding: [1, 2, 3],
+        limit: 3,
+      }),
+    ).rejects.toThrow("Unsupported embedding dimension: 3072");
+  });
+
+  it("rejects vectors whose length does not match the profile dimension", async () => {
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(vi.fn(async () => ({ rows: [] }))),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3],
+        limit: 3,
+      }),
+    ).rejects.toThrow("embedding vector length 3 does not match profile dimension 6");
   });
 });
 
@@ -190,7 +306,12 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
       throw new Error("Expected Postgres pool to be initialized");
     }
 
-    const repository = createDocumentFragmentRepository({ queryable: pool });
+    const repository = createDocumentFragmentRepository({
+      queryable: pool,
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
 
     await repository.replaceFragmentsForSnapshot({
       documentSourceId: sourceId,
@@ -206,7 +327,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
         documentSourceId: sourceId,
         documentSnapshotId: snapshotId,
         text: "Alpha body",
-        embedding: [1, 0, 0, 0, 0, 0],
+        embedding: [],
         embeddingProfileId: "static-dev-6d",
       }),
     ]);

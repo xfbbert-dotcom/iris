@@ -31,13 +31,16 @@ export type AnswerDraftRuntime = {
 
 export type AnswerDraftRuntimeDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => Queryable & { end(): Promise<void> };
-  createDocumentFragmentRepository?: (dependencies: { queryable: Queryable }) => Pick<DocumentFragmentRepository, "searchSimilarFragments">;
+  createDocumentFragmentRepository?: (dependencies: {
+    queryable: Queryable;
+    embeddingProfiles: Pick<EmbeddingProfileRepository, "getProfileById">;
+  }) => Pick<DocumentFragmentRepository, "searchSimilarFragments">;
   createModelProvider?: (config: ModelProviderConfig) => {
     generateAnswerDraft(input: { question: string; promptContext: string }): Promise<{ answerText: string }>;
   };
   createEmbeddingProfileRepository?: (dependencies: { queryable: Queryable }) => Pick<
     EmbeddingProfileRepository,
-    "getStaticDevelopmentProfile" | "findOrCreateProfile"
+    "getStaticDevelopmentProfile" | "findOrCreateProfile" | "getProfileById"
   >;
   createEmbeddingProvider?: (config: EmbeddingProviderConfig) => EmbeddingProvider;
 };
@@ -76,8 +79,8 @@ export function createAnswerDraftRuntime({
     ((config: EmbeddingProviderConfig) => createOpenAICompatibleEmbeddingProvider({ config }));
 
   const pool = createPool(readDatabaseConfig(env));
-  const fragments = createFragments({ queryable: pool });
   const profiles = createProfiles({ queryable: pool });
+  const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
   const model = createModel(modelConfig);
   const embeddingConfig = readEmbeddingProviderConfig(env);
   let runtimeEmbeddingPromise: Promise<RuntimeEmbedding> | undefined;
