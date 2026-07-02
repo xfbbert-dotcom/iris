@@ -13,8 +13,9 @@ describe("DocumentReindexWorker", () => {
         fragmentCount: 3,
       })),
     };
+    const queue = queueFixture([job()]);
     const worker = createDocumentReindexWorker({
-      queue: { dequeueBatch: vi.fn(async () => [job()]) },
+      queue,
       snapshots: { findSnapshotById: vi.fn(async () => snapshot({ id: "snapshot-1" })) },
       fragments: { hasFragmentsForSnapshotProfile: vi.fn(async () => false) },
       indexer,
@@ -33,7 +34,7 @@ describe("DocumentReindexWorker", () => {
 
   it("skips missing snapshots", async () => {
     const worker = createDocumentReindexWorker({
-      queue: { dequeueBatch: vi.fn(async () => [job()]) },
+      queue: queueFixture([job()]),
       snapshots: { findSnapshotById: vi.fn(async () => undefined) },
       fragments: { hasFragmentsForSnapshotProfile: vi.fn() },
       indexer: { indexSnapshot: vi.fn() },
@@ -51,7 +52,7 @@ describe("DocumentReindexWorker", () => {
 
   it("skips failed snapshots", async () => {
     const worker = createDocumentReindexWorker({
-      queue: { dequeueBatch: vi.fn(async () => [job()]) },
+      queue: queueFixture([job()]),
       snapshots: {
         findSnapshotById: vi.fn(async () => snapshot({ fetchStatus: "failed", bodyText: undefined })),
       },
@@ -71,7 +72,7 @@ describe("DocumentReindexWorker", () => {
 
   it("skips already indexed snapshot profile jobs", async () => {
     const worker = createDocumentReindexWorker({
-      queue: { dequeueBatch: vi.fn(async () => [job()]) },
+      queue: queueFixture([job()]),
       snapshots: { findSnapshotById: vi.fn(async () => snapshot()) },
       fragments: { hasFragmentsForSnapshotProfile: vi.fn(async () => true) },
       indexer: { indexSnapshot: vi.fn() },
@@ -86,7 +87,115 @@ describe("DocumentReindexWorker", () => {
       },
     ]);
   });
+
+  it("requeues failed processing jobs below the retry limit", async () => {
+    const queuedJob = job();
+    const queue = queueFixture([queuedJob], { action: "requeued", attempts: 1 });
+    const worker = createDocumentReindexWorker({
+      queue,
+      snapshots: { findSnapshotById: vi.fn(async () => snapshot()) },
+      fragments: { hasFragmentsForSnapshotProfile: vi.fn(async () => false) },
+      indexer: { indexSnapshot: vi.fn(async () => Promise.reject(new Error("embedding failed"))) },
+    });
+
+    await expect(worker.processBatch({ limit: 10 })).resolves.toEqual([
+      {
+        status: "failed",
+        documentSnapshotId: "snapshot-1",
+        embeddingProfileId: "profile-1536",
+        reason: "processing_error",
+        errorMessage: "embedding failed",
+        retryAction: "requeued",
+        attempts: 1,
+      },
+    ]);
+    expect(queue.handleFailedJob).toHaveBeenCalledWith({
+      job: queuedJob,
+      errorMessage: "embedding failed",
+    });
+  });
+
+  it("dead-letters failed processing jobs at the retry limit", async () => {
+    const queuedJob = job({ attempts: 2 });
+    const queue = queueFixture([queuedJob], { action: "dead_lettered", attempts: 3 });
+    const worker = createDocumentReindexWorker({
+      queue,
+      snapshots: { findSnapshotById: vi.fn(async () => snapshot()) },
+      fragments: { hasFragmentsForSnapshotProfile: vi.fn(async () => false) },
+      indexer: { indexSnapshot: vi.fn(async () => Promise.reject(new Error("embedding failed"))) },
+    });
+
+    await expect(worker.processBatch({ limit: 10 })).resolves.toEqual([
+      {
+        status: "failed",
+        documentSnapshotId: "snapshot-1",
+        embeddingProfileId: "profile-1536",
+        reason: "processing_error",
+        errorMessage: "embedding failed",
+        retryAction: "dead_lettered",
+        attempts: 3,
+      },
+    ]);
+  });
+
+  it("continues processing later jobs when one job fails", async () => {
+    const firstJob = job({ documentSnapshotId: "snapshot-1" });
+    const secondJob = job({
+      idempotencyKey: "reindex:profile-1536:snapshot-2",
+      documentSnapshotId: "snapshot-2",
+    });
+    const indexer = {
+      indexSnapshot: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("embedding failed"))
+        .mockResolvedValueOnce({
+          status: "indexed" as const,
+          snapshotId: "snapshot-2",
+          fragmentCount: 1,
+        }),
+    };
+    const worker = createDocumentReindexWorker({
+      queue: queueFixture([firstJob, secondJob], { action: "requeued", attempts: 1 }),
+      snapshots: {
+        findSnapshotById: vi.fn(async (id: string) => snapshot({ id })),
+      },
+      fragments: { hasFragmentsForSnapshotProfile: vi.fn(async () => false) },
+      indexer,
+    });
+
+    await expect(worker.processBatch({ limit: 10 })).resolves.toEqual([
+      {
+        status: "failed",
+        documentSnapshotId: "snapshot-1",
+        embeddingProfileId: "profile-1536",
+        reason: "processing_error",
+        errorMessage: "embedding failed",
+        retryAction: "requeued",
+        attempts: 1,
+      },
+      {
+        status: "indexed",
+        documentSnapshotId: "snapshot-2",
+        embeddingProfileId: "profile-1536",
+        fragmentCount: 1,
+      },
+    ]);
+    expect(indexer.indexSnapshot).toHaveBeenCalledTimes(2);
+  });
 });
+
+function queueFixture(
+  jobs: DocumentReindexJob[],
+  failedResult: { action: "requeued" | "dead_lettered"; attempts: number } = {
+    action: "requeued",
+    attempts: 1,
+  },
+) {
+  return {
+    dequeueBatch: vi.fn(async () => jobs),
+    handleFailedJob: vi.fn(async () => failedResult),
+  };
+}
 
 function job(overrides: Partial<DocumentReindexJob> = {}): DocumentReindexJob {
   return {

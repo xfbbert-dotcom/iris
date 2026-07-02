@@ -9,10 +9,19 @@ export type DocumentReindexJobResult =
       documentSnapshotId: string;
       embeddingProfileId: string;
       reason: "already_indexed" | "snapshot_not_successful" | "snapshot_not_found";
+    }
+  | {
+      status: "failed";
+      documentSnapshotId: string;
+      embeddingProfileId: string;
+      reason: "processing_error";
+      errorMessage: string;
+      retryAction: "requeued" | "dead_lettered";
+      attempts: number;
     };
 
 export type DocumentReindexWorkerDependencies = {
-  queue: Pick<DocumentReindexQueue, "dequeueBatch">;
+  queue: Pick<DocumentReindexQueue, "dequeueBatch" | "handleFailedJob">;
   snapshots: {
     findSnapshotById(id: string): Promise<DocumentSnapshot | undefined>;
   };
@@ -34,7 +43,21 @@ export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerD
       const results: DocumentReindexJobResult[] = [];
 
       for (const job of jobs) {
-        results.push(await processJob(dependencies, job));
+        try {
+          results.push(await processJob(dependencies, job));
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const retryResult = await dependencies.queue.handleFailedJob({ job, errorMessage });
+          results.push({
+            status: "failed",
+            documentSnapshotId: job.documentSnapshotId,
+            embeddingProfileId: job.embeddingProfileId,
+            reason: "processing_error",
+            errorMessage,
+            retryAction: retryResult.action,
+            attempts: retryResult.attempts,
+          });
+        }
       }
 
       return results;
