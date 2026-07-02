@@ -25,7 +25,6 @@ describe("LiveChatContextProvider", () => {
           chatId: "oc_1",
           senderId: null,
           messageType: "image",
-          text: null,
           sentAt: new Date("2026-07-02T10:01:00.000Z"),
           rawEventIdempotencyKey: "event-2",
           createdAt: new Date("2026-07-02T10:01:01.000Z"),

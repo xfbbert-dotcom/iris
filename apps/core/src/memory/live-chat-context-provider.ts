@@ -20,7 +20,7 @@ export function createLiveChatContextProvider({
       return messages
         .slice()
         .reverse()
-        .filter((message) => message.text !== null && message.text.trim().length > 0)
+        .filter((message) => typeof message.text === "string" && message.text.trim().length > 0)
         .map((message) => ({
           speaker: message.senderId ?? "unknown",
           text: message.text!.trim(),
