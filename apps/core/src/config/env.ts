@@ -10,6 +10,15 @@ export type ModelProviderConfig = {
   timeoutMs: number;
 };
 
+export type EmbeddingProviderConfig = {
+  provider: "openai-compatible";
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  dimensions?: number;
+  timeoutMs: number;
+};
+
 export type AnswerDraftRuntimeConfig =
   | { enabled: false }
   | { enabled: true; permissionMode: "allow-indexed" };
@@ -36,6 +45,38 @@ export function readModelProviderConfig(env: EnvLike = process.env): ModelProvid
     apiKey: readRequiredEnv("IRIS_MODEL_API_KEY", env.IRIS_MODEL_API_KEY),
     model: readRequiredEnv("IRIS_MODEL_NAME", env.IRIS_MODEL_NAME),
     timeoutMs: readPositiveIntegerEnv("IRIS_MODEL_TIMEOUT_MS", env.IRIS_MODEL_TIMEOUT_MS, 30000)
+  };
+}
+
+export function readEmbeddingProviderConfig(
+  env: EnvLike = process.env
+): EmbeddingProviderConfig | undefined {
+  const provider = readOptionalEnv(env.IRIS_EMBEDDING_PROVIDER);
+  if (provider === undefined) {
+    return undefined;
+  }
+  if (provider !== "openai-compatible") {
+    throw new Error(`Unsupported IRIS_EMBEDDING_PROVIDER: ${provider}`);
+  }
+
+  const dimensions = readOptionalPositiveIntegerEnv(
+    "IRIS_EMBEDDING_DIMENSIONS",
+    env.IRIS_EMBEDDING_DIMENSIONS
+  );
+
+  return {
+    provider,
+    baseUrl: trimTrailingSlash(
+      readRequiredEnv("IRIS_EMBEDDING_BASE_URL", env.IRIS_EMBEDDING_BASE_URL)
+    ),
+    apiKey: readRequiredEnv("IRIS_EMBEDDING_API_KEY", env.IRIS_EMBEDDING_API_KEY),
+    model: readRequiredEnv("IRIS_EMBEDDING_MODEL", env.IRIS_EMBEDDING_MODEL),
+    ...(dimensions === undefined ? {} : { dimensions }),
+    timeoutMs: readPositiveIntegerEnv(
+      "IRIS_EMBEDDING_TIMEOUT_MS",
+      env.IRIS_EMBEDDING_TIMEOUT_MS,
+      30000
+    )
   };
 }
 
@@ -80,6 +121,23 @@ function readPositiveIntegerEnv(
   const trimmed = readOptionalEnv(value);
   if (trimmed === undefined) {
     return defaultValue;
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+
+  return parsed;
+}
+
+function readOptionalPositiveIntegerEnv(
+  name: string,
+  value: string | undefined
+): number | undefined {
+  const trimmed = readOptionalEnv(value);
+  if (trimmed === undefined) {
+    return undefined;
   }
 
   const parsed = Number(trimmed);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   readAnswerDraftRuntimeConfig,
+  readEmbeddingProviderConfig,
   readFeishuAuthConfig,
   readModelProviderConfig,
 } from "../src/config/env.js";
@@ -70,6 +71,80 @@ describe("readModelProviderConfig", () => {
         IRIS_MODEL_TIMEOUT_MS: "0",
       }),
     ).toThrow("IRIS_MODEL_TIMEOUT_MS must be a positive integer");
+  });
+});
+
+describe("readEmbeddingProviderConfig", () => {
+  it("returns undefined when no embedding provider is configured", () => {
+    expect(readEmbeddingProviderConfig({})).toBeUndefined();
+  });
+
+  it("reads openai-compatible embedding config and trims values", () => {
+    expect(
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: " openai-compatible ",
+        IRIS_EMBEDDING_BASE_URL: " https://api.example.com/v1/ ",
+        IRIS_EMBEDDING_API_KEY: " key-a ",
+        IRIS_EMBEDDING_MODEL: " embedding-model ",
+        IRIS_EMBEDDING_DIMENSIONS: " 1536 ",
+        IRIS_EMBEDDING_TIMEOUT_MS: " 2500 ",
+      }),
+    ).toEqual({
+      provider: "openai-compatible",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "key-a",
+      model: "embedding-model",
+      dimensions: 1536,
+      timeoutMs: 2500,
+    });
+  });
+
+  it("omits dimensions when not configured", () => {
+    expect(
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+      }),
+    ).toEqual({
+      provider: "openai-compatible",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "key-a",
+      model: "embedding-model",
+      timeoutMs: 30000,
+    });
+  });
+
+  it("rejects incomplete openai-compatible embedding config", () => {
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+      }),
+    ).toThrow("IRIS_EMBEDDING_API_KEY is required");
+  });
+
+  it("rejects invalid dimensions and timeout values", () => {
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+        IRIS_EMBEDDING_DIMENSIONS: "-1",
+      }),
+    ).toThrow("IRIS_EMBEDDING_DIMENSIONS must be a positive integer");
+
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+        IRIS_EMBEDDING_TIMEOUT_MS: "0",
+      }),
+    ).toThrow("IRIS_EMBEDDING_TIMEOUT_MS must be a positive integer");
   });
 });
 
