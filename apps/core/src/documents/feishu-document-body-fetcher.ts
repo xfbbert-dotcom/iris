@@ -16,6 +16,14 @@ const supportedSourceTypes = new Set<DocumentSourceType>([
 ]);
 
 export function parseFeishuDocxDocumentId(sourceUri: string): string | undefined {
+  return parseFeishuPathToken(sourceUri, ["docx", "docs"]);
+}
+
+export function parseFeishuWikiNodeToken(sourceUri: string): string | undefined {
+  return parseFeishuPathToken(sourceUri, ["wiki"]);
+}
+
+function parseFeishuPathToken(sourceUri: string, markers: string[]): string | undefined {
   let url: URL;
   try {
     url = new URL(sourceUri);
@@ -24,13 +32,13 @@ export function parseFeishuDocxDocumentId(sourceUri: string): string | undefined
   }
 
   const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
-  const markerIndex = segments.findIndex((segment) => segment === "docx" || segment === "docs");
+  const markerIndex = segments.findIndex((segment) => markers.includes(segment));
   if (markerIndex < 0) {
     return undefined;
   }
 
-  const documentId = segments[markerIndex + 1];
-  return documentId === undefined || documentId.trim().length === 0 ? undefined : documentId;
+  const token = segments[markerIndex + 1];
+  return token === undefined || token.trim().length === 0 ? undefined : token;
 }
 
 export function createFeishuDocumentBodyFetcher({
@@ -42,12 +50,17 @@ export function createFeishuDocumentBodyFetcher({
   return {
     async fetch(source: DocumentSource): Promise<DocumentBodyFetchResult> {
       assertSupportedSourceType(source.sourceType);
-      const documentId = parseFeishuDocxDocumentId(source.sourceUri);
+      const tenantAccessToken = await tokenProvider.getTenantAccessToken();
+      const documentId = await resolveDocumentId({
+        baseUrl,
+        sourceUri: source.sourceUri,
+        tenantAccessToken,
+        fetch,
+      });
       if (documentId === undefined) {
         throw new Error(`unsupported Feishu docx URL: ${source.sourceUri}`);
       }
 
-      const tenantAccessToken = await tokenProvider.getTenantAccessToken();
       const response = await fetch(
         `${trimTrailingSlash(baseUrl)}/open-apis/docx/v1/documents/${encodeURIComponent(
           documentId,
@@ -57,7 +70,10 @@ export function createFeishuDocumentBodyFetcher({
           headers: { authorization: `Bearer ${tenantAccessToken}` },
         },
       );
-      const responseBody = await readJsonResponse(response);
+      const responseBody = await readJsonResponse(
+        response,
+        "Feishu document raw content response was not valid JSON",
+      );
 
       if (!response.ok) {
         throw new Error(
@@ -76,18 +92,108 @@ export function createFeishuDocumentBodyFetcher({
   };
 }
 
+async function resolveDocumentId({
+  baseUrl,
+  sourceUri,
+  tenantAccessToken,
+  fetch,
+}: {
+  baseUrl: string;
+  sourceUri: string;
+  tenantAccessToken: string;
+  fetch: typeof globalThis.fetch;
+}): Promise<string | undefined> {
+  const directDocumentId = parseFeishuDocxDocumentId(sourceUri);
+  if (directDocumentId !== undefined) {
+    return directDocumentId;
+  }
+
+  const wikiNodeToken = parseFeishuWikiNodeToken(sourceUri);
+  if (wikiNodeToken === undefined) {
+    return undefined;
+  }
+
+  return await fetchWikiDocumentId({ baseUrl, wikiNodeToken, tenantAccessToken, fetch });
+}
+
+async function fetchWikiDocumentId({
+  baseUrl,
+  wikiNodeToken,
+  tenantAccessToken,
+  fetch,
+}: {
+  baseUrl: string;
+  wikiNodeToken: string;
+  tenantAccessToken: string;
+  fetch: typeof globalThis.fetch;
+}): Promise<string> {
+  const response = await fetch(
+    `${trimTrailingSlash(baseUrl)}/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(
+      wikiNodeToken,
+    )}`,
+    {
+      method: "GET",
+      headers: { authorization: `Bearer ${tenantAccessToken}` },
+    },
+  );
+  const responseBody = await readJsonResponse(
+    response,
+    "Feishu wiki node response was not valid JSON",
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Feishu wiki node request failed with status ${response.status}: ${readErrorMessage(
+        responseBody,
+      )}`,
+    );
+  }
+
+  return readWikiDocumentId(responseBody);
+}
+
 function assertSupportedSourceType(sourceType: DocumentSourceType): void {
   if (!supportedSourceTypes.has(sourceType)) {
     throw new Error(`unsupported Feishu document source type: ${sourceType}`);
   }
 }
 
-async function readJsonResponse(response: Response): Promise<unknown> {
+async function readJsonResponse(response: Response, errorMessage: string): Promise<unknown> {
   try {
     return await response.json();
   } catch {
-    throw new Error("Feishu document raw content response was not valid JSON");
+    throw new Error(errorMessage);
   }
+}
+
+function readWikiDocumentId(responseBody: unknown): string {
+  if (!isRecord(responseBody)) {
+    throw new Error("Feishu wiki node response did not include document token");
+  }
+
+  const code = responseBody.code;
+  if (typeof code === "number" && code !== 0) {
+    throw new Error(`Feishu wiki node request failed: ${readErrorMessage(responseBody)}`);
+  }
+
+  if (!isRecord(responseBody.data) || !isRecord(responseBody.data.node)) {
+    throw new Error("Feishu wiki node response did not include document token");
+  }
+
+  const objectType = responseBody.data.node.obj_type;
+  if (typeof objectType !== "string" || objectType.trim().length === 0) {
+    throw new Error("Feishu wiki node response did not include document token");
+  }
+  if (objectType !== "docx" && objectType !== "doc") {
+    throw new Error(`unsupported Feishu wiki object type: ${objectType}`);
+  }
+
+  const objectToken = responseBody.data.node.obj_token;
+  if (typeof objectToken !== "string" || objectToken.trim().length === 0) {
+    throw new Error("Feishu wiki node response did not include document token");
+  }
+
+  return objectToken.trim();
 }
 
 function readRawContent(responseBody: unknown): string {
