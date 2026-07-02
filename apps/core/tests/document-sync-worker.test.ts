@@ -1,0 +1,130 @@
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  createDocumentSyncWorker,
+  type DocumentSyncWorkerResult,
+} from "../src/documents/document-sync-worker.js";
+import {
+  createDocumentSyncIdempotencyKey,
+  type DocumentSyncJob,
+} from "../src/documents/document-sync-queue.js";
+import type { DocumentSource } from "../src/documents/document-source-registry.js";
+
+describe("DocumentSyncWorker", () => {
+  it("processes document sync jobs through the runner", async () => {
+    const job = jobFixture({ documentSourceId: "source-1" });
+    const queue = { dequeueBatch: vi.fn(async () => [job]) };
+    const runner = {
+      syncSourceById: vi.fn(async () => ({
+        status: "synced" as const,
+        source: sourceFixture({ id: "source-1" }),
+        snapshot: {},
+      })),
+    };
+    const worker = createDocumentSyncWorker({ queue, runner });
+
+    await expect(worker.processBatch({ limit: 10.9 })).resolves.toEqual([
+      {
+        status: "processed",
+        idempotencyKey: job.idempotencyKey,
+        documentSourceId: "source-1",
+        syncStatus: "synced",
+      },
+    ] satisfies DocumentSyncWorkerResult[]);
+    expect(queue.dequeueBatch).toHaveBeenCalledWith(10);
+    expect(runner.syncSourceById).toHaveBeenCalledWith("source-1");
+  });
+
+  it("treats runner-handled failed syncs as processed jobs", async () => {
+    const job = jobFixture({ documentSourceId: "source-failed" });
+    const worker = createDocumentSyncWorker({
+      queue: { dequeueBatch: vi.fn(async () => [job]) },
+      runner: {
+        syncSourceById: vi.fn(async () => ({
+          status: "failed" as const,
+          source: sourceFixture({ id: "source-failed" }),
+          snapshot: {},
+          errorMessage: "fetch failed",
+        })),
+      },
+    });
+
+    await expect(worker.processBatch({ limit: 1 })).resolves.toEqual([
+      {
+        status: "processed",
+        idempotencyKey: job.idempotencyKey,
+        documentSourceId: "source-failed",
+        syncStatus: "failed",
+      },
+    ]);
+  });
+
+  it("records thrown runner errors and continues processing", async () => {
+    const first = jobFixture({ documentSourceId: "source-1" });
+    const second = jobFixture({ documentSourceId: "source-2" });
+    const worker = createDocumentSyncWorker({
+      queue: { dequeueBatch: vi.fn(async () => [first, second]) },
+      runner: {
+        syncSourceById: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("runner crashed"))
+          .mockResolvedValueOnce({
+            status: "skipped",
+            source: sourceFixture({ id: "source-2" }),
+            reason: "already_synced",
+          }),
+      },
+    });
+
+    await expect(worker.processBatch({ limit: 5 })).resolves.toEqual([
+      {
+        status: "failed",
+        idempotencyKey: first.idempotencyKey,
+        documentSourceId: "source-1",
+        errorMessage: "runner crashed",
+      },
+      {
+        status: "processed",
+        idempotencyKey: second.idempotencyKey,
+        documentSourceId: "source-2",
+        syncStatus: "skipped",
+      },
+    ]);
+  });
+});
+
+function jobFixture(overrides: Partial<DocumentSyncJob> = {}): DocumentSyncJob {
+  const documentSourceId = overrides.documentSourceId ?? "source-1";
+
+  return {
+    idempotencyKey:
+      overrides.idempotencyKey ?? createDocumentSyncIdempotencyKey({ documentSourceId }),
+    documentSourceId,
+    reason: "discovered_group_document",
+    enqueuedAt: new Date("2026-07-03T02:00:00.000Z"),
+    attempts: 0,
+    ...overrides,
+  };
+}
+
+function sourceFixture(overrides: Partial<DocumentSource> = {}): DocumentSource {
+  const createdAt = new Date("2026-07-03T02:00:00.000Z");
+
+  return {
+    id: "source-1",
+    sourceType: "group_visible_document",
+    sourceUri: "https://docs.feishu.cn/docx/a",
+    originGroupId: "chat-1",
+    originMessageId: "message-1",
+    submittedByUserId: undefined,
+    authorizedSpaceId: undefined,
+    permissionState: "unknown",
+    syncState: "pending",
+    canUseForAnswering: true,
+    canUseForKnowledgeDrafts: true,
+    createdAt,
+    updatedAt: createdAt,
+    evidence: [],
+    ...overrides,
+  };
+}
