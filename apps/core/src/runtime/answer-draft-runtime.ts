@@ -135,11 +135,7 @@ async function resolveRuntimeEmbedding({
       "IRIS_EMBEDDING_DIMENSIONS is required when internal answer drafts use an embedding provider",
     );
   }
-  if (embeddingConfig.dimensions !== 6) {
-    throw new Error(
-      "IRIS_EMBEDDING_DIMENSIONS must be 6 until document_fragments vector storage is migrated",
-    );
-  }
+  assertSupportedRuntimeEmbeddingDimension(embeddingConfig.dimensions);
 
   return {
     profile: await profiles.findOrCreateProfile({
@@ -150,6 +146,12 @@ async function resolveRuntimeEmbedding({
     }),
     embedder: createEmbeddingProvider(embeddingConfig),
   };
+}
+
+function assertSupportedRuntimeEmbeddingDimension(dimension: number): void {
+  if (dimension !== 6 && dimension !== 1536) {
+    throw new Error(`Unsupported embedding dimension: ${dimension}`);
+  }
 }
 
 function createStaticQueryEmbeddingProvider() {

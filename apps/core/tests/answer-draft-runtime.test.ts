@@ -200,7 +200,31 @@ describe("createAnswerDraftRuntime", () => {
     );
   });
 
-  it("rejects non-6 embedding dimensions until vector storage is migrated when generating a draft", async () => {
+  it("uses configured OpenAI-compatible embedding provider when dimensions are 1536", async () => {
+    const vector = Array.from({ length: 1536 }, (_, index) => index / 1536);
+    const embeddingProvider = { embedTexts: vi.fn(async () => [vector]) };
+    const embeddingProfiles = {
+      getStaticDevelopmentProfile: vi.fn(),
+      findOrCreateProfile: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:text-embedding-small:1536",
+          provider: "openai-compatible",
+          model: "text-embedding-small",
+          dimensions: 1536,
+          displayName: "OpenAI-compatible text-embedding-small (1536d)",
+        }),
+      ),
+      getProfileById: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:text-embedding-small:1536",
+          provider: "openai-compatible",
+          model: "text-embedding-small",
+          dimensions: 1536,
+          displayName: "OpenAI-compatible text-embedding-small (1536d)",
+        }),
+      ),
+    };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
     const runtime = createAnswerDraftRuntime({
       env: {
         ...enabledEnv(),
@@ -209,6 +233,45 @@ describe("createAnswerDraftRuntime", () => {
         IRIS_EMBEDDING_API_KEY: "embed-key",
         IRIS_EMBEDDING_MODEL: "text-embedding-small",
         IRIS_EMBEDDING_DIMENSIONS: "1536",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => embeddingProfiles),
+        createEmbeddingProvider: vi.fn(() => embeddingProvider),
+      },
+    });
+
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "Use production embedder?",
+      liveChatMessages: [],
+    });
+
+    expect(embeddingProfiles.findOrCreateProfile).toHaveBeenCalledWith({
+      provider: "openai-compatible",
+      model: "text-embedding-small",
+      dimensions: 1536,
+      displayName: "OpenAI-compatible text-embedding-small (1536d)",
+    });
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
+      embeddingProfileId: "openai-compatible:text-embedding-small:1536",
+      embedding: vector,
+      limit: 8,
+    });
+  });
+
+  it("rejects unsupported embedding dimensions when generating a draft", async () => {
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "embed-key",
+        IRIS_EMBEDDING_MODEL: "text-embedding-large",
+        IRIS_EMBEDDING_DIMENSIONS: "3072",
       },
       dependencies: {
         createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
@@ -229,9 +292,7 @@ describe("createAnswerDraftRuntime", () => {
         question: "bad",
         liveChatMessages: [],
       }),
-    ).rejects.toThrow(
-      "IRIS_EMBEDDING_DIMENSIONS must be 6 until document_fragments vector storage is migrated",
-    );
+    ).rejects.toThrow("Unsupported embedding dimension: 3072");
   });
 });
 
