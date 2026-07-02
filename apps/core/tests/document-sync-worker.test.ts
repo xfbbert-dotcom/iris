@@ -8,6 +8,7 @@ import {
   createDocumentSyncIdempotencyKey,
   type DocumentSyncJob,
 } from "../src/documents/document-sync-queue.js";
+import type { DocumentSnapshot } from "../src/documents/document-snapshot-repository.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 
 describe("DocumentSyncWorker", () => {
@@ -18,7 +19,7 @@ describe("DocumentSyncWorker", () => {
       syncSourceById: vi.fn(async () => ({
         status: "synced" as const,
         source: sourceFixture({ id: "source-1" }),
-        snapshot: {},
+        snapshot: snapshotFixture({ documentSourceId: "source-1" }),
       })),
     };
     const worker = createDocumentSyncWorker({ queue, runner });
@@ -43,7 +44,7 @@ describe("DocumentSyncWorker", () => {
         syncSourceById: vi.fn(async () => ({
           status: "failed" as const,
           source: sourceFixture({ id: "source-failed" }),
-          snapshot: {},
+          snapshot: snapshotFixture({ documentSourceId: "source-failed" }),
           errorMessage: "fetch failed",
         })),
       },
@@ -125,6 +126,23 @@ function sourceFixture(overrides: Partial<DocumentSource> = {}): DocumentSource 
     createdAt,
     updatedAt: createdAt,
     evidence: [],
+    ...overrides,
+  };
+}
+
+function snapshotFixture(overrides: Partial<DocumentSnapshot> = {}): DocumentSnapshot {
+  const fetchedAt = new Date("2026-07-03T02:01:00.000Z");
+
+  return {
+    id: "snapshot-1",
+    documentSourceId: "source-1",
+    sourceUri: "https://docs.feishu.cn/docx/a",
+    fetchStatus: "succeeded",
+    bodyText: "Document body",
+    contentHash: "hash-1",
+    sourceVersion: "version-1",
+    fetchedAt,
+    createdAt: fetchedAt,
     ...overrides,
   };
 }
