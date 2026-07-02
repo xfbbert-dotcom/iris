@@ -1,4 +1,7 @@
-import type { RegisterGroupVisibleDocumentInput } from "./document-source-registry.js";
+import type {
+  DocumentSource,
+  RegisterGroupVisibleDocumentInput,
+} from "./document-source-registry.js";
 import type { FeishuDocumentLink } from "./feishu-document-link-extractor.js";
 
 export type GroupVisibleDocumentRegistrar = {
@@ -12,24 +15,31 @@ export type GroupVisibleDocumentRegistrar = {
 };
 
 type GroupVisibleDocumentRegistry = {
-  registerGroupVisibleDocument(input: RegisterGroupVisibleDocumentInput): Promise<unknown>;
+  registerGroupVisibleDocument(input: RegisterGroupVisibleDocumentInput): Promise<DocumentSource>;
+};
+
+type RegisteredDocumentSyncPlanner = {
+  planRegisteredSources(sources: DocumentSource[]): Promise<unknown>;
 };
 
 export function createGroupVisibleDocumentRegistrar({
   registry,
+  syncPlanner,
 }: {
   registry: GroupVisibleDocumentRegistry;
+  syncPlanner?: RegisteredDocumentSyncPlanner;
 }): GroupVisibleDocumentRegistrar {
   return {
     async registerDiscoveredLinks(input) {
       for (const link of input.links) {
-        await registry.registerGroupVisibleDocument({
+        const source = await registry.registerGroupVisibleDocument({
           sourceUri: link.sourceUri,
           originGroupId: input.chatId,
           originMessageId: input.messageId,
           observedByUserId: input.senderId,
           observedAt: input.observedAt,
         });
+        await syncPlanner?.planRegisteredSources([source]);
       }
     },
   };
