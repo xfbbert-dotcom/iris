@@ -47,6 +47,7 @@ describe("createDocumentSyncRuntime", () => {
       dequeueBatch: vi.fn(async () => []),
       getPendingCount: vi.fn(async () => 3),
       handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
+      getDeadLetterCount: vi.fn(async () => 2),
     };
     const reindexQueue = {
       enqueue: vi.fn(async () => undefined),
@@ -172,6 +173,7 @@ describe("createDocumentSyncRuntime", () => {
       intervalMs: 2500,
       batchLimit: 4,
       pendingJobCount: 3,
+      deadLetterJobCount: 2,
       latestBatch,
     });
 

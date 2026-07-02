@@ -742,6 +742,7 @@ describe("GET /internal/document-sync/status", () => {
         intervalMs: 1000,
         batchLimit: 10,
         pendingJobCount: 5,
+        deadLetterJobCount: 2,
         latestBatch: {
           status: "succeeded" as const,
           startedAt: new Date("2026-07-03T01:00:00.000Z"),
@@ -772,6 +773,7 @@ describe("GET /internal/document-sync/status", () => {
       intervalMs: 1000,
       batchLimit: 10,
       pendingJobCount: 5,
+      deadLetterJobCount: 2,
       latestBatch: {
         status: "succeeded",
         startedAt: "2026-07-03T01:00:00.000Z",
@@ -866,6 +868,7 @@ function fakeDocumentSyncRuntime(
       intervalMs: 1000,
       batchLimit: 10,
       pendingJobCount: 0,
+      deadLetterJobCount: 0,
     })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),

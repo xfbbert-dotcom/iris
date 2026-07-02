@@ -63,6 +63,7 @@ export type DocumentSyncRuntimeStatus = {
   intervalMs: number;
   batchLimit: number;
   pendingJobCount: number;
+  deadLetterJobCount: number;
   latestBatch?: DocumentSyncWorkerBatchSnapshot;
 };
 
@@ -75,7 +76,7 @@ type DocumentSyncRuntimeSnapshots = DocumentSyncSnapshotWriter & {
 };
 type DocumentSyncRuntimeQueue = Pick<
   DocumentSyncQueue,
-  "dequeueBatch" | "getPendingCount" | "handleFailedJob"
+  "dequeueBatch" | "getPendingCount" | "handleFailedJob" | "getDeadLetterCount"
 >;
 type DocumentSyncRuntimeReindexQueue = Pick<DocumentReindexQueue, "enqueue">;
 type DocumentSyncRuntimeReindexPlanner = Pick<
@@ -211,6 +212,7 @@ function createEnabledDocumentSyncRuntime({
     async getStatus() {
       const loopSnapshot = loop.getSnapshot();
       const pendingJobCount = await queue.getPendingCount();
+      const deadLetterJobCount = await queue.getDeadLetterCount();
 
       return {
         enabled: true,
@@ -218,6 +220,7 @@ function createEnabledDocumentSyncRuntime({
         intervalMs: loopSnapshot.intervalMs,
         batchLimit: loopSnapshot.batchLimit,
         pendingJobCount,
+        deadLetterJobCount,
         ...(loopSnapshot.latestBatch === undefined
           ? {}
           : { latestBatch: loopSnapshot.latestBatch }),
