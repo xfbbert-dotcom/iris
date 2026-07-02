@@ -20,6 +20,11 @@ describe("DocumentReindexWorkerLoop", () => {
     await vi.runOnlyPendingTimersAsync();
 
     expect(worker.processBatch).toHaveBeenCalledWith({ limit: 25 });
+    expect(loop.getSnapshot()).toMatchObject({
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 25,
+    });
     await loop.stop();
   });
 
@@ -58,6 +63,7 @@ describe("DocumentReindexWorkerLoop", () => {
 
   it("reports errors and continues polling", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T01:00:00.000Z"));
     const error = new Error("batch failed");
     const worker = {
       processBatch: vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce([]),
@@ -76,6 +82,80 @@ describe("DocumentReindexWorkerLoop", () => {
 
     expect(onError).toHaveBeenCalledWith(error);
     expect(worker.processBatch).toHaveBeenCalledTimes(2);
+    expect(loop.getSnapshot().latestBatch).toMatchObject({
+      status: "succeeded",
+      indexedCount: 0,
+      skippedCount: 0,
+      failed: false,
+    });
+    await loop.stop();
+  });
+
+  it("records successful batch result counts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T01:00:00.000Z"));
+    const worker = {
+      processBatch: vi.fn(async () => [
+        {
+          status: "indexed" as const,
+          documentSnapshotId: "snapshot-1",
+          embeddingProfileId: "profile-1",
+          fragmentCount: 2,
+        },
+        {
+          status: "skipped" as const,
+          documentSnapshotId: "snapshot-2",
+          embeddingProfileId: "profile-1",
+          reason: "already_indexed" as const,
+        },
+      ]),
+    };
+    const loop = createDocumentReindexWorkerLoop({
+      worker,
+      intervalMs: 1000,
+      batchLimit: 25,
+    });
+
+    loop.start();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(loop.getSnapshot().latestBatch).toEqual({
+      status: "succeeded",
+      startedAt: new Date("2026-07-02T01:00:01.000Z"),
+      finishedAt: new Date("2026-07-02T01:00:01.000Z"),
+      indexedCount: 1,
+      skippedCount: 1,
+      failed: false,
+    });
+    await loop.stop();
+  });
+
+  it("records failed batch errors", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T01:00:00.000Z"));
+    const worker = {
+      processBatch: vi.fn(async () => {
+        throw new Error("batch failed");
+      }),
+    };
+    const loop = createDocumentReindexWorkerLoop({
+      worker,
+      intervalMs: 1000,
+      batchLimit: 25,
+    });
+
+    loop.start();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(loop.getSnapshot().latestBatch).toEqual({
+      status: "failed",
+      startedAt: new Date("2026-07-02T01:00:01.000Z"),
+      finishedAt: new Date("2026-07-02T01:00:01.000Z"),
+      indexedCount: 0,
+      skippedCount: 0,
+      failed: true,
+      errorMessage: "batch failed",
+    });
     await loop.stop();
   });
 

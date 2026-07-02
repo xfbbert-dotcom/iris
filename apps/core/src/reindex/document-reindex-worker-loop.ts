@@ -17,7 +17,34 @@ export type DocumentReindexWorkerLoop = {
   start(): void;
   stop(): Promise<void>;
   isRunning(): boolean;
+  getSnapshot(): DocumentReindexWorkerLoopSnapshot;
 };
+
+export type DocumentReindexWorkerLoopSnapshot = {
+  running: boolean;
+  intervalMs: number;
+  batchLimit: number;
+  latestBatch?: ReindexWorkerBatchSnapshot;
+};
+
+export type ReindexWorkerBatchSnapshot =
+  | {
+      status: "succeeded";
+      startedAt: Date;
+      finishedAt: Date;
+      indexedCount: number;
+      skippedCount: number;
+      failed: false;
+    }
+  | {
+      status: "failed";
+      startedAt: Date;
+      finishedAt: Date;
+      indexedCount: 0;
+      skippedCount: 0;
+      failed: true;
+      errorMessage: string;
+    };
 
 export function createDocumentReindexWorkerLoop({
   worker,
@@ -32,11 +59,30 @@ export function createDocumentReindexWorkerLoop({
   let running = false;
   let timer: TimerHandle | undefined;
   let inFlight: Promise<void> | undefined;
+  let latestBatch: ReindexWorkerBatchSnapshot | undefined;
 
   const tick = async () => {
+    const startedAt = new Date();
     try {
-      await worker.processBatch({ limit: safeBatchLimit });
+      const results = await worker.processBatch({ limit: safeBatchLimit });
+      latestBatch = {
+        status: "succeeded",
+        startedAt,
+        finishedAt: new Date(),
+        indexedCount: results.filter((result) => result.status === "indexed").length,
+        skippedCount: results.filter((result) => result.status === "skipped").length,
+        failed: false,
+      };
     } catch (error) {
+      latestBatch = {
+        status: "failed",
+        startedAt,
+        finishedAt: new Date(),
+        indexedCount: 0,
+        skippedCount: 0,
+        failed: true,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
       onError?.(error);
     }
   };
@@ -77,6 +123,15 @@ export function createDocumentReindexWorkerLoop({
 
     isRunning() {
       return running;
+    },
+
+    getSnapshot() {
+      return {
+        running,
+        intervalMs: safeIntervalMs,
+        batchLimit: safeBatchLimit,
+        ...(latestBatch === undefined ? {} : { latestBatch }),
+      };
     },
   };
 }

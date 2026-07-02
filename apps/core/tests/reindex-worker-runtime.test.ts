@@ -29,6 +29,7 @@ describe("createReindexWorkerRuntime", () => {
       start: vi.fn(),
       stop: vi.fn(async () => undefined),
       isRunning: vi.fn(() => false),
+      getSnapshot: vi.fn(() => ({ running: false, intervalMs: 1000, batchLimit: 25 })),
     };
 
     const runtime = createReindexWorkerRuntime({
@@ -164,6 +165,7 @@ function runtimeDependencies() {
       start: vi.fn(),
       stop: vi.fn(async () => undefined),
       isRunning: vi.fn(() => false),
+      getSnapshot: vi.fn(() => ({ running: false, intervalMs: 1000, batchLimit: 25 })),
     })),
   };
 }
