@@ -38,6 +38,17 @@ describe("InMemoryDocumentReindexQueue", () => {
       }),
     ).toBe("reindex:profile-1:snapshot-1");
   });
+
+  it("reports pending job count", async () => {
+    const queue = new InMemoryDocumentReindexQueue();
+
+    await expect(queue.getPendingCount()).resolves.toBe(0);
+    await queue.enqueue(jobFixture({ documentSnapshotId: "snapshot-1" }));
+    await queue.enqueue(jobFixture({ documentSnapshotId: "snapshot-2" }));
+    await expect(queue.getPendingCount()).resolves.toBe(2);
+    await queue.dequeueBatch(1);
+    await expect(queue.getPendingCount()).resolves.toBe(1);
+  });
 });
 
 function jobFixture(overrides: Partial<DocumentReindexJob> = {}): DocumentReindexJob {

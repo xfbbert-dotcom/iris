@@ -197,6 +197,10 @@ function createLazyRedisQueueClient(
       const client = await redisConnection;
       return client.lPop(key);
     },
+    async lLen(key) {
+      const client = await redisConnection;
+      return client.lLen(key);
+    },
   };
 }
 

@@ -16,6 +16,7 @@ export type CreateDocumentReindexIdempotencyKeyInput = {
 export interface DocumentReindexQueue {
   enqueue(job: DocumentReindexJob): Promise<void>;
   dequeueBatch(limit: number): Promise<DocumentReindexJob[]>;
+  getPendingCount(): Promise<number>;
 }
 
 export function createDocumentReindexIdempotencyKey(

@@ -13,6 +13,7 @@ describe("createReindexWorkerRuntime", () => {
       connect: vi.fn(async () => redisClient),
       eval: vi.fn(async () => 1),
       lPop: vi.fn(async () => null),
+      lLen: vi.fn(async () => 0),
       quit: vi.fn(async () => undefined),
     };
     const embeddingProfile = embeddingProfileFixture();
@@ -138,6 +139,7 @@ function runtimeDependencies() {
     connect: vi.fn(async () => redisClient),
     eval: vi.fn(async () => 1),
     lPop: vi.fn(async () => null),
+    lLen: vi.fn(async () => 0),
     quit: vi.fn(async () => undefined),
   };
 

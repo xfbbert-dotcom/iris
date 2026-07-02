@@ -16,6 +16,7 @@ export type RedisDocumentReindexQueueClient = {
     options: { keys: string[]; arguments: string[] },
   ): Promise<number | string>;
   lPop(key: string): Promise<string | null>;
+  lLen(key: string): Promise<number>;
 };
 
 export type RedisDocumentReindexQueueOptions = {
@@ -51,6 +52,10 @@ export function createRedisDocumentReindexQueue({
       }
 
       return jobs;
+    },
+
+    getPendingCount() {
+      return client.lLen(queueKey);
     },
   };
 }

@@ -17,4 +17,8 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
     const safeLimit = Math.max(0, Math.floor(limit));
     return this.jobs.splice(0, safeLimit);
   }
+
+  async getPendingCount(): Promise<number> {
+    return this.jobs.length;
+  }
 }

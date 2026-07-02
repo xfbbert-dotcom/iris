@@ -16,6 +16,7 @@ describe("RedisDocumentReindexQueue", () => {
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(async () => 1),
       lPop: vi.fn(),
+      lLen: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
     const job = jobFixture();
@@ -33,6 +34,7 @@ describe("RedisDocumentReindexQueue", () => {
     const second = jobFixture({ documentSnapshotId: "snapshot-2" });
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(),
+      lLen: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce(serializeDocumentReindexJob(first))
@@ -50,6 +52,7 @@ describe("RedisDocumentReindexQueue", () => {
     const second = jobFixture({ documentSnapshotId: "snapshot-2" });
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(),
+      lLen: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce(serializeDocumentReindexJob(first))
@@ -65,6 +68,18 @@ describe("RedisDocumentReindexQueue", () => {
     const job = jobFixture();
 
     expect(parseDocumentReindexJob(serializeDocumentReindexJob(job))).toEqual(job);
+  });
+
+  it("reports Redis queue depth", async () => {
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(async () => 42),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.getPendingCount()).resolves.toBe(42);
+    expect(client.lLen).toHaveBeenCalledWith("iris:reindex:documents:queue");
   });
 
   it("rejects malformed queue payloads", () => {
