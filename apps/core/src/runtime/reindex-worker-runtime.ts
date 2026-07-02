@@ -33,6 +33,7 @@ import { createDocumentReindexWorker } from "../reindex/document-reindex-worker.
 import {
   createDocumentReindexWorkerLoop,
   type DocumentReindexWorkerLoop,
+  type ReindexWorkerBatchSnapshot,
 } from "../reindex/document-reindex-worker-loop.js";
 import {
   createRedisDocumentReindexQueue,
@@ -47,8 +48,19 @@ export type ReindexWorkerRuntime = {
       limit: number;
     }): Promise<{ enqueuedCount: number; skippedCount: number }>;
   };
+  getStatus(): Promise<ReindexWorkerRuntimeStatus>;
   start(): void;
   close(): Promise<void>;
+};
+
+export type ReindexWorkerRuntimeStatus = {
+  enabled: true;
+  running: boolean;
+  activeEmbeddingProfileId: string;
+  intervalMs: number;
+  batchLimit: number;
+  pendingJobCount: number;
+  latestBatch?: ReindexWorkerBatchSnapshot;
 };
 
 type RedisClient = RedisDocumentReindexQueueClient & {
@@ -176,6 +188,22 @@ export function createReindexWorkerRuntime({
     },
     start() {
       loop.start();
+    },
+    async getStatus() {
+      const loopSnapshot = loop.getSnapshot();
+      const pendingJobCount = await queue.getPendingCount();
+
+      return {
+        enabled: true,
+        running: loopSnapshot.running,
+        activeEmbeddingProfileId,
+        intervalMs: loopSnapshot.intervalMs,
+        batchLimit: loopSnapshot.batchLimit,
+        pendingJobCount,
+        ...(loopSnapshot.latestBatch === undefined
+          ? {}
+          : { latestBatch: loopSnapshot.latestBatch }),
+      };
     },
     async close() {
       await loop.stop();

@@ -13,7 +13,7 @@ describe("createReindexWorkerRuntime", () => {
       connect: vi.fn(async () => redisClient),
       eval: vi.fn(async () => 1),
       lPop: vi.fn(async () => null),
-      lLen: vi.fn(async () => 0),
+      lLen: vi.fn(async () => 42),
       quit: vi.fn(async () => undefined),
     };
     const embeddingProfile = embeddingProfileFixture();
@@ -29,7 +29,19 @@ describe("createReindexWorkerRuntime", () => {
       start: vi.fn(),
       stop: vi.fn(async () => undefined),
       isRunning: vi.fn(() => false),
-      getSnapshot: vi.fn(() => ({ running: false, intervalMs: 1000, batchLimit: 25 })),
+      getSnapshot: vi.fn(() => ({
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 25,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt: new Date("2026-07-02T01:00:00.000Z"),
+          finishedAt: new Date("2026-07-02T01:00:01.000Z"),
+          indexedCount: 2,
+          skippedCount: 1,
+          failed: false as const,
+        },
+      })),
     };
 
     const runtime = createReindexWorkerRuntime({
@@ -62,6 +74,23 @@ describe("createReindexWorkerRuntime", () => {
 
     runtime?.start();
     expect(loop.start).toHaveBeenCalledOnce();
+
+    await expect(runtime?.getStatus()).resolves.toEqual({
+      enabled: true,
+      running: true,
+      activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+      intervalMs: 1000,
+      batchLimit: 25,
+      pendingJobCount: 42,
+      latestBatch: {
+        status: "succeeded",
+        startedAt: new Date("2026-07-02T01:00:00.000Z"),
+        finishedAt: new Date("2026-07-02T01:00:01.000Z"),
+        indexedCount: 2,
+        skippedCount: 1,
+        failed: false,
+      },
+    });
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();
