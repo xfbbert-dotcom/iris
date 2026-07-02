@@ -97,4 +97,48 @@ describe("EmbeddingProfileRepository", () => {
       "static development embedding profile was not found",
     );
   });
+
+  it("reads a profile by id", async () => {
+    const createdAt = new Date("2026-07-02T03:00:00.000Z");
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      expect(normalizeSql(sql)).toContain("select * from embedding_profiles");
+      expect(values).toEqual(["openai-compatible:text-embedding-small:1536"]);
+      return {
+        rows: [
+          {
+            id: "openai-compatible:text-embedding-small:1536",
+            provider: "openai-compatible",
+            model: "text-embedding-small",
+            dimensions: 1536,
+            display_name: "OpenAI-compatible text-embedding-small (1536d)",
+            status: "active",
+            created_at: createdAt,
+          },
+        ],
+      };
+    });
+    const repository = createEmbeddingProfileRepository({ queryable: queryableFrom(query) });
+
+    await expect(
+      repository.getProfileById("openai-compatible:text-embedding-small:1536"),
+    ).resolves.toEqual({
+      id: "openai-compatible:text-embedding-small:1536",
+      provider: "openai-compatible",
+      model: "text-embedding-small",
+      dimensions: 1536,
+      displayName: "OpenAI-compatible text-embedding-small (1536d)",
+      status: "active",
+      createdAt,
+    });
+  });
+
+  it("throws when a profile id is missing", async () => {
+    const repository = createEmbeddingProfileRepository({
+      queryable: queryableFrom(vi.fn(async () => ({ rows: [] }))),
+    });
+
+    await expect(repository.getProfileById("missing-profile")).rejects.toThrow(
+      "embedding profile was not found: missing-profile",
+    );
+  });
 });

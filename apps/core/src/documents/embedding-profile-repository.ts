@@ -28,6 +28,7 @@ export type EmbeddingProfileRepositoryDependencies = {
 
 export interface EmbeddingProfileRepository {
   findOrCreateProfile(input: FindOrCreateEmbeddingProfileInput): Promise<EmbeddingProfile>;
+  getProfileById(id: string): Promise<EmbeddingProfile>;
   getStaticDevelopmentProfile(): Promise<EmbeddingProfile>;
 }
 
@@ -76,6 +77,19 @@ returning *
       );
 
       return mapProfileRow(readSingleRow(result.rows, "embedding profile was not returned"));
+    },
+
+    async getProfileById(id) {
+      const result = await dependencies.queryable.query<EmbeddingProfileRow>(
+        `
+select *
+from embedding_profiles
+where id = $1
+`,
+        [id],
+      );
+
+      return mapProfileRow(readSingleRow(result.rows, `embedding profile was not found: ${id}`));
     },
 
     async getStaticDevelopmentProfile() {
