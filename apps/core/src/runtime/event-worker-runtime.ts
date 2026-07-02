@@ -1,4 +1,5 @@
 import { createClient } from "redis";
+import type pg from "pg";
 
 import {
   readEventWorkerRuntimeConfig,
@@ -14,7 +15,10 @@ import { readDatabaseConfig, type DatabaseConfig } from "../database/database-co
 import { createPostgresPool } from "../database/postgres.js";
 import { createFeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
 import { createGroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
-import { createPostgresDocumentSourceRegistry } from "../documents/postgres-document-source-registry.js";
+import {
+  createPostgresDocumentSourceRegistry,
+  type AsyncDocumentSourceRegistry,
+} from "../documents/postgres-document-source-registry.js";
 import { createRedisRawEventQueue, type RedisRawEventQueueClient } from "../events/redis-raw-event-queue.js";
 import { createRawEventWorker } from "../events/raw-event-worker.js";
 import {
@@ -43,12 +47,17 @@ type RedisClient = RedisRawEventQueueClient & {
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
 };
+type PostgresPool = Queryable & { end(): Promise<void> };
+type GroupVisibleDocumentRegistry = Pick<
+  AsyncDocumentSourceRegistry,
+  "registerGroupVisibleDocument"
+>;
 
 export type EventWorkerRuntimeDependencies = {
-  createPostgresPool?: (config: DatabaseConfig) => Queryable & { end(): Promise<void> };
+  createPostgresPool?: (config: DatabaseConfig) => PostgresPool;
   createRedisClient?: (url: string) => RedisClient;
   createConversationMessageRepository?: typeof createPostgresConversationMessageRepository;
-  createDocumentSourceRegistry?: typeof createPostgresDocumentSourceRegistry;
+  createDocumentSourceRegistry?: (pool: PostgresPool) => GroupVisibleDocumentRegistry;
   createDocumentLinkExtractor?: typeof createFeishuDocumentLinkExtractor;
   createGroupVisibleDocumentRegistrar?: typeof createGroupVisibleDocumentRegistrar;
   createProcessor?: typeof createFeishuMessageEventProcessor;
@@ -87,7 +96,7 @@ function createEnabledEventWorkerRuntime({
     dependencies.createConversationMessageRepository ??
     createPostgresConversationMessageRepository;
   const createDocumentSources =
-    dependencies.createDocumentSourceRegistry ?? createPostgresDocumentSourceRegistry;
+    dependencies.createDocumentSourceRegistry ?? createDefaultDocumentSourceRegistry;
   const createDocumentLinkExtractor =
     dependencies.createDocumentLinkExtractor ?? createFeishuDocumentLinkExtractor;
   const createGroupVisibleRegistrar =
@@ -150,6 +159,10 @@ function createEnabledEventWorkerRuntime({
       await pool.end();
     },
   };
+}
+
+function createDefaultDocumentSourceRegistry(pool: PostgresPool): GroupVisibleDocumentRegistry {
+  return createPostgresDocumentSourceRegistry(pool as unknown as pg.Pool);
 }
 
 function createLazyRedisQueueClient(
