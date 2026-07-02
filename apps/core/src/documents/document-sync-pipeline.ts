@@ -1,7 +1,8 @@
 import type { DocumentSource } from "./document-source-registry.js";
-import type { AsyncDocumentSourceRegistry } from "./postgres-document-source-registry.js";
 
-export type DocumentSyncRegistryReader = Pick<AsyncDocumentSourceRegistry, "listSources">;
+export interface DocumentSyncRegistryReader {
+  listSources(): Promise<DocumentSource[]>;
+}
 
 export interface DocumentSyncPlanner {
   listSyncCandidates(): Promise<DocumentSource[]>;
