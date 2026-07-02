@@ -41,6 +41,41 @@ describe("FeishuDocumentBodyFetcher", () => {
     );
   });
 
+  it("fetches raw content for user-submitted document sources", async () => {
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
+    const fetch = vi.fn(async () =>
+      jsonResponse({ code: 0, data: { content: "User submitted body" } }),
+    );
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider,
+      fetch,
+      now: () => new Date("2026-07-03T03:20:00.000Z"),
+    });
+
+    await expect(
+      fetcher.fetch(
+        source({
+          sourceType: "user_submitted_document",
+          submittedByUserId: "ou_1",
+          originGroupId: undefined,
+          originMessageId: undefined,
+        }),
+      ),
+    ).resolves.toEqual({
+      bodyText: "User submitted body",
+      fetchedAt: new Date("2026-07-03T03:20:00.000Z"),
+    });
+    expect(tokenProvider.getTenantAccessToken).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/docx/v1/documents/doc_token_1/raw_content",
+      {
+        method: "GET",
+        headers: { authorization: "Bearer tenant-token" },
+      },
+    );
+  });
+
   it("rejects unsupported source types and URL shapes", async () => {
     const fetcher = createFeishuDocumentBodyFetcher({
       baseUrl: "https://open.feishu.cn",
@@ -48,9 +83,6 @@ describe("FeishuDocumentBodyFetcher", () => {
       fetch: vi.fn(),
     });
 
-    await expect(
-      fetcher.fetch(source({ sourceType: "user_submitted_document" })),
-    ).rejects.toThrow("unsupported Feishu document source type: user_submitted_document");
     await expect(fetcher.fetch(source({ sourceUri: "https://acme.feishu.cn/wiki/wiki_1" }))).rejects.toThrow(
       "unsupported Feishu docx URL",
     );

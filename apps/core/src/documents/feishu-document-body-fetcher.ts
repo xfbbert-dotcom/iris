@@ -12,6 +12,7 @@ export type FeishuDocumentBodyFetcherDependencies = {
 const supportedSourceTypes = new Set<DocumentSourceType>([
   "group_visible_document",
   "authorized_wiki_document",
+  "user_submitted_document",
 ]);
 
 export function parseFeishuDocxDocumentId(sourceUri: string): string | undefined {
