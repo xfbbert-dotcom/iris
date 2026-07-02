@@ -11,7 +11,7 @@ import {
   type Queryable,
 } from "../src/documents/document-snapshot-repository.js";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 function normalizeSql(sql: string): string {
@@ -222,7 +222,7 @@ describe("DocumentSnapshotRepository", () => {
 });
 
 runIfDatabase("DocumentSnapshotRepository with Postgres", () => {
-  let pool: pg.Pool;
+  let pool: pg.Pool | undefined;
   const sourceId = `snapshot-source-${randomUUID()}`;
   const sourceUri = `https://example.com/postgres-snapshots/${sourceId}`;
 
@@ -276,11 +276,22 @@ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
   });
 
   afterAll(async () => {
-    await pool.query("delete from document_sources where id = $1", [sourceId]);
-    await pool.end();
+    if (!pool) {
+      return;
+    }
+
+    try {
+      await pool.query("delete from document_sources where id = $1", [sourceId]);
+    } finally {
+      await pool.end();
+    }
   });
 
   it("persists succeeded snapshots and reads back the latest body text", async () => {
+    if (!pool) {
+      throw new Error("Expected Postgres pool to be initialized");
+    }
+
     const repository = createDocumentSnapshotRepository({ queryable: pool });
     const bodyText = "Postgres snapshot body";
 
