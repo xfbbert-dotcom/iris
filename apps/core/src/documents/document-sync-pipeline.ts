@@ -1,3 +1,4 @@
+import type { DocumentSnapshot } from "./document-snapshot-repository.js";
 import type { DocumentSource, DocumentSyncState } from "./document-source-registry.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -28,13 +29,13 @@ export interface DocumentSyncSnapshotWriter {
     bodyText: string;
     sourceVersion?: string;
     fetchedAt: Date;
-  }): MaybePromise<unknown>;
+  }): MaybePromise<DocumentSnapshot>;
   insertFailedSnapshot(input: {
     documentSourceId: string;
     sourceUri: string;
     errorMessage: string;
     fetchedAt: Date;
-  }): MaybePromise<unknown>;
+  }): MaybePromise<DocumentSnapshot>;
 }
 
 export interface DocumentSyncPlanner {
@@ -42,14 +43,27 @@ export interface DocumentSyncPlanner {
 }
 
 export interface DocumentSyncRunner {
-  syncSource(sourceId: string): Promise<DocumentSyncResult>;
+  syncSourceById(sourceId: string): Promise<DocumentSyncResult>;
 }
 
 export type DocumentSyncResult =
-  | { status: "synced"; sourceId: string }
-  | { status: "failed"; sourceId: string; errorMessage: string }
-  | { status: "skipped"; reason: "already_syncing" | "already_synced" }
-  | { status: "rejected"; reason: "permission_denied" | "capability_disabled" }
+  | { status: "synced"; source: DocumentSource; snapshot: DocumentSnapshot }
+  | {
+      status: "failed";
+      source: DocumentSource;
+      snapshot: DocumentSnapshot;
+      errorMessage: string;
+    }
+  | {
+      status: "skipped";
+      source: DocumentSource;
+      reason: "already_syncing" | "already_synced";
+    }
+  | {
+      status: "rejected";
+      source: DocumentSource;
+      reason: "permission_denied" | "capability_disabled";
+    }
   | { status: "not_found"; sourceId: string };
 
 export function createDocumentSyncPlanner({
@@ -78,7 +92,7 @@ export function createDocumentSyncRunner({
   now?: () => Date;
 }): DocumentSyncRunner {
   return {
-    async syncSource(sourceId) {
+    async syncSourceById(sourceId) {
       const source = await registry.findSourceById(sourceId);
 
       if (source === undefined) {
@@ -86,40 +100,31 @@ export function createDocumentSyncRunner({
       }
 
       if (source.permissionState === "denied") {
-        return { status: "rejected", reason: "permission_denied" };
+        return { status: "rejected", source, reason: "permission_denied" };
       }
 
       if (!source.canUseForAnswering && !source.canUseForKnowledgeDrafts) {
-        return { status: "rejected", reason: "capability_disabled" };
+        return { status: "rejected", source, reason: "capability_disabled" };
       }
 
       if (source.syncState === "syncing") {
-        return { status: "skipped", reason: "already_syncing" };
+        return { status: "skipped", source, reason: "already_syncing" };
       }
 
       if (source.syncState === "synced") {
-        return { status: "skipped", reason: "already_synced" };
+        return { status: "skipped", source, reason: "already_synced" };
       }
 
       await registry.markSyncState(source.id, "syncing");
 
+      let fetchResult: DocumentBodyFetchResult;
+
       try {
-        const fetchResult = await fetcher.fetch(source);
-
-        await snapshots.insertSucceededSnapshot({
-          documentSourceId: source.id,
-          sourceUri: source.sourceUri,
-          bodyText: fetchResult.bodyText,
-          sourceVersion: fetchResult.sourceVersion,
-          fetchedAt: fetchResult.fetchedAt,
-        });
-        await registry.markSyncState(source.id, "synced");
-
-        return { status: "synced", sourceId: source.id };
+        fetchResult = await fetcher.fetch(source);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
 
-        await snapshots.insertFailedSnapshot({
+        const snapshot = await snapshots.insertFailedSnapshot({
           documentSourceId: source.id,
           sourceUri: source.sourceUri,
           errorMessage,
@@ -127,8 +132,19 @@ export function createDocumentSyncRunner({
         });
         await registry.markSyncState(source.id, "failed");
 
-        return { status: "failed", sourceId: source.id, errorMessage };
+        return { status: "failed", source, snapshot, errorMessage };
       }
+
+      const snapshot = await snapshots.insertSucceededSnapshot({
+        documentSourceId: source.id,
+        sourceUri: source.sourceUri,
+        bodyText: fetchResult.bodyText,
+        sourceVersion: fetchResult.sourceVersion,
+        fetchedAt: fetchResult.fetchedAt,
+      });
+      await registry.markSyncState(source.id, "synced");
+
+      return { status: "synced", source, snapshot };
     },
   };
 }
