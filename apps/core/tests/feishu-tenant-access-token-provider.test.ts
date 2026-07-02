@@ -66,7 +66,7 @@ describe("FeishuTenantAccessTokenProvider", () => {
         json: async () => {
           throw new Error("invalid json");
         },
-      } as Response)),
+      } as unknown as Response)),
     });
 
     await expect(provider.getTenantAccessToken()).rejects.toThrow(

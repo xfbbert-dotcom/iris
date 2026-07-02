@@ -98,7 +98,7 @@ describe("FeishuDocumentBodyFetcher", () => {
         json: async () => {
           throw new Error("invalid json");
         },
-      } as Response)),
+      } as unknown as Response)),
     });
 
     await expect(fetcher.fetch(source())).rejects.toThrow(
