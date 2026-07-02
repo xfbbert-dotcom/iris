@@ -4,6 +4,7 @@ import {
   readEmbeddingProviderConfig,
   readFeishuAuthConfig,
   readModelProviderConfig,
+  readReindexWorkerRuntimeConfig,
 } from "../src/config/env.js";
 
 describe("readFeishuAuthConfig", () => {
@@ -181,5 +182,59 @@ describe("readAnswerDraftRuntimeConfig", () => {
         IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "live-feishu",
       }),
     ).toThrow("Unsupported IRIS_INTERNAL_DRAFT_PERMISSION_MODE: live-feishu");
+  });
+});
+
+describe("readReindexWorkerRuntimeConfig", () => {
+  it("returns disabled config by default", () => {
+    expect(readReindexWorkerRuntimeConfig({})).toEqual({ enabled: false });
+    expect(readReindexWorkerRuntimeConfig({ IRIS_REINDEX_WORKER_ENABLED: "false" })).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("reads enabled Redis worker config", () => {
+    expect(
+      readReindexWorkerRuntimeConfig({
+        IRIS_REINDEX_WORKER_ENABLED: " true ",
+        REDIS_URL: " redis://localhost:6379 ",
+        IRIS_REINDEX_WORKER_INTERVAL_MS: " 500 ",
+        IRIS_REINDEX_WORKER_BATCH_LIMIT: " 10 ",
+      }),
+    ).toEqual({
+      enabled: true,
+      redisUrl: "redis://localhost:6379",
+      intervalMs: 500,
+      batchLimit: 10,
+    });
+  });
+
+  it("defaults enabled worker interval, batch limit, and Redis URL", () => {
+    expect(
+      readReindexWorkerRuntimeConfig({
+        IRIS_REINDEX_WORKER_ENABLED: "true",
+      }),
+    ).toEqual({
+      enabled: true,
+      redisUrl: "redis://localhost:6379",
+      intervalMs: 1000,
+      batchLimit: 25,
+    });
+  });
+
+  it("rejects invalid interval and batch limit values", () => {
+    expect(() =>
+      readReindexWorkerRuntimeConfig({
+        IRIS_REINDEX_WORKER_ENABLED: "true",
+        IRIS_REINDEX_WORKER_INTERVAL_MS: "0",
+      }),
+    ).toThrow("IRIS_REINDEX_WORKER_INTERVAL_MS must be a positive integer");
+
+    expect(() =>
+      readReindexWorkerRuntimeConfig({
+        IRIS_REINDEX_WORKER_ENABLED: "true",
+        IRIS_REINDEX_WORKER_BATCH_LIMIT: "-1",
+      }),
+    ).toThrow("IRIS_REINDEX_WORKER_BATCH_LIMIT must be a positive integer");
   });
 });

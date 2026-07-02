@@ -23,6 +23,15 @@ export type AnswerDraftRuntimeConfig =
   | { enabled: false }
   | { enabled: true; permissionMode: "allow-indexed" };
 
+export type ReindexWorkerRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      redisUrl: string;
+      intervalMs: number;
+      batchLimit: number;
+    };
+
 export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConfig {
   return {
     verificationToken: readOptionalEnv(env.FEISHU_VERIFICATION_TOKEN),
@@ -97,6 +106,30 @@ export function readAnswerDraftRuntimeConfig(
   }
 
   return { enabled: true, permissionMode };
+}
+
+export function readReindexWorkerRuntimeConfig(
+  env: EnvLike = process.env,
+): ReindexWorkerRuntimeConfig {
+  const enabled = readOptionalEnv(env.IRIS_REINDEX_WORKER_ENABLED);
+  if (enabled !== "true") {
+    return { enabled: false };
+  }
+
+  return {
+    enabled: true,
+    redisUrl: readOptionalEnv(env.REDIS_URL) ?? "redis://localhost:6379",
+    intervalMs: readPositiveIntegerEnv(
+      "IRIS_REINDEX_WORKER_INTERVAL_MS",
+      env.IRIS_REINDEX_WORKER_INTERVAL_MS,
+      1000,
+    ),
+    batchLimit: readPositiveIntegerEnv(
+      "IRIS_REINDEX_WORKER_BATCH_LIMIT",
+      env.IRIS_REINDEX_WORKER_BATCH_LIMIT,
+      25,
+    ),
+  };
 }
 
 function readOptionalEnv(value: string | undefined): string | undefined {
