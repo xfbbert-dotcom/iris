@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readFeishuAuthConfig, readModelProviderConfig } from "../src/config/env.js";
+import {
+  readAnswerDraftRuntimeConfig,
+  readFeishuAuthConfig,
+  readModelProviderConfig,
+} from "../src/config/env.js";
 
 describe("readFeishuAuthConfig", () => {
   it("reads Feishu verification token and encrypt key from the environment", () => {
@@ -66,5 +70,41 @@ describe("readModelProviderConfig", () => {
         IRIS_MODEL_TIMEOUT_MS: "0",
       }),
     ).toThrow("IRIS_MODEL_TIMEOUT_MS must be a positive integer");
+  });
+});
+
+describe("readAnswerDraftRuntimeConfig", () => {
+  it("returns disabled config when internal answer drafts are not enabled", () => {
+    expect(readAnswerDraftRuntimeConfig({})).toEqual({ enabled: false });
+    expect(readAnswerDraftRuntimeConfig({ IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS: "false" })).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("reads enabled allow-indexed runtime config", () => {
+    expect(
+      readAnswerDraftRuntimeConfig({
+        IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS: " true ",
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: " allow-indexed ",
+      }),
+    ).toEqual({
+      enabled: true,
+      permissionMode: "allow-indexed",
+    });
+  });
+
+  it("requires permission mode when runtime is enabled", () => {
+    expect(() =>
+      readAnswerDraftRuntimeConfig({ IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS: "true" }),
+    ).toThrow("IRIS_INTERNAL_DRAFT_PERMISSION_MODE is required");
+  });
+
+  it("rejects unsupported permission modes", () => {
+    expect(() =>
+      readAnswerDraftRuntimeConfig({
+        IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS: "true",
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "live-feishu",
+      }),
+    ).toThrow("Unsupported IRIS_INTERNAL_DRAFT_PERMISSION_MODE: live-feishu");
   });
 });

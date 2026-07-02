@@ -10,6 +10,10 @@ export type ModelProviderConfig = {
   timeoutMs: number;
 };
 
+export type AnswerDraftRuntimeConfig =
+  | { enabled: false }
+  | { enabled: true; permissionMode: "allow-indexed" };
+
 export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConfig {
   return {
     verificationToken: readOptionalEnv(env.FEISHU_VERIFICATION_TOKEN),
@@ -33,6 +37,25 @@ export function readModelProviderConfig(env: EnvLike = process.env): ModelProvid
     model: readRequiredEnv("IRIS_MODEL_NAME", env.IRIS_MODEL_NAME),
     timeoutMs: readPositiveIntegerEnv("IRIS_MODEL_TIMEOUT_MS", env.IRIS_MODEL_TIMEOUT_MS, 30000)
   };
+}
+
+export function readAnswerDraftRuntimeConfig(
+  env: EnvLike = process.env,
+): AnswerDraftRuntimeConfig {
+  const enabled = readOptionalEnv(env.IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS);
+  if (enabled !== "true") {
+    return { enabled: false };
+  }
+
+  const permissionMode = readRequiredEnv(
+    "IRIS_INTERNAL_DRAFT_PERMISSION_MODE",
+    env.IRIS_INTERNAL_DRAFT_PERMISSION_MODE,
+  );
+  if (permissionMode !== "allow-indexed") {
+    throw new Error(`Unsupported IRIS_INTERNAL_DRAFT_PERMISSION_MODE: ${permissionMode}`);
+  }
+
+  return { enabled: true, permissionMode };
 }
 
 function readOptionalEnv(value: string | undefined): string | undefined {
