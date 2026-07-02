@@ -830,6 +830,7 @@ describe("document sync source inventory API", () => {
         list: vi.fn(async () => [authorizedWikiSource(), userSubmittedSource()]),
         get: vi.fn(),
         updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -885,6 +886,7 @@ describe("document sync source inventory API", () => {
         list: vi.fn(async () => [authorizedWikiSource()]),
         get: vi.fn(),
         updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -941,6 +943,7 @@ describe("document sync source inventory API", () => {
         list: vi.fn(),
         get: vi.fn(async () => authorizedWikiSource()),
         updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -997,6 +1000,7 @@ describe("document sync source inventory API", () => {
         }),
         get: vi.fn(),
         updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1042,6 +1046,7 @@ describe("document sync source policy API", () => {
         list: vi.fn(),
         get: vi.fn(),
         updatePolicy: vi.fn(async () => updatedSource),
+        listSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1123,6 +1128,7 @@ describe("document sync source policy API", () => {
         updatePolicy: vi.fn(async () => {
           throw new Error("database unavailable");
         }),
+        listSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1138,6 +1144,155 @@ describe("document sync source policy API", () => {
 
     expect(response.statusCode).toBe(500);
     expect(response.json()).toEqual({ ok: false, error: "document_source_policy_update_failed" });
+  });
+});
+
+describe("document sync source snapshot inventory API", () => {
+  it("returns 503 when listing source snapshots without document sync runtime", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1/snapshots",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "document_sync_worker_unavailable" });
+  });
+
+  it("lists document source snapshot summaries without body text", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(),
+        get: vi.fn(),
+        updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(async () => [
+          {
+            id: "snapshot-1",
+            documentSourceId: "source-1",
+            sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+            fetchStatus: "succeeded" as const,
+            bodyText: "Document body",
+            contentHash: "hash-1",
+            sourceVersion: "v1",
+            fetchedAt: new Date("2026-07-03T04:00:00.000Z"),
+            errorMessage: undefined,
+            createdAt: new Date("2026-07-03T04:00:01.000Z"),
+          },
+          {
+            id: "snapshot-2",
+            documentSourceId: "source-1",
+            sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+            fetchStatus: "failed" as const,
+            bodyText: undefined,
+            contentHash: undefined,
+            sourceVersion: undefined,
+            fetchedAt: new Date("2026-07-03T03:00:00.000Z"),
+            errorMessage: "Feishu returned 403",
+            createdAt: new Date("2026-07-03T03:00:01.000Z"),
+          },
+        ]),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1/snapshots?limit=2",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      snapshots: [
+        {
+          id: "snapshot-1",
+          documentSourceId: "source-1",
+          sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+          fetchStatus: "succeeded",
+          contentHash: "hash-1",
+          sourceVersion: "v1",
+          fetchedAt: "2026-07-03T04:00:00.000Z",
+          createdAt: "2026-07-03T04:00:01.000Z",
+          bodyTextLength: 13,
+        },
+        {
+          id: "snapshot-2",
+          documentSourceId: "source-1",
+          sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+          fetchStatus: "failed",
+          fetchedAt: "2026-07-03T03:00:00.000Z",
+          errorMessage: "Feishu returned 403",
+          createdAt: "2026-07-03T03:00:01.000Z",
+        },
+      ],
+    });
+    expect(response.json().snapshots[0]).not.toHaveProperty("bodyText");
+    expect(runtime.sources.listSnapshots).toHaveBeenCalledWith({ id: "source-1", limit: 2 });
+  });
+
+  it("returns 404 when listing snapshots for an unknown source", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/missing/snapshots",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ ok: false, error: "document_source_not_found" });
+  });
+
+  it("rejects invalid source snapshot list limits", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1/snapshots?limit=-1",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("returns 500 when source snapshot lookup fails", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(),
+        get: vi.fn(),
+        updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(async () => {
+          throw new Error("database unavailable");
+        }),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1/snapshots",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "document_source_snapshot_lookup_failed",
+    });
   });
 });
 
@@ -1769,6 +1924,7 @@ function fakeDocumentSyncRuntime(
       list: vi.fn(async () => []),
       get: vi.fn(async () => undefined),
       updatePolicy: vi.fn(async () => undefined),
+      listSnapshots: vi.fn(async () => undefined),
     },
     deadLetters: {
       list: vi.fn(async () => []),

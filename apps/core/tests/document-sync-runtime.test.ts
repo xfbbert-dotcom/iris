@@ -62,6 +62,18 @@ describe("createDocumentSyncRuntime", () => {
       updatedAt: new Date("2026-07-03T03:10:00.000Z"),
       evidence: [],
     };
+    const snapshot = {
+      id: "snapshot-1",
+      documentSourceId: "source-1",
+      sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+      fetchStatus: "succeeded" as const,
+      bodyText: "Document body",
+      contentHash: "hash-1",
+      sourceVersion: undefined,
+      fetchedAt: new Date("2026-07-03T04:00:00.000Z"),
+      errorMessage: undefined,
+      createdAt: new Date("2026-07-03T04:00:01.000Z"),
+    };
     const documentSources = {
       findSourceById: vi.fn(async () => inventorySource),
       listSources: vi.fn(async () => [inventorySource, userSubmittedSource]),
@@ -86,6 +98,7 @@ describe("createDocumentSyncRuntime", () => {
     const snapshots = {
       insertSucceededSnapshot: vi.fn(),
       insertFailedSnapshot: vi.fn(),
+      listSnapshotsForSource: vi.fn(async () => [snapshot]),
       listSuccessfulSnapshotsMissingProfile: vi.fn(async () => []),
     };
     const tokenProvider = {
@@ -412,6 +425,11 @@ describe("createDocumentSyncRuntime", () => {
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
     expect(documentSources.setAnsweringEnabled).toHaveBeenCalledWith("source-1", false);
     expect(documentSources.setKnowledgeDraftsEnabled).toHaveBeenCalledWith("source-1", false);
+    await expect(
+      runtime?.sources.listSnapshots({ id: "source-1", limit: 1 }),
+    ).resolves.toEqual([snapshot]);
+    expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
+    expect(snapshots.listSnapshotsForSource).toHaveBeenCalledWith("source-1");
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();

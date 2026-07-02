@@ -28,6 +28,7 @@ import {
   type DocumentSyncRuntime
 } from "./runtime/document-sync-runtime.js";
 import type { DocumentSourceType } from "./documents/document-source-registry.js";
+import type { DocumentSnapshot } from "./documents/document-snapshot-repository.js";
 
 export type BuildAppDependencies = {
   queue?: EventQueue;
@@ -237,6 +238,38 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       };
     } catch {
       return reply.code(500).send({ ok: false, error: "document_source_lookup_failed" });
+    }
+  });
+
+  app.get("/internal/document-sync/sources/:id/snapshots", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const documentSourceId = readNonBlankId((request.params as { id?: unknown }).id);
+    const limit = parseDeadLetterLimit((request.query as { limit?: unknown }).limit);
+    if (documentSourceId === undefined || limit === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const snapshots = await documentSyncRuntime.sources.listSnapshots({
+        id: documentSourceId,
+        limit,
+      });
+      if (snapshots === undefined) {
+        return reply.code(404).send({ ok: false, error: "document_source_not_found" });
+      }
+
+      return {
+        ok: true,
+        snapshots: snapshots.map(toDocumentSnapshotSummary),
+      };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "document_source_snapshot_lookup_failed"
+      });
     }
   });
 
@@ -693,6 +726,21 @@ function isDocumentSourceType(value: string): value is DocumentSourceType {
     value === "authorized_wiki_document" ||
     value === "user_submitted_document"
   );
+}
+
+function toDocumentSnapshotSummary(snapshot: DocumentSnapshot) {
+  return {
+    id: snapshot.id,
+    documentSourceId: snapshot.documentSourceId,
+    sourceUri: snapshot.sourceUri,
+    fetchStatus: snapshot.fetchStatus,
+    ...(snapshot.contentHash === undefined ? {} : { contentHash: snapshot.contentHash }),
+    ...(snapshot.sourceVersion === undefined ? {} : { sourceVersion: snapshot.sourceVersion }),
+    fetchedAt: snapshot.fetchedAt,
+    ...(snapshot.errorMessage === undefined ? {} : { errorMessage: snapshot.errorMessage }),
+    createdAt: snapshot.createdAt,
+    ...(snapshot.bodyText === undefined ? {} : { bodyTextLength: snapshot.bodyText.length }),
+  };
 }
 
 function parseDocumentSourcePolicyUpdateRequest(
