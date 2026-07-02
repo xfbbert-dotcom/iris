@@ -4,7 +4,11 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
+import {
+  defaultMigrationsDir,
+  runMigrations,
+  type MigrationClient,
+} from "../src/database/migrate.js";
 
 describe("runMigrations", () => {
   it("applies pending migrations in lexical order", async () => {
@@ -34,7 +38,7 @@ describe("runMigrations", () => {
     });
 
     const result = await runMigrations({
-      client: { query },
+      client: { query } as unknown as MigrationClient,
       migrationsDir,
     });
 
@@ -68,7 +72,7 @@ describe("runMigrations", () => {
     });
 
     const result = await runMigrations({
-      client: { query },
+      client: { query } as unknown as MigrationClient,
       migrationsDir,
     });
 
@@ -104,7 +108,7 @@ describe("runMigrations", () => {
 
     await expect(
       runMigrations({
-        client: { query },
+        client: { query } as unknown as MigrationClient,
         migrationsDir,
       }),
     ).rejects.toBe(migrationError);
@@ -139,7 +143,7 @@ describe("runMigrations", () => {
 
     await expect(
       runMigrations({
-        client: { query },
+        client: { query } as unknown as MigrationClient,
         migrationsDir,
       }),
     ).rejects.toBe(migrationError);

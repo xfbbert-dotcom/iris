@@ -14,6 +14,10 @@ export function createPostgresPool(config: DatabaseConfig): pg.Pool {
   return new pg.Pool({ connectionString: config.databaseUrl });
 }
 
+export async function closePostgresPool(pool: pg.Pool): Promise<void> {
+  await pool.end();
+}
+
 export async function checkDatabaseHealth(
   queryable: Queryable,
 ): Promise<DatabaseHealth> {

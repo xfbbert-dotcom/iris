@@ -2,11 +2,13 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type pg from "pg";
+
 import { readDatabaseConfig } from "./database-config.js";
-import { createPostgresPool, type Queryable } from "./postgres.js";
+import { closePostgresPool, createPostgresPool } from "./postgres.js";
 
 export type MigrationResult = { applied: string[]; skipped: string[] };
-export type MigrationClient = Queryable;
+export type MigrationClient = pg.PoolClient;
 export type RunMigrationsInput = {
   client: MigrationClient;
   migrationsDir: string;
@@ -92,7 +94,7 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(result, null, 2));
   } finally {
     client.release();
-    await pool.end();
+    await closePostgresPool(pool);
   }
 }
 
