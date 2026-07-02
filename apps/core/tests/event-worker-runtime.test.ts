@@ -45,6 +45,12 @@ describe("createEventWorkerRuntime", () => {
     const documentLinkExtractor = {
       extractLinks: vi.fn(() => []),
     };
+    const documentSyncQueue = {
+      enqueue: vi.fn(async () => undefined),
+    };
+    const documentSyncPlanner = {
+      planRegisteredSources: vi.fn(async () => ({ enqueuedCount: 0, skippedCount: 0 })),
+    };
     const groupVisibleDocumentRegistrar = {
       registerDiscoveredLinks: vi.fn(async () => undefined),
     };
@@ -57,6 +63,8 @@ describe("createEventWorkerRuntime", () => {
       createConversationMessageRepository: vi.fn(() => messages),
       createDocumentSourceRegistry: vi.fn(() => documentSources),
       createDocumentLinkExtractor: vi.fn(() => documentLinkExtractor),
+      createDocumentSyncQueue: vi.fn(() => documentSyncQueue),
+      createDiscoveredDocumentSyncPlanner: vi.fn(() => documentSyncPlanner),
       createGroupVisibleDocumentRegistrar: vi.fn(() => groupVisibleDocumentRegistrar),
       createProcessor: vi.fn(() => processor),
       createWorkerLoop: vi.fn(() => loop),
@@ -74,8 +82,13 @@ describe("createEventWorkerRuntime", () => {
     });
     expect(dependencies.createDocumentSourceRegistry).toHaveBeenCalledWith(pool);
     expect(dependencies.createDocumentLinkExtractor).toHaveBeenCalledWith();
+    expect(dependencies.createDocumentSyncQueue).toHaveBeenCalledWith();
+    expect(dependencies.createDiscoveredDocumentSyncPlanner).toHaveBeenCalledWith({
+      queue: documentSyncQueue,
+    });
     expect(dependencies.createGroupVisibleDocumentRegistrar).toHaveBeenCalledWith({
       registry: documentSources,
+      syncPlanner: documentSyncPlanner,
     });
     expect(dependencies.createProcessor).toHaveBeenCalledWith({
       messages,

@@ -13,8 +13,11 @@ import {
 } from "../conversation/postgres-conversation-message-repository.js";
 import { readDatabaseConfig, type DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
+import { createDiscoveredDocumentSyncPlanner } from "../documents/discovered-document-sync-planner.js";
+import type { DocumentSyncQueue } from "../documents/document-sync-queue.js";
 import { createFeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
 import { createGroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
+import { createInMemoryDocumentSyncQueue } from "../documents/in-memory-document-sync-queue.js";
 import {
   createPostgresDocumentSourceRegistry,
   type AsyncDocumentSourceRegistry,
@@ -59,6 +62,8 @@ export type EventWorkerRuntimeDependencies = {
   createConversationMessageRepository?: typeof createPostgresConversationMessageRepository;
   createDocumentSourceRegistry?: (pool: PostgresPool) => GroupVisibleDocumentRegistry;
   createDocumentLinkExtractor?: typeof createFeishuDocumentLinkExtractor;
+  createDocumentSyncQueue?: () => Pick<DocumentSyncQueue, "enqueue">;
+  createDiscoveredDocumentSyncPlanner?: typeof createDiscoveredDocumentSyncPlanner;
   createGroupVisibleDocumentRegistrar?: typeof createGroupVisibleDocumentRegistrar;
   createProcessor?: typeof createFeishuMessageEventProcessor;
   createWorkerLoop?: typeof createRawEventWorkerLoop;
@@ -99,6 +104,10 @@ function createEnabledEventWorkerRuntime({
     dependencies.createDocumentSourceRegistry ?? createDefaultDocumentSourceRegistry;
   const createDocumentLinkExtractor =
     dependencies.createDocumentLinkExtractor ?? createFeishuDocumentLinkExtractor;
+  const createDocumentSyncQueue =
+    dependencies.createDocumentSyncQueue ?? createInMemoryDocumentSyncQueue;
+  const createDiscoveredSyncPlanner =
+    dependencies.createDiscoveredDocumentSyncPlanner ?? createDiscoveredDocumentSyncPlanner;
   const createGroupVisibleRegistrar =
     dependencies.createGroupVisibleDocumentRegistrar ?? createGroupVisibleDocumentRegistrar;
   const createProcessor = dependencies.createProcessor ?? createFeishuMessageEventProcessor;
@@ -108,8 +117,11 @@ function createEnabledEventWorkerRuntime({
   const messages = createMessages({ queryable: pool });
   const documentSources = createDocumentSources(pool);
   const documentLinkExtractor = createDocumentLinkExtractor();
+  const documentSyncQueue = createDocumentSyncQueue();
+  const syncPlanner = createDiscoveredSyncPlanner({ queue: documentSyncQueue });
   const groupVisibleDocumentRegistrar = createGroupVisibleRegistrar({
     registry: documentSources,
+    syncPlanner,
   });
   const processor = createProcessor({
     messages,
