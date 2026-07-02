@@ -5,6 +5,13 @@ import {
   type EnvLike,
   type EventWorkerRuntimeConfig,
 } from "../config/env.js";
+import { createFeishuMessageEventProcessor } from "../conversation/feishu-message-event-processor.js";
+import {
+  createPostgresConversationMessageRepository,
+  type Queryable,
+} from "../conversation/postgres-conversation-message-repository.js";
+import { readDatabaseConfig, type DatabaseConfig } from "../database/database-config.js";
+import { createPostgresPool } from "../database/postgres.js";
 import { createRedisRawEventQueue, type RedisRawEventQueueClient } from "../events/redis-raw-event-queue.js";
 import { createRawEventWorker } from "../events/raw-event-worker.js";
 import {
@@ -35,7 +42,10 @@ type RedisClient = RedisRawEventQueueClient & {
 };
 
 export type EventWorkerRuntimeDependencies = {
+  createPostgresPool?: (config: DatabaseConfig) => Queryable & { end(): Promise<void> };
   createRedisClient?: (url: string) => RedisClient;
+  createConversationMessageRepository?: typeof createPostgresConversationMessageRepository;
+  createProcessor?: typeof createFeishuMessageEventProcessor;
   createWorkerLoop?: typeof createRawEventWorkerLoop;
 };
 
@@ -51,21 +61,31 @@ export function createEventWorkerRuntime({
     return undefined;
   }
 
-  return createEnabledEventWorkerRuntime({ runtimeConfig, dependencies });
+  return createEnabledEventWorkerRuntime({ env, runtimeConfig, dependencies });
 }
 
 function createEnabledEventWorkerRuntime({
+  env,
   runtimeConfig,
   dependencies,
 }: {
+  env: EnvLike;
   runtimeConfig: Extract<EventWorkerRuntimeConfig, { enabled: true }>;
   dependencies: EventWorkerRuntimeDependencies;
 }): EventWorkerRuntime {
   const createRedis =
     dependencies.createRedisClient ??
     ((url: string) => createClient({ url }) as unknown as RedisClient);
+  const createPool = dependencies.createPostgresPool ?? createPostgresPool;
+  const createMessages =
+    dependencies.createConversationMessageRepository ??
+    createPostgresConversationMessageRepository;
+  const createProcessor = dependencies.createProcessor ?? createFeishuMessageEventProcessor;
   const createLoop = dependencies.createWorkerLoop ?? createRawEventWorkerLoop;
 
+  const pool = createPool(readDatabaseConfig(env));
+  const messages = createMessages({ queryable: pool });
+  const processor = createProcessor({ messages });
   const redis = createRedis(runtimeConfig.redisUrl);
   const redisConnection = redis.connect().then(() => redis);
   const queue = createRedisRawEventQueue({
@@ -73,11 +93,7 @@ function createEnabledEventWorkerRuntime({
   });
   const worker = createRawEventWorker({
     queue,
-    processor: {
-      async process() {
-        return undefined;
-      },
-    },
+    processor,
   });
   const loop: RawEventWorkerLoop = createLoop({
     worker,
@@ -110,6 +126,7 @@ function createEnabledEventWorkerRuntime({
     async close() {
       await loop.stop();
       await redisConnection.then((client) => client.quit());
+      await pool.end();
     },
   };
 }

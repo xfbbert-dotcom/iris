@@ -7,7 +7,8 @@ describe("createEventWorkerRuntime", () => {
     expect(createEventWorkerRuntime({ env: {} })).toBeUndefined();
   });
 
-  it("composes Redis queue, no-op processor, worker, and loop when enabled", async () => {
+  it("composes Redis queue, message repository, processor, worker, and loop when enabled", async () => {
+    const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const redisClient = {
       connect: vi.fn(async () => redisClient),
       eval: vi.fn(async () => 1),
@@ -34,16 +35,27 @@ describe("createEventWorkerRuntime", () => {
         },
       })),
     };
+    const messages = {
+      upsertMessage: vi.fn(),
+      listRecentByChat: vi.fn(),
+    };
+    const dependencies = {
+      createPostgresPool: vi.fn(() => pool),
+      createRedisClient: vi.fn(() => redisClient),
+      createConversationMessageRepository: vi.fn(() => messages),
+      createWorkerLoop: vi.fn(() => loop),
+    };
 
     const runtime = createEventWorkerRuntime({
       env: enabledEnv(),
-      dependencies: {
-        createRedisClient: vi.fn(() => redisClient),
-        createWorkerLoop: vi.fn(() => loop),
-      },
+      dependencies,
     });
 
     expect(runtime).toBeDefined();
+    expect(dependencies.createPostgresPool).toHaveBeenCalled();
+    expect(dependencies.createConversationMessageRepository).toHaveBeenCalledWith({
+      queryable: pool,
+    });
     runtime?.start();
     expect(loop.start).toHaveBeenCalledOnce();
 
@@ -67,6 +79,7 @@ describe("createEventWorkerRuntime", () => {
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();
     expect(redisClient.quit).toHaveBeenCalledOnce();
+    expect(pool.end).toHaveBeenCalledOnce();
   });
 });
 
@@ -74,5 +87,6 @@ function enabledEnv() {
   return {
     IRIS_EVENT_WORKER_ENABLED: "true",
     REDIS_URL: "redis://localhost:6379",
+    DATABASE_URL: "postgres://example",
   };
 }
