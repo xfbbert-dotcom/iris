@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
 import { createAnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
 
 describe("createAnswerDraftRuntime", () => {
@@ -16,6 +17,10 @@ describe("createAnswerDraftRuntime", () => {
       })),
       createModelProvider: vi.fn(() => ({
         generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+      })),
+      createEmbeddingProfileRepository: vi.fn(() => ({
+        getStaticDevelopmentProfile: vi.fn(async () => profile()),
+        findOrCreateProfile: vi.fn(),
       })),
     };
 
@@ -77,6 +82,10 @@ describe("createAnswerDraftRuntime", () => {
         createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
         createDocumentFragmentRepository: vi.fn(() => fragments),
         createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+        })),
       },
     });
 
@@ -97,7 +106,139 @@ describe("createAnswerDraftRuntime", () => {
       }),
     );
   });
+
+  it("uses configured OpenAI-compatible embedding provider when dimensions are 6", async () => {
+    const embeddingProvider = { embedTexts: vi.fn(async () => [[0, 1, 0, 0, 0, 0]]) };
+    const embeddingProfiles = {
+      getStaticDevelopmentProfile: vi.fn(),
+      findOrCreateProfile: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:text-embedding-small:6",
+          provider: "openai-compatible",
+          model: "text-embedding-small",
+          dimensions: 6,
+          displayName: "OpenAI-compatible text-embedding-small (6d)",
+        }),
+      ),
+    };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "embed-key",
+        IRIS_EMBEDDING_MODEL: "text-embedding-small",
+        IRIS_EMBEDDING_DIMENSIONS: "6",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => embeddingProfiles),
+        createEmbeddingProvider: vi.fn(() => embeddingProvider),
+      },
+    });
+
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "Use real embedder?",
+      liveChatMessages: [],
+    });
+
+    expect(embeddingProfiles.findOrCreateProfile).toHaveBeenCalledWith({
+      provider: "openai-compatible",
+      model: "text-embedding-small",
+      dimensions: 6,
+      displayName: "OpenAI-compatible text-embedding-small (6d)",
+    });
+    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith(["Use real embedder?"]);
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
+      embeddingProfileId: "openai-compatible:text-embedding-small:6",
+      embedding: [0, 1, 0, 0, 0, 0],
+      limit: 8,
+    });
+  });
+
+  it("rejects configured embedding provider without dimensions when generating a draft", async () => {
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "embed-key",
+        IRIS_EMBEDDING_MODEL: "text-embedding-small",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => ({ searchSimilarFragments: vi.fn(async () => []) })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(),
+          findOrCreateProfile: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(
+      runtime?.answerDraftOrchestrator.generateDraft({
+        question: "bad",
+        liveChatMessages: [],
+      }),
+    ).rejects.toThrow(
+      "IRIS_EMBEDDING_DIMENSIONS is required when internal answer drafts use an embedding provider",
+    );
+  });
+
+  it("rejects non-6 embedding dimensions until vector storage is migrated when generating a draft", async () => {
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "embed-key",
+        IRIS_EMBEDDING_MODEL: "text-embedding-small",
+        IRIS_EMBEDDING_DIMENSIONS: "1536",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => ({ searchSimilarFragments: vi.fn(async () => []) })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(),
+          findOrCreateProfile: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(
+      runtime?.answerDraftOrchestrator.generateDraft({
+        question: "bad",
+        liveChatMessages: [],
+      }),
+    ).rejects.toThrow(
+      "IRIS_EMBEDDING_DIMENSIONS must be 6 until document_fragments vector storage is migrated",
+    );
+  });
 });
+
+function profile(overrides: Partial<EmbeddingProfile> = {}): EmbeddingProfile {
+  return {
+    id: "static-dev-6d",
+    provider: "static-dev",
+    model: "static-dev-6d",
+    dimensions: 6,
+    displayName: "Static development embeddings (6d)",
+    status: "active",
+    createdAt: new Date("2026-07-02T01:00:00.000Z"),
+    ...overrides,
+  };
+}
 
 function enabledEnv() {
   return {

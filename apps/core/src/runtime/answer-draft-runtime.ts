@@ -1,7 +1,9 @@
 import { createAnswerDraftOrchestrator, type AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
 import {
   readAnswerDraftRuntimeConfig,
+  readEmbeddingProviderConfig,
   readModelProviderConfig,
+  type EmbeddingProviderConfig,
   type EnvLike,
   type ModelProviderConfig,
 } from "../config/env.js";
@@ -12,7 +14,14 @@ import {
   type DocumentFragmentRepository,
   type Queryable,
 } from "../documents/document-fragment-repository.js";
+import {
+  createEmbeddingProfileRepository,
+  type EmbeddingProfile,
+  type EmbeddingProfileRepository,
+} from "../documents/embedding-profile-repository.js";
+import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 import { createDocumentRetrievalContextBuilder } from "../memory/document-retrieval-context.js";
+import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createOpenAICompatibleModelProvider } from "../model/openai-compatible-model-provider.js";
 
 export type AnswerDraftRuntime = {
@@ -26,6 +35,16 @@ export type AnswerDraftRuntimeDependencies = {
   createModelProvider?: (config: ModelProviderConfig) => {
     generateAnswerDraft(input: { question: string; promptContext: string }): Promise<{ answerText: string }>;
   };
+  createEmbeddingProfileRepository?: (dependencies: { queryable: Queryable }) => Pick<
+    EmbeddingProfileRepository,
+    "getStaticDevelopmentProfile" | "findOrCreateProfile"
+  >;
+  createEmbeddingProvider?: (config: EmbeddingProviderConfig) => EmbeddingProvider;
+};
+
+type RuntimeEmbedding = {
+  profile: EmbeddingProfile;
+  embedder: EmbeddingProvider;
 };
 
 export function createAnswerDraftRuntime({
@@ -50,26 +69,83 @@ export function createAnswerDraftRuntime({
   const createModel =
     dependencies.createModelProvider ??
     ((config: ModelProviderConfig) => createOpenAICompatibleModelProvider({ config }));
+  const createProfiles =
+    dependencies.createEmbeddingProfileRepository ?? createEmbeddingProfileRepository;
+  const createEmbedding =
+    dependencies.createEmbeddingProvider ??
+    ((config: EmbeddingProviderConfig) => createOpenAICompatibleEmbeddingProvider({ config }));
 
   const pool = createPool(readDatabaseConfig(env));
   const fragments = createFragments({ queryable: pool });
+  const profiles = createProfiles({ queryable: pool });
   const model = createModel(modelConfig);
-  const contextBuilder = createDocumentRetrievalContextBuilder({
-    embeddingProfileId: "static-dev-6d",
-    embedder: createStaticQueryEmbeddingProvider(),
-    fragments,
-    canReadDocument: async () => true,
-  });
-  const answerDraftOrchestrator = createAnswerDraftOrchestrator({
-    contextBuilder,
-    model,
-  });
+  const embeddingConfig = readEmbeddingProviderConfig(env);
+  let runtimeEmbeddingPromise: Promise<RuntimeEmbedding> | undefined;
+  const answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> = {
+    async generateDraft(input) {
+      runtimeEmbeddingPromise ??= resolveRuntimeEmbedding({
+        embeddingConfig,
+        profiles,
+        createEmbeddingProvider: createEmbedding,
+      });
+      const runtimeEmbedding = await runtimeEmbeddingPromise;
+      const contextBuilder = createDocumentRetrievalContextBuilder({
+        embeddingProfileId: runtimeEmbedding.profile.id,
+        embedder: runtimeEmbedding.embedder,
+        fragments,
+        canReadDocument: async () => true,
+      });
+
+      return createAnswerDraftOrchestrator({
+        contextBuilder,
+        model,
+      }).generateDraft(input);
+    },
+  };
 
   return {
     answerDraftOrchestrator,
     close() {
       return pool.end();
     },
+  };
+}
+
+async function resolveRuntimeEmbedding({
+  embeddingConfig,
+  profiles,
+  createEmbeddingProvider,
+}: {
+  embeddingConfig: EmbeddingProviderConfig | undefined;
+  profiles: Pick<EmbeddingProfileRepository, "getStaticDevelopmentProfile" | "findOrCreateProfile">;
+  createEmbeddingProvider: (config: EmbeddingProviderConfig) => EmbeddingProvider;
+}): Promise<RuntimeEmbedding> {
+  if (embeddingConfig === undefined) {
+    return {
+      profile: await profiles.getStaticDevelopmentProfile(),
+      embedder: createStaticQueryEmbeddingProvider(),
+    };
+  }
+
+  if (embeddingConfig.dimensions === undefined) {
+    throw new Error(
+      "IRIS_EMBEDDING_DIMENSIONS is required when internal answer drafts use an embedding provider",
+    );
+  }
+  if (embeddingConfig.dimensions !== 6) {
+    throw new Error(
+      "IRIS_EMBEDDING_DIMENSIONS must be 6 until document_fragments vector storage is migrated",
+    );
+  }
+
+  return {
+    profile: await profiles.findOrCreateProfile({
+      provider: "openai-compatible",
+      model: embeddingConfig.model,
+      dimensions: embeddingConfig.dimensions,
+      displayName: `OpenAI-compatible ${embeddingConfig.model} (${embeddingConfig.dimensions}d)`,
+    }),
+    embedder: createEmbeddingProvider(embeddingConfig),
   };
 }
 
