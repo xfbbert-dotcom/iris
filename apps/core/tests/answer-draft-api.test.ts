@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 
 describe("POST /internal/answer-drafts", () => {
@@ -612,6 +613,95 @@ describe("reindex dead-letter API", () => {
   });
 });
 
+describe("GET /internal/events/status", () => {
+  it("returns disabled status when event runtime is unavailable", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/events/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, enabled: false, running: false });
+  });
+
+  it("returns event worker runtime status", async () => {
+    const runtime = fakeEventRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 50,
+        pendingEventCount: 7,
+        deadLetterEventCount: 2,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt: new Date("2026-07-02T01:00:00.000Z"),
+          finishedAt: new Date("2026-07-02T01:00:01.000Z"),
+          processedCount: 3,
+          failedCount: 1,
+          failed: false as const,
+        },
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/events/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      enabled: true,
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 50,
+      pendingEventCount: 7,
+      deadLetterEventCount: 2,
+      latestBatch: {
+        status: "succeeded",
+        startedAt: "2026-07-02T01:00:00.000Z",
+        finishedAt: "2026-07-02T01:00:01.000Z",
+        processedCount: 3,
+        failedCount: 1,
+        failed: false,
+      },
+    });
+  });
+
+  it("returns 500 when event status lookup fails", async () => {
+    const runtime = fakeEventRuntime({
+      getStatus: vi.fn(async () => {
+        throw new Error("redis unavailable");
+      }),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/events/status",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ ok: false, error: "event_worker_status_failed" });
+  });
+});
+
 function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): ReindexWorkerRuntime {
   return {
     activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
@@ -640,6 +730,22 @@ function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): Rein
         unsupportedLegacyIds: [],
       })),
     },
+    start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeEventRuntime(overrides: Partial<EventWorkerRuntime> = {}): EventWorkerRuntime {
+  return {
+    getStatus: vi.fn(async () => ({
+      enabled: true as const,
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 50,
+      pendingEventCount: 0,
+      deadLetterEventCount: 0,
+    })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,

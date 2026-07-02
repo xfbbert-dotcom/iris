@@ -16,6 +16,10 @@ import {
   type AnswerDraftRuntime
 } from "./runtime/answer-draft-runtime.js";
 import {
+  createEventWorkerRuntime,
+  type EventWorkerRuntime
+} from "./runtime/event-worker-runtime.js";
+import {
   createReindexWorkerRuntime,
   type ReindexWorkerRuntime
 } from "./runtime/reindex-worker-runtime.js";
@@ -26,6 +30,7 @@ export type BuildAppDependencies = {
   verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   createAnswerDraftRuntime?: () => AnswerDraftRuntime | undefined;
+  createEventWorkerRuntime?: () => EventWorkerRuntime | undefined;
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
 };
 
@@ -61,6 +66,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const reindexWorkerRuntime =
     (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
   reindexWorkerRuntime?.start();
+  const eventWorkerRuntime =
+    (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)();
+  eventWorkerRuntime?.start();
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
     dependencies.verifyFeishuRequest ??
@@ -153,6 +161,18 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/events/status", async (_request, reply) => {
+    if (eventWorkerRuntime === undefined) {
+      return { ok: true, enabled: false, running: false };
+    }
+
+    try {
+      return { ok: true, ...(await eventWorkerRuntime.getStatus()) };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "event_worker_status_failed" });
+    }
+  });
+
   app.get("/internal/reindex/dead-letters", async (request, reply) => {
     if (reindexWorkerRuntime === undefined) {
       return reply.code(503).send({ ok: false, error: "reindex_worker_unavailable" });
@@ -237,6 +257,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   app.get("/health", async () => ({ ok: true, service: "iris-core" }));
 
   app.addHook("onClose", async () => {
+    await eventWorkerRuntime?.close();
     await reindexWorkerRuntime?.close();
     await answerDraftRuntime?.close();
   });

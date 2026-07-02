@@ -32,6 +32,15 @@ export type ReindexWorkerRuntimeConfig =
       batchLimit: number;
     };
 
+export type EventWorkerRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      redisUrl: string;
+      intervalMs: number;
+      batchLimit: number;
+    };
+
 export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConfig {
   return {
     verificationToken: readOptionalEnv(env.FEISHU_VERIFICATION_TOKEN),
@@ -128,6 +137,30 @@ export function readReindexWorkerRuntimeConfig(
       "IRIS_REINDEX_WORKER_BATCH_LIMIT",
       env.IRIS_REINDEX_WORKER_BATCH_LIMIT,
       25,
+    ),
+  };
+}
+
+export function readEventWorkerRuntimeConfig(
+  env: EnvLike = process.env,
+): EventWorkerRuntimeConfig {
+  const enabled = readOptionalEnv(env.IRIS_EVENT_WORKER_ENABLED);
+  if (enabled !== "true") {
+    return { enabled: false };
+  }
+
+  return {
+    enabled: true,
+    redisUrl: readOptionalEnv(env.REDIS_URL) ?? "redis://localhost:6379",
+    intervalMs: readPositiveIntegerEnv(
+      "IRIS_EVENT_WORKER_INTERVAL_MS",
+      env.IRIS_EVENT_WORKER_INTERVAL_MS,
+      1000,
+    ),
+    batchLimit: readPositiveIntegerEnv(
+      "IRIS_EVENT_WORKER_BATCH_LIMIT",
+      env.IRIS_EVENT_WORKER_BATCH_LIMIT,
+      50,
     ),
   };
 }

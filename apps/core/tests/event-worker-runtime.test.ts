@@ -1,0 +1,78 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { createEventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
+
+describe("createEventWorkerRuntime", () => {
+  it("returns undefined when the event worker is disabled", () => {
+    expect(createEventWorkerRuntime({ env: {} })).toBeUndefined();
+  });
+
+  it("composes Redis queue, no-op processor, worker, and loop when enabled", async () => {
+    const redisClient = {
+      connect: vi.fn(async () => redisClient),
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(async () => null),
+      lLen: vi.fn().mockResolvedValueOnce(42).mockResolvedValueOnce(5),
+      quit: vi.fn(async () => undefined),
+    };
+    const loop = {
+      start: vi.fn(),
+      stop: vi.fn(async () => undefined),
+      isRunning: vi.fn(() => true),
+      getSnapshot: vi.fn(() => ({
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 50,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt: new Date("2026-07-02T01:00:00.000Z"),
+          finishedAt: new Date("2026-07-02T01:00:01.000Z"),
+          processedCount: 2,
+          failedCount: 1,
+          failed: false as const,
+        },
+      })),
+    };
+
+    const runtime = createEventWorkerRuntime({
+      env: enabledEnv(),
+      dependencies: {
+        createRedisClient: vi.fn(() => redisClient),
+        createWorkerLoop: vi.fn(() => loop),
+      },
+    });
+
+    expect(runtime).toBeDefined();
+    runtime?.start();
+    expect(loop.start).toHaveBeenCalledOnce();
+
+    await expect(runtime?.getStatus()).resolves.toEqual({
+      enabled: true,
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 50,
+      pendingEventCount: 42,
+      deadLetterEventCount: 5,
+      latestBatch: {
+        status: "succeeded",
+        startedAt: new Date("2026-07-02T01:00:00.000Z"),
+        finishedAt: new Date("2026-07-02T01:00:01.000Z"),
+        processedCount: 2,
+        failedCount: 1,
+        failed: false,
+      },
+    });
+
+    await runtime?.close();
+    expect(loop.stop).toHaveBeenCalledOnce();
+    expect(redisClient.quit).toHaveBeenCalledOnce();
+  });
+});
+
+function enabledEnv() {
+  return {
+    IRIS_EVENT_WORKER_ENABLED: "true",
+    REDIS_URL: "redis://localhost:6379",
+  };
+}

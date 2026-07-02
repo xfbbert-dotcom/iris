@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   readAnswerDraftRuntimeConfig,
   readEmbeddingProviderConfig,
+  readEventWorkerRuntimeConfig,
   readFeishuAuthConfig,
   readModelProviderConfig,
   readReindexWorkerRuntimeConfig,
@@ -27,6 +28,44 @@ describe("readFeishuAuthConfig", () => {
         FEISHU_ENCRYPT_KEY: ""
       })
     ).toEqual({});
+  });
+});
+
+describe("readEventWorkerRuntimeConfig", () => {
+  it("returns disabled config by default", () => {
+    expect(readEventWorkerRuntimeConfig({})).toEqual({ enabled: false });
+    expect(readEventWorkerRuntimeConfig({ IRIS_EVENT_WORKER_ENABLED: "false" })).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("reads enabled Redis event worker config", () => {
+    expect(
+      readEventWorkerRuntimeConfig({
+        IRIS_EVENT_WORKER_ENABLED: " true ",
+        REDIS_URL: " redis://localhost:6379 ",
+        IRIS_EVENT_WORKER_INTERVAL_MS: " 2000 ",
+        IRIS_EVENT_WORKER_BATCH_LIMIT: " 25 ",
+      }),
+    ).toEqual({
+      enabled: true,
+      redisUrl: "redis://localhost:6379",
+      intervalMs: 2000,
+      batchLimit: 25,
+    });
+  });
+
+  it("defaults enabled event worker interval, batch limit, and Redis URL", () => {
+    expect(
+      readEventWorkerRuntimeConfig({
+        IRIS_EVENT_WORKER_ENABLED: "true",
+      }),
+    ).toEqual({
+      enabled: true,
+      redisUrl: "redis://localhost:6379",
+      intervalMs: 1000,
+      batchLimit: 50,
+    });
   });
 });
 
