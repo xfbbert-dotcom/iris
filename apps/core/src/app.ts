@@ -20,6 +20,12 @@ export type BuildAppDependencies = {
   verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   createAnswerDraftRuntime?: () => AnswerDraftRuntime | undefined;
+  createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
+};
+
+export type ReindexWorkerRuntime = {
+  start(): void;
+  close(): Promise<void>;
 };
 
 type ParsedJsonBody = {
@@ -42,6 +48,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       : undefined;
   const answerDraftOrchestrator =
     dependencies.answerDraftOrchestrator ?? answerDraftRuntime?.answerDraftOrchestrator;
+  const reindexWorkerRuntime = dependencies.createReindexWorkerRuntime?.();
+  reindexWorkerRuntime?.start();
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
     dependencies.verifyFeishuRequest ??
@@ -102,6 +110,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   app.get("/health", async () => ({ ok: true, service: "iris-core" }));
 
   app.addHook("onClose", async () => {
+    await reindexWorkerRuntime?.close();
     await answerDraftRuntime?.close();
   });
 

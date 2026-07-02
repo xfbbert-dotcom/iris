@@ -187,4 +187,19 @@ describe("answer draft runtime wiring", () => {
     await app.close();
     expect(close).toHaveBeenCalled();
   });
+
+  it("starts and closes an injected reindex worker runtime", async () => {
+    const reindexWorkerRuntime = {
+      start: vi.fn(),
+      close: vi.fn(async () => undefined),
+    };
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => reindexWorkerRuntime,
+    });
+
+    expect(reindexWorkerRuntime.start).toHaveBeenCalledOnce();
+    await app.close();
+    expect(reindexWorkerRuntime.close).toHaveBeenCalledOnce();
+  });
 });
