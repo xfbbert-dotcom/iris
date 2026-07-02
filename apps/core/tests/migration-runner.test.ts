@@ -161,4 +161,13 @@ describe("defaultMigrationsDir", () => {
       expect.arrayContaining(["0003_document_fragments.sql", "0004_embedding_profiles.sql"]),
     );
   });
+
+  it("includes dimension-sharded vector storage migration after embedding profiles", async () => {
+    await expect(readdir(defaultMigrationsDir())).resolves.toEqual(
+      expect.arrayContaining([
+        "0004_embedding_profiles.sql",
+        "0005_dimension_sharded_vector_storage.sql",
+      ]),
+    );
+  });
 });
