@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { createFeishuGateway } from "../src/feishu/feishu-gateway.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
@@ -170,6 +170,41 @@ describe("FeishuGateway", () => {
 
     expect(queue.events[0]?.idempotencyKey).not.toBe("");
     expect(queue.events[0]?.idempotencyKey).not.toBe("   ");
+  });
+
+  it("enqueues raw Feishu events for async processing", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+      now: () => new Date("2026-07-02T01:00:00.000Z"),
+    });
+    const body = {
+      header: {
+        event_id: "event-1",
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
+          message_id: "message-1",
+          chat_id: "chat-1",
+          message_type: "text",
+          content: "{\"text\":\"hello\"}",
+        },
+      },
+    };
+
+    await gateway.handleCallback({ headers: {}, body });
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledWith({
+      idempotencyKey: "raw-event:feishu:event-1",
+      provider: "feishu",
+      eventType: "im.message.receive_v1",
+      rawBody: body,
+      receivedAt: new Date("2026-07-02T01:00:00.000Z"),
+      attempts: 0,
+    });
   });
 });
 

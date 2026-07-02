@@ -8,6 +8,7 @@ import { readFeishuAuthConfig } from "./config/env.js";
 import { createFeishuRequestVerifier } from "./feishu/feishu-auth.js";
 import type { EventQueue } from "./queues/event-queue.js";
 import { InMemoryEventQueue } from "./queues/in-memory-event-queue.js";
+import type { RawEventQueue } from "./events/raw-event-queue.js";
 import type { AnswerDraftOrchestrator } from "./agent/answer-draft-orchestrator.js";
 import type { LiveChatMessage } from "./memory/context-assembly.js";
 import {
@@ -21,6 +22,7 @@ import {
 
 export type BuildAppDependencies = {
   queue?: EventQueue;
+  rawEventQueue?: Pick<RawEventQueue, "enqueue">;
   verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   createAnswerDraftRuntime?: () => AnswerDraftRuntime | undefined;
@@ -67,6 +69,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       : undefined);
   const gateway = createFeishuGateway({
     queue,
+    rawEventQueue: dependencies.rawEventQueue,
     verifyRequest: verifyFeishuRequest
   });
   const app = Fastify({ logger: false });

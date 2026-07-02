@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  createRawEventIdempotencyKey,
+  type RawEventQueue,
+} from "../events/raw-event-queue.js";
 import type { EventQueue } from "../queues/event-queue.js";
 
 export type FeishuCallbackRequest = {
@@ -26,6 +30,7 @@ type RequestVerifier = (request: FeishuCallbackRequest) => Promise<boolean> | bo
 
 export type FeishuGatewayDependencies = {
   queue: EventQueue;
+  rawEventQueue?: Pick<RawEventQueue, "enqueue">;
   signalFilter?: SignalFilter;
   verifyRequest?: RequestVerifier;
   now?: () => Date;
@@ -62,6 +67,18 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
 
       const idempotencyKey = resolveIdempotencyKey(request);
 
+      await dependencies.rawEventQueue?.enqueue({
+        idempotencyKey: createRawEventIdempotencyKey({
+          provider: "feishu",
+          eventId: resolveRawEventId(request),
+        }),
+        provider: "feishu",
+        eventType: resolveEventType(request.body),
+        rawBody: request.body,
+        receivedAt: now(),
+        attempts: 0,
+      });
+
       await dependencies.queue.enqueueRawFeishuEvent({
         idempotencyKey,
         receivedAt: now(),
@@ -74,6 +91,47 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
       };
     }
   };
+}
+
+function resolveRawEventId(request: FeishuCallbackRequest): string {
+  const headerKey = normalizeIdempotencyKey(request.headers["x-iris-event-id"]);
+  if (headerKey) {
+    return headerKey;
+  }
+
+  if (isRecord(request.body)) {
+    const header = request.body.header;
+    if (isRecord(header)) {
+      const headerEventId = normalizeIdempotencyKey(header.event_id);
+      if (headerEventId) {
+        return headerEventId;
+      }
+    }
+
+    const bodyEventId = normalizeIdempotencyKey(request.body.event_id);
+    if (bodyEventId) {
+      return bodyEventId;
+    }
+  }
+
+  return stableJsonHash(request.body);
+}
+
+function resolveEventType(body: unknown): string {
+  if (!isRecord(body)) {
+    return "unknown";
+  }
+
+  const header = body.header;
+  if (isRecord(header)) {
+    const eventType = normalizeIdempotencyKey(header.event_type);
+    if (eventType) {
+      return eventType;
+    }
+  }
+
+  const eventType = normalizeIdempotencyKey(body.event_type);
+  return eventType ?? "unknown";
 }
 
 function isFeishuUrlVerificationPayload(
@@ -109,4 +167,14 @@ function normalizeIdempotencyKey(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function stableJsonHash(value: unknown): string {
+  const serialized = JSON.stringify(value) ?? String(value);
+  let hash = 0;
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash = (hash * 31 + serialized.charCodeAt(index)) >>> 0;
+  }
+
+  return `body-${hash.toString(16)}`;
 }
