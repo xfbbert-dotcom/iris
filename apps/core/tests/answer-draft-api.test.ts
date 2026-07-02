@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 
 describe("POST /internal/answer-drafts", () => {
   it("calls the injected orchestrator and returns draft metadata", async () => {
@@ -189,10 +190,7 @@ describe("answer draft runtime wiring", () => {
   });
 
   it("starts and closes an injected reindex worker runtime", async () => {
-    const reindexWorkerRuntime = {
-      start: vi.fn(),
-      close: vi.fn(async () => undefined),
-    };
+    const reindexWorkerRuntime = fakeReindexRuntime();
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => reindexWorkerRuntime,
@@ -203,3 +201,121 @@ describe("answer draft runtime wiring", () => {
     expect(reindexWorkerRuntime.close).toHaveBeenCalledOnce();
   });
 });
+
+describe("POST /internal/reindex/document-profile", () => {
+  it("returns 503 when reindex runtime is unavailable", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/reindex/document-profile",
+      payload: {
+        embeddingProfileId: "openai-compatible:text-embedding-small:1536",
+        limit: 10,
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "reindex_worker_unavailable" });
+  });
+
+  it("returns 400 for invalid reindex requests", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => fakeReindexRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/reindex/document-profile",
+      payload: { embeddingProfileId: " ", limit: 0 },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("rejects profile ids that do not match the active runtime profile", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => fakeReindexRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/reindex/document-profile",
+      payload: { embeddingProfileId: "other-profile", limit: 10 },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("plans document profile reindex jobs", async () => {
+    const runtime = fakeReindexRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/reindex/document-profile",
+      payload: {
+        embeddingProfileId: "openai-compatible:text-embedding-small:1536",
+        limit: 10,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, enqueuedCount: 2, skippedCount: 0 });
+    expect(runtime.planner.planDocumentProfileReindex).toHaveBeenCalledWith({
+      embeddingProfileId: "openai-compatible:text-embedding-small:1536",
+      limit: 10,
+    });
+  });
+
+  it("returns 500 when reindex planning fails", async () => {
+    const runtime = fakeReindexRuntime({
+      planner: {
+        planDocumentProfileReindex: vi.fn(async () => {
+          throw new Error("planner failed");
+        }),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/reindex/document-profile",
+      payload: {
+        embeddingProfileId: "openai-compatible:text-embedding-small:1536",
+        limit: 10,
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ ok: false, error: "reindex_plan_failed" });
+  });
+});
+
+function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): ReindexWorkerRuntime {
+  return {
+    activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+    planner: {
+      planDocumentProfileReindex: vi.fn(async () => ({
+        enqueuedCount: 2,
+        skippedCount: 0,
+      })),
+    },
+    start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}

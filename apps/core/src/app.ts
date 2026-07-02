@@ -14,6 +14,10 @@ import {
   createAnswerDraftRuntime,
   type AnswerDraftRuntime
 } from "./runtime/answer-draft-runtime.js";
+import {
+  createReindexWorkerRuntime,
+  type ReindexWorkerRuntime
+} from "./runtime/reindex-worker-runtime.js";
 
 export type BuildAppDependencies = {
   queue?: EventQueue;
@@ -21,11 +25,6 @@ export type BuildAppDependencies = {
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   createAnswerDraftRuntime?: () => AnswerDraftRuntime | undefined;
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
-};
-
-export type ReindexWorkerRuntime = {
-  start(): void;
-  close(): Promise<void>;
 };
 
 type ParsedJsonBody = {
@@ -40,6 +39,11 @@ type AnswerDraftRequest = {
   liveChatLimit?: number;
 };
 
+type ReindexDocumentProfileRequest = {
+  embeddingProfileId: string;
+  limit: number;
+};
+
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const answerDraftRuntime =
@@ -48,7 +52,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       : undefined;
   const answerDraftOrchestrator =
     dependencies.answerDraftOrchestrator ?? answerDraftRuntime?.answerDraftOrchestrator;
-  const reindexWorkerRuntime = dependencies.createReindexWorkerRuntime?.();
+  const reindexWorkerRuntime =
+    (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
   reindexWorkerRuntime?.start();
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
@@ -107,6 +112,28 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.post("/internal/reindex/document-profile", async (request, reply) => {
+    if (reindexWorkerRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "reindex_worker_unavailable" });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseReindexDocumentProfileRequest(
+      body,
+      reindexWorkerRuntime.activeEmbeddingProfileId,
+    );
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const result = await reindexWorkerRuntime.planner.planDocumentProfileReindex(parsedRequest);
+      return { ok: true, ...result };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "reindex_plan_failed" });
+    }
+  });
+
   app.get("/health", async () => ({ ok: true, service: "iris-core" }));
 
   app.addHook("onClose", async () => {
@@ -160,6 +187,26 @@ function parseAnswerDraftRequest(value: unknown): AnswerDraftRequest | undefined
     ...(value.fragmentLimit === undefined ? {} : { fragmentLimit: value.fragmentLimit }),
     ...(value.liveChatLimit === undefined ? {} : { liveChatLimit: value.liveChatLimit })
   };
+}
+
+function parseReindexDocumentProfileRequest(
+  value: unknown,
+  activeEmbeddingProfileId: string,
+): ReindexDocumentProfileRequest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const embeddingProfileId =
+    typeof value.embeddingProfileId === "string" ? value.embeddingProfileId.trim() : "";
+  if (embeddingProfileId.length === 0 || embeddingProfileId !== activeEmbeddingProfileId) {
+    return undefined;
+  }
+  if (typeof value.limit !== "number" || !Number.isInteger(value.limit) || value.limit <= 0) {
+    return undefined;
+  }
+
+  return { embeddingProfileId, limit: value.limit };
 }
 
 function parseLiveChatMessage(value: unknown): LiveChatMessage | undefined {
