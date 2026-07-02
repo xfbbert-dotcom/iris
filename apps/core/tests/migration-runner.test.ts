@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readdir } from "node:fs/promises";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -153,5 +154,11 @@ describe("runMigrations", () => {
 describe("defaultMigrationsDir", () => {
   it("points at the migrations directory", () => {
     expect(defaultMigrationsDir()).toMatch(/[\\/]migrations$/);
+  });
+
+  it("includes embedding profile migration after document fragments", async () => {
+    await expect(readdir(defaultMigrationsDir())).resolves.toEqual(
+      expect.arrayContaining(["0003_document_fragments.sql", "0004_embedding_profiles.sql"]),
+    );
   });
 });
