@@ -47,6 +47,7 @@ export interface RegisterGroupVisibleDocumentInput {
   title?: string;
   originGroupId: string;
   originMessageId: string;
+  observedByUserId?: string;
   observedAt: Date;
 }
 
@@ -109,6 +110,7 @@ export function createDocumentSourceRegistry(
       const sourceUri = requireNonBlank("sourceUri", input.sourceUri);
       const originGroupId = requireNonBlank("originGroupId", input.originGroupId);
       const originMessageId = requireNonBlank("originMessageId", input.originMessageId);
+      const observedByUserId = normalizeOptional(input.observedByUserId);
       const source = registerSource(
         sourcesById,
         sourcesByUri,
@@ -128,7 +130,7 @@ export function createDocumentSourceRegistry(
             sourceUri,
             groupId: originGroupId,
             messageId: originMessageId,
-            userId: undefined,
+            userId: observedByUserId,
             spaceId: undefined,
             observedAt: new Date(input.observedAt),
           },

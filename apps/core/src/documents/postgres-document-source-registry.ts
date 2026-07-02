@@ -93,6 +93,7 @@ export function createPostgresDocumentSourceRegistry(
       const sourceUri = requireNonBlank("sourceUri", input.sourceUri);
       const originGroupId = requireNonBlank("originGroupId", input.originGroupId);
       const originMessageId = requireNonBlank("originMessageId", input.originMessageId);
+      const observedByUserId = normalizeOptional(input.observedByUserId);
 
       return registerSource(pool, resolvedDependencies, {
         sourceType: "group_visible_document",
@@ -109,7 +110,7 @@ export function createPostgresDocumentSourceRegistry(
           sourceUri,
           groupId: originGroupId,
           messageId: originMessageId,
-          userId: undefined,
+          userId: observedByUserId,
           spaceId: undefined,
           observedAt: new Date(input.observedAt),
         },

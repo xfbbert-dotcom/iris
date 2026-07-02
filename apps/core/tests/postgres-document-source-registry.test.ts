@@ -211,6 +211,7 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
       title: "Group Doc",
       originGroupId: "group-1",
       originMessageId: "message-1",
+      observedByUserId: "user-1",
       observedAt: new Date("2026-07-01T04:01:00.000Z"),
     });
 
@@ -225,6 +226,7 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     expect(normalizeSql(evidenceInsert?.sql ?? "")).not.toContain(
       "on conflict do nothing",
     );
+    expect(evidenceInsert?.values?.[5]).toBe("user-1");
   });
 
   it("rolls back and releases the client when registration fails", async () => {

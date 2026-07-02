@@ -91,6 +91,7 @@ describe("createDocumentSourceRegistry", () => {
       title: "  Launch Notes  ",
       originGroupId: "group-1",
       originMessageId: "message-1",
+      observedByUserId: " user-1 ",
       observedAt,
     });
 
@@ -115,7 +116,7 @@ describe("createDocumentSourceRegistry", () => {
           sourceUri: "https://example.com/docs/doc-1",
           groupId: "group-1",
           messageId: "message-1",
-          userId: undefined,
+          userId: "user-1",
           spaceId: undefined,
           observedAt,
         },
