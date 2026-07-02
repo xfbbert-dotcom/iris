@@ -1,10 +1,18 @@
+import { randomUUID } from "node:crypto";
+
+import pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 
+import { readDatabaseConfig } from "../src/database/database-config.js";
+import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import {
   createDocumentSnapshotRepository,
   type DocumentSnapshot,
   type Queryable,
 } from "../src/documents/document-snapshot-repository.js";
+
+const databaseUrl = process.env.DATABASE_URL;
+const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, " ").trim().toLowerCase();
@@ -209,6 +217,86 @@ describe("DocumentSnapshotRepository", () => {
     await expect(repository.findLatestSnapshotForSource("source-1")).resolves.toMatchObject({
       id: "snapshot-2",
       bodyText: "new",
+    });
+  });
+});
+
+runIfDatabase("DocumentSnapshotRepository with Postgres", () => {
+  let pool: pg.Pool;
+  const sourceId = `snapshot-source-${randomUUID()}`;
+  const sourceUri = `https://example.com/postgres-snapshots/${sourceId}`;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: readDatabaseConfig().databaseUrl });
+    const client = await pool.connect();
+
+    try {
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+    } finally {
+      client.release();
+    }
+
+    await pool.query(
+      `
+insert into document_sources (
+  id,
+  source_type,
+  source_uri,
+  title,
+  origin_group_id,
+  origin_message_id,
+  submitted_by_user_id,
+  authorized_space_id,
+  permission_state,
+  sync_state,
+  can_use_for_answering,
+  can_use_for_knowledge_drafts,
+  created_at,
+  updated_at
+)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+`,
+      [
+        sourceId,
+        "group_visible_document",
+        sourceUri,
+        "Snapshot integration source",
+        "group-1",
+        "message-1",
+        null,
+        null,
+        "readable",
+        "pending",
+        true,
+        true,
+        new Date("2026-07-02T01:00:00.000Z"),
+        new Date("2026-07-02T01:00:00.000Z"),
+      ],
+    );
+  });
+
+  afterAll(async () => {
+    await pool.query("delete from document_sources where id = $1", [sourceId]);
+    await pool.end();
+  });
+
+  it("persists succeeded snapshots and reads back the latest body text", async () => {
+    const repository = createDocumentSnapshotRepository({ queryable: pool });
+    const bodyText = "Postgres snapshot body";
+
+    await repository.insertSucceededSnapshot({
+      documentSourceId: sourceId,
+      sourceUri,
+      bodyText,
+      fetchedAt: new Date("2026-07-02T02:00:00.000Z"),
+    });
+
+    await expect(repository.findLatestSnapshotForSource(sourceId)).resolves.toMatchObject({
+      documentSourceId: sourceId,
+      sourceUri,
+      fetchStatus: "succeeded",
+      bodyText,
+      errorMessage: undefined,
     });
   });
 });
