@@ -13,10 +13,12 @@ export type DocumentSyncWorkerResult =
       idempotencyKey: string;
       documentSourceId: string;
       errorMessage: string;
+      retryAction: "requeued" | "dead_lettered";
+      attempts: number;
     };
 
 export type DocumentSyncWorkerDependencies = {
-  queue: Pick<DocumentSyncQueue, "dequeueBatch">;
+  queue: Pick<DocumentSyncQueue, "dequeueBatch" | "handleFailedJob">;
   runner: Pick<DocumentSyncRunner, "syncSourceById">;
 };
 
@@ -27,7 +29,7 @@ export function createDocumentSyncWorker(dependencies: DocumentSyncWorkerDepende
       const results: DocumentSyncWorkerResult[] = [];
 
       for (const job of jobs) {
-        results.push(await processJob(job, dependencies.runner));
+        results.push(await processJob(job, dependencies.runner, dependencies.queue));
       }
 
       return results;
@@ -38,6 +40,7 @@ export function createDocumentSyncWorker(dependencies: DocumentSyncWorkerDepende
 async function processJob(
   job: DocumentSyncJob,
   runner: Pick<DocumentSyncRunner, "syncSourceById">,
+  queue: Pick<DocumentSyncQueue, "handleFailedJob">,
 ): Promise<DocumentSyncWorkerResult> {
   try {
     const result = await runner.syncSourceById(job.documentSourceId);
@@ -48,11 +51,16 @@ async function processJob(
       syncStatus: result.status,
     };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const failureResult = await queue.handleFailedJob({ job, errorMessage });
+
     return {
       status: "failed",
       idempotencyKey: job.idempotencyKey,
       documentSourceId: job.documentSourceId,
-      errorMessage: error instanceof Error ? error.message : String(error),
+      errorMessage,
+      retryAction: failureResult.action,
+      attempts: failureResult.attempts,
     };
   }
 }

@@ -73,7 +73,10 @@ type DocumentSyncRuntimeSnapshots = DocumentSyncSnapshotWriter & {
     limit: number;
   }): Promise<DocumentSnapshot[]>;
 };
-type DocumentSyncRuntimeQueue = Pick<DocumentSyncQueue, "dequeueBatch" | "getPendingCount">;
+type DocumentSyncRuntimeQueue = Pick<
+  DocumentSyncQueue,
+  "dequeueBatch" | "getPendingCount" | "handleFailedJob"
+>;
 type DocumentSyncRuntimeReindexQueue = Pick<DocumentReindexQueue, "enqueue">;
 type DocumentSyncRuntimeReindexPlanner = Pick<
   ReturnType<typeof createDocumentReindexPlanner>,

@@ -14,7 +14,10 @@ import type { DocumentSource } from "../src/documents/document-source-registry.j
 describe("DocumentSyncWorker", () => {
   it("processes document sync jobs through the runner", async () => {
     const job = jobFixture({ documentSourceId: "source-1" });
-    const queue = { dequeueBatch: vi.fn(async () => [job]) };
+    const queue = {
+      dequeueBatch: vi.fn(async () => [job]),
+      handleFailedJob: vi.fn(),
+    };
     const runner = {
       syncSourceById: vi.fn(async () => ({
         status: "synced" as const,
@@ -39,7 +42,10 @@ describe("DocumentSyncWorker", () => {
   it("treats runner-handled failed syncs as processed jobs", async () => {
     const job = jobFixture({ documentSourceId: "source-failed" });
     const worker = createDocumentSyncWorker({
-      queue: { dequeueBatch: vi.fn(async () => [job]) },
+      queue: {
+        dequeueBatch: vi.fn(async () => [job]),
+        handleFailedJob: vi.fn(),
+      },
       runner: {
         syncSourceById: vi.fn(async () => ({
           status: "failed" as const,
@@ -63,8 +69,12 @@ describe("DocumentSyncWorker", () => {
   it("records thrown runner errors and continues processing", async () => {
     const first = jobFixture({ documentSourceId: "source-1" });
     const second = jobFixture({ documentSourceId: "source-2" });
+    const queue = {
+      dequeueBatch: vi.fn(async () => [first, second]),
+      handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
+    };
     const worker = createDocumentSyncWorker({
-      queue: { dequeueBatch: vi.fn(async () => [first, second]) },
+      queue,
       runner: {
         syncSourceById: vi
           .fn()
@@ -83,12 +93,44 @@ describe("DocumentSyncWorker", () => {
         idempotencyKey: first.idempotencyKey,
         documentSourceId: "source-1",
         errorMessage: "runner crashed",
+        retryAction: "requeued",
+        attempts: 1,
       },
       {
         status: "processed",
         idempotencyKey: second.idempotencyKey,
         documentSourceId: "source-2",
         syncStatus: "skipped",
+      },
+    ]);
+    expect(queue.handleFailedJob).toHaveBeenCalledWith({
+      job: first,
+      errorMessage: "runner crashed",
+    });
+  });
+
+  it("records dead-lettered runner errors", async () => {
+    const syncJob = jobFixture({ documentSourceId: "source-dead-letter" });
+    const worker = createDocumentSyncWorker({
+      queue: {
+        dequeueBatch: vi.fn(async () => [syncJob]),
+        handleFailedJob: vi.fn(async () => ({ action: "dead_lettered" as const, attempts: 3 })),
+      },
+      runner: {
+        syncSourceById: vi.fn(async () => {
+          throw new Error("runner crashed");
+        }),
+      },
+    });
+
+    await expect(worker.processBatch({ limit: 1 })).resolves.toEqual([
+      {
+        status: "failed",
+        idempotencyKey: syncJob.idempotencyKey,
+        documentSourceId: "source-dead-letter",
+        errorMessage: "runner crashed",
+        retryAction: "dead_lettered",
+        attempts: 3,
       },
     ]);
   });

@@ -46,6 +46,7 @@ describe("createDocumentSyncRuntime", () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),
       getPendingCount: vi.fn(async () => 3),
+      handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
     };
     const reindexQueue = {
       enqueue: vi.fn(async () => undefined),

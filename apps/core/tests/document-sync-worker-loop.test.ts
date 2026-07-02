@@ -44,6 +44,8 @@ describe("DocumentSyncWorkerLoop", () => {
           idempotencyKey: "document-sync:source-2",
           documentSourceId: "source-2",
           errorMessage: "runner crashed",
+          retryAction: "requeued" as const,
+          attempts: 1,
         },
       ]),
     };
