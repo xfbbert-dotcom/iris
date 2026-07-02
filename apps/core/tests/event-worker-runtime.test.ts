@@ -82,7 +82,11 @@ describe("createEventWorkerRuntime", () => {
     });
     expect(dependencies.createDocumentSourceRegistry).toHaveBeenCalledWith(pool);
     expect(dependencies.createDocumentLinkExtractor).toHaveBeenCalledWith();
-    expect(dependencies.createDocumentSyncQueue).toHaveBeenCalledWith();
+    expect(dependencies.createDocumentSyncQueue).toHaveBeenCalledWith({
+      eval: expect.any(Function),
+      lPop: expect.any(Function),
+      lLen: expect.any(Function),
+    });
     expect(dependencies.createDiscoveredDocumentSyncPlanner).toHaveBeenCalledWith({
       queue: documentSyncQueue,
     });

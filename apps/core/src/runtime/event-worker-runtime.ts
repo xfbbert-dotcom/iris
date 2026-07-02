@@ -17,11 +17,14 @@ import { createDiscoveredDocumentSyncPlanner } from "../documents/discovered-doc
 import type { DocumentSyncQueue } from "../documents/document-sync-queue.js";
 import { createFeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
 import { createGroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
-import { createInMemoryDocumentSyncQueue } from "../documents/in-memory-document-sync-queue.js";
 import {
   createPostgresDocumentSourceRegistry,
   type AsyncDocumentSourceRegistry,
 } from "../documents/postgres-document-source-registry.js";
+import {
+  createRedisDocumentSyncQueue,
+  type RedisDocumentSyncQueueClient,
+} from "../documents/redis-document-sync-queue.js";
 import { createRedisRawEventQueue, type RedisRawEventQueueClient } from "../events/redis-raw-event-queue.js";
 import { createRawEventWorker } from "../events/raw-event-worker.js";
 import {
@@ -62,7 +65,9 @@ export type EventWorkerRuntimeDependencies = {
   createConversationMessageRepository?: typeof createPostgresConversationMessageRepository;
   createDocumentSourceRegistry?: (pool: PostgresPool) => GroupVisibleDocumentRegistry;
   createDocumentLinkExtractor?: typeof createFeishuDocumentLinkExtractor;
-  createDocumentSyncQueue?: () => Pick<DocumentSyncQueue, "enqueue">;
+  createDocumentSyncQueue?: (
+    client: RedisDocumentSyncQueueClient,
+  ) => Pick<DocumentSyncQueue, "enqueue">;
   createDiscoveredDocumentSyncPlanner?: typeof createDiscoveredDocumentSyncPlanner;
   createGroupVisibleDocumentRegistrar?: typeof createGroupVisibleDocumentRegistrar;
   createProcessor?: typeof createFeishuMessageEventProcessor;
@@ -105,7 +110,8 @@ function createEnabledEventWorkerRuntime({
   const createDocumentLinkExtractor =
     dependencies.createDocumentLinkExtractor ?? createFeishuDocumentLinkExtractor;
   const createDocumentSyncQueue =
-    dependencies.createDocumentSyncQueue ?? createInMemoryDocumentSyncQueue;
+    dependencies.createDocumentSyncQueue ??
+    ((client: RedisDocumentSyncQueueClient) => createRedisDocumentSyncQueue({ client }));
   const createDiscoveredSyncPlanner =
     dependencies.createDiscoveredDocumentSyncPlanner ?? createDiscoveredDocumentSyncPlanner;
   const createGroupVisibleRegistrar =
@@ -114,10 +120,14 @@ function createEnabledEventWorkerRuntime({
   const createLoop = dependencies.createWorkerLoop ?? createRawEventWorkerLoop;
 
   const pool = createPool(readDatabaseConfig(env));
+  const redis = createRedis(runtimeConfig.redisUrl);
+  const redisConnection = redis.connect().then(() => redis);
   const messages = createMessages({ queryable: pool });
   const documentSources = createDocumentSources(pool);
   const documentLinkExtractor = createDocumentLinkExtractor();
-  const documentSyncQueue = createDocumentSyncQueue();
+  const documentSyncQueue = createDocumentSyncQueue(
+    createLazyRedisDocumentSyncQueueClient(redisConnection),
+  );
   const syncPlanner = createDiscoveredSyncPlanner({ queue: documentSyncQueue });
   const groupVisibleDocumentRegistrar = createGroupVisibleRegistrar({
     registry: documentSources,
@@ -128,8 +138,6 @@ function createEnabledEventWorkerRuntime({
     documentLinkExtractor,
     groupVisibleDocumentRegistrar,
   });
-  const redis = createRedis(runtimeConfig.redisUrl);
-  const redisConnection = redis.connect().then(() => redis);
   const queue = createRedisRawEventQueue({
     client: createLazyRedisQueueClient(redisConnection),
   });
@@ -175,6 +183,25 @@ function createEnabledEventWorkerRuntime({
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): GroupVisibleDocumentRegistry {
   return createPostgresDocumentSourceRegistry(pool as unknown as pg.Pool);
+}
+
+function createLazyRedisDocumentSyncQueueClient(
+  redisConnection: Promise<RedisClient>,
+): RedisDocumentSyncQueueClient {
+  return {
+    async eval(script, options) {
+      const client = await redisConnection;
+      return client.eval(script, options);
+    },
+    async lPop(key) {
+      const client = await redisConnection;
+      return client.lPop(key);
+    },
+    async lLen(key) {
+      const client = await redisConnection;
+      return client.lLen(key);
+    },
+  };
 }
 
 function createLazyRedisQueueClient(
