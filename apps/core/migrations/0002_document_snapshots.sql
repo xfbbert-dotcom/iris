@@ -8,11 +8,23 @@ create table document_snapshots (
   source_version text,
   fetched_at timestamptz not null,
   error_message text,
-  created_at timestamptz not null
+  created_at timestamptz not null,
+  check (
+    (
+      fetch_status = 'succeeded'
+      and body_text is not null
+      and error_message is null
+    )
+    or (
+      fetch_status = 'failed'
+      and body_text is null
+      and error_message is not null
+    )
+  )
 );
 
 create index document_snapshots_document_source_id_idx
-  on document_snapshots (document_source_id);
+  on document_snapshots (document_source_id, fetched_at desc, id asc);
 
 create index document_snapshots_fetched_at_idx
   on document_snapshots (fetched_at desc, id asc);
