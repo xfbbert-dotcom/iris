@@ -71,6 +71,81 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
     await expect(queue.getDeadLetterCount()).resolves.toBe(1);
   });
+
+  it("lists dead-lettered jobs with generated ids", async () => {
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+      now: () => new Date("2026-07-02T01:05:00.000Z"),
+    });
+    const job = jobFixture();
+
+    await queue.handleFailedJob({ job, errorMessage: "embedding failed" });
+
+    await expect(queue.listDeadLetters({ limit: 20 })).resolves.toEqual([
+      {
+        id: "dlq-1",
+        job: { ...job, attempts: 1 },
+        errorMessage: "embedding failed",
+        failedAt: new Date("2026-07-02T01:05:00.000Z"),
+        replayable: true,
+      },
+    ]);
+  });
+
+  it("replays dead-lettered jobs with attempts reset", async () => {
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+      now: () => new Date("2026-07-02T01:05:00.000Z"),
+    });
+    const job = jobFixture({ attempts: 0 });
+    await queue.handleFailedJob({ job, errorMessage: "embedding failed" });
+
+    await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
+    await expect(queue.listDeadLetters({ limit: 20 })).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([{ ...job, attempts: 0 }]);
+  });
+
+  it("deletes dead-lettered jobs without replaying them", async () => {
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+      now: () => new Date("2026-07-02T01:05:00.000Z"),
+    });
+    await queue.handleFailedJob({ job: jobFixture(), errorMessage: "embedding failed" });
+
+    await expect(queue.deleteDeadLetter("dlq-1")).resolves.toBe("deleted");
+    await expect(queue.listDeadLetters({ limit: 20 })).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+  });
+
+  it("batch replays dead-lettered jobs", async () => {
+    let nextId = 1;
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: () => `dlq-${nextId++}`,
+    });
+    await queue.handleFailedJob({
+      job: jobFixture({ documentSnapshotId: "snapshot-1" }),
+      errorMessage: "first",
+    });
+    await queue.handleFailedJob({
+      job: jobFixture({
+        idempotencyKey: "reindex:profile-1:snapshot-2",
+        documentSnapshotId: "snapshot-2",
+      }),
+      errorMessage: "second",
+    });
+
+    await expect(queue.replayDeadLetters({ ids: ["dlq-1", "missing", "dlq-2"] })).resolves.toEqual({
+      replayedCount: 2,
+      notFoundIds: ["missing"],
+      unsupportedLegacyIds: [],
+    });
+    await expect(queue.getDeadLetterCount()).resolves.toBe(0);
+    await expect(queue.dequeueBatch(10)).resolves.toHaveLength(2);
+  });
 });
 
 function jobFixture(overrides: Partial<DocumentReindexJob> = {}): DocumentReindexJob {

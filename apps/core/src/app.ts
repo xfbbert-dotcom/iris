@@ -44,6 +44,10 @@ type ReindexDocumentProfileRequest = {
   limit: number;
 };
 
+type ReindexDeadLetterBatchReplayRequest = {
+  ids: string[];
+};
+
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const answerDraftRuntime =
@@ -146,6 +150,87 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/reindex/dead-letters", async (request, reply) => {
+    if (reindexWorkerRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "reindex_worker_unavailable" });
+    }
+
+    const limit = parseDeadLetterLimit((request.query as { limit?: unknown }).limit);
+    if (limit === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, deadLetters: await reindexWorkerRuntime.deadLetters.list({ limit }) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "reindex_dead_letter_operation_failed"
+      });
+    }
+  });
+
+  app.post("/internal/reindex/dead-letters/replay", async (request, reply) => {
+    if (reindexWorkerRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "reindex_worker_unavailable" });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseReindexDeadLetterBatchReplayRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, ...(await reindexWorkerRuntime.deadLetters.replayBatch(parsedRequest)) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "reindex_dead_letter_operation_failed"
+      });
+    }
+  });
+
+  app.post("/internal/reindex/dead-letters/:id/replay", async (request, reply) => {
+    if (reindexWorkerRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "reindex_worker_unavailable" });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, status: await reindexWorkerRuntime.deadLetters.replay(id) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "reindex_dead_letter_operation_failed"
+      });
+    }
+  });
+
+  app.delete("/internal/reindex/dead-letters/:id", async (request, reply) => {
+    if (reindexWorkerRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "reindex_worker_unavailable" });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, status: await reindexWorkerRuntime.deadLetters.delete(id) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "reindex_dead_letter_operation_failed"
+      });
+    }
+  });
+
   app.get("/health", async () => ({ ok: true, service: "iris-core" }));
 
   app.addHook("onClose", async () => {
@@ -219,6 +304,41 @@ function parseReindexDocumentProfileRequest(
   }
 
   return { embeddingProfileId, limit: value.limit };
+}
+
+function parseDeadLetterLimit(value: unknown): number | undefined {
+  if (value === undefined) {
+    return 20;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return undefined;
+  }
+
+  return Math.min(parsed, 100);
+}
+
+function parseReindexDeadLetterBatchReplayRequest(
+  value: unknown,
+): ReindexDeadLetterBatchReplayRequest | undefined {
+  if (!isRecord(value) || !Array.isArray(value.ids)) {
+    return undefined;
+  }
+  if (value.ids.length === 0 || value.ids.length > 100) {
+    return undefined;
+  }
+
+  const ids = value.ids.map(readNonBlankId);
+  if (ids.some((id) => id === undefined)) {
+    return undefined;
+  }
+
+  return { ids: ids as string[] };
+}
+
+function readNonBlankId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function parseLiveChatMessage(value: unknown): LiveChatMessage | undefined {

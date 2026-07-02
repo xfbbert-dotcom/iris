@@ -29,6 +29,10 @@ import {
 } from "../documents/embedding-profile-repository.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createDocumentReindexPlanner } from "../reindex/document-reindex-planner.js";
+import type {
+  DocumentReindexDeadLetter,
+  ReplayDocumentReindexDeadLettersResult,
+} from "../reindex/document-reindex-queue.js";
 import { createDocumentReindexWorker } from "../reindex/document-reindex-worker.js";
 import {
   createDocumentReindexWorkerLoop,
@@ -47,6 +51,12 @@ export type ReindexWorkerRuntime = {
       embeddingProfileId: string;
       limit: number;
     }): Promise<{ enqueuedCount: number; skippedCount: number }>;
+  };
+  deadLetters: {
+    list(input: { limit: number }): Promise<DocumentReindexDeadLetter[]>;
+    replay(id: string): Promise<"replayed" | "not_found" | "unsupported_legacy_item">;
+    delete(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
+    replayBatch(input: { ids: string[] }): Promise<ReplayDocumentReindexDeadLettersResult>;
   };
   getStatus(): Promise<ReindexWorkerRuntimeStatus>;
   start(): void;
@@ -187,6 +197,12 @@ export function createReindexWorkerRuntime({
         return planner.planDocumentProfileReindex(input);
       },
     },
+    deadLetters: {
+      list: (input) => queue.listDeadLetters(input),
+      replay: (id) => queue.replayDeadLetter(id),
+      delete: (id) => queue.deleteDeadLetter(id),
+      replayBatch: (input) => queue.replayDeadLetters(input),
+    },
     start() {
       loop.start();
     },
@@ -235,6 +251,14 @@ function createLazyRedisQueueClient(
     async lLen(key) {
       const client = await redisConnection;
       return client.lLen(key);
+    },
+    async lRange(key, start, stop) {
+      const client = await redisConnection;
+      return client.lRange(key, start, stop);
+    },
+    async lRem(key, count, value) {
+      const client = await redisConnection;
+      return client.lRem(key, count, value);
     },
   };
 }

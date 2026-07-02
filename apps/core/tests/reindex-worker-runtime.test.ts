@@ -15,6 +15,8 @@ describe("createReindexWorkerRuntime", () => {
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(async () => null),
       lLen: vi.fn().mockResolvedValueOnce(42).mockResolvedValueOnce(5),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(async () => 1),
       quit: vi.fn(async () => undefined),
     };
     const embeddingProfile = embeddingProfileFixture();
@@ -95,6 +97,8 @@ describe("createReindexWorkerRuntime", () => {
         failed: false,
       },
     });
+    await expect(runtime?.deadLetters.list({ limit: 20 })).resolves.toEqual([]);
+    expect(redisClient.lRange).toHaveBeenCalledWith("iris:reindex:documents:dlq", 0, 19);
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();
@@ -175,6 +179,8 @@ function runtimeDependencies() {
     rPush: vi.fn(async () => 1),
     lPop: vi.fn(async () => null),
     lLen: vi.fn(async () => 0),
+    lRange: vi.fn(async () => []),
+    lRem: vi.fn(async () => 1),
     quit: vi.fn(async () => undefined),
   };
 

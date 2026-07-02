@@ -19,6 +19,20 @@ export type FailedDocumentReindexJobResult = {
   attempts: number;
 };
 
+export type DocumentReindexDeadLetter = {
+  id: string;
+  job: DocumentReindexJob;
+  errorMessage: string;
+  failedAt: Date;
+  replayable: boolean;
+};
+
+export type ReplayDocumentReindexDeadLettersResult = {
+  replayedCount: number;
+  notFoundIds: string[];
+  unsupportedLegacyIds: string[];
+};
+
 export type CreateDocumentReindexIdempotencyKeyInput = {
   embeddingProfileId: string;
   documentSnapshotId: string;
@@ -32,6 +46,10 @@ export interface DocumentReindexQueue {
     input: FailedDocumentReindexJobInput,
   ): Promise<FailedDocumentReindexJobResult>;
   getDeadLetterCount(): Promise<number>;
+  listDeadLetters(input: { limit: number }): Promise<DocumentReindexDeadLetter[]>;
+  replayDeadLetter(id: string): Promise<"replayed" | "not_found" | "unsupported_legacy_item">;
+  deleteDeadLetter(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
+  replayDeadLetters(input: { ids: string[] }): Promise<ReplayDocumentReindexDeadLettersResult>;
 }
 
 export function createDocumentReindexIdempotencyKey(
