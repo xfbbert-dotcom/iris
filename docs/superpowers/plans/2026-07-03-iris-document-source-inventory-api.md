@@ -184,7 +184,7 @@ git add docs/superpowers/specs/2026-07-03-iris-document-source-inventory-api-des
 git commit -m "feat: expose document source inventory"
 ```
 
-- [ ] **Step 3: Push and update PR**
+- [x] **Step 3: Push and update PR**
 
 Run:
 
