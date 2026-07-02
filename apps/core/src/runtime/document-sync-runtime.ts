@@ -72,6 +72,12 @@ export type DocumentSyncRuntime = {
     source: Awaited<ReturnType<AsyncDocumentSourceRegistry["registerAuthorizedWikiDocument"]>>;
     enqueue: ManualDocumentSyncEnqueueResult;
   }>;
+  registerUserSubmittedDocument(
+    input: Parameters<AsyncDocumentSourceRegistry["registerUserSubmittedDocument"]>[0],
+  ): Promise<{
+    source: Awaited<ReturnType<AsyncDocumentSourceRegistry["registerUserSubmittedDocument"]>>;
+    enqueue: ManualDocumentSyncEnqueueResult;
+  }>;
   deadLetters: {
     list(input: { limit: number }): Promise<DocumentSyncDeadLetter[]>;
     replay(id: string): Promise<"replayed" | "not_found" | "unsupported_legacy_item">;
@@ -100,7 +106,10 @@ type DocumentSyncRuntimeSnapshots = DocumentSyncSnapshotWriter & {
   }): Promise<DocumentSnapshot[]>;
 };
 type DocumentSyncRuntimeDocumentSources = DocumentSyncRunnerRegistry &
-  Pick<AsyncDocumentSourceRegistry, "registerAuthorizedWikiDocument">;
+  Pick<
+    AsyncDocumentSourceRegistry,
+    "registerAuthorizedWikiDocument" | "registerUserSubmittedDocument"
+  >;
 type DocumentSyncRuntimeQueue = Pick<
   DocumentSyncQueue,
   | "dequeueBatch"
@@ -275,6 +284,12 @@ function createEnabledDocumentSyncRuntime({
     },
     async registerAuthorizedWikiDocument(input) {
       const source = await documentSources.registerAuthorizedWikiDocument(input);
+      const enqueue = await manualPlanner.enqueueSource({ documentSourceId: source.id });
+
+      return { source, enqueue };
+    },
+    async registerUserSubmittedDocument(input) {
+      const source = await documentSources.registerUserSubmittedDocument(input);
       const enqueue = await manualPlanner.enqueueSource({ documentSourceId: source.id });
 
       return { source, enqueue };

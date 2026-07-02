@@ -1248,6 +1248,128 @@ describe("authorized wiki document registration API", () => {
   });
 });
 
+describe("user submitted document registration API", () => {
+  it("returns 503 when document sync runtime is unavailable", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/user-submitted-documents",
+      payload: {
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+        submittedByUserId: "ou_1",
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "document_sync_worker_unavailable" });
+  });
+
+  it("registers a user submitted document and enqueues sync", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      registerUserSubmittedDocument: vi.fn(async () => ({
+        source: userSubmittedSource(),
+        enqueue: {
+          status: "enqueued" as const,
+          documentSourceId: "user-source-1",
+        },
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/user-submitted-documents",
+      payload: {
+        sourceUri: " https://docs.feishu.cn/docx/user_doc_token_1 ",
+        title: " User Guide ",
+        submittedByUserId: " ou_1 ",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      source: {
+        id: "user-source-1",
+        sourceType: "user_submitted_document",
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+        title: "User Guide",
+        submittedByUserId: "ou_1",
+        permissionState: "unknown",
+        syncState: "pending",
+        canUseForAnswering: true,
+        canUseForKnowledgeDrafts: false,
+        createdAt: "2026-07-03T03:10:00.000Z",
+        updatedAt: "2026-07-03T03:10:00.000Z",
+        evidence: [],
+      },
+      enqueue: {
+        status: "enqueued",
+        documentSourceId: "user-source-1",
+      },
+    });
+    expect(runtime.registerUserSubmittedDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+      title: "User Guide",
+      submittedByUserId: "ou_1",
+      observedAt: expect.any(Date),
+    });
+  });
+
+  it("rejects invalid user submitted document requests", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/user-submitted-documents",
+      payload: {
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+        submittedByUserId: " ",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("returns 500 when user submitted registration fails", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      registerUserSubmittedDocument: vi.fn(async () => {
+        throw new Error("database unavailable");
+      }),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/user-submitted-documents",
+      payload: {
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+        submittedByUserId: "ou_1",
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "user_submitted_document_registration_failed",
+    });
+  });
+});
+
 function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): ReindexWorkerRuntime {
   return {
     activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
@@ -1331,6 +1453,13 @@ function fakeDocumentSyncRuntime(
         documentSourceId: "source-1",
       },
     })),
+    registerUserSubmittedDocument: vi.fn(async () => ({
+      source: userSubmittedSource(),
+      enqueue: {
+        status: "enqueued" as const,
+        documentSourceId: "user-source-1",
+      },
+    })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,
@@ -1353,6 +1482,26 @@ function authorizedWikiSource() {
     canUseForKnowledgeDrafts: true,
     createdAt: new Date("2026-07-03T03:00:00.000Z"),
     updatedAt: new Date("2026-07-03T03:00:00.000Z"),
+    evidence: [],
+  };
+}
+
+function userSubmittedSource() {
+  return {
+    id: "user-source-1",
+    sourceType: "user_submitted_document" as const,
+    sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+    title: "User Guide",
+    originGroupId: undefined,
+    originMessageId: undefined,
+    submittedByUserId: "ou_1",
+    authorizedSpaceId: undefined,
+    permissionState: "unknown" as const,
+    syncState: "pending" as const,
+    canUseForAnswering: true,
+    canUseForKnowledgeDrafts: false,
+    createdAt: new Date("2026-07-03T03:10:00.000Z"),
+    updatedAt: new Date("2026-07-03T03:10:00.000Z"),
     evidence: [],
   };
 }

@@ -66,6 +66,12 @@ type RegisterAuthorizedWikiDocumentRequest = {
   authorizedSpaceId: string;
 };
 
+type RegisterUserSubmittedDocumentRequest = {
+  sourceUri: string;
+  title?: string;
+  submittedByUserId: string;
+};
+
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const answerDraftRuntime =
@@ -242,6 +248,33 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(500).send({
         ok: false,
         error: "authorized_wiki_document_registration_failed"
+      });
+    }
+  });
+
+  app.post("/internal/document-sync/user-submitted-documents", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseRegisterUserSubmittedDocumentRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return {
+        ok: true,
+        ...(await documentSyncRuntime.registerUserSubmittedDocument({
+          ...parsedRequest,
+          observedAt: new Date(),
+        })),
+      };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "user_submitted_document_registration_failed"
       });
     }
   });
@@ -537,6 +570,31 @@ function parseRegisterAuthorizedWikiDocumentRequest(
   return {
     sourceUri,
     authorizedSpaceId,
+    ...(title === undefined ? {} : { title }),
+  };
+}
+
+function parseRegisterUserSubmittedDocumentRequest(
+  value: unknown,
+): RegisterUserSubmittedDocumentRequest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const sourceUri = readNonBlankId(value.sourceUri);
+  const submittedByUserId = readNonBlankId(value.submittedByUserId);
+  const title = value.title === undefined ? undefined : readNonBlankId(value.title);
+  if (
+    sourceUri === undefined ||
+    submittedByUserId === undefined ||
+    (title === undefined && value.title !== undefined)
+  ) {
+    return undefined;
+  }
+
+  return {
+    sourceUri,
+    submittedByUserId,
     ...(title === undefined ? {} : { title }),
   };
 }

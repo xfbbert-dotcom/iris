@@ -16,15 +16,15 @@
 - Modify: `apps/core/src/runtime/document-sync-runtime.ts`
 - Test: `apps/core/tests/document-sync-runtime.test.ts`
 
-- [ ] **Step 1: Write failing runtime test**
+- [x] **Step 1: Write failing runtime test**
 
 Assert `runtime.registerUserSubmittedDocument({ sourceUri, submittedByUserId, title, observedAt })` calls `documentSources.registerUserSubmittedDocument` and then `manualPlanner.enqueueSource`.
 
-- [ ] **Step 2: Extend runtime types and composition**
+- [x] **Step 2: Extend runtime types and composition**
 
 Add the method to `DocumentSyncRuntime`, widen the document source registry dependency type, and implement the method by registering then enqueueing.
 
-- [ ] **Step 3: Verify runtime test**
+- [x] **Step 3: Verify runtime test**
 
 Run:
 
@@ -40,15 +40,15 @@ Expected: runtime tests pass.
 - Modify: `apps/core/src/app.ts`
 - Test: `apps/core/tests/answer-draft-api.test.ts`
 
-- [ ] **Step 1: Write failing API tests**
+- [x] **Step 1: Write failing API tests**
 
 Cover unavailable runtime, successful registration, invalid body, and runtime failure.
 
-- [ ] **Step 2: Add route**
+- [x] **Step 2: Add route**
 
 Add `POST /internal/document-sync/user-submitted-documents`.
 
-- [ ] **Step 3: Verify API test**
+- [x] **Step 3: Verify API test**
 
 Run:
 
@@ -63,7 +63,7 @@ Expected: API tests pass.
 **Files:**
 - Modify: PR #3 body.
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run:
 
@@ -76,10 +76,10 @@ docker compose config
 
 Expected: all commands exit 0.
 
-- [ ] **Step 2: Commit and push**
+- [x] **Step 2: Commit and push**
 
 Commit docs and implementation, then push `codex/iris-document-source-registry`.
 
-- [ ] **Step 3: Update PR body and inspect PR state**
+- [x] **Step 3: Update PR body and inspect PR state**
 
 Append Phase 3I summary and verify PR #3 remains open and non-draft.

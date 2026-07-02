@@ -48,6 +48,23 @@ describe("createDocumentSyncRuntime", () => {
         updatedAt: new Date("2026-07-03T03:00:00.000Z"),
         evidence: [],
       })),
+      registerUserSubmittedDocument: vi.fn(async () => ({
+        id: "user-source-1",
+        sourceType: "user_submitted_document" as const,
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+        title: "User Guide",
+        originGroupId: undefined,
+        originMessageId: undefined,
+        submittedByUserId: "ou_1",
+        authorizedSpaceId: undefined,
+        permissionState: "unknown" as const,
+        syncState: "pending" as const,
+        canUseForAnswering: true,
+        canUseForKnowledgeDrafts: false,
+        createdAt: new Date("2026-07-03T03:10:00.000Z"),
+        updatedAt: new Date("2026-07-03T03:10:00.000Z"),
+        evidence: [],
+      })),
     };
     const snapshots = {
       insertSucceededSnapshot: vi.fn(),
@@ -114,9 +131,9 @@ describe("createDocumentSyncRuntime", () => {
       })),
     };
     const manualPlanner = {
-      enqueueSource: vi.fn(async () => ({
+      enqueueSource: vi.fn(async (input: { documentSourceId: string }) => ({
         status: "enqueued" as const,
-        documentSourceId: "source-1",
+        documentSourceId: input.documentSourceId,
       })),
     };
     let runnerInput:
@@ -300,6 +317,45 @@ describe("createDocumentSyncRuntime", () => {
     });
     expect(manualPlanner.enqueueSource).toHaveBeenCalledWith({
       documentSourceId: "source-1",
+    });
+    await expect(
+      runtime?.registerUserSubmittedDocument({
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+        title: "User Guide",
+        submittedByUserId: "ou_1",
+        observedAt: new Date("2026-07-03T03:10:00.000Z"),
+      }),
+    ).resolves.toEqual({
+      source: {
+        id: "user-source-1",
+        sourceType: "user_submitted_document",
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+        title: "User Guide",
+        originGroupId: undefined,
+        originMessageId: undefined,
+        submittedByUserId: "ou_1",
+        authorizedSpaceId: undefined,
+        permissionState: "unknown",
+        syncState: "pending",
+        canUseForAnswering: true,
+        canUseForKnowledgeDrafts: false,
+        createdAt: new Date("2026-07-03T03:10:00.000Z"),
+        updatedAt: new Date("2026-07-03T03:10:00.000Z"),
+        evidence: [],
+      },
+      enqueue: {
+        status: "enqueued",
+        documentSourceId: "user-source-1",
+      },
+    });
+    expect(documentSources.registerUserSubmittedDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+      title: "User Guide",
+      submittedByUserId: "ou_1",
+      observedAt: new Date("2026-07-03T03:10:00.000Z"),
+    });
+    expect(manualPlanner.enqueueSource).toHaveBeenCalledWith({
+      documentSourceId: "user-source-1",
     });
 
     await runtime?.close();
