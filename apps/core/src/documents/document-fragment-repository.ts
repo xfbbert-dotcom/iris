@@ -56,6 +56,10 @@ export interface DocumentFragmentRepository {
   listFragmentsForSource(documentSourceId: string): Promise<DocumentFragment[]>;
   listFragmentsForSnapshot(documentSnapshotId: string): Promise<DocumentFragment[]>;
   searchSimilarFragments(input: SearchSimilarFragmentsInput): Promise<RetrievedDocumentFragment[]>;
+  hasFragmentsForSnapshotProfile(input: {
+    documentSnapshotId: string;
+    embeddingProfileId: string;
+  }): Promise<boolean>;
 }
 
 type DocumentFragmentRow = {
@@ -180,6 +184,22 @@ limit $3
       );
 
       return result.rows.map(mapRetrievedFragmentRow);
+    },
+
+    async hasFragmentsForSnapshotProfile(input) {
+      const result = await dependencies.queryable.query<{ exists: boolean }>(
+        `
+select exists (
+  select 1
+  from document_fragments
+  where document_snapshot_id = $1
+    and embedding_profile_id = $2
+) as exists
+`,
+        [input.documentSnapshotId, input.embeddingProfileId],
+      );
+
+      return result.rows[0]?.exists === true;
     },
   };
 }

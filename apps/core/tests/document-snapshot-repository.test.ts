@@ -219,6 +219,79 @@ describe("DocumentSnapshotRepository", () => {
       bodyText: "new",
     });
   });
+
+  it("finds a snapshot by id", async () => {
+    const createdAt = new Date("2026-07-02T01:00:00.000Z");
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      expect(normalizeSql(sql)).toContain("where id = $1");
+      expect(values).toEqual(["snapshot-1"]);
+      return {
+        rows: [
+          {
+            id: "snapshot-1",
+            document_source_id: "source-1",
+            source_uri: "https://example.com/doc",
+            fetch_status: "succeeded",
+            body_text: "Alpha body",
+            content_hash: "hash",
+            source_version: "v1",
+            fetched_at: createdAt,
+            error_message: null,
+            created_at: createdAt,
+          },
+        ],
+      };
+    });
+    const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
+
+    await expect(repository.findSnapshotById("snapshot-1")).resolves.toEqual(
+      expect.objectContaining({
+        id: "snapshot-1",
+        fetchStatus: "succeeded",
+        bodyText: "Alpha body",
+      }),
+    );
+  });
+
+  it("lists successful snapshots missing a profile", async () => {
+    const createdAt = new Date("2026-07-02T01:00:00.000Z");
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("fetch_status = 'succeeded'");
+      expect(normalized).toContain("not exists");
+      expect(normalized).toContain("embedding_profile_id = $1");
+      expect(values).toEqual(["profile-1536", 25]);
+      return {
+        rows: [
+          {
+            id: "snapshot-1",
+            document_source_id: "source-1",
+            source_uri: "https://example.com/doc",
+            fetch_status: "succeeded",
+            body_text: "Alpha body",
+            content_hash: "hash",
+            source_version: "v1",
+            fetched_at: createdAt,
+            error_message: null,
+            created_at: createdAt,
+          },
+        ],
+      };
+    });
+    const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
+
+    await expect(
+      repository.listSuccessfulSnapshotsMissingProfile({
+        embeddingProfileId: "profile-1536",
+        limit: 25,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "snapshot-1",
+        fetchStatus: "succeeded",
+      }),
+    ]);
+  });
 });
 
 runIfDatabase("DocumentSnapshotRepository with Postgres", () => {

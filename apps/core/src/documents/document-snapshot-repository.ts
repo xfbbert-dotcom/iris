@@ -46,6 +46,11 @@ export interface DocumentSnapshotRepository {
   insertFailedSnapshot(input: InsertFailedSnapshotInput): Promise<DocumentSnapshot>;
   listSnapshotsForSource(documentSourceId: string): Promise<DocumentSnapshot[]>;
   findLatestSnapshotForSource(documentSourceId: string): Promise<DocumentSnapshot | undefined>;
+  findSnapshotById(id: string): Promise<DocumentSnapshot | undefined>;
+  listSuccessfulSnapshotsMissingProfile(input: {
+    embeddingProfileId: string;
+    limit: number;
+  }): Promise<DocumentSnapshot[]>;
 }
 
 type DocumentSnapshotRow = {
@@ -128,6 +133,41 @@ order by fetched_at desc, id asc
     async findLatestSnapshotForSource(documentSourceId) {
       const snapshots = await this.listSnapshotsForSource(documentSourceId);
       return snapshots[0];
+    },
+
+    async findSnapshotById(id) {
+      const result = await dependencies.queryable.query<DocumentSnapshotRow>(
+        `
+select *
+from document_snapshots
+where id = $1
+`,
+        [id],
+      );
+
+      const row = result.rows[0];
+      return row === undefined ? undefined : mapSnapshotRow(row);
+    },
+
+    async listSuccessfulSnapshotsMissingProfile(input) {
+      const result = await dependencies.queryable.query<DocumentSnapshotRow>(
+        `
+select *
+from document_snapshots s
+where s.fetch_status = 'succeeded'
+  and not exists (
+    select 1
+    from document_fragments f
+    where f.document_snapshot_id = s.id
+      and f.embedding_profile_id = $1
+  )
+order by s.fetched_at asc, s.id asc
+limit $2
+`,
+        [input.embeddingProfileId, Math.max(0, Math.floor(input.limit))],
+      );
+
+      return result.rows.map(mapSnapshotRow);
     },
   };
 }

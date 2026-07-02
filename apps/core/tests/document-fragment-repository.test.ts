@@ -231,6 +231,30 @@ describe("DocumentFragmentRepository", () => {
       }),
     ).rejects.toThrow("embedding vector length 3 does not match profile dimension 6");
   });
+
+  it("checks whether fragments exist for a snapshot profile", async () => {
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("from document_fragments");
+      expect(normalized).toContain("document_snapshot_id = $1");
+      expect(normalized).toContain("embedding_profile_id = $2");
+      expect(values).toEqual(["snapshot-1", "profile-1536"]);
+      return { rows: [{ exists: true }] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "profile-1536", dimensions: 1536 })),
+      },
+    });
+
+    await expect(
+      repository.hasFragmentsForSnapshotProfile({
+        documentSnapshotId: "snapshot-1",
+        embeddingProfileId: "profile-1536",
+      }),
+    ).resolves.toBe(true);
+  });
 });
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
