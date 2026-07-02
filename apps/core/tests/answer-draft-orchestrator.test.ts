@@ -76,6 +76,52 @@ describe("AnswerDraftOrchestrator", () => {
     expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
+  it("loads stored live chat context when chatId is supplied", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft answer." })),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => [
+        { speaker: "ou_a", text: "Stored context" },
+      ]),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await orchestrator.generateDraft({
+      question: "What changed?",
+      chatId: "oc_1",
+      liveChatMessages: [{ speaker: "ou_b", text: "Current question context" }],
+      liveChatLimit: 8,
+    });
+
+    expect(liveChatContextProvider.loadRecentMessages).toHaveBeenCalledWith({
+      chatId: "oc_1",
+      limit: 8,
+    });
+    expect(contextBuilder.buildContext).toHaveBeenCalledWith({
+      queryText: "What changed?",
+      liveChatMessages: [
+        { speaker: "ou_a", text: "Stored context" },
+        { speaker: "ou_b", text: "Current question context" },
+      ],
+      fragmentLimit: undefined,
+      liveChatLimit: 8,
+    });
+  });
+
   it("rejects blank model output", async () => {
     const orchestrator = createAnswerDraftOrchestrator({
       contextBuilder: {

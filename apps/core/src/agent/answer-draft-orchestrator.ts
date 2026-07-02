@@ -20,6 +20,7 @@ export interface ModelProvider {
 
 export type AnswerDraftInput = {
   question: string;
+  chatId?: string;
   liveChatMessages: LiveChatMessage[];
   fragmentLimit?: number;
   liveChatLimit?: number;
@@ -37,12 +38,18 @@ export interface AnswerDraftOrchestrator {
   generateDraft(input: AnswerDraftInput): Promise<AnswerDraftResult>;
 }
 
+type LiveChatContextProvider = {
+  loadRecentMessages(input: { chatId: string; limit?: number }): Promise<LiveChatMessage[]>;
+};
+
 export function createAnswerDraftOrchestrator({
   contextBuilder,
   model,
+  liveChatContextProvider,
 }: {
   contextBuilder: Pick<DocumentRetrievalContextBuilder, "buildContext">;
   model: ModelProvider;
+  liveChatContextProvider?: LiveChatContextProvider;
 }): AnswerDraftOrchestrator {
   return {
     async generateDraft(input) {
@@ -51,9 +58,18 @@ export function createAnswerDraftOrchestrator({
         throw new Error("question must not be blank");
       }
 
+      const storedLiveChatMessages =
+        input.chatId === undefined
+          ? []
+          : await liveChatContextProvider?.loadRecentMessages({
+              chatId: input.chatId,
+              limit: input.liveChatLimit,
+            }) ?? [];
+      const liveChatMessages = [...storedLiveChatMessages, ...input.liveChatMessages];
+
       const context = await contextBuilder.buildContext({
         queryText: question,
-        liveChatMessages: input.liveChatMessages,
+        liveChatMessages,
         fragmentLimit: input.fragmentLimit,
         liveChatLimit: input.liveChatLimit,
       });
