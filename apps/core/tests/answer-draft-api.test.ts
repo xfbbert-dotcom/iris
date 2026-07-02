@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import type { DocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 
@@ -200,6 +201,19 @@ describe("answer draft runtime wiring", () => {
     expect(reindexWorkerRuntime.start).toHaveBeenCalledOnce();
     await app.close();
     expect(reindexWorkerRuntime.close).toHaveBeenCalledOnce();
+  });
+
+  it("starts and closes an injected document sync runtime", async () => {
+    const documentSyncRuntime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+    });
+
+    expect(documentSyncRuntime.start).toHaveBeenCalledOnce();
+    await app.close();
+    expect(documentSyncRuntime.close).toHaveBeenCalledOnce();
   });
 });
 
@@ -702,6 +716,96 @@ describe("GET /internal/events/status", () => {
   });
 });
 
+describe("GET /internal/document-sync/status", () => {
+  it("returns disabled status when document sync runtime is unavailable", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, enabled: false, running: false });
+  });
+
+  it("returns document sync runtime status", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 10,
+        pendingJobCount: 5,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt: new Date("2026-07-03T01:00:00.000Z"),
+          finishedAt: new Date("2026-07-03T01:00:01.000Z"),
+          processedCount: 4,
+          failedCount: 1,
+          failed: false as const,
+        },
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      enabled: true,
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 10,
+      pendingJobCount: 5,
+      latestBatch: {
+        status: "succeeded",
+        startedAt: "2026-07-03T01:00:00.000Z",
+        finishedAt: "2026-07-03T01:00:01.000Z",
+        processedCount: 4,
+        failedCount: 1,
+        failed: false,
+      },
+    });
+  });
+
+  it("returns 500 when document sync status lookup fails", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      getStatus: vi.fn(async () => {
+        throw new Error("redis unavailable");
+      }),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/status",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ ok: false, error: "document_sync_status_failed" });
+  });
+});
+
 function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): ReindexWorkerRuntime {
   return {
     activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
@@ -745,6 +849,23 @@ function fakeEventRuntime(overrides: Partial<EventWorkerRuntime> = {}): EventWor
       batchLimit: 50,
       pendingEventCount: 0,
       deadLetterEventCount: 0,
+    })),
+    start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeDocumentSyncRuntime(
+  overrides: Partial<DocumentSyncRuntime> = {},
+): DocumentSyncRuntime {
+  return {
+    getStatus: vi.fn(async () => ({
+      enabled: true as const,
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 10,
+      pendingJobCount: 0,
     })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),

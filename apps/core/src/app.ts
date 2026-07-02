@@ -23,6 +23,10 @@ import {
   createReindexWorkerRuntime,
   type ReindexWorkerRuntime
 } from "./runtime/reindex-worker-runtime.js";
+import {
+  createDocumentSyncRuntime,
+  type DocumentSyncRuntime
+} from "./runtime/document-sync-runtime.js";
 
 export type BuildAppDependencies = {
   queue?: EventQueue;
@@ -32,6 +36,7 @@ export type BuildAppDependencies = {
   createAnswerDraftRuntime?: () => AnswerDraftRuntime | undefined;
   createEventWorkerRuntime?: () => EventWorkerRuntime | undefined;
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
+  createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
 };
 
 type ParsedJsonBody = {
@@ -69,6 +74,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const eventWorkerRuntime =
     (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)();
   eventWorkerRuntime?.start();
+  const documentSyncRuntime =
+    (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
+  documentSyncRuntime?.start();
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
     dependencies.verifyFeishuRequest ??
@@ -173,6 +181,18 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/document-sync/status", async (_request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return { ok: true, enabled: false, running: false };
+    }
+
+    try {
+      return { ok: true, ...(await documentSyncRuntime.getStatus()) };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "document_sync_status_failed" });
+    }
+  });
+
   app.get("/internal/reindex/dead-letters", async (request, reply) => {
     if (reindexWorkerRuntime === undefined) {
       return reply.code(503).send({ ok: false, error: "reindex_worker_unavailable" });
@@ -257,6 +277,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   app.get("/health", async () => ({ ok: true, service: "iris-core" }));
 
   app.addHook("onClose", async () => {
+    await documentSyncRuntime?.close();
     await eventWorkerRuntime?.close();
     await reindexWorkerRuntime?.close();
     await answerDraftRuntime?.close();
