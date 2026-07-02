@@ -1,3 +1,4 @@
+import { createClient } from "redis";
 import type pg from "pg";
 
 import {
@@ -27,8 +28,11 @@ import {
   createDocumentSnapshotRepository,
   type Queryable,
 } from "../documents/document-snapshot-repository.js";
-import { createInMemoryDocumentSyncQueue } from "../documents/in-memory-document-sync-queue.js";
 import { createPostgresDocumentSourceRegistry } from "../documents/postgres-document-source-registry.js";
+import {
+  createRedisDocumentSyncQueue,
+  type RedisDocumentSyncQueueClient,
+} from "../documents/redis-document-sync-queue.js";
 import {
   createFeishuTenantAccessTokenProvider,
   type FeishuTenantAccessTokenProvider,
@@ -51,9 +55,14 @@ export type DocumentSyncRuntimeStatus = {
 
 type PostgresPool = Queryable & { end(): Promise<void> };
 type DocumentSyncRuntimeQueue = Pick<DocumentSyncQueue, "dequeueBatch" | "getPendingCount">;
+type RedisClient = RedisDocumentSyncQueueClient & {
+  connect(): Promise<unknown>;
+  quit(): Promise<unknown>;
+};
 
 export type DocumentSyncRuntimeDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => PostgresPool;
+  createRedisClient?: (url: string) => RedisClient;
   createDocumentSourceRegistry?: (pool: PostgresPool) => DocumentSyncRunnerRegistry;
   createDocumentSnapshotRepository?: (dependencies: {
     queryable: Queryable;
@@ -67,7 +76,7 @@ export type DocumentSyncRuntimeDependencies = {
     baseUrl: string;
     tokenProvider: FeishuTenantAccessTokenProvider;
   }) => DocumentBodyFetcher;
-  createDocumentSyncQueue?: () => DocumentSyncRuntimeQueue;
+  createDocumentSyncQueue?: (client: RedisDocumentSyncQueueClient) => DocumentSyncRuntimeQueue;
   createDocumentSyncRunner?: typeof createDocumentSyncRunner;
   createDocumentSyncWorker?: typeof createDocumentSyncWorker;
   createWorkerLoop?: typeof createDocumentSyncWorkerLoop;
@@ -98,6 +107,9 @@ function createEnabledDocumentSyncRuntime({
   dependencies: DocumentSyncRuntimeDependencies;
 }): DocumentSyncRuntime {
   const createPool = dependencies.createPostgresPool ?? createPostgresPool;
+  const createRedis =
+    dependencies.createRedisClient ??
+    ((url: string) => createClient({ url }) as unknown as RedisClient);
   const createDocumentSources =
     dependencies.createDocumentSourceRegistry ?? createDefaultDocumentSourceRegistry;
   const createSnapshots =
@@ -106,13 +118,17 @@ function createEnabledDocumentSyncRuntime({
     dependencies.createFeishuTenantAccessTokenProvider ?? createFeishuTenantAccessTokenProvider;
   const createBodyFetcher =
     dependencies.createFeishuDocumentBodyFetcher ?? createFeishuDocumentBodyFetcher;
-  const createQueue = dependencies.createDocumentSyncQueue ?? createInMemoryDocumentSyncQueue;
+  const createQueue =
+    dependencies.createDocumentSyncQueue ??
+    ((client: RedisDocumentSyncQueueClient) => createRedisDocumentSyncQueue({ client }));
   const createRunner = dependencies.createDocumentSyncRunner ?? createDocumentSyncRunner;
   const createWorker = dependencies.createDocumentSyncWorker ?? createDocumentSyncWorker;
   const createLoop = dependencies.createWorkerLoop ?? createDocumentSyncWorkerLoop;
 
   const feishuConfig = readFeishuOpenApiConfig(env);
   const pool = createPool(readDatabaseConfig(env));
+  const redis = createRedis(runtimeConfig.redisUrl);
+  const redisConnection = redis.connect().then(() => redis);
   const documentSources = createDocumentSources(pool);
   const snapshots = createSnapshots({ queryable: pool });
   const tokenProvider = createTokenProvider({
@@ -124,7 +140,7 @@ function createEnabledDocumentSyncRuntime({
     baseUrl: feishuConfig.baseUrl,
     tokenProvider,
   });
-  const queue = createQueue();
+  const queue = createQueue(createLazyRedisDocumentSyncQueueClient(redisConnection));
   const runner: DocumentSyncRunner = createRunner({
     registry: documentSources,
     snapshots,
@@ -162,6 +178,7 @@ function createEnabledDocumentSyncRuntime({
     },
     async close() {
       await loop.stop();
+      await redisConnection.then((client) => client.quit());
       await pool.end();
     },
   };
@@ -169,4 +186,23 @@ function createEnabledDocumentSyncRuntime({
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): DocumentSyncRunnerRegistry {
   return createPostgresDocumentSourceRegistry(pool as unknown as pg.Pool);
+}
+
+function createLazyRedisDocumentSyncQueueClient(
+  redisConnection: Promise<RedisClient>,
+): RedisDocumentSyncQueueClient {
+  return {
+    async eval(script, options) {
+      const client = await redisConnection;
+      return client.eval(script, options);
+    },
+    async lPop(key) {
+      const client = await redisConnection;
+      return client.lPop(key);
+    },
+    async lLen(key) {
+      const client = await redisConnection;
+      return client.lLen(key);
+    },
+  };
 }

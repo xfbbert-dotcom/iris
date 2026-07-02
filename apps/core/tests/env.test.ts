@@ -295,6 +295,7 @@ describe("readDocumentSyncWorkerRuntimeConfig", () => {
       }),
     ).toEqual({
       enabled: true,
+      redisUrl: "redis://localhost:6379",
       intervalMs: 1000,
       batchLimit: 10,
     });
@@ -304,11 +305,13 @@ describe("readDocumentSyncWorkerRuntimeConfig", () => {
     expect(
       readDocumentSyncWorkerRuntimeConfig({
         IRIS_DOCUMENT_SYNC_WORKER_ENABLED: "true",
+        REDIS_URL: " redis://redis.example.com:6379 ",
         IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS: " 2500 ",
         IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT: " 4 ",
       }),
     ).toEqual({
       enabled: true,
+      redisUrl: "redis://redis.example.com:6379",
       intervalMs: 2500,
       batchLimit: 4,
     });

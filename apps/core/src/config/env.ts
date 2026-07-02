@@ -45,6 +45,7 @@ export type DocumentSyncWorkerRuntimeConfig =
   | { enabled: false }
   | {
       enabled: true;
+      redisUrl: string;
       intervalMs: number;
       batchLimit: number;
     };
@@ -189,6 +190,7 @@ export function readDocumentSyncWorkerRuntimeConfig(
 
   return {
     enabled: true,
+    redisUrl: readOptionalEnv(env.REDIS_URL) ?? "redis://localhost:6379",
     intervalMs: readPositiveIntegerEnv(
       "IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS",
       env.IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS,

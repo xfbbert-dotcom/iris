@@ -17,6 +17,13 @@ describe("createDocumentSyncRuntime", () => {
       failed: false as const,
     };
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
+    const redisClient = {
+      connect: vi.fn(async () => redisClient),
+      eval: vi.fn(async () => 1),
+      lPop: vi.fn(async () => null),
+      lLen: vi.fn(async () => 0),
+      quit: vi.fn(async () => undefined),
+    };
     const documentSources = {
       findSourceById: vi.fn(),
       markSyncState: vi.fn(),
@@ -54,6 +61,7 @@ describe("createDocumentSyncRuntime", () => {
     };
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),
+      createRedisClient: vi.fn(() => redisClient),
       createDocumentSourceRegistry: vi.fn(() => documentSources),
       createDocumentSnapshotRepository: vi.fn(() => snapshots),
       createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
@@ -73,6 +81,7 @@ describe("createDocumentSyncRuntime", () => {
     expect(dependencies.createPostgresPool).toHaveBeenCalledWith({
       databaseUrl: "postgres://example",
     });
+    expect(dependencies.createRedisClient).toHaveBeenCalledWith("redis://localhost:6379");
     expect(dependencies.createDocumentSourceRegistry).toHaveBeenCalledWith(pool);
     expect(dependencies.createDocumentSnapshotRepository).toHaveBeenCalledWith({
       queryable: pool,
@@ -86,7 +95,11 @@ describe("createDocumentSyncRuntime", () => {
       baseUrl: "https://open.example.com",
       tokenProvider,
     });
-    expect(dependencies.createDocumentSyncQueue).toHaveBeenCalledWith();
+    expect(dependencies.createDocumentSyncQueue).toHaveBeenCalledWith({
+      eval: expect.any(Function),
+      lPop: expect.any(Function),
+      lLen: expect.any(Function),
+    });
     expect(dependencies.createDocumentSyncRunner).toHaveBeenCalledWith({
       registry: documentSources,
       snapshots,
@@ -117,6 +130,7 @@ describe("createDocumentSyncRuntime", () => {
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();
+    expect(redisClient.quit).toHaveBeenCalledOnce();
     expect(pool.end).toHaveBeenCalledOnce();
   });
 });
@@ -127,6 +141,7 @@ function enabledEnv() {
     IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS: "2500",
     IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT: "4",
     DATABASE_URL: "postgres://example",
+    REDIS_URL: "redis://localhost:6379",
     FEISHU_APP_ID: "app-id",
     FEISHU_APP_SECRET: "app-secret",
     FEISHU_OPEN_BASE_URL: "https://open.example.com/",
