@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { readDatabaseConfig } from "../src/database/database-config.js";
+import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import {
   createDocumentFragmentRepository,
   serializeVector,
@@ -100,5 +105,99 @@ describe("DocumentFragmentRepository", () => {
     await expect(
       repository.searchSimilarFragments({ embedding: [1, 2, 3, 4, 5, 6], limit: 3 }),
     ).resolves.toEqual([]);
+  });
+});
+
+const databaseUrl = process.env.DATABASE_URL?.trim();
+const runIfDatabase = databaseUrl ? describe : describe.skip;
+
+runIfDatabase("DocumentFragmentRepository with Postgres", () => {
+  let pool: pg.Pool | undefined;
+  const sourceId = `fragment-source-${randomUUID()}`;
+  const snapshotId = `fragment-snapshot-${randomUUID()}`;
+  const sourceUri = `https://example.com/postgres-fragments/${sourceId}`;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: readDatabaseConfig().databaseUrl });
+    const client = await pool.connect();
+    try {
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+    } finally {
+      client.release();
+    }
+
+    await pool.query(
+      `
+insert into document_sources (
+  id,
+  source_type,
+  source_uri,
+  permission_state,
+  sync_state,
+  can_use_for_answering,
+  can_use_for_knowledge_drafts,
+  created_at,
+  updated_at
+)
+values ($1, 'group_visible_document', $2, 'readable', 'synced', true, true, $3, $3)
+`,
+      [sourceId, sourceUri, new Date("2026-07-02T01:00:00.000Z")],
+    );
+
+    await pool.query(
+      `
+insert into document_snapshots (
+  id,
+  document_source_id,
+  source_uri,
+  fetch_status,
+  body_text,
+  content_hash,
+  source_version,
+  fetched_at,
+  error_message,
+  created_at
+)
+values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
+`,
+      [snapshotId, sourceId, sourceUri, new Date("2026-07-02T01:00:00.000Z")],
+    );
+  });
+
+  afterAll(async () => {
+    if (!pool) {
+      return;
+    }
+
+    try {
+      await pool.query("delete from document_sources where id = $1", [sourceId]);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("replaces and lists fragments", async () => {
+    if (!pool) {
+      throw new Error("Expected Postgres pool to be initialized");
+    }
+
+    const repository = createDocumentFragmentRepository({ queryable: pool });
+
+    await repository.replaceFragmentsForSnapshot({
+      documentSourceId: sourceId,
+      documentSnapshotId: snapshotId,
+      sourceUri,
+      chunks: [{ chunkIndex: 0, text: "Alpha body" }],
+      embeddings: [[1, 0, 0, 0, 0, 0]],
+    });
+
+    await expect(repository.listFragmentsForSnapshot(snapshotId)).resolves.toEqual([
+      expect.objectContaining({
+        documentSourceId: sourceId,
+        documentSnapshotId: snapshotId,
+        text: "Alpha body",
+        embedding: [1, 0, 0, 0, 0, 0],
+      }),
+    ]);
   });
 });
