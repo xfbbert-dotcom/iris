@@ -134,6 +134,18 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/reindex/status", async (_request, reply) => {
+    if (reindexWorkerRuntime === undefined) {
+      return { ok: true, enabled: false, running: false };
+    }
+
+    try {
+      return { ok: true, ...(await reindexWorkerRuntime.getStatus()) };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "reindex_status_failed" });
+    }
+  });
+
   app.get("/health", async () => ({ ok: true, service: "iris-core" }));
 
   app.addHook("onClose", async () => {

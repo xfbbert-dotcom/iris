@@ -305,6 +305,92 @@ describe("POST /internal/reindex/document-profile", () => {
   });
 });
 
+describe("GET /internal/reindex/status", () => {
+  it("returns disabled status when reindex runtime is unavailable", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/reindex/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, enabled: false, running: false });
+  });
+
+  it("returns reindex runtime status", async () => {
+    const runtime = fakeReindexRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+        intervalMs: 1000,
+        batchLimit: 25,
+        pendingJobCount: 7,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt: new Date("2026-07-02T01:00:00.000Z"),
+          finishedAt: new Date("2026-07-02T01:00:01.000Z"),
+          indexedCount: 2,
+          skippedCount: 1,
+          failed: false as const,
+        },
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/reindex/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      enabled: true,
+      running: true,
+      activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+      intervalMs: 1000,
+      batchLimit: 25,
+      pendingJobCount: 7,
+      latestBatch: {
+        status: "succeeded",
+        startedAt: "2026-07-02T01:00:00.000Z",
+        finishedAt: "2026-07-02T01:00:01.000Z",
+        indexedCount: 2,
+        skippedCount: 1,
+        failed: false,
+      },
+    });
+  });
+
+  it("returns 500 when reindex status lookup fails", async () => {
+    const runtime = fakeReindexRuntime({
+      getStatus: vi.fn(async () => {
+        throw new Error("redis unavailable");
+      }),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/reindex/status",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ ok: false, error: "reindex_status_failed" });
+  });
+});
+
 function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): ReindexWorkerRuntime {
   return {
     activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
