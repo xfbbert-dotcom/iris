@@ -127,3 +127,62 @@ describe("POST /internal/answer-drafts", () => {
     expect(response.json()).toEqual({ ok: false, error: "answer_draft_failed" });
   });
 });
+
+describe("answer draft runtime wiring", () => {
+  it("uses injected orchestrator without composing runtime", async () => {
+    const createAnswerDraftRuntime = vi.fn(() => {
+      throw new Error("should not compose runtime");
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime,
+      answerDraftOrchestrator: {
+        generateDraft: vi.fn(async () => ({
+          answerText: "Injected draft",
+          promptContext: "",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+        })),
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: { question: "Q", liveChatMessages: [] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(createAnswerDraftRuntime).not.toHaveBeenCalled();
+  });
+
+  it("uses composed runtime when no orchestrator is injected", async () => {
+    const close = vi.fn(async () => undefined);
+    const app = buildApp({
+      createAnswerDraftRuntime: vi.fn(() => ({
+        answerDraftOrchestrator: {
+          generateDraft: vi.fn(async () => ({
+            answerText: "Runtime draft",
+            promptContext: "",
+            allowedFragments: [],
+            deniedDocumentIds: [],
+            retrievedFragmentCount: 0,
+          })),
+        },
+        close,
+      })),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: { question: "Q", liveChatMessages: [] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().answerText).toBe("Runtime draft");
+
+    await app.close();
+    expect(close).toHaveBeenCalled();
+  });
+});

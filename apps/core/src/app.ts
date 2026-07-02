@@ -10,11 +10,16 @@ import type { EventQueue } from "./queues/event-queue.js";
 import { InMemoryEventQueue } from "./queues/in-memory-event-queue.js";
 import type { AnswerDraftOrchestrator } from "./agent/answer-draft-orchestrator.js";
 import type { LiveChatMessage } from "./memory/context-assembly.js";
+import {
+  createAnswerDraftRuntime,
+  type AnswerDraftRuntime
+} from "./runtime/answer-draft-runtime.js";
 
 export type BuildAppDependencies = {
   queue?: EventQueue;
   verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  createAnswerDraftRuntime?: () => AnswerDraftRuntime | undefined;
 };
 
 type ParsedJsonBody = {
@@ -31,6 +36,12 @@ type AnswerDraftRequest = {
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
+  const answerDraftRuntime =
+    dependencies.answerDraftOrchestrator === undefined
+      ? (dependencies.createAnswerDraftRuntime ?? createAnswerDraftRuntime)()
+      : undefined;
+  const answerDraftOrchestrator =
+    dependencies.answerDraftOrchestrator ?? answerDraftRuntime?.answerDraftOrchestrator;
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
     dependencies.verifyFeishuRequest ??
@@ -68,7 +79,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   app.post("/internal/answer-drafts", async (request, reply) => {
-    if (dependencies.answerDraftOrchestrator === undefined) {
+    if (answerDraftOrchestrator === undefined) {
       return reply.code(503).send({
         ok: false,
         error: "answer_draft_orchestrator_unavailable"
@@ -82,13 +93,17 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
 
     try {
-      return await dependencies.answerDraftOrchestrator.generateDraft(parsedRequest);
+      return await answerDraftOrchestrator.generateDraft(parsedRequest);
     } catch {
       return reply.code(500).send({ ok: false, error: "answer_draft_failed" });
     }
   });
 
   app.get("/health", async () => ({ ok: true, service: "iris-core" }));
+
+  app.addHook("onClose", async () => {
+    await answerDraftRuntime?.close();
+  });
 
   return app;
 }
