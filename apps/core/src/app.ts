@@ -82,6 +82,11 @@ type DocumentSourceListQuery = {
   usableForAnswering?: true;
 };
 
+type DocumentSourcePolicyUpdateRequest = {
+  canUseForAnswering?: boolean;
+  canUseForKnowledgeDrafts?: boolean;
+};
+
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const answerDraftRuntime =
@@ -254,6 +259,36 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return { ok: true, source };
     } catch {
       return reply.code(500).send({ ok: false, error: "document_source_lookup_failed" });
+    }
+  });
+
+  app.patch("/internal/document-sync/sources/:id/policy", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const documentSourceId = readNonBlankId((request.params as { id?: unknown }).id);
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseDocumentSourcePolicyUpdateRequest(body);
+    if (documentSourceId === undefined || parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const source = await documentSyncRuntime.sources.updatePolicy({
+        id: documentSourceId,
+        ...parsedRequest,
+      });
+      if (source === undefined) {
+        return reply.code(404).send({ ok: false, error: "document_source_not_found" });
+      }
+
+      return { ok: true, source };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "document_source_policy_update_failed"
+      });
     }
   });
 
@@ -658,6 +693,33 @@ function isDocumentSourceType(value: string): value is DocumentSourceType {
     value === "authorized_wiki_document" ||
     value === "user_submitted_document"
   );
+}
+
+function parseDocumentSourcePolicyUpdateRequest(
+  value: unknown,
+): DocumentSourcePolicyUpdateRequest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const hasAnswering = "canUseForAnswering" in value;
+  const hasKnowledgeDrafts = "canUseForKnowledgeDrafts" in value;
+  if (!hasAnswering && !hasKnowledgeDrafts) {
+    return undefined;
+  }
+  if (hasAnswering && typeof value.canUseForAnswering !== "boolean") {
+    return undefined;
+  }
+  if (hasKnowledgeDrafts && typeof value.canUseForKnowledgeDrafts !== "boolean") {
+    return undefined;
+  }
+
+  return {
+    ...(hasAnswering ? { canUseForAnswering: value.canUseForAnswering as boolean } : {}),
+    ...(hasKnowledgeDrafts
+      ? { canUseForKnowledgeDrafts: value.canUseForKnowledgeDrafts as boolean }
+      : {}),
+  };
 }
 
 function parseDeadLetterBatchReplayRequest(

@@ -72,6 +72,7 @@ export type DocumentSyncRuntime = {
   sources: {
     list(input: DocumentSourceInventoryListInput): Promise<DocumentSource[]>;
     get(id: string): Promise<DocumentSource | undefined>;
+    updatePolicy(input: DocumentSourcePolicyUpdateInput): Promise<DocumentSource | undefined>;
   };
   enqueueSource(input: { documentSourceId: string }): Promise<ManualDocumentSyncEnqueueResult>;
   registerAuthorizedWikiDocument(
@@ -105,6 +106,12 @@ export type DocumentSourceInventoryListInput = {
   usableForAnswering?: true;
 };
 
+export type DocumentSourcePolicyUpdateInput = {
+  id: string;
+  canUseForAnswering?: boolean;
+  canUseForKnowledgeDrafts?: boolean;
+};
+
 export type DocumentSyncRuntimeStatus = {
   enabled: true;
   running: boolean;
@@ -133,6 +140,8 @@ type DocumentSyncRuntimeDocumentSources = DocumentSyncRunnerRegistry &
     | "listSourcesByAuthorizedSpaceId"
     | "listSourcesBySubmittingUserId"
     | "listSourcesUsableForAnswering"
+    | "setAnsweringEnabled"
+    | "setKnowledgeDraftsEnabled"
   >;
 type DocumentSyncRuntimeQueue = Pick<
   DocumentSyncQueue,
@@ -313,6 +322,23 @@ function createEnabledDocumentSyncRuntime({
       },
       async get(id) {
         return await documentSources.findSourceById(id);
+      },
+      async updatePolicy(input) {
+        let source = await documentSources.findSourceById(input.id);
+        if (source === undefined) {
+          return undefined;
+        }
+        if (input.canUseForAnswering !== undefined) {
+          source = await documentSources.setAnsweringEnabled(input.id, input.canUseForAnswering);
+        }
+        if (input.canUseForKnowledgeDrafts !== undefined) {
+          source = await documentSources.setKnowledgeDraftsEnabled(
+            input.id,
+            input.canUseForKnowledgeDrafts,
+          );
+        }
+
+        return source;
       },
     },
     async registerAuthorizedWikiDocument(input) {

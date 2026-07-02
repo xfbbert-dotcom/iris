@@ -829,6 +829,7 @@ describe("document sync source inventory API", () => {
       sources: {
         list: vi.fn(async () => [authorizedWikiSource(), userSubmittedSource()]),
         get: vi.fn(),
+        updatePolicy: vi.fn(),
       },
     });
     const app = buildApp({
@@ -883,6 +884,7 @@ describe("document sync source inventory API", () => {
       sources: {
         list: vi.fn(async () => [authorizedWikiSource()]),
         get: vi.fn(),
+        updatePolicy: vi.fn(),
       },
     });
     const app = buildApp({
@@ -938,6 +940,7 @@ describe("document sync source inventory API", () => {
       sources: {
         list: vi.fn(),
         get: vi.fn(async () => authorizedWikiSource()),
+        updatePolicy: vi.fn(),
       },
     });
     const app = buildApp({
@@ -993,6 +996,7 @@ describe("document sync source inventory API", () => {
           throw new Error("database unavailable");
         }),
         get: vi.fn(),
+        updatePolicy: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1007,6 +1011,133 @@ describe("document sync source inventory API", () => {
 
     expect(response.statusCode).toBe(500);
     expect(response.json()).toEqual({ ok: false, error: "document_source_lookup_failed" });
+  });
+});
+
+describe("document sync source policy API", () => {
+  it("returns 503 when updating source policy without document sync runtime", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/document-sync/sources/source-1/policy",
+      payload: { canUseForAnswering: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "document_sync_worker_unavailable" });
+  });
+
+  it("updates document source policy", async () => {
+    const updatedSource = {
+      ...authorizedWikiSource(),
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    };
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(),
+        get: vi.fn(),
+        updatePolicy: vi.fn(async () => updatedSource),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/document-sync/sources/source-1/policy",
+      payload: {
+        canUseForAnswering: false,
+        canUseForKnowledgeDrafts: false,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      source: {
+        id: "source-1",
+        sourceType: "authorized_wiki_document",
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        title: "Handbook",
+        authorizedSpaceId: "space-1",
+        permissionState: "unknown",
+        syncState: "pending",
+        canUseForAnswering: false,
+        canUseForKnowledgeDrafts: false,
+        createdAt: "2026-07-03T03:00:00.000Z",
+        updatedAt: "2026-07-03T03:00:00.000Z",
+        evidence: [],
+      },
+    });
+    expect(runtime.sources.updatePolicy).toHaveBeenCalledWith({
+      id: "source-1",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+  });
+
+  it("returns 404 when updating policy for an unknown source", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/document-sync/sources/missing/policy",
+      payload: { canUseForAnswering: false },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ ok: false, error: "document_source_not_found" });
+  });
+
+  it("rejects invalid source policy update requests", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/document-sync/sources/source-1/policy",
+      payload: { canUseForAnswering: "false" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("returns 500 when source policy update fails", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(),
+        get: vi.fn(),
+        updatePolicy: vi.fn(async () => {
+          throw new Error("database unavailable");
+        }),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/document-sync/sources/source-1/policy",
+      payload: { canUseForKnowledgeDrafts: false },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ ok: false, error: "document_source_policy_update_failed" });
   });
 });
 
@@ -1637,6 +1768,7 @@ function fakeDocumentSyncRuntime(
     sources: {
       list: vi.fn(async () => []),
       get: vi.fn(async () => undefined),
+      updatePolicy: vi.fn(async () => undefined),
     },
     deadLetters: {
       list: vi.fn(async () => []),

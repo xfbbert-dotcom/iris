@@ -70,6 +70,15 @@ describe("createDocumentSyncRuntime", () => {
       listSourcesByAuthorizedSpaceId: vi.fn(async () => [inventorySource]),
       listSourcesBySubmittingUserId: vi.fn(async () => [userSubmittedSource]),
       listSourcesUsableForAnswering: vi.fn(async () => [inventorySource, userSubmittedSource]),
+      setAnsweringEnabled: vi.fn(async () => ({
+        ...inventorySource,
+        canUseForAnswering: false,
+      })),
+      setKnowledgeDraftsEnabled: vi.fn(async () => ({
+        ...inventorySource,
+        canUseForAnswering: false,
+        canUseForKnowledgeDrafts: false,
+      })),
       markSyncState: vi.fn(),
       registerAuthorizedWikiDocument: vi.fn(async () => inventorySource),
       registerUserSubmittedDocument: vi.fn(async () => userSubmittedSource),
@@ -389,6 +398,20 @@ describe("createDocumentSyncRuntime", () => {
     expect(documentSources.listSourcesUsableForAnswering).toHaveBeenCalledOnce();
     await expect(runtime?.sources.get("source-1")).resolves.toEqual(inventorySource);
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
+    await expect(
+      runtime?.sources.updatePolicy({
+        id: "source-1",
+        canUseForAnswering: false,
+        canUseForKnowledgeDrafts: false,
+      }),
+    ).resolves.toEqual({
+      ...inventorySource,
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
+    expect(documentSources.setAnsweringEnabled).toHaveBeenCalledWith("source-1", false);
+    expect(documentSources.setKnowledgeDraftsEnabled).toHaveBeenCalledWith("source-1", false);
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();
