@@ -122,6 +122,14 @@ The runtime creates or finds:
 
 This returns the `embeddingProfileId` used by `DocumentSemanticIndexer`.
 
+Phase 2P supports one active reindex profile per runtime process. The internal API's
+`embeddingProfileId` must match the profile resolved from environment configuration. If it does
+not match, the API returns `400 invalid_request`.
+
+This guard is mandatory because the current `DocumentSemanticIndexer` is created for one fixed
+embedding profile. A later multi-profile worker can route each job to a per-profile embedder and
+indexer, but Phase 2P deliberately does not introduce that complexity.
+
 ## 6. Redis Client Wiring
 
 Use the official `redis` package added in Phase 2O.
@@ -165,6 +173,7 @@ Request:
 Validation:
 
 - `embeddingProfileId` must be a non-empty string after trim;
+- `embeddingProfileId` must match the runtime's active embedding profile id;
 - `limit` must be a positive integer;
 - reject extra behavior-changing fields because this endpoint has one job.
 
