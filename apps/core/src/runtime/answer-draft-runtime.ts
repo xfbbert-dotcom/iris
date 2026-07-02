@@ -9,6 +9,11 @@ import {
 } from "../config/env.js";
 import { readDatabaseConfig, type DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
+import type { ConversationMessageRepository } from "../conversation/conversation-message-repository.js";
+import {
+  createPostgresConversationMessageRepository,
+  type Queryable as ConversationMessageQueryable,
+} from "../conversation/postgres-conversation-message-repository.js";
 import {
   createDocumentFragmentRepository,
   type DocumentFragmentRepository,
@@ -21,6 +26,10 @@ import {
 } from "../documents/embedding-profile-repository.js";
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 import { createDocumentRetrievalContextBuilder } from "../memory/document-retrieval-context.js";
+import {
+  createLiveChatContextProvider,
+  type LiveChatContextProvider,
+} from "../memory/live-chat-context-provider.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createOpenAICompatibleModelProvider } from "../model/openai-compatible-model-provider.js";
 
@@ -35,6 +44,12 @@ export type AnswerDraftRuntimeDependencies = {
     queryable: Queryable;
     embeddingProfiles: Pick<EmbeddingProfileRepository, "getProfileById">;
   }) => Pick<DocumentFragmentRepository, "searchSimilarFragments">;
+  createConversationMessageRepository?: (dependencies: {
+    queryable: ConversationMessageQueryable;
+  }) => Pick<ConversationMessageRepository, "listRecentByChat">;
+  createLiveChatContextProvider?: (dependencies: {
+    repository: Pick<ConversationMessageRepository, "listRecentByChat">;
+  }) => LiveChatContextProvider;
   createModelProvider?: (config: ModelProviderConfig) => {
     generateAnswerDraft(input: { question: string; promptContext: string }): Promise<{ answerText: string }>;
   };
@@ -69,6 +84,10 @@ export function createAnswerDraftRuntime({
 
   const createPool = dependencies.createPostgresPool ?? createPostgresPool;
   const createFragments = dependencies.createDocumentFragmentRepository ?? createDocumentFragmentRepository;
+  const createConversationMessages =
+    dependencies.createConversationMessageRepository ?? createPostgresConversationMessageRepository;
+  const createLiveChatContext =
+    dependencies.createLiveChatContextProvider ?? createLiveChatContextProvider;
   const createModel =
     dependencies.createModelProvider ??
     ((config: ModelProviderConfig) => createOpenAICompatibleModelProvider({ config }));
@@ -81,6 +100,8 @@ export function createAnswerDraftRuntime({
   const pool = createPool(readDatabaseConfig(env));
   const profiles = createProfiles({ queryable: pool });
   const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
+  const conversationMessages = createConversationMessages({ queryable: pool });
+  const liveChatContextProvider = createLiveChatContext({ repository: conversationMessages });
   const model = createModel(modelConfig);
   const embeddingConfig = readEmbeddingProviderConfig(env);
   let runtimeEmbeddingPromise: Promise<RuntimeEmbedding> | undefined;
@@ -102,6 +123,7 @@ export function createAnswerDraftRuntime({
       return createAnswerDraftOrchestrator({
         contextBuilder,
         model,
+        liveChatContextProvider,
       }).generateDraft(input);
     },
   };

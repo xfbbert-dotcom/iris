@@ -10,11 +10,15 @@ describe("createAnswerDraftRuntime", () => {
 
   it("composes runtime dependencies when explicitly enabled", async () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
+    const conversationMessages = { listRecentByChat: vi.fn(async () => []) };
+    const liveChatContextProvider = { loadRecentMessages: vi.fn(async () => []) };
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),
       createDocumentFragmentRepository: vi.fn(() => ({
         searchSimilarFragments: vi.fn(async () => []),
       })),
+      createConversationMessageRepository: vi.fn(() => conversationMessages),
+      createLiveChatContextProvider: vi.fn(() => liveChatContextProvider),
       createModelProvider: vi.fn(() => ({
         generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
       })),
@@ -47,6 +51,12 @@ describe("createAnswerDraftRuntime", () => {
       embeddingProfiles: expect.objectContaining({
         getProfileById: expect.any(Function),
       }),
+    });
+    expect(dependencies.createConversationMessageRepository).toHaveBeenCalledWith({
+      queryable: pool,
+    });
+    expect(dependencies.createLiveChatContextProvider).toHaveBeenCalledWith({
+      repository: conversationMessages,
     });
     expect(dependencies.createModelProvider).toHaveBeenCalledWith({
       provider: "openai-compatible",
