@@ -31,11 +31,13 @@ export interface DocumentRetrievalContextBuilder {
 }
 
 export function createDocumentRetrievalContextBuilder({
+  embeddingProfileId,
   embedder,
   fragments,
   canReadDocument,
   auditLog,
 }: {
+  embeddingProfileId: string;
   embedder: QueryEmbeddingProvider;
   fragments: Pick<DocumentFragmentRepository, "searchSimilarFragments">;
   canReadDocument: (documentId: string) => Promise<boolean>;
@@ -46,6 +48,7 @@ export function createDocumentRetrievalContextBuilder({
       const queryEmbedding = await embedQuery(input.queryText, embedder);
       const fragmentLimit = sanitizeFragmentLimit(input.fragmentLimit);
       const retrievedFragments = await fragments.searchSimilarFragments({
+        embeddingProfileId,
         embedding: queryEmbedding,
         limit: fragmentLimit,
       });

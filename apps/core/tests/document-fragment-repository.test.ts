@@ -40,6 +40,7 @@ describe("DocumentFragmentRepository", () => {
             text: "Alpha",
             content_hash: "hash-alpha",
             embedding: "[1,2,3,4,5,6]",
+            embedding_profile_id: "static-dev-6d",
             created_at: createdAt,
           },
         ],
@@ -55,6 +56,7 @@ describe("DocumentFragmentRepository", () => {
       documentSourceId: "source-1",
       documentSnapshotId: "snapshot-1",
       sourceUri: "https://example.com/doc",
+      embeddingProfileId: "static-dev-6d",
       chunks: [{ chunkIndex: 0, text: "Alpha" }],
       embeddings: [[1, 2, 3, 4, 5, 6]],
     });
@@ -73,6 +75,7 @@ describe("DocumentFragmentRepository", () => {
       "Alpha",
       "b1a96dd646bccaa24cef7a3db22a6f995f05658f4f1c3272913e258c03e6fb24",
       "[1,2,3,4,5,6]",
+      "static-dev-6d",
       createdAt,
     ]);
     expect(fragments).toEqual<DocumentFragment[]>([
@@ -85,6 +88,7 @@ describe("DocumentFragmentRepository", () => {
         text: "Alpha",
         contentHash: "hash-alpha",
         embedding: [1, 2, 3, 4, 5, 6],
+        embeddingProfileId: "static-dev-6d",
         createdAt,
       },
     ]);
@@ -96,14 +100,19 @@ describe("DocumentFragmentRepository", () => {
 
   it("builds vector search query with limit", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
-      expect(normalizeSql(sql)).toContain("order by embedding <=> $1::vector asc");
-      expect(values).toEqual(["[1,2,3,4,5,6]", 3]);
+      expect(normalizeSql(sql)).toContain("where embedding_profile_id = $1");
+      expect(normalizeSql(sql)).toContain("order by embedding <=> $2::vector asc");
+      expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 3]);
       return { rows: [] };
     });
     const repository = createDocumentFragmentRepository({ queryable: queryableFrom(query) });
 
     await expect(
-      repository.searchSimilarFragments({ embedding: [1, 2, 3, 4, 5, 6], limit: 3 }),
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: 3,
+      }),
     ).resolves.toEqual([]);
   });
 });
@@ -187,6 +196,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
       documentSourceId: sourceId,
       documentSnapshotId: snapshotId,
       sourceUri,
+      embeddingProfileId: "static-dev-6d",
       chunks: [{ chunkIndex: 0, text: "Alpha body" }],
       embeddings: [[1, 0, 0, 0, 0, 0]],
     });
@@ -197,6 +207,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
         documentSnapshotId: snapshotId,
         text: "Alpha body",
         embedding: [1, 0, 0, 0, 0, 0],
+        embeddingProfileId: "static-dev-6d",
       }),
     ]);
   });

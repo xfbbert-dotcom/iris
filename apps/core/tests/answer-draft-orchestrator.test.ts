@@ -21,6 +21,7 @@ describe("AnswerDraftOrchestrator", () => {
             text: "Allowed text",
             contentHash: "hash",
             embedding: [1, 0, 0, 0, 0, 0],
+            embeddingProfileId: "static-dev-6d",
             createdAt: new Date("2026-07-02T01:00:00.000Z"),
           },
         ],

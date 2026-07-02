@@ -66,6 +66,7 @@ describe("createAnswerDraftRuntime", () => {
           text: "Indexed text",
           contentHash: "hash",
           embedding: [1, 0, 0, 0, 0, 0],
+          embeddingProfileId: "static-dev-6d",
           createdAt: new Date("2026-07-02T01:00:00.000Z"),
         },
       ]),
@@ -86,6 +87,7 @@ describe("createAnswerDraftRuntime", () => {
 
     expect(result?.answerText).toBe("Runtime draft");
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
+      embeddingProfileId: "static-dev-6d",
       embedding: [1, 0, 0, 0, 0, 0],
       limit: 8,
     });

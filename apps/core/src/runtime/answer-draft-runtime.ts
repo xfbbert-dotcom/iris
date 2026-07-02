@@ -55,6 +55,7 @@ export function createAnswerDraftRuntime({
   const fragments = createFragments({ queryable: pool });
   const model = createModel(modelConfig);
   const contextBuilder = createDocumentRetrievalContextBuilder({
+    embeddingProfileId: "static-dev-6d",
     embedder: createStaticQueryEmbeddingProvider(),
     fragments,
     canReadDocument: async () => true,

@@ -15,6 +15,7 @@ export type DocumentFragment = {
   text: string;
   contentHash: string;
   embedding: number[];
+  embeddingProfileId: string;
   createdAt: Date;
 };
 
@@ -26,11 +27,13 @@ export type ReplaceFragmentsInput = {
   documentSourceId: string;
   documentSnapshotId: string;
   sourceUri: string;
+  embeddingProfileId: string;
   chunks: DocumentChunk[];
   embeddings: number[][];
 };
 
 export type SearchSimilarFragmentsInput = {
+  embeddingProfileId: string;
   embedding: number[];
   limit: number;
 };
@@ -57,6 +60,7 @@ type DocumentFragmentRow = {
   text: string;
   content_hash: string;
   embedding: string | number[];
+  embedding_profile_id: string;
   created_at: Date;
 };
 
@@ -101,6 +105,7 @@ where document_snapshot_id = $1
             text: chunk.text,
             contentHash: hashText(chunk.text),
             embedding,
+            embeddingProfileId: input.embeddingProfileId,
             createdAt: now(),
           }),
         );
@@ -140,12 +145,13 @@ order by chunk_index asc, id asc
     async searchSimilarFragments(input) {
       const result = await dependencies.queryable.query<RetrievedDocumentFragmentRow>(
         `
-select *, embedding <=> $1::vector as distance
+select *, embedding <=> $2::vector as distance
 from document_fragments
-order by embedding <=> $1::vector asc
-limit $2
+where embedding_profile_id = $1
+order by embedding <=> $2::vector asc
+limit $3
 `,
-        [serializeVector(input.embedding), input.limit],
+        [input.embeddingProfileId, serializeVector(input.embedding), input.limit],
       );
 
       return result.rows.map(mapRetrievedFragmentRow);
@@ -172,9 +178,10 @@ insert into document_fragments (
   text,
   content_hash,
   embedding,
+  embedding_profile_id,
   created_at
 )
-values ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9)
+values ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9, $10)
 returning *
 `,
     [
@@ -186,6 +193,7 @@ returning *
       fragment.text,
       fragment.contentHash,
       serializeVector(fragment.embedding),
+      fragment.embeddingProfileId,
       fragment.createdAt,
     ],
   );
@@ -215,6 +223,7 @@ function mapFragmentRow(row: DocumentFragmentRow): DocumentFragment {
     text: row.text,
     contentHash: row.content_hash,
     embedding: parseVector(row.embedding),
+    embeddingProfileId: row.embedding_profile_id,
     createdAt: row.created_at,
   };
 }

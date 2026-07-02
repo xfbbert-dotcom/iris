@@ -34,6 +34,7 @@ describe("DocumentSemanticIndexer", () => {
       chunker: createDocumentChunker({ maxChunkChars: 80, minChunkChars: 20 }),
       embedder,
       fragments,
+      embeddingProfileId: "static-dev-6d",
     });
 
     const result = await indexer.indexSnapshot(snapshot());
@@ -43,6 +44,7 @@ describe("DocumentSemanticIndexer", () => {
       documentSourceId: "source-1",
       documentSnapshotId: "snapshot-1",
       sourceUri: "https://example.com/doc",
+      embeddingProfileId: "static-dev-6d",
       chunks: [{ chunkIndex: 0, text: "Alpha\n\nBeta" }],
       embeddings: [[11, 0, 0, 0, 0, 0]],
     });
@@ -56,6 +58,7 @@ describe("DocumentSemanticIndexer", () => {
       chunker: createDocumentChunker(),
       embedder,
       fragments,
+      embeddingProfileId: "static-dev-6d",
     });
 
     await expect(indexer.indexSnapshot(snapshot({ fetchStatus: "failed", bodyText: undefined }))).resolves.toEqual({
@@ -72,6 +75,7 @@ describe("DocumentSemanticIndexer", () => {
       chunker: createDocumentChunker(),
       embedder: { embedTexts: vi.fn() },
       fragments: { replaceFragmentsForSnapshot: vi.fn() },
+      embeddingProfileId: "static-dev-6d",
     });
 
     await expect(indexer.indexSnapshot(snapshot({ bodyText: " \n " }))).resolves.toEqual({
@@ -86,6 +90,7 @@ describe("DocumentSemanticIndexer", () => {
       chunker: createDocumentChunker({ maxChunkChars: 5, minChunkChars: 1 }),
       embedder: { embedTexts: vi.fn(async () => [[1, 2, 3, 4, 5, 6]]) },
       fragments: { replaceFragmentsForSnapshot: vi.fn() },
+      embeddingProfileId: "static-dev-6d",
     });
 
     await expect(indexer.indexSnapshot(snapshot({ bodyText: "abcdefghijkl" }))).rejects.toThrow(
@@ -98,6 +103,7 @@ describe("DocumentSemanticIndexer", () => {
       chunker: createDocumentChunker(),
       embedder: { embedTexts: vi.fn(async () => [[Number.NaN, 0, 0, 0, 0, 0]]) },
       fragments: { replaceFragmentsForSnapshot: vi.fn() },
+      embeddingProfileId: "static-dev-6d",
     });
 
     await expect(indexer.indexSnapshot(snapshot())).rejects.toThrow(

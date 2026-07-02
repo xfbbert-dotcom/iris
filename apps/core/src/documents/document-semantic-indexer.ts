@@ -17,10 +17,12 @@ export interface DocumentSemanticIndexer {
 export function createDocumentSemanticIndexer({
   chunker,
   embedder,
+  embeddingProfileId,
   fragments,
 }: {
   chunker: DocumentChunker;
   embedder: EmbeddingProvider;
+  embeddingProfileId: string;
   fragments: Pick<DocumentFragmentRepository, "replaceFragmentsForSnapshot">;
 }): DocumentSemanticIndexer {
   return {
@@ -44,6 +46,7 @@ export function createDocumentSemanticIndexer({
         documentSourceId: snapshot.documentSourceId,
         documentSnapshotId: snapshot.id,
         sourceUri: snapshot.sourceUri,
+        embeddingProfileId,
         chunks,
         embeddings,
       });

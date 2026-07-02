@@ -21,6 +21,7 @@ describe("DocumentRetrievalContextBuilder", () => {
           text: "Allowed document text",
           contentHash: "hash-a",
           embedding: [1, 0, 0, 0, 0, 0],
+          embeddingProfileId: "static-dev-6d",
           createdAt: new Date("2026-07-02T01:00:00.000Z"),
           distance: 0.1,
         },
@@ -33,6 +34,7 @@ describe("DocumentRetrievalContextBuilder", () => {
           text: "Denied document text",
           contentHash: "hash-b",
           embedding: [0, 1, 0, 0, 0, 0],
+          embeddingProfileId: "static-dev-6d",
           createdAt: new Date("2026-07-02T01:00:00.000Z"),
           distance: 0.2,
         },
@@ -40,6 +42,7 @@ describe("DocumentRetrievalContextBuilder", () => {
     };
     const canReadDocument = vi.fn(async (documentId: string) => documentId === "source-allowed");
     const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
       embedder,
       fragments,
       canReadDocument,
@@ -53,6 +56,7 @@ describe("DocumentRetrievalContextBuilder", () => {
 
     expect(embedder.embedTexts).toHaveBeenCalledWith(["What did the document say?"]);
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
+      embeddingProfileId: "static-dev-6d",
       embedding: [1, 0, 0, 0, 0, 0],
       limit: 5,
     });
@@ -75,6 +79,7 @@ describe("DocumentRetrievalContextBuilder", () => {
 
   it("returns live chat context when no fragments are retrieved", async () => {
     const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
       embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
       fragments: { searchSimilarFragments: vi.fn(async () => []) },
       canReadDocument: vi.fn(),
@@ -95,6 +100,7 @@ describe("DocumentRetrievalContextBuilder", () => {
   it("deduplicates permission checks by document source id", async () => {
     const canReadDocument = vi.fn(async () => true);
     const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
       embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
       fragments: {
         searchSimilarFragments: vi.fn(async () => [
@@ -115,6 +121,7 @@ describe("DocumentRetrievalContextBuilder", () => {
 
   it("rejects missing query embedding", async () => {
     const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
       embedder: { embedTexts: vi.fn(async () => []) },
       fragments: { searchSimilarFragments: vi.fn() },
       canReadDocument: vi.fn(),
@@ -127,6 +134,7 @@ describe("DocumentRetrievalContextBuilder", () => {
 
   it("rejects invalid query embedding values", async () => {
     const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
       embedder: { embedTexts: vi.fn(async () => [[Number.POSITIVE_INFINITY]]) },
       fragments: { searchSimilarFragments: vi.fn() },
       canReadDocument: vi.fn(),
@@ -149,6 +157,7 @@ function fragment(overrides: {
     text: `text-${overrides.chunkIndex}`,
     contentHash: `hash-${overrides.chunkIndex}`,
     embedding: [1, 0, 0, 0, 0, 0],
+    embeddingProfileId: "static-dev-6d",
     createdAt: new Date("2026-07-02T01:00:00.000Z"),
     ...overrides,
   };
