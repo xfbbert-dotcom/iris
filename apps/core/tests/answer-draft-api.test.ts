@@ -1023,6 +1023,109 @@ describe("document sync dead-letter API", () => {
   });
 });
 
+describe("document sync manual enqueue API", () => {
+  it("returns 503 when document sync runtime is unavailable", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/source-1/enqueue",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "document_sync_worker_unavailable" });
+  });
+
+  it("enqueues a document source for manual sync", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      enqueueSource: vi.fn(async () => ({
+        status: "enqueued" as const,
+        documentSourceId: "source-1",
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/source-1/enqueue",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      status: "enqueued",
+      documentSourceId: "source-1",
+    });
+    expect(runtime.enqueueSource).toHaveBeenCalledWith({ documentSourceId: "source-1" });
+  });
+
+  it("returns not_found when manually enqueueing an unknown source", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      enqueueSource: vi.fn(async () => ({
+        status: "not_found" as const,
+        documentSourceId: "missing",
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/missing/enqueue",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      status: "not_found",
+      documentSourceId: "missing",
+    });
+  });
+
+  it("rejects blank manual enqueue source ids", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/%20/enqueue",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("returns 500 when manual enqueue fails", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      enqueueSource: vi.fn(async () => {
+        throw new Error("redis unavailable");
+      }),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/source-1/enqueue",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ ok: false, error: "document_sync_enqueue_failed" });
+  });
+});
+
 function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): ReindexWorkerRuntime {
   return {
     activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
@@ -1095,6 +1198,10 @@ function fakeDocumentSyncRuntime(
         unsupportedLegacyIds: [],
       })),
     },
+    enqueueSource: vi.fn(async () => ({
+      status: "not_found" as const,
+      documentSourceId: "missing",
+    })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,

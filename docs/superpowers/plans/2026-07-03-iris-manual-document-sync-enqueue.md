@@ -19,23 +19,23 @@
 - Test: `apps/core/tests/redis-document-sync-queue.test.ts`
 - Test: `apps/core/tests/manual-document-sync-planner.test.ts`
 
-- [ ] **Step 1: Write failing queue reason tests**
+- [x] **Step 1: Write failing queue reason tests**
 
 Add a Redis queue round-trip test for a job with `reason: "manual_source_sync"`.
 
-- [ ] **Step 2: Write failing planner tests**
+- [x] **Step 2: Write failing planner tests**
 
 Cover: enqueues pending sources, re-enqueues synced sources after marking pending, re-enqueues failed sources after marking pending, returns `not_found`, rejects denied/disabled sources, and skips syncing sources.
 
-- [ ] **Step 3: Add queue reason support**
+- [x] **Step 3: Add queue reason support**
 
 Extend `DocumentSyncReason` and Redis parsing to accept `manual_source_sync`.
 
-- [ ] **Step 4: Implement planner**
+- [x] **Step 4: Implement planner**
 
 Create `createManualDocumentSyncPlanner({ registry, queue, now, requestId })`.
 
-- [ ] **Step 5: Verify targeted tests**
+- [x] **Step 5: Verify targeted tests**
 
 Run:
 
@@ -53,23 +53,23 @@ Expected: targeted tests pass.
 - Test: `apps/core/tests/document-sync-runtime.test.ts`
 - Test: `apps/core/tests/answer-draft-api.test.ts`
 
-- [ ] **Step 1: Write failing runtime tests**
+- [x] **Step 1: Write failing runtime tests**
 
 Assert `runtime.enqueueSource({ documentSourceId })` delegates to the manual planner.
 
-- [ ] **Step 2: Write failing API tests**
+- [x] **Step 2: Write failing API tests**
 
 Cover unavailable runtime, invalid ID, successful enqueue, not-found status, and operation failure for `POST /internal/document-sync/sources/:id/enqueue`.
 
-- [ ] **Step 3: Wire runtime planner**
+- [x] **Step 3: Wire runtime planner**
 
 Create the manual planner from the same document source registry and queue used by document sync runtime.
 
-- [ ] **Step 4: Add Fastify route**
+- [x] **Step 4: Add Fastify route**
 
 Expose `POST /internal/document-sync/sources/:id/enqueue`.
 
-- [ ] **Step 5: Verify targeted tests**
+- [x] **Step 5: Verify targeted tests**
 
 Run:
 
@@ -84,7 +84,7 @@ Expected: targeted tests pass.
 **Files:**
 - Modify: PR #3 body.
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run:
 
@@ -97,10 +97,10 @@ docker compose config
 
 Expected: all commands exit 0.
 
-- [ ] **Step 2: Commit and push**
+- [x] **Step 2: Commit and push**
 
 Commit the docs and implementation, then push `codex/iris-document-source-registry`.
 
-- [ ] **Step 3: Update PR body and inspect PR state**
+- [x] **Step 3: Update PR body and inspect PR state**
 
 Append Phase 3G summary and verify PR #3 remains open and non-draft.

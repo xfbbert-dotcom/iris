@@ -1,4 +1,4 @@
-export type DocumentSyncReason = "discovered_group_document";
+export type DocumentSyncReason = "discovered_group_document" | "manual_source_sync";
 
 export type DocumentSyncJob = {
   idempotencyKey: string;

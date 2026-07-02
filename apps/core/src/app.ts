@@ -193,6 +193,26 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.post("/internal/document-sync/sources/:id/enqueue", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const documentSourceId = readNonBlankId((request.params as { id?: unknown }).id);
+    if (documentSourceId === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return {
+        ok: true,
+        ...(await documentSyncRuntime.enqueueSource({ documentSourceId })),
+      };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "document_sync_enqueue_failed" });
+    }
+  });
+
   app.get("/internal/document-sync/dead-letters", async (request, reply) => {
     if (documentSyncRuntime === undefined) {
       return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });

@@ -79,6 +79,12 @@ describe("RedisDocumentSyncQueue", () => {
     expect(parseDocumentSyncJob(serializeDocumentSyncJob(syncJob))).toEqual(syncJob);
   });
 
+  it("round-trips manual source sync jobs through JSON", () => {
+    const syncJob = job({ reason: "manual_source_sync" });
+
+    expect(parseDocumentSyncJob(serializeDocumentSyncJob(syncJob))).toEqual(syncJob);
+  });
+
   it("reports Redis queue depth", async () => {
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(),

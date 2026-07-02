@@ -44,6 +44,7 @@ describe("createDocumentSyncRuntime", () => {
       fetch: vi.fn(),
     };
     const queue = {
+      enqueue: vi.fn(async () => undefined),
       dequeueBatch: vi.fn(async () => []),
       getPendingCount: vi.fn(async () => 3),
       handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
@@ -95,6 +96,12 @@ describe("createDocumentSyncRuntime", () => {
         latestBatch,
       })),
     };
+    const manualPlanner = {
+      enqueueSource: vi.fn(async () => ({
+        status: "enqueued" as const,
+        documentSourceId: "source-1",
+      })),
+    };
     let runnerInput:
       | {
           syncedSnapshotReindexer?: SyncedSnapshotReindexer;
@@ -114,6 +121,7 @@ describe("createDocumentSyncRuntime", () => {
       createDocumentSyncQueue: vi.fn(() => queue),
       createDocumentReindexQueue: vi.fn(() => reindexQueue),
       createDocumentReindexPlanner: vi.fn(() => reindexPlanner),
+      createManualDocumentSyncPlanner: vi.fn(() => manualPlanner),
       createDocumentSyncRunner,
       createDocumentSyncWorker: vi.fn(() => worker),
       createWorkerLoop: vi.fn(() => loop),
@@ -181,6 +189,10 @@ describe("createDocumentSyncRuntime", () => {
       queue,
       runner,
     });
+    expect(dependencies.createManualDocumentSyncPlanner).toHaveBeenCalledWith({
+      registry: documentSources,
+      queue,
+    });
     expect(dependencies.createWorkerLoop).toHaveBeenCalledWith({
       worker,
       intervalMs: 2500,
@@ -223,6 +235,15 @@ describe("createDocumentSyncRuntime", () => {
       replayedCount: 1,
       notFoundIds: [],
       unsupportedLegacyIds: [],
+    });
+    await expect(
+      runtime?.enqueueSource({ documentSourceId: "source-1" }),
+    ).resolves.toEqual({
+      status: "enqueued",
+      documentSourceId: "source-1",
+    });
+    expect(manualPlanner.enqueueSource).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
     });
 
     await runtime?.close();

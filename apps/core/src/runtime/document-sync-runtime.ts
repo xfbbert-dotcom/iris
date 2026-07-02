@@ -35,6 +35,11 @@ import {
   type DocumentSnapshot,
   type Queryable,
 } from "../documents/document-snapshot-repository.js";
+import {
+  createManualDocumentSyncPlanner,
+  type ManualDocumentSyncEnqueueResult,
+  type ManualDocumentSyncPlanner,
+} from "../documents/manual-document-sync-planner.js";
 import { createPostgresDocumentSourceRegistry } from "../documents/postgres-document-source-registry.js";
 import {
   createRedisDocumentSyncQueue,
@@ -57,6 +62,7 @@ import {
 
 export type DocumentSyncRuntime = {
   getStatus(): Promise<DocumentSyncRuntimeStatus>;
+  enqueueSource(input: { documentSourceId: string }): Promise<ManualDocumentSyncEnqueueResult>;
   deadLetters: {
     list(input: { limit: number }): Promise<DocumentSyncDeadLetter[]>;
     replay(id: string): Promise<"replayed" | "not_found" | "unsupported_legacy_item">;
@@ -87,6 +93,7 @@ type DocumentSyncRuntimeSnapshots = DocumentSyncSnapshotWriter & {
 type DocumentSyncRuntimeQueue = Pick<
   DocumentSyncQueue,
   | "dequeueBatch"
+  | "enqueue"
   | "getPendingCount"
   | "handleFailedJob"
   | "getDeadLetterCount"
@@ -129,6 +136,9 @@ export type DocumentSyncRuntimeDependencies = {
   createDocumentReindexPlanner?: (
     dependencies: Parameters<typeof createDocumentReindexPlanner>[0],
   ) => DocumentSyncRuntimeReindexPlanner;
+  createManualDocumentSyncPlanner?: (
+    dependencies: Parameters<typeof createManualDocumentSyncPlanner>[0],
+  ) => ManualDocumentSyncPlanner;
   createDocumentSyncRunner?: typeof createDocumentSyncRunner;
   createDocumentSyncWorker?: typeof createDocumentSyncWorker;
   createWorkerLoop?: typeof createDocumentSyncWorkerLoop;
@@ -178,6 +188,8 @@ function createEnabledDocumentSyncRuntime({
     ((client: RedisDocumentReindexQueueClient) => createRedisDocumentReindexQueue({ client }));
   const createReindexPlanner =
     dependencies.createDocumentReindexPlanner ?? createDocumentReindexPlanner;
+  const createManualPlanner =
+    dependencies.createManualDocumentSyncPlanner ?? createManualDocumentSyncPlanner;
   const createRunner = dependencies.createDocumentSyncRunner ?? createDocumentSyncRunner;
   const createWorker = dependencies.createDocumentSyncWorker ?? createDocumentSyncWorker;
   const createLoop = dependencies.createWorkerLoop ?? createDocumentSyncWorkerLoop;
@@ -198,6 +210,10 @@ function createEnabledDocumentSyncRuntime({
     tokenProvider,
   });
   const queue = createQueue(createLazyRedisDocumentSyncQueueClient(redisConnection));
+  const manualPlanner = createManualPlanner({
+    registry: documentSources,
+    queue,
+  });
   const syncedSnapshotReindexer = createSyncedSnapshotReindexer({
     embeddingConfig: readEmbeddingProviderConfig(env),
     createReindexQueue,
@@ -242,6 +258,9 @@ function createEnabledDocumentSyncRuntime({
           ? {}
           : { latestBatch: loopSnapshot.latestBatch }),
       };
+    },
+    enqueueSource(input) {
+      return manualPlanner.enqueueSource(input);
     },
     deadLetters: {
       list(input) {

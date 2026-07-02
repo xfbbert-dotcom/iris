@@ -188,7 +188,7 @@ export function parseDocumentSyncJob(payload: string): DocumentSyncJob {
   if (
     readString(parsed.idempotencyKey).length === 0 ||
     readString(parsed.documentSourceId).length === 0 ||
-    reason !== "discovered_group_document" ||
+    !isValidReason(reason) ||
     Number.isNaN(enqueuedAt.getTime()) ||
     parsedAttempts === null
   ) {
@@ -218,6 +218,10 @@ function readOptionalNonNegativeInteger(value: unknown): number | null | undefin
   }
 
   return value;
+}
+
+function isValidReason(value: unknown): value is DocumentSyncJob["reason"] {
+  return value === "discovered_group_document" || value === "manual_source_sync";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
