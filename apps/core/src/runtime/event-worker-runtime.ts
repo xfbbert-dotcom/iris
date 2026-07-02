@@ -49,7 +49,7 @@ export type EventWorkerRuntimeStatus = {
   latestBatch?: RawEventWorkerBatchSnapshot;
 };
 
-type RedisClient = RedisRawEventQueueClient & {
+type RedisClient = RedisRawEventQueueClient & RedisDocumentSyncQueueClient & {
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
 };
@@ -204,6 +204,14 @@ function createLazyRedisDocumentSyncQueueClient(
     async lLen(key) {
       const client = await redisConnection;
       return client.lLen(key);
+    },
+    async lRange(key, start, stop) {
+      const client = await redisConnection;
+      return client.lRange(key, start, stop);
+    },
+    async lRem(key, count, value) {
+      const client = await redisConnection;
+      return client.lRem(key, count, value);
     },
   };
 }

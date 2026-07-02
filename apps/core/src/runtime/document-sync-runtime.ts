@@ -19,7 +19,11 @@ import {
   type DocumentSyncRunnerRegistry,
   type DocumentSyncSnapshotWriter,
 } from "../documents/document-sync-pipeline.js";
-import type { DocumentSyncQueue } from "../documents/document-sync-queue.js";
+import type {
+  DocumentSyncDeadLetter,
+  DocumentSyncQueue,
+  ReplayDocumentSyncDeadLettersResult,
+} from "../documents/document-sync-queue.js";
 import { createDocumentSyncWorker } from "../documents/document-sync-worker.js";
 import {
   createDocumentSyncWorkerLoop,
@@ -53,6 +57,12 @@ import {
 
 export type DocumentSyncRuntime = {
   getStatus(): Promise<DocumentSyncRuntimeStatus>;
+  deadLetters: {
+    list(input: { limit: number }): Promise<DocumentSyncDeadLetter[]>;
+    replay(id: string): Promise<"replayed" | "not_found" | "unsupported_legacy_item">;
+    delete(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
+    replayBatch(input: { ids: string[] }): Promise<ReplayDocumentSyncDeadLettersResult>;
+  };
   start(): void;
   close(): Promise<void>;
 };
@@ -76,7 +86,14 @@ type DocumentSyncRuntimeSnapshots = DocumentSyncSnapshotWriter & {
 };
 type DocumentSyncRuntimeQueue = Pick<
   DocumentSyncQueue,
-  "dequeueBatch" | "getPendingCount" | "handleFailedJob" | "getDeadLetterCount"
+  | "dequeueBatch"
+  | "getPendingCount"
+  | "handleFailedJob"
+  | "getDeadLetterCount"
+  | "listDeadLetters"
+  | "replayDeadLetter"
+  | "deleteDeadLetter"
+  | "replayDeadLetters"
 >;
 type DocumentSyncRuntimeReindexQueue = Pick<DocumentReindexQueue, "enqueue">;
 type DocumentSyncRuntimeReindexPlanner = Pick<
@@ -226,6 +243,20 @@ function createEnabledDocumentSyncRuntime({
           : { latestBatch: loopSnapshot.latestBatch }),
       };
     },
+    deadLetters: {
+      list(input) {
+        return queue.listDeadLetters(input);
+      },
+      replay(id) {
+        return queue.replayDeadLetter(id);
+      },
+      delete(id) {
+        return queue.deleteDeadLetter(id);
+      },
+      replayBatch(input) {
+        return queue.replayDeadLetters(input);
+      },
+    },
     async close() {
       await loop.stop();
       await redisConnection.then((client) => client.quit());
@@ -302,6 +333,14 @@ function createLazyRedisDocumentSyncQueueClient(
     async lLen(key) {
       const client = await redisConnection;
       return client.lLen(key);
+    },
+    async lRange(key, start, stop) {
+      const client = await redisConnection;
+      return client.lRange(key, start, stop);
+    },
+    async lRem(key, count, value) {
+      const client = await redisConnection;
+      return client.lRem(key, count, value);
     },
   };
 }

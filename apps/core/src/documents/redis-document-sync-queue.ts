@@ -1,8 +1,10 @@
 import type {
+  DocumentSyncDeadLetter,
   DocumentSyncJob,
   DocumentSyncQueue,
   FailedDocumentSyncJobInput,
   FailedDocumentSyncJobResult,
+  ReplayDocumentSyncDeadLettersResult,
 } from "./document-sync-queue.js";
 
 const DEFAULT_SEEN_KEY = "iris:documents:sync:seen";
@@ -25,6 +27,8 @@ export type RedisDocumentSyncQueueClient = {
   rPush(key: string, value: string): Promise<number>;
   lPop(key: string): Promise<string | null>;
   lLen(key: string): Promise<number>;
+  lRange(key: string, start: number, stop: number): Promise<string[]>;
+  lRem(key: string, count: number, value: string): Promise<number>;
 };
 
 export type RedisDocumentSyncQueueOptions = {
@@ -34,6 +38,7 @@ export type RedisDocumentSyncQueueOptions = {
   deadLetterKey?: string;
   maxAttempts?: number;
   now?: () => Date;
+  idGenerator?: () => string;
 };
 
 export function createRedisDocumentSyncQueue({
@@ -43,6 +48,7 @@ export function createRedisDocumentSyncQueue({
   deadLetterKey = DEFAULT_DEAD_LETTER_KEY,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   now = () => new Date(),
+  idGenerator = defaultIdGenerator,
 }: RedisDocumentSyncQueueOptions): DocumentSyncQueue {
   const safeMaxAttempts = sanitizeMaxAttempts(maxAttempts);
 
@@ -83,10 +89,11 @@ export function createRedisDocumentSyncQueue({
       if (attempts >= safeMaxAttempts) {
         await client.rPush(
           deadLetterKey,
-          JSON.stringify({
-            job: serializeDocumentSyncJobPayload(failedJob),
+          serializeDeadLetteredDocumentSyncJob({
+            id: idGenerator(),
+            job: failedJob,
             errorMessage: input.errorMessage,
-            failedAt: now().toISOString(),
+            failedAt: now(),
           }),
         );
         return { action: "dead_lettered", attempts };
@@ -98,6 +105,61 @@ export function createRedisDocumentSyncQueue({
 
     getDeadLetterCount() {
       return client.lLen(deadLetterKey);
+    },
+
+    async listDeadLetters(input) {
+      const safeLimit = Math.max(0, Math.floor(input.limit));
+      if (safeLimit === 0) {
+        return [];
+      }
+
+      const payloads = await client.lRange(deadLetterKey, 0, safeLimit - 1);
+      return payloads.map((payload, index) => parseDeadLetterPayload(payload, index).deadLetter);
+    },
+
+    async replayDeadLetter(id) {
+      const found = await findDeadLetterByStoredId(client, deadLetterKey, id);
+      if (found === undefined) {
+        return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+      }
+
+      await client.lRem(deadLetterKey, 1, found.payload);
+      await client.rPush(
+        queueKey,
+        serializeDocumentSyncJob({ ...found.deadLetter.job, attempts: 0 }),
+      );
+      return "replayed";
+    },
+
+    async deleteDeadLetter(id) {
+      const found = await findDeadLetterByStoredId(client, deadLetterKey, id);
+      if (found === undefined) {
+        return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+      }
+
+      await client.lRem(deadLetterKey, 1, found.payload);
+      return "deleted";
+    },
+
+    async replayDeadLetters(input): Promise<ReplayDocumentSyncDeadLettersResult> {
+      const result: ReplayDocumentSyncDeadLettersResult = {
+        replayedCount: 0,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      };
+
+      for (const id of input.ids) {
+        const replayResult = await this.replayDeadLetter(id);
+        if (replayResult === "replayed") {
+          result.replayedCount += 1;
+        } else if (replayResult === "not_found") {
+          result.notFoundIds.push(id);
+        } else {
+          result.unsupportedLegacyIds.push(id);
+        }
+      }
+
+      return result;
     },
   };
 }
@@ -169,10 +231,93 @@ function serializeDocumentSyncJobPayload(job: DocumentSyncJob): Record<string, u
   };
 }
 
+function serializeDeadLetteredDocumentSyncJob(input: {
+  id: string;
+  job: DocumentSyncJob;
+  errorMessage: string;
+  failedAt: Date;
+}): string {
+  return JSON.stringify({
+    id: input.id,
+    job: serializeDocumentSyncJobPayload(input.job),
+    errorMessage: input.errorMessage,
+    failedAt: input.failedAt.toISOString(),
+  });
+}
+
+type ParsedDeadLetterPayload = {
+  payload: string;
+  deadLetter: DocumentSyncDeadLetter;
+  storedId?: string;
+};
+
+function parseDeadLetterPayload(payload: string, index: number): ParsedDeadLetterPayload {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    throw new Error("Invalid document sync dead letter JSON");
+  }
+
+  if (!isRecord(parsed) || !isRecord(parsed.job)) {
+    throw new Error("Invalid document sync dead letter payload");
+  }
+
+  const job = parseDocumentSyncJob(JSON.stringify(parsed.job));
+  const failedAt = new Date(readString(parsed.failedAt));
+  const errorMessage = readString(parsed.errorMessage);
+  const storedId = readString(parsed.id) || undefined;
+  if (Number.isNaN(failedAt.getTime()) || errorMessage.length === 0) {
+    throw new Error("Invalid document sync dead letter payload");
+  }
+
+  return {
+    payload,
+    storedId,
+    deadLetter: {
+      id: storedId ?? createLegacyDeadLetterId(payload, index),
+      job,
+      errorMessage,
+      failedAt,
+      replayable: storedId !== undefined,
+    },
+  };
+}
+
+async function findDeadLetterByStoredId(
+  client: RedisDocumentSyncQueueClient,
+  deadLetterKey: string,
+  id: string,
+): Promise<ParsedDeadLetterPayload | undefined> {
+  const payloads = await client.lRange(deadLetterKey, 0, -1);
+
+  for (const [index, payload] of payloads.entries()) {
+    const parsed = parseDeadLetterPayload(payload, index);
+    if (parsed.storedId === id) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
 function sanitizeMaxAttempts(value: number): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error("maxAttempts must be a positive integer");
   }
 
   return value;
+}
+
+function defaultIdGenerator(): string {
+  return `dlq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function createLegacyDeadLetterId(payload: string, index: number): string {
+  let hash = 0;
+  for (let cursor = 0; cursor < payload.length; cursor += 1) {
+    hash = (hash * 31 + payload.charCodeAt(cursor)) >>> 0;
+  }
+
+  return `legacy:${index}:${hash.toString(16)}`;
 }

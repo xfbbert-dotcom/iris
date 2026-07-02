@@ -15,6 +15,8 @@ describe("createEventWorkerRuntime", () => {
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(async () => null),
       lLen: vi.fn().mockResolvedValueOnce(42).mockResolvedValueOnce(5),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(async () => 0),
       quit: vi.fn(async () => undefined),
     };
     const loop = {
@@ -87,6 +89,8 @@ describe("createEventWorkerRuntime", () => {
       rPush: expect.any(Function),
       lPop: expect.any(Function),
       lLen: expect.any(Function),
+      lRange: expect.any(Function),
+      lRem: expect.any(Function),
     });
     expect(dependencies.createDiscoveredDocumentSyncPlanner).toHaveBeenCalledWith({
       queue: documentSyncQueue,

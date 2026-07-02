@@ -48,6 +48,28 @@ describe("createDocumentSyncRuntime", () => {
       getPendingCount: vi.fn(async () => 3),
       handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
       getDeadLetterCount: vi.fn(async () => 2),
+      listDeadLetters: vi.fn(async () => [
+        {
+          id: "dlq-1",
+          job: {
+            idempotencyKey: "document-sync:source-1",
+            documentSourceId: "source-1",
+            reason: "discovered_group_document" as const,
+            enqueuedAt: new Date("2026-07-03T01:00:00.000Z"),
+            attempts: 3,
+          },
+          errorMessage: "runner crashed",
+          failedAt: new Date("2026-07-03T02:00:00.000Z"),
+          replayable: true,
+        },
+      ]),
+      replayDeadLetter: vi.fn(async () => "replayed" as const),
+      deleteDeadLetter: vi.fn(async () => "deleted" as const),
+      replayDeadLetters: vi.fn(async () => ({
+        replayedCount: 1,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      })),
     };
     const reindexQueue = {
       enqueue: vi.fn(async () => undefined),
@@ -125,6 +147,8 @@ describe("createDocumentSyncRuntime", () => {
       rPush: expect.any(Function),
       lPop: expect.any(Function),
       lLen: expect.any(Function),
+      lRange: expect.any(Function),
+      lRem: expect.any(Function),
     });
     expect(dependencies.createDocumentReindexQueue).toHaveBeenCalledWith({
       eval: expect.any(Function),
@@ -175,6 +199,30 @@ describe("createDocumentSyncRuntime", () => {
       pendingJobCount: 3,
       deadLetterJobCount: 2,
       latestBatch,
+    });
+
+    await expect(runtime?.deadLetters.list({ limit: 10 })).resolves.toEqual([
+      {
+        id: "dlq-1",
+        job: {
+          idempotencyKey: "document-sync:source-1",
+          documentSourceId: "source-1",
+          reason: "discovered_group_document",
+          enqueuedAt: new Date("2026-07-03T01:00:00.000Z"),
+          attempts: 3,
+        },
+        errorMessage: "runner crashed",
+        failedAt: new Date("2026-07-03T02:00:00.000Z"),
+        replayable: true,
+      },
+    ]);
+    expect(queue.listDeadLetters).toHaveBeenCalledWith({ limit: 10 });
+    await expect(runtime?.deadLetters.replay("dlq-1")).resolves.toBe("replayed");
+    await expect(runtime?.deadLetters.delete("dlq-1")).resolves.toBe("deleted");
+    await expect(runtime?.deadLetters.replayBatch({ ids: ["dlq-1"] })).resolves.toEqual({
+      replayedCount: 1,
+      notFoundIds: [],
+      unsupportedLegacyIds: [],
     });
 
     await runtime?.close();

@@ -19,27 +19,27 @@
 - Test: `apps/core/tests/redis-document-sync-queue.test.ts`
 - Test: `apps/core/tests/document-sync-queue.test.ts`
 
-- [ ] **Step 1: Write failing Redis DLQ tests**
+- [x] **Step 1: Write failing Redis DLQ tests**
 
 Add tests proving stable IDs are stored, list returns replayable entries, legacy entries are listable but unsupported, replay resets attempts, delete removes entries, and batch replay reports not-found/legacy IDs.
 
-- [ ] **Step 2: Write failing in-memory DLQ tests**
+- [x] **Step 2: Write failing in-memory DLQ tests**
 
 Add tests proving in-memory DLQ entries can be listed, replayed, and deleted.
 
-- [ ] **Step 3: Extend the queue contract**
+- [x] **Step 3: Extend the queue contract**
 
 Add `DocumentSyncDeadLetter`, `ReplayDocumentSyncDeadLettersResult`, and the four DLQ methods to `DocumentSyncQueue`.
 
-- [ ] **Step 4: Implement Redis DLQ management**
+- [x] **Step 4: Implement Redis DLQ management**
 
 Use `lRange` and `lRem`, stable IDs, legacy synthetic IDs, and attempts reset on replay.
 
-- [ ] **Step 5: Implement in-memory DLQ management**
+- [x] **Step 5: Implement in-memory DLQ management**
 
 Store stable IDs in memory and keep replay/delete behavior aligned with Redis.
 
-- [ ] **Step 6: Verify targeted queue tests**
+- [x] **Step 6: Verify targeted queue tests**
 
 Run:
 
@@ -57,15 +57,15 @@ Expected: queue tests pass.
 - Test: `apps/core/tests/document-sync-runtime.test.ts`
 - Test: `apps/core/tests/event-worker-runtime.test.ts`
 
-- [ ] **Step 1: Write failing runtime tests**
+- [x] **Step 1: Write failing runtime tests**
 
 Assert `runtime.deadLetters.list/replay/delete/replayBatch` delegates to queue methods.
 
-- [ ] **Step 2: Extend runtime types**
+- [x] **Step 2: Extend runtime types**
 
 Expose the `deadLetters` facade and extend the lazy Redis sync client with `lRange`/`lRem`.
 
-- [ ] **Step 3: Verify targeted runtime tests**
+- [x] **Step 3: Verify targeted runtime tests**
 
 Run:
 
@@ -81,15 +81,15 @@ Expected: runtime tests pass.
 - Modify: `apps/core/src/app.ts`
 - Test: `apps/core/tests/answer-draft-api.test.ts`
 
-- [ ] **Step 1: Write failing API tests**
+- [x] **Step 1: Write failing API tests**
 
 Cover unavailable runtime, listing, invalid limits, single replay, delete, batch replay, invalid batch body, and operation failures.
 
-- [ ] **Step 2: Add routes**
+- [x] **Step 2: Add routes**
 
 Mirror the reindex DLQ API pattern under `/internal/document-sync/dead-letters`.
 
-- [ ] **Step 3: Verify targeted API tests**
+- [x] **Step 3: Verify targeted API tests**
 
 Run:
 
@@ -104,7 +104,7 @@ Expected: API tests pass.
 **Files:**
 - Modify: PR #3 body.
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run:
 
@@ -117,10 +117,10 @@ docker compose config
 
 Expected: all commands exit 0.
 
-- [ ] **Step 2: Commit and push**
+- [x] **Step 2: Commit and push**
 
 Commit the implementation and push `codex/iris-document-source-registry`.
 
-- [ ] **Step 3: Update PR body and inspect PR state**
+- [x] **Step 3: Update PR body and inspect PR state**
 
 Append Phase 3F summary and verify PR #3 remains open and non-draft.

@@ -18,6 +18,8 @@ describe("RedisDocumentSyncQueue", () => {
       rPush: vi.fn(),
       lPop: vi.fn(),
       lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
     const syncJob = job();
@@ -37,6 +39,8 @@ describe("RedisDocumentSyncQueue", () => {
       eval: vi.fn(),
       rPush: vi.fn(),
       lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce(serializeDocumentSyncJob(first))
@@ -56,6 +60,8 @@ describe("RedisDocumentSyncQueue", () => {
       eval: vi.fn(),
       rPush: vi.fn(),
       lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce(serializeDocumentSyncJob(first))
@@ -79,6 +85,8 @@ describe("RedisDocumentSyncQueue", () => {
       rPush: vi.fn(),
       lPop: vi.fn(),
       lLen: vi.fn(async () => 42),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
@@ -117,6 +125,8 @@ describe("RedisDocumentSyncQueue", () => {
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(),
       lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client, maxAttempts: 3 });
     const syncJob = job();
@@ -136,6 +146,8 @@ describe("RedisDocumentSyncQueue", () => {
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(),
       lLen: vi.fn(async () => 5),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client, maxAttempts: 3 });
     const syncJob = job({ attempts: 2 });
@@ -149,6 +161,167 @@ describe("RedisDocumentSyncQueue", () => {
     );
     await expect(queue.getDeadLetterCount()).resolves.toBe(5);
     expect(client.lLen).toHaveBeenCalledWith("iris:documents:sync:dlq");
+  });
+
+  it("stores failed jobs in Redis DLQ with stable ids", async () => {
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({
+      client,
+      maxAttempts: 1,
+      now: () => new Date("2026-07-03T02:00:00.000Z"),
+      idGenerator: () => "dlq-1",
+    });
+
+    await queue.handleFailedJob({ job: job(), errorMessage: "runner crashed" });
+
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:documents:sync:dlq",
+      JSON.stringify({
+        id: "dlq-1",
+        job: {
+          ...job({ attempts: 1 }),
+          enqueuedAt: "2026-07-03T01:00:00.000Z",
+        },
+        errorMessage: "runner crashed",
+        failedAt: "2026-07-03T02:00:00.000Z",
+      }),
+    );
+  });
+
+  it("lists Redis DLQ entries and marks legacy entries as non-replayable", async () => {
+    const storedPayload = JSON.stringify({
+      id: "dlq-1",
+      job: {
+        ...job({ attempts: 3 }),
+        enqueuedAt: "2026-07-03T01:00:00.000Z",
+      },
+      errorMessage: "runner crashed",
+      failedAt: "2026-07-03T02:00:00.000Z",
+    });
+    const legacyPayload = JSON.stringify({
+      job: {
+        ...job({ documentSourceId: "source-2", attempts: 3 }),
+        enqueuedAt: "2026-07-03T01:00:00.000Z",
+      },
+      errorMessage: "legacy failure",
+      failedAt: "2026-07-03T02:01:00.000Z",
+    });
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [storedPayload, legacyPayload]),
+      lRem: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: 2 })).resolves.toEqual([
+      {
+        id: "dlq-1",
+        job: job({ attempts: 3 }),
+        errorMessage: "runner crashed",
+        failedAt: new Date("2026-07-03T02:00:00.000Z"),
+        replayable: true,
+      },
+      {
+        id: expect.stringMatching(/^legacy:1:/),
+        job: job({ documentSourceId: "source-2", attempts: 3 }),
+        errorMessage: "legacy failure",
+        failedAt: new Date("2026-07-03T02:01:00.000Z"),
+        replayable: false,
+      },
+    ]);
+    expect(client.lRange).toHaveBeenCalledWith("iris:documents:sync:dlq", 0, 1);
+  });
+
+  it("replays Redis DLQ entries with attempts reset", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-1",
+      job: {
+        ...job({ attempts: 3 }),
+        enqueuedAt: "2026-07-03T01:00:00.000Z",
+      },
+      errorMessage: "runner crashed",
+      failedAt: "2026-07-03T02:00:00.000Z",
+    });
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
+    expect(client.lRem).toHaveBeenCalledWith("iris:documents:sync:dlq", 1, payload);
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:documents:sync:queue",
+      serializeDocumentSyncJob(job({ attempts: 0 })),
+    );
+  });
+
+  it("deletes Redis DLQ entries by stable id", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-1",
+      job: {
+        ...job({ attempts: 3 }),
+        enqueuedAt: "2026-07-03T01:00:00.000Z",
+      },
+      errorMessage: "runner crashed",
+      failedAt: "2026-07-03T02:00:00.000Z",
+    });
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.deleteDeadLetter("dlq-1")).resolves.toBe("deleted");
+    expect(client.lRem).toHaveBeenCalledWith("iris:documents:sync:dlq", 1, payload);
+    expect(client.rPush).not.toHaveBeenCalled();
+  });
+
+  it("batch replays Redis DLQ entries and reports missing or legacy ids", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-1",
+      job: {
+        ...job({ attempts: 3 }),
+        enqueuedAt: "2026-07-03T01:00:00.000Z",
+      },
+      errorMessage: "runner crashed",
+      failedAt: "2026-07-03T02:00:00.000Z",
+    });
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(
+      queue.replayDeadLetters({ ids: ["dlq-1", "missing", "legacy:0:abc"] }),
+    ).resolves.toEqual({
+      replayedCount: 1,
+      notFoundIds: ["missing"],
+      unsupportedLegacyIds: ["legacy:0:abc"],
+    });
   });
 });
 

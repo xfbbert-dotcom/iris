@@ -808,6 +808,221 @@ describe("GET /internal/document-sync/status", () => {
   });
 });
 
+describe("document sync dead-letter API", () => {
+  it("returns 503 when document sync runtime is unavailable", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/dead-letters",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "document_sync_worker_unavailable" });
+  });
+
+  it("lists document sync dead letters", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      deadLetters: {
+        list: vi.fn(async () => [
+          {
+            id: "dlq-1",
+            job: {
+              idempotencyKey: "document-sync:source-1",
+              documentSourceId: "source-1",
+              reason: "discovered_group_document" as const,
+              enqueuedAt: new Date("2026-07-03T01:00:00.000Z"),
+              attempts: 3,
+            },
+            errorMessage: "runner crashed",
+            failedAt: new Date("2026-07-03T02:00:00.000Z"),
+            replayable: true,
+          },
+        ]),
+        replay: vi.fn(),
+        delete: vi.fn(),
+        replayBatch: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/dead-letters?limit=20",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      deadLetters: [
+        {
+          id: "dlq-1",
+          job: {
+            idempotencyKey: "document-sync:source-1",
+            documentSourceId: "source-1",
+            reason: "discovered_group_document",
+            enqueuedAt: "2026-07-03T01:00:00.000Z",
+            attempts: 3,
+          },
+          errorMessage: "runner crashed",
+          failedAt: "2026-07-03T02:00:00.000Z",
+          replayable: true,
+        },
+      ],
+    });
+    expect(runtime.deadLetters.list).toHaveBeenCalledWith({ limit: 20 });
+  });
+
+  it("rejects invalid document sync dead-letter list limits", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/dead-letters?limit=-1",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("replays a document sync dead letter", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      deadLetters: {
+        list: vi.fn(),
+        replay: vi.fn(async () => "replayed" as const),
+        delete: vi.fn(),
+        replayBatch: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/dead-letters/dlq-1/replay",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, status: "replayed" });
+    expect(runtime.deadLetters.replay).toHaveBeenCalledWith("dlq-1");
+  });
+
+  it("deletes a document sync dead letter", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      deadLetters: {
+        list: vi.fn(),
+        replay: vi.fn(),
+        delete: vi.fn(async () => "deleted" as const),
+        replayBatch: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/internal/document-sync/dead-letters/dlq-1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, status: "deleted" });
+    expect(runtime.deadLetters.delete).toHaveBeenCalledWith("dlq-1");
+  });
+
+  it("batch replays document sync dead letters", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      deadLetters: {
+        list: vi.fn(),
+        replay: vi.fn(),
+        delete: vi.fn(),
+        replayBatch: vi.fn(async () => ({
+          replayedCount: 1,
+          notFoundIds: ["missing"],
+          unsupportedLegacyIds: ["legacy:0:abc"],
+        })),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/dead-letters/replay",
+      payload: { ids: ["dlq-1", "missing", "legacy:0:abc"] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      replayedCount: 1,
+      notFoundIds: ["missing"],
+      unsupportedLegacyIds: ["legacy:0:abc"],
+    });
+    expect(runtime.deadLetters.replayBatch).toHaveBeenCalledWith({
+      ids: ["dlq-1", "missing", "legacy:0:abc"],
+    });
+  });
+
+  it("rejects invalid document sync batch replay requests", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/dead-letters/replay",
+      payload: { ids: [] },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("returns 500 when document sync dead-letter operations fail", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      deadLetters: {
+        list: vi.fn(async () => {
+          throw new Error("redis unavailable");
+        }),
+        replay: vi.fn(),
+        delete: vi.fn(),
+        replayBatch: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/dead-letters",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "document_sync_dead_letter_operation_failed",
+    });
+  });
+});
+
 function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): ReindexWorkerRuntime {
   return {
     activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
@@ -870,6 +1085,16 @@ function fakeDocumentSyncRuntime(
       pendingJobCount: 0,
       deadLetterJobCount: 0,
     })),
+    deadLetters: {
+      list: vi.fn(async () => []),
+      replay: vi.fn(async () => "not_found" as const),
+      delete: vi.fn(async () => "not_found" as const),
+      replayBatch: vi.fn(async () => ({
+        replayedCount: 0,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      })),
+    },
     start: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,

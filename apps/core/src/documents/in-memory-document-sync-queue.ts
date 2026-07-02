@@ -1,11 +1,18 @@
-import type { DocumentSyncJob, DocumentSyncQueue } from "./document-sync-queue.js";
+import type {
+  DocumentSyncDeadLetter,
+  DocumentSyncJob,
+  DocumentSyncQueue,
+  ReplayDocumentSyncDeadLettersResult,
+} from "./document-sync-queue.js";
 
 export type InMemoryDocumentSyncQueueOptions = {
   maxAttempts?: number;
   now?: () => Date;
+  idGenerator?: () => string;
 };
 
 type DeadLetteredDocumentSyncJob = {
+  id: string;
   job: DocumentSyncJob;
   errorMessage: string;
   failedAt: Date;
@@ -14,6 +21,7 @@ type DeadLetteredDocumentSyncJob = {
 export function createInMemoryDocumentSyncQueue({
   maxAttempts = 3,
   now = () => new Date(),
+  idGenerator = defaultIdGenerator,
 }: InMemoryDocumentSyncQueueOptions = {}): DocumentSyncQueue {
   const safeMaxAttempts = sanitizeMaxAttempts(maxAttempts);
   const jobsByIdempotencyKey = new Map<string, DocumentSyncJob>();
@@ -48,6 +56,7 @@ export function createInMemoryDocumentSyncQueue({
 
       if (attempts >= safeMaxAttempts) {
         deadLetters.push({
+          id: idGenerator(),
           job: cloneJob(failedJob),
           errorMessage: input.errorMessage,
           failedAt: now(),
@@ -61,6 +70,55 @@ export function createInMemoryDocumentSyncQueue({
 
     async getDeadLetterCount() {
       return deadLetters.length;
+    },
+
+    async listDeadLetters(input) {
+      return deadLetters.slice(0, sanitizeLimit(input.limit)).map(cloneDeadLetter);
+    },
+
+    async replayDeadLetter(id) {
+      const index = deadLetters.findIndex((deadLetter) => deadLetter.id === id);
+      if (index === -1) {
+        return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+      }
+
+      const [deadLetter] = deadLetters.splice(index, 1);
+      jobsByIdempotencyKey.set(
+        deadLetter.job.idempotencyKey,
+        cloneJob({ ...deadLetter.job, attempts: 0 }),
+      );
+      return "replayed";
+    },
+
+    async deleteDeadLetter(id) {
+      const index = deadLetters.findIndex((deadLetter) => deadLetter.id === id);
+      if (index === -1) {
+        return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+      }
+
+      deadLetters.splice(index, 1);
+      return "deleted";
+    },
+
+    async replayDeadLetters(input): Promise<ReplayDocumentSyncDeadLettersResult> {
+      const result: ReplayDocumentSyncDeadLettersResult = {
+        replayedCount: 0,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      };
+
+      for (const id of input.ids) {
+        const replayResult = await this.replayDeadLetter(id);
+        if (replayResult === "replayed") {
+          result.replayedCount += 1;
+        } else if (replayResult === "not_found") {
+          result.notFoundIds.push(id);
+        } else {
+          result.unsupportedLegacyIds.push(id);
+        }
+      }
+
+      return result;
     },
   };
 }
@@ -80,10 +138,24 @@ function cloneJob(job: DocumentSyncJob): DocumentSyncJob {
   };
 }
 
+function cloneDeadLetter(deadLetter: DeadLetteredDocumentSyncJob): DocumentSyncDeadLetter {
+  return {
+    id: deadLetter.id,
+    job: cloneJob(deadLetter.job),
+    errorMessage: deadLetter.errorMessage,
+    failedAt: new Date(deadLetter.failedAt),
+    replayable: true,
+  };
+}
+
 function sanitizeMaxAttempts(value: number): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error("maxAttempts must be a positive integer");
   }
 
   return value;
+}
+
+function defaultIdGenerator(): string {
+  return `dlq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }

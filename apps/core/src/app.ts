@@ -56,7 +56,7 @@ type ReindexDocumentProfileRequest = {
   limit: number;
 };
 
-type ReindexDeadLetterBatchReplayRequest = {
+type DeadLetterBatchReplayRequest = {
   ids: string[];
 };
 
@@ -193,6 +193,87 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/document-sync/dead-letters", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const limit = parseDeadLetterLimit((request.query as { limit?: unknown }).limit);
+    if (limit === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, deadLetters: await documentSyncRuntime.deadLetters.list({ limit }) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "document_sync_dead_letter_operation_failed"
+      });
+    }
+  });
+
+  app.post("/internal/document-sync/dead-letters/replay", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseDeadLetterBatchReplayRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, ...(await documentSyncRuntime.deadLetters.replayBatch(parsedRequest)) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "document_sync_dead_letter_operation_failed"
+      });
+    }
+  });
+
+  app.post("/internal/document-sync/dead-letters/:id/replay", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, status: await documentSyncRuntime.deadLetters.replay(id) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "document_sync_dead_letter_operation_failed"
+      });
+    }
+  });
+
+  app.delete("/internal/document-sync/dead-letters/:id", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, status: await documentSyncRuntime.deadLetters.delete(id) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "document_sync_dead_letter_operation_failed"
+      });
+    }
+  });
+
   app.get("/internal/reindex/dead-letters", async (request, reply) => {
     if (reindexWorkerRuntime === undefined) {
       return reply.code(503).send({ ok: false, error: "reindex_worker_unavailable" });
@@ -219,7 +300,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
 
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
-    const parsedRequest = parseReindexDeadLetterBatchReplayRequest(body);
+    const parsedRequest = parseDeadLetterBatchReplayRequest(body);
     if (parsedRequest === undefined) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
@@ -364,9 +445,9 @@ function parseDeadLetterLimit(value: unknown): number | undefined {
   return Math.min(parsed, 100);
 }
 
-function parseReindexDeadLetterBatchReplayRequest(
+function parseDeadLetterBatchReplayRequest(
   value: unknown,
-): ReindexDeadLetterBatchReplayRequest | undefined {
+): DeadLetterBatchReplayRequest | undefined {
   if (!isRecord(value) || !Array.isArray(value.ids)) {
     return undefined;
   }

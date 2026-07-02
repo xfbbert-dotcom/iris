@@ -65,6 +65,47 @@ describe("DocumentSyncQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([]);
     await expect(queue.getDeadLetterCount()).resolves.toBe(1);
   });
+
+  it("lists and replays in-memory DLQ entries", async () => {
+    const queue = createInMemoryDocumentSyncQueue({
+      maxAttempts: 1,
+      now: () => new Date("2026-07-03T02:00:00.000Z"),
+      idGenerator: () => "dlq-1",
+    });
+    const syncJob = job();
+
+    await queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" });
+
+    await expect(queue.listDeadLetters({ limit: 10 })).resolves.toEqual([
+      {
+        id: "dlq-1",
+        job: { ...syncJob, attempts: 1 },
+        errorMessage: "runner crashed",
+        failedAt: new Date("2026-07-03T02:00:00.000Z"),
+        replayable: true,
+      },
+    ]);
+    await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
+    await expect(queue.getDeadLetterCount()).resolves.toBe(0);
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([syncJob]);
+  });
+
+  it("deletes in-memory DLQ entries", async () => {
+    const queue = createInMemoryDocumentSyncQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+    });
+
+    await queue.handleFailedJob({ job: job(), errorMessage: "runner crashed" });
+
+    await expect(queue.deleteDeadLetter("dlq-1")).resolves.toBe("deleted");
+    await expect(queue.getDeadLetterCount()).resolves.toBe(0);
+    await expect(queue.replayDeadLetters({ ids: ["missing"] })).resolves.toEqual({
+      replayedCount: 0,
+      notFoundIds: ["missing"],
+      unsupportedLegacyIds: [],
+    });
+  });
 });
 
 function job(overrides: Partial<DocumentSyncJob> = {}): DocumentSyncJob {
