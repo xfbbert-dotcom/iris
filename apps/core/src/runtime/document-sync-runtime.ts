@@ -44,6 +44,10 @@ import {
   createPostgresDocumentSourceRegistry,
   type AsyncDocumentSourceRegistry,
 } from "../documents/postgres-document-source-registry.js";
+import type {
+  DocumentSource,
+  DocumentSourceType,
+} from "../documents/document-source-registry.js";
 import {
   createRedisDocumentSyncQueue,
   type RedisDocumentSyncQueueClient,
@@ -65,6 +69,10 @@ import {
 
 export type DocumentSyncRuntime = {
   getStatus(): Promise<DocumentSyncRuntimeStatus>;
+  sources: {
+    list(input: DocumentSourceInventoryListInput): Promise<DocumentSource[]>;
+    get(id: string): Promise<DocumentSource | undefined>;
+  };
   enqueueSource(input: { documentSourceId: string }): Promise<ManualDocumentSyncEnqueueResult>;
   registerAuthorizedWikiDocument(
     input: Parameters<AsyncDocumentSourceRegistry["registerAuthorizedWikiDocument"]>[0],
@@ -88,6 +96,15 @@ export type DocumentSyncRuntime = {
   close(): Promise<void>;
 };
 
+export type DocumentSourceInventoryListInput = {
+  limit: number;
+  sourceType?: DocumentSourceType;
+  groupId?: string;
+  authorizedSpaceId?: string;
+  submittedByUserId?: string;
+  usableForAnswering?: true;
+};
+
 export type DocumentSyncRuntimeStatus = {
   enabled: true;
   running: boolean;
@@ -108,7 +125,14 @@ type DocumentSyncRuntimeSnapshots = DocumentSyncSnapshotWriter & {
 type DocumentSyncRuntimeDocumentSources = DocumentSyncRunnerRegistry &
   Pick<
     AsyncDocumentSourceRegistry,
-    "registerAuthorizedWikiDocument" | "registerUserSubmittedDocument"
+    | "registerAuthorizedWikiDocument"
+    | "registerUserSubmittedDocument"
+    | "listSources"
+    | "listSourcesByType"
+    | "listSourcesByGroupId"
+    | "listSourcesByAuthorizedSpaceId"
+    | "listSourcesBySubmittingUserId"
+    | "listSourcesUsableForAnswering"
   >;
 type DocumentSyncRuntimeQueue = Pick<
   DocumentSyncQueue,
@@ -282,6 +306,15 @@ function createEnabledDocumentSyncRuntime({
     enqueueSource(input) {
       return manualPlanner.enqueueSource(input);
     },
+    sources: {
+      async list(input) {
+        const sources = await listDocumentSources(documentSources, input);
+        return sources.slice(0, input.limit);
+      },
+      async get(id) {
+        return await documentSources.findSourceById(id);
+      },
+    },
     async registerAuthorizedWikiDocument(input) {
       const source = await documentSources.registerAuthorizedWikiDocument(input);
       const enqueue = await manualPlanner.enqueueSource({ documentSourceId: source.id });
@@ -314,6 +347,29 @@ function createEnabledDocumentSyncRuntime({
       await pool.end();
     },
   };
+}
+
+function listDocumentSources(
+  documentSources: DocumentSyncRuntimeDocumentSources,
+  input: DocumentSourceInventoryListInput,
+): Promise<DocumentSource[]> {
+  if (input.sourceType !== undefined) {
+    return documentSources.listSourcesByType(input.sourceType);
+  }
+  if (input.groupId !== undefined) {
+    return documentSources.listSourcesByGroupId(input.groupId);
+  }
+  if (input.authorizedSpaceId !== undefined) {
+    return documentSources.listSourcesByAuthorizedSpaceId(input.authorizedSpaceId);
+  }
+  if (input.submittedByUserId !== undefined) {
+    return documentSources.listSourcesBySubmittingUserId(input.submittedByUserId);
+  }
+  if (input.usableForAnswering === true) {
+    return documentSources.listSourcesUsableForAnswering();
+  }
+
+  return documentSources.listSources();
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): DocumentSyncRuntimeDocumentSources {

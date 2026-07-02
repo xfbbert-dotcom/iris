@@ -808,6 +808,208 @@ describe("GET /internal/document-sync/status", () => {
   });
 });
 
+describe("document sync source inventory API", () => {
+  it("returns 503 when listing sources without document sync runtime", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "document_sync_worker_unavailable" });
+  });
+
+  it("lists document sources", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(async () => [authorizedWikiSource(), userSubmittedSource()]),
+        get: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?limit=2",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      sources: [
+        {
+          id: "source-1",
+          sourceType: "authorized_wiki_document",
+          sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+          title: "Handbook",
+          authorizedSpaceId: "space-1",
+          permissionState: "unknown",
+          syncState: "pending",
+          canUseForAnswering: true,
+          canUseForKnowledgeDrafts: true,
+          createdAt: "2026-07-03T03:00:00.000Z",
+          updatedAt: "2026-07-03T03:00:00.000Z",
+          evidence: [],
+        },
+        {
+          id: "user-source-1",
+          sourceType: "user_submitted_document",
+          sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+          title: "User Guide",
+          submittedByUserId: "ou_1",
+          permissionState: "unknown",
+          syncState: "pending",
+          canUseForAnswering: true,
+          canUseForKnowledgeDrafts: false,
+          createdAt: "2026-07-03T03:10:00.000Z",
+          updatedAt: "2026-07-03T03:10:00.000Z",
+          evidence: [],
+        },
+      ],
+    });
+    expect(runtime.sources.list).toHaveBeenCalledWith({ limit: 2 });
+  });
+
+  it("lists document sources by source type", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(async () => [authorizedWikiSource()]),
+        get: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?sourceType=authorized_wiki_document",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().sources).toHaveLength(1);
+    expect(runtime.sources.list).toHaveBeenCalledWith({
+      limit: 20,
+      sourceType: "authorized_wiki_document",
+    });
+  });
+
+  it("rejects source inventory requests with multiple filters", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?sourceType=authorized_wiki_document&groupId=group-1",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("rejects invalid source inventory list limits", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?limit=-1",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("returns a document source by id", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(),
+        get: vi.fn(async () => authorizedWikiSource()),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      source: {
+        id: "source-1",
+        sourceType: "authorized_wiki_document",
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        title: "Handbook",
+        authorizedSpaceId: "space-1",
+        permissionState: "unknown",
+        syncState: "pending",
+        canUseForAnswering: true,
+        canUseForKnowledgeDrafts: true,
+        createdAt: "2026-07-03T03:00:00.000Z",
+        updatedAt: "2026-07-03T03:00:00.000Z",
+        evidence: [],
+      },
+    });
+    expect(runtime.sources.get).toHaveBeenCalledWith("source-1");
+  });
+
+  it("returns 404 for unknown document source ids", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/missing",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ ok: false, error: "document_source_not_found" });
+  });
+
+  it("returns 500 when source inventory lookup fails", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(async () => {
+          throw new Error("database unavailable");
+        }),
+        get: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ ok: false, error: "document_source_lookup_failed" });
+  });
+});
+
 describe("document sync dead-letter API", () => {
   it("returns 503 when document sync runtime is unavailable", async () => {
     const app = buildApp({
@@ -1432,6 +1634,10 @@ function fakeDocumentSyncRuntime(
       pendingJobCount: 0,
       deadLetterJobCount: 0,
     })),
+    sources: {
+      list: vi.fn(async () => []),
+      get: vi.fn(async () => undefined),
+    },
     deadLetters: {
       list: vi.fn(async () => []),
       replay: vi.fn(async () => "not_found" as const),

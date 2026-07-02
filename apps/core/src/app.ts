@@ -27,6 +27,7 @@ import {
   createDocumentSyncRuntime,
   type DocumentSyncRuntime
 } from "./runtime/document-sync-runtime.js";
+import type { DocumentSourceType } from "./documents/document-source-registry.js";
 
 export type BuildAppDependencies = {
   queue?: EventQueue;
@@ -70,6 +71,15 @@ type RegisterUserSubmittedDocumentRequest = {
   sourceUri: string;
   title?: string;
   submittedByUserId: string;
+};
+
+type DocumentSourceListQuery = {
+  limit: number;
+  sourceType?: DocumentSourceType;
+  groupId?: string;
+  authorizedSpaceId?: string;
+  submittedByUserId?: string;
+  usableForAnswering?: true;
 };
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
@@ -202,6 +212,48 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return { ok: true, ...(await documentSyncRuntime.getStatus()) };
     } catch {
       return reply.code(500).send({ ok: false, error: "document_sync_status_failed" });
+    }
+  });
+
+  app.get("/internal/document-sync/sources", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const parsedQuery = parseDocumentSourceListQuery(request.query);
+    if (parsedQuery === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return {
+        ok: true,
+        sources: await documentSyncRuntime.sources.list(parsedQuery),
+      };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "document_source_lookup_failed" });
+    }
+  });
+
+  app.get("/internal/document-sync/sources/:id", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const documentSourceId = readNonBlankId((request.params as { id?: unknown }).id);
+    if (documentSourceId === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const source = await documentSyncRuntime.sources.get(documentSourceId);
+      if (source === undefined) {
+        return reply.code(404).send({ ok: false, error: "document_source_not_found" });
+      }
+
+      return { ok: true, source };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "document_source_lookup_failed" });
     }
   });
 
@@ -529,6 +581,83 @@ function parseDeadLetterLimit(value: unknown): number | undefined {
   }
 
   return Math.min(parsed, 100);
+}
+
+function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const limit = parseDeadLetterLimit(value.limit);
+  if (limit === undefined) {
+    return undefined;
+  }
+
+  const sourceType = parseDocumentSourceType(value.sourceType);
+  const groupId = value.groupId === undefined ? undefined : readNonBlankId(value.groupId);
+  const authorizedSpaceId =
+    value.authorizedSpaceId === undefined ? undefined : readNonBlankId(value.authorizedSpaceId);
+  const submittedByUserId =
+    value.submittedByUserId === undefined ? undefined : readNonBlankId(value.submittedByUserId);
+  const usableForAnswering = parseUsableForAnswering(value.usableForAnswering);
+
+  if (
+    sourceType === false ||
+    (groupId === undefined && value.groupId !== undefined) ||
+    (authorizedSpaceId === undefined && value.authorizedSpaceId !== undefined) ||
+    (submittedByUserId === undefined && value.submittedByUserId !== undefined) ||
+    usableForAnswering === false
+  ) {
+    return undefined;
+  }
+
+  const filterCount = [
+    sourceType,
+    groupId,
+    authorizedSpaceId,
+    submittedByUserId,
+    usableForAnswering,
+  ].filter((filter) => filter !== undefined).length;
+  if (filterCount > 1) {
+    return undefined;
+  }
+
+  return {
+    limit,
+    ...(sourceType === undefined ? {} : { sourceType }),
+    ...(groupId === undefined ? {} : { groupId }),
+    ...(authorizedSpaceId === undefined ? {} : { authorizedSpaceId }),
+    ...(submittedByUserId === undefined ? {} : { submittedByUserId }),
+    ...(usableForAnswering === undefined ? {} : { usableForAnswering }),
+  };
+}
+
+function parseDocumentSourceType(value: unknown): DocumentSourceType | false | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const sourceType = value.trim();
+  return isDocumentSourceType(sourceType) ? sourceType : false;
+}
+
+function parseUsableForAnswering(value: unknown): true | false | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  return value === "true" ? true : false;
+}
+
+function isDocumentSourceType(value: string): value is DocumentSourceType {
+  return (
+    value === "group_visible_document" ||
+    value === "authorized_wiki_document" ||
+    value === "user_submitted_document"
+  );
 }
 
 function parseDeadLetterBatchReplayRequest(

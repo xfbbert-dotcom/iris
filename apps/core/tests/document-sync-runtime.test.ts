@@ -28,43 +28,51 @@ describe("createDocumentSyncRuntime", () => {
       lRem: vi.fn(async () => 0),
       quit: vi.fn(async () => undefined),
     };
+    const inventorySource = {
+      id: "source-1",
+      sourceType: "authorized_wiki_document" as const,
+      sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+      title: "Handbook",
+      originGroupId: undefined,
+      originMessageId: undefined,
+      submittedByUserId: undefined,
+      authorizedSpaceId: "space-1",
+      permissionState: "unknown" as const,
+      syncState: "pending" as const,
+      canUseForAnswering: true,
+      canUseForKnowledgeDrafts: true,
+      createdAt: new Date("2026-07-03T03:00:00.000Z"),
+      updatedAt: new Date("2026-07-03T03:00:00.000Z"),
+      evidence: [],
+    };
+    const userSubmittedSource = {
+      id: "user-source-1",
+      sourceType: "user_submitted_document" as const,
+      sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+      title: "User Guide",
+      originGroupId: undefined,
+      originMessageId: undefined,
+      submittedByUserId: "ou_1",
+      authorizedSpaceId: undefined,
+      permissionState: "unknown" as const,
+      syncState: "pending" as const,
+      canUseForAnswering: true,
+      canUseForKnowledgeDrafts: false,
+      createdAt: new Date("2026-07-03T03:10:00.000Z"),
+      updatedAt: new Date("2026-07-03T03:10:00.000Z"),
+      evidence: [],
+    };
     const documentSources = {
-      findSourceById: vi.fn(),
+      findSourceById: vi.fn(async () => inventorySource),
+      listSources: vi.fn(async () => [inventorySource, userSubmittedSource]),
+      listSourcesByType: vi.fn(async () => [inventorySource]),
+      listSourcesByGroupId: vi.fn(async () => [inventorySource]),
+      listSourcesByAuthorizedSpaceId: vi.fn(async () => [inventorySource]),
+      listSourcesBySubmittingUserId: vi.fn(async () => [userSubmittedSource]),
+      listSourcesUsableForAnswering: vi.fn(async () => [inventorySource, userSubmittedSource]),
       markSyncState: vi.fn(),
-      registerAuthorizedWikiDocument: vi.fn(async () => ({
-        id: "source-1",
-        sourceType: "authorized_wiki_document" as const,
-        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
-        title: "Handbook",
-        originGroupId: undefined,
-        originMessageId: undefined,
-        submittedByUserId: undefined,
-        authorizedSpaceId: "space-1",
-        permissionState: "unknown" as const,
-        syncState: "pending" as const,
-        canUseForAnswering: true,
-        canUseForKnowledgeDrafts: true,
-        createdAt: new Date("2026-07-03T03:00:00.000Z"),
-        updatedAt: new Date("2026-07-03T03:00:00.000Z"),
-        evidence: [],
-      })),
-      registerUserSubmittedDocument: vi.fn(async () => ({
-        id: "user-source-1",
-        sourceType: "user_submitted_document" as const,
-        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
-        title: "User Guide",
-        originGroupId: undefined,
-        originMessageId: undefined,
-        submittedByUserId: "ou_1",
-        authorizedSpaceId: undefined,
-        permissionState: "unknown" as const,
-        syncState: "pending" as const,
-        canUseForAnswering: true,
-        canUseForKnowledgeDrafts: false,
-        createdAt: new Date("2026-07-03T03:10:00.000Z"),
-        updatedAt: new Date("2026-07-03T03:10:00.000Z"),
-        evidence: [],
-      })),
+      registerAuthorizedWikiDocument: vi.fn(async () => inventorySource),
+      registerUserSubmittedDocument: vi.fn(async () => userSubmittedSource),
     };
     const snapshots = {
       insertSucceededSnapshot: vi.fn(),
@@ -357,6 +365,30 @@ describe("createDocumentSyncRuntime", () => {
     expect(manualPlanner.enqueueSource).toHaveBeenCalledWith({
       documentSourceId: "user-source-1",
     });
+    await expect(runtime?.sources.list({ limit: 1 })).resolves.toEqual([inventorySource]);
+    expect(documentSources.listSources).toHaveBeenCalledOnce();
+    await expect(
+      runtime?.sources.list({ limit: 10, sourceType: "authorized_wiki_document" }),
+    ).resolves.toEqual([inventorySource]);
+    expect(documentSources.listSourcesByType).toHaveBeenCalledWith("authorized_wiki_document");
+    await expect(runtime?.sources.list({ limit: 10, groupId: "group-1" })).resolves.toEqual([
+      inventorySource,
+    ]);
+    expect(documentSources.listSourcesByGroupId).toHaveBeenCalledWith("group-1");
+    await expect(runtime?.sources.list({ limit: 10, authorizedSpaceId: "space-1" })).resolves.toEqual([
+      inventorySource,
+    ]);
+    expect(documentSources.listSourcesByAuthorizedSpaceId).toHaveBeenCalledWith("space-1");
+    await expect(
+      runtime?.sources.list({ limit: 10, submittedByUserId: "ou_1" }),
+    ).resolves.toEqual([userSubmittedSource]);
+    expect(documentSources.listSourcesBySubmittingUserId).toHaveBeenCalledWith("ou_1");
+    await expect(
+      runtime?.sources.list({ limit: 1, usableForAnswering: true }),
+    ).resolves.toEqual([inventorySource]);
+    expect(documentSources.listSourcesUsableForAnswering).toHaveBeenCalledOnce();
+    await expect(runtime?.sources.get("source-1")).resolves.toEqual(inventorySource);
+    expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();
