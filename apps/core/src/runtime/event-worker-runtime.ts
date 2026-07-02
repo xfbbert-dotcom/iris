@@ -12,6 +12,9 @@ import {
 } from "../conversation/postgres-conversation-message-repository.js";
 import { readDatabaseConfig, type DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
+import { createFeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
+import { createGroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
+import { createPostgresDocumentSourceRegistry } from "../documents/postgres-document-source-registry.js";
 import { createRedisRawEventQueue, type RedisRawEventQueueClient } from "../events/redis-raw-event-queue.js";
 import { createRawEventWorker } from "../events/raw-event-worker.js";
 import {
@@ -45,6 +48,9 @@ export type EventWorkerRuntimeDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => Queryable & { end(): Promise<void> };
   createRedisClient?: (url: string) => RedisClient;
   createConversationMessageRepository?: typeof createPostgresConversationMessageRepository;
+  createDocumentSourceRegistry?: typeof createPostgresDocumentSourceRegistry;
+  createDocumentLinkExtractor?: typeof createFeishuDocumentLinkExtractor;
+  createGroupVisibleDocumentRegistrar?: typeof createGroupVisibleDocumentRegistrar;
   createProcessor?: typeof createFeishuMessageEventProcessor;
   createWorkerLoop?: typeof createRawEventWorkerLoop;
 };
@@ -80,12 +86,27 @@ function createEnabledEventWorkerRuntime({
   const createMessages =
     dependencies.createConversationMessageRepository ??
     createPostgresConversationMessageRepository;
+  const createDocumentSources =
+    dependencies.createDocumentSourceRegistry ?? createPostgresDocumentSourceRegistry;
+  const createDocumentLinkExtractor =
+    dependencies.createDocumentLinkExtractor ?? createFeishuDocumentLinkExtractor;
+  const createGroupVisibleRegistrar =
+    dependencies.createGroupVisibleDocumentRegistrar ?? createGroupVisibleDocumentRegistrar;
   const createProcessor = dependencies.createProcessor ?? createFeishuMessageEventProcessor;
   const createLoop = dependencies.createWorkerLoop ?? createRawEventWorkerLoop;
 
   const pool = createPool(readDatabaseConfig(env));
   const messages = createMessages({ queryable: pool });
-  const processor = createProcessor({ messages });
+  const documentSources = createDocumentSources(pool);
+  const documentLinkExtractor = createDocumentLinkExtractor();
+  const groupVisibleDocumentRegistrar = createGroupVisibleRegistrar({
+    registry: documentSources,
+  });
+  const processor = createProcessor({
+    messages,
+    documentLinkExtractor,
+    groupVisibleDocumentRegistrar,
+  });
   const redis = createRedis(runtimeConfig.redisUrl);
   const redisConnection = redis.connect().then(() => redis);
   const queue = createRedisRawEventQueue({

@@ -39,10 +39,26 @@ describe("createEventWorkerRuntime", () => {
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
     };
+    const documentSources = {
+      registerGroupVisibleDocument: vi.fn(),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => []),
+    };
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => undefined),
+    };
+    const processor = {
+      process: vi.fn(async () => undefined),
+    };
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),
       createRedisClient: vi.fn(() => redisClient),
       createConversationMessageRepository: vi.fn(() => messages),
+      createDocumentSourceRegistry: vi.fn(() => documentSources),
+      createDocumentLinkExtractor: vi.fn(() => documentLinkExtractor),
+      createGroupVisibleDocumentRegistrar: vi.fn(() => groupVisibleDocumentRegistrar),
+      createProcessor: vi.fn(() => processor),
       createWorkerLoop: vi.fn(() => loop),
     };
 
@@ -55,6 +71,16 @@ describe("createEventWorkerRuntime", () => {
     expect(dependencies.createPostgresPool).toHaveBeenCalled();
     expect(dependencies.createConversationMessageRepository).toHaveBeenCalledWith({
       queryable: pool,
+    });
+    expect(dependencies.createDocumentSourceRegistry).toHaveBeenCalledWith(pool);
+    expect(dependencies.createDocumentLinkExtractor).toHaveBeenCalledWith();
+    expect(dependencies.createGroupVisibleDocumentRegistrar).toHaveBeenCalledWith({
+      registry: documentSources,
+    });
+    expect(dependencies.createProcessor).toHaveBeenCalledWith({
+      messages,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
     });
     runtime?.start();
     expect(loop.start).toHaveBeenCalledOnce();
