@@ -2,9 +2,11 @@ import { createClient } from "redis";
 import type pg from "pg";
 
 import {
+  readEmbeddingProviderConfig,
   readDocumentSyncWorkerRuntimeConfig,
   readFeishuOpenApiConfig,
   type DocumentSyncWorkerRuntimeConfig,
+  type EmbeddingProviderConfig,
   type EnvLike,
 } from "../config/env.js";
 import { readDatabaseConfig, type DatabaseConfig } from "../database/database-config.js";
@@ -26,6 +28,7 @@ import {
 } from "../documents/document-sync-worker-loop.js";
 import {
   createDocumentSnapshotRepository,
+  type DocumentSnapshot,
   type Queryable,
 } from "../documents/document-snapshot-repository.js";
 import { createPostgresDocumentSourceRegistry } from "../documents/postgres-document-source-registry.js";
@@ -37,6 +40,16 @@ import {
   createFeishuTenantAccessTokenProvider,
   type FeishuTenantAccessTokenProvider,
 } from "../feishu/feishu-tenant-access-token-provider.js";
+import {
+  assertSupportedRuntimeEmbeddingDimension,
+  createEmbeddingProfileId,
+} from "../model/embedding-profile-id.js";
+import { createDocumentReindexPlanner } from "../reindex/document-reindex-planner.js";
+import type { DocumentReindexQueue } from "../reindex/document-reindex-queue.js";
+import {
+  createRedisDocumentReindexQueue,
+  type RedisDocumentReindexQueueClient,
+} from "../reindex/redis-document-reindex-queue.js";
 
 export type DocumentSyncRuntime = {
   getStatus(): Promise<DocumentSyncRuntimeStatus>;
@@ -54,8 +67,20 @@ export type DocumentSyncRuntimeStatus = {
 };
 
 type PostgresPool = Queryable & { end(): Promise<void> };
+type DocumentSyncRuntimeSnapshots = DocumentSyncSnapshotWriter & {
+  listSuccessfulSnapshotsMissingProfile(input: {
+    embeddingProfileId: string;
+    limit: number;
+  }): Promise<DocumentSnapshot[]>;
+};
 type DocumentSyncRuntimeQueue = Pick<DocumentSyncQueue, "dequeueBatch" | "getPendingCount">;
-type RedisClient = RedisDocumentSyncQueueClient & {
+type DocumentSyncRuntimeReindexQueue = Pick<DocumentReindexQueue, "enqueue">;
+type DocumentSyncRuntimeReindexPlanner = Pick<
+  ReturnType<typeof createDocumentReindexPlanner>,
+  "enqueueSyncedSnapshotReindex"
+>;
+type RedisClient = RedisDocumentSyncQueueClient &
+  RedisDocumentReindexQueueClient & {
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
 };
@@ -66,7 +91,7 @@ export type DocumentSyncRuntimeDependencies = {
   createDocumentSourceRegistry?: (pool: PostgresPool) => DocumentSyncRunnerRegistry;
   createDocumentSnapshotRepository?: (dependencies: {
     queryable: Queryable;
-  }) => DocumentSyncSnapshotWriter;
+  }) => DocumentSyncRuntimeSnapshots;
   createFeishuTenantAccessTokenProvider?: (dependencies: {
     baseUrl: string;
     appId: string;
@@ -77,6 +102,12 @@ export type DocumentSyncRuntimeDependencies = {
     tokenProvider: FeishuTenantAccessTokenProvider;
   }) => DocumentBodyFetcher;
   createDocumentSyncQueue?: (client: RedisDocumentSyncQueueClient) => DocumentSyncRuntimeQueue;
+  createDocumentReindexQueue?: (
+    client: RedisDocumentReindexQueueClient,
+  ) => DocumentSyncRuntimeReindexQueue;
+  createDocumentReindexPlanner?: (
+    dependencies: Parameters<typeof createDocumentReindexPlanner>[0],
+  ) => DocumentSyncRuntimeReindexPlanner;
   createDocumentSyncRunner?: typeof createDocumentSyncRunner;
   createDocumentSyncWorker?: typeof createDocumentSyncWorker;
   createWorkerLoop?: typeof createDocumentSyncWorkerLoop;
@@ -121,6 +152,11 @@ function createEnabledDocumentSyncRuntime({
   const createQueue =
     dependencies.createDocumentSyncQueue ??
     ((client: RedisDocumentSyncQueueClient) => createRedisDocumentSyncQueue({ client }));
+  const createReindexQueue =
+    dependencies.createDocumentReindexQueue ??
+    ((client: RedisDocumentReindexQueueClient) => createRedisDocumentReindexQueue({ client }));
+  const createReindexPlanner =
+    dependencies.createDocumentReindexPlanner ?? createDocumentReindexPlanner;
   const createRunner = dependencies.createDocumentSyncRunner ?? createDocumentSyncRunner;
   const createWorker = dependencies.createDocumentSyncWorker ?? createDocumentSyncWorker;
   const createLoop = dependencies.createWorkerLoop ?? createDocumentSyncWorkerLoop;
@@ -141,10 +177,18 @@ function createEnabledDocumentSyncRuntime({
     tokenProvider,
   });
   const queue = createQueue(createLazyRedisDocumentSyncQueueClient(redisConnection));
+  const syncedSnapshotReindexer = createSyncedSnapshotReindexer({
+    embeddingConfig: readEmbeddingProviderConfig(env),
+    createReindexQueue,
+    createReindexPlanner,
+    snapshots,
+    redisConnection,
+  });
   const runner: DocumentSyncRunner = createRunner({
     registry: documentSources,
     snapshots,
     fetcher,
+    ...(syncedSnapshotReindexer === undefined ? {} : { syncedSnapshotReindexer }),
   });
   const worker = createWorker({
     queue,
@@ -188,6 +232,51 @@ function createDefaultDocumentSourceRegistry(pool: PostgresPool): DocumentSyncRu
   return createPostgresDocumentSourceRegistry(pool as unknown as pg.Pool);
 }
 
+function createSyncedSnapshotReindexer({
+  embeddingConfig,
+  createReindexQueue,
+  createReindexPlanner,
+  snapshots,
+  redisConnection,
+}: {
+  embeddingConfig: EmbeddingProviderConfig | undefined;
+  createReindexQueue: (client: RedisDocumentReindexQueueClient) => DocumentSyncRuntimeReindexQueue;
+  createReindexPlanner: (
+    dependencies: Parameters<typeof createDocumentReindexPlanner>[0],
+  ) => DocumentSyncRuntimeReindexPlanner;
+  snapshots: DocumentSyncRuntimeSnapshots;
+  redisConnection: Promise<RedisClient>;
+}) {
+  if (embeddingConfig === undefined) {
+    return undefined;
+  }
+  if (embeddingConfig.dimensions === undefined) {
+    throw new Error(
+      "IRIS_EMBEDDING_DIMENSIONS is required when document sync reindex enqueue is enabled",
+    );
+  }
+  assertSupportedRuntimeEmbeddingDimension(embeddingConfig.dimensions);
+
+  const embeddingProfileId = createEmbeddingProfileId({
+    provider: "openai-compatible",
+    model: embeddingConfig.model,
+    dimensions: embeddingConfig.dimensions,
+  });
+  const reindexQueue = createReindexQueue(
+    createLazyRedisDocumentReindexQueueClient(redisConnection),
+  );
+  const reindexPlanner = createReindexPlanner({ snapshots, queue: reindexQueue });
+
+  return {
+    enqueueSyncedSnapshotReindex(input: { documentSnapshotId: string }) {
+      return reindexPlanner.enqueueSyncedSnapshotReindex({
+        embeddingProfileId,
+        documentSnapshotId: input.documentSnapshotId,
+      });
+    },
+  };
+}
+
 function createLazyRedisDocumentSyncQueueClient(
   redisConnection: Promise<RedisClient>,
 ): RedisDocumentSyncQueueClient {
@@ -203,6 +292,37 @@ function createLazyRedisDocumentSyncQueueClient(
     async lLen(key) {
       const client = await redisConnection;
       return client.lLen(key);
+    },
+  };
+}
+
+function createLazyRedisDocumentReindexQueueClient(
+  redisConnection: Promise<RedisClient>,
+): RedisDocumentReindexQueueClient {
+  return {
+    async eval(script, options) {
+      const client = await redisConnection;
+      return client.eval(script, options);
+    },
+    async rPush(key, value) {
+      const client = await redisConnection;
+      return client.rPush(key, value);
+    },
+    async lPop(key) {
+      const client = await redisConnection;
+      return client.lPop(key);
+    },
+    async lLen(key) {
+      const client = await redisConnection;
+      return client.lLen(key);
+    },
+    async lRange(key, start, stop) {
+      const client = await redisConnection;
+      return client.lRange(key, start, stop);
+    },
+    async lRem(key, count, value) {
+      const client = await redisConnection;
+      return client.lRem(key, count, value);
     },
   };
 }

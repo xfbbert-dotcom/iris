@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { SyncedSnapshotReindexer } from "../src/documents/document-sync-pipeline.js";
 import { createDocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 
 describe("createDocumentSyncRuntime", () => {
@@ -20,8 +21,11 @@ describe("createDocumentSyncRuntime", () => {
     const redisClient = {
       connect: vi.fn(async () => redisClient),
       eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
       lPop: vi.fn(async () => null),
       lLen: vi.fn(async () => 0),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(async () => 0),
       quit: vi.fn(async () => undefined),
     };
     const documentSources = {
@@ -31,6 +35,7 @@ describe("createDocumentSyncRuntime", () => {
     const snapshots = {
       insertSucceededSnapshot: vi.fn(),
       insertFailedSnapshot: vi.fn(),
+      listSuccessfulSnapshotsMissingProfile: vi.fn(async () => []),
     };
     const tokenProvider = {
       getTenantAccessToken: vi.fn(async () => "tenant-token"),
@@ -41,6 +46,13 @@ describe("createDocumentSyncRuntime", () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),
       getPendingCount: vi.fn(async () => 3),
+    };
+    const reindexQueue = {
+      enqueue: vi.fn(async () => undefined),
+    };
+    const reindexPlanner = {
+      planDocumentProfileReindex: vi.fn(async () => ({ enqueuedCount: 0, skippedCount: 0 })),
+      enqueueSyncedSnapshotReindex: vi.fn(async () => undefined),
     };
     const runner = {
       syncSourceById: vi.fn(),
@@ -59,6 +71,15 @@ describe("createDocumentSyncRuntime", () => {
         latestBatch,
       })),
     };
+    let runnerInput:
+      | {
+          syncedSnapshotReindexer?: SyncedSnapshotReindexer;
+        }
+      | undefined;
+    const createDocumentSyncRunner = vi.fn((input) => {
+      runnerInput = input;
+      return runner;
+    });
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),
       createRedisClient: vi.fn(() => redisClient),
@@ -67,7 +88,9 @@ describe("createDocumentSyncRuntime", () => {
       createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
       createFeishuDocumentBodyFetcher: vi.fn(() => fetcher),
       createDocumentSyncQueue: vi.fn(() => queue),
-      createDocumentSyncRunner: vi.fn(() => runner),
+      createDocumentReindexQueue: vi.fn(() => reindexQueue),
+      createDocumentReindexPlanner: vi.fn(() => reindexPlanner),
+      createDocumentSyncRunner,
       createDocumentSyncWorker: vi.fn(() => worker),
       createWorkerLoop: vi.fn(() => loop),
     };
@@ -100,10 +123,32 @@ describe("createDocumentSyncRuntime", () => {
       lPop: expect.any(Function),
       lLen: expect.any(Function),
     });
+    expect(dependencies.createDocumentReindexQueue).toHaveBeenCalledWith({
+      eval: expect.any(Function),
+      rPush: expect.any(Function),
+      lPop: expect.any(Function),
+      lLen: expect.any(Function),
+      lRange: expect.any(Function),
+      lRem: expect.any(Function),
+    });
+    expect(dependencies.createDocumentReindexPlanner).toHaveBeenCalledWith({
+      snapshots,
+      queue: reindexQueue,
+    });
     expect(dependencies.createDocumentSyncRunner).toHaveBeenCalledWith({
       registry: documentSources,
       snapshots,
       fetcher,
+      syncedSnapshotReindexer: {
+        enqueueSyncedSnapshotReindex: expect.any(Function),
+      },
+    });
+    await runnerInput?.syncedSnapshotReindexer?.enqueueSyncedSnapshotReindex({
+      documentSnapshotId: "snapshot-1",
+    });
+    expect(reindexPlanner.enqueueSyncedSnapshotReindex).toHaveBeenCalledWith({
+      embeddingProfileId: "openai-compatible:text-embedding-small:1536",
+      documentSnapshotId: "snapshot-1",
     });
     expect(dependencies.createDocumentSyncWorker).toHaveBeenCalledWith({
       queue,
@@ -145,5 +190,10 @@ function enabledEnv() {
     FEISHU_APP_ID: "app-id",
     FEISHU_APP_SECRET: "app-secret",
     FEISHU_OPEN_BASE_URL: "https://open.example.com/",
+    IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+    IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+    IRIS_EMBEDDING_API_KEY: "key",
+    IRIS_EMBEDDING_MODEL: "text-embedding-small",
+    IRIS_EMBEDDING_DIMENSIONS: "1536",
   };
 }
