@@ -74,7 +74,7 @@ describe("GroupVisibleDocumentRegistrar", () => {
 
   it("does nothing when there are no discovered links", async () => {
     const registry = {
-      registerGroupVisibleDocument: vi.fn(async () => undefined),
+      registerGroupVisibleDocument: vi.fn(async () => source()),
     };
     const registrar = createGroupVisibleDocumentRegistrar({ registry });
 
