@@ -60,6 +60,7 @@ export type ReindexWorkerRuntimeStatus = {
   intervalMs: number;
   batchLimit: number;
   pendingJobCount: number;
+  deadLetterJobCount: number;
   latestBatch?: ReindexWorkerBatchSnapshot;
 };
 
@@ -192,6 +193,7 @@ export function createReindexWorkerRuntime({
     async getStatus() {
       const loopSnapshot = loop.getSnapshot();
       const pendingJobCount = await queue.getPendingCount();
+      const deadLetterJobCount = await queue.getDeadLetterCount();
 
       return {
         enabled: true,
@@ -200,6 +202,7 @@ export function createReindexWorkerRuntime({
         intervalMs: loopSnapshot.intervalMs,
         batchLimit: loopSnapshot.batchLimit,
         pendingJobCount,
+        deadLetterJobCount,
         ...(loopSnapshot.latestBatch === undefined
           ? {}
           : { latestBatch: loopSnapshot.latestBatch }),

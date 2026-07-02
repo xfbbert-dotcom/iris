@@ -34,6 +34,7 @@ export type ReindexWorkerBatchSnapshot =
       finishedAt: Date;
       indexedCount: number;
       skippedCount: number;
+      failedCount: number;
       failed: false;
     }
   | {
@@ -42,6 +43,7 @@ export type ReindexWorkerBatchSnapshot =
       finishedAt: Date;
       indexedCount: 0;
       skippedCount: 0;
+      failedCount: 0;
       failed: true;
       errorMessage: string;
     };
@@ -71,6 +73,7 @@ export function createDocumentReindexWorkerLoop({
         finishedAt: new Date(),
         indexedCount: results.filter((result) => result.status === "indexed").length,
         skippedCount: results.filter((result) => result.status === "skipped").length,
+        failedCount: results.filter((result) => result.status === "failed").length,
         failed: false,
       };
     } catch (error) {
@@ -80,6 +83,7 @@ export function createDocumentReindexWorkerLoop({
         finishedAt: new Date(),
         indexedCount: 0,
         skippedCount: 0,
+        failedCount: 0,
         failed: true,
         errorMessage: error instanceof Error ? error.message : String(error),
       };

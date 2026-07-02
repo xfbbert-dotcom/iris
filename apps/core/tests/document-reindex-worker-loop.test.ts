@@ -86,6 +86,7 @@ describe("DocumentReindexWorkerLoop", () => {
       status: "succeeded",
       indexedCount: 0,
       skippedCount: 0,
+      failedCount: 0,
       failed: false,
     });
     await loop.stop();
@@ -96,6 +97,15 @@ describe("DocumentReindexWorkerLoop", () => {
     vi.setSystemTime(new Date("2026-07-02T01:00:00.000Z"));
     const worker = {
       processBatch: vi.fn(async () => [
+        {
+          status: "failed" as const,
+          documentSnapshotId: "snapshot-3",
+          embeddingProfileId: "profile-1",
+          reason: "processing_error" as const,
+          errorMessage: "embedding failed",
+          retryAction: "requeued" as const,
+          attempts: 1,
+        },
         {
           status: "indexed" as const,
           documentSnapshotId: "snapshot-1",
@@ -125,6 +135,7 @@ describe("DocumentReindexWorkerLoop", () => {
       finishedAt: new Date("2026-07-02T01:00:01.000Z"),
       indexedCount: 1,
       skippedCount: 1,
+      failedCount: 1,
       failed: false,
     });
     await loop.stop();
@@ -153,6 +164,7 @@ describe("DocumentReindexWorkerLoop", () => {
       finishedAt: new Date("2026-07-02T01:00:01.000Z"),
       indexedCount: 0,
       skippedCount: 0,
+      failedCount: 0,
       failed: true,
       errorMessage: "batch failed",
     });

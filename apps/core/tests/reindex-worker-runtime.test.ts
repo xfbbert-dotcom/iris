@@ -14,7 +14,7 @@ describe("createReindexWorkerRuntime", () => {
       eval: vi.fn(async () => 1),
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(async () => null),
-      lLen: vi.fn(async () => 42),
+      lLen: vi.fn().mockResolvedValueOnce(42).mockResolvedValueOnce(5),
       quit: vi.fn(async () => undefined),
     };
     const embeddingProfile = embeddingProfileFixture();
@@ -40,6 +40,7 @@ describe("createReindexWorkerRuntime", () => {
           finishedAt: new Date("2026-07-02T01:00:01.000Z"),
           indexedCount: 2,
           skippedCount: 1,
+          failedCount: 0,
           failed: false as const,
         },
       })),
@@ -83,12 +84,14 @@ describe("createReindexWorkerRuntime", () => {
       intervalMs: 1000,
       batchLimit: 25,
       pendingJobCount: 42,
+      deadLetterJobCount: 5,
       latestBatch: {
         status: "succeeded",
         startedAt: new Date("2026-07-02T01:00:00.000Z"),
         finishedAt: new Date("2026-07-02T01:00:01.000Z"),
         indexedCount: 2,
         skippedCount: 1,
+        failedCount: 0,
         failed: false,
       },
     });
