@@ -1,7 +1,14 @@
-import type { DocumentSyncJob, DocumentSyncQueue } from "./document-sync-queue.js";
+import type {
+  DocumentSyncJob,
+  DocumentSyncQueue,
+  FailedDocumentSyncJobInput,
+  FailedDocumentSyncJobResult,
+} from "./document-sync-queue.js";
 
 const DEFAULT_SEEN_KEY = "iris:documents:sync:seen";
 const DEFAULT_QUEUE_KEY = "iris:documents:sync:queue";
+const DEFAULT_DEAD_LETTER_KEY = "iris:documents:sync:dlq";
+const DEFAULT_MAX_ATTEMPTS = 3;
 
 const ENQUEUE_SCRIPT = `
 if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then
@@ -15,6 +22,7 @@ export type RedisDocumentSyncQueueClient = {
     script: string,
     options: { keys: string[]; arguments: string[] },
   ): Promise<number | string>;
+  rPush(key: string, value: string): Promise<number>;
   lPop(key: string): Promise<string | null>;
   lLen(key: string): Promise<number>;
 };
@@ -23,13 +31,21 @@ export type RedisDocumentSyncQueueOptions = {
   client: RedisDocumentSyncQueueClient;
   seenKey?: string;
   queueKey?: string;
+  deadLetterKey?: string;
+  maxAttempts?: number;
+  now?: () => Date;
 };
 
 export function createRedisDocumentSyncQueue({
   client,
   seenKey = DEFAULT_SEEN_KEY,
   queueKey = DEFAULT_QUEUE_KEY,
+  deadLetterKey = DEFAULT_DEAD_LETTER_KEY,
+  maxAttempts = DEFAULT_MAX_ATTEMPTS,
+  now = () => new Date(),
 }: RedisDocumentSyncQueueOptions): DocumentSyncQueue {
+  const safeMaxAttempts = sanitizeMaxAttempts(maxAttempts);
+
   return {
     async enqueue(job) {
       await client.eval(ENQUEUE_SCRIPT, {
@@ -57,14 +73,37 @@ export function createRedisDocumentSyncQueue({
     getPendingCount() {
       return client.lLen(queueKey);
     },
+
+    async handleFailedJob(
+      input: FailedDocumentSyncJobInput,
+    ): Promise<FailedDocumentSyncJobResult> {
+      const attempts = input.job.attempts + 1;
+      const failedJob = { ...input.job, attempts };
+
+      if (attempts >= safeMaxAttempts) {
+        await client.rPush(
+          deadLetterKey,
+          JSON.stringify({
+            job: serializeDocumentSyncJobPayload(failedJob),
+            errorMessage: input.errorMessage,
+            failedAt: now().toISOString(),
+          }),
+        );
+        return { action: "dead_lettered", attempts };
+      }
+
+      await client.rPush(queueKey, serializeDocumentSyncJob(failedJob));
+      return { action: "requeued", attempts };
+    },
+
+    getDeadLetterCount() {
+      return client.lLen(deadLetterKey);
+    },
   };
 }
 
 export function serializeDocumentSyncJob(job: DocumentSyncJob): string {
-  return JSON.stringify({
-    ...job,
-    enqueuedAt: job.enqueuedAt.toISOString(),
-  });
+  return JSON.stringify(serializeDocumentSyncJobPayload(job));
 }
 
 export function parseDocumentSyncJob(payload: string): DocumentSyncJob {
@@ -121,4 +160,19 @@ function readOptionalNonNegativeInteger(value: unknown): number | null | undefin
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function serializeDocumentSyncJobPayload(job: DocumentSyncJob): Record<string, unknown> {
+  return {
+    ...job,
+    enqueuedAt: job.enqueuedAt.toISOString(),
+  };
+}
+
+function sanitizeMaxAttempts(value: number): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error("maxAttempts must be a positive integer");
+  }
+
+  return value;
 }

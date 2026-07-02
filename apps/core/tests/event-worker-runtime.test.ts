@@ -84,6 +84,7 @@ describe("createEventWorkerRuntime", () => {
     expect(dependencies.createDocumentLinkExtractor).toHaveBeenCalledWith();
     expect(dependencies.createDocumentSyncQueue).toHaveBeenCalledWith({
       eval: expect.any(Function),
+      rPush: expect.any(Function),
       lPop: expect.any(Function),
       lLen: expect.any(Function),
     });

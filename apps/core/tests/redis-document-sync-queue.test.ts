@@ -15,6 +15,7 @@ describe("RedisDocumentSyncQueue", () => {
   it("atomically enqueues jobs through Redis eval", async () => {
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(async () => 1),
+      rPush: vi.fn(),
       lPop: vi.fn(),
       lLen: vi.fn(),
     };
@@ -34,6 +35,7 @@ describe("RedisDocumentSyncQueue", () => {
     const second = job({ documentSourceId: "source-2" });
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(),
+      rPush: vi.fn(),
       lLen: vi.fn(),
       lPop: vi
         .fn()
@@ -52,6 +54,7 @@ describe("RedisDocumentSyncQueue", () => {
     const second = job({ documentSourceId: "source-2" });
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(),
+      rPush: vi.fn(),
       lLen: vi.fn(),
       lPop: vi
         .fn()
@@ -73,6 +76,7 @@ describe("RedisDocumentSyncQueue", () => {
   it("reports Redis queue depth", async () => {
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(),
+      rPush: vi.fn(),
       lPop: vi.fn(),
       lLen: vi.fn(async () => 42),
     };
@@ -105,6 +109,46 @@ describe("RedisDocumentSyncQueue", () => {
         }),
       ),
     ).toThrow("Invalid document sync job payload");
+  });
+
+  it("requeues failed jobs below max attempts", async () => {
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({ client, maxAttempts: 3 });
+    const syncJob = job();
+
+    await expect(
+      queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" }),
+    ).resolves.toEqual({ action: "requeued", attempts: 1 });
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:documents:sync:queue",
+      serializeDocumentSyncJob({ ...syncJob, attempts: 1 }),
+    );
+  });
+
+  it("moves failed jobs to Redis DLQ at max attempts", async () => {
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(),
+      lLen: vi.fn(async () => 5),
+    };
+    const queue = createRedisDocumentSyncQueue({ client, maxAttempts: 3 });
+    const syncJob = job({ attempts: 2 });
+
+    await expect(
+      queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" }),
+    ).resolves.toEqual({ action: "dead_lettered", attempts: 3 });
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:documents:sync:dlq",
+      expect.stringContaining("runner crashed"),
+    );
+    await expect(queue.getDeadLetterCount()).resolves.toBe(5);
+    expect(client.lLen).toHaveBeenCalledWith("iris:documents:sync:dlq");
   });
 });
 

@@ -285,6 +285,10 @@ function createLazyRedisDocumentSyncQueueClient(
       const client = await redisConnection;
       return client.eval(script, options);
     },
+    async rPush(key, value) {
+      const client = await redisConnection;
+      return client.rPush(key, value);
+    },
     async lPop(key) {
       const client = await redisConnection;
       return client.lPop(key);

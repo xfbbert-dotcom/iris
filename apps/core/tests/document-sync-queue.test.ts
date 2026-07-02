@@ -41,6 +41,30 @@ describe("DocumentSyncQueue", () => {
     await expect(queue.getPendingCount()).resolves.toBe(1);
     await expect(queue.dequeueBatch(10)).resolves.toEqual([first]);
   });
+
+  it("requeues failed jobs below max attempts", async () => {
+    const queue = createInMemoryDocumentSyncQueue({ maxAttempts: 3 });
+    const syncJob = job();
+
+    await expect(
+      queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" }),
+    ).resolves.toEqual({ action: "requeued", attempts: 1 });
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([
+      { ...syncJob, attempts: 1 },
+    ]);
+    await expect(queue.getDeadLetterCount()).resolves.toBe(0);
+  });
+
+  it("moves failed jobs to DLQ at max attempts", async () => {
+    const queue = createInMemoryDocumentSyncQueue({ maxAttempts: 3 });
+    const syncJob = job({ attempts: 2 });
+
+    await expect(
+      queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" }),
+    ).resolves.toEqual({ action: "dead_lettered", attempts: 3 });
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([]);
+    await expect(queue.getDeadLetterCount()).resolves.toBe(1);
+  });
 });
 
 function job(overrides: Partial<DocumentSyncJob> = {}): DocumentSyncJob {

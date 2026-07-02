@@ -8,10 +8,22 @@ export type DocumentSyncJob = {
   attempts: number;
 };
 
+export type FailedDocumentSyncJobInput = {
+  job: DocumentSyncJob;
+  errorMessage: string;
+};
+
+export type FailedDocumentSyncJobResult = {
+  action: "requeued" | "dead_lettered";
+  attempts: number;
+};
+
 export interface DocumentSyncQueue {
   enqueue(job: DocumentSyncJob): Promise<void>;
   dequeueBatch(limit: number): Promise<DocumentSyncJob[]>;
   getPendingCount(): Promise<number>;
+  handleFailedJob(input: FailedDocumentSyncJobInput): Promise<FailedDocumentSyncJobResult>;
+  getDeadLetterCount(): Promise<number>;
 }
 
 export function createDocumentSyncIdempotencyKey(input: {
