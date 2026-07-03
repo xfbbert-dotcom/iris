@@ -1,4 +1,5 @@
 export type InternalComponentStatus = "healthy" | "disabled" | "degraded" | "stopped";
+export type InternalAttentionSeverity = "none" | "info" | "warning" | "critical";
 
 export function buildInternalStatusSnapshot<
   ComponentMap extends Record<string, { ok: boolean; enabled: boolean; running?: unknown }>,
@@ -22,6 +23,7 @@ export function buildInternalStatusSnapshot<
   const attentionComponents = buildAttentionComponents(components);
   const attentionComponentCount = attentionComponents.length;
   const primaryAttentionComponent = attentionComponents[0] ?? null;
+  const attentionSeverity = getAttentionSeverity(primaryAttentionComponent);
   const ok = healthyComponentCount === componentStatuses.length;
 
   return {
@@ -47,6 +49,7 @@ export function buildInternalStatusSnapshot<
       attentionComponents,
       attentionComponentCount,
       primaryAttentionComponent,
+      attentionSeverity,
     },
     components,
   };
@@ -118,6 +121,22 @@ function buildAttentionComponents(
         priority[left.status] - priority[right.status] || left.index - right.index,
     )
     .map(({ name, status }) => ({ name, status }));
+}
+
+function getAttentionSeverity(
+  primaryAttentionComponent: { status: InternalComponentStatus } | null,
+): InternalAttentionSeverity {
+  if (!primaryAttentionComponent) {
+    return "none";
+  }
+  if (primaryAttentionComponent.status === "degraded") {
+    return "critical";
+  }
+  if (primaryAttentionComponent.status === "stopped") {
+    return "warning";
+  }
+
+  return "info";
 }
 
 function hasRunningStatus(

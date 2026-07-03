@@ -365,6 +365,7 @@ describe("GET /internal/status", () => {
         ],
         attentionComponentCount: 2,
         primaryAttentionComponent: { name: "reindex", status: "stopped" },
+        attentionSeverity: "warning",
       },
       components: {
         audit: {
@@ -474,6 +475,7 @@ describe("GET /internal/status", () => {
       ],
       attentionComponentCount: 3,
       primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
+      attentionSeverity: "critical",
     });
     expect(response.json().components.eventWorker).toEqual({
       status: "degraded",
