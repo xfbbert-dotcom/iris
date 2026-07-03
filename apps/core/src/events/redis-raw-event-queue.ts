@@ -25,6 +25,7 @@ export type RedisRawEventQueueClient = {
   rPush(key: string, value: string): Promise<number>;
   lPop(key: string): Promise<string | null>;
   lLen(key: string): Promise<number>;
+  sRem(key: string, member: string): Promise<number>;
 };
 
 export type RedisRawEventQueueOptions = {
@@ -65,7 +66,9 @@ export function createRedisRawEventQueue({
         }
 
         try {
-          events.push(parseRawEvent(payload));
+          const event = parseRawEvent(payload);
+          await client.sRem(seenKey, event.idempotencyKey);
+          events.push(event);
         } catch (error) {
           await client.rPush(
             deadLetterKey,

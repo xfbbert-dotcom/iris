@@ -41,7 +41,12 @@ export class InMemoryRawEventQueue implements RawEventQueue {
 
   async dequeueBatch(limit: number): Promise<RawEvent[]> {
     const safeLimit = sanitizeLimit(limit);
-    return this.events.splice(0, safeLimit).map(cloneEvent);
+    const events = this.events.splice(0, safeLimit);
+    for (const event of events) {
+      this.seenKeys.delete(event.idempotencyKey);
+    }
+
+    return events.map(cloneEvent);
   }
 
   async handleFailedEvent(input: RawEventFailureInput): Promise<RawEventFailureResult> {

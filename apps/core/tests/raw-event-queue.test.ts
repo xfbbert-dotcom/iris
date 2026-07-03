@@ -29,6 +29,20 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([second]);
   });
 
+  it("releases dequeued event idempotency keys so later retries can enqueue", async () => {
+    const queue = new InMemoryRawEventQueue();
+    const event = eventFixture();
+
+    await queue.enqueue(event);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([event]);
+
+    await queue.enqueue({ ...event, receivedAt: new Date("2026-07-02T02:00:00.000Z") });
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([
+      { ...event, receivedAt: new Date("2026-07-02T02:00:00.000Z") },
+    ]);
+  });
+
   it("insulates queued events from caller mutations", async () => {
     const queue = new InMemoryRawEventQueue();
     const event = eventFixture({

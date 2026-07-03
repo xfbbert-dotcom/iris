@@ -18,6 +18,7 @@ describe("RedisRawEventQueue", () => {
       rPush: vi.fn(),
       lPop: vi.fn(),
       lLen: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisRawEventQueue({ client });
     const event = eventFixture();
@@ -92,10 +93,30 @@ describe("RedisRawEventQueue", () => {
         .mockResolvedValueOnce(serializeRawEvent(first))
         .mockResolvedValueOnce(serializeRawEvent(second))
         .mockResolvedValueOnce(null),
+      sRem: vi.fn(async () => 1),
     };
     const queue = createRedisRawEventQueue({ client });
 
     await expect(queue.dequeueBatch(10)).resolves.toEqual([first, second]);
+  });
+
+  it("releases dequeued raw event idempotency keys from the Redis seen set", async () => {
+    const event = eventFixture({ idempotencyKey: "raw-event:feishu:event-1" });
+    const client = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lPop: vi.fn().mockResolvedValueOnce(serializeRawEvent(event)).mockResolvedValueOnce(null),
+      sRem: vi.fn(async () => 1),
+    };
+    const queue = createRedisRawEventQueue({ client });
+
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([event]);
+
+    expect(client.sRem).toHaveBeenCalledWith(
+      "iris:events:raw:seen",
+      event.idempotencyKey,
+    );
   });
 
   it("treats non-finite dequeue limits as zero", async () => {
@@ -104,6 +125,7 @@ describe("RedisRawEventQueue", () => {
       rPush: vi.fn(),
       lLen: vi.fn(),
       lPop: vi.fn(async () => null),
+      sRem: vi.fn(),
     };
     const queue = createRedisRawEventQueue({ client });
 
@@ -122,6 +144,7 @@ describe("RedisRawEventQueue", () => {
         .fn()
         .mockResolvedValueOnce("{")
         .mockResolvedValueOnce(serializeRawEvent(valid)),
+      sRem: vi.fn(async () => 1),
     };
     const queue = createRedisRawEventQueue({
       client,
@@ -156,6 +179,7 @@ describe("RedisRawEventQueue", () => {
         .fn()
         .mockResolvedValueOnce(invalidPayload)
         .mockResolvedValueOnce(serializeRawEvent(valid)),
+      sRem: vi.fn(async () => 1),
     };
     const queue = createRedisRawEventQueue({
       client,
@@ -179,6 +203,7 @@ describe("RedisRawEventQueue", () => {
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(),
       lLen: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisRawEventQueue({ client, maxAttempts: 3 });
     const event = eventFixture();
@@ -198,6 +223,7 @@ describe("RedisRawEventQueue", () => {
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(),
       lLen: vi.fn(async () => 5),
+      sRem: vi.fn(),
     };
     const queue = createRedisRawEventQueue({ client, maxAttempts: 3 });
     const event = eventFixture({ attempts: 2 });
