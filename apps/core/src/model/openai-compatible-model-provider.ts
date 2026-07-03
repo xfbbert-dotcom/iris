@@ -23,9 +23,8 @@ export function createOpenAICompatibleModelProvider({
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
-      let response: Response;
       try {
-        response = await fetch(joinBaseUrl(config.baseUrl, "/chat/completions"), {
+        const response = await fetch(joinBaseUrl(config.baseUrl, "/chat/completions"), {
           method: "POST",
           headers: {
             authorization: `Bearer ${config.apiKey}`,
@@ -52,6 +51,20 @@ export function createOpenAICompatibleModelProvider({
           }),
           signal: controller.signal,
         });
+        const responseBody = await readJsonResponse(response);
+
+        if (!response.ok) {
+          throw new Error(
+            `model provider request failed with status ${response.status}: ${readErrorMessage(responseBody)}`,
+          );
+        }
+
+        const answerText = readAnswerContent(responseBody).trim();
+        if (answerText.length === 0) {
+          throw new Error("model provider response did not include answer content");
+        }
+
+        return { answerText };
       } catch (error) {
         if (isAbortError(error)) {
           throw new Error("model provider request timed out");
@@ -60,20 +73,6 @@ export function createOpenAICompatibleModelProvider({
       } finally {
         clearTimeout(timeout);
       }
-
-      const responseBody = await readJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(
-          `model provider request failed with status ${response.status}: ${readErrorMessage(responseBody)}`,
-        );
-      }
-
-      const answerText = readAnswerContent(responseBody).trim();
-      if (answerText.length === 0) {
-        throw new Error("model provider response did not include answer content");
-      }
-
-      return { answerText };
     },
   };
 }
@@ -85,7 +84,10 @@ function joinBaseUrl(baseUrl: string, path: string): string {
 async function readJsonResponse(response: Response): Promise<unknown> {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     throw new Error("model provider response was not valid JSON");
   }
 }

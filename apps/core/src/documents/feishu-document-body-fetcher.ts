@@ -79,7 +79,7 @@ export function createFeishuDocumentBodyFetcher({
         });
       }
 
-      const response = await fetchWithTimeout({
+      const { response, responseBody } = await fetchJsonWithTimeout({
         fetch,
         url: `${trimTrailingSlash(baseUrl)}/open-apis/docx/v1/documents/${encodeURIComponent(
           documentId,
@@ -90,11 +90,8 @@ export function createFeishuDocumentBodyFetcher({
         },
         timeoutMs,
         timeoutMessage: "Feishu document raw content request timed out",
+        jsonErrorMessage: "Feishu document raw content response was not valid JSON",
       });
-      const responseBody = await readJsonResponse(
-        response,
-        "Feishu document raw content response was not valid JSON",
-      );
 
       if (!response.ok) {
         throw new Error(
@@ -126,7 +123,7 @@ async function fetchWikiDocumentId({
   fetch: typeof globalThis.fetch;
   timeoutMs: number;
 }): Promise<string> {
-  const response = await fetchWithTimeout({
+  const { response, responseBody } = await fetchJsonWithTimeout({
     fetch,
     url: `${trimTrailingSlash(baseUrl)}/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(
       wikiNodeToken,
@@ -137,11 +134,8 @@ async function fetchWikiDocumentId({
     },
     timeoutMs,
     timeoutMessage: "Feishu wiki node request timed out",
+    jsonErrorMessage: "Feishu wiki node response was not valid JSON",
   });
-  const responseBody = await readJsonResponse(
-    response,
-    "Feishu wiki node response was not valid JSON",
-  );
 
   if (!response.ok) {
     throw new Error(
@@ -154,27 +148,32 @@ async function fetchWikiDocumentId({
   return readWikiDocumentId(responseBody);
 }
 
-async function fetchWithTimeout({
+async function fetchJsonWithTimeout({
   fetch,
   url,
   init,
   timeoutMs,
   timeoutMessage,
+  jsonErrorMessage,
 }: {
   fetch: typeof globalThis.fetch;
   url: string;
   init: RequestInit;
   timeoutMs: number;
   timeoutMessage: string;
-}): Promise<Response> {
+  jsonErrorMessage: string;
+}): Promise<{ response: Response; responseBody: unknown }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...init,
       signal: controller.signal,
     });
+    const responseBody = await readJsonResponse(response, jsonErrorMessage);
+
+    return { response, responseBody };
   } catch (error) {
     if (isAbortError(error)) {
       throw new Error(timeoutMessage);
@@ -194,7 +193,10 @@ function assertSupportedSourceType(sourceType: DocumentSourceType): void {
 async function readJsonResponse(response: Response, errorMessage: string): Promise<unknown> {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     throw new Error(errorMessage);
   }
 }

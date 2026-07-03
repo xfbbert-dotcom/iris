@@ -182,6 +182,19 @@ describe("FeishuDocumentBodyFetcher", () => {
     );
   });
 
+  it("treats aborted raw content response body reads as request timeouts", async () => {
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => abortingJsonResponse()),
+      timeoutMs: 1,
+    });
+
+    await expect(fetcher.fetch(source())).rejects.toThrow(
+      "Feishu document raw content request timed out",
+    );
+  });
+
   it("times out wiki node requests", async () => {
     const fetch = vi.fn(async (_url, init) => {
       if (init?.signal === undefined) {
@@ -214,6 +227,27 @@ describe("FeishuDocumentBodyFetcher", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+  });
+
+  it("treats aborted wiki node response body reads as request timeouts", async () => {
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => abortingJsonResponse()),
+      timeoutMs: 1,
+    });
+
+    await expect(
+      fetcher.fetch(
+        source({
+          sourceType: "authorized_wiki_document",
+          sourceUri: "https://acme.feishu.cn/wiki/wiki_token_1",
+          originGroupId: undefined,
+          originMessageId: undefined,
+          authorizedSpaceId: "space-1",
+        }),
+      ),
+    ).rejects.toThrow("Feishu wiki node request timed out");
   });
 
   it("rejects unsupported source types and URL shapes", async () => {
@@ -353,11 +387,21 @@ function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {
     ok: init.ok ?? true,
     status: init.status ?? 200,
     json: async () => body,
-  } as Response;
+  } as unknown as Response;
 }
 
 function abortError(): Error {
   const error = new Error("aborted");
   error.name = "AbortError";
   return error;
+}
+
+function abortingJsonResponse(): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => {
+      throw abortError();
+    },
+  } as unknown as Response;
 }

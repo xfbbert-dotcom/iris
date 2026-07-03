@@ -36,71 +36,56 @@ export function createFeishuTenantAccessTokenProvider({
         return cachedToken.token;
       }
 
-      const response = await fetchWithTimeout({
-        fetch,
-        url: `${trimTrailingSlash(baseUrl)}/open-apis/auth/v3/tenant_access_token/internal`,
-        init: {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-        },
-        timeoutMs,
-      });
-      const responseBody = await readJsonResponse(response);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-      if (!response.ok) {
-        throw new Error(
-          `Feishu tenant access token HTTP request failed with status ${response.status}: ${readErrorMessage(
-            responseBody,
-          )}`,
+      try {
+        const response = await fetch(
+          `${trimTrailingSlash(baseUrl)}/open-apis/auth/v3/tenant_access_token/internal`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+            signal: controller.signal,
+          },
         );
+        const responseBody = await readJsonResponse(response);
+
+        if (!response.ok) {
+          throw new Error(
+            `Feishu tenant access token HTTP request failed with status ${
+              response.status
+            }: ${readErrorMessage(responseBody)}`,
+          );
+        }
+
+        const token = readTenantAccessToken(responseBody);
+        const expiresInSeconds = readExpireSeconds(responseBody);
+        cachedToken = {
+          token,
+          expiresAtMs: nowMs + Math.max(0, expiresInSeconds * 1000 - tokenRefreshSkewMs),
+        };
+
+        return token;
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw new Error("Feishu tenant access token request timed out");
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
       }
-
-      const token = readTenantAccessToken(responseBody);
-      const expiresInSeconds = readExpireSeconds(responseBody);
-      cachedToken = {
-        token,
-        expiresAtMs: nowMs + Math.max(0, expiresInSeconds * 1000 - tokenRefreshSkewMs),
-      };
-
-      return token;
     },
   };
-}
-
-async function fetchWithTimeout({
-  fetch,
-  url,
-  init,
-  timeoutMs,
-}: {
-  fetch: typeof globalThis.fetch;
-  url: string;
-  init: RequestInit;
-  timeoutMs: number;
-}): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw new Error("Feishu tenant access token request timed out");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     throw new Error("Feishu tenant access token response was not valid JSON");
   }
 }

@@ -19,9 +19,8 @@ export function createOpenAICompatibleEmbeddingProvider({
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
-      let response: Response;
       try {
-        response = await fetch(joinBaseUrl(config.baseUrl, "/embeddings"), {
+        const response = await fetch(joinBaseUrl(config.baseUrl, "/embeddings"), {
           method: "POST",
           headers: {
             authorization: `Bearer ${config.apiKey}`,
@@ -34,6 +33,22 @@ export function createOpenAICompatibleEmbeddingProvider({
           }),
           signal: controller.signal,
         });
+        const responseBody = await readJsonResponse(response);
+
+        if (!response.ok) {
+          throw new Error(
+            `embedding provider request failed with status ${response.status}: ${readErrorMessage(
+              responseBody,
+            )}`,
+          );
+        }
+
+        const embeddings = readEmbeddingVectors(responseBody);
+        if (embeddings.length !== texts.length) {
+          throw new Error("embedding response count mismatch");
+        }
+
+        return embeddings;
       } catch (error) {
         if (isAbortError(error)) {
           throw new Error("embedding provider request timed out");
@@ -42,22 +57,6 @@ export function createOpenAICompatibleEmbeddingProvider({
       } finally {
         clearTimeout(timeout);
       }
-
-      const responseBody = await readJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(
-          `embedding provider request failed with status ${response.status}: ${readErrorMessage(
-            responseBody,
-          )}`,
-        );
-      }
-
-      const embeddings = readEmbeddingVectors(responseBody);
-      if (embeddings.length !== texts.length) {
-        throw new Error("embedding response count mismatch");
-      }
-
-      return embeddings;
     },
   };
 }
@@ -69,7 +68,10 @@ function joinBaseUrl(baseUrl: string, path: string): string {
 async function readJsonResponse(response: Response): Promise<unknown> {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     throw new Error("embedding provider response was not valid JSON");
   }
 }

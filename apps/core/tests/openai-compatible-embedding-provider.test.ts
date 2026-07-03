@@ -131,6 +131,17 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
       "embedding provider request timed out",
     );
   });
+
+  it("treats aborted response body reads as request timeouts", async () => {
+    const provider = createOpenAICompatibleEmbeddingProvider({
+      config: { ...config(), timeoutMs: 1 },
+      fetch: vi.fn(async () => abortingJsonResponse()),
+    });
+
+    await expect(provider.embedTexts(["alpha"])).rejects.toThrow(
+      "embedding provider request timed out",
+    );
+  });
 });
 
 function config() {
@@ -148,4 +159,16 @@ function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
     status: init.status ?? 200,
     headers: { "content-type": "application/json" },
   });
+}
+
+function abortingJsonResponse(): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => {
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      throw error;
+    },
+  } as unknown as Response;
 }

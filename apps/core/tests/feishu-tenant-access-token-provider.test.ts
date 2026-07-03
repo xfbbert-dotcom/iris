@@ -70,6 +70,20 @@ describe("FeishuTenantAccessTokenProvider", () => {
     );
   });
 
+  it("treats aborted token response body reads as request timeouts", async () => {
+    const provider = createFeishuTenantAccessTokenProvider({
+      baseUrl: "https://open.feishu.cn",
+      appId: "app-id",
+      appSecret: "app-secret",
+      fetch: vi.fn(async () => abortingJsonResponse()),
+      timeoutMs: 1,
+    });
+
+    await expect(provider.getTenantAccessToken()).rejects.toThrow(
+      "Feishu tenant access token request timed out",
+    );
+  });
+
   it("throws on failed token responses", async () => {
     const provider = createFeishuTenantAccessTokenProvider({
       baseUrl: "https://open.feishu.cn",
@@ -121,11 +135,21 @@ function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {
     ok: init.ok ?? true,
     status: init.status ?? 200,
     json: async () => body,
-  } as Response;
+  } as unknown as Response;
 }
 
 function abortError(): Error {
   const error = new Error("aborted");
   error.name = "AbortError";
   return error;
+}
+
+function abortingJsonResponse(): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => {
+      throw abortError();
+    },
+  } as unknown as Response;
 }
