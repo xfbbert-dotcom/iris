@@ -115,6 +115,9 @@ async function embedQuery(queryText: string, embedder: QueryEmbeddingProvider): 
   if (embedding === undefined) {
     throw new Error("query embedding provider must return exactly one vector");
   }
+  if (embedding.length === 0) {
+    throw new Error("query embedding must not be empty");
+  }
 
   for (const value of embedding) {
     if (typeof value !== "number" || !Number.isFinite(value)) {

@@ -326,6 +326,21 @@ describe("DocumentRetrievalContextBuilder", () => {
       "query embedding contains invalid value",
     );
   });
+
+  it("rejects empty query embeddings before vector search", async () => {
+    const fragments = { searchSimilarFragments: vi.fn() };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[]]) },
+      fragments,
+      canReadDocument: vi.fn(),
+    });
+
+    await expect(builder.buildContext({ queryText: "bad", liveChatMessages: [] })).rejects.toThrow(
+      "query embedding must not be empty",
+    );
+    expect(fragments.searchSimilarFragments).not.toHaveBeenCalled();
+  });
 });
 
 function fragment(overrides: {
