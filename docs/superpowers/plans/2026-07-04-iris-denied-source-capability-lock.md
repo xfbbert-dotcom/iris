@@ -13,5 +13,7 @@ upgrades.
 - [x] Disable knowledge drafts when marking permission denied.
 - [x] Preserve denied knowledge draft lock during policy updates.
 - [x] Preserve denied knowledge draft lock during registration/source-type upgrades.
+- [x] Add a migration that backfills denied source capabilities and adds a
+  database check constraint.
 - [x] Update the architecture whitepaper and focused design note.
 - [x] Run full verification before commit and push.

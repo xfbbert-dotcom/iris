@@ -185,4 +185,19 @@ describe("defaultMigrationsDir", () => {
       "unique (document_snapshot_id, embedding_profile_id, chunk_index)",
     );
   });
+
+  it("includes migration to lock denied document source capabilities", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0014_denied_document_source_capability_lock.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("where permission_state = 'denied'");
+    expect(normalized).toContain("can_use_for_answering = false");
+    expect(normalized).toContain("can_use_for_knowledge_drafts = false");
+    expect(normalized).toContain(
+      "add constraint document_sources_denied_capabilities_disabled",
+    );
+  });
 });
