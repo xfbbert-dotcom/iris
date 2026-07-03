@@ -69,7 +69,8 @@ export class InMemoryAuditLog implements AuditLog {
   }
 
   summarizeRecent(options: AuditEventSummaryQuery): AuditEventSummary[] {
-    if (options.limit <= 0) {
+    const limit = sanitizeLimit(options.limit);
+    if (limit <= 0) {
       return [];
     }
 
@@ -78,7 +79,7 @@ export class InMemoryAuditLog implements AuditLog {
       AuditEventSummary & { affectedFragmentIds: Set<string> }
     >();
 
-    for (const event of this.events.slice(-options.limit)) {
+    for (const event of this.events.slice(-limit)) {
       if (options.documentId !== undefined && event.documentId !== options.documentId) {
         continue;
       }
@@ -132,4 +133,12 @@ export class InMemoryAuditLog implements AuditLog {
         latestRecordedAt: new Date(summary.latestRecordedAt),
       }));
   }
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }

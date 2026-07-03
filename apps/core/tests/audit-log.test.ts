@@ -188,6 +188,19 @@ describe("InMemoryAuditLog", () => {
     expect(auditLog.summarizeRecent({ limit: 0 })).toEqual([]);
   });
 
+  it("returns no audit summary rows for non-finite recent event limits", async () => {
+    const auditLog = new InMemoryAuditLog();
+
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+
+    expect(auditLog.summarizeRecent({ limit: Number.POSITIVE_INFINITY })).toEqual([]);
+    expect(auditLog.summarizeRecent({ limit: Number.NaN })).toEqual([]);
+  });
+
   it("filters audit summaries by document and event type", async () => {
     const recordedAt = new Date("2026-07-03T06:04:00.000Z");
     const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
