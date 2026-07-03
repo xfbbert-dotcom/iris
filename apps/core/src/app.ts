@@ -81,6 +81,7 @@ type DocumentSourceListQuery = {
   authorizedSpaceId?: string;
   submittedByUserId?: string;
   usableForAnswering?: true;
+  includeLatestSnapshot?: true;
 };
 
 type DocumentSourcePolicyUpdateRequest = {
@@ -232,9 +233,29 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
 
     try {
+      const sources = await documentSyncRuntime.sources.list(parsedQuery);
+      if (parsedQuery.includeLatestSnapshot !== true) {
+        return {
+          ok: true,
+          sources,
+        };
+      }
+
       return {
         ok: true,
-        sources: await documentSyncRuntime.sources.list(parsedQuery),
+        sources: await Promise.all(
+          sources.map(async (source) => {
+            const latestSnapshot = await documentSyncRuntime.sources.getLatestSnapshot({
+              sourceId: source.id,
+            });
+            return {
+              ...source,
+              ...(latestSnapshot === undefined
+                ? {}
+                : { latestSnapshot: toDocumentSnapshotSummary(latestSnapshot) }),
+            };
+          }),
+        ),
       };
     } catch {
       return reply.code(500).send({ ok: false, error: "document_source_lookup_failed" });
@@ -744,13 +765,15 @@ function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery |
   const submittedByUserId =
     value.submittedByUserId === undefined ? undefined : readNonBlankId(value.submittedByUserId);
   const usableForAnswering = parseUsableForAnswering(value.usableForAnswering);
+  const includeLatestSnapshot = parseIncludeLatestSnapshot(value.includeLatestSnapshot);
 
   if (
     sourceType === false ||
     (groupId === undefined && value.groupId !== undefined) ||
     (authorizedSpaceId === undefined && value.authorizedSpaceId !== undefined) ||
     (submittedByUserId === undefined && value.submittedByUserId !== undefined) ||
-    usableForAnswering === false
+    usableForAnswering === false ||
+    includeLatestSnapshot === false
   ) {
     return undefined;
   }
@@ -773,6 +796,7 @@ function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery |
     ...(authorizedSpaceId === undefined ? {} : { authorizedSpaceId }),
     ...(submittedByUserId === undefined ? {} : { submittedByUserId }),
     ...(usableForAnswering === undefined ? {} : { usableForAnswering }),
+    ...(includeLatestSnapshot === undefined ? {} : { includeLatestSnapshot }),
   };
 }
 
@@ -789,6 +813,14 @@ function parseDocumentSourceType(value: unknown): DocumentSourceType | false | u
 }
 
 function parseUsableForAnswering(value: unknown): true | false | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  return value === "true" ? true : false;
+}
+
+function parseIncludeLatestSnapshot(value: unknown): true | false | undefined {
   if (value === undefined) {
     return undefined;
   }
