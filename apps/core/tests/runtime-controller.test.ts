@@ -123,6 +123,7 @@ describe("RuntimeController", () => {
 
     expect(controller.canProcessIncomingEvent({ groupId: "chat-a" })).toBe(true);
     expect(controller.canProcessIncomingEvent({})).toBe(true);
+    expect(controller.canProcessIncomingEvent({ groupId: "   " })).toBe(false);
 
     controller.disableGroup(" chat-a ");
 

@@ -81,7 +81,8 @@ export class RuntimeController {
       return true;
     }
 
-    return !this.config.disabledGroupIds.has(normalizeGroupId(input.groupId) ?? "");
+    const normalized = normalizeGroupId(input.groupId);
+    return normalized !== undefined && !this.config.disabledGroupIds.has(normalized);
   }
 
   canReplyWhenMentioned(groupId: string): boolean {
