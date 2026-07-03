@@ -248,7 +248,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
     const sourceId = readNonBlankId((request.params as { sourceId?: unknown }).sourceId);
     const snapshotId = readNonBlankId((request.params as { snapshotId?: unknown }).snapshotId);
-    if (sourceId === undefined || snapshotId === undefined) {
+    const previewLength = parseSnapshotPreviewLength(
+      (request.query as { previewLength?: unknown }).previewLength,
+    );
+    if (sourceId === undefined || snapshotId === undefined || previewLength === false) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
@@ -266,7 +269,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
       return {
         ok: true,
-        snapshot: toDocumentSnapshotSummary(snapshot),
+        snapshot: toDocumentSnapshotSummary(snapshot, {
+          ...(previewLength === undefined ? {} : { previewLength }),
+        }),
       };
     } catch {
       return reply.code(500).send({
@@ -298,7 +303,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
       return {
         ok: true,
-        snapshots: snapshots.map(toDocumentSnapshotSummary),
+        snapshots: snapshots.map((snapshot) => toDocumentSnapshotSummary(snapshot)),
       };
     } catch {
       return reply.code(500).send({
@@ -763,7 +768,22 @@ function isDocumentSourceType(value: string): value is DocumentSourceType {
   );
 }
 
-function toDocumentSnapshotSummary(snapshot: DocumentSnapshot) {
+function parseSnapshotPreviewLength(value: unknown): number | false | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    return false;
+  }
+
+  const previewLength = Number.parseInt(value, 10);
+  return previewLength <= 2000 ? previewLength : false;
+}
+
+function toDocumentSnapshotSummary(
+  snapshot: DocumentSnapshot,
+  options: { previewLength?: number } = {},
+) {
   return {
     id: snapshot.id,
     documentSourceId: snapshot.documentSourceId,
@@ -775,6 +795,9 @@ function toDocumentSnapshotSummary(snapshot: DocumentSnapshot) {
     ...(snapshot.errorMessage === undefined ? {} : { errorMessage: snapshot.errorMessage }),
     createdAt: snapshot.createdAt,
     ...(snapshot.bodyText === undefined ? {} : { bodyTextLength: snapshot.bodyText.length }),
+    ...(snapshot.bodyText === undefined || options.previewLength === undefined
+      ? {}
+      : { bodyTextPreview: snapshot.bodyText.slice(0, options.previewLength) }),
   };
 }
 

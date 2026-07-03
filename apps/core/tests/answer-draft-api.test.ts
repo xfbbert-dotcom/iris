@@ -1291,9 +1291,89 @@ describe("document sync source snapshot inventory API", () => {
       },
     });
     expect(response.json().snapshot).not.toHaveProperty("bodyText");
+    expect(response.json().snapshot).not.toHaveProperty("bodyTextPreview");
     expect(runtime.sources.getSnapshot).toHaveBeenCalledWith({
       sourceId: "source-1",
       snapshotId: "snapshot-1",
+    });
+  });
+
+  it("returns an explicit capped document source snapshot body preview", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(),
+        get: vi.fn(),
+        updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
+        getSnapshot: vi.fn(async () => ({
+          id: "snapshot-1",
+          documentSourceId: "source-1",
+          sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+          fetchStatus: "succeeded" as const,
+          bodyText: "Document body",
+          contentHash: "hash-1",
+          sourceVersion: undefined,
+          fetchedAt: new Date("2026-07-03T04:00:00.000Z"),
+          errorMessage: undefined,
+          createdAt: new Date("2026-07-03T04:00:01.000Z"),
+        })),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1/snapshots/snapshot-1?previewLength=8",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().snapshot).toMatchObject({
+      id: "snapshot-1",
+      bodyTextLength: 13,
+      bodyTextPreview: "Document",
+    });
+    expect(response.json().snapshot).not.toHaveProperty("bodyText");
+  });
+
+  it("returns an empty document source snapshot body preview when requested", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(),
+        get: vi.fn(),
+        updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
+        getSnapshot: vi.fn(async () => ({
+          id: "snapshot-1",
+          documentSourceId: "source-1",
+          sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+          fetchStatus: "succeeded" as const,
+          bodyText: "Document body",
+          contentHash: undefined,
+          sourceVersion: undefined,
+          fetchedAt: new Date("2026-07-03T04:00:00.000Z"),
+          errorMessage: undefined,
+          createdAt: new Date("2026-07-03T04:00:01.000Z"),
+        })),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1/snapshots/snapshot-1?previewLength=0",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().snapshot).toMatchObject({
+      id: "snapshot-1",
+      bodyTextLength: 13,
+      bodyTextPreview: "",
     });
   });
 
@@ -1339,6 +1419,21 @@ describe("document sync source snapshot inventory API", () => {
     const response = await app.inject({
       method: "GET",
       url: "/internal/document-sync/sources/source-1/snapshots/%20",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("rejects invalid source snapshot preview lengths", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1/snapshots/snapshot-1?previewLength=2001",
     });
 
     expect(response.statusCode).toBe(400);
