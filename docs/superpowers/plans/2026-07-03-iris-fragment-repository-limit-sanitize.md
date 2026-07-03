@@ -50,7 +50,7 @@ npm test
 
 Expected: all commands PASS.
 
-- [ ] **Step 6: Commit and update PR**
+- [x] **Step 6: Commit and update PR**
 
 Run:
 
