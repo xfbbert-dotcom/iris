@@ -39,7 +39,7 @@ export type DocumentReindexWorkerDependencies = {
 export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerDependencies) {
   return {
     async processBatch({ limit }: { limit: number }): Promise<DocumentReindexJobResult[]> {
-      const jobs = await dependencies.queue.dequeueBatch(Math.max(0, Math.floor(limit)));
+      const jobs = await dependencies.queue.dequeueBatch(sanitizeLimit(limit));
       const results: DocumentReindexJobResult[] = [];
 
       for (const job of jobs) {
@@ -63,6 +63,14 @@ export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerD
       return results;
     },
   };
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 async function processJob(

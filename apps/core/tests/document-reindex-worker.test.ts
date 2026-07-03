@@ -32,6 +32,22 @@ describe("DocumentReindexWorker", () => {
     expect(indexer.indexSnapshot).toHaveBeenCalledWith(snapshot({ id: "snapshot-1" }));
   });
 
+  it("sanitizes non-finite batch limits to zero", async () => {
+    const queue = queueFixture([]);
+    const worker = createDocumentReindexWorker({
+      queue,
+      snapshots: { findSnapshotById: vi.fn() },
+      fragments: { hasFragmentsForSnapshotProfile: vi.fn() },
+      indexer: { indexSnapshot: vi.fn() },
+    });
+
+    await expect(worker.processBatch({ limit: Number.POSITIVE_INFINITY })).resolves.toEqual([]);
+    await expect(worker.processBatch({ limit: Number.NaN })).resolves.toEqual([]);
+
+    expect(queue.dequeueBatch).toHaveBeenNthCalledWith(1, 0);
+    expect(queue.dequeueBatch).toHaveBeenNthCalledWith(2, 0);
+  });
+
   it("skips missing snapshots", async () => {
     const worker = createDocumentReindexWorker({
       queue: queueFixture([job()]),
