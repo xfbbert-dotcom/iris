@@ -749,6 +749,30 @@ processes, introduce a distributed token cache or short-lived refresh lock. That
 cache must preserve timeout handling and must not turn token failures into stale
 credential reuse.
 
+### 12.12 Document Chunker Numeric Safety
+
+Pressure:
+
+Document chunking feeds embeddings and semantic retrieval. If invalid numeric
+settings such as `NaN`, `Infinity`, fractional values, or unsafe integers are
+accepted, JavaScript slicing and loop arithmetic can produce empty or distorted
+chunks. That weakens Iris's ability to retrieve document evidence and may make
+answers appear less grounded even when the source document was synced.
+
+Required architectural response:
+
+- Chunker size settings must be validated before any text is processed.
+- `maxChunkChars` and `minChunkChars` must be positive safe integers.
+- `minChunkChars` must remain less than or equal to `maxChunkChars`.
+- Invalid chunker configuration must fail loudly rather than silently producing
+  poor semantic memory.
+
+Evolution signal:
+
+If document types require specialized chunking, Iris may introduce document-type
+profiles for prose, tables, code, transcripts, and PDFs. Those profiles must
+still pass through strict numeric validation before reaching chunking logic.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

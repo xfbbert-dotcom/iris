@@ -37,4 +37,22 @@ describe("DocumentChunker", () => {
 
     expect(chunker.chunkText(" \n\n\t ")).toEqual([]);
   });
+
+  it("rejects non-integer or unsafe chunk size limits", () => {
+    expect(() => createDocumentChunker({ maxChunkChars: Number.NaN })).toThrow(
+      "maxChunkChars must be a positive safe integer",
+    );
+    expect(() => createDocumentChunker({ maxChunkChars: Number.POSITIVE_INFINITY })).toThrow(
+      "maxChunkChars must be a positive safe integer",
+    );
+    expect(() => createDocumentChunker({ maxChunkChars: 10.5 })).toThrow(
+      "maxChunkChars must be a positive safe integer",
+    );
+    expect(() => createDocumentChunker({ maxChunkChars: 9007199254740992 })).toThrow(
+      "maxChunkChars must be a positive safe integer",
+    );
+    expect(() => createDocumentChunker({ minChunkChars: Number.NaN })).toThrow(
+      "minChunkChars must be a positive safe integer",
+    );
+  });
 });

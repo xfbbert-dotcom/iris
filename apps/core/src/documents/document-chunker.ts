@@ -13,15 +13,9 @@ export interface DocumentChunker {
 }
 
 export function createDocumentChunker(options: DocumentChunkerOptions = {}): DocumentChunker {
-  const maxChunkChars = options.maxChunkChars ?? 1200;
-  const minChunkChars = options.minChunkChars ?? 80;
+  const maxChunkChars = sanitizePositiveSafeInteger("maxChunkChars", options.maxChunkChars ?? 1200);
+  const minChunkChars = sanitizePositiveSafeInteger("minChunkChars", options.minChunkChars ?? 80);
 
-  if (maxChunkChars < 1) {
-    throw new Error("maxChunkChars must be greater than 0");
-  }
-  if (minChunkChars < 1) {
-    throw new Error("minChunkChars must be greater than 0");
-  }
   if (minChunkChars > maxChunkChars) {
     throw new Error("minChunkChars must be less than or equal to maxChunkChars");
   }
@@ -48,6 +42,14 @@ export function createDocumentChunker(options: DocumentChunkerOptions = {}): Doc
       }));
     },
   };
+}
+
+function sanitizePositiveSafeInteger(fieldName: string, value: number): number {
+  if (!Number.isInteger(value) || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${fieldName} must be a positive safe integer`);
+  }
+
+  return value;
 }
 
 function mergeBlocks(
