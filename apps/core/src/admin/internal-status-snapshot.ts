@@ -20,6 +20,7 @@ export function buildInternalStatusSnapshot<
     .map(([name]) => name);
   const componentStatusCounts = countComponentStatuses(componentStatuses);
   const attentionComponents = buildAttentionComponents(components);
+  const attentionComponentCount = attentionComponents.length;
   const primaryAttentionComponent = attentionComponents[0] ?? null;
   const ok = healthyComponentCount === componentStatuses.length;
 
@@ -44,6 +45,7 @@ export function buildInternalStatusSnapshot<
       stoppedEnabledRuntimeComponents,
       componentStatusCounts,
       attentionComponents,
+      attentionComponentCount,
       primaryAttentionComponent,
     },
     components,

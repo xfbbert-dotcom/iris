@@ -64,6 +64,7 @@ describe("buildInternalStatusSnapshot", () => {
           { name: "reindex", status: "stopped" },
           { name: "answerDraft", status: "disabled" },
         ],
+        attentionComponentCount: 3,
         primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
       },
       components: {
@@ -118,6 +119,7 @@ describe("buildInternalStatusSnapshot", () => {
     });
 
     expect(snapshot.summary.attentionComponents).toEqual([]);
+    expect(snapshot.summary.attentionComponentCount).toBe(0);
     expect(snapshot.summary.primaryAttentionComponent).toBeNull();
   });
 });
