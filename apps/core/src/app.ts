@@ -130,6 +130,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     dependencies.answerDraftOrchestrator === undefined
       ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
           dependencies: { auditLog },
+          runtimeController,
         })
       : undefined;
   const answerDraftOrchestrator =

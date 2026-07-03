@@ -25,6 +25,7 @@ import {
   createPostgresDocumentSourceRegistry,
   type AsyncDocumentSourceRegistry,
 } from "../documents/postgres-document-source-registry.js";
+import type { DocumentSource } from "../documents/document-source-registry.js";
 import {
   createEmbeddingProfileRepository,
   type EmbeddingProfile,
@@ -70,6 +71,11 @@ export type AnswerDraftRuntimeDependencies = {
   auditLog?: AuditLog;
 };
 
+type RuntimeRetrievalGate = {
+  canReadDocuments(): boolean;
+  canRetrieveKnowledgeBase(): boolean;
+};
+
 type RuntimeEmbedding = {
   profile: EmbeddingProfile;
   embedder: EmbeddingProvider;
@@ -78,9 +84,11 @@ type RuntimeEmbedding = {
 export function createAnswerDraftRuntime({
   env = process.env,
   dependencies = {},
+  runtimeController,
 }: {
   env?: EnvLike;
   dependencies?: AnswerDraftRuntimeDependencies;
+  runtimeController?: RuntimeRetrievalGate;
 } = {}): AnswerDraftRuntime | undefined {
   const runtimeConfig = readAnswerDraftRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
@@ -140,6 +148,7 @@ export function createAnswerDraftRuntime({
         canReadDocument: createCanReadDocument({
           permissionMode: runtimeConfig.permissionMode,
           sourceRegistry,
+          runtimeController,
         }),
         auditLog: dependencies.auditLog,
       });
@@ -163,20 +172,24 @@ export function createAnswerDraftRuntime({
 function createCanReadDocument({
   permissionMode,
   sourceRegistry,
+  runtimeController,
 }: {
   permissionMode: AnswerDraftPermissionMode;
   sourceRegistry?: Pick<AsyncDocumentSourceRegistry, "findSourceById">;
+  runtimeController?: RuntimeRetrievalGate;
 }): (documentSourceId: string) => Promise<boolean> {
   if (permissionMode === "allow-indexed") {
     return async () => true;
   }
 
-  return (documentSourceId) => canReadBySourcePolicy(documentSourceId, sourceRegistry);
+  return (documentSourceId) =>
+    canReadBySourcePolicy(documentSourceId, sourceRegistry, runtimeController);
 }
 
 async function canReadBySourcePolicy(
   documentSourceId: string,
   sourceRegistry: Pick<AsyncDocumentSourceRegistry, "findSourceById"> | undefined,
+  runtimeController: RuntimeRetrievalGate | undefined,
 ): Promise<boolean> {
   if (sourceRegistry === undefined) {
     return false;
@@ -187,11 +200,29 @@ async function canReadBySourcePolicy(
     return (
       source !== undefined &&
       source.canUseForAnswering &&
-      (source.permissionState === "unknown" || source.permissionState === "readable")
+      (source.permissionState === "unknown" || source.permissionState === "readable") &&
+      canUseSourceByRuntimeCapabilities(source, runtimeController)
     );
   } catch {
     return false;
   }
+}
+
+function canUseSourceByRuntimeCapabilities(
+  source: DocumentSource,
+  runtimeController: RuntimeRetrievalGate | undefined,
+): boolean {
+  if (runtimeController === undefined) {
+    return true;
+  }
+  if (source.sourceType === "group_visible_document") {
+    return runtimeController.canReadDocuments();
+  }
+  if (source.sourceType === "authorized_wiki_document") {
+    return runtimeController.canRetrieveKnowledgeBase();
+  }
+
+  return true;
 }
 
 async function resolveRuntimeEmbedding({

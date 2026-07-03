@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
+import type { GenerateAnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
 import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
@@ -257,6 +258,89 @@ describe("createAnswerDraftRuntime", () => {
         recordedAt: expect.any(Date),
       },
     ]);
+  });
+
+  it("filters answer draft fragments through runtime retrieval capabilities", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(async (_input: GenerateAnswerDraftInput) => ({
+        answerText: "Runtime draft",
+      })),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-group",
+          documentSourceId: "source-group",
+          text: "Group visible document text",
+        }),
+        fragment({
+          id: "fragment-wiki",
+          documentSourceId: "source-wiki",
+          text: "Knowledge base text",
+        }),
+        fragment({
+          id: "fragment-user",
+          documentSourceId: "source-user",
+          text: "User submitted text",
+        }),
+      ]),
+    };
+    const sources: Record<string, DocumentSource | undefined> = {
+      "source-group": source({
+        id: "source-group",
+        sourceType: "group_visible_document",
+        permissionState: "readable",
+      }),
+      "source-wiki": source({
+        id: "source-wiki",
+        sourceType: "authorized_wiki_document",
+        permissionState: "readable",
+      }),
+      "source-user": source({
+        id: "source-user",
+        sourceType: "user_submitted_document",
+        permissionState: "readable",
+      }),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async (id: string) => sources[id]),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => false),
+      canRetrieveKnowledgeBase: vi.fn(() => false),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What can Iris use?",
+      liveChatMessages: [],
+    });
+
+    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    expect(promptContext).not.toContain("Group visible document text");
+    expect(promptContext).not.toContain("Knowledge base text");
+    expect(promptContext).toContain("User submitted text");
+    expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-user"]);
+    expect(result?.deniedDocumentIds.sort()).toEqual(["source-group", "source-wiki"]);
+    expect(runtimeController.canReadDocuments).toHaveBeenCalled();
+    expect(runtimeController.canRetrieveKnowledgeBase).toHaveBeenCalled();
   });
 
   it("uses configured OpenAI-compatible embedding provider when dimensions are 6", async () => {

@@ -258,7 +258,10 @@ describe("answer draft runtime wiring", () => {
 
     buildApp({ auditLog, createAnswerDraftRuntime });
 
-    expect(createAnswerDraftRuntime).toHaveBeenCalledWith({ dependencies: { auditLog } });
+    expect(createAnswerDraftRuntime).toHaveBeenCalledWith({
+      dependencies: { auditLog },
+      runtimeController: expect.any(Object),
+    });
   });
 
   it("starts and closes an injected reindex worker runtime", async () => {
