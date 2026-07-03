@@ -207,6 +207,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     const degradedComponents = Object.entries(components)
       .filter(([, component]) => !component.ok)
       .map(([name]) => name);
+    const disabledComponents = Object.entries(components)
+      .filter(([, component]) => !component.enabled)
+      .map(([name]) => name);
 
     return {
       ok: healthyComponentCount === componentStatuses.length,
@@ -216,6 +219,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         healthyComponentCount,
         degradedComponentCount: componentStatuses.length - healthyComponentCount,
         degradedComponents,
+        enabledComponentCount: componentStatuses.length - disabledComponents.length,
+        disabledComponentCount: disabledComponents.length,
+        disabledComponents,
       },
       components,
     };
