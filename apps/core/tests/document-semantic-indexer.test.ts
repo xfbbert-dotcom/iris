@@ -110,4 +110,19 @@ describe("DocumentSemanticIndexer", () => {
       "embedding vector contains invalid value",
     );
   });
+
+  it("rejects empty embedding vectors before replacing fragments", async () => {
+    const fragments = { replaceFragmentsForSnapshot: vi.fn() };
+    const indexer = createDocumentSemanticIndexer({
+      chunker: createDocumentChunker(),
+      embedder: { embedTexts: vi.fn(async () => [[]]) },
+      fragments,
+      embeddingProfileId: "static-dev-6d",
+    });
+
+    await expect(indexer.indexSnapshot(snapshot())).rejects.toThrow(
+      "embedding vector must not be empty",
+    );
+    expect(fragments.replaceFragmentsForSnapshot).not.toHaveBeenCalled();
+  });
 });

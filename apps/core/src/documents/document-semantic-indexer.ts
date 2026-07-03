@@ -62,6 +62,9 @@ function validateEmbeddings(chunks: DocumentChunk[], embeddings: number[][]): vo
   }
 
   for (const vector of embeddings) {
+    if (vector.length === 0) {
+      throw new Error("embedding vector must not be empty");
+    }
     for (const value of vector) {
       if (typeof value !== "number" || !Number.isFinite(value)) {
         throw new Error("embedding vector contains invalid value");
