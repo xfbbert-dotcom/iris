@@ -42,12 +42,12 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
     }
 
     this.seenKeys.add(job.idempotencyKey);
-    this.jobs.push(job);
+    this.jobs.push(cloneJob(job));
   }
 
   async dequeueBatch(limit: number): Promise<DocumentReindexJob[]> {
     const safeLimit = sanitizeLimit(limit);
-    return this.jobs.splice(0, safeLimit);
+    return this.jobs.splice(0, safeLimit).map(cloneJob);
   }
 
   async getPendingCount(): Promise<number> {
@@ -58,19 +58,19 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
     input: FailedDocumentReindexJobInput,
   ): Promise<FailedDocumentReindexJobResult> {
     const attempts = input.job.attempts + 1;
-    const failedJob = { ...input.job, attempts };
+    const failedJob = cloneJob({ ...input.job, attempts });
 
     if (attempts >= this.maxAttempts) {
       this.deadLetters.push({
         id: this.idGenerator(),
-        job: failedJob,
+        job: cloneJob(failedJob),
         errorMessage: input.errorMessage,
         failedAt: this.now(),
       });
       return { action: "dead_lettered", attempts };
     }
 
-    this.jobs.push(failedJob);
+    this.jobs.push(cloneJob(failedJob));
     return { action: "requeued", attempts };
   }
 
@@ -80,10 +80,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
 
   async listDeadLetters(input: { limit: number }): Promise<DocumentReindexDeadLetter[]> {
     const safeLimit = sanitizeLimit(input.limit);
-    return this.deadLetters.slice(0, safeLimit).map((item) => ({
-      ...item,
-      replayable: true,
-    }));
+    return this.deadLetters.slice(0, safeLimit).map(cloneDeadLetter);
   }
 
   async replayDeadLetter(
@@ -95,7 +92,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
     }
 
     const [item] = this.deadLetters.splice(index, 1);
-    this.jobs.push({ ...item.job, attempts: 0 });
+    this.jobs.push(cloneJob({ ...item.job, attempts: 0 }));
     return "replayed";
   }
 
@@ -149,6 +146,23 @@ function sanitizeLimit(value: number): number {
   }
 
   return Math.max(0, Math.floor(value));
+}
+
+function cloneJob(job: DocumentReindexJob): DocumentReindexJob {
+  return {
+    ...job,
+    enqueuedAt: new Date(job.enqueuedAt),
+  };
+}
+
+function cloneDeadLetter(deadLetter: DeadLetteredDocumentReindexJob): DocumentReindexDeadLetter {
+  return {
+    id: deadLetter.id,
+    job: cloneJob(deadLetter.job),
+    errorMessage: deadLetter.errorMessage,
+    failedAt: new Date(deadLetter.failedAt),
+    replayable: true,
+  };
 }
 
 function defaultIdGenerator(): string {

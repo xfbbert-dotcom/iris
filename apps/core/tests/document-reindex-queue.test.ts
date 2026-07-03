@@ -30,6 +30,19 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([second]);
   });
 
+  it("insulates queued jobs from caller mutations", async () => {
+    const queue = new InMemoryDocumentReindexQueue();
+    const job = jobFixture({ documentSnapshotId: "snapshot-original" });
+
+    await queue.enqueue(job);
+    job.documentSnapshotId = "snapshot-mutated";
+    job.enqueuedAt.setUTCFullYear(2030);
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([
+      jobFixture({ documentSnapshotId: "snapshot-original" }),
+    ]);
+  });
+
   it("treats non-finite dequeue limits as zero", async () => {
     const queue = new InMemoryDocumentReindexQueue();
     const job = jobFixture();
@@ -112,6 +125,34 @@ describe("InMemoryDocumentReindexQueue", () => {
     const job = jobFixture();
 
     await queue.handleFailedJob({ job, errorMessage: "embedding failed" });
+
+    await expect(queue.listDeadLetters({ limit: 20 })).resolves.toEqual([
+      {
+        id: "dlq-1",
+        job: { ...job, attempts: 1 },
+        errorMessage: "embedding failed",
+        failedAt: new Date("2026-07-02T01:05:00.000Z"),
+        replayable: true,
+      },
+    ]);
+  });
+
+  it("insulates stored DLQ entries from returned object mutations", async () => {
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+      now: () => new Date("2026-07-02T01:05:00.000Z"),
+    });
+    const job = jobFixture();
+
+    await queue.handleFailedJob({ job, errorMessage: "embedding failed" });
+    const [first] = await queue.listDeadLetters({ limit: 20 });
+    if (!("job" in first)) {
+      throw new Error("expected job dead letter");
+    }
+    first.job.documentSnapshotId = "snapshot-mutated";
+    first.job.enqueuedAt.setUTCFullYear(2030);
+    first.failedAt.setUTCFullYear(2030);
 
     await expect(queue.listDeadLetters({ limit: 20 })).resolves.toEqual([
       {
