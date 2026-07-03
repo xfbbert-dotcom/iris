@@ -98,6 +98,7 @@ describe("createDocumentSyncRuntime", () => {
     const snapshots = {
       insertSucceededSnapshot: vi.fn(),
       insertFailedSnapshot: vi.fn(),
+      findSnapshotById: vi.fn(async () => snapshot),
       listSnapshotsForSource: vi.fn(async () => [snapshot]),
       listSuccessfulSnapshotsMissingProfile: vi.fn(async () => []),
     };
@@ -430,6 +431,19 @@ describe("createDocumentSyncRuntime", () => {
     ).resolves.toEqual([snapshot]);
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
     expect(snapshots.listSnapshotsForSource).toHaveBeenCalledWith("source-1");
+    await expect(
+      runtime?.sources.getSnapshot({ sourceId: "source-1", snapshotId: "snapshot-1" }),
+    ).resolves.toEqual(snapshot);
+    expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
+    expect(snapshots.findSnapshotById).toHaveBeenCalledWith("snapshot-1");
+    snapshots.findSnapshotById.mockResolvedValueOnce({
+      ...snapshot,
+      id: "snapshot-2",
+      documentSourceId: "other-source",
+    });
+    await expect(
+      runtime?.sources.getSnapshot({ sourceId: "source-1", snapshotId: "snapshot-2" }),
+    ).resolves.toBeUndefined();
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();

@@ -241,6 +241,41 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/document-sync/sources/:sourceId/snapshots/:snapshotId", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const sourceId = readNonBlankId((request.params as { sourceId?: unknown }).sourceId);
+    const snapshotId = readNonBlankId((request.params as { snapshotId?: unknown }).snapshotId);
+    if (sourceId === undefined || snapshotId === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const snapshot = await documentSyncRuntime.sources.getSnapshot({
+        sourceId,
+        snapshotId,
+      });
+      if (snapshot === undefined) {
+        return reply.code(404).send({
+          ok: false,
+          error: "document_source_snapshot_not_found",
+        });
+      }
+
+      return {
+        ok: true,
+        snapshot: toDocumentSnapshotSummary(snapshot),
+      };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "document_source_snapshot_lookup_failed"
+      });
+    }
+  });
+
   app.get("/internal/document-sync/sources/:id/snapshots", async (request, reply) => {
     if (documentSyncRuntime === undefined) {
       return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
