@@ -1,5 +1,6 @@
 import type { ModelProvider } from "../agent/answer-draft-orchestrator.js";
 import type { ModelProviderConfig } from "../config/env.js";
+import { readPositiveSafeInteger } from "../config/numeric-guards.js";
 
 export type OpenAICompatibleModelProviderDependencies = {
   config: ModelProviderConfig;
@@ -18,10 +19,15 @@ export function createOpenAICompatibleModelProvider({
   config,
   fetch = globalThis.fetch,
 }: OpenAICompatibleModelProviderDependencies): ModelProvider {
+  const timeoutMs = readPositiveSafeInteger(
+    config.timeoutMs,
+    "model provider timeoutMs",
+  );
+
   return {
     async generateAnswerDraft(input) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
         const response = await fetch(joinBaseUrl(config.baseUrl, "/chat/completions"), {

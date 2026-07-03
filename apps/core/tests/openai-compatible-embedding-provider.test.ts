@@ -142,6 +142,23 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
       "embedding provider request timed out",
     );
   });
+
+  it("rejects invalid timeout configuration before requests can start", () => {
+    for (const timeoutMs of [
+      0,
+      1.5,
+      Number.POSITIVE_INFINITY,
+      Number.NaN,
+      9007199254740992,
+    ]) {
+      expect(() =>
+        createOpenAICompatibleEmbeddingProvider({
+          config: { ...config(), timeoutMs },
+          fetch: vi.fn(),
+        }),
+      ).toThrow("embedding provider timeoutMs must be a positive safe integer");
+    }
+  });
 });
 
 function config() {

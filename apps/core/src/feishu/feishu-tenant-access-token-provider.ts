@@ -1,3 +1,5 @@
+import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+
 export type FeishuTenantAccessTokenProvider = {
   getTenantAccessToken(): Promise<string>;
 };
@@ -27,6 +29,10 @@ export function createFeishuTenantAccessTokenProvider({
   timeoutMs = defaultTokenRequestTimeoutMs,
   now = () => new Date(),
 }: FeishuTenantAccessTokenProviderDependencies): FeishuTenantAccessTokenProvider {
+  const safeTimeoutMs = readPositiveSafeInteger(
+    timeoutMs,
+    "Feishu tenant access token timeoutMs",
+  );
   let cachedToken: CachedToken | undefined;
   let inFlightTokenRequest: Promise<string> | undefined;
 
@@ -45,7 +51,7 @@ export function createFeishuTenantAccessTokenProvider({
         appId,
         appSecret,
         fetch,
-        timeoutMs,
+        timeoutMs: safeTimeoutMs,
         cacheToken(token, expiresInSeconds) {
           cachedToken = {
             token,

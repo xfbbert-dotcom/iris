@@ -358,6 +358,25 @@ describe("FeishuDocumentBodyFetcher", () => {
       "Feishu document raw content response was not valid JSON",
     );
   });
+
+  it("rejects invalid timeout configuration before document requests can start", () => {
+    for (const timeoutMs of [
+      0,
+      1.5,
+      Number.POSITIVE_INFINITY,
+      Number.NaN,
+      9007199254740992,
+    ]) {
+      expect(() =>
+        createFeishuDocumentBodyFetcher({
+          baseUrl: "https://open.feishu.cn",
+          tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+          fetch: vi.fn(),
+          timeoutMs,
+        }),
+      ).toThrow("Feishu document fetch timeoutMs must be a positive safe integer");
+    }
+  });
 });
 
 function source(overrides: Partial<DocumentSource> = {}): DocumentSource {

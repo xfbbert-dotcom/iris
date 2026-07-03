@@ -191,6 +191,26 @@ describe("FeishuTenantAccessTokenProvider", () => {
       "Feishu tenant access token response did not include tenant_access_token",
     );
   });
+
+  it("rejects invalid timeout configuration before token requests can start", () => {
+    for (const timeoutMs of [
+      0,
+      1.5,
+      Number.POSITIVE_INFINITY,
+      Number.NaN,
+      9007199254740992,
+    ]) {
+      expect(() =>
+        createFeishuTenantAccessTokenProvider({
+          baseUrl: "https://open.feishu.cn",
+          appId: "app-id",
+          appSecret: "app-secret",
+          fetch: vi.fn(),
+          timeoutMs,
+        }),
+      ).toThrow("Feishu tenant access token timeoutMs must be a positive safe integer");
+    }
+  });
 });
 
 function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {}): Response {

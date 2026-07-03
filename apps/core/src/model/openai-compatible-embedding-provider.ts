@@ -1,5 +1,6 @@
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 import type { EmbeddingProviderConfig } from "../config/env.js";
+import { readPositiveSafeInteger } from "../config/numeric-guards.js";
 
 export type OpenAICompatibleEmbeddingProviderDependencies = {
   config: EmbeddingProviderConfig;
@@ -10,6 +11,11 @@ export function createOpenAICompatibleEmbeddingProvider({
   config,
   fetch = globalThis.fetch,
 }: OpenAICompatibleEmbeddingProviderDependencies): EmbeddingProvider {
+  const timeoutMs = readPositiveSafeInteger(
+    config.timeoutMs,
+    "embedding provider timeoutMs",
+  );
+
   return {
     async embedTexts(texts) {
       if (texts.length === 0) {
@@ -17,7 +23,7 @@ export function createOpenAICompatibleEmbeddingProvider({
       }
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
         const response = await fetch(joinBaseUrl(config.baseUrl, "/embeddings"), {

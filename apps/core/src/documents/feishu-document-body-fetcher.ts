@@ -1,6 +1,7 @@
 import type { DocumentBodyFetcher, DocumentBodyFetchResult } from "./document-sync-pipeline.js";
 import type { DocumentSource, DocumentSourceType } from "./document-source-registry.js";
 import type { FeishuTenantAccessTokenProvider } from "../feishu/feishu-tenant-access-token-provider.js";
+import { readPositiveSafeInteger } from "../config/numeric-guards.js";
 
 export type FeishuDocumentBodyFetcherDependencies = {
   baseUrl: string;
@@ -54,6 +55,11 @@ export function createFeishuDocumentBodyFetcher({
   timeoutMs = DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS,
   now = () => new Date(),
 }: FeishuDocumentBodyFetcherDependencies): DocumentBodyFetcher {
+  const safeTimeoutMs = readPositiveSafeInteger(
+    timeoutMs,
+    "Feishu document fetch timeoutMs",
+  );
+
   return {
     async fetch(source: DocumentSource): Promise<DocumentBodyFetchResult> {
       assertSupportedSourceType(source.sourceType);
@@ -75,7 +81,7 @@ export function createFeishuDocumentBodyFetcher({
           wikiNodeToken,
           tenantAccessToken,
           fetch,
-          timeoutMs,
+          timeoutMs: safeTimeoutMs,
         });
       }
 
@@ -88,7 +94,7 @@ export function createFeishuDocumentBodyFetcher({
           method: "GET",
           headers: { authorization: `Bearer ${tenantAccessToken}` },
         },
-        timeoutMs,
+        timeoutMs: safeTimeoutMs,
         timeoutMessage: "Feishu document raw content request timed out",
         jsonErrorMessage: "Feishu document raw content response was not valid JSON",
       });

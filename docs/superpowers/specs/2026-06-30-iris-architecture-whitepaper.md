@@ -675,6 +675,8 @@ Required architectural response:
 
 - Positive integer environment settings must also be safe JavaScript integers.
 - Unsafe integers must be rejected during config loading with explicit errors.
+- External I/O adapters must re-validate timeout values at construction time so
+  direct dependency injection cannot bypass environment validation.
 - Validation should not invent product-specific business caps unless a separate architecture decision calls for them.
 
 Evolution signal:
