@@ -19,9 +19,11 @@ export type EmbeddingProviderConfig = {
   timeoutMs: number;
 };
 
+export type AnswerDraftPermissionMode = "allow-indexed" | "source-policy";
+
 export type AnswerDraftRuntimeConfig =
   | { enabled: false }
-  | { enabled: true; permissionMode: "allow-indexed" };
+  | { enabled: true; permissionMode: AnswerDraftPermissionMode };
 
 export type ReindexWorkerRuntimeConfig =
   | { enabled: false }
@@ -125,7 +127,7 @@ export function readAnswerDraftRuntimeConfig(
     "IRIS_INTERNAL_DRAFT_PERMISSION_MODE",
     env.IRIS_INTERNAL_DRAFT_PERMISSION_MODE,
   );
-  if (permissionMode !== "allow-indexed") {
+  if (permissionMode !== "allow-indexed" && permissionMode !== "source-policy") {
     throw new Error(`Unsupported IRIS_INTERNAL_DRAFT_PERMISSION_MODE: ${permissionMode}`);
   }
 

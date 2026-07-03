@@ -210,6 +210,18 @@ describe("readAnswerDraftRuntimeConfig", () => {
     });
   });
 
+  it("reads enabled source-policy runtime config", () => {
+    expect(
+      readAnswerDraftRuntimeConfig({
+        IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS: " true ",
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: " source-policy ",
+      }),
+    ).toEqual({
+      enabled: true,
+      permissionMode: "source-policy",
+    });
+  });
+
   it("requires permission mode when runtime is enabled", () => {
     expect(() =>
       readAnswerDraftRuntimeConfig({ IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS: "true" }),

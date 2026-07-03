@@ -3,6 +3,7 @@ import {
   readAnswerDraftRuntimeConfig,
   readEmbeddingProviderConfig,
   readModelProviderConfig,
+  type AnswerDraftPermissionMode,
   type EmbeddingProviderConfig,
   type EnvLike,
   type ModelProviderConfig,
@@ -19,6 +20,10 @@ import {
   type DocumentFragmentRepository,
   type Queryable,
 } from "../documents/document-fragment-repository.js";
+import {
+  createPostgresDocumentSourceRegistry,
+  type AsyncDocumentSourceRegistry,
+} from "../documents/postgres-document-source-registry.js";
 import {
   createEmbeddingProfileRepository,
   type EmbeddingProfile,
@@ -44,6 +49,9 @@ export type AnswerDraftRuntimeDependencies = {
     queryable: Queryable;
     embeddingProfiles: Pick<EmbeddingProfileRepository, "getProfileById">;
   }) => Pick<DocumentFragmentRepository, "searchSimilarFragments">;
+  createDocumentSourceRegistry?: (dependencies: {
+    queryable: Queryable;
+  }) => Pick<AsyncDocumentSourceRegistry, "findSourceById">;
   createConversationMessageRepository?: (dependencies: {
     queryable: ConversationMessageQueryable;
   }) => Pick<ConversationMessageRepository, "listRecentByChat">;
@@ -84,6 +92,12 @@ export function createAnswerDraftRuntime({
 
   const createPool = dependencies.createPostgresPool ?? createPostgresPool;
   const createFragments = dependencies.createDocumentFragmentRepository ?? createDocumentFragmentRepository;
+  const createSources =
+    dependencies.createDocumentSourceRegistry ??
+    (({ queryable }: { queryable: Queryable }) =>
+      createPostgresDocumentSourceRegistry(
+        queryable as Parameters<typeof createPostgresDocumentSourceRegistry>[0],
+      ));
   const createConversationMessages =
     dependencies.createConversationMessageRepository ?? createPostgresConversationMessageRepository;
   const createLiveChatContext =
@@ -100,6 +114,10 @@ export function createAnswerDraftRuntime({
   const pool = createPool(readDatabaseConfig(env));
   const profiles = createProfiles({ queryable: pool });
   const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
+  const sourceRegistry =
+    runtimeConfig.permissionMode === "source-policy"
+      ? createSources({ queryable: pool })
+      : undefined;
   const conversationMessages = createConversationMessages({ queryable: pool });
   const liveChatContextProvider = createLiveChatContext({ repository: conversationMessages });
   const model = createModel(modelConfig);
@@ -117,7 +135,10 @@ export function createAnswerDraftRuntime({
         embeddingProfileId: runtimeEmbedding.profile.id,
         embedder: runtimeEmbedding.embedder,
         fragments,
-        canReadDocument: async () => true,
+        canReadDocument: createCanReadDocument({
+          permissionMode: runtimeConfig.permissionMode,
+          sourceRegistry,
+        }),
       });
 
       return createAnswerDraftOrchestrator({
@@ -134,6 +155,40 @@ export function createAnswerDraftRuntime({
       return pool.end();
     },
   };
+}
+
+function createCanReadDocument({
+  permissionMode,
+  sourceRegistry,
+}: {
+  permissionMode: AnswerDraftPermissionMode;
+  sourceRegistry?: Pick<AsyncDocumentSourceRegistry, "findSourceById">;
+}): (documentSourceId: string) => Promise<boolean> {
+  if (permissionMode === "allow-indexed") {
+    return async () => true;
+  }
+
+  return (documentSourceId) => canReadBySourcePolicy(documentSourceId, sourceRegistry);
+}
+
+async function canReadBySourcePolicy(
+  documentSourceId: string,
+  sourceRegistry: Pick<AsyncDocumentSourceRegistry, "findSourceById"> | undefined,
+): Promise<boolean> {
+  if (sourceRegistry === undefined) {
+    return false;
+  }
+
+  try {
+    const source = await sourceRegistry.findSourceById(documentSourceId);
+    return (
+      source !== undefined &&
+      source.canUseForAnswering &&
+      (source.permissionState === "unknown" || source.permissionState === "readable")
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function resolveRuntimeEmbedding({

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
+import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
 import { createAnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
 
@@ -120,6 +122,106 @@ describe("createAnswerDraftRuntime", () => {
         question: "What changed?",
       }),
     );
+  });
+
+  it("filters answer draft fragments through local source policy", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(
+        async (_input: { question: string; promptContext: string }) => ({
+          answerText: "Runtime draft",
+        }),
+      ),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-allowed",
+          documentSourceId: "source-allowed",
+          text: "Allowed text",
+        }),
+        fragment({
+          id: "fragment-disabled",
+          documentSourceId: "source-disabled",
+          text: "Disabled text",
+        }),
+        fragment({
+          id: "fragment-denied",
+          documentSourceId: "source-denied",
+          text: "Denied text",
+        }),
+        fragment({
+          id: "fragment-stale",
+          documentSourceId: "source-stale",
+          text: "Stale text",
+        }),
+        fragment({
+          id: "fragment-missing",
+          documentSourceId: "source-missing",
+          text: "Missing text",
+        }),
+        fragment({
+          id: "fragment-error",
+          documentSourceId: "source-error",
+          text: "Error text",
+        }),
+      ]),
+    };
+    const sources: Record<string, DocumentSource | undefined> = {
+      "source-allowed": source({ id: "source-allowed", permissionState: "readable" }),
+      "source-disabled": source({
+        id: "source-disabled",
+        permissionState: "readable",
+        canUseForAnswering: false,
+      }),
+      "source-denied": source({ id: "source-denied", permissionState: "denied" }),
+      "source-stale": source({ id: "source-stale", permissionState: "stale" }),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async (id: string) => {
+        if (id === "source-error") {
+          throw new Error("registry unavailable");
+        }
+        return sources[id];
+      }),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What can Iris use?",
+      liveChatMessages: [],
+    });
+
+    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    expect(promptContext).toContain("Allowed text");
+    expect(promptContext).not.toContain("Disabled text");
+    expect(promptContext).not.toContain("Denied text");
+    expect(promptContext).not.toContain("Stale text");
+    expect(promptContext).not.toContain("Missing text");
+    expect(promptContext).not.toContain("Error text");
+    expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-allowed"]);
+    expect(result?.deniedDocumentIds.sort()).toEqual([
+      "source-denied",
+      "source-disabled",
+      "source-error",
+      "source-missing",
+      "source-stale",
+    ]);
   });
 
   it("uses configured OpenAI-compatible embedding provider when dimensions are 6", async () => {
@@ -306,6 +408,24 @@ describe("createAnswerDraftRuntime", () => {
   });
 });
 
+function fragment(
+  overrides: Partial<RetrievedDocumentFragment> = {},
+): RetrievedDocumentFragment {
+  return {
+    id: "fragment-1",
+    documentSourceId: "source-1",
+    documentSnapshotId: "snapshot-1",
+    sourceUri: "https://example.com/doc",
+    chunkIndex: 0,
+    text: "Indexed text",
+    contentHash: "hash",
+    embedding: [1, 0, 0, 0, 0, 0],
+    embeddingProfileId: "static-dev-6d",
+    createdAt: new Date("2026-07-02T01:00:00.000Z"),
+    ...overrides,
+  };
+}
+
 function profile(overrides: Partial<EmbeddingProfile> = {}): EmbeddingProfile {
   return {
     id: "static-dev-6d",
@@ -315,6 +435,22 @@ function profile(overrides: Partial<EmbeddingProfile> = {}): EmbeddingProfile {
     displayName: "Static development embeddings (6d)",
     status: "active",
     createdAt: new Date("2026-07-02T01:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function source(overrides: Partial<DocumentSource> = {}): DocumentSource {
+  return {
+    id: "source-1",
+    sourceType: "group_visible_document",
+    sourceUri: "https://example.com/doc",
+    permissionState: "unknown",
+    syncState: "synced",
+    canUseForAnswering: true,
+    canUseForKnowledgeDrafts: true,
+    createdAt: new Date("2026-07-01T01:00:00.000Z"),
+    updatedAt: new Date("2026-07-01T01:00:00.000Z"),
+    evidence: [],
     ...overrides,
   };
 }
