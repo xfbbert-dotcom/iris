@@ -21,6 +21,30 @@ describe("InMemoryAuditLog", () => {
     ]);
   });
 
+  it("clones recorded events so caller mutation cannot change history", async () => {
+    const auditLog = new InMemoryAuditLog();
+    const event = {
+      type: "permission_guard_error" as const,
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+      message: "original",
+    };
+
+    await auditLog.record(event);
+    event.documentId = "source-mutated";
+    event.fragmentIds.push("fragment-mutated");
+    event.message = "mutated";
+
+    expect(auditLog.events).toEqual([
+      {
+        type: "permission_guard_error",
+        documentId: "source-1",
+        fragmentIds: ["fragment-1"],
+        message: "original",
+      },
+    ]);
+  });
+
   it("rejects invalid max event limits", () => {
     expect(() => new InMemoryAuditLog({ maxEvents: 0 })).toThrow(
       "maxEvents must be a positive integer",

@@ -25,7 +25,10 @@ export class InMemoryAuditLog implements AuditLog {
   }
 
   async record(event: AuditEvent): Promise<void> {
-    this.events.push(event);
+    this.events.push({
+      ...event,
+      fragmentIds: [...event.fragmentIds],
+    });
     const overflow = this.events.length - this.maxEvents;
     if (overflow > 0) {
       this.events.splice(0, overflow);
