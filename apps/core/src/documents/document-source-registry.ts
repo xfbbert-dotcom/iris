@@ -90,6 +90,7 @@ export interface DocumentSourceRegistry {
   findSourceById(id: string): DocumentSource | undefined;
   findSourceByUri(sourceUri: string): DocumentSource | undefined;
   listSourcesUsableForAnswering(): DocumentSource[];
+  listSourcesByAnsweringEnabled(enabled: boolean): DocumentSource[];
   listSourcesByGroupId(groupId: string): DocumentSource[];
   listSourcesByAuthorizedSpaceId(spaceId: string): DocumentSource[];
   listSourcesBySubmittingUserId(userId: string): DocumentSource[];
@@ -255,9 +256,15 @@ export function createDocumentSourceRegistry(
     },
 
     listSourcesUsableForAnswering() {
+      return this.listSourcesByAnsweringEnabled(true);
+    },
+
+    listSourcesByAnsweringEnabled(enabled) {
       return cloneSources(
         sortSources(
-          Array.from(sourcesById.values()).filter((source) => source.canUseForAnswering),
+          Array.from(sourcesById.values()).filter(
+            (source) => source.canUseForAnswering === enabled,
+          ),
         ),
       );
     },

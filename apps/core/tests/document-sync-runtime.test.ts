@@ -83,6 +83,9 @@ describe("createDocumentSyncRuntime", () => {
       listSourcesByAuthorizedSpaceId: vi.fn(async () => [inventorySource]),
       listSourcesBySubmittingUserId: vi.fn(async () => [userSubmittedSource]),
       listSourcesUsableForAnswering: vi.fn(async () => [inventorySource, userSubmittedSource]),
+      listSourcesByAnsweringEnabled: vi.fn(async (enabled: boolean) =>
+        enabled ? [inventorySource, userSubmittedSource] : [],
+      ),
       setAnsweringEnabled: vi.fn(async () => ({
         ...inventorySource,
         canUseForAnswering: false,
@@ -418,7 +421,11 @@ describe("createDocumentSyncRuntime", () => {
     await expect(
       runtime?.sources.list({ limit: 1, usableForAnswering: true }),
     ).resolves.toEqual([inventorySource]);
-    expect(documentSources.listSourcesUsableForAnswering).toHaveBeenCalledOnce();
+    expect(documentSources.listSourcesByAnsweringEnabled).toHaveBeenCalledWith(true);
+    await expect(
+      runtime?.sources.list({ limit: 1, usableForAnswering: false }),
+    ).resolves.toEqual([]);
+    expect(documentSources.listSourcesByAnsweringEnabled).toHaveBeenCalledWith(false);
     await expect(runtime?.sources.get("source-1")).resolves.toEqual(inventorySource);
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
     await expect(

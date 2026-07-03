@@ -1809,6 +1809,41 @@ describe("document sync source inventory API", () => {
     });
   });
 
+  it("lists document sources by disabled answering policy", async () => {
+    const disabledSource = {
+      ...authorizedWikiSource(),
+      canUseForAnswering: false,
+    };
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(async () => [disabledSource]),
+        get: vi.fn(),
+        updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
+        getSnapshot: vi.fn(),
+        getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?usableForAnswering=false",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().sources).toHaveLength(1);
+    expect(response.json().sources[0].canUseForAnswering).toBe(false);
+    expect(runtime.sources.list).toHaveBeenCalledWith({
+      limit: 20,
+      usableForAnswering: false,
+    });
+  });
+
   it("rejects source inventory requests with multiple filters", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,

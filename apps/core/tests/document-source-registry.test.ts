@@ -616,6 +616,13 @@ describe("createDocumentSourceRegistry", () => {
     expect(registry.listSourcesUsableForAnswering().map((source) => source.id)).not.toContain(
       userSource.id,
     );
+    expect(registry.listSourcesByAnsweringEnabled(false).map((source) => source.id)).toEqual([
+      userSource.id,
+    ]);
+    expect(registry.listSourcesByAnsweringEnabled(true).map((source) => source.id)).toEqual([
+      groupSource.id,
+      wikiSource.id,
+    ]);
   });
 
   it("filters sources by evidence from repeated registrations", () => {

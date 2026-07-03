@@ -104,7 +104,7 @@ type DocumentSourceListQuery = {
   groupId?: string;
   authorizedSpaceId?: string;
   submittedByUserId?: string;
-  usableForAnswering?: true;
+  usableForAnswering?: boolean;
   includeLatestSnapshot?: true;
 };
 
@@ -1119,7 +1119,7 @@ function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery |
     (groupId === undefined && value.groupId !== undefined) ||
     (authorizedSpaceId === undefined && value.authorizedSpaceId !== undefined) ||
     (submittedByUserId === undefined && value.submittedByUserId !== undefined) ||
-    usableForAnswering === false ||
+    usableForAnswering === "invalid" ||
     includeLatestSnapshot === false
   ) {
     return undefined;
@@ -1159,12 +1159,20 @@ function parseDocumentSourceType(value: unknown): DocumentSourceType | false | u
   return isDocumentSourceType(sourceType) ? sourceType : false;
 }
 
-function parseUsableForAnswering(value: unknown): true | false | undefined {
+function parseUsableForAnswering(value: unknown): boolean | "invalid" | undefined {
   if (value === undefined) {
     return undefined;
   }
 
-  return value === "true" ? true : false;
+  if (value === "true" || value === true) {
+    return true;
+  }
+
+  if (value === "false" || value === false) {
+    return false;
+  }
+
+  return "invalid";
 }
 
 function parseIncludeLatestSnapshot(value: unknown): true | false | undefined {

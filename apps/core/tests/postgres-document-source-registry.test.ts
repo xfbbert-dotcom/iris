@@ -136,7 +136,7 @@ function createFakePool(options: {
     return { rows: [] };
   });
   const client = { query, release };
-  const pool = { connect: vi.fn(async () => client) };
+  const pool = { connect: vi.fn(async () => client), query };
 
   return {
     pool: pool as unknown as pg.Pool,
@@ -433,6 +433,22 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
       "can_use_for_answering = case when permission_state = 'denied' then false else $2 end",
     );
     expect(update?.values).toEqual(["source-1", true, now]);
+  });
+
+  it("filters sources by answering enabled state", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({ can_use_for_answering: false }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await expect(registry.listSourcesByAnsweringEnabled(false)).resolves.toHaveLength(1);
+
+    const sourceSelect = fake.queries.find((query) =>
+      normalizeSql(query.sql).startsWith("select * from document_sources"),
+    );
+    expect(sourceSelect).toBeDefined();
+    expect(normalizeSql(sourceSelect?.sql ?? "")).toContain("can_use_for_answering = $1");
+    expect(sourceSelect?.values).toEqual([false]);
   });
 });
 

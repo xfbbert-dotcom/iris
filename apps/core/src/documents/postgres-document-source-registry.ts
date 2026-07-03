@@ -32,6 +32,7 @@ export interface AsyncDocumentSourceRegistry {
   findSourceById(id: string): Promise<DocumentSource | undefined>;
   findSourceByUri(sourceUri: string): Promise<DocumentSource | undefined>;
   listSourcesUsableForAnswering(): Promise<DocumentSource[]>;
+  listSourcesByAnsweringEnabled(enabled: boolean): Promise<DocumentSource[]>;
   listSourcesByGroupId(groupId: string): Promise<DocumentSource[]>;
   listSourcesByAuthorizedSpaceId(spaceId: string): Promise<DocumentSource[]>;
   listSourcesBySubmittingUserId(userId: string): Promise<DocumentSource[]>;
@@ -245,7 +246,11 @@ returning *
     },
 
     listSourcesUsableForAnswering() {
-      return fetchSources(pool, "can_use_for_answering = true", []);
+      return this.listSourcesByAnsweringEnabled(true);
+    },
+
+    listSourcesByAnsweringEnabled(enabled) {
+      return fetchSources(pool, "can_use_for_answering = $1", [enabled]);
     },
 
     listSourcesByGroupId(groupId) {

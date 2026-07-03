@@ -111,7 +111,7 @@ export type DocumentSourceInventoryListInput = {
   groupId?: string;
   authorizedSpaceId?: string;
   submittedByUserId?: string;
-  usableForAnswering?: true;
+  usableForAnswering?: boolean;
 };
 
 export type DocumentSourcePolicyUpdateInput = {
@@ -170,6 +170,7 @@ type DocumentSyncRuntimeDocumentSources = DocumentSyncRunnerRegistry &
     | "listSourcesByAuthorizedSpaceId"
     | "listSourcesBySubmittingUserId"
     | "listSourcesUsableForAnswering"
+    | "listSourcesByAnsweringEnabled"
     | "setAnsweringEnabled"
     | "setKnowledgeDraftsEnabled"
   >;
@@ -457,8 +458,8 @@ function listDocumentSources(
   if (input.submittedByUserId !== undefined) {
     return documentSources.listSourcesBySubmittingUserId(input.submittedByUserId);
   }
-  if (input.usableForAnswering === true) {
-    return documentSources.listSourcesUsableForAnswering();
+  if (input.usableForAnswering !== undefined) {
+    return documentSources.listSourcesByAnsweringEnabled(input.usableForAnswering);
   }
 
   return documentSources.listSources();
