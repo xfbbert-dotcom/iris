@@ -79,6 +79,20 @@ describe("RedisDocumentSyncQueue", () => {
     expect(parseDocumentSyncJob(serializeDocumentSyncJob(syncJob))).toEqual(syncJob);
   });
 
+  it("normalizes queued job ids when parsing Redis payloads", () => {
+    expect(
+      parseDocumentSyncJob(
+        JSON.stringify({
+          idempotencyKey: " document-sync:source-1 ",
+          documentSourceId: " source-1 ",
+          reason: "discovered_group_document",
+          enqueuedAt: "2026-07-03T01:00:00.000Z",
+          attempts: 0,
+        }),
+      ),
+    ).toEqual(job());
+  });
+
   it("round-trips manual source sync jobs through JSON", () => {
     const syncJob = job({ reason: "manual_source_sync" });
 

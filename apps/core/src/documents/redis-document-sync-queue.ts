@@ -205,7 +205,7 @@ export function parseDocumentSyncJob(payload: string): DocumentSyncJob {
 }
 
 function readString(value: unknown): string {
-  return typeof value === "string" ? value : "";
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function readOptionalNonNegativeInteger(value: unknown): number | null | undefined {
