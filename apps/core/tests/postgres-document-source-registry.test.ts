@@ -229,6 +229,50 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     expect(evidenceInsert?.values?.[5]).toBe("user-1");
   });
 
+  it("merges knowledge draft capability when registration upgrades an existing source", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "user_submitted_document",
+        authorized_space_id: null,
+        can_use_for_knowledge_drafts: false,
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/doc",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "can_use_for_knowledge_drafts = can_use_for_knowledge_drafts or $7",
+    );
+    expect(update?.values).toEqual([
+      "authorized_wiki_document",
+      null,
+      null,
+      null,
+      null,
+      "space-1",
+      true,
+      now,
+      "source-1",
+    ]);
+  });
+
   it("rolls back and releases the client when registration fails", async () => {
     const fake = createFakePool({
       failOnSql: (sql) =>

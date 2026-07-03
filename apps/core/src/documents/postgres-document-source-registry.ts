@@ -358,8 +358,9 @@ set
   origin_message_id = coalesce(origin_message_id, $4),
   submitted_by_user_id = coalesce(submitted_by_user_id, $5),
   authorized_space_id = coalesce(authorized_space_id, $6),
-  updated_at = $7
-where id = $8
+  can_use_for_knowledge_drafts = can_use_for_knowledge_drafts or $7,
+  updated_at = $8
+where id = $9
 `,
       [
         mergedSourceType,
@@ -368,6 +369,7 @@ where id = $8
         next.originMessageId ?? null,
         next.submittedByUserId ?? null,
         next.authorizedSpaceId ?? null,
+        next.canUseForKnowledgeDrafts,
         now,
         existing.id,
       ],
