@@ -117,7 +117,7 @@ describe("createAnswerDraftRuntime", () => {
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
       embeddingProfileId: "static-dev-6d",
       embedding: [1, 0, 0, 0, 0, 0],
-      limit: 8,
+      limit: 24,
     });
     expect(model.generateAnswerDraft).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -483,7 +483,7 @@ describe("createAnswerDraftRuntime", () => {
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
       embeddingProfileId: "openai-compatible:text-embedding-small:6",
       embedding: [0, 1, 0, 0, 0, 0],
-      limit: 8,
+      limit: 24,
     });
   });
 
@@ -579,7 +579,7 @@ describe("createAnswerDraftRuntime", () => {
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
       embeddingProfileId: "openai-compatible:text-embedding-small:1536",
       embedding: vector,
-      limit: 8,
+      limit: 24,
     });
   });
 

@@ -58,7 +58,7 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
       embeddingProfileId: "static-dev-6d",
       embedding: [1, 0, 0, 0, 0, 0],
-      limit: 5,
+      limit: 15,
     });
     expect(canReadDocument).toHaveBeenCalledWith("source-allowed");
     expect(canReadDocument).toHaveBeenCalledWith("source-denied");
@@ -147,7 +147,7 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(canReadDocument).toHaveBeenCalledTimes(1);
   });
 
-  it("caps explicit fragment limits before searching similar fragments", async () => {
+  it("caps overfetched explicit fragment limits before searching similar fragments", async () => {
     const fragments = {
       searchSimilarFragments: vi.fn(async () => []),
     };
@@ -165,8 +165,69 @@ describe("DocumentRetrievalContextBuilder", () => {
     });
 
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 12 }),
+      expect.objectContaining({ limit: 36 }),
     );
+  });
+
+  it("overfetches before permission filtering and keeps only the requested allowed fragments", async () => {
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "denied-1",
+          documentSourceId: "source-denied-1",
+          chunkIndex: 0,
+          text: "Denied one",
+        }),
+        fragment({
+          id: "denied-2",
+          documentSourceId: "source-denied-2",
+          chunkIndex: 1,
+          text: "Denied two",
+        }),
+        fragment({
+          id: "allowed-1",
+          documentSourceId: "source-allowed-1",
+          chunkIndex: 2,
+          text: "Allowed one",
+        }),
+        fragment({
+          id: "allowed-2",
+          documentSourceId: "source-allowed-2",
+          chunkIndex: 3,
+          text: "Allowed two",
+        }),
+        fragment({
+          id: "allowed-3",
+          documentSourceId: "source-allowed-3",
+          chunkIndex: 4,
+          text: "Allowed three",
+        }),
+      ]),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments,
+      canReadDocument: vi.fn(async (documentId: string) => documentId.startsWith("source-allowed")),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "permission filtered docs",
+      fragmentLimit: 2,
+      liveChatMessages: [],
+    });
+
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 6 }),
+    );
+    expect(result.retrievedFragmentCount).toBe(5);
+    expect(result.deniedDocumentIds).toEqual(["source-denied-1", "source-denied-2"]);
+    expect(result.allowedFragments.map((item) => item.id)).toEqual(["allowed-1", "allowed-2"]);
+    expect(result.promptContext).toContain("Allowed one");
+    expect(result.promptContext).toContain("Allowed two");
+    expect(result.promptContext).not.toContain("Allowed three");
+    expect(result.promptContext).not.toContain("Denied one");
+    expect(result.promptContext).not.toContain("Denied two");
   });
 
   it("filters blank allowed fragments from prompt context and returned metadata", async () => {

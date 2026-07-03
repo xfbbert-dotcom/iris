@@ -12,6 +12,8 @@ import { assemblePromptContext, type LiveChatMessage } from "./context-assembly.
 
 const DEFAULT_FRAGMENT_LIMIT = 8;
 const MAX_FRAGMENT_LIMIT = 12;
+const CANDIDATE_FETCH_MULTIPLIER = 3;
+const MAX_CANDIDATE_FRAGMENT_LIMIT = MAX_FRAGMENT_LIMIT * CANDIDATE_FETCH_MULTIPLIER;
 
 export type QueryEmbeddingProvider = Pick<EmbeddingProvider, "embedTexts">;
 
@@ -63,10 +65,11 @@ export function createDocumentRetrievalContextBuilder({
       }
 
       const queryEmbedding = await embedQuery(input.queryText, embedder);
+      const candidateFragmentLimit = computeCandidateFragmentLimit(fragmentLimit);
       const retrievedFragments = await fragments.searchSimilarFragments({
         embeddingProfileId,
         embedding: queryEmbedding,
-        limit: fragmentLimit,
+        limit: candidateFragmentLimit,
       });
       const meaningfulFragments = retrievedFragments.filter((fragment) =>
         fragment.text.trim().length > 0,
@@ -82,7 +85,7 @@ export function createDocumentRetrievalContextBuilder({
       );
       const allowedFragments = meaningfulFragments.filter((fragment) =>
         allowedFragmentIds.has(fragment.id),
-      );
+      ).slice(0, fragmentLimit);
 
       return {
         promptContext: assemblePromptContext({
@@ -128,6 +131,10 @@ function sanitizeFragmentLimit(value: number | undefined): number {
   }
 
   return Math.min(MAX_FRAGMENT_LIMIT, Math.max(0, Math.floor(value)));
+}
+
+function computeCandidateFragmentLimit(fragmentLimit: number): number {
+  return Math.min(MAX_CANDIDATE_FRAGMENT_LIMIT, fragmentLimit * CANDIDATE_FETCH_MULTIPLIER);
 }
 
 function toPermissionGuardFragment(fragment: RetrievedDocumentFragment): PermissionGuardFragment {
