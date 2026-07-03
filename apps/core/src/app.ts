@@ -241,6 +241,42 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/document-sync/sources/:id/snapshots/latest", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const sourceId = readNonBlankId((request.params as { id?: unknown }).id);
+    const previewLength = parseSnapshotPreviewLength(
+      (request.query as { previewLength?: unknown }).previewLength,
+    );
+    if (sourceId === undefined || previewLength === false) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const snapshot = await documentSyncRuntime.sources.getLatestSnapshot({ sourceId });
+      if (snapshot === undefined) {
+        return reply.code(404).send({
+          ok: false,
+          error: "document_source_snapshot_not_found",
+        });
+      }
+
+      return {
+        ok: true,
+        snapshot: toDocumentSnapshotSummary(snapshot, {
+          ...(previewLength === undefined ? {} : { previewLength }),
+        }),
+      };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "document_source_snapshot_lookup_failed"
+      });
+    }
+  });
+
   app.get("/internal/document-sync/sources/:sourceId/snapshots/:snapshotId", async (request, reply) => {
     if (documentSyncRuntime === undefined) {
       return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });

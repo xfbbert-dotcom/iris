@@ -99,6 +99,7 @@ describe("createDocumentSyncRuntime", () => {
       insertSucceededSnapshot: vi.fn(),
       insertFailedSnapshot: vi.fn(),
       findSnapshotById: vi.fn(async () => snapshot),
+      findLatestSnapshotForSource: vi.fn(async () => snapshot),
       listSnapshotsForSource: vi.fn(async () => [snapshot]),
       listSuccessfulSnapshotsMissingProfile: vi.fn(async () => []),
     };
@@ -444,6 +445,11 @@ describe("createDocumentSyncRuntime", () => {
     await expect(
       runtime?.sources.getSnapshot({ sourceId: "source-1", snapshotId: "snapshot-2" }),
     ).resolves.toBeUndefined();
+    await expect(
+      runtime?.sources.getLatestSnapshot({ sourceId: "source-1" }),
+    ).resolves.toEqual(snapshot);
+    expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
+    expect(snapshots.findLatestSnapshotForSource).toHaveBeenCalledWith("source-1");
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();
