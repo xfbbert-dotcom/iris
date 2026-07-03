@@ -204,6 +204,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     };
     const componentStatuses = Object.values(components);
     const healthyComponentCount = componentStatuses.filter((component) => component.ok).length;
+    const degradedComponents = Object.entries(components)
+      .filter(([, component]) => !component.ok)
+      .map(([name]) => name);
 
     return {
       ok: healthyComponentCount === componentStatuses.length,
@@ -212,6 +215,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         componentCount: componentStatuses.length,
         healthyComponentCount,
         degradedComponentCount: componentStatuses.length - healthyComponentCount,
+        degradedComponents,
       },
       components,
     };

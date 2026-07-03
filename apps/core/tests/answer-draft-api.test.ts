@@ -342,6 +342,7 @@ describe("GET /internal/status", () => {
         componentCount: 5,
         healthyComponentCount: 5,
         degradedComponentCount: 0,
+        degradedComponents: [],
       },
       components: {
         audit: {
@@ -424,6 +425,7 @@ describe("GET /internal/status", () => {
       componentCount: 5,
       healthyComponentCount: 4,
       degradedComponentCount: 1,
+      degradedComponents: ["eventWorker"],
     });
     expect(response.json().components.eventWorker).toEqual({
       ok: false,
