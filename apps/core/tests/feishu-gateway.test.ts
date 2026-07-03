@@ -342,6 +342,38 @@ describe("FeishuGateway", () => {
     expect(onEnqueueError).toHaveBeenCalledWith(enqueueError);
   });
 
+  it("isolates enqueue error observers from Feishu acknowledgement handling", async () => {
+    const queue = new InMemoryEventQueue();
+    const enqueueError = new Error("redis unavailable");
+    const onEnqueueError = vi.fn(() => {
+      throw new Error("observer failed");
+    });
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => {
+        throw enqueueError;
+      }),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+      onEnqueueError,
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: {
+        header: {
+          event_id: "event-observer-failure",
+          event_type: "im.message.receive_v1",
+        },
+      },
+    });
+    await Promise.resolve();
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(onEnqueueError).toHaveBeenCalledWith(enqueueError);
+  });
+
   it("uses the legacy event queue only when no raw event queue is available", async () => {
     const queue = new InMemoryEventQueue();
     const rawEventQueue = { enqueue: vi.fn(async () => undefined) };

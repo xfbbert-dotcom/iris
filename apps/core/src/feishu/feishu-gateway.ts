@@ -127,10 +127,21 @@ function enqueueWithoutWaiting(
 ): void {
   try {
     void enqueue().catch((error: unknown) => {
-      onError?.(error);
+      reportEnqueueError(onError, error);
     });
   } catch (error) {
+    reportEnqueueError(onError, error);
+  }
+}
+
+function reportEnqueueError(
+  onError: EnqueueErrorHandler | undefined,
+  error: unknown,
+): void {
+  try {
     onError?.(error);
+  } catch {
+    // Observability hooks must not break Feishu callback acknowledgement.
   }
 }
 

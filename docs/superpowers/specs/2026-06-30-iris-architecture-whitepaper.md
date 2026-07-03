@@ -631,6 +631,23 @@ Evolution signal:
 
 If observability becomes more complex, Iris may introduce a dedicated telemetry adapter with bounded queues and explicit drop policies. That adapter must remain noncritical to event processing, document sync, and reindex polling.
 
+### 12.6 Feishu Gateway Enqueue Observer Failure
+
+Pressure:
+
+Feishu Gateway records queue persistence failures through an enqueue-error observer while preserving ack-first callback behavior. If that observer throws because app status capture, logging, or metrics code is broken, Iris must not create an unhandled rejection after acknowledging Feishu.
+
+Required architectural response:
+
+- Feishu Gateway must acknowledge valid callbacks independently of asynchronous queue persistence failures.
+- Queue persistence failures should still be reported to the observer with the original error.
+- Enqueue-error observers must be best effort and isolated from callback control flow.
+- A throwing observer must not produce an unhandled rejection or affect later callback handling.
+
+Evolution signal:
+
+If gateway observability grows beyond simple counters and snapshots, Iris may route gateway events through a dedicated telemetry adapter with bounded buffering and explicit drop policy. That adapter must remain noncritical to Feishu callback acknowledgement.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
