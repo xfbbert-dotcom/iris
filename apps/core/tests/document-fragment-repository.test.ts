@@ -198,6 +198,36 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
+  it("sanitizes non-finite vector search limits to zero", async () => {
+    const query = vi.fn(async (_sql: string, values?: unknown[]) => {
+      expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 0]);
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: Number.POSITIVE_INFINITY,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: Number.NaN,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects unsupported embedding dimensions", async () => {
     const repository = createDocumentFragmentRepository({
       queryable: queryableFrom(vi.fn(async () => ({ rows: [] }))),

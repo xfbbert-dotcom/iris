@@ -180,7 +180,7 @@ where f.embedding_profile_id = $1
 order by e.embedding <=> $2::vector asc
 limit $3
 `,
-        [input.embeddingProfileId, serializeVector(input.embedding), input.limit],
+        [input.embeddingProfileId, serializeVector(input.embedding), sanitizeLimit(input.limit)],
       );
 
       return result.rows.map(mapRetrievedFragmentRow);
@@ -206,6 +206,14 @@ select exists (
 
 export function serializeVector(vector: number[]): string {
   return `[${vector.join(",")}]`;
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 async function insertFragment(
