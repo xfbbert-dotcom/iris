@@ -353,6 +353,12 @@ describe("GET /internal/status", () => {
         runningEnabledRuntimeComponentCount: 2,
         stoppedEnabledRuntimeComponentCount: 1,
         stoppedEnabledRuntimeComponents: ["reindex"],
+        componentStatusCounts: {
+          healthy: 3,
+          disabled: 1,
+          degraded: 0,
+          stopped: 1,
+        },
       },
       components: {
         audit: {
@@ -449,6 +455,12 @@ describe("GET /internal/status", () => {
       runningEnabledRuntimeComponentCount: 1,
       stoppedEnabledRuntimeComponentCount: 1,
       stoppedEnabledRuntimeComponents: ["eventWorker"],
+      componentStatusCounts: {
+        healthy: 2,
+        disabled: 2,
+        degraded: 1,
+        stopped: 0,
+      },
     });
     expect(response.json().components.eventWorker).toEqual({
       status: "degraded",

@@ -53,6 +53,12 @@ describe("buildInternalStatusSnapshot", () => {
         runningEnabledRuntimeComponentCount: 1,
         stoppedEnabledRuntimeComponentCount: 2,
         stoppedEnabledRuntimeComponents: ["eventWorker", "reindex"],
+        componentStatusCounts: {
+          healthy: 2,
+          disabled: 1,
+          degraded: 1,
+          stopped: 1,
+        },
       },
       components: {
         audit: {

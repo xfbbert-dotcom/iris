@@ -18,6 +18,7 @@ export function buildInternalStatusSnapshot<
   const stoppedEnabledRuntimeComponents = enabledRuntimeComponents
     .filter(([, component]) => hasRunningStatus(component) && component.running === false)
     .map(([name]) => name);
+  const componentStatusCounts = countComponentStatuses(componentStatuses);
   const ok = healthyComponentCount === componentStatuses.length;
 
   return {
@@ -39,6 +40,7 @@ export function buildInternalStatusSnapshot<
         enabledRuntimeComponents.length - stoppedEnabledRuntimeComponents.length,
       stoppedEnabledRuntimeComponentCount: stoppedEnabledRuntimeComponents.length,
       stoppedEnabledRuntimeComponents,
+      componentStatusCounts,
     },
     components,
   };
@@ -73,6 +75,23 @@ function getInternalComponentStatus(component: {
   }
 
   return "healthy";
+}
+
+function countComponentStatuses(
+  components: Array<{ status: InternalComponentStatus }>,
+): Record<InternalComponentStatus, number> {
+  return components.reduce<Record<InternalComponentStatus, number>>(
+    (counts, component) => ({
+      ...counts,
+      [component.status]: counts[component.status] + 1,
+    }),
+    {
+      healthy: 0,
+      disabled: 0,
+      degraded: 0,
+      stopped: 0,
+    },
+  );
 }
 
 function hasRunningStatus(
