@@ -63,6 +63,8 @@ export function createDocumentRetrievalContextBuilder({
       );
       const allowedFragments = retrievedFragments.filter((fragment) =>
         allowedFragmentIds.has(fragment.id),
+      ).filter((fragment) =>
+        fragment.text.trim().length > 0,
       );
 
       return {

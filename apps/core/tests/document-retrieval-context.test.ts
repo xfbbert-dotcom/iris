@@ -119,6 +119,41 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(canReadDocument).toHaveBeenCalledTimes(1);
   });
 
+  it("filters blank allowed fragments from prompt context and returned metadata", async () => {
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: {
+        searchSimilarFragments: vi.fn(async () => [
+          fragment({
+            id: "blank-fragment",
+            documentSourceId: "source-1",
+            chunkIndex: 0,
+            text: " \n\t ",
+          }),
+          fragment({
+            id: "useful-fragment",
+            documentSourceId: "source-2",
+            chunkIndex: 1,
+            text: "Useful context",
+          }),
+        ]),
+      },
+      canReadDocument: vi.fn(async () => true),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "blank chunks",
+      liveChatMessages: [],
+    });
+
+    expect(result.retrievedFragmentCount).toBe(2);
+    expect(result.allowedFragments.map((item) => item.id)).toEqual(["useful-fragment"]);
+    expect(result.promptContext).toContain("Useful context");
+    expect(result.promptContext).not.toContain("blank-fragment");
+    expect(result.promptContext).not.toContain("> \n\t </document>");
+  });
+
   it("rejects missing query embedding", async () => {
     const builder = createDocumentRetrievalContextBuilder({
       embeddingProfileId: "static-dev-6d",
@@ -150,6 +185,7 @@ function fragment(overrides: {
   id: string;
   documentSourceId: string;
   chunkIndex: number;
+  text?: string;
 }) {
   return {
     documentSnapshotId: "snapshot-1",
