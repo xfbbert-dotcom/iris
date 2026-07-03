@@ -34,6 +34,9 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
     this.maxAttempts = sanitizeMaxAttempts(options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
     this.idGenerator = options.idGenerator ?? defaultIdGenerator;
     this.now = options.now ?? (() => new Date());
+    this.replayDeadLetter = this.replayDeadLetter.bind(this);
+    this.deleteDeadLetter = this.deleteDeadLetter.bind(this);
+    this.replayDeadLetters = this.replayDeadLetters.bind(this);
   }
 
   async enqueue(job: DocumentReindexJob): Promise<void> {

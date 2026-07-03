@@ -27,6 +27,34 @@ export function createInMemoryDocumentSyncQueue({
   const jobsByIdempotencyKey = new Map<string, DocumentSyncJob>();
   const deadLetters: DeadLetteredDocumentSyncJob[] = [];
 
+  const replayDeadLetter = async (
+    id: string,
+  ): Promise<"replayed" | "not_found" | "unsupported_legacy_item"> => {
+    const index = deadLetters.findIndex((deadLetter) => deadLetter.id === id);
+    if (index === -1) {
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+    }
+
+    const [deadLetter] = deadLetters.splice(index, 1);
+    jobsByIdempotencyKey.set(
+      deadLetter.job.idempotencyKey,
+      cloneJob({ ...deadLetter.job, attempts: 0 }),
+    );
+    return "replayed";
+  };
+
+  const deleteDeadLetter = async (
+    id: string,
+  ): Promise<"deleted" | "not_found" | "unsupported_legacy_item"> => {
+    const index = deadLetters.findIndex((deadLetter) => deadLetter.id === id);
+    if (index === -1) {
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+    }
+
+    deadLetters.splice(index, 1);
+    return "deleted";
+  };
+
   return {
     async enqueue(job) {
       if (jobsByIdempotencyKey.has(job.idempotencyKey)) {
@@ -76,29 +104,9 @@ export function createInMemoryDocumentSyncQueue({
       return deadLetters.slice(0, sanitizeLimit(input.limit)).map(cloneDeadLetter);
     },
 
-    async replayDeadLetter(id) {
-      const index = deadLetters.findIndex((deadLetter) => deadLetter.id === id);
-      if (index === -1) {
-        return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
-      }
+    replayDeadLetter,
 
-      const [deadLetter] = deadLetters.splice(index, 1);
-      jobsByIdempotencyKey.set(
-        deadLetter.job.idempotencyKey,
-        cloneJob({ ...deadLetter.job, attempts: 0 }),
-      );
-      return "replayed";
-    },
-
-    async deleteDeadLetter(id) {
-      const index = deadLetters.findIndex((deadLetter) => deadLetter.id === id);
-      if (index === -1) {
-        return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
-      }
-
-      deadLetters.splice(index, 1);
-      return "deleted";
-    },
+    deleteDeadLetter,
 
     async replayDeadLetters(input): Promise<ReplayDocumentSyncDeadLettersResult> {
       const result: ReplayDocumentSyncDeadLettersResult = {
@@ -108,7 +116,7 @@ export function createInMemoryDocumentSyncQueue({
       };
 
       for (const id of input.ids) {
-        const replayResult = await this.replayDeadLetter(id);
+        const replayResult = await replayDeadLetter(id);
         if (replayResult === "replayed") {
           result.replayedCount += 1;
         } else if (replayResult === "not_found") {

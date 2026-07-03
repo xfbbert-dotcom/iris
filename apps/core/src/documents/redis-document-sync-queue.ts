@@ -53,6 +53,38 @@ export function createRedisDocumentSyncQueue({
 }: RedisDocumentSyncQueueOptions): DocumentSyncQueue {
   const safeMaxAttempts = sanitizeMaxAttempts(maxAttempts);
 
+  const replayDeadLetter = async (
+    id: string,
+  ): Promise<"replayed" | "not_found" | "unsupported_legacy_item"> => {
+    const found = await findDeadLetterByStoredId(client, deadLetterKey, id);
+    if (found === undefined) {
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+    }
+
+    if (!("job" in found.deadLetter)) {
+      return "unsupported_legacy_item";
+    }
+
+    await client.lRem(deadLetterKey, 1, found.payload);
+    await enqueueSerializedJob(client, seenKey, queueKey, {
+      ...found.deadLetter.job,
+      attempts: 0,
+    });
+    return "replayed";
+  };
+
+  const deleteDeadLetter = async (
+    id: string,
+  ): Promise<"deleted" | "not_found" | "unsupported_legacy_item"> => {
+    const found = await findDeadLetterByStoredId(client, deadLetterKey, id);
+    if (found === undefined) {
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+    }
+
+    await client.lRem(deadLetterKey, 1, found.payload);
+    return "deleted";
+  };
+
   return {
     async enqueue(job) {
       await enqueueSerializedJob(client, seenKey, queueKey, job);
@@ -129,33 +161,9 @@ export function createRedisDocumentSyncQueue({
       return payloads.map((payload, index) => parseDeadLetterPayload(payload, index).deadLetter);
     },
 
-    async replayDeadLetter(id) {
-      const found = await findDeadLetterByStoredId(client, deadLetterKey, id);
-      if (found === undefined) {
-        return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
-      }
+    replayDeadLetter,
 
-      if (!("job" in found.deadLetter)) {
-        return "unsupported_legacy_item";
-      }
-
-      await client.lRem(deadLetterKey, 1, found.payload);
-      await enqueueSerializedJob(client, seenKey, queueKey, {
-        ...found.deadLetter.job,
-        attempts: 0,
-      });
-      return "replayed";
-    },
-
-    async deleteDeadLetter(id) {
-      const found = await findDeadLetterByStoredId(client, deadLetterKey, id);
-      if (found === undefined) {
-        return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
-      }
-
-      await client.lRem(deadLetterKey, 1, found.payload);
-      return "deleted";
-    },
+    deleteDeadLetter,
 
     async replayDeadLetters(input): Promise<ReplayDocumentSyncDeadLettersResult> {
       const result: ReplayDocumentSyncDeadLettersResult = {
@@ -165,7 +173,7 @@ export function createRedisDocumentSyncQueue({
       };
 
       for (const id of input.ids) {
-        const replayResult = await this.replayDeadLetter(id);
+        const replayResult = await replayDeadLetter(id);
         if (replayResult === "replayed") {
           result.replayedCount += 1;
         } else if (replayResult === "not_found") {

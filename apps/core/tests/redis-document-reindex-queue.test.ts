@@ -491,6 +491,43 @@ describe("RedisDocumentReindexQueue", () => {
       ),
     ).toThrow("Invalid document reindex job payload");
   });
+
+  it("batch replays Redis DLQ entries without relying on method binding", async () => {
+    const deadLetter = {
+      id: "dlq-1",
+      job: {
+        ...jobFixture({ attempts: 3 }),
+        enqueuedAt: "2026-07-02T01:00:00.000Z",
+      },
+      errorMessage: "embedding failed",
+      failedAt: "2026-07-02T01:05:00.000Z",
+    };
+    const payload = JSON.stringify(deadLetter);
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+    const replayDeadLetters = queue.replayDeadLetters;
+
+    await expect(replayDeadLetters({ ids: ["dlq-1"] })).resolves.toEqual({
+      replayedCount: 1,
+      notFoundIds: [],
+      unsupportedLegacyIds: [],
+    });
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+      arguments: [
+        jobFixture().idempotencyKey,
+        serializeDocumentReindexJob(jobFixture({ attempts: 0 })),
+      ],
+    });
+  });
 });
 
 function jobFixture(overrides: Partial<DocumentReindexJob> = {}): DocumentReindexJob {

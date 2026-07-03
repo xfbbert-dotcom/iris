@@ -254,6 +254,25 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.getDeadLetterCount()).resolves.toBe(0);
     await expect(queue.dequeueBatch(10)).resolves.toHaveLength(2);
   });
+
+  it("batch replays dead-lettered jobs without relying on method binding", async () => {
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+    });
+    await queue.handleFailedJob({
+      job: jobFixture(),
+      errorMessage: "embedding failed",
+    });
+    const replayDeadLetters = queue.replayDeadLetters;
+
+    await expect(replayDeadLetters({ ids: ["dlq-1"] })).resolves.toEqual({
+      replayedCount: 1,
+      notFoundIds: [],
+      unsupportedLegacyIds: [],
+    });
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([jobFixture()]);
+  });
 });
 
 function jobFixture(overrides: Partial<DocumentReindexJob> = {}): DocumentReindexJob {
