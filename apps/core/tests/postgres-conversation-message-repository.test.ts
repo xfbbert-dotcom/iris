@@ -82,6 +82,29 @@ describe("PostgresConversationMessageRepository", () => {
       ["chat-1", 20],
     );
   });
+
+  it("sanitizes non-finite recent message limits to zero", async () => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(
+      repository.listRecentByChat({ chatId: "chat-1", limit: Number.POSITIVE_INFINITY }),
+    ).resolves.toEqual([]);
+    await expect(
+      repository.listRecentByChat({ chatId: "chat-1", limit: Number.NaN }),
+    ).resolves.toEqual([]);
+
+    expect(queryable.query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("WHERE chat_id = $1"),
+      ["chat-1", 0],
+    );
+    expect(queryable.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("WHERE chat_id = $1"),
+      ["chat-1", 0],
+    );
+  });
 });
 
 function fakeQueryable(rows: unknown[]): Queryable {

@@ -69,7 +69,7 @@ export function createPostgresConversationMessageRepository({
     },
 
     async listRecentByChat(input) {
-      const limit = Math.max(0, Math.floor(input.limit));
+      const limit = sanitizeLimit(input.limit);
       const result = await queryable.query<ConversationMessageRow>(
         `
         SELECT *
@@ -84,6 +84,14 @@ export function createPostgresConversationMessageRepository({
       return result.rows.map(mapRow);
     },
   };
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 function mapRow(row: ConversationMessageRow): ConversationMessage {

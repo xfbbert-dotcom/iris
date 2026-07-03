@@ -183,12 +183,20 @@ where s.fetch_status = 'succeeded'
 order by s.fetched_at asc, s.id asc
 limit $2
 `,
-        [input.embeddingProfileId, Math.max(0, Math.floor(input.limit))],
+        [input.embeddingProfileId, sanitizeLimit(input.limit)],
       );
 
       return result.rows.map(mapSnapshotRow);
     },
   };
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 async function insertSnapshot(
