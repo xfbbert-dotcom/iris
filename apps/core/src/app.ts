@@ -51,6 +51,7 @@ export type BuildAppDependencies = {
   queue?: EventQueue;
   rawEventQueue?: Pick<RawEventQueue, "enqueue">;
   verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
+  onFeishuGatewayEnqueueError?: (error: unknown) => void;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   auditLog?: InMemoryAuditLog;
   now?: () => Date;
@@ -112,6 +113,14 @@ type DocumentSourcePolicyUpdateRequest = {
   canUseForKnowledgeDrafts?: boolean;
 };
 type RuntimeCapabilityUpdateRequest = Partial<Record<RuntimeCapabilityName, boolean>>;
+type FeishuGatewayEnqueueErrorSnapshot = {
+  message: string;
+  recordedAt: string;
+};
+type FeishuGatewayStatusState = {
+  enqueueFailureCount: number;
+  latestEnqueueError?: FeishuGatewayEnqueueErrorSnapshot;
+};
 
 const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
   "readGroupContext",
@@ -154,10 +163,21 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     (feishuAuthConfig.verificationToken || feishuAuthConfig.encryptKey
       ? createFeishuRequestVerifier(feishuAuthConfig)
       : undefined);
+  const feishuGatewayStatus: FeishuGatewayStatusState = {
+    enqueueFailureCount: 0,
+  };
   const gateway = createFeishuGateway({
     queue,
     rawEventQueue: dependencies.rawEventQueue ?? eventWorkerRuntime?.rawEventQueue,
     verifyRequest: verifyFeishuRequest,
+    onEnqueueError(error) {
+      feishuGatewayStatus.enqueueFailureCount += 1;
+      feishuGatewayStatus.latestEnqueueError = {
+        message: error instanceof Error ? error.message : String(error),
+        recordedAt: now().toISOString(),
+      };
+      dependencies.onFeishuGatewayEnqueueError?.(error);
+    },
     runtimeController,
   });
   const app = Fastify({ logger: false });
@@ -233,6 +253,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ok: true,
         enabled: answerDraftOrchestrator !== undefined,
       },
+      feishuGateway: getFeishuGatewayStatus(feishuGatewayStatus),
       eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
@@ -854,6 +875,17 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   return app;
+}
+
+function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
+  return {
+    ok: state.latestEnqueueError === undefined,
+    enabled: true,
+    enqueueFailureCount: state.enqueueFailureCount,
+    ...(state.latestEnqueueError === undefined
+      ? {}
+      : { latestEnqueueError: state.latestEnqueueError }),
+  };
 }
 
 function normalizeHeaders(headers: Record<string, unknown>): Record<string, string | undefined> {

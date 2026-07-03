@@ -392,13 +392,20 @@ describe("GET /internal/status", () => {
       status: "healthy",
       schemaVersion: 1,
       generatedAt: "2026-07-03T07:30:00.000Z",
-      componentOrder: ["audit", "answerDraft", "eventWorker", "documentSync", "reindex"],
+      componentOrder: [
+        "audit",
+        "answerDraft",
+        "feishuGateway",
+        "eventWorker",
+        "documentSync",
+        "reindex",
+      ],
       summary: {
-        componentCount: 5,
-        healthyComponentCount: 5,
+        componentCount: 6,
+        healthyComponentCount: 6,
         degradedComponentCount: 0,
         degradedComponents: [],
-        enabledComponentCount: 4,
+        enabledComponentCount: 5,
         disabledComponentCount: 1,
         disabledComponents: ["answerDraft"],
         enabledRuntimeComponentCount: 3,
@@ -406,7 +413,7 @@ describe("GET /internal/status", () => {
         stoppedEnabledRuntimeComponentCount: 1,
         stoppedEnabledRuntimeComponents: ["reindex"],
         componentStatusCounts: {
-          healthy: 3,
+          healthy: 4,
           disabled: 1,
           degraded: 0,
           stopped: 1,
@@ -436,6 +443,12 @@ describe("GET /internal/status", () => {
           status: "disabled",
           ok: true,
           enabled: false,
+        },
+        feishuGateway: {
+          status: "healthy",
+          ok: true,
+          enabled: true,
+          enqueueFailureCount: 0,
         },
         eventWorker: {
           status: "healthy",
@@ -504,11 +517,11 @@ describe("GET /internal/status", () => {
     expect(response.json().ok).toBe(false);
     expect(response.json().status).toBe("degraded");
     expect(response.json().summary).toEqual({
-      componentCount: 5,
-      healthyComponentCount: 4,
+      componentCount: 6,
+      healthyComponentCount: 5,
       degradedComponentCount: 1,
       degradedComponents: ["eventWorker"],
-      enabledComponentCount: 3,
+      enabledComponentCount: 4,
       disabledComponentCount: 2,
       disabledComponents: ["answerDraft", "reindex"],
       enabledRuntimeComponentCount: 2,
@@ -516,7 +529,7 @@ describe("GET /internal/status", () => {
       stoppedEnabledRuntimeComponentCount: 1,
       stoppedEnabledRuntimeComponents: ["eventWorker"],
       componentStatusCounts: {
-        healthy: 2,
+        healthy: 3,
         disabled: 2,
         degraded: 1,
         stopped: 0,
@@ -554,6 +567,59 @@ describe("GET /internal/status", () => {
       enabled: false,
       running: false,
     });
+  });
+
+  it("surfaces Feishu gateway enqueue failures in the consolidated status", async () => {
+    const generatedAt = new Date("2026-07-03T09:00:00.000Z");
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => {
+        throw new Error("redis unavailable");
+      }),
+    };
+    const app = buildApp({
+      rawEventQueue,
+      now: () => generatedAt,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const callbackResponse = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload: {
+        header: {
+          event_id: "event-gateway-enqueue-failure",
+          event_type: "im.message.receive_v1",
+        },
+      },
+    });
+    await Promise.resolve();
+
+    const statusResponse = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+    });
+
+    expect(callbackResponse.statusCode).toBe(200);
+    expect(statusResponse.statusCode).toBe(200);
+    expect(statusResponse.json().components.feishuGateway).toEqual({
+      status: "degraded",
+      ok: false,
+      enabled: true,
+      enqueueFailureCount: 1,
+      latestEnqueueError: {
+        message: "redis unavailable",
+        recordedAt: "2026-07-03T09:00:00.000Z",
+      },
+    });
+    expect(statusResponse.json().summary.degradedComponents).toContain("feishuGateway");
+    expect(statusResponse.json().summary.primaryAttentionComponent).toEqual({
+      name: "feishuGateway",
+      status: "degraded",
+    });
+    expect(statusResponse.json().summary.attentionSeverity).toBe("critical");
   });
 });
 
