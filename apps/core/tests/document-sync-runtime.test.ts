@@ -216,6 +216,7 @@ describe("createDocumentSyncRuntime", () => {
       baseUrl: "https://open.example.com",
       appId: "app-id",
       appSecret: "app-secret",
+      timeoutMs: 7000,
     });
     expect(dependencies.createFeishuDocumentBodyFetcher).toHaveBeenCalledWith({
       baseUrl: "https://open.example.com",

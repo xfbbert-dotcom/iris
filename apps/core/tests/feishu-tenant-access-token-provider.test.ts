@@ -24,11 +24,12 @@ describe("FeishuTenantAccessTokenProvider", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith(
       "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-      {
+      expect.objectContaining({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ app_id: "app-id", app_secret: "app-secret" }),
-      },
+        signal: expect.any(AbortSignal),
+      }),
     );
 
     now = new Date("2026-07-03T04:00:01.000Z");
@@ -40,6 +41,33 @@ describe("FeishuTenantAccessTokenProvider", () => {
 
     await expect(provider.getTenantAccessToken()).resolves.toBe("tenant-token-2");
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("times out tenant access token requests", async () => {
+    const fetch = vi.fn(async (_url, init) => {
+      if (init?.signal === undefined) {
+        throw new Error("missing abort signal");
+      }
+      init.signal.dispatchEvent(new Event("abort"));
+      throw abortError();
+    }) as typeof globalThis.fetch;
+    const provider = createFeishuTenantAccessTokenProvider({
+      baseUrl: "https://open.feishu.cn",
+      appId: "app-id",
+      appSecret: "app-secret",
+      fetch,
+      timeoutMs: 1,
+    });
+
+    await expect(provider.getTenantAccessToken()).rejects.toThrow(
+      "Feishu tenant access token request timed out",
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 
   it("throws on failed token responses", async () => {
@@ -94,4 +122,10 @@ function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {
     status: init.status ?? 200,
     json: async () => body,
   } as Response;
+}
+
+function abortError(): Error {
+  const error = new Error("aborted");
+  error.name = "AbortError";
+  return error;
 }

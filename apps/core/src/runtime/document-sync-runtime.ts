@@ -208,6 +208,7 @@ export type DocumentSyncRuntimeDependencies = {
     baseUrl: string;
     appId: string;
     appSecret: string;
+    timeoutMs: number;
   }) => FeishuTenantAccessTokenProvider;
   createFeishuDocumentBodyFetcher?: (dependencies: {
     baseUrl: string;
@@ -289,6 +290,7 @@ function createEnabledDocumentSyncRuntime({
     baseUrl: feishuConfig.baseUrl,
     appId: feishuConfig.appId,
     appSecret: feishuConfig.appSecret,
+    timeoutMs: feishuConfig.documentFetchTimeoutMs,
   });
   const fetcher = createBodyFetcher({
     baseUrl: feishuConfig.baseUrl,

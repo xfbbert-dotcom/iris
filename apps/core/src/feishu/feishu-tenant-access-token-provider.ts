@@ -7,6 +7,7 @@ export type FeishuTenantAccessTokenProviderDependencies = {
   appId: string;
   appSecret: string;
   fetch?: typeof fetch;
+  timeoutMs?: number;
   now?: () => Date;
 };
 
@@ -16,12 +17,14 @@ type CachedToken = {
 };
 
 const tokenRefreshSkewMs = 60_000;
+const defaultTokenRequestTimeoutMs = 10_000;
 
 export function createFeishuTenantAccessTokenProvider({
   baseUrl,
   appId,
   appSecret,
   fetch = globalThis.fetch,
+  timeoutMs = defaultTokenRequestTimeoutMs,
   now = () => new Date(),
 }: FeishuTenantAccessTokenProviderDependencies): FeishuTenantAccessTokenProvider {
   let cachedToken: CachedToken | undefined;
@@ -33,14 +36,16 @@ export function createFeishuTenantAccessTokenProvider({
         return cachedToken.token;
       }
 
-      const response = await fetch(
-        `${trimTrailingSlash(baseUrl)}/open-apis/auth/v3/tenant_access_token/internal`,
-        {
+      const response = await fetchWithTimeout({
+        fetch,
+        url: `${trimTrailingSlash(baseUrl)}/open-apis/auth/v3/tenant_access_token/internal`,
+        init: {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
         },
-      );
+        timeoutMs,
+      });
       const responseBody = await readJsonResponse(response);
 
       if (!response.ok) {
@@ -61,6 +66,35 @@ export function createFeishuTenantAccessTokenProvider({
       return token;
     },
   };
+}
+
+async function fetchWithTimeout({
+  fetch,
+  url,
+  init,
+  timeoutMs,
+}: {
+  fetch: typeof globalThis.fetch;
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+}): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error("Feishu tenant access token request timed out");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
@@ -110,6 +144,10 @@ function readErrorMessage(responseBody: unknown): string {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
