@@ -36,6 +36,21 @@ describe("RedisRawEventQueue", () => {
     expect(parseRawEvent(serializeRawEvent(event))).toEqual(event);
   });
 
+  it("normalizes queued raw event ids when parsing Redis payloads", () => {
+    expect(
+      parseRawEvent(
+        JSON.stringify({
+          idempotencyKey: " raw-event:feishu:event-1 ",
+          provider: "feishu",
+          eventType: " im.message.receive_v1 ",
+          rawBody: { event_id: "event-1" },
+          receivedAt: "2026-07-02T01:00:00.000Z",
+          attempts: 0,
+        }),
+      ),
+    ).toEqual(eventFixture());
+  });
+
   it("defaults missing attempts to zero for old payloads", () => {
     const legacyEvent = {
       idempotencyKey: "raw-event:feishu:event-1",
