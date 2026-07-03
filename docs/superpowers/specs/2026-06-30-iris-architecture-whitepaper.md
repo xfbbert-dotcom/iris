@@ -648,6 +648,23 @@ Evolution signal:
 
 If gateway observability grows beyond simple counters and snapshots, Iris may route gateway events through a dedicated telemetry adapter with bounded buffering and explicit drop policy. That adapter must remain noncritical to Feishu callback acknowledgement.
 
+### 12.7 Permission Guard Audit Failure
+
+Pressure:
+
+Answer-time permission filtering writes audit events when document fragments are denied or permission checks fail. If audit storage fails, Iris must not turn a safe fail-closed permission decision into a failed answer draft.
+
+Required architectural response:
+
+- Live permission guard decisions must remain authoritative even when audit logging fails.
+- Denied or uncertain fragments must stay out of model context.
+- Allowed fragments from other documents should still be usable in the same answer.
+- Audit writes must be best effort unless a future product decision explicitly makes compliance-grade audit durability mandatory.
+
+Evolution signal:
+
+If audit durability becomes a compliance requirement, Iris should split audit persistence into a dedicated durable audit pipeline with retries and operator-visible backlog. That pipeline must not weaken answer-time permission enforcement.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

@@ -99,10 +99,14 @@ async function auditDeniedPermission(input: {
   }
 
   input.auditedDocumentIds.add(input.documentId);
-  await input.auditLog.record({
-    type: input.permission.error === undefined ? "permission_guard_denied" : "permission_guard_error",
-    documentId: input.documentId,
-    fragmentIds: input.fragmentIds,
-    ...(input.permission.error instanceof Error ? { message: input.permission.error.message } : {})
-  });
+  try {
+    await input.auditLog.record({
+      type: input.permission.error === undefined ? "permission_guard_denied" : "permission_guard_error",
+      documentId: input.documentId,
+      fragmentIds: input.fragmentIds,
+      ...(input.permission.error instanceof Error ? { message: input.permission.error.message } : {})
+    });
+  } catch {
+    // Audit logging is best-effort; permission filtering must stay fail-closed.
+  }
 }

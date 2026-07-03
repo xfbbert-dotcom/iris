@@ -120,4 +120,30 @@ describe("filterFragmentsByLivePermission", () => {
       }
     ]);
   });
+
+  it("does not fail permission filtering when audit recording fails", async () => {
+    const fragments = [
+      { id: "frag-1", documentId: "doc-denied", text: "Denied content A" },
+      { id: "frag-2", documentId: "doc-allowed", text: "Allowed content B" }
+    ];
+    const auditLog = {
+      record: vi.fn(async () => {
+        throw new Error("audit store unavailable");
+      })
+    };
+
+    const result = await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async (documentId) => documentId === "doc-allowed",
+      auditLog
+    });
+
+    expect(result.allowedFragments).toEqual([fragments[1]]);
+    expect(result.deniedDocumentIds).toEqual(["doc-denied"]);
+    expect(auditLog.record).toHaveBeenCalledWith({
+      type: "permission_guard_denied",
+      documentId: "doc-denied",
+      fragmentIds: ["frag-1"]
+    });
+  });
 });
