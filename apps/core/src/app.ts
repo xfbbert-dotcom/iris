@@ -846,6 +846,7 @@ function buildInternalStatusSnapshot<
 
   return {
     ok: healthyComponentCount === componentStatuses.length,
+    schemaVersion: 1,
     generatedAt: input.generatedAt.toISOString(),
     summary: {
       componentCount: componentStatuses.length,
