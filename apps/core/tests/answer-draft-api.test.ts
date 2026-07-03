@@ -1770,6 +1770,21 @@ describe("document sync source inventory API", () => {
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
   });
 
+  it("rejects blank source inventory list limits", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?limit=",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
   it("rejects invalid source inventory latest snapshot flags", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,

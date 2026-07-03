@@ -885,6 +885,9 @@ function parseDeadLetterLimit(value: unknown): number | undefined {
   if (value === undefined) {
     return 20;
   }
+  if (typeof value === "string" && value.trim().length === 0) {
+    return undefined;
+  }
 
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
