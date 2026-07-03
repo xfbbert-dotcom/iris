@@ -340,6 +340,7 @@ describe("GET /internal/status", () => {
       status: "healthy",
       schemaVersion: 1,
       generatedAt: "2026-07-03T07:30:00.000Z",
+      componentOrder: ["audit", "answerDraft", "eventWorker", "documentSync", "reindex"],
       summary: {
         componentCount: 5,
         healthyComponentCount: 5,

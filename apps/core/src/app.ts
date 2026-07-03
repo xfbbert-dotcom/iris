@@ -851,6 +851,7 @@ function buildInternalStatusSnapshot<
     status: ok ? "healthy" : "degraded",
     schemaVersion: 1,
     generatedAt: input.generatedAt.toISOString(),
+    componentOrder: Object.keys(components),
     summary: {
       componentCount: componentStatuses.length,
       healthyComponentCount,
