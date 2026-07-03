@@ -40,7 +40,7 @@ export class InMemoryRawEventQueue implements RawEventQueue {
   }
 
   async dequeueBatch(limit: number): Promise<RawEvent[]> {
-    const safeLimit = Math.max(0, Math.floor(limit));
+    const safeLimit = sanitizeLimit(limit);
     return this.events.splice(0, safeLimit);
   }
 
@@ -76,4 +76,12 @@ function sanitizeMaxAttempts(value: number): number {
   }
 
   return value;
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }

@@ -55,7 +55,7 @@ export function createRedisRawEventQueue({
     },
 
     async dequeueBatch(limit) {
-      const safeLimit = Math.max(0, Math.floor(limit));
+      const safeLimit = sanitizeLimit(limit);
       const events: RawEvent[] = [];
 
       for (let index = 0; index < safeLimit; index += 1) {
@@ -183,4 +183,12 @@ function sanitizeMaxAttempts(value: number): number {
   }
 
   return value;
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }

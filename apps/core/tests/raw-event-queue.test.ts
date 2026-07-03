@@ -29,6 +29,16 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([second]);
   });
 
+  it("treats non-finite dequeue limits as zero", async () => {
+    const queue = new InMemoryRawEventQueue();
+    const event = eventFixture();
+
+    await queue.enqueue(event);
+
+    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([event]);
+  });
+
   it("creates stable idempotency keys", () => {
     expect(createRawEventIdempotencyKey({ provider: "feishu", eventId: "evt-1" })).toBe(
       "raw-event:feishu:evt-1",

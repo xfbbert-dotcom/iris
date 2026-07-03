@@ -46,7 +46,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
   }
 
   async dequeueBatch(limit: number): Promise<DocumentReindexJob[]> {
-    const safeLimit = Math.max(0, Math.floor(limit));
+    const safeLimit = sanitizeLimit(limit);
     return this.jobs.splice(0, safeLimit);
   }
 
@@ -79,7 +79,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
   }
 
   async listDeadLetters(input: { limit: number }): Promise<DocumentReindexDeadLetter[]> {
-    const safeLimit = Math.max(0, Math.floor(input.limit));
+    const safeLimit = sanitizeLimit(input.limit);
     return this.deadLetters.slice(0, safeLimit).map((item) => ({
       ...item,
       replayable: true,
@@ -141,6 +141,14 @@ function sanitizeMaxAttempts(value: number): number {
   }
 
   return value;
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 function defaultIdGenerator(): string {

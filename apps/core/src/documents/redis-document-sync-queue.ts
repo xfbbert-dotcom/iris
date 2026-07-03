@@ -61,7 +61,7 @@ export function createRedisDocumentSyncQueue({
     },
 
     async dequeueBatch(limit) {
-      const safeLimit = Math.max(0, Math.floor(limit));
+      const safeLimit = sanitizeLimit(limit);
       const jobs: DocumentSyncJob[] = [];
 
       for (let index = 0; index < safeLimit; index += 1) {
@@ -108,7 +108,7 @@ export function createRedisDocumentSyncQueue({
     },
 
     async listDeadLetters(input) {
-      const safeLimit = Math.max(0, Math.floor(input.limit));
+      const safeLimit = sanitizeLimit(input.limit);
       if (safeLimit === 0) {
         return [];
       }
@@ -311,6 +311,14 @@ function sanitizeMaxAttempts(value: number): number {
   }
 
   return value;
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 function defaultIdGenerator(): string {

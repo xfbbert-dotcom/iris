@@ -30,6 +30,16 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([second]);
   });
 
+  it("treats non-finite dequeue limits as zero", async () => {
+    const queue = new InMemoryDocumentReindexQueue();
+    const job = jobFixture();
+
+    await queue.enqueue(job);
+
+    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([job]);
+  });
+
   it("creates stable idempotency keys", () => {
     expect(
       createDocumentReindexIdempotencyKey({
@@ -112,6 +122,19 @@ describe("InMemoryDocumentReindexQueue", () => {
         replayable: true,
       },
     ]);
+  });
+
+  it("treats non-finite dead-letter list limits as zero", async () => {
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+      now: () => new Date("2026-07-02T01:05:00.000Z"),
+    });
+
+    await queue.handleFailedJob({ job: jobFixture(), errorMessage: "embedding failed" });
+
+    await expect(queue.listDeadLetters({ limit: Number.POSITIVE_INFINITY })).resolves.toEqual([]);
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toHaveLength(1);
   });
 
   it("replays dead-lettered jobs with attempts reset", async () => {

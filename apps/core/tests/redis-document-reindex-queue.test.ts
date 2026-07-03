@@ -73,6 +73,22 @@ describe("RedisDocumentReindexQueue", () => {
     expect(client.lPop).toHaveBeenCalledTimes(1);
   });
 
+  it("treats non-finite dequeue limits as zero", async () => {
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      lPop: vi.fn(async () => null),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(Number.NaN)).resolves.toEqual([]);
+    expect(client.lPop).not.toHaveBeenCalled();
+  });
+
   it("round-trips job dates through JSON", () => {
     const job = jobFixture();
 
@@ -189,6 +205,22 @@ describe("RedisDocumentReindexQueue", () => {
       },
     ]);
     expect(client.lRange).toHaveBeenCalledWith("iris:reindex:documents:dlq", 0, 19);
+  });
+
+  it("treats non-finite Redis DLQ list limits as zero", async () => {
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: Number.POSITIVE_INFINITY })).resolves.toEqual([]);
+    await expect(queue.listDeadLetters({ limit: Number.NaN })).resolves.toEqual([]);
+    expect(client.lRange).not.toHaveBeenCalled();
   });
 
   it("lists legacy Redis DLQ entries as not replayable", async () => {

@@ -81,6 +81,20 @@ describe("RedisRawEventQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([first, second]);
   });
 
+  it("treats non-finite dequeue limits as zero", async () => {
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lPop: vi.fn(async () => null),
+    };
+    const queue = createRedisRawEventQueue({ client });
+
+    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(Number.NaN)).resolves.toEqual([]);
+    expect(client.lPop).not.toHaveBeenCalled();
+  });
+
   it("dead-letters invalid queued payloads and continues dequeuing valid events", async () => {
     const valid = eventFixture({ idempotencyKey: "raw-event:feishu:event-valid" });
     const client: RedisRawEventQueueClient = {
