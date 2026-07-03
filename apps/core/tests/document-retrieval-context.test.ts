@@ -97,6 +97,34 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.promptContext).toContain('<message speaker="Bob">Use live chat.</message>');
   });
 
+  it("skips embedding, search, and permission checks when fragmentLimit is 0", async () => {
+    const embedder = { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const canReadDocument = vi.fn(async () => true);
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder,
+      fragments,
+      canReadDocument,
+    });
+
+    const result = await builder.buildContext({
+      queryText: "Live chat only",
+      fragmentLimit: 0,
+      liveChatMessages: [{ speaker: "Bob", text: "Use live chat." }],
+    });
+
+    expect(embedder.embedTexts).not.toHaveBeenCalled();
+    expect(fragments.searchSimilarFragments).not.toHaveBeenCalled();
+    expect(canReadDocument).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      allowedFragments: [],
+      deniedDocumentIds: [],
+      retrievedFragmentCount: 0,
+    });
+    expect(result.promptContext).toContain('<message speaker="Bob">Use live chat.</message>');
+  });
+
   it("deduplicates permission checks by document source id", async () => {
     const canReadDocument = vi.fn(async () => true);
     const builder = createDocumentRetrievalContextBuilder({

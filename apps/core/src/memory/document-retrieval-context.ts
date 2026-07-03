@@ -45,8 +45,21 @@ export function createDocumentRetrievalContextBuilder({
 }): DocumentRetrievalContextBuilder {
   return {
     async buildContext(input) {
-      const queryEmbedding = await embedQuery(input.queryText, embedder);
       const fragmentLimit = sanitizeFragmentLimit(input.fragmentLimit);
+      if (fragmentLimit === 0) {
+        return {
+          promptContext: assemblePromptContext({
+            backgroundDocuments: [],
+            liveChatMessages: input.liveChatMessages,
+            liveChatLimit: input.liveChatLimit,
+          }),
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+        };
+      }
+
+      const queryEmbedding = await embedQuery(input.queryText, embedder);
       const retrievedFragments = await fragments.searchSimilarFragments({
         embeddingProfileId,
         embedding: queryEmbedding,
