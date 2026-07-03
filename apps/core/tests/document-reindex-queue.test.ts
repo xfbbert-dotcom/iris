@@ -285,6 +285,23 @@ describe("InMemoryDocumentReindexQueue", () => {
     });
     await expect(queue.dequeueBatch(1)).resolves.toEqual([jobFixture()]);
   });
+
+  it("deduplicates repeated ids in batch replay requests", async () => {
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+    });
+    await queue.handleFailedJob({
+      job: jobFixture(),
+      errorMessage: "embedding failed",
+    });
+
+    await expect(queue.replayDeadLetters({ ids: ["dlq-1", "dlq-1"] })).resolves.toEqual({
+      replayedCount: 1,
+      notFoundIds: [],
+      unsupportedLegacyIds: [],
+    });
+  });
 });
 
 function jobFixture(overrides: Partial<DocumentReindexJob> = {}): DocumentReindexJob {

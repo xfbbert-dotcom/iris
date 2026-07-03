@@ -584,6 +584,36 @@ describe("RedisDocumentSyncQueue", () => {
       arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 0 }))],
     });
   });
+
+  it("deduplicates repeated ids in Redis batch replay requests", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-1",
+      job: {
+        ...job({ attempts: 3 }),
+        enqueuedAt: "2026-07-03T01:00:00.000Z",
+      },
+      errorMessage: "runner crashed",
+      failedAt: "2026-07-03T02:00:00.000Z",
+    });
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.replayDeadLetters({ ids: ["dlq-1", "dlq-1"] })).resolves.toEqual({
+      replayedCount: 1,
+      notFoundIds: [],
+      unsupportedLegacyIds: [],
+    });
+    expect(client.eval).toHaveBeenCalledOnce();
+    expect(client.lRem).toHaveBeenCalledOnce();
+  });
 });
 
 function job(overrides: Partial<DocumentSyncJob> = {}): DocumentSyncJob {

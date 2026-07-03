@@ -172,7 +172,7 @@ export function createRedisDocumentReindexQueue({
         unsupportedLegacyIds: [],
       };
 
-      for (const id of input.ids) {
+      for (const id of new Set(input.ids)) {
         const replayResult = await replayDeadLetter(id);
         if (replayResult === "replayed") {
           result.replayedCount += 1;

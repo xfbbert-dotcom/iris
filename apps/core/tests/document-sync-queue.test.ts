@@ -131,6 +131,20 @@ describe("DocumentSyncQueue", () => {
     });
     await expect(queue.dequeueBatch(1)).resolves.toEqual([job()]);
   });
+
+  it("deduplicates repeated ids in batch replay requests", async () => {
+    const queue = createInMemoryDocumentSyncQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+    });
+    await queue.handleFailedJob({ job: job(), errorMessage: "runner crashed" });
+
+    await expect(queue.replayDeadLetters({ ids: ["dlq-1", "dlq-1"] })).resolves.toEqual({
+      replayedCount: 1,
+      notFoundIds: [],
+      unsupportedLegacyIds: [],
+    });
+  });
 });
 
 function job(overrides: Partial<DocumentSyncJob> = {}): DocumentSyncJob {

@@ -135,7 +135,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
       unsupportedLegacyIds: [],
     };
 
-    for (const id of input.ids) {
+    for (const id of new Set(input.ids)) {
       const replayResult = await this.replayDeadLetter(id);
       if (replayResult === "replayed") {
         result.replayedCount += 1;
