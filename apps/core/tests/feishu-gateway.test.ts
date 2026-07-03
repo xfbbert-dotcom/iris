@@ -206,6 +206,23 @@ describe("FeishuGateway", () => {
       attempts: 0,
     });
   });
+
+  it("uses the legacy event queue only when no raw event queue is available", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+    });
+
+    await gateway.handleCallback({
+      headers: { "x-iris-event-id": "event-raw-primary" },
+      body: { event_id: "event-raw-primary" },
+    });
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
+    expect(queue.events).toEqual([]);
+  });
 });
 
 describe("Core App Feishu route", () => {

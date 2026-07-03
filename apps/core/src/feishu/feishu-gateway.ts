@@ -65,25 +65,27 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
         };
       }
 
-      const idempotencyKey = resolveIdempotencyKey(request);
+      const receivedAt = now();
 
-      await dependencies.rawEventQueue?.enqueue({
-        idempotencyKey: createRawEventIdempotencyKey({
+      if (dependencies.rawEventQueue !== undefined) {
+        await dependencies.rawEventQueue.enqueue({
+          idempotencyKey: createRawEventIdempotencyKey({
+            provider: "feishu",
+            eventId: resolveRawEventId(request),
+          }),
           provider: "feishu",
-          eventId: resolveRawEventId(request),
-        }),
-        provider: "feishu",
-        eventType: resolveEventType(request.body),
-        rawBody: request.body,
-        receivedAt: now(),
-        attempts: 0,
-      });
-
-      await dependencies.queue.enqueueRawFeishuEvent({
-        idempotencyKey,
-        receivedAt: now(),
-        body: request.body
-      });
+          eventType: resolveEventType(request.body),
+          rawBody: request.body,
+          receivedAt,
+          attempts: 0,
+        });
+      } else {
+        await dependencies.queue.enqueueRawFeishuEvent({
+          idempotencyKey: resolveIdempotencyKey(request),
+          receivedAt,
+          body: request.body
+        });
+      }
 
       return {
         statusCode: 200,
