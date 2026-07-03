@@ -158,6 +158,24 @@ describe("FeishuDocumentBodyFetcher", () => {
     ).rejects.toThrow("unsupported Feishu docx URL");
   });
 
+  it("rejects unsupported URL shapes before requesting a tenant token", async () => {
+    const tokenProvider = {
+      getTenantAccessToken: vi.fn(async () => {
+        throw new Error("tenant token should not be requested");
+      }),
+    };
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider,
+      fetch: vi.fn(),
+    });
+
+    await expect(
+      fetcher.fetch(source({ sourceUri: "https://acme.feishu.cn/file/file_1" })),
+    ).rejects.toThrow("unsupported Feishu docx URL");
+    expect(tokenProvider.getTenantAccessToken).not.toHaveBeenCalled();
+  });
+
   it("throws on unsupported wiki object types", async () => {
     const fetcher = createFeishuDocumentBodyFetcher({
       baseUrl: "https://open.feishu.cn",

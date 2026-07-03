@@ -52,15 +52,20 @@ export function createFeishuDocumentBodyFetcher({
   return {
     async fetch(source: DocumentSource): Promise<DocumentBodyFetchResult> {
       assertSupportedSourceType(source.sourceType);
-      const tenantAccessToken = await tokenProvider.getTenantAccessToken();
-      const documentId = await resolveDocumentId({
-        baseUrl,
-        sourceUri: source.sourceUri,
-        tenantAccessToken,
-        fetch,
-      });
-      if (documentId === undefined) {
+      const directDocumentId = parseFeishuDocxDocumentId(source.sourceUri);
+      const wikiNodeToken =
+        directDocumentId === undefined ? parseFeishuWikiNodeToken(source.sourceUri) : undefined;
+      if (directDocumentId === undefined && wikiNodeToken === undefined) {
         throw new Error(`unsupported Feishu docx URL: ${source.sourceUri}`);
+      }
+
+      const tenantAccessToken = await tokenProvider.getTenantAccessToken();
+      let documentId = directDocumentId;
+      if (documentId === undefined) {
+        if (wikiNodeToken === undefined) {
+          throw new Error(`unsupported Feishu docx URL: ${source.sourceUri}`);
+        }
+        documentId = await fetchWikiDocumentId({ baseUrl, wikiNodeToken, tenantAccessToken, fetch });
       }
 
       const response = await fetch(
@@ -92,30 +97,6 @@ export function createFeishuDocumentBodyFetcher({
       };
     },
   };
-}
-
-async function resolveDocumentId({
-  baseUrl,
-  sourceUri,
-  tenantAccessToken,
-  fetch,
-}: {
-  baseUrl: string;
-  sourceUri: string;
-  tenantAccessToken: string;
-  fetch: typeof globalThis.fetch;
-}): Promise<string | undefined> {
-  const directDocumentId = parseFeishuDocxDocumentId(sourceUri);
-  if (directDocumentId !== undefined) {
-    return directDocumentId;
-  }
-
-  const wikiNodeToken = parseFeishuWikiNodeToken(sourceUri);
-  if (wikiNodeToken === undefined) {
-    return undefined;
-  }
-
-  return await fetchWikiDocumentId({ baseUrl, wikiNodeToken, tenantAccessToken, fetch });
 }
 
 async function fetchWikiDocumentId({
