@@ -35,5 +35,5 @@ export interface RawEventQueue {
 export function createRawEventIdempotencyKey(
   input: CreateRawEventIdempotencyKeyInput,
 ): string {
-  return `raw-event:${input.provider}:${input.eventId}`;
+  return `raw-event:${input.provider}:${input.eventId.trim()}`;
 }

@@ -33,6 +33,9 @@ describe("InMemoryRawEventQueue", () => {
     expect(createRawEventIdempotencyKey({ provider: "feishu", eventId: "evt-1" })).toBe(
       "raw-event:feishu:evt-1",
     );
+    expect(createRawEventIdempotencyKey({ provider: "feishu", eventId: " evt-1 " })).toBe(
+      "raw-event:feishu:evt-1",
+    );
   });
 
   it("requeues failed events below max attempts", async () => {
