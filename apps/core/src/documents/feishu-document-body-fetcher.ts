@@ -30,6 +30,9 @@ function parseFeishuPathToken(sourceUri: string, markers: string[]): string | un
   } catch {
     return undefined;
   }
+  if (!isSupportedFeishuHost(url.hostname)) {
+    return undefined;
+  }
 
   const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
   const markerIndex = segments.findIndex((segment) => markers.includes(segment));
@@ -231,6 +234,15 @@ function readErrorMessage(responseBody: unknown): string {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
+}
+
+function isSupportedFeishuHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "docs.feishu.cn" ||
+    host.endsWith(".feishu.cn") ||
+    host.endsWith(".larksuite.com")
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
