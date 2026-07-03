@@ -46,4 +46,14 @@ describe("FeishuDocumentLinkExtractor", () => {
       { sourceUri: "https://foo.feishu.cn/docx/b" },
     ]);
   });
+
+  it("drops copied link query strings and fragments before deduplication", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks(
+        "doc https://docs.feishu.cn/docx/token?from=from_copylink#heading and https://docs.feishu.cn/docx/token?open_in_browser=true",
+      ),
+    ).toEqual([{ sourceUri: "https://docs.feishu.cn/docx/token" }]);
+  });
 });

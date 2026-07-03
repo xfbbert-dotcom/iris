@@ -42,6 +42,9 @@ function normalizeCandidateUrl(candidate: string): string | undefined {
       return undefined;
     }
 
+    url.search = "";
+    url.hash = "";
+
     return url.href;
   } catch {
     return undefined;
