@@ -355,6 +355,7 @@ describe("GET /internal/status", () => {
       },
       components: {
         audit: {
+          status: "healthy",
           ok: true,
           enabled: true,
           storage: "in_memory",
@@ -365,10 +366,12 @@ describe("GET /internal/status", () => {
           },
         },
         answerDraft: {
+          status: "disabled",
           ok: true,
           enabled: false,
         },
         eventWorker: {
+          status: "healthy",
           ok: true,
           enabled: true,
           running: true,
@@ -378,6 +381,7 @@ describe("GET /internal/status", () => {
           deadLetterEventCount: 1,
         },
         documentSync: {
+          status: "healthy",
           ok: true,
           enabled: true,
           running: true,
@@ -387,6 +391,7 @@ describe("GET /internal/status", () => {
           deadLetterJobCount: 2,
         },
         reindex: {
+          status: "stopped",
           ok: true,
           enabled: true,
           running: false,
@@ -445,12 +450,14 @@ describe("GET /internal/status", () => {
       stoppedEnabledRuntimeComponents: ["eventWorker"],
     });
     expect(response.json().components.eventWorker).toEqual({
+      status: "degraded",
       ok: false,
       enabled: true,
       running: false,
       error: "event_worker_status_failed",
     });
     expect(response.json().components.documentSync).toEqual({
+      status: "healthy",
       ok: true,
       enabled: true,
       running: true,
@@ -460,6 +467,7 @@ describe("GET /internal/status", () => {
       deadLetterJobCount: 2,
     });
     expect(response.json().components.reindex).toEqual({
+      status: "disabled",
       ok: true,
       enabled: false,
       running: false,

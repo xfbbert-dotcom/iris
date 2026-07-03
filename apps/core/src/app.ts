@@ -829,15 +829,16 @@ function hasRunningStatus(
 function buildInternalStatusSnapshot<
   ComponentMap extends Record<string, { ok: boolean; enabled: boolean; running?: unknown }>,
 >(input: { components: ComponentMap; generatedAt: Date }) {
-  const componentStatuses = Object.values(input.components);
+  const components = addComponentStatuses(input.components);
+  const componentStatuses = Object.values(components);
   const healthyComponentCount = componentStatuses.filter((component) => component.ok).length;
-  const degradedComponents = Object.entries(input.components)
+  const degradedComponents = Object.entries(components)
     .filter(([, component]) => !component.ok)
     .map(([name]) => name);
-  const disabledComponents = Object.entries(input.components)
+  const disabledComponents = Object.entries(components)
     .filter(([, component]) => !component.enabled)
     .map(([name]) => name);
-  const enabledRuntimeComponents = Object.entries(input.components).filter(
+  const enabledRuntimeComponents = Object.entries(components).filter(
     ([, component]) => component.enabled && hasRunningStatus(component),
   );
   const stoppedEnabledRuntimeComponents = enabledRuntimeComponents
@@ -864,8 +865,41 @@ function buildInternalStatusSnapshot<
       stoppedEnabledRuntimeComponentCount: stoppedEnabledRuntimeComponents.length,
       stoppedEnabledRuntimeComponents,
     },
-    components: input.components,
+    components,
   };
+}
+
+type InternalComponentStatus = "healthy" | "disabled" | "degraded" | "stopped";
+
+function addComponentStatuses<
+  ComponentMap extends Record<string, { ok: boolean; enabled: boolean; running?: unknown }>,
+>(components: ComponentMap) {
+  return Object.fromEntries(
+    Object.entries(components).map(([name, component]) => [
+      name,
+      { status: getInternalComponentStatus(component), ...component },
+    ]),
+  ) as {
+    [Name in keyof ComponentMap]: ComponentMap[Name] & { status: InternalComponentStatus };
+  };
+}
+
+function getInternalComponentStatus(component: {
+  ok: boolean;
+  enabled: boolean;
+  running?: unknown;
+}): InternalComponentStatus {
+  if (!component.enabled) {
+    return "disabled";
+  }
+  if (!component.ok) {
+    return "degraded";
+  }
+  if (hasRunningStatus(component) && !component.running) {
+    return "stopped";
+  }
+
+  return "healthy";
 }
 
 async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {
