@@ -93,6 +93,36 @@ describe("POST /internal/answer-drafts", () => {
     });
   });
 
+  it("passes optional chatId to the answer draft orchestrator", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Draft answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const app = buildApp({ answerDraftOrchestrator });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        chatId: " oc_1 ",
+        liveChatMessages: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      question: "What changed?",
+      chatId: "oc_1",
+      liveChatMessages: [],
+    });
+  });
+
   it("returns 400 for invalid requests", async () => {
     const app = buildApp({
       answerDraftOrchestrator: { generateDraft: vi.fn() },
@@ -109,6 +139,25 @@ describe("POST /internal/answer-drafts", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("returns 400 when chatId is provided as blank", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const app = buildApp({ answerDraftOrchestrator });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        chatId: "   ",
+        liveChatMessages: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
   });
 
   it("returns 500 when draft generation fails", async () => {

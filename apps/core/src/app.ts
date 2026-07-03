@@ -60,6 +60,7 @@ type ParsedJsonBody = {
 
 type AnswerDraftRequest = {
   question: string;
+  chatId?: string;
   liveChatMessages: LiveChatMessage[];
   fragmentLimit?: number;
   liveChatLimit?: number;
@@ -786,6 +787,10 @@ function parseAnswerDraftRequest(value: unknown): AnswerDraftRequest | undefined
   if (question.length === 0 || !Array.isArray(value.liveChatMessages)) {
     return undefined;
   }
+  const chatId = value.chatId === undefined ? undefined : readNonBlankId(value.chatId);
+  if (chatId === undefined && value.chatId !== undefined) {
+    return undefined;
+  }
 
   const liveChatMessages = value.liveChatMessages.map(parseLiveChatMessage);
   if (liveChatMessages.some((message) => message === undefined)) {
@@ -798,6 +803,7 @@ function parseAnswerDraftRequest(value: unknown): AnswerDraftRequest | undefined
 
   return {
     question,
+    ...(chatId === undefined ? {} : { chatId }),
     liveChatMessages: liveChatMessages as LiveChatMessage[],
     ...(value.fragmentLimit === undefined ? {} : { fragmentLimit: value.fragmentLimit }),
     ...(value.liveChatLimit === undefined ? {} : { liveChatLimit: value.liveChatLimit })
