@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import { pathToFileURL } from "node:url";
+import { InMemoryAuditLog, type AuditEvent } from "./audit/audit-log.js";
 import {
   createFeishuGateway,
   type FeishuCallbackRequest
@@ -12,7 +13,7 @@ import type { RawEventQueue } from "./events/raw-event-queue.js";
 import type { AnswerDraftOrchestrator } from "./agent/answer-draft-orchestrator.js";
 import type { LiveChatMessage } from "./memory/context-assembly.js";
 import {
-  createAnswerDraftRuntime,
+  createAnswerDraftRuntime as createDefaultAnswerDraftRuntime,
   type AnswerDraftRuntime
 } from "./runtime/answer-draft-runtime.js";
 import {
@@ -35,7 +36,10 @@ export type BuildAppDependencies = {
   rawEventQueue?: Pick<RawEventQueue, "enqueue">;
   verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
-  createAnswerDraftRuntime?: () => AnswerDraftRuntime | undefined;
+  auditLog?: InMemoryAuditLog;
+  createAnswerDraftRuntime?: (
+    input?: Parameters<typeof createDefaultAnswerDraftRuntime>[0],
+  ) => AnswerDraftRuntime | undefined;
   createEventWorkerRuntime?: () => EventWorkerRuntime | undefined;
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
@@ -91,9 +95,12 @@ type DocumentSourcePolicyUpdateRequest = {
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
+  const auditLog = dependencies.auditLog ?? new InMemoryAuditLog();
   const answerDraftRuntime =
     dependencies.answerDraftOrchestrator === undefined
-      ? (dependencies.createAnswerDraftRuntime ?? createAnswerDraftRuntime)()
+      ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
+          dependencies: { auditLog },
+        })
       : undefined;
   const answerDraftOrchestrator =
     dependencies.answerDraftOrchestrator ?? answerDraftRuntime?.answerDraftOrchestrator;
@@ -162,6 +169,18 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     } catch {
       return reply.code(500).send({ ok: false, error: "answer_draft_failed" });
     }
+  });
+
+  app.get("/internal/audit/events", async (request, reply) => {
+    const limit = parseDeadLetterLimit((request.query as { limit?: unknown }).limit);
+    if (limit === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    return {
+      ok: true,
+      events: auditLog.events.slice(-limit).reverse().map(toAuditEventResponse),
+    };
   });
 
   app.post("/internal/reindex/document-profile", async (request, reply) => {
@@ -907,6 +926,13 @@ function toDocumentSourceSyncHealth(snapshot: DocumentSnapshot | undefined) {
     status: "failing" as const,
     ...base,
     ...(snapshot.errorMessage === undefined ? {} : { errorMessage: snapshot.errorMessage }),
+  };
+}
+
+function toAuditEventResponse(event: AuditEvent): AuditEvent {
+  return {
+    ...event,
+    fragmentIds: [...event.fragmentIds],
   };
 }
 

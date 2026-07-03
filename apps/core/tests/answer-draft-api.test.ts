@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import { buildApp } from "../src/app.js";
 import type { DocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
@@ -191,6 +192,26 @@ describe("answer draft runtime wiring", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("passes the shared audit log into the composed answer draft runtime", async () => {
+    const auditLog = new InMemoryAuditLog();
+    const createAnswerDraftRuntime = vi.fn(() => ({
+      answerDraftOrchestrator: {
+        generateDraft: vi.fn(async () => ({
+          answerText: "Runtime draft",
+          promptContext: "",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+        })),
+      },
+      close: vi.fn(async () => undefined),
+    }));
+
+    buildApp({ auditLog, createAnswerDraftRuntime });
+
+    expect(createAnswerDraftRuntime).toHaveBeenCalledWith({ dependencies: { auditLog } });
+  });
+
   it("starts and closes an injected reindex worker runtime", async () => {
     const reindexWorkerRuntime = fakeReindexRuntime();
     const app = buildApp({
@@ -214,6 +235,69 @@ describe("answer draft runtime wiring", () => {
     expect(documentSyncRuntime.start).toHaveBeenCalledOnce();
     await app.close();
     expect(documentSyncRuntime.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("GET /internal/audit/events", () => {
+  it("returns recent audit events newest first with a limit", async () => {
+    const auditLog = new InMemoryAuditLog();
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-old",
+      fragmentIds: ["fragment-old"],
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-middle",
+      fragmentIds: ["fragment-middle"],
+    });
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-new",
+      fragmentIds: ["fragment-new"],
+      message: "registry unavailable",
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events?limit=2",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      events: [
+        {
+          type: "permission_guard_error",
+          documentId: "source-new",
+          fragmentIds: ["fragment-new"],
+          message: "registry unavailable",
+        },
+        {
+          type: "permission_guard_denied",
+          documentId: "source-middle",
+          fragmentIds: ["fragment-middle"],
+        },
+      ],
+    });
+  });
+
+  it("rejects invalid audit event limits", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events?limit=-1",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
   });
 });
 
