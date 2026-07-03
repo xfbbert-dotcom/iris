@@ -492,6 +492,18 @@ describe("RedisDocumentReindexQueue", () => {
     ).toThrow("Invalid document reindex job payload");
   });
 
+  it("rejects unsafe integer document reindex attempts", () => {
+    expect(() =>
+      parseDocumentReindexJob(
+        JSON.stringify({
+          ...jobFixture(),
+          enqueuedAt: "2026-07-02T01:00:00.000Z",
+          attempts: 9007199254740992,
+        }),
+      ),
+    ).toThrow("Invalid document reindex job payload");
+  });
+
   it("batch replays Redis DLQ entries without relying on method binding", async () => {
     const deadLetter = {
       id: "dlq-1",

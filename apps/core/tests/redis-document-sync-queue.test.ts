@@ -212,6 +212,18 @@ describe("RedisDocumentSyncQueue", () => {
     ).toThrow("Invalid document sync job payload");
   });
 
+  it("rejects unsafe integer document sync attempts", () => {
+    expect(() =>
+      parseDocumentSyncJob(
+        JSON.stringify({
+          ...job(),
+          enqueuedAt: "2026-07-03T01:00:00.000Z",
+          attempts: 9007199254740992,
+        }),
+      ),
+    ).toThrow("Invalid document sync job payload");
+  });
+
   it("requeues failed jobs below max attempts", async () => {
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(),

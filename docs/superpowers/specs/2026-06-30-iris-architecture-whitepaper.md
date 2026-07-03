@@ -681,6 +681,22 @@ Evolution signal:
 
 If operators need richer deployment profiles, Iris may add named configuration presets for internal rollout, staging, and production. Numeric validation must remain strict before preset values reach runtime components.
 
+### 12.9 Redis Retry Attempt Numeric Safety
+
+Pressure:
+
+Redis queue payloads persist retry attempt counters across process restarts. Payloads can be produced by old code, manual repair, or corrupted external state. If unsafe integer attempts are accepted, retry and DLQ decisions can run on values JavaScript cannot represent exactly.
+
+Required architectural response:
+
+- Missing attempts remain backward-compatible and default to zero.
+- Non-number, fractional, negative, and unsafe integer attempts must be rejected as invalid payloads.
+- Invalid queued payloads must use the existing dead-letter diagnostic path instead of entering worker processing.
+
+Evolution signal:
+
+If queues gain schema versions, retry attempt validation should move into versioned payload decoders shared across raw event, document sync, and reindex queues.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

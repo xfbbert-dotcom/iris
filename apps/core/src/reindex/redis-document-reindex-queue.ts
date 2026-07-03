@@ -349,7 +349,12 @@ function readOptionalNonNegativeInteger(value: unknown): number | null | undefin
     return undefined;
   }
 
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    !Number.isSafeInteger(value) ||
+    value < 0
+  ) {
     return null;
   }
 

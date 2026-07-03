@@ -81,6 +81,21 @@ describe("RedisRawEventQueue", () => {
     );
   });
 
+  it("rejects unsafe integer raw event attempts", () => {
+    expect(() =>
+      parseRawEvent(
+        JSON.stringify({
+          idempotencyKey: "raw-event:feishu:event-1",
+          provider: "feishu",
+          eventType: "im.message.receive_v1",
+          rawBody: { event_id: "event-1" },
+          receivedAt: "2026-07-02T01:00:00.000Z",
+          attempts: 9007199254740992,
+        }),
+      ),
+    ).toThrow("Invalid raw event payload");
+  });
+
   it("dequeues raw events in FIFO order up to limit", async () => {
     const first = eventFixture({ idempotencyKey: "raw-event:feishu:event-1" });
     const second = eventFixture({ idempotencyKey: "raw-event:feishu:event-2" });
