@@ -937,7 +937,14 @@ describe("document sync source inventory API", () => {
     });
     expect(response.json().sources[0].latestSnapshot).not.toHaveProperty("bodyText");
     expect(response.json().sources[0].latestSnapshot).not.toHaveProperty("bodyTextPreview");
+    expect(response.json().sources[0].syncHealth).toEqual({
+      status: "failing",
+      latestSnapshotId: "snapshot-1",
+      lastFetchedAt: "2026-07-03T04:00:00.000Z",
+      errorMessage: "Feishu returned 403",
+    });
     expect(response.json().sources[1]).not.toHaveProperty("latestSnapshot");
+    expect(response.json().sources[1].syncHealth).toEqual({ status: "never_synced" });
     expect(runtime.sources.list).toHaveBeenCalledWith({
       limit: 2,
       includeLatestSnapshot: true,
@@ -1115,6 +1122,11 @@ describe("document sync source inventory API", () => {
     });
     expect(response.json().source.latestSnapshot).not.toHaveProperty("bodyText");
     expect(response.json().source.latestSnapshot).not.toHaveProperty("bodyTextPreview");
+    expect(response.json().source.syncHealth).toEqual({
+      status: "healthy",
+      latestSnapshotId: "snapshot-1",
+      lastFetchedAt: "2026-07-03T04:00:00.000Z",
+    });
     expect(runtime.sources.get).toHaveBeenCalledWith("source-1");
     expect(runtime.sources.getLatestSnapshot).toHaveBeenCalledWith({ sourceId: "source-1" });
   });

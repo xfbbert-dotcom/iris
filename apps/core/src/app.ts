@@ -250,6 +250,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
           const latestSnapshot = latestSnapshotsBySourceId.get(source.id);
           return {
             ...source,
+            syncHealth: toDocumentSourceSyncHealth(latestSnapshot),
             ...(latestSnapshot === undefined
               ? {}
               : { latestSnapshot: toDocumentSnapshotSummary(latestSnapshot) }),
@@ -398,6 +399,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ok: true,
         source: {
           ...source,
+          syncHealth: toDocumentSourceSyncHealth(latestSnapshot),
           ...(latestSnapshot === undefined
             ? {}
             : { latestSnapshot: toDocumentSnapshotSummary(latestSnapshot) }),
@@ -882,6 +884,29 @@ function toDocumentSnapshotSummary(
     ...(snapshot.bodyText === undefined || options.previewLength === undefined
       ? {}
       : { bodyTextPreview: snapshot.bodyText.slice(0, options.previewLength) }),
+  };
+}
+
+function toDocumentSourceSyncHealth(snapshot: DocumentSnapshot | undefined) {
+  if (snapshot === undefined) {
+    return { status: "never_synced" as const };
+  }
+
+  const base = {
+    latestSnapshotId: snapshot.id,
+    lastFetchedAt: snapshot.fetchedAt,
+  };
+  if (snapshot.fetchStatus === "succeeded") {
+    return {
+      status: "healthy" as const,
+      ...base,
+    };
+  }
+
+  return {
+    status: "failing" as const,
+    ...base,
+    ...(snapshot.errorMessage === undefined ? {} : { errorMessage: snapshot.errorMessage }),
   };
 }
 
