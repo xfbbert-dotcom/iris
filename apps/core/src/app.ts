@@ -843,9 +843,11 @@ function buildInternalStatusSnapshot<
   const stoppedEnabledRuntimeComponents = enabledRuntimeComponents
     .filter(([, component]) => hasRunningStatus(component) && component.running === false)
     .map(([name]) => name);
+  const ok = healthyComponentCount === componentStatuses.length;
 
   return {
-    ok: healthyComponentCount === componentStatuses.length,
+    ok,
+    status: ok ? "healthy" : "degraded",
     schemaVersion: 1,
     generatedAt: input.generatedAt.toISOString(),
     summary: {

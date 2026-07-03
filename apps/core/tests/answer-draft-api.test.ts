@@ -337,6 +337,7 @@ describe("GET /internal/status", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       ok: true,
+      status: "healthy",
       schemaVersion: 1,
       generatedAt: "2026-07-03T07:30:00.000Z",
       summary: {
@@ -429,6 +430,7 @@ describe("GET /internal/status", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().ok).toBe(false);
+    expect(response.json().status).toBe("degraded");
     expect(response.json().summary).toEqual({
       componentCount: 5,
       healthyComponentCount: 4,
