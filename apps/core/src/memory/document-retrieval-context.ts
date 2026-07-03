@@ -52,19 +52,20 @@ export function createDocumentRetrievalContextBuilder({
         embedding: queryEmbedding,
         limit: fragmentLimit,
       });
+      const meaningfulFragments = retrievedFragments.filter((fragment) =>
+        fragment.text.trim().length > 0,
+      );
 
       const permissionGuardResult = await filterFragmentsByLivePermission({
-        fragments: retrievedFragments.map(toPermissionGuardFragment),
+        fragments: meaningfulFragments.map(toPermissionGuardFragment),
         canReadDocument,
         auditLog,
       });
       const allowedFragmentIds = new Set(
         permissionGuardResult.allowedFragments.map((fragment) => fragment.id),
       );
-      const allowedFragments = retrievedFragments.filter((fragment) =>
+      const allowedFragments = meaningfulFragments.filter((fragment) =>
         allowedFragmentIds.has(fragment.id),
-      ).filter((fragment) =>
-        fragment.text.trim().length > 0,
       );
 
       return {

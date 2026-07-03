@@ -154,6 +154,42 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.promptContext).not.toContain("> \n\t </document>");
   });
 
+  it("skips live permission checks for blank fragments", async () => {
+    const canReadDocument = vi.fn(async () => true);
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: {
+        searchSimilarFragments: vi.fn(async () => [
+          fragment({
+            id: "blank-fragment",
+            documentSourceId: "source-blank",
+            chunkIndex: 0,
+            text: " \n\t ",
+          }),
+          fragment({
+            id: "useful-fragment",
+            documentSourceId: "source-useful",
+            chunkIndex: 1,
+            text: "Useful context",
+          }),
+        ]),
+      },
+      canReadDocument,
+    });
+
+    const result = await builder.buildContext({
+      queryText: "blank chunks",
+      liveChatMessages: [],
+    });
+
+    expect(canReadDocument).toHaveBeenCalledTimes(1);
+    expect(canReadDocument).toHaveBeenCalledWith("source-useful");
+    expect(canReadDocument).not.toHaveBeenCalledWith("source-blank");
+    expect(result.retrievedFragmentCount).toBe(2);
+    expect(result.allowedFragments.map((item) => item.id)).toEqual(["useful-fragment"]);
+  });
+
   it("rejects missing query embedding", async () => {
     const builder = createDocumentRetrievalContextBuilder({
       embeddingProfileId: "static-dev-6d",
