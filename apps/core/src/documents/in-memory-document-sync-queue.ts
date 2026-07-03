@@ -160,6 +160,9 @@ function sanitizeMaxAttempts(value: number): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error("maxAttempts must be a positive integer");
   }
+  if (!Number.isSafeInteger(value)) {
+    throw new Error("maxAttempts must be a positive safe integer");
+  }
 
   return value;
 }

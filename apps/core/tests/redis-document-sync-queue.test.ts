@@ -249,6 +249,22 @@ describe("RedisDocumentSyncQueue", () => {
     });
   });
 
+  it("rejects unsafe integer max attempts", () => {
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+
+    expect(() => createRedisDocumentSyncQueue({ client, maxAttempts: 9007199254740992 })).toThrow(
+      "maxAttempts must be a positive safe integer",
+    );
+  });
+
   it("moves failed jobs to Redis DLQ at max attempts", async () => {
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(),

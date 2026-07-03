@@ -233,6 +233,20 @@ describe("RedisRawEventQueue", () => {
     expect(client.rPush).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe integer max attempts", () => {
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      sRem: vi.fn(),
+    };
+
+    expect(() => createRedisRawEventQueue({ client, maxAttempts: 9007199254740992 })).toThrow(
+      "maxAttempts must be a positive safe integer",
+    );
+  });
+
   it("moves failed raw events to Redis DLQ at max attempts", async () => {
     const client: RedisRawEventQueueClient = {
       eval: vi.fn(),

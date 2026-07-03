@@ -118,6 +118,12 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.getDeadLetterCount()).resolves.toBe(0);
   });
 
+  it("rejects unsafe integer max attempts", () => {
+    expect(() => new InMemoryDocumentReindexQueue({ maxAttempts: 9007199254740992 })).toThrow(
+      "maxAttempts must be a positive safe integer",
+    );
+  });
+
   it("keeps requeued failed jobs deduplicated by idempotency key", async () => {
     const queue = new InMemoryDocumentReindexQueue({ maxAttempts: 3 });
     const job = jobFixture();

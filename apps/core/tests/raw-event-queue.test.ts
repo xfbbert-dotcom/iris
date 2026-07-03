@@ -98,6 +98,12 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.getDeadLetterCount()).resolves.toBe(0);
   });
 
+  it("rejects unsafe integer max attempts", () => {
+    expect(() => new InMemoryRawEventQueue({ maxAttempts: 9007199254740992 })).toThrow(
+      "maxAttempts must be a positive safe integer",
+    );
+  });
+
   it("deduplicates platform retries after a failed event is requeued", async () => {
     const queue = new InMemoryRawEventQueue({ maxAttempts: 3 });
     const event = eventFixture();

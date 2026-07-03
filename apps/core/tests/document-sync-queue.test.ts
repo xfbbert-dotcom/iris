@@ -64,6 +64,12 @@ describe("DocumentSyncQueue", () => {
     await expect(queue.getDeadLetterCount()).resolves.toBe(0);
   });
 
+  it("rejects unsafe integer max attempts", () => {
+    expect(() => createInMemoryDocumentSyncQueue({ maxAttempts: 9007199254740992 })).toThrow(
+      "maxAttempts must be a positive safe integer",
+    );
+  });
+
   it("moves failed jobs to DLQ at max attempts", async () => {
     const queue = createInMemoryDocumentSyncQueue({ maxAttempts: 3 });
     const syncJob = job({ attempts: 2 });
