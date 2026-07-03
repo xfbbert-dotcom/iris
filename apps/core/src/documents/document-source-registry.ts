@@ -376,6 +376,7 @@ function registerSource(
     originMessageId: existing.originMessageId ?? next.originMessageId,
     submittedByUserId: existing.submittedByUserId ?? next.submittedByUserId,
     authorizedSpaceId: existing.authorizedSpaceId ?? next.authorizedSpaceId,
+    syncState: existing.syncState === "failed" ? "pending" : existing.syncState,
     canUseForAnswering: existing.canUseForAnswering,
     canUseForKnowledgeDrafts:
       existing.canUseForKnowledgeDrafts || next.canUseForKnowledgeDrafts,

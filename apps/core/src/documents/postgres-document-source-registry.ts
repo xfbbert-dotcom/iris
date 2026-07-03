@@ -359,6 +359,7 @@ set
   submitted_by_user_id = coalesce(submitted_by_user_id, $5),
   authorized_space_id = coalesce(authorized_space_id, $6),
   can_use_for_knowledge_drafts = can_use_for_knowledge_drafts or $7,
+  sync_state = case when sync_state = 'failed' then 'pending' else sync_state end,
   updated_at = $8
 where id = $9
 `,

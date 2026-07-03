@@ -273,6 +273,38 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     ]);
   });
 
+  it("resets failed sync state to pending when registration adds new evidence", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        sync_state: "failed",
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      originGroupId: "group-1",
+      originMessageId: "message-2",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "sync_state = case when sync_state = 'failed' then 'pending' else sync_state end",
+    );
+  });
+
   it("rolls back and releases the client when registration fails", async () => {
     const fake = createFakePool({
       failOnSql: (sql) =>
