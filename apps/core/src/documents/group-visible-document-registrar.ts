@@ -48,11 +48,15 @@ export function createGroupVisibleDocumentRegistrar({
 function dedupeLinks(links: FeishuDocumentLink[]): FeishuDocumentLink[] {
   const seen = new Set<string>();
 
-  return links.filter((link) => {
-    if (seen.has(link.sourceUri)) {
-      return false;
+  return links.flatMap((link) => {
+    const sourceUri = link.sourceUri.trim();
+    if (seen.has(sourceUri)) {
+      return [];
     }
-    seen.add(link.sourceUri);
-    return true;
+    if (sourceUri.length === 0) {
+      return [];
+    }
+    seen.add(sourceUri);
+    return [{ ...link, sourceUri }];
   });
 }

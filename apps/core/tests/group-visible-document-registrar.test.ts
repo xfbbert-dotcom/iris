@@ -75,6 +75,37 @@ describe("GroupVisibleDocumentRegistrar", () => {
     expect(syncPlanner.planRegisteredSources).toHaveBeenCalledTimes(1);
   });
 
+  it("deduplicates links by trimmed sourceUri before registration", async () => {
+    const registered = source({ id: "source-1" });
+    const registry = {
+      registerGroupVisibleDocument: vi.fn(async () => registered),
+    };
+    const syncPlanner = {
+      planRegisteredSources: vi.fn(async () => ({ enqueuedCount: 1, skippedCount: 0 })),
+    };
+    const registrar = createGroupVisibleDocumentRegistrar({ registry, syncPlanner });
+
+    await registrar.registerDiscoveredLinks({
+      chatId: "oc_1",
+      messageId: "om_1",
+      observedAt: new Date("2026-07-02T10:00:00.000Z"),
+      links: [
+        { sourceUri: " https://docs.feishu.cn/docx/a " },
+        { sourceUri: "https://docs.feishu.cn/docx/a" },
+      ],
+    });
+
+    expect(registry.registerGroupVisibleDocument).toHaveBeenCalledTimes(1);
+    expect(registry.registerGroupVisibleDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/a",
+      originGroupId: "oc_1",
+      originMessageId: "om_1",
+      observedByUserId: undefined,
+      observedAt: new Date("2026-07-02T10:00:00.000Z"),
+    });
+    expect(syncPlanner.planRegisteredSources).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects when sync planning fails", async () => {
     const registry = {
       registerGroupVisibleDocument: vi.fn(async () => source({ id: "source-1" })),
