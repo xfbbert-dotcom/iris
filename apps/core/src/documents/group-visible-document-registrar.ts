@@ -31,7 +31,7 @@ export function createGroupVisibleDocumentRegistrar({
 }): GroupVisibleDocumentRegistrar {
   return {
     async registerDiscoveredLinks(input) {
-      for (const link of input.links) {
+      for (const link of dedupeLinks(input.links)) {
         const source = await registry.registerGroupVisibleDocument({
           sourceUri: link.sourceUri,
           originGroupId: input.chatId,
@@ -43,4 +43,16 @@ export function createGroupVisibleDocumentRegistrar({
       }
     },
   };
+}
+
+function dedupeLinks(links: FeishuDocumentLink[]): FeishuDocumentLink[] {
+  const seen = new Set<string>();
+
+  return links.filter((link) => {
+    if (seen.has(link.sourceUri)) {
+      return false;
+    }
+    seen.add(link.sourceUri);
+    return true;
+  });
 }
