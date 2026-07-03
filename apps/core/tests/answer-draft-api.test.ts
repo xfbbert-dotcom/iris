@@ -338,6 +338,11 @@ describe("GET /internal/status", () => {
     expect(response.json()).toEqual({
       ok: true,
       generatedAt: "2026-07-03T07:30:00.000Z",
+      summary: {
+        componentCount: 5,
+        healthyComponentCount: 5,
+        degradedComponentCount: 0,
+      },
       components: {
         audit: {
           ok: true,
@@ -415,6 +420,11 @@ describe("GET /internal/status", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().ok).toBe(false);
+    expect(response.json().summary).toEqual({
+      componentCount: 5,
+      healthyComponentCount: 4,
+      degradedComponentCount: 1,
+    });
     expect(response.json().components.eventWorker).toEqual({
       ok: false,
       enabled: true,

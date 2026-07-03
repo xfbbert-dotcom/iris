@@ -202,10 +202,17 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
     };
+    const componentStatuses = Object.values(components);
+    const healthyComponentCount = componentStatuses.filter((component) => component.ok).length;
 
     return {
-      ok: Object.values(components).every((component) => component.ok),
+      ok: healthyComponentCount === componentStatuses.length,
       generatedAt: now().toISOString(),
+      summary: {
+        componentCount: componentStatuses.length,
+        healthyComponentCount,
+        degradedComponentCount: componentStatuses.length - healthyComponentCount,
+      },
       components,
     };
   });
