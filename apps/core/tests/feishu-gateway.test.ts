@@ -35,6 +35,50 @@ describe("InMemoryEventQueue", () => {
 
     expect(queue.events).toHaveLength(1);
   });
+
+  it("insulates stored events from caller mutations", async () => {
+    const queue = new InMemoryEventQueue();
+    const event = {
+      idempotencyKey: "event-1",
+      receivedAt: new Date("2026-06-30T00:00:00.000Z"),
+      body: { event_id: "event-1", nested: { value: "original" } }
+    };
+
+    await queue.enqueueRawFeishuEvent(event);
+    event.receivedAt.setUTCFullYear(2030);
+    event.body.event_id = "event-mutated";
+    event.body.nested.value = "mutated";
+
+    expect(queue.events).toEqual([
+      {
+        idempotencyKey: "event-1",
+        receivedAt: new Date("2026-06-30T00:00:00.000Z"),
+        body: { event_id: "event-1", nested: { value: "original" } }
+      }
+    ]);
+  });
+
+  it("insulates stored events from returned event mutations", async () => {
+    const queue = new InMemoryEventQueue();
+    await queue.enqueueRawFeishuEvent({
+      idempotencyKey: "event-1",
+      receivedAt: new Date("2026-06-30T00:00:00.000Z"),
+      body: { event_id: "event-1", nested: { value: "original" } }
+    });
+
+    const [stored] = queue.events;
+    stored.receivedAt.setUTCFullYear(2030);
+    (stored.body as { event_id: string; nested: { value: string } }).event_id = "event-mutated";
+    (stored.body as { event_id: string; nested: { value: string } }).nested.value = "mutated";
+
+    expect(queue.events).toEqual([
+      {
+        idempotencyKey: "event-1",
+        receivedAt: new Date("2026-06-30T00:00:00.000Z"),
+        body: { event_id: "event-1", nested: { value: "original" } }
+      }
+    ]);
+  });
 });
 
 describe("FeishuGateway", () => {
