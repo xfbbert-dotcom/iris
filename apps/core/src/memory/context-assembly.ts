@@ -16,9 +16,15 @@ export type PromptContextInput = {
 
 const DEFAULT_LIVE_CHAT_LIMIT = 20;
 const MAX_LIVE_CHAT_LIMIT = 20;
+const MAX_BACKGROUND_DOCUMENT_LIMIT = 12;
 
 export function assemblePromptContext(input: PromptContextInput): string {
   const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
+  const backgroundDocuments = input.backgroundDocuments
+    .filter(
+      (document) => document.source.trim().length > 0 && document.text.trim().length > 0,
+    )
+    .slice(0, MAX_BACKGROUND_DOCUMENT_LIMIT);
   const meaningfulLiveChatMessages = input.liveChatMessages.filter(
     (message) => message.speaker.trim().length > 0 && message.text.trim().length > 0,
   );
@@ -28,7 +34,7 @@ export function assemblePromptContext(input: PromptContextInput): string {
 
   return [
     "<background_documents>",
-    ...input.backgroundDocuments.map(formatBackgroundDocument),
+    ...backgroundDocuments.map(formatBackgroundDocument),
     "</background_documents>",
     "",
     "<live_chat_context>",

@@ -129,6 +129,41 @@ describe("assemblePromptContext", () => {
     expect(context).not.toContain("  Useful document context.  ");
   });
 
+  it("caps background documents to the first 12 items", () => {
+    const backgroundDocuments = Array.from({ length: 14 }, (_, index) => ({
+      source: `doc-${index + 1}`,
+      text: `document-${index + 1}`
+    }));
+
+    const context = assemblePromptContext({
+      backgroundDocuments,
+      liveChatMessages: []
+    });
+
+    expect(context).toContain('<document source="doc-1">document-1</document>');
+    expect(context).toContain('<document source="doc-12">document-12</document>');
+    expect(context).not.toContain('<document source="doc-13">document-13</document>');
+    expect(context).not.toContain('<document source="doc-14">document-14</document>');
+  });
+
+  it("filters blank background documents before applying the limit", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [
+        { source: "doc-a", text: "Useful document" },
+        { source: "   ", text: "missing source" },
+        { source: "doc-b", text: "\n\t" },
+        { source: "doc-c", text: "Second useful document" }
+      ],
+      liveChatMessages: []
+    });
+
+    expect(context).toContain('<document source="doc-a">Useful document</document>');
+    expect(context).toContain('<document source="doc-c">Second useful document</document>');
+    expect(context).not.toContain("missing source");
+    expect(context).not.toContain('source=""');
+    expect(context).not.toContain('<document source="doc-b">');
+  });
+
   it("excludes live messages when liveChatLimit is negative", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],
