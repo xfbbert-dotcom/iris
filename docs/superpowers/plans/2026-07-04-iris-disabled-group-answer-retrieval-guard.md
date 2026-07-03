@@ -64,7 +64,7 @@ docker compose config
 npm test
 ```
 
-- [ ] **Step 2: Commit and push**
+- [x] **Step 2: Commit and push**
 
 Commit with:
 
