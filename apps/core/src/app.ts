@@ -429,6 +429,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
           sources,
         };
       }
+      if (sources.length === 0) {
+        return {
+          ok: true,
+          sources: [],
+        };
+      }
 
       const latestSnapshotsBySourceId = await documentSyncRuntime.sources.getLatestSnapshots({
         sourceIds: sources.map((source) => source.id),

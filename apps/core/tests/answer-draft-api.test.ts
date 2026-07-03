@@ -1779,6 +1779,37 @@ describe("document sync source inventory API", () => {
     expect(runtime.sources.getLatestSnapshot).not.toHaveBeenCalled();
   });
 
+  it("does not fetch latest snapshots for empty source inventory pages", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(async () => []),
+        get: vi.fn(),
+        updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
+        getSnapshot: vi.fn(),
+        getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?limit=0&includeLatestSnapshot=true",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, sources: [] });
+    expect(runtime.sources.list).toHaveBeenCalledWith({
+      limit: 0,
+      includeLatestSnapshot: true,
+    });
+    expect(runtime.sources.getLatestSnapshots).not.toHaveBeenCalled();
+  });
+
   it("lists document sources by source type", async () => {
     const runtime = fakeDocumentSyncRuntime({
       sources: {
