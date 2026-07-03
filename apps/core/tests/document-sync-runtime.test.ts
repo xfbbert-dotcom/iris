@@ -220,6 +220,7 @@ describe("createDocumentSyncRuntime", () => {
     expect(dependencies.createFeishuDocumentBodyFetcher).toHaveBeenCalledWith({
       baseUrl: "https://open.example.com",
       tokenProvider,
+      timeoutMs: 7000,
     });
     expect(dependencies.createDocumentSyncQueue).toHaveBeenCalledWith({
       eval: expect.any(Function),
@@ -498,6 +499,7 @@ function enabledEnv() {
     FEISHU_APP_ID: "app-id",
     FEISHU_APP_SECRET: "app-secret",
     FEISHU_OPEN_BASE_URL: "https://open.example.com/",
+    IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: "7000",
     IRIS_EMBEDDING_PROVIDER: "openai-compatible",
     IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
     IRIS_EMBEDDING_API_KEY: "key",

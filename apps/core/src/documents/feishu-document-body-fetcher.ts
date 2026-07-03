@@ -6,8 +6,11 @@ export type FeishuDocumentBodyFetcherDependencies = {
   baseUrl: string;
   tokenProvider: FeishuTenantAccessTokenProvider;
   fetch?: typeof fetch;
+  timeoutMs?: number;
   now?: () => Date;
 };
+
+const DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS = 10_000;
 
 const supportedSourceTypes = new Set<DocumentSourceType>([
   "group_visible_document",
@@ -48,6 +51,7 @@ export function createFeishuDocumentBodyFetcher({
   baseUrl,
   tokenProvider,
   fetch = globalThis.fetch,
+  timeoutMs = DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS,
   now = () => new Date(),
 }: FeishuDocumentBodyFetcherDependencies): DocumentBodyFetcher {
   return {
@@ -66,18 +70,27 @@ export function createFeishuDocumentBodyFetcher({
         if (wikiNodeToken === undefined) {
           throw new Error(`unsupported Feishu docx URL: ${source.sourceUri}`);
         }
-        documentId = await fetchWikiDocumentId({ baseUrl, wikiNodeToken, tenantAccessToken, fetch });
+        documentId = await fetchWikiDocumentId({
+          baseUrl,
+          wikiNodeToken,
+          tenantAccessToken,
+          fetch,
+          timeoutMs,
+        });
       }
 
-      const response = await fetch(
-        `${trimTrailingSlash(baseUrl)}/open-apis/docx/v1/documents/${encodeURIComponent(
+      const response = await fetchWithTimeout({
+        fetch,
+        url: `${trimTrailingSlash(baseUrl)}/open-apis/docx/v1/documents/${encodeURIComponent(
           documentId,
         )}/raw_content`,
-        {
+        init: {
           method: "GET",
           headers: { authorization: `Bearer ${tenantAccessToken}` },
         },
-      );
+        timeoutMs,
+        timeoutMessage: "Feishu document raw content request timed out",
+      });
       const responseBody = await readJsonResponse(
         response,
         "Feishu document raw content response was not valid JSON",
@@ -105,21 +118,26 @@ async function fetchWikiDocumentId({
   wikiNodeToken,
   tenantAccessToken,
   fetch,
+  timeoutMs,
 }: {
   baseUrl: string;
   wikiNodeToken: string;
   tenantAccessToken: string;
   fetch: typeof globalThis.fetch;
+  timeoutMs: number;
 }): Promise<string> {
-  const response = await fetch(
-    `${trimTrailingSlash(baseUrl)}/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(
+  const response = await fetchWithTimeout({
+    fetch,
+    url: `${trimTrailingSlash(baseUrl)}/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(
       wikiNodeToken,
     )}`,
-    {
+    init: {
       method: "GET",
       headers: { authorization: `Bearer ${tenantAccessToken}` },
     },
-  );
+    timeoutMs,
+    timeoutMessage: "Feishu wiki node request timed out",
+  });
   const responseBody = await readJsonResponse(
     response,
     "Feishu wiki node response was not valid JSON",
@@ -134,6 +152,37 @@ async function fetchWikiDocumentId({
   }
 
   return readWikiDocumentId(responseBody);
+}
+
+async function fetchWithTimeout({
+  fetch,
+  url,
+  init,
+  timeoutMs,
+  timeoutMessage,
+}: {
+  fetch: typeof globalThis.fetch;
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+  timeoutMessage: string;
+}): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(timeoutMessage);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function assertSupportedSourceType(sourceType: DocumentSourceType): void {
@@ -224,6 +273,10 @@ function isSupportedFeishuHost(hostname: string): boolean {
     host.endsWith(".feishu.cn") ||
     host.endsWith(".larksuite.com")
   );
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

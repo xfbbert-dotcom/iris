@@ -212,6 +212,7 @@ export type DocumentSyncRuntimeDependencies = {
   createFeishuDocumentBodyFetcher?: (dependencies: {
     baseUrl: string;
     tokenProvider: FeishuTenantAccessTokenProvider;
+    timeoutMs: number;
   }) => DocumentBodyFetcher;
   createDocumentSyncQueue?: (client: RedisDocumentSyncQueueClient) => DocumentSyncRuntimeQueue;
   createDocumentReindexQueue?: (
@@ -292,6 +293,7 @@ function createEnabledDocumentSyncRuntime({
   const fetcher = createBodyFetcher({
     baseUrl: feishuConfig.baseUrl,
     tokenProvider,
+    timeoutMs: feishuConfig.documentFetchTimeoutMs,
   });
   const queue = createQueue(createLazyRedisDocumentSyncQueueClient(redisConnection));
   const manualPlanner = createManualPlanner({

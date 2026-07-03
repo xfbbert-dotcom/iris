@@ -56,6 +56,7 @@ export type FeishuOpenApiConfig = {
   appId: string;
   appSecret: string;
   baseUrl: string;
+  documentFetchTimeoutMs: number;
 };
 
 export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConfig {
@@ -211,6 +212,11 @@ export function readFeishuOpenApiConfig(env: EnvLike = process.env): FeishuOpenA
     appId: readRequiredEnv("FEISHU_APP_ID", env.FEISHU_APP_ID),
     appSecret: readRequiredEnv("FEISHU_APP_SECRET", env.FEISHU_APP_SECRET),
     baseUrl: trimTrailingSlash(readOptionalEnv(env.FEISHU_OPEN_BASE_URL) ?? "https://open.feishu.cn"),
+    documentFetchTimeoutMs: readPositiveIntegerEnv(
+      "IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS",
+      env.IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS,
+      10000,
+    ),
   };
 }
 

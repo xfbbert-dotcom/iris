@@ -132,6 +132,8 @@ Iris must not use a document link to bypass Feishu permissions. If a document is
 
 Local permission state is never enough for sensitive retrieval. Before document fragments retrieved from pgvector are passed into the LLM, TypeScript Core App must run a real-time permission guard against Feishu for the candidate document IDs whenever the answer depends on document content. This guard exists because indirect permission changes, such as parent-folder permission changes or group membership changes, may lag behind or bypass clean webhook notifications.
 
+Feishu document body reads are external I/O and must always be bounded by request timeouts. If wiki-node lookup or raw-content fetch stalls, Iris must fail the document sync attempt and let the queue retry/dead-letter policy handle recovery rather than occupying a worker indefinitely.
+
 Constitutional principle:
 
 > Iris reads both chat text and readable document bodies. Every document entering memory must preserve source, permission, version, and visibility scope.
@@ -595,6 +597,23 @@ Required architectural response:
 Evolution signal:
 
 If document-heavy groups become common, introduce a Context Assembly module or service responsible for ranking, compression, source budgeting, prompt layout, and evaluation of answer faithfulness to live-chat intent.
+
+### 12.4 Feishu Document Fetch Stall
+
+Pressure:
+
+Feishu document APIs or the network may stall during wiki-node lookup or raw-content fetch. Without a bounded request timeout, a document sync worker can remain occupied by one external call and reduce the system's ability to process newer work.
+
+Required architectural response:
+
+- Every Feishu document body request must carry an abortable timeout.
+- Timeout failures must become explicit document sync failures, not hanging promises.
+- Queue retry and dead-letter policy must handle repeated fetch stalls.
+- Operators must be able to tune the timeout for their deployment without changing code.
+
+Evolution signal:
+
+If document fetch stalls or Feishu rate limits become frequent, Iris may introduce a dedicated Document Fetch Service with request coalescing, adaptive backoff, per-source freshness policies, and provider-specific rate-limit handling. The service must still preserve source visibility and permission boundaries.
 
 Constitutional principle:
 

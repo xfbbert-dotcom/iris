@@ -59,10 +59,11 @@ describe("FeishuDocumentBodyFetcher", () => {
     expect(tokenProvider.getTenantAccessToken).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledWith(
       "https://open.feishu.cn/open-apis/docx/v1/documents/doc_token_1/raw_content",
-      {
+      expect.objectContaining({
         method: "GET",
         headers: { authorization: "Bearer tenant-token" },
-      },
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -94,10 +95,11 @@ describe("FeishuDocumentBodyFetcher", () => {
     expect(tokenProvider.getTenantAccessToken).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledWith(
       "https://open.feishu.cn/open-apis/docx/v1/documents/doc_token_1/raw_content",
-      {
+      expect.objectContaining({
         method: "GET",
         headers: { authorization: "Bearer tenant-token" },
-      },
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -137,18 +139,80 @@ describe("FeishuDocumentBodyFetcher", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       "https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=wiki_token_1",
-      {
+      expect.objectContaining({
         method: "GET",
         headers: { authorization: "Bearer tenant-token" },
-      },
+        signal: expect.any(AbortSignal),
+      }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "https://open.feishu.cn/open-apis/docx/v1/documents/doc_token_from_wiki/raw_content",
-      {
+      expect.objectContaining({
         method: "GET",
         headers: { authorization: "Bearer tenant-token" },
-      },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it("times out raw content requests", async () => {
+    const fetch = vi.fn(async (_url, init) => {
+      if (init?.signal === undefined) {
+        throw new Error("missing abort signal");
+      }
+      init.signal.dispatchEvent(new Event("abort"));
+      throw abortError();
+    }) as typeof globalThis.fetch;
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+      timeoutMs: 1,
+    });
+
+    await expect(fetcher.fetch(source())).rejects.toThrow(
+      "Feishu document raw content request timed out",
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/docx/v1/documents/doc_token_1/raw_content",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it("times out wiki node requests", async () => {
+    const fetch = vi.fn(async (_url, init) => {
+      if (init?.signal === undefined) {
+        throw new Error("missing abort signal");
+      }
+      init.signal.dispatchEvent(new Event("abort"));
+      throw abortError();
+    }) as typeof globalThis.fetch;
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+      timeoutMs: 1,
+    });
+
+    await expect(
+      fetcher.fetch(
+        source({
+          sourceType: "authorized_wiki_document",
+          sourceUri: "https://acme.feishu.cn/wiki/wiki_token_1",
+          originGroupId: undefined,
+          originMessageId: undefined,
+          authorizedSpaceId: "space-1",
+        }),
+      ),
+    ).rejects.toThrow("Feishu wiki node request timed out");
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=wiki_token_1",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -290,4 +354,10 @@ function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {
     status: init.status ?? 200,
     json: async () => body,
   } as Response;
+}
+
+function abortError(): Error {
+  const error = new Error("aborted");
+  error.name = "AbortError";
+  return error;
 }

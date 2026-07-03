@@ -353,15 +353,17 @@ describe("readFeishuOpenApiConfig", () => {
         FEISHU_APP_ID: " app-id ",
         FEISHU_APP_SECRET: " app-secret ",
         FEISHU_OPEN_BASE_URL: " https://open.example.com/ ",
+        IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: " 2500 ",
       }),
     ).toEqual({
       appId: "app-id",
       appSecret: "app-secret",
       baseUrl: "https://open.example.com",
+      documentFetchTimeoutMs: 2500,
     });
   });
 
-  it("defaults Feishu OpenAPI base URL", () => {
+  it("defaults Feishu OpenAPI base URL and document fetch timeout", () => {
     expect(
       readFeishuOpenApiConfig({
         FEISHU_APP_ID: "app-id",
@@ -371,6 +373,7 @@ describe("readFeishuOpenApiConfig", () => {
       appId: "app-id",
       appSecret: "app-secret",
       baseUrl: "https://open.feishu.cn",
+      documentFetchTimeoutMs: 10000,
     });
   });
 
@@ -378,5 +381,15 @@ describe("readFeishuOpenApiConfig", () => {
     expect(() => readFeishuOpenApiConfig({ FEISHU_APP_ID: "app-id" })).toThrow(
       "FEISHU_APP_SECRET is required",
     );
+  });
+
+  it("rejects invalid Feishu document fetch timeout values", () => {
+    expect(() =>
+      readFeishuOpenApiConfig({
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: "0",
+      }),
+    ).toThrow("IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS must be a positive integer");
   });
 });
