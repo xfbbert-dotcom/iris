@@ -35,12 +35,11 @@ function parseFeishuPathToken(sourceUri: string, markers: string[]): string | un
   }
 
   const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
-  const markerIndex = segments.findIndex((segment) => markers.includes(segment));
-  if (markerIndex < 0) {
+  if (!markers.includes(segments[0] ?? "")) {
     return undefined;
   }
 
-  const token = segments[markerIndex + 1];
+  const token = segments[1];
   return token === undefined || token.trim().length === 0 ? undefined : token;
 }
 
