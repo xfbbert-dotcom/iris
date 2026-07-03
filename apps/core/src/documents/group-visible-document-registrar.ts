@@ -31,15 +31,21 @@ export function createGroupVisibleDocumentRegistrar({
 }): GroupVisibleDocumentRegistrar {
   return {
     async registerDiscoveredLinks(input) {
+      const registeredSources: DocumentSource[] = [];
       for (const link of dedupeLinks(input.links)) {
-        const source = await registry.registerGroupVisibleDocument({
-          sourceUri: link.sourceUri,
-          originGroupId: input.chatId,
-          originMessageId: input.messageId,
-          observedByUserId: input.senderId,
-          observedAt: input.observedAt,
-        });
-        await syncPlanner?.planRegisteredSources([source]);
+        registeredSources.push(
+          await registry.registerGroupVisibleDocument({
+            sourceUri: link.sourceUri,
+            originGroupId: input.chatId,
+            originMessageId: input.messageId,
+            observedByUserId: input.senderId,
+            observedAt: input.observedAt,
+          }),
+        );
+      }
+
+      if (registeredSources.length > 0) {
+        await syncPlanner?.planRegisteredSources(registeredSources);
       }
     },
   };

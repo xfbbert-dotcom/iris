@@ -51,6 +51,33 @@ describe("GroupVisibleDocumentRegistrar", () => {
     expect(syncPlanner.planRegisteredSources).toHaveBeenCalledWith([registered]);
   });
 
+  it("plans sync once with every registered document from a message", async () => {
+    const first = source({ id: "source-1", sourceUri: "https://docs.feishu.cn/docx/a" });
+    const second = source({ id: "source-2", sourceUri: "https://docs.feishu.cn/docx/b" });
+    const registry = {
+      registerGroupVisibleDocument: vi.fn(async (input: { sourceUri: string }) =>
+        input.sourceUri.endsWith("/a") ? first : second,
+      ),
+    };
+    const syncPlanner = {
+      planRegisteredSources: vi.fn(async () => ({ enqueuedCount: 2, skippedCount: 0 })),
+    };
+    const registrar = createGroupVisibleDocumentRegistrar({ registry, syncPlanner });
+
+    await registrar.registerDiscoveredLinks({
+      chatId: "oc_1",
+      messageId: "om_1",
+      observedAt: new Date("2026-07-02T10:00:00.000Z"),
+      links: [
+        { sourceUri: "https://docs.feishu.cn/docx/a" },
+        { sourceUri: "https://docs.feishu.cn/docx/b" },
+      ],
+    });
+
+    expect(syncPlanner.planRegisteredSources).toHaveBeenCalledTimes(1);
+    expect(syncPlanner.planRegisteredSources).toHaveBeenCalledWith([first, second]);
+  });
+
   it("deduplicates repeated links before registration and sync planning", async () => {
     const registered = source({ id: "source-1" });
     const registry = {
