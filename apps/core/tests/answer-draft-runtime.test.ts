@@ -343,6 +343,95 @@ describe("createAnswerDraftRuntime", () => {
     expect(runtimeController.canRetrieveKnowledgeBase).toHaveBeenCalled();
   });
 
+  it("excludes group-visible answer fragments whose source groups are disabled", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(async (_input: GenerateAnswerDraftInput) => ({
+        answerText: "Runtime draft",
+      })),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-disabled-group",
+          documentSourceId: "source-disabled-group",
+          text: "Disabled group document text",
+        }),
+        fragment({
+          id: "fragment-enabled-group",
+          documentSourceId: "source-enabled-group",
+          text: "Enabled group document text",
+        }),
+        fragment({
+          id: "fragment-user",
+          documentSourceId: "source-user",
+          text: "User submitted text",
+        }),
+      ]),
+    };
+    const sources: Record<string, DocumentSource | undefined> = {
+      "source-disabled-group": source({
+        id: "source-disabled-group",
+        sourceType: "group_visible_document",
+        originGroupId: "chat-disabled",
+        permissionState: "readable",
+      }),
+      "source-enabled-group": source({
+        id: "source-enabled-group",
+        sourceType: "group_visible_document",
+        originGroupId: "chat-enabled",
+        permissionState: "readable",
+      }),
+      "source-user": source({
+        id: "source-user",
+        sourceType: "user_submitted_document",
+        permissionState: "readable",
+      }),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async (id: string) => sources[id]),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn((groupId: string) => groupId !== "chat-disabled"),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What can Iris use?",
+      liveChatMessages: [],
+    });
+
+    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    expect(promptContext).not.toContain("Disabled group document text");
+    expect(promptContext).toContain("Enabled group document text");
+    expect(promptContext).toContain("User submitted text");
+    expect(result?.allowedFragments.map((item) => item.id)).toEqual([
+      "fragment-enabled-group",
+      "fragment-user",
+    ]);
+    expect(result?.deniedDocumentIds).toEqual(["source-disabled-group"]);
+    expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-disabled");
+    expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-enabled");
+  });
+
   it("uses configured OpenAI-compatible embedding provider when dimensions are 6", async () => {
     const embeddingProvider = { embedTexts: vi.fn(async () => [[0, 1, 0, 0, 0, 0]]) };
     const embeddingProfiles = {

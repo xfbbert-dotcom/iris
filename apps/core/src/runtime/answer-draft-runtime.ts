@@ -74,6 +74,7 @@ export type AnswerDraftRuntimeDependencies = {
 type RuntimeRetrievalGate = {
   canReadDocuments(): boolean;
   canRetrieveKnowledgeBase(): boolean;
+  canProcessGroupMessage?(groupId: string): boolean;
 };
 
 type RuntimeEmbedding = {
@@ -216,13 +217,47 @@ function canUseSourceByRuntimeCapabilities(
     return true;
   }
   if (source.sourceType === "group_visible_document") {
-    return runtimeController.canReadDocuments();
+    return canUseGroupVisibleSource(source, runtimeController);
   }
   if (source.sourceType === "authorized_wiki_document") {
     return runtimeController.canRetrieveKnowledgeBase();
   }
 
   return true;
+}
+
+function canUseGroupVisibleSource(source: DocumentSource, runtimeController: RuntimeRetrievalGate): boolean {
+  if (!runtimeController.canReadDocuments()) {
+    return false;
+  }
+
+  if (runtimeController.canProcessGroupMessage === undefined) {
+    return true;
+  }
+
+  const sourceGroupIds = collectSourceGroupIds(source);
+  if (sourceGroupIds.length === 0) {
+    return true;
+  }
+
+  return sourceGroupIds.some((groupId) => runtimeController.canProcessGroupMessage?.(groupId) === true);
+}
+
+function collectSourceGroupIds(source: DocumentSource): string[] {
+  const groupIds = new Set<string>();
+  addGroupId(groupIds, source.originGroupId);
+  for (const evidence of source.evidence) {
+    addGroupId(groupIds, evidence.groupId);
+  }
+
+  return [...groupIds];
+}
+
+function addGroupId(groupIds: Set<string>, groupId: string | undefined): void {
+  const normalized = groupId?.trim();
+  if (normalized !== undefined && normalized.length > 0) {
+    groupIds.add(normalized);
+  }
 }
 
 async function resolveRuntimeEmbedding({
