@@ -12,6 +12,9 @@ describe("FeishuDocumentBodyFetcher", () => {
     expect(parseFeishuDocxDocumentId("https://docs.feishu.cn/docx/doc_token_1")).toBe(
       "doc_token_1",
     );
+    expect(parseFeishuDocxDocumentId("https://docs.feishu.cn/DOCX/doc_token_upper")).toBe(
+      "doc_token_upper",
+    );
     expect(parseFeishuDocxDocumentId("https://acme.feishu.cn/docs/doc_token_2?from=chat")).toBe(
       "doc_token_2",
     );
@@ -25,6 +28,9 @@ describe("FeishuDocumentBodyFetcher", () => {
   it("parses wiki node tokens from Feishu URLs", () => {
     expect(parseFeishuWikiNodeToken("https://acme.feishu.cn/wiki/wiki_token_1")).toBe(
       "wiki_token_1",
+    );
+    expect(parseFeishuWikiNodeToken("https://acme.feishu.cn/WIKI/wiki_token_upper")).toBe(
+      "wiki_token_upper",
     );
     expect(parseFeishuWikiNodeToken("https://acme.feishu.cn/wiki/wiki_token_2?from=chat")).toBe(
       "wiki_token_2",

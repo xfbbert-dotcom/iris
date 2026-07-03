@@ -35,7 +35,8 @@ function parseFeishuPathToken(sourceUri: string, markers: string[]): string | un
   }
 
   const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
-  if (!markers.includes(segments[0] ?? "")) {
+  const marker = segments[0]?.toLowerCase();
+  if (marker === undefined || !markers.includes(marker)) {
     return undefined;
   }
 
