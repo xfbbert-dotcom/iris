@@ -149,9 +149,16 @@ export function createDocumentSyncRunner({
         fetchedAt: fetchResult.fetchedAt,
       });
       await registry.markSyncState(source.id, "synced");
-      await syncedSnapshotReindexer?.enqueueSyncedSnapshotReindex({
-        documentSnapshotId: snapshot.id,
-      });
+      if (syncedSnapshotReindexer !== undefined) {
+        try {
+          await syncedSnapshotReindexer.enqueueSyncedSnapshotReindex({
+            documentSnapshotId: snapshot.id,
+          });
+        } catch (error) {
+          await registry.markSyncState(source.id, "pending");
+          throw error;
+        }
+      }
 
       return { status: "synced", source, snapshot };
     },

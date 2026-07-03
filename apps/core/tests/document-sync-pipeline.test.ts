@@ -241,6 +241,58 @@ describe("createDocumentSyncRunner", () => {
     });
   });
 
+  it("marks a successfully fetched source pending again when reindex enqueue fails", async () => {
+    const candidate = source({ id: "source-with-reindex-failure" });
+    const calls: string[] = [];
+    const succeededSnapshot = snapshot({
+      id: "snapshot-with-reindex-failure",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchedAt,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) => {
+        calls.push(`mark:${syncState}`);
+        return source({ id, syncState: syncState as DocumentSource["syncState"] });
+      }),
+    };
+    const syncedSnapshotReindexer = {
+      enqueueSyncedSnapshotReindex: vi.fn(async () => {
+        calls.push("reindex");
+        throw new Error("reindex queue unavailable");
+      }),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots: {
+        insertSucceededSnapshot: vi.fn(async () => {
+          calls.push("snapshot:succeeded");
+          return succeededSnapshot;
+        }),
+        insertFailedSnapshot: vi.fn(),
+      },
+      fetcher: {
+        fetch: vi.fn(async () => ({
+          bodyText: "Document body",
+          fetchedAt,
+        })),
+      },
+      syncedSnapshotReindexer,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-reindex-failure"),
+    ).rejects.toThrow("reindex queue unavailable");
+    expect(calls).toEqual([
+      "mark:syncing",
+      "snapshot:succeeded",
+      "mark:synced",
+      "reindex",
+      "mark:pending",
+    ]);
+  });
+
   it("does not enqueue reindex after a failed sync snapshot", async () => {
     const candidate = source({ id: "source-with-fetch-failure" });
     const syncedSnapshotReindexer = {
