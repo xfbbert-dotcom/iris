@@ -35,6 +35,23 @@ describe("assemblePromptContext", () => {
     expect(context).toContain("message-25");
   });
 
+  it("caps explicit liveChatLimit values to the latest 20 messages", () => {
+    const liveChatMessages = Array.from({ length: 25 }, (_, index) => ({
+      speaker: "User",
+      text: `message-${index + 1}`
+    }));
+
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages,
+      liveChatLimit: 999
+    });
+
+    expect(context).not.toContain('<message speaker="User">message-1</message>');
+    expect(context).toContain('<message speaker="User">message-6</message>');
+    expect(context).toContain('<message speaker="User">message-25</message>');
+  });
+
   it("keeps live chat tags but excludes messages when liveChatLimit is 0", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],

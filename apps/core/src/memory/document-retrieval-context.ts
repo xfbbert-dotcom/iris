@@ -10,6 +10,9 @@ import {
 } from "../permissions/permission-guard.js";
 import { assemblePromptContext, type LiveChatMessage } from "./context-assembly.js";
 
+const DEFAULT_FRAGMENT_LIMIT = 8;
+const MAX_FRAGMENT_LIMIT = 12;
+
 export type QueryEmbeddingProvider = Pick<EmbeddingProvider, "embedTexts">;
 
 export type DocumentRetrievalContextInput = {
@@ -121,10 +124,10 @@ async function embedQuery(queryText: string, embedder: QueryEmbeddingProvider): 
 
 function sanitizeFragmentLimit(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) {
-    return 8;
+    return DEFAULT_FRAGMENT_LIMIT;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_FRAGMENT_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 function toPermissionGuardFragment(fragment: RetrievedDocumentFragment): PermissionGuardFragment {

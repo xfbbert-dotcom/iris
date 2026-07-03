@@ -14,6 +14,9 @@ export type PromptContextInput = {
   liveChatLimit?: number;
 };
 
+const DEFAULT_LIVE_CHAT_LIMIT = 20;
+const MAX_LIVE_CHAT_LIMIT = 20;
+
 export function assemblePromptContext(input: PromptContextInput): string {
   const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
   const meaningfulLiveChatMessages = input.liveChatMessages.filter(
@@ -48,10 +51,10 @@ function formatLiveChatMessage(message: LiveChatMessage): string {
 
 function sanitizeLiveChatLimit(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) {
-    return 20;
+    return DEFAULT_LIVE_CHAT_LIMIT;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_LIVE_CHAT_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 function escapeXml(value: string): string {

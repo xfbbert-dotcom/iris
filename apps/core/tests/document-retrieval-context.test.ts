@@ -147,6 +147,28 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(canReadDocument).toHaveBeenCalledTimes(1);
   });
 
+  it("caps explicit fragment limits before searching similar fragments", async () => {
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => []),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments,
+      canReadDocument: vi.fn(),
+    });
+
+    await builder.buildContext({
+      queryText: "large retrieval",
+      fragmentLimit: 999,
+      liveChatMessages: [],
+    });
+
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 12 }),
+    );
+  });
+
   it("filters blank allowed fragments from prompt context and returned metadata", async () => {
     const builder = createDocumentRetrievalContextBuilder({
       embeddingProfileId: "static-dev-6d",
