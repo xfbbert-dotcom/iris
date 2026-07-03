@@ -20,6 +20,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
     const syncJob = job();
@@ -41,6 +42,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce(serializeDocumentSyncJob(first))
@@ -53,6 +55,26 @@ describe("RedisDocumentSyncQueue", () => {
     expect(client.lPop).toHaveBeenCalledTimes(3);
   });
 
+  it("releases dequeued job idempotency keys from the Redis seen set", async () => {
+    const syncJob = job();
+    const client = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(async () => 1),
+      lPop: vi.fn().mockResolvedValueOnce(serializeDocumentSyncJob(syncJob)),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([syncJob]);
+    expect(client.sRem).toHaveBeenCalledWith(
+      "iris:documents:sync:seen",
+      syncJob.idempotencyKey,
+    );
+  });
+
   it("respects dequeue batch limits", async () => {
     const first = job({ documentSourceId: "source-1" });
     const second = job({ documentSourceId: "source-2" });
@@ -62,6 +84,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce(serializeDocumentSyncJob(first))
@@ -80,6 +103,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
       lPop: vi.fn(async () => null),
     };
     const queue = createRedisDocumentSyncQueue({ client });
@@ -97,6 +121,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce("{")
@@ -154,6 +179,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(async () => 42),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
@@ -194,6 +220,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client, maxAttempts: 3 });
     const syncJob = job();
@@ -201,10 +228,13 @@ describe("RedisDocumentSyncQueue", () => {
     await expect(
       queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" }),
     ).resolves.toEqual({ action: "requeued", attempts: 1 });
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:documents:sync:queue",
-      serializeDocumentSyncJob({ ...syncJob, attempts: 1 }),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
+      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
+      arguments: [
+        syncJob.idempotencyKey,
+        serializeDocumentSyncJob({ ...syncJob, attempts: 1 }),
+      ],
+    });
   });
 
   it("moves failed jobs to Redis DLQ at max attempts", async () => {
@@ -215,6 +245,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(async () => 5),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client, maxAttempts: 3 });
     const syncJob = job({ attempts: 2 });
@@ -238,6 +269,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({
       client,
@@ -287,6 +319,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [storedPayload, legacyPayload]),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
@@ -323,6 +356,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
@@ -351,6 +385,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
@@ -379,6 +414,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
@@ -403,6 +439,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
@@ -418,6 +455,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => []),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
@@ -443,15 +481,19 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
     await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
     expect(client.lRem).toHaveBeenCalledWith("iris:documents:sync:dlq", 1, payload);
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:documents:sync:queue",
-      serializeDocumentSyncJob(job({ attempts: 0 })),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
+      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
+      arguments: [
+        job().idempotencyKey,
+        serializeDocumentSyncJob(job({ attempts: 0 })),
+      ],
+    });
   });
 
   it("deletes Redis DLQ entries by stable id", async () => {
@@ -471,6 +513,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 
@@ -496,6 +539,7 @@ describe("RedisDocumentSyncQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentSyncQueue({ client });
 

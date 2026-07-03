@@ -18,6 +18,19 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([]);
   });
 
+  it("allows completed idempotency keys to be enqueued again", async () => {
+    const queue = new InMemoryDocumentReindexQueue();
+    const first = jobFixture();
+    const second = jobFixture({ enqueuedAt: new Date("2026-07-02T02:00:00.000Z") });
+
+    await queue.enqueue(first);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([first]);
+
+    await queue.enqueue(second);
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([second]);
+  });
+
   it("dequeues at most the requested batch size in FIFO order", async () => {
     const queue = new InMemoryDocumentReindexQueue();
     const first = jobFixture({ documentSnapshotId: "snapshot-1" });
@@ -103,6 +116,16 @@ describe("InMemoryDocumentReindexQueue", () => {
     ).resolves.toEqual({ action: "requeued", attempts: 1 });
     await expect(queue.dequeueBatch(1)).resolves.toEqual([{ ...job, attempts: 1 }]);
     await expect(queue.getDeadLetterCount()).resolves.toBe(0);
+  });
+
+  it("keeps requeued failed jobs deduplicated by idempotency key", async () => {
+    const queue = new InMemoryDocumentReindexQueue({ maxAttempts: 3 });
+    const job = jobFixture();
+
+    await queue.handleFailedJob({ job, errorMessage: "embedding failed" });
+    await queue.enqueue({ ...job, enqueuedAt: new Date("2026-07-02T02:00:00.000Z") });
+
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([{ ...job, attempts: 1 }]);
   });
 
   it("moves failed jobs to DLQ at max attempts", async () => {

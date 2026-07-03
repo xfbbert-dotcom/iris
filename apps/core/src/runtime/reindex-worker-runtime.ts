@@ -264,5 +264,9 @@ function createLazyRedisQueueClient(
       const client = await redisConnection;
       return client.lRem(key, count, value);
     },
+    async sRem(key, member) {
+      const client = await redisConnection;
+      return client.sRem(key, member);
+    },
   };
 }

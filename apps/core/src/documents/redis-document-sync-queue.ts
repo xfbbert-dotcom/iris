@@ -29,6 +29,7 @@ export type RedisDocumentSyncQueueClient = {
   lLen(key: string): Promise<number>;
   lRange(key: string, start: number, stop: number): Promise<string[]>;
   lRem(key: string, count: number, value: string): Promise<number>;
+  sRem(key: string, member: string): Promise<number>;
 };
 
 export type RedisDocumentSyncQueueOptions = {
@@ -54,10 +55,7 @@ export function createRedisDocumentSyncQueue({
 
   return {
     async enqueue(job) {
-      await client.eval(ENQUEUE_SCRIPT, {
-        keys: [seenKey, queueKey],
-        arguments: [job.idempotencyKey, serializeDocumentSyncJob(job)],
-      });
+      await enqueueSerializedJob(client, seenKey, queueKey, job);
     },
 
     async dequeueBatch(limit) {
@@ -71,7 +69,9 @@ export function createRedisDocumentSyncQueue({
         }
 
         try {
-          jobs.push(parseDocumentSyncJob(payload));
+          const job = parseDocumentSyncJob(payload);
+          await client.sRem(seenKey, job.idempotencyKey);
+          jobs.push(job);
         } catch (error) {
           await client.rPush(
             deadLetterKey,
@@ -111,7 +111,7 @@ export function createRedisDocumentSyncQueue({
         return { action: "dead_lettered", attempts };
       }
 
-      await client.rPush(queueKey, serializeDocumentSyncJob(failedJob));
+      await enqueueSerializedJob(client, seenKey, queueKey, failedJob);
       return { action: "requeued", attempts };
     },
 
@@ -140,10 +140,10 @@ export function createRedisDocumentSyncQueue({
       }
 
       await client.lRem(deadLetterKey, 1, found.payload);
-      await client.rPush(
-        queueKey,
-        serializeDocumentSyncJob({ ...found.deadLetter.job, attempts: 0 }),
-      );
+      await enqueueSerializedJob(client, seenKey, queueKey, {
+        ...found.deadLetter.job,
+        attempts: 0,
+      });
       return "replayed";
     },
 
@@ -178,6 +178,18 @@ export function createRedisDocumentSyncQueue({
       return result;
     },
   };
+}
+
+async function enqueueSerializedJob(
+  client: RedisDocumentSyncQueueClient,
+  seenKey: string,
+  queueKey: string,
+  job: DocumentSyncJob,
+): Promise<void> {
+  await client.eval(ENQUEUE_SCRIPT, {
+    keys: [seenKey, queueKey],
+    arguments: [job.idempotencyKey, serializeDocumentSyncJob(job)],
+  });
 }
 
 export function serializeDocumentSyncJob(job: DocumentSyncJob): string {

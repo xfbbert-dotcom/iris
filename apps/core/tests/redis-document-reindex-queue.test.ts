@@ -20,6 +20,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
     const job = jobFixture();
@@ -41,6 +42,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce(serializeDocumentReindexJob(first))
@@ -53,6 +55,26 @@ describe("RedisDocumentReindexQueue", () => {
     expect(client.lPop).toHaveBeenCalledTimes(3);
   });
 
+  it("releases dequeued job idempotency keys from the Redis seen set", async () => {
+    const job = jobFixture();
+    const client = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(async () => 1),
+      lPop: vi.fn().mockResolvedValueOnce(serializeDocumentReindexJob(job)),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([job]);
+    expect(client.sRem).toHaveBeenCalledWith(
+      "iris:reindex:documents:seen",
+      job.idempotencyKey,
+    );
+  });
+
   it("respects dequeue batch limits", async () => {
     const first = jobFixture({ documentSnapshotId: "snapshot-1" });
     const second = jobFixture({ documentSnapshotId: "snapshot-2" });
@@ -62,6 +84,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce(serializeDocumentReindexJob(first))
@@ -80,6 +103,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
       lPop: vi.fn(async () => null),
     };
     const queue = createRedisDocumentReindexQueue({ client });
@@ -97,6 +121,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
       lPop: vi
         .fn()
         .mockResolvedValueOnce("{")
@@ -149,6 +174,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(async () => 42),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
@@ -170,6 +196,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client, maxAttempts: 3 });
     const job = jobFixture();
@@ -177,10 +204,13 @@ describe("RedisDocumentReindexQueue", () => {
     await expect(
       queue.handleFailedJob({ job, errorMessage: "embedding failed" }),
     ).resolves.toEqual({ action: "requeued", attempts: 1 });
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:reindex:documents:queue",
-      serializeDocumentReindexJob({ ...job, attempts: 1 }),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+      arguments: [
+        job.idempotencyKey,
+        serializeDocumentReindexJob({ ...job, attempts: 1 }),
+      ],
+    });
   });
 
   it("moves failed jobs to Redis DLQ at max attempts", async () => {
@@ -191,6 +221,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(async () => 5),
       lRange: vi.fn(),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client, maxAttempts: 3 });
     const job = jobFixture({ attempts: 2 });
@@ -223,6 +254,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [JSON.stringify(deadLetter)]),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
@@ -246,6 +278,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => []),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
@@ -270,6 +303,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [JSON.stringify(legacy)]),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
@@ -292,6 +326,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
@@ -320,6 +355,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
@@ -348,6 +384,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
@@ -372,6 +409,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
@@ -397,15 +435,19 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
     await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
     expect(client.lRem).toHaveBeenCalledWith("iris:reindex:documents:dlq", 1, payload);
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:reindex:documents:queue",
-      serializeDocumentReindexJob(jobFixture({ attempts: 0 })),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+      arguments: [
+        jobFixture().idempotencyKey,
+        serializeDocumentReindexJob(jobFixture({ attempts: 0 })),
+      ],
+    });
   });
 
   it("deletes Redis DLQ entries", async () => {
@@ -426,6 +468,7 @@ describe("RedisDocumentReindexQueue", () => {
       lLen: vi.fn(),
       lRange: vi.fn(async () => [payload]),
       lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 

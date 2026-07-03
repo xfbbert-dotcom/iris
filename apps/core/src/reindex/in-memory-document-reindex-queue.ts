@@ -47,7 +47,12 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
 
   async dequeueBatch(limit: number): Promise<DocumentReindexJob[]> {
     const safeLimit = sanitizeLimit(limit);
-    return this.jobs.splice(0, safeLimit).map(cloneJob);
+    const jobs = this.jobs.splice(0, safeLimit);
+    for (const job of jobs) {
+      this.seenKeys.delete(job.idempotencyKey);
+    }
+
+    return jobs.map(cloneJob);
   }
 
   async getPendingCount(): Promise<number> {
@@ -70,6 +75,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
       return { action: "dead_lettered", attempts };
     }
 
+    this.seenKeys.add(failedJob.idempotencyKey);
     this.jobs.push(cloneJob(failedJob));
     return { action: "requeued", attempts };
   }
@@ -92,7 +98,9 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
     }
 
     const [item] = this.deadLetters.splice(index, 1);
-    this.jobs.push(cloneJob({ ...item.job, attempts: 0 }));
+    const replayedJob = cloneJob({ ...item.job, attempts: 0 });
+    this.seenKeys.add(replayedJob.idempotencyKey);
+    this.jobs.push(replayedJob);
     return "replayed";
   }
 

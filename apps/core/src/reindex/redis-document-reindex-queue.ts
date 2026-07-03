@@ -29,6 +29,7 @@ export type RedisDocumentReindexQueueClient = {
   lLen(key: string): Promise<number>;
   lRange(key: string, start: number, stop: number): Promise<string[]>;
   lRem(key: string, count: number, value: string): Promise<number>;
+  sRem(key: string, member: string): Promise<number>;
 };
 
 export type RedisDocumentReindexQueueOptions = {
@@ -54,10 +55,7 @@ export function createRedisDocumentReindexQueue({
 
   return {
     async enqueue(job) {
-      await client.eval(ENQUEUE_SCRIPT, {
-        keys: [seenKey, queueKey],
-        arguments: [job.idempotencyKey, serializeDocumentReindexJob(job)],
-      });
+      await enqueueSerializedJob(client, seenKey, queueKey, job);
     },
 
     async dequeueBatch(limit) {
@@ -71,7 +69,9 @@ export function createRedisDocumentReindexQueue({
         }
 
         try {
-          jobs.push(parseDocumentReindexJob(payload));
+          const job = parseDocumentReindexJob(payload);
+          await client.sRem(seenKey, job.idempotencyKey);
+          jobs.push(job);
         } catch (error) {
           await client.rPush(
             deadLetterKey,
@@ -111,7 +111,7 @@ export function createRedisDocumentReindexQueue({
         return { action: "dead_lettered", attempts };
       }
 
-      await client.rPush(queueKey, serializeDocumentReindexJob(failedJob));
+      await enqueueSerializedJob(client, seenKey, queueKey, failedJob);
       return { action: "requeued", attempts };
     },
 
@@ -140,10 +140,10 @@ export function createRedisDocumentReindexQueue({
       }
 
       await client.lRem(deadLetterKey, 1, found.payload);
-      await client.rPush(
-        queueKey,
-        serializeDocumentReindexJob({ ...found.deadLetter.job, attempts: 0 }),
-      );
+      await enqueueSerializedJob(client, seenKey, queueKey, {
+        ...found.deadLetter.job,
+        attempts: 0,
+      });
       return "replayed";
     },
 
@@ -178,6 +178,18 @@ export function createRedisDocumentReindexQueue({
       return result;
     },
   };
+}
+
+async function enqueueSerializedJob(
+  client: RedisDocumentReindexQueueClient,
+  seenKey: string,
+  queueKey: string,
+  job: DocumentReindexJob,
+): Promise<void> {
+  await client.eval(ENQUEUE_SCRIPT, {
+    keys: [seenKey, queueKey],
+    arguments: [job.idempotencyKey, serializeDocumentReindexJob(job)],
+  });
 }
 
 export function serializeDocumentReindexJob(job: DocumentReindexJob): string {

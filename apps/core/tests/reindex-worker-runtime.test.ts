@@ -17,6 +17,7 @@ describe("createReindexWorkerRuntime", () => {
       lLen: vi.fn().mockResolvedValueOnce(42).mockResolvedValueOnce(5),
       lRange: vi.fn(async () => []),
       lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
       quit: vi.fn(async () => undefined),
     };
     const embeddingProfile = embeddingProfileFixture();
@@ -181,6 +182,7 @@ function runtimeDependencies() {
     lLen: vi.fn(async () => 0),
     lRange: vi.fn(async () => []),
     lRem: vi.fn(async () => 1),
+    sRem: vi.fn(),
     quit: vi.fn(async () => undefined),
   };
 

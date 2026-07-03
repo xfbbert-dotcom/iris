@@ -549,6 +549,10 @@ function createLazyRedisDocumentSyncQueueClient(
       const client = await redisConnection;
       return client.lRem(key, count, value);
     },
+    async sRem(key, member) {
+      const client = await redisConnection;
+      return client.sRem(key, member);
+    },
   };
 }
 
@@ -579,6 +583,10 @@ function createLazyRedisDocumentReindexQueueClient(
     async lRem(key, count, value) {
       const client = await redisConnection;
       return client.lRem(key, count, value);
+    },
+    async sRem(key, member) {
+      const client = await redisConnection;
+      return client.sRem(key, member);
     },
   };
 }

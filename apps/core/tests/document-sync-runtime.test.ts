@@ -26,6 +26,7 @@ describe("createDocumentSyncRuntime", () => {
       lLen: vi.fn(async () => 0),
       lRange: vi.fn(async () => []),
       lRem: vi.fn(async () => 0),
+      sRem: vi.fn(),
       quit: vi.fn(async () => undefined),
     };
     const inventorySource = {
@@ -224,6 +225,7 @@ describe("createDocumentSyncRuntime", () => {
       lLen: expect.any(Function),
       lRange: expect.any(Function),
       lRem: expect.any(Function),
+      sRem: expect.any(Function),
     });
     expect(dependencies.createDocumentReindexQueue).toHaveBeenCalledWith({
       eval: expect.any(Function),
@@ -232,6 +234,7 @@ describe("createDocumentSyncRuntime", () => {
       lLen: expect.any(Function),
       lRange: expect.any(Function),
       lRem: expect.any(Function),
+      sRem: expect.any(Function),
     });
     expect(dependencies.createDocumentReindexPlanner).toHaveBeenCalledWith({
       snapshots,
