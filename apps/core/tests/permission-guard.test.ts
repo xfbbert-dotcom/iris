@@ -87,7 +87,8 @@ describe("filterFragmentsByLivePermission", () => {
       {
         type: "permission_guard_denied",
         documentId: "doc-denied",
-        fragmentIds: ["frag-1", "frag-2"]
+        fragmentIds: ["frag-1", "frag-2"],
+        recordedAt: expect.any(Date),
       }
     ]);
   });
@@ -114,7 +115,8 @@ describe("filterFragmentsByLivePermission", () => {
         type: "permission_guard_error",
         documentId: "doc-timeout",
         fragmentIds: ["frag-1", "frag-2"],
-        message: "Feishu permission timeout"
+        message: "Feishu permission timeout",
+        recordedAt: expect.any(Date),
       }
     ]);
   });

@@ -240,7 +240,15 @@ describe("answer draft runtime wiring", () => {
 
 describe("GET /internal/audit/events", () => {
   it("returns recent audit events newest first with a limit", async () => {
-    const auditLog = new InMemoryAuditLog();
+    const recordedTimes = [
+      new Date("2026-07-03T06:00:00.000Z"),
+      new Date("2026-07-03T06:01:00.000Z"),
+      new Date("2026-07-03T06:02:00.000Z"),
+    ];
+    let nowIndex = 0;
+    const auditLog = new InMemoryAuditLog({
+      now: () => recordedTimes[nowIndex++] ?? recordedTimes.at(-1)!,
+    });
     await auditLog.record({
       type: "permission_guard_denied",
       documentId: "source-old",
@@ -276,11 +284,13 @@ describe("GET /internal/audit/events", () => {
           documentId: "source-new",
           fragmentIds: ["fragment-new"],
           message: "registry unavailable",
+          recordedAt: "2026-07-03T06:02:00.000Z",
         },
         {
           type: "permission_guard_denied",
           documentId: "source-middle",
           fragmentIds: ["fragment-middle"],
+          recordedAt: "2026-07-03T06:01:00.000Z",
         },
       ],
     });

@@ -230,26 +230,31 @@ describe("createAnswerDraftRuntime", () => {
         type: "permission_guard_denied",
         documentId: "source-disabled",
         fragmentIds: ["fragment-disabled"],
+        recordedAt: expect.any(Date),
       },
       {
         type: "permission_guard_denied",
         documentId: "source-denied",
         fragmentIds: ["fragment-denied"],
+        recordedAt: expect.any(Date),
       },
       {
         type: "permission_guard_denied",
         documentId: "source-stale",
         fragmentIds: ["fragment-stale"],
+        recordedAt: expect.any(Date),
       },
       {
         type: "permission_guard_denied",
         documentId: "source-missing",
         fragmentIds: ["fragment-missing"],
+        recordedAt: expect.any(Date),
       },
       {
         type: "permission_guard_denied",
         documentId: "source-error",
         fragmentIds: ["fragment-error"],
+        recordedAt: expect.any(Date),
       },
     ]);
   });

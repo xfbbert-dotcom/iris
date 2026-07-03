@@ -4,7 +4,8 @@ import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 
 describe("InMemoryAuditLog", () => {
   it("records audit events with default retention", async () => {
-    const auditLog = new InMemoryAuditLog();
+    const recordedAt = new Date("2026-07-03T06:00:00.000Z");
+    const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
 
     await auditLog.record({
       type: "permission_guard_denied",
@@ -17,12 +18,14 @@ describe("InMemoryAuditLog", () => {
         type: "permission_guard_denied",
         documentId: "source-1",
         fragmentIds: ["fragment-1"],
+        recordedAt,
       },
     ]);
   });
 
   it("clones recorded events so caller mutation cannot change history", async () => {
-    const auditLog = new InMemoryAuditLog();
+    const recordedAt = new Date("2026-07-03T06:01:00.000Z");
+    const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
     const event = {
       type: "permission_guard_error" as const,
       documentId: "source-1",
@@ -41,6 +44,7 @@ describe("InMemoryAuditLog", () => {
         documentId: "source-1",
         fragmentIds: ["fragment-1"],
         message: "original",
+        recordedAt,
       },
     ]);
   });
@@ -55,7 +59,8 @@ describe("InMemoryAuditLog", () => {
   });
 
   it("retains only the newest audit events", async () => {
-    const auditLog = new InMemoryAuditLog({ maxEvents: 2 });
+    const recordedAt = new Date("2026-07-03T06:02:00.000Z");
+    const auditLog = new InMemoryAuditLog({ maxEvents: 2, now: () => recordedAt });
 
     await auditLog.record({
       type: "permission_guard_denied",
@@ -79,12 +84,14 @@ describe("InMemoryAuditLog", () => {
         type: "permission_guard_denied",
         documentId: "source-2",
         fragmentIds: ["fragment-2"],
+        recordedAt,
       },
       {
         type: "permission_guard_error",
         documentId: "source-3",
         fragmentIds: ["fragment-3"],
         message: "permission lookup failed",
+        recordedAt,
       },
     ]);
   });
