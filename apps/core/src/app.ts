@@ -210,6 +210,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     const disabledComponents = Object.entries(components)
       .filter(([, component]) => !component.enabled)
       .map(([name]) => name);
+    const enabledRuntimeComponents = Object.entries(components).filter(
+      ([, component]) => component.enabled && hasRunningStatus(component),
+    );
+    const stoppedEnabledRuntimeComponents = enabledRuntimeComponents
+      .filter(([, component]) => hasRunningStatus(component) && component.running === false)
+      .map(([name]) => name);
 
     return {
       ok: healthyComponentCount === componentStatuses.length,
@@ -222,6 +228,11 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         enabledComponentCount: componentStatuses.length - disabledComponents.length,
         disabledComponentCount: disabledComponents.length,
         disabledComponents,
+        enabledRuntimeComponentCount: enabledRuntimeComponents.length,
+        runningEnabledRuntimeComponentCount:
+          enabledRuntimeComponents.length - stoppedEnabledRuntimeComponents.length,
+        stoppedEnabledRuntimeComponentCount: stoppedEnabledRuntimeComponents.length,
+        stoppedEnabledRuntimeComponents,
       },
       components,
     };
@@ -839,6 +850,12 @@ async function getEventWorkerStatus(runtime: EventWorkerRuntime | undefined) {
       error: "event_worker_status_failed",
     };
   }
+}
+
+function hasRunningStatus(
+  component: { enabled: boolean; running?: unknown },
+): component is { enabled: boolean; running: boolean } {
+  return typeof component.running === "boolean";
 }
 
 async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {

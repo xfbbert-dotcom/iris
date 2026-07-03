@@ -346,6 +346,10 @@ describe("GET /internal/status", () => {
         enabledComponentCount: 4,
         disabledComponentCount: 1,
         disabledComponents: ["answerDraft"],
+        enabledRuntimeComponentCount: 3,
+        runningEnabledRuntimeComponentCount: 2,
+        stoppedEnabledRuntimeComponentCount: 1,
+        stoppedEnabledRuntimeComponents: ["reindex"],
       },
       components: {
         audit: {
@@ -432,6 +436,10 @@ describe("GET /internal/status", () => {
       enabledComponentCount: 3,
       disabledComponentCount: 2,
       disabledComponents: ["answerDraft", "reindex"],
+      enabledRuntimeComponentCount: 2,
+      runningEnabledRuntimeComponentCount: 1,
+      stoppedEnabledRuntimeComponentCount: 1,
+      stoppedEnabledRuntimeComponents: ["eventWorker"],
     });
     expect(response.json().components.eventWorker).toEqual({
       ok: false,
