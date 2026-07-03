@@ -58,6 +58,8 @@ type RedisClient = RedisRawEventQueueClient & RedisDocumentSyncQueueClient & {
 type PostgresPool = Queryable & { end(): Promise<void> };
 type RuntimeGate = {
   canProcessIncomingEvent(input: { groupId?: string }): boolean;
+  canReadGroupContext(groupId: string): boolean;
+  canReadDocuments(): boolean;
 };
 type GroupVisibleDocumentRegistry = Pick<
   AsyncDocumentSourceRegistry,

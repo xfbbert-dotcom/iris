@@ -61,6 +61,8 @@ describe("createEventWorkerRuntime", () => {
     };
     const runtimeController = {
       canProcessIncomingEvent: vi.fn(() => true),
+      canReadGroupContext: vi.fn(() => true),
+      canReadDocuments: vi.fn(() => true),
     };
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),

@@ -11,6 +11,8 @@ import type { GroupVisibleDocumentRegistrar } from "../documents/group-visible-d
 
 type RuntimeGate = {
   canProcessIncomingEvent(input: { groupId?: string }): boolean;
+  canReadGroupContext(groupId: string): boolean;
+  canReadDocuments(): boolean;
 };
 
 export function createFeishuMessageEventProcessor({
@@ -36,8 +38,18 @@ export function createFeishuMessageEventProcessor({
       ) {
         return;
       }
+      if (
+        runtimeController !== undefined &&
+        !runtimeController.canReadGroupContext(parsed.chatId)
+      ) {
+        return;
+      }
 
       await messages.upsertMessage(parsed);
+      if (runtimeController !== undefined && !runtimeController.canReadDocuments()) {
+        return;
+      }
+
       const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
       if (links.length === 0 || groupVisibleDocumentRegistrar === undefined) {
         return;

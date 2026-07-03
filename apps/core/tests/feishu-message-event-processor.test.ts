@@ -58,6 +58,8 @@ describe("FeishuMessageEventProcessor", () => {
     };
     const runtimeController = {
       canProcessIncomingEvent: vi.fn(() => false),
+      canReadGroupContext: vi.fn(() => true),
+      canReadDocuments: vi.fn(() => true),
     };
     const processor = createFeishuMessageEventProcessor({
       messages,
@@ -72,6 +74,70 @@ describe("FeishuMessageEventProcessor", () => {
       groupId: "chat-1",
     });
     expect(messages.upsertMessage).not.toHaveBeenCalled();
+    expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
+    expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
+  });
+
+  it("skips message facts and document discovery when group context reading is disabled", async () => {
+    const messages = {
+      upsertMessage: vi.fn(),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => [{ sourceUri: "https://docs.feishu.cn/docx/a" }]),
+    };
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => undefined),
+    };
+    const runtimeController = {
+      canProcessIncomingEvent: vi.fn(() => true),
+      canReadGroupContext: vi.fn(() => false),
+      canReadDocuments: vi.fn(() => true),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+      runtimeController,
+    });
+
+    await processor.process(rawEventFixture());
+
+    expect(runtimeController.canReadGroupContext).toHaveBeenCalledWith("chat-1");
+    expect(messages.upsertMessage).not.toHaveBeenCalled();
+    expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
+    expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
+  });
+
+  it("persists messages but skips document discovery when document reading is disabled", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => [{ sourceUri: "https://docs.feishu.cn/docx/a" }]),
+    };
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => undefined),
+    };
+    const runtimeController = {
+      canProcessIncomingEvent: vi.fn(() => true),
+      canReadGroupContext: vi.fn(() => true),
+      canReadDocuments: vi.fn(() => false),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+      runtimeController,
+    });
+
+    await processor.process(rawEventFixture());
+
+    expect(messages.upsertMessage).toHaveBeenCalledOnce();
+    expect(runtimeController.canReadDocuments).toHaveBeenCalledOnce();
     expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
     expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
   });
