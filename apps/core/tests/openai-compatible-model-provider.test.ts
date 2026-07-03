@@ -50,6 +50,28 @@ describe("OpenAICompatibleModelProvider", () => {
     });
   });
 
+  it("normalizes trailing slashes in model base URLs", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        choices: [{ message: { content: "Answer draft." } }],
+      }),
+    );
+    const provider = createOpenAICompatibleModelProvider({
+      config: {
+        ...config(),
+        baseUrl: "https://api.example.com/v1/",
+      },
+      fetch,
+    });
+
+    await provider.generateAnswerDraft({ question: "Q", promptContext: "C" });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.example.com/v1/chat/completions",
+      expect.any(Object),
+    );
+  });
+
   it("throws on non-2xx responses", async () => {
     const provider = createOpenAICompatibleModelProvider({
       config: config(),

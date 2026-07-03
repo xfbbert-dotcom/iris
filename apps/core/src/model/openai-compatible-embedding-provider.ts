@@ -21,7 +21,7 @@ export function createOpenAICompatibleEmbeddingProvider({
 
       let response: Response;
       try {
-        response = await fetch(`${config.baseUrl}/embeddings`, {
+        response = await fetch(joinBaseUrl(config.baseUrl, "/embeddings"), {
           method: "POST",
           headers: {
             authorization: `Bearer ${config.apiKey}`,
@@ -60,6 +60,10 @@ export function createOpenAICompatibleEmbeddingProvider({
       return embeddings;
     },
   };
+}
+
+function joinBaseUrl(baseUrl: string, path: string): string {
+  return `${baseUrl.replace(/\/+$/u, "")}${path}`;
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {

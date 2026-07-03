@@ -25,7 +25,7 @@ export function createOpenAICompatibleModelProvider({
 
       let response: Response;
       try {
-        response = await fetch(`${config.baseUrl}/chat/completions`, {
+        response = await fetch(joinBaseUrl(config.baseUrl, "/chat/completions"), {
           method: "POST",
           headers: {
             authorization: `Bearer ${config.apiKey}`,
@@ -76,6 +76,10 @@ export function createOpenAICompatibleModelProvider({
       return { answerText };
     },
   };
+}
+
+function joinBaseUrl(baseUrl: string, path: string): string {
+  return `${baseUrl.replace(/\/+$/u, "")}${path}`;
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {

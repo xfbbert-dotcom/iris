@@ -64,6 +64,26 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     });
   });
 
+  it("normalizes trailing slashes in embedding base URLs", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({ data: [{ index: 0, embedding: [1, 0, 0] }] }),
+    );
+    const provider = createOpenAICompatibleEmbeddingProvider({
+      config: {
+        ...config(),
+        baseUrl: "https://api.example.com/v1/",
+      },
+      fetch,
+    });
+
+    await provider.embedTexts(["alpha"]);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.example.com/v1/embeddings",
+      expect.any(Object),
+    );
+  });
+
   it("throws on count mismatch", async () => {
     const provider = createOpenAICompatibleEmbeddingProvider({
       config: config(),
