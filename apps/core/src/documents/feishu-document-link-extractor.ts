@@ -41,6 +41,9 @@ function normalizeCandidateUrl(candidate: string): string | undefined {
     if (!isSupportedHost(url.hostname)) {
       return undefined;
     }
+    if (!isSupportedDocumentPath(url)) {
+      return undefined;
+    }
 
     url.search = "";
     url.hash = "";
@@ -57,5 +60,14 @@ function isSupportedHost(hostname: string): boolean {
     host === "docs.feishu.cn" ||
     host.endsWith(".feishu.cn") ||
     host.endsWith(".larksuite.com")
+  );
+}
+
+function isSupportedDocumentPath(url: URL): boolean {
+  const firstPathSegment = url.pathname.split("/").filter(Boolean)[0]?.toLowerCase();
+  return (
+    firstPathSegment === "docx" ||
+    firstPathSegment === "docs" ||
+    firstPathSegment === "wiki"
   );
 }

@@ -24,6 +24,16 @@ describe("FeishuDocumentLinkExtractor", () => {
     ).toEqual([]);
   });
 
+  it("ignores unsupported Feishu product URL paths", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks(
+        "file https://foo.feishu.cn/file/file_token and minutes https://foo.feishu.cn/minutes/min_token",
+      ),
+    ).toEqual([]);
+  });
+
   it("trims trailing chat punctuation and deduplicates repeated links", () => {
     const extractor = createFeishuDocumentLinkExtractor();
 
