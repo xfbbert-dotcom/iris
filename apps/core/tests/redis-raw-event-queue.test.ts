@@ -66,6 +66,33 @@ describe("RedisRawEventQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([first, second]);
   });
 
+  it("dead-letters invalid queued payloads and continues dequeuing valid events", async () => {
+    const valid = eventFixture({ idempotencyKey: "raw-event:feishu:event-valid" });
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lLen: vi.fn(),
+      lPop: vi
+        .fn()
+        .mockResolvedValueOnce("{")
+        .mockResolvedValueOnce(serializeRawEvent(valid)),
+    };
+    const queue = createRedisRawEventQueue({
+      client,
+      now: () => new Date("2026-07-03T12:00:00.000Z"),
+    });
+
+    await expect(queue.dequeueBatch(2)).resolves.toEqual([valid]);
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:events:raw:dlq",
+      JSON.stringify({
+        rawPayload: "{",
+        errorMessage: "Invalid raw event JSON",
+        failedAt: "2026-07-03T12:00:00.000Z",
+      }),
+    );
+  });
+
   it("requeues failed raw events below max attempts", async () => {
     const client: RedisRawEventQueueClient = {
       eval: vi.fn(),
