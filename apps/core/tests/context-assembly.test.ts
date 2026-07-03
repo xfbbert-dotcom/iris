@@ -81,6 +81,21 @@ describe("assemblePromptContext", () => {
     expect(context).not.toContain("  Please check this.  ");
   });
 
+  it("trims background document source and text when formatting documents", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [
+        { source: " feishu://doc/abc ", text: "  Useful document context.  " }
+      ],
+      liveChatMessages: []
+    });
+
+    expect(context).toContain(
+      '<document source="feishu://doc/abc">Useful document context.</document>',
+    );
+    expect(context).not.toContain(" feishu://doc/abc ");
+    expect(context).not.toContain("  Useful document context.  ");
+  });
+
   it("excludes live messages when liveChatLimit is negative", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],

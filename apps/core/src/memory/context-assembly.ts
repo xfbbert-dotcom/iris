@@ -35,7 +35,9 @@ export function assemblePromptContext(input: PromptContextInput): string {
 }
 
 function formatBackgroundDocument(document: BackgroundDocument): string {
-  return `<document source="${escapeXml(document.source)}">${escapeXml(document.text)}</document>`;
+  return `<document source="${escapeXml(document.source.trim())}">${escapeXml(
+    document.text.trim(),
+  )}</document>`;
 }
 
 function formatLiveChatMessage(message: LiveChatMessage): string {
