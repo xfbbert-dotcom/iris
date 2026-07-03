@@ -306,6 +306,34 @@ describe("RedisDocumentReindexQueue", () => {
     ]);
   });
 
+  it("preserves empty invalid raw payload DLQ diagnostics", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-invalid",
+      rawPayload: "",
+      errorMessage: "Invalid document reindex job JSON",
+      failedAt: "2026-07-03T12:35:00.000Z",
+    });
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: 20 })).resolves.toEqual([
+      {
+        id: "dlq-invalid",
+        rawPayload: "",
+        errorMessage: "Invalid document reindex job JSON",
+        failedAt: new Date("2026-07-03T12:35:00.000Z"),
+        replayable: false,
+      },
+    ]);
+  });
+
   it("does not replay invalid raw payload DLQ entries", async () => {
     const payload = JSON.stringify({
       id: "dlq-invalid",

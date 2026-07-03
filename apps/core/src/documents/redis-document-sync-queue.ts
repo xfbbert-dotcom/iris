@@ -224,6 +224,10 @@ function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readRawPayload(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function readOptionalNonNegativeInteger(value: unknown): number | null | undefined {
   if (value === undefined) {
     return undefined;
@@ -291,8 +295,8 @@ function parseDeadLetterPayload(payload: string, index: number): ParsedDeadLette
   }
 
   if (!isRecord(parsed.job)) {
-    const rawPayload = readString(parsed.rawPayload);
-    if (rawPayload.length === 0) {
+    const rawPayload = readRawPayload(parsed.rawPayload);
+    if (rawPayload === undefined) {
       throw new Error("Invalid document sync dead letter payload");
     }
 

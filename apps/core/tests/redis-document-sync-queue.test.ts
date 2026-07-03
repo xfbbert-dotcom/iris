@@ -337,6 +337,34 @@ describe("RedisDocumentSyncQueue", () => {
     ]);
   });
 
+  it("preserves whitespace-only invalid raw payload DLQ diagnostics", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-invalid",
+      rawPayload: "   ",
+      errorMessage: "Invalid document sync job JSON",
+      failedAt: "2026-07-03T12:30:00.000Z",
+    });
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: 20 })).resolves.toEqual([
+      {
+        id: "dlq-invalid",
+        rawPayload: "   ",
+        errorMessage: "Invalid document sync job JSON",
+        failedAt: new Date("2026-07-03T12:30:00.000Z"),
+        replayable: false,
+      },
+    ]);
+  });
+
   it("does not replay invalid raw payload DLQ entries", async () => {
     const payload = JSON.stringify({
       id: "dlq-invalid",
