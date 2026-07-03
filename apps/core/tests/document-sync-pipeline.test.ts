@@ -471,8 +471,9 @@ describe("createDocumentSyncRunner", () => {
       runner.syncSourceById("source-with-snapshot-write-failure"),
     ).rejects.toThrow("snapshot write failed");
     expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
-    expect(registry.markSyncState).toHaveBeenCalledTimes(1);
+    expect(registry.markSyncState).toHaveBeenCalledTimes(2);
     expect(registry.markSyncState).toHaveBeenCalledWith(candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenLastCalledWith(candidate.id, "pending");
   });
 
   it("rejects when marking synced fails without recording a failed snapshot", async () => {
@@ -513,8 +514,79 @@ describe("createDocumentSyncRunner", () => {
       runner.syncSourceById("source-with-mark-synced-failure"),
     ).rejects.toThrow("mark synced failed");
     expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
-    expect(registry.markSyncState).toHaveBeenCalledTimes(2);
-    expect(registry.markSyncState).toHaveBeenLastCalledWith(candidate.id, "synced");
+    expect(registry.markSyncState).toHaveBeenCalledTimes(3);
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "synced");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(3, candidate.id, "pending");
+  });
+
+  it("marks a source pending again when recording a failed snapshot fails", async () => {
+    const candidate = source({ id: "source-with-failed-snapshot-write-failure" });
+    const registry = registryReturning(candidate);
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(),
+      insertFailedSnapshot: vi.fn(async () => {
+        throw new Error("failed snapshot write failed");
+      }),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw new Error("network unavailable");
+        }),
+      },
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-failed-snapshot-write-failure"),
+    ).rejects.toThrow("failed snapshot write failed");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(1, candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "pending");
+  });
+
+  it("marks a source pending again when marking failed fails", async () => {
+    const candidate = source({ id: "source-with-mark-failed-failure" });
+    const failedSnapshot = snapshot({
+      id: "snapshot-before-mark-failed-failure",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchStatus: "failed",
+      bodyText: undefined,
+      fetchedAt: failedAt,
+      errorMessage: "network unavailable",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) => {
+        if (syncState === "failed") {
+          throw new Error("mark failed failed");
+        }
+
+        return source({ id, syncState: syncState as DocumentSource["syncState"] });
+      }),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots: {
+        insertSucceededSnapshot: vi.fn(),
+        insertFailedSnapshot: vi.fn(async () => failedSnapshot),
+      },
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw new Error("network unavailable");
+        }),
+      },
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-mark-failed-failure"),
+    ).rejects.toThrow("mark failed failed");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(1, candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "failed");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(3, candidate.id, "pending");
   });
 
   it("rejects denied sources without fetching or marking sync state", async () => {

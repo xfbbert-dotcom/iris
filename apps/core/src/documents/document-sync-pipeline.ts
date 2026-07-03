@@ -130,39 +130,56 @@ export function createDocumentSyncRunner({
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
 
-        const snapshot = await snapshots.insertFailedSnapshot({
-          documentSourceId: source.id,
-          sourceUri: source.sourceUri,
-          errorMessage,
-          fetchedAt: now(),
-        });
-        await registry.markSyncState(source.id, "failed");
+        let snapshot: DocumentSnapshot;
+        try {
+          snapshot = await snapshots.insertFailedSnapshot({
+            documentSourceId: source.id,
+            sourceUri: source.sourceUri,
+            errorMessage,
+            fetchedAt: now(),
+          });
+          await registry.markSyncState(source.id, "failed");
+        } catch (persistenceError) {
+          await markPendingAfterUnexpectedSyncFailure(registry, source.id);
+          throw persistenceError;
+        }
 
         return { status: "failed", source, snapshot, errorMessage };
       }
 
-      const snapshot = await snapshots.insertSucceededSnapshot({
-        documentSourceId: source.id,
-        sourceUri: source.sourceUri,
-        bodyText: fetchResult.bodyText,
-        sourceVersion: fetchResult.sourceVersion,
-        fetchedAt: fetchResult.fetchedAt,
-      });
-      await registry.markSyncState(source.id, "synced");
-      if (syncedSnapshotReindexer !== undefined) {
-        try {
+      try {
+        const snapshot = await snapshots.insertSucceededSnapshot({
+          documentSourceId: source.id,
+          sourceUri: source.sourceUri,
+          bodyText: fetchResult.bodyText,
+          sourceVersion: fetchResult.sourceVersion,
+          fetchedAt: fetchResult.fetchedAt,
+        });
+        await registry.markSyncState(source.id, "synced");
+        if (syncedSnapshotReindexer !== undefined) {
           await syncedSnapshotReindexer.enqueueSyncedSnapshotReindex({
             documentSnapshotId: snapshot.id,
           });
-        } catch (error) {
-          await registry.markSyncState(source.id, "pending");
-          throw error;
         }
-      }
 
-      return { status: "synced", source, snapshot };
+        return { status: "synced", source, snapshot };
+      } catch (error) {
+        await markPendingAfterUnexpectedSyncFailure(registry, source.id);
+        throw error;
+      }
     },
   };
+}
+
+async function markPendingAfterUnexpectedSyncFailure(
+  registry: DocumentSyncRunnerRegistry,
+  sourceId: string,
+): Promise<void> {
+  try {
+    await registry.markSyncState(sourceId, "pending");
+  } catch {
+    // Preserve the original persistence or enqueue error.
+  }
 }
 
 export function isSyncCandidate(source: DocumentSource): boolean {
