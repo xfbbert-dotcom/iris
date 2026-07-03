@@ -42,6 +42,8 @@ type LiveChatContextProvider = {
   loadRecentMessages(input: { chatId: string; limit?: number }): Promise<LiveChatMessage[]>;
 };
 
+const MAX_LIVE_CHAT_LIMIT = 20;
+
 export function createAnswerDraftOrchestrator({
   contextBuilder,
   model,
@@ -58,12 +60,13 @@ export function createAnswerDraftOrchestrator({
         throw new Error("question must not be blank");
       }
 
+      const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
       const storedLiveChatMessages =
         input.chatId === undefined
           ? []
           : await liveChatContextProvider?.loadRecentMessages({
               chatId: input.chatId,
-              limit: input.liveChatLimit,
+              limit: liveChatLimit,
             }) ?? [];
       const liveChatMessages = dedupeLiveChatMessages([
         ...storedLiveChatMessages,
@@ -74,7 +77,7 @@ export function createAnswerDraftOrchestrator({
         queryText: question,
         liveChatMessages,
         fragmentLimit: input.fragmentLimit,
-        liveChatLimit: input.liveChatLimit,
+        liveChatLimit,
       });
 
       const modelResult = await model.generateAnswerDraft({
@@ -89,6 +92,14 @@ export function createAnswerDraftOrchestrator({
       return toAnswerDraftResult(answerText, context);
     },
   };
+}
+
+function sanitizeLiveChatLimit(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  return Math.min(MAX_LIVE_CHAT_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] {

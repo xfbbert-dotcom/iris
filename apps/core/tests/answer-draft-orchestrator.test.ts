@@ -122,6 +122,44 @@ describe("AnswerDraftOrchestrator", () => {
     });
   });
 
+  it("caps stored live chat loading and context limits to 20 messages", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft answer." })),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => []),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await orchestrator.generateDraft({
+      question: "What changed?",
+      chatId: "oc_1",
+      liveChatMessages: [],
+      liveChatLimit: 999,
+    });
+
+    expect(liveChatContextProvider.loadRecentMessages).toHaveBeenCalledWith({
+      chatId: "oc_1",
+      limit: 20,
+    });
+    expect(contextBuilder.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({ liveChatLimit: 20 }),
+    );
+  });
+
   it("deduplicates stored and request live chat messages before building context", async () => {
     const contextBuilder = {
       buildContext: vi.fn(async () => ({

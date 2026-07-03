@@ -29,10 +29,13 @@ export function createLiveChatContextProvider({
   };
 }
 
+const DEFAULT_LIVE_CHAT_LIMIT = 20;
+const MAX_LIVE_CHAT_LIMIT = 20;
+
 function sanitizeLimit(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) {
-    return 20;
+    return DEFAULT_LIVE_CHAT_LIMIT;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_LIVE_CHAT_LIMIT, Math.max(0, Math.floor(value)));
 }

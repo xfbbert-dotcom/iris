@@ -66,6 +66,17 @@ describe("LiveChatContextProvider", () => {
     expect(repository.listRecentByChat).toHaveBeenCalledWith({ chatId: "oc_1", limit: 5 });
     expect(messages).toEqual([{ speaker: "unknown", text: "No sender" }]);
   });
+
+  it("caps oversized custom limits before querying the repository", async () => {
+    const repository = {
+      listRecentByChat: vi.fn(async () => []),
+    };
+    const provider = createLiveChatContextProvider({ repository });
+
+    await provider.loadRecentMessages({ chatId: "oc_1", limit: 999 });
+
+    expect(repository.listRecentByChat).toHaveBeenCalledWith({ chatId: "oc_1", limit: 20 });
+  });
 });
 
 function message(overrides: Partial<ConversationMessage>): ConversationMessage {
