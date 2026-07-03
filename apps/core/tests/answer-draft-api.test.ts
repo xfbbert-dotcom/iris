@@ -1854,6 +1854,34 @@ describe("document sync source inventory API", () => {
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
   });
 
+  it("treats false source inventory latest snapshot flags as omitted", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(async () => [authorizedWikiSource()]),
+        get: vi.fn(),
+        updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
+        getSnapshot: vi.fn(),
+        getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?includeLatestSnapshot=false",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().sources[0]).not.toHaveProperty("latestSnapshot");
+    expect(runtime.sources.list).toHaveBeenCalledWith({ limit: 20 });
+    expect(runtime.sources.getLatestSnapshots).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid source inventory latest snapshot flags", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
@@ -1862,7 +1890,7 @@ describe("document sync source inventory API", () => {
 
     const response = await app.inject({
       method: "GET",
-      url: "/internal/document-sync/sources?includeLatestSnapshot=false",
+      url: "/internal/document-sync/sources?includeLatestSnapshot=maybe",
     });
 
     expect(response.statusCode).toBe(400);
@@ -1970,6 +1998,34 @@ describe("document sync source inventory API", () => {
     expect(runtime.sources.getLatestSnapshot).toHaveBeenCalledWith({ sourceId: "source-1" });
   });
 
+  it("treats false source detail latest snapshot flags as omitted", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(),
+        get: vi.fn(async () => authorizedWikiSource()),
+        updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
+        getSnapshot: vi.fn(),
+        getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1?includeLatestSnapshot=false",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().source).not.toHaveProperty("latestSnapshot");
+    expect(runtime.sources.get).toHaveBeenCalledWith("source-1");
+    expect(runtime.sources.getLatestSnapshot).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid source detail latest snapshot flags", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
@@ -1978,7 +2034,7 @@ describe("document sync source inventory API", () => {
 
     const response = await app.inject({
       method: "GET",
-      url: "/internal/document-sync/sources/source-1?includeLatestSnapshot=false",
+      url: "/internal/document-sync/sources/source-1?includeLatestSnapshot=maybe",
     });
 
     expect(response.statusCode).toBe(400);

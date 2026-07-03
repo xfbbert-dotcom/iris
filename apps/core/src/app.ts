@@ -1168,11 +1168,11 @@ function parseUsableForAnswering(value: unknown): true | false | undefined {
 }
 
 function parseIncludeLatestSnapshot(value: unknown): true | false | undefined {
-  if (value === undefined) {
+  if (value === undefined || value === "false" || value === false) {
     return undefined;
   }
 
-  return value === "true" ? true : false;
+  return value === "true" || value === true ? true : false;
 }
 
 function isDocumentSourceType(value: string): value is DocumentSourceType {
