@@ -199,7 +199,7 @@ describe("RedisRawEventQueue", () => {
 
   it("requeues failed raw events below max attempts", async () => {
     const client: RedisRawEventQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn(async () => 1),
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(),
       lLen: vi.fn(),
@@ -211,10 +211,11 @@ describe("RedisRawEventQueue", () => {
     await expect(
       queue.handleFailedEvent({ event, errorMessage: "processor failed" }),
     ).resolves.toEqual({ action: "requeued", attempts: 1 });
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:events:raw:queue",
-      serializeRawEvent({ ...event, attempts: 1 }),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
+      keys: ["iris:events:raw:seen", "iris:events:raw:queue"],
+      arguments: [event.idempotencyKey, serializeRawEvent({ ...event, attempts: 1 })],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
   });
 
   it("moves failed raw events to Redis DLQ at max attempts", async () => {

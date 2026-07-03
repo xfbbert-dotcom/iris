@@ -98,6 +98,18 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.getDeadLetterCount()).resolves.toBe(0);
   });
 
+  it("deduplicates platform retries after a failed event is requeued", async () => {
+    const queue = new InMemoryRawEventQueue({ maxAttempts: 3 });
+    const event = eventFixture();
+
+    await queue.enqueue(event);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([event]);
+    await queue.handleFailedEvent({ event, errorMessage: "processor failed" });
+    await queue.enqueue({ ...event, receivedAt: new Date("2026-07-02T02:00:00.000Z") });
+
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([{ ...event, attempts: 1 }]);
+  });
+
   it("insulates requeued failed events from caller mutations", async () => {
     const queue = new InMemoryRawEventQueue({ maxAttempts: 3 });
     const event = eventFixture({

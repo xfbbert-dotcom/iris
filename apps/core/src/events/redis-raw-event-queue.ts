@@ -49,10 +49,7 @@ export function createRedisRawEventQueue({
 
   return {
     async enqueue(event) {
-      await client.eval(ENQUEUE_SCRIPT, {
-        keys: [seenKey, queueKey],
-        arguments: [event.idempotencyKey, serializeRawEvent(event)],
-      });
+      await enqueueSerializedRawEvent(client, seenKey, queueKey, event);
     },
 
     async dequeueBatch(limit) {
@@ -100,7 +97,7 @@ export function createRedisRawEventQueue({
         return { action: "dead_lettered", attempts };
       }
 
-      await client.rPush(queueKey, serializeRawEvent(failedEvent));
+      await enqueueSerializedRawEvent(client, seenKey, queueKey, failedEvent);
       return { action: "requeued", attempts };
     },
 
@@ -112,6 +109,18 @@ export function createRedisRawEventQueue({
       return client.lLen(deadLetterKey);
     },
   };
+}
+
+async function enqueueSerializedRawEvent(
+  client: RedisRawEventQueueClient,
+  seenKey: string,
+  queueKey: string,
+  event: RawEvent,
+): Promise<void> {
+  await client.eval(ENQUEUE_SCRIPT, {
+    keys: [seenKey, queueKey],
+    arguments: [event.idempotencyKey, serializeRawEvent(event)],
+  });
 }
 
 export function serializeRawEvent(event: RawEvent): string {
