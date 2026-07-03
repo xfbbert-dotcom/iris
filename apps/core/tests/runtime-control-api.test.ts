@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
@@ -170,6 +170,97 @@ describe("runtime control API", () => {
     expect(invalidGlobal.json()).toEqual({ ok: false, error: "invalid_request" });
     expect(invalidGroup.statusCode).toBe(400);
     expect(invalidGroup.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("blocks answer draft generation while Iris is globally disabled", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Draft answer.",
+        promptContext: "",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const app = buildApp({
+      answerDraftOrchestrator,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: false },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        liveChatMessages: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "iris_runtime_disabled" });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
+  it("blocks answer draft generation for disabled groups only", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Draft answer.",
+        promptContext: "",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const app = buildApp({
+      answerDraftOrchestrator,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/groups/chat-a",
+      payload: { enabled: false },
+    });
+
+    const disabledResponse = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        chatId: "chat-a",
+        liveChatMessages: [],
+      },
+    });
+    const enabledResponse = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        chatId: "chat-b",
+        liveChatMessages: [],
+      },
+    });
+
+    expect(disabledResponse.statusCode).toBe(403);
+    expect(disabledResponse.json()).toEqual({ ok: false, error: "iris_runtime_disabled" });
+    expect(enabledResponse.statusCode).toBe(200);
+    expect(enabledResponse.json()).toMatchObject({ answerText: "Draft answer." });
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledTimes(1);
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      question: "What changed?",
+      chatId: "chat-b",
+      liveChatMessages: [],
+    });
   });
 });
 

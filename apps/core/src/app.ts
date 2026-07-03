@@ -179,6 +179,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     if (parsedRequest === undefined) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
+    if (
+      !runtimeController.canProcessIncomingEvent({
+        ...(parsedRequest.chatId === undefined ? {} : { groupId: parsedRequest.chatId }),
+      })
+    ) {
+      return reply.code(403).send({ ok: false, error: "iris_runtime_disabled" });
+    }
 
     try {
       return await answerDraftOrchestrator.generateDraft(parsedRequest);
