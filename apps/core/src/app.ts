@@ -43,6 +43,7 @@ export type BuildAppDependencies = {
   verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   auditLog?: InMemoryAuditLog;
+  now?: () => Date;
   createAnswerDraftRuntime?: (
     input?: Parameters<typeof createDefaultAnswerDraftRuntime>[0],
   ) => AnswerDraftRuntime | undefined;
@@ -102,6 +103,7 @@ type DocumentSourcePolicyUpdateRequest = {
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const auditLog = dependencies.auditLog ?? new InMemoryAuditLog();
+  const now = dependencies.now ?? (() => new Date());
   const answerDraftRuntime =
     dependencies.answerDraftOrchestrator === undefined
       ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
@@ -203,6 +205,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
     return {
       ok: Object.values(components).every((component) => component.ok),
+      generatedAt: now().toISOString(),
       components,
     };
   });

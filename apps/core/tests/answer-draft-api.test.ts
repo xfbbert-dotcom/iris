@@ -283,6 +283,7 @@ describe("GET /internal/audit/status", () => {
 describe("GET /internal/status", () => {
   it("returns a consolidated internal service status snapshot", async () => {
     const auditLog = new InMemoryAuditLog({ maxEvents: 2 });
+    const generatedAt = new Date("2026-07-03T07:30:00.000Z");
     await auditLog.record({
       type: "permission_guard_denied",
       documentId: "source-1",
@@ -321,6 +322,7 @@ describe("GET /internal/status", () => {
     });
     const app = buildApp({
       auditLog,
+      now: () => generatedAt,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => documentSyncRuntime,
@@ -335,6 +337,7 @@ describe("GET /internal/status", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       ok: true,
+      generatedAt: "2026-07-03T07:30:00.000Z",
       components: {
         audit: {
           ok: true,
