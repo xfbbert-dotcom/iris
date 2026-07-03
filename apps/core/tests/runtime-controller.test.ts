@@ -135,4 +135,18 @@ describe("RuntimeController", () => {
     expect(controller.canProcessIncomingEvent({ groupId: "chat-b" })).toBe(false);
     expect(controller.canProcessIncomingEvent({})).toBe(false);
   });
+
+  it("updates individual runtime capabilities", () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+
+    controller.setCapability("proactiveSpeech", false);
+
+    expect(controller.canProactivelySpeak("chat-a")).toBe(false);
+    expect(controller.getSnapshot().capabilities.proactiveSpeech).toBe(false);
+
+    controller.setCapability("proactiveSpeech", true);
+
+    expect(controller.canProactivelySpeak("chat-a")).toBe(true);
+    expect(controller.getSnapshot().capabilities.proactiveSpeech).toBe(true);
+  });
 });

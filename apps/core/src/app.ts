@@ -12,7 +12,10 @@ import {
   type FeishuCallbackRequest
 } from "./feishu/feishu-gateway.js";
 import { readFeishuAuthConfig } from "./config/env.js";
-import { RuntimeController } from "./admin/runtime-controller.js";
+import {
+  RuntimeController,
+  type RuntimeCapabilityName
+} from "./admin/runtime-controller.js";
 import { createDefaultRuntimeConfig } from "./config/runtime-config.js";
 import { createFeishuRequestVerifier } from "./feishu/feishu-auth.js";
 import type { EventQueue } from "./queues/event-queue.js";
@@ -104,6 +107,18 @@ type DocumentSourcePolicyUpdateRequest = {
   canUseForAnswering?: boolean;
   canUseForKnowledgeDrafts?: boolean;
 };
+type RuntimeCapabilityUpdateRequest = Partial<Record<RuntimeCapabilityName, boolean>>;
+
+const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
+  "readGroupContext",
+  "replyWhenMentioned",
+  "readGroupDocuments",
+  "retrieveKnowledgeBase",
+  "proactiveSpeech",
+  "generateKnowledgeDrafts",
+  "writeKnowledgeBase",
+  "callExternalTools",
+]);
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
@@ -257,6 +272,25 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       runtimeController.enableGroup(groupId);
     } else {
       runtimeController.disableGroup(groupId);
+    }
+
+    return {
+      ok: true,
+      ...runtimeController.getSnapshot(),
+    };
+  });
+
+  app.patch("/internal/runtime-control/capabilities", async (request, reply) => {
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseRuntimeCapabilityUpdateRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    for (const [capability, enabled] of Object.entries(parsedRequest) as Array<
+      [RuntimeCapabilityName, boolean]
+    >) {
+      runtimeController.setCapability(capability, enabled);
     }
 
     return {
@@ -1217,6 +1251,34 @@ function parseRuntimeEnabledRequest(value: unknown): { enabled: boolean } | unde
   }
 
   return { enabled: value.enabled };
+}
+
+function parseRuntimeCapabilityUpdateRequest(
+  value: unknown,
+): RuntimeCapabilityUpdateRequest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const entries = Object.entries(value);
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  const update: RuntimeCapabilityUpdateRequest = {};
+  for (const [capability, enabled] of entries) {
+    if (!isRuntimeCapabilityName(capability) || typeof enabled !== "boolean") {
+      return undefined;
+    }
+
+    update[capability] = enabled;
+  }
+
+  return update;
+}
+
+function isRuntimeCapabilityName(value: string): value is RuntimeCapabilityName {
+  return runtimeCapabilityNames.has(value as RuntimeCapabilityName);
 }
 
 function parseDeadLetterBatchReplayRequest(

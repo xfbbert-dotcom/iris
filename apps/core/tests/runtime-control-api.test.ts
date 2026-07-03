@@ -262,6 +262,77 @@ describe("runtime control API", () => {
       liveChatMessages: [],
     });
   });
+
+  it("updates runtime capabilities", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      payload: {
+        proactiveSpeech: false,
+        writeKnowledgeBase: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      capabilities: {
+        proactiveSpeech: false,
+        writeKnowledgeBase: true,
+      },
+    });
+
+    const status = await app.inject({
+      method: "GET",
+      url: "/internal/runtime-control/status",
+    });
+
+    expect(status.json()).toMatchObject({
+      capabilities: {
+        proactiveSpeech: false,
+        writeKnowledgeBase: true,
+      },
+    });
+  });
+
+  it("rejects invalid runtime capability updates", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const unknownCapability = await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      payload: { unknownCapability: true },
+    });
+    const nonBooleanCapability = await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      payload: { proactiveSpeech: "false" },
+    });
+    const emptyUpdate = await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      payload: {},
+    });
+
+    expect(unknownCapability.statusCode).toBe(400);
+    expect(unknownCapability.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(nonBooleanCapability.statusCode).toBe(400);
+    expect(nonBooleanCapability.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(emptyUpdate.statusCode).toBe(400);
+    expect(emptyUpdate.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
 });
 
 function feishuMessagePayload(eventId: string, chatId: string) {

@@ -5,6 +5,7 @@ export type RuntimeControllerSnapshot = {
   disabledGroupIds: string[];
   capabilities: RuntimeConfig["capabilities"];
 };
+export type RuntimeCapabilityName = keyof RuntimeConfig["capabilities"];
 
 export class RuntimeController {
   constructor(private readonly config: RuntimeConfig) {}
@@ -41,6 +42,10 @@ export class RuntimeController {
     }
 
     this.config.disabledGroupIds.delete(normalized);
+  }
+
+  setCapability(capability: RuntimeCapabilityName, enabled: boolean): void {
+    this.config.capabilities[capability] = enabled;
   }
 
   pauseProactiveBehavior(): void {
