@@ -25,7 +25,7 @@ export type RawEventWorkerDependencies = {
 export function createRawEventWorker(dependencies: RawEventWorkerDependencies) {
   return {
     async processBatch({ limit }: { limit: number }): Promise<RawEventWorkerResult[]> {
-      const events = await dependencies.queue.dequeueBatch(Math.max(0, Math.floor(limit)));
+      const events = await dependencies.queue.dequeueBatch(sanitizeLimit(limit));
       const results: RawEventWorkerResult[] = [];
 
       for (const event of events) {
@@ -53,4 +53,12 @@ export function createRawEventWorker(dependencies: RawEventWorkerDependencies) {
       return results;
     },
   };
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }

@@ -16,6 +16,23 @@ describe("RawEventWorker", () => {
     ]);
   });
 
+  it("sanitizes non-finite batch limits to zero", async () => {
+    const queue = {
+      dequeueBatch: vi.fn(async () => []),
+      handleFailedEvent: vi.fn(),
+    };
+    const worker = createRawEventWorker({
+      queue,
+      processor: { process: vi.fn(async () => undefined) },
+    });
+
+    await expect(worker.processBatch({ limit: Number.POSITIVE_INFINITY })).resolves.toEqual([]);
+    await expect(worker.processBatch({ limit: Number.NaN })).resolves.toEqual([]);
+
+    expect(queue.dequeueBatch).toHaveBeenNthCalledWith(1, 0);
+    expect(queue.dequeueBatch).toHaveBeenNthCalledWith(2, 0);
+  });
+
   it("requeues failed events and continues processing", async () => {
     const first = eventFixture({ idempotencyKey: "raw-event:feishu:event-1" });
     const second = eventFixture({ idempotencyKey: "raw-event:feishu:event-2" });
