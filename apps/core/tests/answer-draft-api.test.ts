@@ -411,6 +411,7 @@ describe("GET /internal/status", () => {
     });
 
     expect(response.statusCode).toBe(200);
+    expect(response.json().ok).toBe(false);
     expect(response.json().components.eventWorker).toEqual({
       ok: false,
       enabled: true,

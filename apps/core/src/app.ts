@@ -184,9 +184,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     retention: auditLog.retention,
   }));
 
-  app.get("/internal/status", async () => ({
-    ok: true,
-    components: {
+  app.get("/internal/status", async () => {
+    const components = {
       audit: {
         ok: true,
         enabled: true,
@@ -200,8 +199,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
-    },
-  }));
+    };
+
+    return {
+      ok: Object.values(components).every((component) => component.ok),
+      components,
+    };
+  });
 
   app.get("/internal/audit/events", async (request, reply) => {
     const parsedQuery = parseAuditEventQuery(request.query);
