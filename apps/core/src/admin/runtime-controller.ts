@@ -88,6 +88,17 @@ export class RuntimeController {
     return this.canProcessGroupMessage(groupId) && this.config.capabilities.replyWhenMentioned;
   }
 
+  canGenerateAnswerDraft(input: { groupId?: string }): boolean {
+    if (!this.config.globalEnabled || !this.config.capabilities.replyWhenMentioned) {
+      return false;
+    }
+    if (input.groupId === undefined) {
+      return true;
+    }
+
+    return this.canProcessGroupMessage(input.groupId);
+  }
+
   canProactivelySpeak(groupId: string): boolean {
     return this.canProcessGroupMessage(groupId) && this.config.capabilities.proactiveSpeech;
   }

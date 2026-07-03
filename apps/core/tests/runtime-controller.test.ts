@@ -149,4 +149,21 @@ describe("RuntimeController", () => {
     expect(controller.canProactivelySpeak("chat-a")).toBe(true);
     expect(controller.getSnapshot().capabilities.proactiveSpeech).toBe(true);
   });
+
+  it("gates answer draft generation by reply capability", () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+
+    expect(controller.canGenerateAnswerDraft({ groupId: "chat-a" })).toBe(true);
+
+    controller.setCapability("replyWhenMentioned", false);
+
+    expect(controller.canGenerateAnswerDraft({ groupId: "chat-a" })).toBe(false);
+    expect(controller.canGenerateAnswerDraft({})).toBe(false);
+
+    controller.setCapability("replyWhenMentioned", true);
+    controller.disableGroup("chat-a");
+
+    expect(controller.canGenerateAnswerDraft({ groupId: "chat-a" })).toBe(false);
+    expect(controller.canGenerateAnswerDraft({ groupId: "chat-b" })).toBe(true);
+  });
 });

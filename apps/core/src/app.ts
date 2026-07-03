@@ -195,7 +195,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
     if (
-      !runtimeController.canProcessIncomingEvent({
+      !runtimeController.canGenerateAnswerDraft({
         ...(parsedRequest.chatId === undefined ? {} : { groupId: parsedRequest.chatId }),
       })
     ) {

@@ -333,6 +333,44 @@ describe("runtime control API", () => {
     expect(emptyUpdate.statusCode).toBe(400);
     expect(emptyUpdate.json()).toEqual({ ok: false, error: "invalid_request" });
   });
+
+  it("blocks answer draft generation when reply capability is disabled", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Draft answer.",
+        promptContext: "",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const app = buildApp({
+      answerDraftOrchestrator,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      payload: { replyWhenMentioned: false },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        chatId: "chat-a",
+        liveChatMessages: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "iris_runtime_disabled" });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
 });
 
 function feishuMessagePayload(eventId: string, chatId: string) {
