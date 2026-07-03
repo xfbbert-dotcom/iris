@@ -368,6 +368,7 @@ function registerSource(
     return source;
   }
 
+  const hasExistingEvidence = evidenceExists(existing.evidence, next.evidence);
   const merged: DocumentSource = {
     ...existing,
     sourceType: higherPrioritySourceType(existing.sourceType, next.sourceType),
@@ -376,13 +377,14 @@ function registerSource(
     originMessageId: existing.originMessageId ?? next.originMessageId,
     submittedByUserId: existing.submittedByUserId ?? next.submittedByUserId,
     authorizedSpaceId: existing.authorizedSpaceId ?? next.authorizedSpaceId,
-    syncState: existing.syncState === "failed" ? "pending" : existing.syncState,
+    syncState:
+      existing.syncState === "failed" && !hasExistingEvidence ? "pending" : existing.syncState,
     canUseForAnswering: existing.canUseForAnswering,
     canUseForKnowledgeDrafts:
       existing.canUseForKnowledgeDrafts || next.canUseForKnowledgeDrafts,
     createdAt: new Date(existing.createdAt),
     updatedAt: now,
-    evidence: evidenceExists(existing.evidence, next.evidence)
+    evidence: hasExistingEvidence
       ? existing.evidence.map(cloneEvidence)
       : [...existing.evidence.map(cloneEvidence), cloneEvidence(next.evidence)],
   };

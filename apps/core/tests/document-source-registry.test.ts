@@ -405,6 +405,30 @@ describe("createDocumentSourceRegistry", () => {
     ]);
   });
 
+  it("keeps failed sync state when duplicate evidence is retried", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    registry.markSyncState(source.id, "failed");
+    const retried = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    expect(retried.syncState).toBe("failed");
+    expect(retried.evidence).toHaveLength(1);
+  });
+
   it("keeps answering disabled when re-registering the same group visible sourceUri", () => {
     const registry = createDocumentSourceRegistry({
       createId: () => "doc-source-1",

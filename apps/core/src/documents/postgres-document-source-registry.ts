@@ -359,7 +359,21 @@ set
   submitted_by_user_id = coalesce(submitted_by_user_id, $5),
   authorized_space_id = coalesce(authorized_space_id, $6),
   can_use_for_knowledge_drafts = can_use_for_knowledge_drafts or $7,
-  sync_state = case when sync_state = 'failed' then 'pending' else sync_state end,
+  sync_state = case
+    when sync_state = 'failed'
+      and not exists (
+        select 1
+        from document_source_evidence evidence
+        where evidence.kind = $10
+          and evidence.source_uri = $11
+          and coalesce(evidence.group_id, '') = coalesce($12, '')
+          and coalesce(evidence.message_id, '') = coalesce($13, '')
+          and coalesce(evidence.user_id, '') = coalesce($14, '')
+          and coalesce(evidence.space_id, '') = coalesce($15, '')
+      )
+    then 'pending'
+    else sync_state
+  end,
   updated_at = $8
 where id = $9
 `,
@@ -373,6 +387,12 @@ where id = $9
         next.canUseForKnowledgeDrafts,
         now,
         existing.id,
+        next.evidence.kind,
+        next.evidence.sourceUri,
+        next.evidence.groupId ?? null,
+        next.evidence.messageId ?? null,
+        next.evidence.userId ?? null,
+        next.evidence.spaceId ?? null,
       ],
     );
 

@@ -270,6 +270,12 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
       true,
       now,
       "source-1",
+      "admin_authorization",
+      "https://example.com/doc",
+      null,
+      null,
+      null,
+      "space-1",
     ]);
   });
 
@@ -301,8 +307,45 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
 
     expect(update).toBeDefined();
     expect(normalizeSql(update?.sql ?? "")).toContain(
-      "sync_state = case when sync_state = 'failed' then 'pending' else sync_state end",
+      "sync_state = case when sync_state = 'failed' and not exists",
     );
+  });
+
+  it("checks existing evidence before resetting failed sync state", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        sync_state: "failed",
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "coalesce(evidence.message_id, '') = coalesce($13, '')",
+    );
+    expect(update?.values?.slice(9, 15)).toEqual([
+      "group_message",
+      "https://example.com/doc",
+      "group-1",
+      "message-1",
+      null,
+      null,
+    ]);
   });
 
   it("rolls back and releases the client when registration fails", async () => {
