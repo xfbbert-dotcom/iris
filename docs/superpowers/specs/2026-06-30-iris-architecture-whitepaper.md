@@ -134,6 +134,8 @@ Local permission state is never enough for sensitive retrieval. Before document 
 
 Feishu document sync reads are external I/O and must always be bounded by request timeouts that cover both response headers and body consumption. If tenant-token acquisition, wiki-node lookup, raw-content fetch, or response body reading stalls, Iris must fail the document sync attempt and let the queue retry/dead-letter policy handle recovery rather than occupying a worker indefinitely.
 
+Document sync workers must not treat a stale pre-claim source read as permission to fetch. After a worker marks a source as `syncing`, it must treat the returned source record as authoritative, re-check permission state and usage capabilities, and abandon the fetch if the source has become denied or disabled. When this happens, the worker must restore the source to `pending` so future administrator changes can re-enable sync without leaving the source stuck in an in-flight state.
+
 Constitutional principle:
 
 > Iris reads both chat text and readable document bodies. Every document entering memory must preserve source, permission, version, and visibility scope.

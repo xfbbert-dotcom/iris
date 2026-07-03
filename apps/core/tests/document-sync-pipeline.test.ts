@@ -646,6 +646,106 @@ describe("createDocumentSyncRunner", () => {
     expect(registry.markSyncState).not.toHaveBeenCalled();
   });
 
+  it("abandons sync when a source loses permission while being claimed", async () => {
+    const candidate = source({ id: "source-loses-permission-during-claim" });
+    const claimedDenied = source({
+      id: candidate.id,
+      permissionState: "denied",
+      syncState: "syncing",
+      canUseForAnswering: false,
+    });
+    const restoredDenied = source({
+      id: candidate.id,
+      permissionState: "denied",
+      syncState: "pending",
+      canUseForAnswering: false,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (_id: string, syncState: string) =>
+        syncState === "syncing" ? claimedDenied : restoredDenied,
+      ),
+    };
+    const fetcher = {
+      fetch: vi.fn(async () => ({
+        bodyText: "Document body",
+        fetchedAt,
+      })),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(async () => snapshot()),
+      insertFailedSnapshot: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-loses-permission-during-claim"),
+    ).resolves.toEqual({
+      status: "rejected",
+      source: restoredDenied,
+      reason: "permission_denied",
+    });
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(snapshots.insertSucceededSnapshot).not.toHaveBeenCalled();
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(1, candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "pending");
+  });
+
+  it("abandons sync when source usage is disabled while being claimed", async () => {
+    const candidate = source({ id: "source-disabled-during-claim" });
+    const claimedDisabled = source({
+      id: candidate.id,
+      syncState: "syncing",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const restoredDisabled = source({
+      id: candidate.id,
+      syncState: "pending",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (_id: string, syncState: string) =>
+        syncState === "syncing" ? claimedDisabled : restoredDisabled,
+      ),
+    };
+    const fetcher = {
+      fetch: vi.fn(async () => ({
+        bodyText: "Document body",
+        fetchedAt,
+      })),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(async () => snapshot()),
+      insertFailedSnapshot: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => failedAt,
+    });
+
+    await expect(runner.syncSourceById("source-disabled-during-claim")).resolves.toEqual({
+      status: "rejected",
+      source: restoredDisabled,
+      reason: "capability_disabled",
+    });
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(snapshots.insertSucceededSnapshot).not.toHaveBeenCalled();
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(1, candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "pending");
+  });
+
   it("returns not_found when the source does not exist", async () => {
     const registry = registryReturning(undefined);
     const { runner, fetcher } = runnerWith({ registry });
@@ -662,7 +762,9 @@ describe("createDocumentSyncRunner", () => {
 function registryReturning(documentSource: DocumentSource | undefined) {
   return {
     findSourceById: vi.fn(async () => documentSource),
-    markSyncState: vi.fn(),
+    markSyncState: vi.fn(async (id: string, syncState: DocumentSource["syncState"]) =>
+      source({ ...(documentSource ?? {}), id, syncState }),
+    ),
   };
 }
 

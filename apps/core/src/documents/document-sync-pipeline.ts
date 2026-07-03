@@ -105,12 +105,9 @@ export function createDocumentSyncRunner({
         return { status: "not_found", sourceId };
       }
 
-      if (source.permissionState === "denied") {
-        return { status: "rejected", source, reason: "permission_denied" };
-      }
-
-      if (!source.canUseForAnswering && !source.canUseForKnowledgeDrafts) {
-        return { status: "rejected", source, reason: "capability_disabled" };
+      const initialRejectionReason = getSyncRejectionReason(source);
+      if (initialRejectionReason !== undefined) {
+        return { status: "rejected", source, reason: initialRejectionReason };
       }
 
       if (source.syncState === "syncing") {
@@ -121,7 +118,13 @@ export function createDocumentSyncRunner({
         return { status: "skipped", source, reason: "already_synced" };
       }
 
-      await registry.markSyncState(source.id, "syncing");
+      const claimedSource = await registry.markSyncState(source.id, "syncing");
+      const claimRejectionReason = getSyncRejectionReason(claimedSource);
+
+      if (claimRejectionReason !== undefined) {
+        const restoredSource = await registry.markSyncState(source.id, "pending");
+        return { status: "rejected", source: restoredSource, reason: claimRejectionReason };
+      }
 
       let fetchResult: DocumentBodyFetchResult;
 
@@ -169,6 +172,25 @@ export function createDocumentSyncRunner({
       }
     },
   };
+}
+
+type DocumentSyncRejectionReason = Extract<
+  DocumentSyncResult,
+  { status: "rejected" }
+>["reason"];
+
+function getSyncRejectionReason(
+  source: DocumentSource,
+): DocumentSyncRejectionReason | undefined {
+  if (source.permissionState === "denied") {
+    return "permission_denied";
+  }
+
+  if (!source.canUseForAnswering && !source.canUseForKnowledgeDrafts) {
+    return "capability_disabled";
+  }
+
+  return undefined;
 }
 
 async function markPendingAfterUnexpectedSyncFailure(
