@@ -11,6 +11,9 @@ describe("DocumentSyncQueue", () => {
     expect(createDocumentSyncIdempotencyKey({ documentSourceId: "source-1" })).toBe(
       "document-sync:source-1",
     );
+    expect(createDocumentSyncIdempotencyKey({ documentSourceId: " source-1 " })).toBe(
+      "document-sync:source-1",
+    );
   });
 
   it("dequeues jobs in enqueue order", async () => {

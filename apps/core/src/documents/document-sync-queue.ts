@@ -49,5 +49,5 @@ export interface DocumentSyncQueue {
 export function createDocumentSyncIdempotencyKey(input: {
   documentSourceId: string;
 }): string {
-  return `document-sync:${input.documentSourceId}`;
+  return `document-sync:${input.documentSourceId.trim()}`;
 }
