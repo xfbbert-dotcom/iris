@@ -24,5 +24,6 @@ Existing `listSourcesUsableForAnswering()` remains as a compatibility shortcut f
 ## Quality Bar
 
 - Enabled and disabled source lists use the same deterministic source ordering.
+- Existing shortcut methods must not depend on JavaScript `this` binding.
 - The admin API returns disabled sources without latest snapshot lookups unless requested.
 - Invalid non-boolean query values still return `invalid_request`.

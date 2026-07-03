@@ -88,6 +88,8 @@ export function createPostgresDocumentSourceRegistry(
     createId: dependencies.createId ?? randomUUID,
     now: dependencies.now ?? (() => new Date()),
   };
+  const listSourcesByAnsweringEnabled = (enabled: boolean): Promise<DocumentSource[]> =>
+    fetchSources(pool, "can_use_for_answering = $1", [enabled]);
 
   return {
     registerGroupVisibleDocument(input) {
@@ -246,12 +248,10 @@ returning *
     },
 
     listSourcesUsableForAnswering() {
-      return this.listSourcesByAnsweringEnabled(true);
+      return listSourcesByAnsweringEnabled(true);
     },
 
-    listSourcesByAnsweringEnabled(enabled) {
-      return fetchSources(pool, "can_use_for_answering = $1", [enabled]);
-    },
+    listSourcesByAnsweringEnabled,
 
     listSourcesByGroupId(groupId) {
       return fetchSources(

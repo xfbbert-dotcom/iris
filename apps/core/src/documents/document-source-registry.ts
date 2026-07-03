@@ -106,6 +106,15 @@ export function createDocumentSourceRegistry(
   const sourcesById = new Map<string, DocumentSource>();
   const sourcesByUri = new Map<string, DocumentSource>();
 
+  const listSourcesByAnsweringEnabled = (enabled: boolean): DocumentSource[] =>
+    cloneSources(
+      sortSources(
+        Array.from(sourcesById.values()).filter(
+          (source) => source.canUseForAnswering === enabled,
+        ),
+      ),
+    );
+
   return {
     registerGroupVisibleDocument(input) {
       const sourceUri = requireNonBlank("sourceUri", input.sourceUri);
@@ -256,18 +265,10 @@ export function createDocumentSourceRegistry(
     },
 
     listSourcesUsableForAnswering() {
-      return this.listSourcesByAnsweringEnabled(true);
+      return listSourcesByAnsweringEnabled(true);
     },
 
-    listSourcesByAnsweringEnabled(enabled) {
-      return cloneSources(
-        sortSources(
-          Array.from(sourcesById.values()).filter(
-            (source) => source.canUseForAnswering === enabled,
-          ),
-        ),
-      );
-    },
+    listSourcesByAnsweringEnabled,
 
     listSourcesByGroupId(groupId) {
       return cloneSources(

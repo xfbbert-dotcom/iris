@@ -450,6 +450,20 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     expect(normalizeSql(sourceSelect?.sql ?? "")).toContain("can_use_for_answering = $1");
     expect(sourceSelect?.values).toEqual([false]);
   });
+
+  it("keeps answering filter shortcuts independent from method binding", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+    const listUsableForAnswering = registry.listSourcesUsableForAnswering;
+
+    await expect(listUsableForAnswering()).resolves.toHaveLength(1);
+
+    const sourceSelect = fake.queries.find((query) =>
+      normalizeSql(query.sql).startsWith("select * from document_sources"),
+    );
+    expect(sourceSelect).toBeDefined();
+    expect(sourceSelect?.values).toEqual([true]);
+  });
 });
 
 runIfDatabase("createPostgresDocumentSourceRegistry", () => {
