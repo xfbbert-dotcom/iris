@@ -1,4 +1,5 @@
 import { createAnswerDraftOrchestrator, type AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
+import type { AuditLog } from "../audit/audit-log.js";
 import {
   readAnswerDraftRuntimeConfig,
   readEmbeddingProviderConfig,
@@ -66,6 +67,7 @@ export type AnswerDraftRuntimeDependencies = {
     "getStaticDevelopmentProfile" | "findOrCreateProfile" | "getProfileById"
   >;
   createEmbeddingProvider?: (config: EmbeddingProviderConfig) => EmbeddingProvider;
+  auditLog?: AuditLog;
 };
 
 type RuntimeEmbedding = {
@@ -139,6 +141,7 @@ export function createAnswerDraftRuntime({
           permissionMode: runtimeConfig.permissionMode,
           sourceRegistry,
         }),
+        auditLog: dependencies.auditLog,
       });
 
       return createAnswerDraftOrchestrator({

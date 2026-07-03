@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
@@ -184,6 +185,7 @@ describe("createAnswerDraftRuntime", () => {
         return sources[id];
       }),
     };
+    const auditLog = new InMemoryAuditLog();
     const runtime = createAnswerDraftRuntime({
       env: {
         ...enabledEnv(),
@@ -194,6 +196,7 @@ describe("createAnswerDraftRuntime", () => {
         createDocumentFragmentRepository: vi.fn(() => fragments),
         createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
         createModelProvider: vi.fn(() => model),
+        auditLog,
         createEmbeddingProfileRepository: vi.fn(() => ({
           getStaticDevelopmentProfile: vi.fn(async () => profile()),
           findOrCreateProfile: vi.fn(),
@@ -221,6 +224,33 @@ describe("createAnswerDraftRuntime", () => {
       "source-error",
       "source-missing",
       "source-stale",
+    ]);
+    expect(auditLog.events).toEqual([
+      {
+        type: "permission_guard_denied",
+        documentId: "source-disabled",
+        fragmentIds: ["fragment-disabled"],
+      },
+      {
+        type: "permission_guard_denied",
+        documentId: "source-denied",
+        fragmentIds: ["fragment-denied"],
+      },
+      {
+        type: "permission_guard_denied",
+        documentId: "source-stale",
+        fragmentIds: ["fragment-stale"],
+      },
+      {
+        type: "permission_guard_denied",
+        documentId: "source-missing",
+        fragmentIds: ["fragment-missing"],
+      },
+      {
+        type: "permission_guard_denied",
+        documentId: "source-error",
+        fragmentIds: ["fragment-error"],
+      },
     ]);
   });
 
