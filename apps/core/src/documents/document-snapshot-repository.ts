@@ -171,10 +171,15 @@ where id = $1
     async listSuccessfulSnapshotsMissingProfile(input) {
       const result = await dependencies.queryable.query<DocumentSnapshotRow>(
         `
+with latest_successful_snapshots as (
+  select distinct on (document_source_id) *
+  from document_snapshots
+  where fetch_status = 'succeeded'
+  order by document_source_id asc, fetched_at desc, id asc
+)
 select *
-from document_snapshots s
-where s.fetch_status = 'succeeded'
-  and not exists (
+from latest_successful_snapshots s
+where not exists (
     select 1
     from document_fragments f
     where f.document_snapshot_id = s.id

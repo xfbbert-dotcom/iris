@@ -320,7 +320,11 @@ describe("DocumentSnapshotRepository", () => {
     const createdAt = new Date("2026-07-02T01:00:00.000Z");
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       const normalized = normalizeSql(sql);
+      expect(normalized).toContain("with latest_successful_snapshots as");
+      expect(normalized).toContain("select distinct on (document_source_id) *");
       expect(normalized).toContain("fetch_status = 'succeeded'");
+      expect(normalized).toContain("order by document_source_id asc, fetched_at desc, id asc");
+      expect(normalized).toContain("from latest_successful_snapshots s");
       expect(normalized).toContain("not exists");
       expect(normalized).toContain("embedding_profile_id = $1");
       expect(values).toEqual(["profile-1536", 25]);
