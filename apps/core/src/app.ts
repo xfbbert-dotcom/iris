@@ -130,7 +130,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       : undefined);
   const gateway = createFeishuGateway({
     queue,
-    rawEventQueue: dependencies.rawEventQueue,
+    rawEventQueue: dependencies.rawEventQueue ?? eventWorkerRuntime?.rawEventQueue,
     verifyRequest: verifyFeishuRequest
   });
   const app = Fastify({ logger: false });

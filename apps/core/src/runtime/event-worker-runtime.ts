@@ -26,6 +26,7 @@ import {
   type RedisDocumentSyncQueueClient,
 } from "../documents/redis-document-sync-queue.js";
 import { createRedisRawEventQueue, type RedisRawEventQueueClient } from "../events/redis-raw-event-queue.js";
+import type { RawEventQueue } from "../events/raw-event-queue.js";
 import { createRawEventWorker } from "../events/raw-event-worker.js";
 import {
   createRawEventWorkerLoop,
@@ -34,6 +35,7 @@ import {
 } from "../events/raw-event-worker-loop.js";
 
 export type EventWorkerRuntime = {
+  rawEventQueue?: Pick<RawEventQueue, "enqueue">;
   getStatus(): Promise<EventWorkerRuntimeStatus>;
   start(): void;
   close(): Promise<void>;
@@ -153,6 +155,7 @@ function createEnabledEventWorkerRuntime({
   });
 
   return {
+    rawEventQueue: queue,
     start() {
       loop.start();
     },

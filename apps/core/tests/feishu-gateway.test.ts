@@ -323,6 +323,55 @@ describe("Core App Feishu route", () => {
     expect(observedRawBody).toBe(JSON.stringify({ event_id: "raw-body-1" }));
   });
 
+  it("uses the event worker raw queue for Feishu callbacks by default", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const app = buildApp({
+      queue,
+      createEventWorkerRuntime: () => ({
+        rawEventQueue,
+        start: vi.fn(),
+        close: vi.fn(async () => undefined),
+        getStatus: vi.fn(async () => ({
+          enabled: true as const,
+          running: false,
+          intervalMs: 1000,
+          batchLimit: 10,
+          pendingEventCount: 0,
+          deadLetterEventCount: 0,
+        })),
+      }),
+    });
+    const payload = {
+      header: {
+        event_id: "event-runtime-queue",
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
+          message_id: "message-1",
+          chat_id: "chat-1",
+        },
+      },
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(rawEventQueue.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "raw-event:feishu:event-runtime-queue",
+        provider: "feishu",
+        eventType: "im.message.receive_v1",
+        rawBody: payload,
+      }),
+    );
+  });
+
   it("uses Feishu auth config from the environment when no verifier is injected", async () => {
     const originalVerificationToken = process.env.FEISHU_VERIFICATION_TOKEN;
     const originalEncryptKey = process.env.FEISHU_ENCRYPT_KEY;
