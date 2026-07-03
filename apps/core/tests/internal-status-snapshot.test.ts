@@ -65,6 +65,7 @@ describe("buildInternalStatusSnapshot", () => {
           { name: "answerDraft", status: "disabled" },
         ],
         attentionComponentCount: 3,
+        requiresOperatorAttention: true,
         primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
         attentionSeverity: "critical",
       },
@@ -121,6 +122,7 @@ describe("buildInternalStatusSnapshot", () => {
 
     expect(snapshot.summary.attentionComponents).toEqual([]);
     expect(snapshot.summary.attentionComponentCount).toBe(0);
+    expect(snapshot.summary.requiresOperatorAttention).toBe(false);
     expect(snapshot.summary.primaryAttentionComponent).toBeNull();
     expect(snapshot.summary.attentionSeverity).toBe("none");
   });

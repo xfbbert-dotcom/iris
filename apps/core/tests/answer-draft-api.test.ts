@@ -364,6 +364,7 @@ describe("GET /internal/status", () => {
           { name: "answerDraft", status: "disabled" },
         ],
         attentionComponentCount: 2,
+        requiresOperatorAttention: true,
         primaryAttentionComponent: { name: "reindex", status: "stopped" },
         attentionSeverity: "warning",
       },
@@ -474,6 +475,7 @@ describe("GET /internal/status", () => {
         { name: "reindex", status: "disabled" },
       ],
       attentionComponentCount: 3,
+      requiresOperatorAttention: true,
       primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
       attentionSeverity: "critical",
     });

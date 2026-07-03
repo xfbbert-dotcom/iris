@@ -22,6 +22,7 @@ export function buildInternalStatusSnapshot<
   const componentStatusCounts = countComponentStatuses(componentStatuses);
   const attentionComponents = buildAttentionComponents(components);
   const attentionComponentCount = attentionComponents.length;
+  const requiresOperatorAttention = attentionComponentCount > 0;
   const primaryAttentionComponent = attentionComponents[0] ?? null;
   const attentionSeverity = getAttentionSeverity(primaryAttentionComponent);
   const ok = healthyComponentCount === componentStatuses.length;
@@ -48,6 +49,7 @@ export function buildInternalStatusSnapshot<
       componentStatusCounts,
       attentionComponents,
       attentionComponentCount,
+      requiresOperatorAttention,
       primaryAttentionComponent,
       attentionSeverity,
     },
