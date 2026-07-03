@@ -85,6 +85,22 @@ describe("assemblePromptContext", () => {
     expect(context).not.toContain('<message speaker="Iris">\n\t</message>');
   });
 
+  it("filters live chat messages with blank speakers before formatting", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: [
+        { speaker: "   ", text: "speaker is blank" },
+        { speaker: "\n\t", text: "speaker is also blank" },
+        { speaker: "Alice", text: "speaker is present" }
+      ]
+    });
+
+    expect(context).toContain('<message speaker="Alice">speaker is present</message>');
+    expect(context).not.toContain("speaker is blank");
+    expect(context).not.toContain("speaker is also blank");
+    expect(context).not.toContain('speaker=""');
+  });
+
   it("trims live chat speaker and text when formatting messages", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],

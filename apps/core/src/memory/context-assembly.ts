@@ -20,7 +20,7 @@ const MAX_LIVE_CHAT_LIMIT = 20;
 export function assemblePromptContext(input: PromptContextInput): string {
   const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
   const meaningfulLiveChatMessages = input.liveChatMessages.filter(
-    (message) => message.text.trim().length > 0,
+    (message) => message.speaker.trim().length > 0 && message.text.trim().length > 0,
   );
   const liveMessages = liveChatLimit === 0
     ? []
