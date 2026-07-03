@@ -393,6 +393,10 @@ describe("createDocumentSyncRuntime", () => {
     await expect(runtime?.sources.list({ limit: 1 })).resolves.toEqual([inventorySource]);
     expect(documentSources.listSources).toHaveBeenCalledOnce();
     await expect(
+      runtime?.sources.list({ limit: Number.POSITIVE_INFINITY }),
+    ).resolves.toEqual([]);
+    await expect(runtime?.sources.list({ limit: Number.NaN })).resolves.toEqual([]);
+    await expect(
       runtime?.sources.list({ limit: 10, sourceType: "authorized_wiki_document" }),
     ).resolves.toEqual([inventorySource]);
     expect(documentSources.listSourcesByType).toHaveBeenCalledWith("authorized_wiki_document");
@@ -431,6 +435,12 @@ describe("createDocumentSyncRuntime", () => {
     await expect(
       runtime?.sources.listSnapshots({ id: "source-1", limit: 1 }),
     ).resolves.toEqual([snapshot]);
+    await expect(
+      runtime?.sources.listSnapshots({ id: "source-1", limit: Number.POSITIVE_INFINITY }),
+    ).resolves.toEqual([]);
+    await expect(
+      runtime?.sources.listSnapshots({ id: "source-1", limit: Number.NaN }),
+    ).resolves.toEqual([]);
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
     expect(snapshots.listSnapshotsForSource).toHaveBeenCalledWith("source-1");
     await expect(

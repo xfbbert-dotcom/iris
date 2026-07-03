@@ -348,7 +348,7 @@ function createEnabledDocumentSyncRuntime({
     sources: {
       async list(input) {
         const sources = await listDocumentSources(documentSources, input);
-        return sources.slice(0, input.limit);
+        return sources.slice(0, sanitizeLimit(input.limit));
       },
       async get(id) {
         return await documentSources.findSourceById(id);
@@ -377,7 +377,7 @@ function createEnabledDocumentSyncRuntime({
         }
 
         const sourceSnapshots = await snapshots.listSnapshotsForSource(input.id);
-        return sourceSnapshots.slice(0, input.limit);
+        return sourceSnapshots.slice(0, sanitizeLimit(input.limit));
       },
       async getSnapshot(input) {
         const source = await documentSources.findSourceById(input.sourceId);
@@ -462,6 +462,14 @@ function listDocumentSources(
   }
 
   return documentSources.listSources();
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): DocumentSyncRuntimeDocumentSources {
