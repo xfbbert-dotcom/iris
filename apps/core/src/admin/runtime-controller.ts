@@ -12,11 +12,21 @@ export class RuntimeController {
   }
 
   disableGroup(groupId: string): void {
-    this.config.disabledGroupIds.add(groupId);
+    const normalized = normalizeGroupId(groupId);
+    if (normalized === undefined) {
+      return;
+    }
+
+    this.config.disabledGroupIds.add(normalized);
   }
 
   enableGroup(groupId: string): void {
-    this.config.disabledGroupIds.delete(groupId);
+    const normalized = normalizeGroupId(groupId);
+    if (normalized === undefined) {
+      return;
+    }
+
+    this.config.disabledGroupIds.delete(normalized);
   }
 
   pauseProactiveBehavior(): void {
@@ -36,7 +46,12 @@ export class RuntimeController {
   }
 
   canProcessGroupMessage(groupId: string): boolean {
-    return this.config.globalEnabled && !this.config.disabledGroupIds.has(groupId);
+    const normalized = normalizeGroupId(groupId);
+    return (
+      normalized !== undefined &&
+      this.config.globalEnabled &&
+      !this.config.disabledGroupIds.has(normalized)
+    );
   }
 
   canReplyWhenMentioned(groupId: string): boolean {
@@ -70,4 +85,9 @@ export class RuntimeController {
   canCallExternalTools(): boolean {
     return this.config.globalEnabled && this.config.capabilities.callExternalTools;
   }
+}
+
+function normalizeGroupId(groupId: string): string | undefined {
+  const normalized = groupId.trim();
+  return normalized.length > 0 ? normalized : undefined;
 }

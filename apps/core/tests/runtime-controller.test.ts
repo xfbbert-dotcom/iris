@@ -26,6 +26,28 @@ describe("RuntimeController", () => {
     expect(controller.canProcessGroupMessage("chat-b")).toBe(true);
   });
 
+  it("normalizes group ids when toggling and checking group access", () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+
+    controller.disableGroup(" chat-a ");
+
+    expect(controller.canProcessGroupMessage("chat-a")).toBe(false);
+    expect(controller.canProcessGroupMessage(" chat-a ")).toBe(false);
+
+    controller.enableGroup(" chat-a ");
+
+    expect(controller.canProcessGroupMessage("chat-a")).toBe(true);
+  });
+
+  it("rejects blank group ids", () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+
+    controller.disableGroup("   ");
+
+    expect(controller.canProcessGroupMessage("   ")).toBe(false);
+    expect(controller.canReplyWhenMentioned("")).toBe(false);
+  });
+
   it("emergency pause disables proactive behavior but keeps mention replies enabled", () => {
     const controller = new RuntimeController(createDefaultRuntimeConfig());
 
