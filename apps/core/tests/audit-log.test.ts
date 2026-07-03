@@ -161,4 +161,43 @@ describe("InMemoryAuditLog", () => {
 
     expect(auditLog.summarizeRecent({ limit: 0 })).toEqual([]);
   });
+
+  it("filters audit summaries by document and event type", async () => {
+    const recordedAt = new Date("2026-07-03T06:04:00.000Z");
+    const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
+
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-1",
+      fragmentIds: ["fragment-2"],
+      message: "permission lookup failed",
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-2",
+      fragmentIds: ["fragment-3"],
+    });
+
+    expect(
+      auditLog.summarizeRecent({
+        limit: 20,
+        documentId: "source-1",
+        type: "permission_guard_denied",
+      }),
+    ).toEqual([
+      {
+        documentId: "source-1",
+        type: "permission_guard_denied",
+        eventCount: 1,
+        affectedFragmentCount: 1,
+        firstRecordedAt: recordedAt,
+        latestRecordedAt: recordedAt,
+      },
+    ]);
+  });
 });

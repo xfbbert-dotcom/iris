@@ -391,6 +391,65 @@ describe("GET /internal/audit/events/summary", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
   });
+
+  it("filters audit event summaries by document and event type", async () => {
+    const recordedAt = new Date("2026-07-03T06:04:00.000Z");
+    const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-1",
+      fragmentIds: ["fragment-2"],
+      message: "permission lookup failed",
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-2",
+      fragmentIds: ["fragment-3"],
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events/summary?limit=20&documentId=source-1&type=permission_guard_denied",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      summaries: [
+        {
+          documentId: "source-1",
+          type: "permission_guard_denied",
+          eventCount: 1,
+          affectedFragmentCount: 1,
+          firstRecordedAt: "2026-07-03T06:04:00.000Z",
+          latestRecordedAt: "2026-07-03T06:04:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("rejects invalid audit summary filters", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events/summary?type=unknown",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
 });
 
 describe("POST /internal/reindex/document-profile", () => {

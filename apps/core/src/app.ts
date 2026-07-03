@@ -2,7 +2,9 @@ import Fastify from "fastify";
 import { pathToFileURL } from "node:url";
 import {
   InMemoryAuditLog,
+  type AuditEvent,
   type AuditEventSummary,
+  type AuditEventSummaryQuery,
   type RecordedAuditEvent,
 } from "./audit/audit-log.js";
 import {
@@ -188,14 +190,14 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   app.get("/internal/audit/events/summary", async (request, reply) => {
-    const limit = parseDeadLetterLimit((request.query as { limit?: unknown }).limit);
-    if (limit === undefined) {
+    const parsedQuery = parseAuditEventSummaryQuery(request.query);
+    if (parsedQuery === undefined) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
     return {
       ok: true,
-      summaries: auditLog.summarizeRecent({ limit }).map(toAuditEventSummaryResponse),
+      summaries: auditLog.summarizeRecent(parsedQuery).map(toAuditEventSummaryResponse),
     };
   });
 
@@ -799,6 +801,41 @@ function parseDeadLetterLimit(value: unknown): number | undefined {
   }
 
   return Math.min(parsed, 100);
+}
+
+function parseAuditEventSummaryQuery(value: unknown): AuditEventSummaryQuery | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const limit = parseDeadLetterLimit(value.limit);
+  const documentId = value.documentId === undefined ? undefined : readNonBlankId(value.documentId);
+  const type = parseAuditEventType(value.type);
+  if (
+    limit === undefined ||
+    (documentId === undefined && value.documentId !== undefined) ||
+    type === false
+  ) {
+    return undefined;
+  }
+
+  return {
+    limit,
+    ...(documentId === undefined ? {} : { documentId }),
+    ...(type === undefined ? {} : { type }),
+  };
+}
+
+function parseAuditEventType(value: unknown): AuditEvent["type"] | false | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const type = value.trim();
+  return type === "permission_guard_denied" || type === "permission_guard_error" ? type : false;
 }
 
 function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery | undefined {

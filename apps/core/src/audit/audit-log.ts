@@ -18,6 +18,12 @@ export type AuditEventSummary = {
   latestRecordedAt: Date;
 };
 
+export type AuditEventSummaryQuery = {
+  limit: number;
+  documentId?: string;
+  type?: AuditEvent["type"];
+};
+
 export interface AuditLog {
   record(event: AuditEvent): Promise<void>;
 }
@@ -52,7 +58,7 @@ export class InMemoryAuditLog implements AuditLog {
     }
   }
 
-  summarizeRecent(options: { limit: number }): AuditEventSummary[] {
+  summarizeRecent(options: AuditEventSummaryQuery): AuditEventSummary[] {
     if (options.limit <= 0) {
       return [];
     }
@@ -63,6 +69,13 @@ export class InMemoryAuditLog implements AuditLog {
     >();
 
     for (const event of this.events.slice(-options.limit)) {
+      if (options.documentId !== undefined && event.documentId !== options.documentId) {
+        continue;
+      }
+      if (options.type !== undefined && event.type !== options.type) {
+        continue;
+      }
+
       const key = `${event.documentId}:${event.type}`;
       const existing = summaries.get(key);
       if (existing === undefined) {
