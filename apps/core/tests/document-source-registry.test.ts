@@ -306,7 +306,9 @@ describe("createDocumentSourceRegistry", () => {
 
     expect(authorized.id).toBe(userSubmitted.id);
     expect(authorized.sourceType).toBe("authorized_wiki_document");
+    expect(authorized.canUseForKnowledgeDrafts).toBe(true);
     expect(groupVisible.sourceType).toBe("authorized_wiki_document");
+    expect(groupVisible.canUseForKnowledgeDrafts).toBe(true);
     expect(groupVisible.evidence).toHaveLength(3);
     expect(groupVisible.evidence.map((evidence) => evidence.kind)).toEqual([
       "user_submission",

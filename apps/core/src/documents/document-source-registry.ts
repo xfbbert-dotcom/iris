@@ -376,6 +376,9 @@ function registerSource(
     originMessageId: existing.originMessageId ?? next.originMessageId,
     submittedByUserId: existing.submittedByUserId ?? next.submittedByUserId,
     authorizedSpaceId: existing.authorizedSpaceId ?? next.authorizedSpaceId,
+    canUseForAnswering: existing.canUseForAnswering,
+    canUseForKnowledgeDrafts:
+      existing.canUseForKnowledgeDrafts || next.canUseForKnowledgeDrafts,
     createdAt: new Date(existing.createdAt),
     updatedAt: now,
     evidence: evidenceExists(existing.evidence, next.evidence)
