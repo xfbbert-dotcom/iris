@@ -679,6 +679,9 @@ Required architectural response:
 - Unsafe integers must be rejected during config loading with explicit errors.
 - External I/O adapters must re-validate timeout values at construction time so
   direct dependency injection cannot bypass environment validation.
+- Operator-facing numeric request fields that control batch or planning scope
+  must reject unsafe integers at the API boundary, and planning components must
+  defensively sanitize unsafe limits before reaching storage queries.
 - Validation should not invent product-specific business caps unless a separate architecture decision calls for them.
 
 Evolution signal:

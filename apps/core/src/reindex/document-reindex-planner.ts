@@ -76,7 +76,7 @@ export function createDocumentReindexPlanner({
 }
 
 function sanitizeLimit(value: number): number {
-  if (!Number.isFinite(value)) {
+  if (!Number.isFinite(value) || !Number.isSafeInteger(value)) {
     return 0;
   }
 

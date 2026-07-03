@@ -1008,7 +1008,12 @@ function parseReindexDocumentProfileRequest(
   if (embeddingProfileId.length === 0 || embeddingProfileId !== activeEmbeddingProfileId) {
     return undefined;
   }
-  if (typeof value.limit !== "number" || !Number.isInteger(value.limit) || value.limit <= 0) {
+  if (
+    typeof value.limit !== "number" ||
+    !Number.isInteger(value.limit) ||
+    !Number.isSafeInteger(value.limit) ||
+    value.limit <= 0
+  ) {
     return undefined;
   }
 

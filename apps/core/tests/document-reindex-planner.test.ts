@@ -54,6 +54,25 @@ describe("DocumentReindexPlanner", () => {
     });
   });
 
+  it("sanitizes unsafe integer limits to zero", async () => {
+    const snapshots = { listSuccessfulSnapshotsMissingProfile: vi.fn(async () => []) };
+    const planner = createDocumentReindexPlanner({
+      snapshots,
+      queue: { enqueue: vi.fn() },
+      now: () => new Date("2026-07-02T01:00:00.000Z"),
+    });
+
+    await planner.planDocumentProfileReindex({
+      embeddingProfileId: "profile-1536",
+      limit: 9007199254740992,
+    });
+
+    expect(snapshots.listSuccessfulSnapshotsMissingProfile).toHaveBeenCalledWith({
+      embeddingProfileId: "profile-1536",
+      limit: 0,
+    });
+  });
+
   it("enqueues a document synced job for a specific snapshot", async () => {
     const queue = { enqueue: vi.fn(async () => undefined) };
     const planner = createDocumentReindexPlanner({
