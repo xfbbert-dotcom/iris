@@ -63,6 +63,23 @@ describe("RedisRawEventQueue", () => {
     expect(parseRawEvent(JSON.stringify(legacyEvent))).toEqual(eventFixture());
   });
 
+  it("rejects raw event payloads without object raw bodies", () => {
+    const validPayload = {
+      idempotencyKey: "raw-event:feishu:event-1",
+      provider: "feishu",
+      eventType: "im.message.receive_v1",
+      receivedAt: "2026-07-02T01:00:00.000Z",
+      attempts: 0,
+    };
+
+    expect(() => parseRawEvent(JSON.stringify(validPayload))).toThrow(
+      "Invalid raw event payload",
+    );
+    expect(() => parseRawEvent(JSON.stringify({ ...validPayload, rawBody: "not-object" }))).toThrow(
+      "Invalid raw event payload",
+    );
+  });
+
   it("dequeues raw events in FIFO order up to limit", async () => {
     const first = eventFixture({ idempotencyKey: "raw-event:feishu:event-1" });
     const second = eventFixture({ idempotencyKey: "raw-event:feishu:event-2" });
@@ -118,6 +135,40 @@ describe("RedisRawEventQueue", () => {
         rawPayload: "{",
         errorMessage: "Invalid raw event JSON",
         failedAt: "2026-07-03T12:00:00.000Z",
+      }),
+    );
+  });
+
+  it("dead-letters raw event payloads with missing bodies and continues dequeuing", async () => {
+    const valid = eventFixture({ idempotencyKey: "raw-event:feishu:event-valid" });
+    const invalidPayload = JSON.stringify({
+      idempotencyKey: "raw-event:feishu:event-missing-body",
+      provider: "feishu",
+      eventType: "im.message.receive_v1",
+      receivedAt: "2026-07-02T01:00:00.000Z",
+      attempts: 0,
+    });
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lLen: vi.fn(),
+      lPop: vi
+        .fn()
+        .mockResolvedValueOnce(invalidPayload)
+        .mockResolvedValueOnce(serializeRawEvent(valid)),
+    };
+    const queue = createRedisRawEventQueue({
+      client,
+      now: () => new Date("2026-07-03T12:05:00.000Z"),
+    });
+
+    await expect(queue.dequeueBatch(2)).resolves.toEqual([valid]);
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:events:raw:dlq",
+      JSON.stringify({
+        rawPayload: invalidPayload,
+        errorMessage: "Invalid raw event payload",
+        failedAt: "2026-07-03T12:05:00.000Z",
       }),
     );
   });

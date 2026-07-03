@@ -134,6 +134,7 @@ export function parseRawEvent(payload: string): RawEvent {
     readString(parsed.idempotencyKey).length === 0 ||
     parsed.provider !== "feishu" ||
     readString(parsed.eventType).length === 0 ||
+    !isRecord(parsed.rawBody) ||
     Number.isNaN(receivedAt.getTime()) ||
     parsedAttempts === null
   ) {
