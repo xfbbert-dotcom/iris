@@ -63,11 +63,39 @@ function addComponentStatuses<
   return Object.fromEntries(
     Object.entries(components).map(([name, component]) => [
       name,
-      { status: getInternalComponentStatus(component), ...component },
+      { status: getInternalComponentStatus(component), ...cloneSnapshotValue(component) },
     ]),
   ) as {
     [Name in keyof ComponentMap]: ComponentMap[Name] & { status: InternalComponentStatus };
   };
+}
+
+function cloneSnapshotValue<Value>(value: Value): Value {
+  if (value instanceof Date) {
+    return new Date(value) as Value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneSnapshotValue(item)) as Value;
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [
+        key,
+        cloneSnapshotValue(nestedValue),
+      ]),
+    ) as Value;
+  }
+
+  return value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function getInternalComponentStatus(component: {

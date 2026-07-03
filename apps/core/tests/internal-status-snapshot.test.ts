@@ -126,4 +126,54 @@ describe("buildInternalStatusSnapshot", () => {
     expect(snapshot.summary.primaryAttentionComponent).toBeNull();
     expect(snapshot.summary.attentionSeverity).toBe("none");
   });
+
+  it("does not share nested component values with the returned snapshot", () => {
+    const latestBatch = {
+      status: "succeeded" as const,
+      startedAt: new Date("2026-07-03T08:10:00.000Z"),
+      finishedAt: new Date("2026-07-03T08:10:01.000Z"),
+      processedCount: 1,
+      failedCount: 0,
+      failed: false as const,
+    };
+    const retention = {
+      maxEventCount: 100,
+      retainedEventCount: 2,
+      droppedEventCount: 0,
+    };
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-03T08:10:02.000Z"),
+      components: {
+        audit: {
+          ok: true,
+          enabled: true,
+          retention,
+        },
+        eventWorker: {
+          ok: true,
+          enabled: true,
+          running: true,
+          latestBatch,
+        },
+      },
+    });
+
+    snapshot.components.audit.retention.retainedEventCount = 999;
+    snapshot.components.eventWorker.latestBatch.startedAt.setUTCFullYear(2030);
+    snapshot.components.eventWorker.latestBatch.processedCount = 999;
+
+    expect(retention).toEqual({
+      maxEventCount: 100,
+      retainedEventCount: 2,
+      droppedEventCount: 0,
+    });
+    expect(latestBatch).toEqual({
+      status: "succeeded",
+      startedAt: new Date("2026-07-03T08:10:00.000Z"),
+      finishedAt: new Date("2026-07-03T08:10:01.000Z"),
+      processedCount: 1,
+      failedCount: 0,
+      failed: false,
+    });
+  });
 });
