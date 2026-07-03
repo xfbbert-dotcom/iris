@@ -202,40 +202,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
     };
-    const componentStatuses = Object.values(components);
-    const healthyComponentCount = componentStatuses.filter((component) => component.ok).length;
-    const degradedComponents = Object.entries(components)
-      .filter(([, component]) => !component.ok)
-      .map(([name]) => name);
-    const disabledComponents = Object.entries(components)
-      .filter(([, component]) => !component.enabled)
-      .map(([name]) => name);
-    const enabledRuntimeComponents = Object.entries(components).filter(
-      ([, component]) => component.enabled && hasRunningStatus(component),
-    );
-    const stoppedEnabledRuntimeComponents = enabledRuntimeComponents
-      .filter(([, component]) => hasRunningStatus(component) && component.running === false)
-      .map(([name]) => name);
 
-    return {
-      ok: healthyComponentCount === componentStatuses.length,
-      generatedAt: now().toISOString(),
-      summary: {
-        componentCount: componentStatuses.length,
-        healthyComponentCount,
-        degradedComponentCount: componentStatuses.length - healthyComponentCount,
-        degradedComponents,
-        enabledComponentCount: componentStatuses.length - disabledComponents.length,
-        disabledComponentCount: disabledComponents.length,
-        disabledComponents,
-        enabledRuntimeComponentCount: enabledRuntimeComponents.length,
-        runningEnabledRuntimeComponentCount:
-          enabledRuntimeComponents.length - stoppedEnabledRuntimeComponents.length,
-        stoppedEnabledRuntimeComponentCount: stoppedEnabledRuntimeComponents.length,
-        stoppedEnabledRuntimeComponents,
-      },
-      components,
-    };
+    return buildInternalStatusSnapshot({ components, generatedAt: now() });
   });
 
   app.get("/internal/audit/events", async (request, reply) => {
@@ -856,6 +824,45 @@ function hasRunningStatus(
   component: { enabled: boolean; running?: unknown },
 ): component is { enabled: boolean; running: boolean } {
   return typeof component.running === "boolean";
+}
+
+function buildInternalStatusSnapshot<
+  ComponentMap extends Record<string, { ok: boolean; enabled: boolean; running?: unknown }>,
+>(input: { components: ComponentMap; generatedAt: Date }) {
+  const componentStatuses = Object.values(input.components);
+  const healthyComponentCount = componentStatuses.filter((component) => component.ok).length;
+  const degradedComponents = Object.entries(input.components)
+    .filter(([, component]) => !component.ok)
+    .map(([name]) => name);
+  const disabledComponents = Object.entries(input.components)
+    .filter(([, component]) => !component.enabled)
+    .map(([name]) => name);
+  const enabledRuntimeComponents = Object.entries(input.components).filter(
+    ([, component]) => component.enabled && hasRunningStatus(component),
+  );
+  const stoppedEnabledRuntimeComponents = enabledRuntimeComponents
+    .filter(([, component]) => hasRunningStatus(component) && component.running === false)
+    .map(([name]) => name);
+
+  return {
+    ok: healthyComponentCount === componentStatuses.length,
+    generatedAt: input.generatedAt.toISOString(),
+    summary: {
+      componentCount: componentStatuses.length,
+      healthyComponentCount,
+      degradedComponentCount: componentStatuses.length - healthyComponentCount,
+      degradedComponents,
+      enabledComponentCount: componentStatuses.length - disabledComponents.length,
+      disabledComponentCount: disabledComponents.length,
+      disabledComponents,
+      enabledRuntimeComponentCount: enabledRuntimeComponents.length,
+      runningEnabledRuntimeComponentCount:
+        enabledRuntimeComponents.length - stoppedEnabledRuntimeComponents.length,
+      stoppedEnabledRuntimeComponentCount: stoppedEnabledRuntimeComponents.length,
+      stoppedEnabledRuntimeComponents,
+    },
+    components: input.components,
+  };
 }
 
 async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {
