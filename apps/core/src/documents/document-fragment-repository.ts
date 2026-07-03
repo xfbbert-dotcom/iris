@@ -98,8 +98,9 @@ export function createDocumentFragmentRepository(
         `
 delete from document_fragments
 where document_snapshot_id = $1
+  and embedding_profile_id = $2
 `,
-        [input.documentSnapshotId],
+        [input.documentSnapshotId, input.embeddingProfileId],
       );
 
       const fragments: DocumentFragment[] = [];

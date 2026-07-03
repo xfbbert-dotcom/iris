@@ -73,9 +73,9 @@ describe("DocumentFragmentRepository", () => {
     });
 
     expect(normalizeSql(calls[0]?.sql ?? "")).toBe(
-      "delete from document_fragments where document_snapshot_id = $1",
+      "delete from document_fragments where document_snapshot_id = $1 and embedding_profile_id = $2",
     );
-    expect(calls[0]?.values).toEqual(["snapshot-1"]);
+    expect(calls[0]?.values).toEqual(["snapshot-1", "static-dev-6d"]);
     expect(normalizeSql(calls[1]?.sql ?? "")).toContain("insert into document_fragments");
     expect(calls[1]?.values).toEqual([
       "fragment-1",
