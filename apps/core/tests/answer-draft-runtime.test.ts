@@ -432,6 +432,80 @@ describe("createAnswerDraftRuntime", () => {
     expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-enabled");
   });
 
+  it("excludes group-visible answer fragments without source group evidence", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(async (_input: GenerateAnswerDraftInput) => ({
+        answerText: "Runtime draft",
+      })),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-missing-group",
+          documentSourceId: "source-missing-group",
+          text: "Group document without source evidence",
+        }),
+        fragment({
+          id: "fragment-user",
+          documentSourceId: "source-user",
+          text: "User submitted text",
+        }),
+      ]),
+    };
+    const sources: Record<string, DocumentSource | undefined> = {
+      "source-missing-group": source({
+        id: "source-missing-group",
+        sourceType: "group_visible_document",
+        originGroupId: undefined,
+        evidence: [],
+        permissionState: "readable",
+      }),
+      "source-user": source({
+        id: "source-user",
+        sourceType: "user_submitted_document",
+        permissionState: "readable",
+      }),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async (id: string) => sources[id]),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What can Iris use?",
+      liveChatMessages: [],
+    });
+
+    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    expect(promptContext).not.toContain("Group document without source evidence");
+    expect(promptContext).toContain("User submitted text");
+    expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-user"]);
+    expect(result?.deniedDocumentIds).toEqual(["source-missing-group"]);
+    expect(runtimeController.canProcessGroupMessage).not.toHaveBeenCalled();
+  });
+
   it("uses configured OpenAI-compatible embedding provider when dimensions are 6", async () => {
     const embeddingProvider = { embedTexts: vi.fn(async () => [[0, 1, 0, 0, 0, 0]]) };
     const embeddingProfiles = {

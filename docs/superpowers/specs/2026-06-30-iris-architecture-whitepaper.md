@@ -804,6 +804,32 @@ ownership into a shared durable queue adapter with explicit in-flight leases.
 That adapter must retain the same rule: failed work advances retry state instead
 of being hidden behind an older duplicate.
 
+### 12.14 Group-Visible Retrieval Source Evidence
+
+Pressure:
+
+Group-visible documents are authorized through the groups where Iris observed
+them. If a group-visible source loses its origin group and evidence group IDs
+because of corrupted data, a partial migration, or a bad manual repair, Iris can
+no longer prove which enabled group made the document visible. Letting that
+document enter answer context would weaken group-level runtime controls.
+
+Required architectural response:
+
+- Answer-time source-policy retrieval must require at least one nonblank source
+  group ID for group-visible documents when group-level runtime gating is
+  available.
+- If no group evidence exists, the source must be treated as denied for prompt
+  assembly.
+- User-submitted and authorized wiki documents keep their own source-type
+  policies and are not affected by this group evidence requirement.
+
+Evolution signal:
+
+If Iris later introduces explicit cross-group document grants, those grants
+should be represented as first-class evidence rather than inferred from a
+group-visible source with missing group IDs.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

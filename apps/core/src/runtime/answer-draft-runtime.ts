@@ -237,7 +237,7 @@ function canUseGroupVisibleSource(source: DocumentSource, runtimeController: Run
 
   const sourceGroupIds = collectSourceGroupIds(source);
   if (sourceGroupIds.length === 0) {
-    return true;
+    return false;
   }
 
   return sourceGroupIds.some((groupId) => runtimeController.canProcessGroupMessage?.(groupId) === true);
