@@ -37,6 +37,12 @@ describe("InMemoryDocumentReindexQueue", () => {
         documentSnapshotId: "snapshot-1",
       }),
     ).toBe("reindex:profile-1:snapshot-1");
+    expect(
+      createDocumentReindexIdempotencyKey({
+        embeddingProfileId: " profile-1 ",
+        documentSnapshotId: " snapshot-1 ",
+      }),
+    ).toBe("reindex:profile-1:snapshot-1");
   });
 
   it("reports pending job count", async () => {

@@ -79,6 +79,21 @@ describe("RedisDocumentReindexQueue", () => {
     expect(parseDocumentReindexJob(serializeDocumentReindexJob(job))).toEqual(job);
   });
 
+  it("normalizes queued job ids when parsing Redis payloads", () => {
+    expect(
+      parseDocumentReindexJob(
+        JSON.stringify({
+          idempotencyKey: " reindex:profile-1536:snapshot-1 ",
+          embeddingProfileId: " profile-1536 ",
+          documentSnapshotId: " snapshot-1 ",
+          reason: "manual_profile_reindex",
+          enqueuedAt: "2026-07-02T01:00:00.000Z",
+          attempts: 0,
+        }),
+      ),
+    ).toEqual(jobFixture());
+  });
+
   it("reports Redis queue depth", async () => {
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(),

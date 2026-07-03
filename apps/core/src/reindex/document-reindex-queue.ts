@@ -55,5 +55,5 @@ export interface DocumentReindexQueue {
 export function createDocumentReindexIdempotencyKey(
   input: CreateDocumentReindexIdempotencyKeyInput,
 ): string {
-  return `reindex:${input.embeddingProfileId}:${input.documentSnapshotId}`;
+  return `reindex:${input.embeddingProfileId.trim()}:${input.documentSnapshotId.trim()}`;
 }

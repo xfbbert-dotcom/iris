@@ -282,7 +282,7 @@ async function findDeadLetterByStoredId(
 }
 
 function readString(value: unknown): string {
-  return typeof value === "string" ? value : "";
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function readOptionalNonNegativeInteger(value: unknown): number | null | undefined {
