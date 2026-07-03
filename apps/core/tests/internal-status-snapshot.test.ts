@@ -1,0 +1,91 @@
+import { describe, expect, it } from "vitest";
+
+import { buildInternalStatusSnapshot } from "../src/admin/internal-status-snapshot.js";
+
+describe("buildInternalStatusSnapshot", () => {
+  it("derives aggregate and component statuses from a component map", () => {
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-03T08:00:00.000Z"),
+      components: {
+        audit: {
+          ok: true,
+          enabled: true,
+          storage: "in_memory",
+        },
+        answerDraft: {
+          ok: true,
+          enabled: false,
+        },
+        eventWorker: {
+          ok: false,
+          enabled: true,
+          running: false,
+          error: "event_worker_status_failed",
+        },
+        documentSync: {
+          ok: true,
+          enabled: true,
+          running: true,
+        },
+        reindex: {
+          ok: true,
+          enabled: true,
+          running: false,
+        },
+      },
+    });
+
+    expect(snapshot).toEqual({
+      ok: false,
+      status: "degraded",
+      schemaVersion: 1,
+      generatedAt: "2026-07-03T08:00:00.000Z",
+      componentOrder: ["audit", "answerDraft", "eventWorker", "documentSync", "reindex"],
+      summary: {
+        componentCount: 5,
+        healthyComponentCount: 4,
+        degradedComponentCount: 1,
+        degradedComponents: ["eventWorker"],
+        enabledComponentCount: 4,
+        disabledComponentCount: 1,
+        disabledComponents: ["answerDraft"],
+        enabledRuntimeComponentCount: 3,
+        runningEnabledRuntimeComponentCount: 1,
+        stoppedEnabledRuntimeComponentCount: 2,
+        stoppedEnabledRuntimeComponents: ["eventWorker", "reindex"],
+      },
+      components: {
+        audit: {
+          status: "healthy",
+          ok: true,
+          enabled: true,
+          storage: "in_memory",
+        },
+        answerDraft: {
+          status: "disabled",
+          ok: true,
+          enabled: false,
+        },
+        eventWorker: {
+          status: "degraded",
+          ok: false,
+          enabled: true,
+          running: false,
+          error: "event_worker_status_failed",
+        },
+        documentSync: {
+          status: "healthy",
+          ok: true,
+          enabled: true,
+          running: true,
+        },
+        reindex: {
+          status: "stopped",
+          ok: true,
+          enabled: true,
+          running: false,
+        },
+      },
+    });
+  });
+});
