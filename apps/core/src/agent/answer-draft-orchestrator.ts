@@ -65,7 +65,10 @@ export function createAnswerDraftOrchestrator({
               chatId: input.chatId,
               limit: input.liveChatLimit,
             }) ?? [];
-      const liveChatMessages = [...storedLiveChatMessages, ...input.liveChatMessages];
+      const liveChatMessages = dedupeLiveChatMessages([
+        ...storedLiveChatMessages,
+        ...input.liveChatMessages,
+      ]);
 
       const context = await contextBuilder.buildContext({
         queryText: question,
@@ -86,6 +89,19 @@ export function createAnswerDraftOrchestrator({
       return toAnswerDraftResult(answerText, context);
     },
   };
+}
+
+function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] {
+  const seen = new Set<string>();
+
+  return messages.filter((message) => {
+    const key = `${message.speaker}\u0000${message.text}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function toAnswerDraftResult(
