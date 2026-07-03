@@ -805,7 +805,16 @@ async function getEventWorkerStatus(runtime: EventWorkerRuntime | undefined) {
     return { ok: true, enabled: false, running: false };
   }
 
-  return { ok: true, ...(await runtime.getStatus()) };
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      error: "event_worker_status_failed",
+    };
+  }
 }
 
 async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {
@@ -813,7 +822,16 @@ async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {
     return { ok: true, enabled: false, running: false };
   }
 
-  return { ok: true, ...(await runtime.getStatus()) };
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      error: "document_sync_status_failed",
+    };
+  }
 }
 
 async function getReindexStatus(runtime: ReindexWorkerRuntime | undefined) {
@@ -821,7 +839,16 @@ async function getReindexStatus(runtime: ReindexWorkerRuntime | undefined) {
     return { ok: true, enabled: false, running: false };
   }
 
-  return { ok: true, ...(await runtime.getStatus()) };
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      error: "reindex_status_failed",
+    };
+  }
 }
 
 function parseReindexDocumentProfileRequest(

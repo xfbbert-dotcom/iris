@@ -381,6 +381,57 @@ describe("GET /internal/status", () => {
       },
     });
   });
+
+  it("keeps the consolidated status available when one component status fails", async () => {
+    const eventWorkerRuntime = fakeEventRuntime({
+      getStatus: vi.fn(async () => {
+        throw new Error("redis unavailable");
+      }),
+    });
+    const documentSyncRuntime = fakeDocumentSyncRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 2000,
+        batchLimit: 10,
+        pendingJobCount: 4,
+        deadLetterJobCount: 2,
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => eventWorkerRuntime,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().components.eventWorker).toEqual({
+      ok: false,
+      enabled: true,
+      running: false,
+      error: "event_worker_status_failed",
+    });
+    expect(response.json().components.documentSync).toEqual({
+      ok: true,
+      enabled: true,
+      running: true,
+      intervalMs: 2000,
+      batchLimit: 10,
+      pendingJobCount: 4,
+      deadLetterJobCount: 2,
+    });
+    expect(response.json().components.reindex).toEqual({
+      ok: true,
+      enabled: false,
+      running: false,
+    });
+  });
 });
 
 describe("GET /internal/audit/events", () => {
