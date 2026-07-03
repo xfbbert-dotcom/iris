@@ -29,6 +29,25 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([second]);
   });
 
+  it("insulates queued events from caller mutations", async () => {
+    const queue = new InMemoryRawEventQueue();
+    const event = eventFixture({
+      rawBody: { event_id: "event-original", nested: { value: "original" } },
+    });
+
+    await queue.enqueue(event);
+    event.eventType = "mutated";
+    event.receivedAt.setUTCFullYear(2030);
+    (event.rawBody as { event_id: string; nested: { value: string } }).event_id = "event-mutated";
+    (event.rawBody as { event_id: string; nested: { value: string } }).nested.value = "mutated";
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([
+      eventFixture({
+        rawBody: { event_id: "event-original", nested: { value: "original" } },
+      }),
+    ]);
+  });
+
   it("treats non-finite dequeue limits as zero", async () => {
     const queue = new InMemoryRawEventQueue();
     const event = eventFixture();
@@ -63,6 +82,28 @@ describe("InMemoryRawEventQueue", () => {
     ).resolves.toEqual({ action: "requeued", attempts: 1 });
     await expect(queue.dequeueBatch(1)).resolves.toEqual([{ ...event, attempts: 1 }]);
     await expect(queue.getDeadLetterCount()).resolves.toBe(0);
+  });
+
+  it("insulates requeued failed events from caller mutations", async () => {
+    const queue = new InMemoryRawEventQueue({ maxAttempts: 3 });
+    const event = eventFixture({
+      rawBody: { event_id: "event-original", nested: { value: "original" } },
+    });
+
+    await queue.handleFailedEvent({ event, errorMessage: "processor failed" });
+    event.eventType = "mutated";
+    event.receivedAt.setUTCFullYear(2030);
+    (event.rawBody as { event_id: string; nested: { value: string } }).event_id = "event-mutated";
+    (event.rawBody as { event_id: string; nested: { value: string } }).nested.value = "mutated";
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([
+      {
+        ...eventFixture({
+          rawBody: { event_id: "event-original", nested: { value: "original" } },
+        }),
+        attempts: 1,
+      },
+    ]);
   });
 
   it("moves failed events to DLQ at max attempts", async () => {

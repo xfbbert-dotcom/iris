@@ -36,28 +36,28 @@ export class InMemoryRawEventQueue implements RawEventQueue {
     }
 
     this.seenKeys.add(event.idempotencyKey);
-    this.events.push(event);
+    this.events.push(cloneEvent(event));
   }
 
   async dequeueBatch(limit: number): Promise<RawEvent[]> {
     const safeLimit = sanitizeLimit(limit);
-    return this.events.splice(0, safeLimit);
+    return this.events.splice(0, safeLimit).map(cloneEvent);
   }
 
   async handleFailedEvent(input: RawEventFailureInput): Promise<RawEventFailureResult> {
     const attempts = input.event.attempts + 1;
-    const failedEvent = { ...input.event, attempts };
+    const failedEvent = cloneEvent({ ...input.event, attempts });
 
     if (attempts >= this.maxAttempts) {
       this.deadLetters.push({
-        event: failedEvent,
+        event: cloneEvent(failedEvent),
         errorMessage: input.errorMessage,
         failedAt: this.now(),
       });
       return { action: "dead_lettered", attempts };
     }
 
-    this.events.push(failedEvent);
+    this.events.push(cloneEvent(failedEvent));
     return { action: "requeued", attempts };
   }
 
@@ -84,4 +84,12 @@ function sanitizeLimit(value: number): number {
   }
 
   return Math.max(0, Math.floor(value));
+}
+
+function cloneEvent(event: RawEvent): RawEvent {
+  return {
+    ...event,
+    rawBody: structuredClone(event.rawBody),
+    receivedAt: new Date(event.receivedAt),
+  };
 }
