@@ -1,3 +1,5 @@
+import { createFeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
+
 export type IrisNormalizedEvent = IrisGroupMessageEvent | IrisUnsupportedEvent;
 
 export type IrisGroupMessageEvent = {
@@ -17,6 +19,8 @@ export type IrisUnsupportedEvent = {
   eventId: string;
   reason: "missing_message" | "missing_required_fields" | "unsupported_message_type";
 };
+
+const feishuDocumentLinkExtractor = createFeishuDocumentLinkExtractor();
 
 export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
   const eventId = readString(payload, "event_id") ?? "unknown";
@@ -99,30 +103,7 @@ function parseTextContent(content: string): string {
 }
 
 function extractFeishuDocumentLinks(text: string): string[] {
-  const candidates = text.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
-  return candidates.map(trimTrailingPunctuation).filter(isFeishuDocumentLink);
-}
-
-function trimTrailingPunctuation(value: string): string {
-  return value.replace(/[),.;:!?]+$/u, "");
-}
-
-function isFeishuDocumentLink(candidate: string): boolean {
-  let url: URL;
-
-  try {
-    url = new URL(candidate);
-  } catch {
-    return false;
-  }
-
-  const hostname = url.hostname.toLowerCase();
-  if (hostname !== "feishu.cn" && !hostname.endsWith(".feishu.cn")) {
-    return false;
-  }
-
-  const firstPathSegment = url.pathname.split("/").filter(Boolean)[0];
-  return firstPathSegment === "docx" || firstPathSegment === "wiki" || firstPathSegment === "file" || firstPathSegment === "docs";
+  return feishuDocumentLinkExtractor.extractLinks(text).map((link) => link.sourceUri);
 }
 
 function readObject(source: unknown, key: string): Record<string, unknown> | undefined {

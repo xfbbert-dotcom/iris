@@ -54,7 +54,30 @@ describe("normalizeFeishuEvent", () => {
 
     expect(result).toMatchObject({
       kind: "group_message",
-      documentLinks: [docxLink, wikiLink, fileLink, docsLink]
+      documentLinks: [docxLink, wikiLink, docsLink]
+    });
+  });
+
+  it("normalizes copied document links before exposing metadata", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-normalized-links",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-normalized-links",
+          chat_id: "chat-a",
+          create_time: "1710000000000",
+          message_type: "text",
+          content: JSON.stringify({
+            text: "Docs https://docs.feishu.cn/docx/ABC123?from=copy#heading and again https://docs.feishu.cn/docx/ABC123."
+          })
+        }
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "group_message",
+      documentLinks: ["https://docs.feishu.cn/docx/ABC123"]
     });
   });
 
