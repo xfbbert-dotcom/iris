@@ -433,6 +433,7 @@ function updateSourceById(
   };
   if (updated.permissionState === "denied") {
     updated.canUseForAnswering = false;
+    updated.canUseForKnowledgeDrafts = false;
   }
 
   sourcesById.set(updated.id, updated);
@@ -452,6 +453,10 @@ function shouldUseKnowledgeDrafts(
   existing: DocumentSource,
   next: NextDocumentSource,
 ): boolean {
+  if (existing.permissionState === "denied") {
+    return false;
+  }
+
   if (existing.canUseForKnowledgeDrafts) {
     return true;
   }

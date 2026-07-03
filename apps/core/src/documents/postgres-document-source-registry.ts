@@ -185,6 +185,10 @@ update document_sources
 set
   permission_state = $2,
   can_use_for_answering = case when $2 = 'denied' then false else can_use_for_answering end,
+  can_use_for_knowledge_drafts = case
+    when $2 = 'denied' then false
+    else can_use_for_knowledge_drafts
+  end,
   updated_at = $3
 where id = $1
 returning *
@@ -223,7 +227,9 @@ returning *
       return updateSource(pool, resolvedDependencies, id, {
         sql: `
 update document_sources
-set can_use_for_knowledge_drafts = $2, updated_at = $3
+set
+  can_use_for_knowledge_drafts = case when permission_state = 'denied' then false else $2 end,
+  updated_at = $3
 where id = $1
 returning *
 `,
@@ -364,6 +370,7 @@ set
   submitted_by_user_id = coalesce(submitted_by_user_id, $5),
   authorized_space_id = coalesce(authorized_space_id, $6),
   can_use_for_knowledge_drafts = case
+    when permission_state = 'denied' then false
     when can_use_for_knowledge_drafts then true
     when source_type = 'user_submitted_document' then $7
     else false

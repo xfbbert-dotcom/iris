@@ -312,6 +312,39 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     );
   });
 
+  it("does not re-enable knowledge drafts for denied sources when registration upgrades capability", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "user_submitted_document",
+        permission_state: "denied",
+        can_use_for_knowledge_drafts: false,
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/doc",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when permission_state = 'denied' then false",
+    );
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when source_type = 'user_submitted_document' then $7",
+    );
+  });
+
   it("resets failed sync state to pending when registration adds new evidence", async () => {
     const now = new Date("2026-07-01T04:00:00.000Z");
     const fake = createFakePool({
@@ -431,6 +464,57 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     expect(update).toBeDefined();
     expect(normalizeSql(update?.sql ?? "")).toContain(
       "can_use_for_answering = case when permission_state = 'denied' then false else $2 end",
+    );
+    expect(update?.values).toEqual(["source-1", true, now]);
+  });
+
+  it("markPermissionState disables answering and knowledge drafts when denied", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.markPermissionState("source-1", "denied");
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "can_use_for_answering = case when $2 = 'denied' then false else can_use_for_answering end",
+    );
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "can_use_for_knowledge_drafts = case when $2 = 'denied' then false else can_use_for_knowledge_drafts end",
+    );
+    expect(update?.values).toEqual(["source-1", "denied", now]);
+  });
+
+  it("setKnowledgeDraftsEnabled preserves denied sources and passes enabled as $2", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.setKnowledgeDraftsEnabled("source-1", true);
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "can_use_for_knowledge_drafts = case when permission_state = 'denied' then false else $2 end",
     );
     expect(update?.values).toEqual(["source-1", true, now]);
   });

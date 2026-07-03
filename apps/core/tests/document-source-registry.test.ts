@@ -334,6 +334,7 @@ describe("createDocumentSourceRegistry", () => {
 
     expect(updated.permissionState).toBe("denied");
     expect(updated.canUseForAnswering).toBe(false);
+    expect(updated.canUseForKnowledgeDrafts).toBe(false);
     expect(updated.updatedAt).toEqual(updatedAt);
   });
 
@@ -475,6 +476,29 @@ describe("createDocumentSourceRegistry", () => {
     expect(reregistered.canUseForKnowledgeDrafts).toBe(false);
   });
 
+  it("does not re-enable knowledge drafts for denied sources when registration upgrades capability", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const source = registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      submittedByUserId: "user-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    registry.markPermissionState(source.id, "denied");
+    const reregistered = registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    expect(reregistered.permissionState).toBe("denied");
+    expect(reregistered.sourceType).toBe("authorized_wiki_document");
+    expect(reregistered.canUseForKnowledgeDrafts).toBe(false);
+  });
+
   it("keeps answering disabled while permission is denied", () => {
     const registry = createDocumentSourceRegistry({
       createId: () => "doc-source-1",
@@ -492,6 +516,25 @@ describe("createDocumentSourceRegistry", () => {
 
     expect(updated.permissionState).toBe("denied");
     expect(updated.canUseForAnswering).toBe(false);
+  });
+
+  it("keeps knowledge drafts disabled while permission is denied", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    registry.markPermissionState(source.id, "denied");
+    const updated = registry.setKnowledgeDraftsEnabled(source.id, true);
+
+    expect(updated.permissionState).toBe("denied");
+    expect(updated.canUseForKnowledgeDrafts).toBe(false);
   });
 
   it("enables knowledge drafts for user_submitted_document after opt-in", () => {
