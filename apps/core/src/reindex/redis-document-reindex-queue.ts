@@ -70,7 +70,18 @@ export function createRedisDocumentReindexQueue({
           break;
         }
 
-        jobs.push(parseDocumentReindexJob(payload));
+        try {
+          jobs.push(parseDocumentReindexJob(payload));
+        } catch (error) {
+          await client.rPush(
+            deadLetterKey,
+            JSON.stringify({
+              rawPayload: payload,
+              errorMessage: error instanceof Error ? error.message : String(error),
+              failedAt: now().toISOString(),
+            }),
+          );
+        }
       }
 
       return jobs;

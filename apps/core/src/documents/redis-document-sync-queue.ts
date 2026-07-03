@@ -70,7 +70,18 @@ export function createRedisDocumentSyncQueue({
           break;
         }
 
-        jobs.push(parseDocumentSyncJob(payload));
+        try {
+          jobs.push(parseDocumentSyncJob(payload));
+        } catch (error) {
+          await client.rPush(
+            deadLetterKey,
+            JSON.stringify({
+              rawPayload: payload,
+              errorMessage: error instanceof Error ? error.message : String(error),
+              failedAt: now().toISOString(),
+            }),
+          );
+        }
       }
 
       return jobs;

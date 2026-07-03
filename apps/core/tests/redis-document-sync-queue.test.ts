@@ -89,6 +89,35 @@ describe("RedisDocumentSyncQueue", () => {
     expect(client.lPop).not.toHaveBeenCalled();
   });
 
+  it("dead-letters invalid queued payloads and continues dequeuing valid jobs", async () => {
+    const valid = job({ documentSourceId: "source-valid" });
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      lPop: vi
+        .fn()
+        .mockResolvedValueOnce("{")
+        .mockResolvedValueOnce(serializeDocumentSyncJob(valid)),
+    };
+    const queue = createRedisDocumentSyncQueue({
+      client,
+      now: () => new Date("2026-07-03T12:30:00.000Z"),
+    });
+
+    await expect(queue.dequeueBatch(2)).resolves.toEqual([valid]);
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:documents:sync:dlq",
+      JSON.stringify({
+        rawPayload: "{",
+        errorMessage: "Invalid document sync job JSON",
+        failedAt: "2026-07-03T12:30:00.000Z",
+      }),
+    );
+  });
+
   it("round-trips job dates through JSON", () => {
     const syncJob = job();
 
