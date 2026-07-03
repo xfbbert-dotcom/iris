@@ -220,6 +220,31 @@ describe("DocumentSnapshotRepository", () => {
     });
   });
 
+  it("finds the latest snapshot without relying on repository method binding", async () => {
+    const rows = [
+      {
+        id: "snapshot-2",
+        document_source_id: "source-1",
+        source_uri: "uri",
+        fetch_status: "succeeded",
+        body_text: "new",
+        content_hash: null,
+        source_version: null,
+        fetched_at: new Date("2026-07-02T02:00:00.000Z"),
+        error_message: null,
+        created_at: new Date("2026-07-02T02:00:01.000Z"),
+      },
+    ];
+    const query = vi.fn(async () => ({ rows }));
+    const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
+    const findLatestSnapshotForSource = repository.findLatestSnapshotForSource;
+
+    await expect(findLatestSnapshotForSource("source-1")).resolves.toMatchObject({
+      id: "snapshot-2",
+      bodyText: "new",
+    });
+  });
+
   it("returns no latest snapshots for empty source ids without querying", async () => {
     const query = vi.fn();
     const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });

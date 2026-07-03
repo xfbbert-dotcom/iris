@@ -86,6 +86,22 @@ export function createDocumentSnapshotRepository(
   const createId = dependencies.createId ?? randomUUID;
   const now = dependencies.now ?? (() => new Date());
 
+  const listSnapshotsForSource = async (
+    documentSourceId: string,
+  ): Promise<DocumentSnapshot[]> => {
+    const result = await dependencies.queryable.query<DocumentSnapshotRow>(
+      `
+select *
+from document_snapshots
+where document_source_id = $1
+order by fetched_at desc, id asc
+`,
+      [documentSourceId],
+    );
+
+    return result.rows.map(mapSnapshotRow);
+  };
+
   return {
     insertSucceededSnapshot(input) {
       return insertSnapshot(dependencies.queryable, {
@@ -117,22 +133,10 @@ export function createDocumentSnapshotRepository(
       });
     },
 
-    async listSnapshotsForSource(documentSourceId) {
-      const result = await dependencies.queryable.query<DocumentSnapshotRow>(
-        `
-select *
-from document_snapshots
-where document_source_id = $1
-order by fetched_at desc, id asc
-`,
-        [documentSourceId],
-      );
-
-      return result.rows.map(mapSnapshotRow);
-    },
+    listSnapshotsForSource,
 
     async findLatestSnapshotForSource(documentSourceId) {
-      const snapshots = await this.listSnapshotsForSource(documentSourceId);
+      const snapshots = await listSnapshotsForSource(documentSourceId);
       return snapshots[0];
     },
 
