@@ -64,6 +64,7 @@ describe("buildInternalStatusSnapshot", () => {
           { name: "reindex", status: "stopped" },
           { name: "answerDraft", status: "disabled" },
         ],
+        primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
       },
       components: {
         audit: {
@@ -98,5 +99,25 @@ describe("buildInternalStatusSnapshot", () => {
         },
       },
     });
+  });
+
+  it("returns no primary attention component when every component is healthy", () => {
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-03T08:05:00.000Z"),
+      components: {
+        audit: {
+          ok: true,
+          enabled: true,
+        },
+        eventWorker: {
+          ok: true,
+          enabled: true,
+          running: true,
+        },
+      },
+    });
+
+    expect(snapshot.summary.attentionComponents).toEqual([]);
+    expect(snapshot.summary.primaryAttentionComponent).toBeNull();
   });
 });
