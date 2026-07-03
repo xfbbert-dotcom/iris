@@ -8,7 +8,7 @@ describe("FeishuDocumentLinkExtractor", () => {
 
     expect(
       extractor.extractLinks(
-        "看这两个文档 https://docs.feishu.cn/docx/abc 和 https://acme.larksuite.com/wiki/space/doc",
+        "docs: https://docs.feishu.cn/docx/abc and https://acme.larksuite.com/wiki/space/doc",
       ),
     ).toEqual([
       { sourceUri: "https://docs.feishu.cn/docx/abc" },
@@ -20,7 +20,7 @@ describe("FeishuDocumentLinkExtractor", () => {
     const extractor = createFeishuDocumentLinkExtractor();
 
     expect(
-      extractor.extractLinks("普通链接 https://example.com/doc 不应该进入 Iris 文档源"),
+      extractor.extractLinks("plain link https://example.com/doc should be ignored"),
     ).toEqual([]);
   });
 
@@ -29,8 +29,21 @@ describe("FeishuDocumentLinkExtractor", () => {
 
     expect(
       extractor.extractLinks(
-        "链接：https://foo.feishu.cn/docx/token)，再发一次 https://foo.feishu.cn/docx/token。",
+        "link: https://foo.feishu.cn/docx/token), again https://foo.feishu.cn/docx/token.",
       ),
     ).toEqual([{ sourceUri: "https://foo.feishu.cn/docx/token" }]);
+  });
+
+  it("trims fullwidth punctuation after document links", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks(
+        "文档 https://docs.feishu.cn/docx/a，另一个 https://foo.feishu.cn/docx/b。",
+      ),
+    ).toEqual([
+      { sourceUri: "https://docs.feishu.cn/docx/a" },
+      { sourceUri: "https://foo.feishu.cn/docx/b" },
+    ]);
   });
 });

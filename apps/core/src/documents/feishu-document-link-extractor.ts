@@ -6,8 +6,8 @@ export type FeishuDocumentLinkExtractor = {
   extractLinks(text: string): FeishuDocumentLink[];
 };
 
-const urlPattern = /https:\/\/[^\s<>"'，。；：！？、）】》]+/gi;
-const trailingPunctuationPattern = /[),.;:!?，。；：！？、）】》]+$/u;
+const urlPattern = /https:\/\/[^\s<>"'，。；：！？、）】」』》]+/gi;
+const trailingPunctuationPattern = /[),.;:!?，。；：！？、）】」』》]+$/u;
 
 export function createFeishuDocumentLinkExtractor(): FeishuDocumentLinkExtractor {
   return {
