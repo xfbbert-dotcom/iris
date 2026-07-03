@@ -41,6 +41,10 @@ import {
 } from "./runtime/document-sync-runtime.js";
 import type { DocumentSourceType } from "./documents/document-source-registry.js";
 import type { DocumentSnapshot } from "./documents/document-snapshot-repository.js";
+import {
+  parseFeishuDocxDocumentId,
+  parseFeishuWikiNodeToken,
+} from "./documents/feishu-document-body-fetcher.js";
 import { buildInternalStatusSnapshot } from "./admin/internal-status-snapshot.js";
 
 export type BuildAppDependencies = {
@@ -1312,6 +1316,7 @@ function parseRegisterAuthorizedWikiDocumentRequest(
   const title = value.title === undefined ? undefined : readNonBlankId(value.title);
   if (
     sourceUri === undefined ||
+    !isSupportedFeishuDocumentSourceUri(sourceUri) ||
     authorizedSpaceId === undefined ||
     (title === undefined && value.title !== undefined)
   ) {
@@ -1337,6 +1342,7 @@ function parseRegisterUserSubmittedDocumentRequest(
   const title = value.title === undefined ? undefined : readNonBlankId(value.title);
   if (
     sourceUri === undefined ||
+    !isSupportedFeishuDocumentSourceUri(sourceUri) ||
     submittedByUserId === undefined ||
     (title === undefined && value.title !== undefined)
   ) {
@@ -1352,6 +1358,13 @@ function parseRegisterUserSubmittedDocumentRequest(
 
 function readNonBlankId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isSupportedFeishuDocumentSourceUri(sourceUri: string): boolean {
+  return (
+    parseFeishuDocxDocumentId(sourceUri) !== undefined ||
+    parseFeishuWikiNodeToken(sourceUri) !== undefined
+  );
 }
 
 function parseLiveChatMessage(value: unknown): LiveChatMessage | undefined {

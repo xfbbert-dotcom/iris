@@ -3057,6 +3057,27 @@ describe("authorized wiki document registration API", () => {
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
   });
 
+  it("rejects unsupported authorized wiki document URLs before registration", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/authorized-wiki-documents",
+      payload: {
+        sourceUri: "https://docs.feishu.cn/file/file_token_1",
+        authorizedSpaceId: "space-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.registerAuthorizedWikiDocument).not.toHaveBeenCalled();
+  });
+
   it("returns 500 when authorized wiki registration fails", async () => {
     const runtime = fakeDocumentSyncRuntime({
       registerAuthorizedWikiDocument: vi.fn(async () => {
@@ -3177,6 +3198,27 @@ describe("user submitted document registration API", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("rejects unsupported user submitted document URLs before registration", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/user-submitted-documents",
+      payload: {
+        sourceUri: "https://example.com/not-readable",
+        submittedByUserId: "ou_1",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.registerUserSubmittedDocument).not.toHaveBeenCalled();
   });
 
   it("returns 500 when user submitted registration fails", async () => {
