@@ -64,10 +64,14 @@ function isSupportedHost(hostname: string): boolean {
 }
 
 function isSupportedDocumentPath(url: URL): boolean {
-  const firstPathSegment = url.pathname.split("/").filter(Boolean)[0]?.toLowerCase();
+  const pathSegments = url.pathname.split("/").filter(Boolean);
+  const firstPathSegment = pathSegments[0]?.toLowerCase();
+  const documentToken = pathSegments[1]?.trim();
   return (
-    firstPathSegment === "docx" ||
-    firstPathSegment === "docs" ||
-    firstPathSegment === "wiki"
+    documentToken !== undefined &&
+    documentToken.length > 0 &&
+    (firstPathSegment === "docx" ||
+      firstPathSegment === "docs" ||
+      firstPathSegment === "wiki")
   );
 }

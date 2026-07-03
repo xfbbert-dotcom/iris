@@ -34,6 +34,16 @@ describe("FeishuDocumentLinkExtractor", () => {
     ).toEqual([]);
   });
 
+  it("ignores supported Feishu document paths without document tokens", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks(
+        "missing tokens https://foo.feishu.cn/docx and https://foo.feishu.cn/wiki/",
+      ),
+    ).toEqual([]);
+  });
+
   it("trims trailing chat punctuation and deduplicates repeated links", () => {
     const extractor = createFeishuDocumentLinkExtractor();
 
