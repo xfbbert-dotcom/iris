@@ -280,6 +280,109 @@ describe("GET /internal/audit/status", () => {
   });
 });
 
+describe("GET /internal/status", () => {
+  it("returns a consolidated internal service status snapshot", async () => {
+    const auditLog = new InMemoryAuditLog({ maxEvents: 2 });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    const eventWorkerRuntime = fakeEventRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 50,
+        pendingEventCount: 3,
+        deadLetterEventCount: 1,
+      })),
+    });
+    const documentSyncRuntime = fakeDocumentSyncRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 2000,
+        batchLimit: 10,
+        pendingJobCount: 4,
+        deadLetterJobCount: 2,
+      })),
+    });
+    const reindexWorkerRuntime = fakeReindexRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: false,
+        activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+        intervalMs: 3000,
+        batchLimit: 25,
+        pendingJobCount: 5,
+        deadLetterJobCount: 0,
+      })),
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => eventWorkerRuntime,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+      createReindexWorkerRuntime: () => reindexWorkerRuntime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      components: {
+        audit: {
+          ok: true,
+          enabled: true,
+          storage: "in_memory",
+          retention: {
+            maxEventCount: 2,
+            retainedEventCount: 1,
+            droppedEventCount: 0,
+          },
+        },
+        answerDraft: {
+          ok: true,
+          enabled: false,
+        },
+        eventWorker: {
+          ok: true,
+          enabled: true,
+          running: true,
+          intervalMs: 1000,
+          batchLimit: 50,
+          pendingEventCount: 3,
+          deadLetterEventCount: 1,
+        },
+        documentSync: {
+          ok: true,
+          enabled: true,
+          running: true,
+          intervalMs: 2000,
+          batchLimit: 10,
+          pendingJobCount: 4,
+          deadLetterJobCount: 2,
+        },
+        reindex: {
+          ok: true,
+          enabled: true,
+          running: false,
+          activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+          intervalMs: 3000,
+          batchLimit: 25,
+          pendingJobCount: 5,
+          deadLetterJobCount: 0,
+        },
+      },
+    });
+  });
+});
+
 describe("GET /internal/audit/events", () => {
   it("returns recent audit events newest first with a limit", async () => {
     const recordedTimes = [

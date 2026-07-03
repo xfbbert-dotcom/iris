@@ -184,6 +184,25 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     retention: auditLog.retention,
   }));
 
+  app.get("/internal/status", async () => ({
+    ok: true,
+    components: {
+      audit: {
+        ok: true,
+        enabled: true,
+        storage: "in_memory",
+        retention: auditLog.retention,
+      },
+      answerDraft: {
+        ok: true,
+        enabled: answerDraftOrchestrator !== undefined,
+      },
+      eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
+      documentSync: await getDocumentSyncStatus(documentSyncRuntime),
+      reindex: await getReindexStatus(reindexWorkerRuntime),
+    },
+  }));
+
   app.get("/internal/audit/events", async (request, reply) => {
     const parsedQuery = parseAuditEventQuery(request.query);
     if (parsedQuery === undefined) {
@@ -779,6 +798,30 @@ function parseAnswerDraftRequest(value: unknown): AnswerDraftRequest | undefined
     ...(value.fragmentLimit === undefined ? {} : { fragmentLimit: value.fragmentLimit }),
     ...(value.liveChatLimit === undefined ? {} : { liveChatLimit: value.liveChatLimit })
   };
+}
+
+async function getEventWorkerStatus(runtime: EventWorkerRuntime | undefined) {
+  if (runtime === undefined) {
+    return { ok: true, enabled: false, running: false };
+  }
+
+  return { ok: true, ...(await runtime.getStatus()) };
+}
+
+async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {
+  if (runtime === undefined) {
+    return { ok: true, enabled: false, running: false };
+  }
+
+  return { ok: true, ...(await runtime.getStatus()) };
+}
+
+async function getReindexStatus(runtime: ReindexWorkerRuntime | undefined) {
+  if (runtime === undefined) {
+    return { ok: true, enabled: false, running: false };
+  }
+
+  return { ok: true, ...(await runtime.getStatus()) };
 }
 
 function parseReindexDocumentProfileRequest(
