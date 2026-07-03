@@ -19,6 +19,7 @@ export function buildInternalStatusSnapshot<
     .filter(([, component]) => hasRunningStatus(component) && component.running === false)
     .map(([name]) => name);
   const componentStatusCounts = countComponentStatuses(componentStatuses);
+  const attentionComponents = buildAttentionComponents(components);
   const ok = healthyComponentCount === componentStatuses.length;
 
   return {
@@ -41,6 +42,7 @@ export function buildInternalStatusSnapshot<
       stoppedEnabledRuntimeComponentCount: stoppedEnabledRuntimeComponents.length,
       stoppedEnabledRuntimeComponents,
       componentStatusCounts,
+      attentionComponents,
     },
     components,
   };
@@ -92,6 +94,26 @@ function countComponentStatuses(
       stopped: 0,
     },
   );
+}
+
+function buildAttentionComponents(
+  components: Record<string, { status: InternalComponentStatus }>,
+) {
+  const priority: Record<InternalComponentStatus, number> = {
+    degraded: 0,
+    stopped: 1,
+    disabled: 2,
+    healthy: 3,
+  };
+
+  return Object.entries(components)
+    .filter(([, component]) => component.status !== "healthy")
+    .map(([name, component], index) => ({ name, status: component.status, index }))
+    .sort(
+      (left, right) =>
+        priority[left.status] - priority[right.status] || left.index - right.index,
+    )
+    .map(({ name, status }) => ({ name, status }));
 }
 
 function hasRunningStatus(

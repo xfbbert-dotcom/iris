@@ -359,6 +359,10 @@ describe("GET /internal/status", () => {
           degraded: 0,
           stopped: 1,
         },
+        attentionComponents: [
+          { name: "reindex", status: "stopped" },
+          { name: "answerDraft", status: "disabled" },
+        ],
       },
       components: {
         audit: {
@@ -461,6 +465,11 @@ describe("GET /internal/status", () => {
         degraded: 1,
         stopped: 0,
       },
+      attentionComponents: [
+        { name: "eventWorker", status: "degraded" },
+        { name: "answerDraft", status: "disabled" },
+        { name: "reindex", status: "disabled" },
+      ],
     });
     expect(response.json().components.eventWorker).toEqual({
       status: "degraded",

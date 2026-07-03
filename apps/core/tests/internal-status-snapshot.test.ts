@@ -59,6 +59,11 @@ describe("buildInternalStatusSnapshot", () => {
           degraded: 1,
           stopped: 1,
         },
+        attentionComponents: [
+          { name: "eventWorker", status: "degraded" },
+          { name: "reindex", status: "stopped" },
+          { name: "answerDraft", status: "disabled" },
+        ],
       },
       components: {
         audit: {
