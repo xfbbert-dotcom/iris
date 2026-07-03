@@ -238,6 +238,48 @@ describe("answer draft runtime wiring", () => {
   });
 });
 
+describe("GET /internal/audit/status", () => {
+  it("returns in-memory audit log retention status", async () => {
+    const auditLog = new InMemoryAuditLog({ maxEvents: 2 });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-2",
+      fragmentIds: ["fragment-2"],
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-3",
+      fragmentIds: ["fragment-3"],
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      enabled: true,
+      storage: "in_memory",
+      retention: {
+        maxEventCount: 2,
+        retainedEventCount: 2,
+        droppedEventCount: 1,
+      },
+    });
+  });
+});
+
 describe("GET /internal/audit/events", () => {
   it("returns recent audit events newest first with a limit", async () => {
     const recordedTimes = [

@@ -177,6 +177,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/audit/status", async () => ({
+    ok: true,
+    enabled: true,
+    storage: "in_memory",
+    retention: auditLog.retention,
+  }));
+
   app.get("/internal/audit/events", async (request, reply) => {
     const parsedQuery = parseAuditEventQuery(request.query);
     if (parsedQuery === undefined) {
