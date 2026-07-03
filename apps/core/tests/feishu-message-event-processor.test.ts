@@ -87,6 +87,78 @@ describe("FeishuMessageEventProcessor", () => {
     expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
   });
 
+  it("extracts document links from Feishu post message content", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => [{ sourceUri: "https://docs.feishu.cn/docx/post-doc" }]),
+    };
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => undefined),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+    });
+
+    await processor.process(
+      rawEventFixture({
+        rawBody: {
+          header: { event_id: "event-1", event_type: "im.message.receive_v1" },
+          event: {
+            sender: {
+              sender_id: {
+                open_id: "open-1",
+              },
+            },
+            message: {
+              message_id: "message-1",
+              chat_id: "chat-1",
+              message_type: "post",
+              content: JSON.stringify({
+                title: "Spec",
+                content: [
+                  [
+                    { tag: "text", text: "Please review " },
+                    {
+                      tag: "a",
+                      text: "product spec",
+                      href: "https://docs.feishu.cn/docx/post-doc?from=chat",
+                    },
+                  ],
+                ],
+              }),
+              create_time: "1782925200000",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(messages.upsertMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageType: "post",
+        text: "Spec Please review product spec https://docs.feishu.cn/docx/post-doc?from=chat",
+      }),
+    );
+    expect(documentLinkExtractor.extractLinks).toHaveBeenCalledWith(
+      "Spec Please review product spec https://docs.feishu.cn/docx/post-doc?from=chat",
+    );
+    expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).toHaveBeenCalledWith({
+      chatId: "chat-1",
+      messageId: "message-1",
+      senderId: "open-1",
+      observedAt: new Date("2026-07-01T17:00:00.000Z"),
+      links: [{ sourceUri: "https://docs.feishu.cn/docx/post-doc" }],
+    });
+  });
+
   it("ignores unsupported events", async () => {
     const messages = { upsertMessage: vi.fn() };
     const processor = createFeishuMessageEventProcessor({ messages });

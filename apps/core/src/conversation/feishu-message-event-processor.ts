@@ -102,19 +102,67 @@ function readSenderId(sender: unknown): string | undefined {
 }
 
 function readText(messageType: string, content: unknown): string | undefined {
-  if (messageType !== "text" || typeof content !== "string") {
+  if (typeof content !== "string") {
     return undefined;
   }
 
   try {
     const parsed = JSON.parse(content) as unknown;
-    if (!isRecord(parsed)) {
-      return undefined;
+    if (messageType === "text") {
+      if (!isRecord(parsed)) {
+        return undefined;
+      }
+
+      return readOptionalString(parsed.text);
     }
 
-    return readOptionalString(parsed.text);
+    if (messageType === "post") {
+      return readPostText(parsed);
+    }
+
+    return undefined;
   } catch {
     return undefined;
+  }
+}
+
+function readPostText(value: unknown): string | undefined {
+  const parts: string[] = [];
+  collectPostTextParts(value, parts);
+
+  const text = parts
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .join(" ")
+    .replace(/\s+/gu, " ")
+    .trim();
+
+  return text.length > 0 ? text : undefined;
+}
+
+const readablePostContentKeys = new Set(["title", "text", "href", "url"]);
+
+function collectPostTextParts(value: unknown, parts: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectPostTextParts(item, parts);
+    }
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (typeof nestedValue === "string" && readablePostContentKeys.has(key)) {
+      parts.push(nestedValue);
+      continue;
+    }
+
+    if (Array.isArray(nestedValue) || isRecord(nestedValue)) {
+      collectPostTextParts(nestedValue, parts);
+    }
   }
 }
 
