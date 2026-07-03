@@ -19,6 +19,23 @@ end
 return 0
 `;
 
+const UPSERT_RETRY_SCRIPT = `
+if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then
+  return redis.call("RPUSH", KEYS[2], ARGV[2])
+end
+
+local queued = redis.call("LRANGE", KEYS[2], 0, -1)
+for index, payload in ipairs(queued) do
+  local ok, decoded = pcall(cjson.decode, payload)
+  if ok and decoded["idempotencyKey"] == ARGV[1] then
+    redis.call("LSET", KEYS[2], index - 1, ARGV[2])
+    return 1
+  end
+end
+
+return redis.call("RPUSH", KEYS[2], ARGV[2])
+`;
+
 export type RedisDocumentReindexQueueClient = {
   eval(
     script: string,
@@ -143,7 +160,7 @@ export function createRedisDocumentReindexQueue({
         return { action: "dead_lettered", attempts };
       }
 
-      await enqueueSerializedJob(client, seenKey, queueKey, failedJob);
+      await upsertRetryingSerializedJob(client, seenKey, queueKey, failedJob);
       return { action: "requeued", attempts };
     },
 
@@ -195,6 +212,18 @@ async function enqueueSerializedJob(
   job: DocumentReindexJob,
 ): Promise<void> {
   await client.eval(ENQUEUE_SCRIPT, {
+    keys: [seenKey, queueKey],
+    arguments: [job.idempotencyKey, serializeDocumentReindexJob(job)],
+  });
+}
+
+async function upsertRetryingSerializedJob(
+  client: RedisDocumentReindexQueueClient,
+  seenKey: string,
+  queueKey: string,
+  job: DocumentReindexJob,
+): Promise<void> {
+  await client.eval(UPSERT_RETRY_SCRIPT, {
     keys: [seenKey, queueKey],
     arguments: [job.idempotencyKey, serializeDocumentReindexJob(job)],
   });

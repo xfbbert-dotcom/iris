@@ -249,6 +249,58 @@ describe("RedisDocumentSyncQueue", () => {
     });
   });
 
+  it("upgrades a pending duplicate when the in-flight job fails", async () => {
+    const syncJob = job();
+    const state = {
+      seen: new Set([syncJob.idempotencyKey]),
+      queue: [
+        serializeDocumentSyncJob({
+          ...syncJob,
+          enqueuedAt: new Date("2026-07-03T01:05:00.000Z"),
+        }),
+      ],
+    };
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(async (script, options) => {
+        const [idempotencyKey, payload] = options.arguments;
+        if (!state.seen.has(idempotencyKey)) {
+          state.seen.add(idempotencyKey);
+          state.queue.push(payload);
+          return state.queue.length;
+        }
+
+        if (script.includes("LSET")) {
+          const existingIndex = state.queue.findIndex(
+            (queuedPayload) =>
+              parseDocumentSyncJob(queuedPayload).idempotencyKey === idempotencyKey,
+          );
+          if (existingIndex >= 0) {
+            state.queue[existingIndex] = payload;
+            return 1;
+          }
+        }
+
+        return 0;
+      }),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(async () => state.queue.shift() ?? null),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(async (_key, member) => {
+        state.seen.delete(member);
+        return 1;
+      }),
+    };
+    const queue = createRedisDocumentSyncQueue({ client, maxAttempts: 3 });
+
+    await expect(
+      queue.handleFailedJob({ job: syncJob, errorMessage: "sync failed" }),
+    ).resolves.toEqual({ action: "requeued", attempts: 1 });
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([{ ...syncJob, attempts: 1 }]);
+  });
+
   it("rejects unsafe integer max attempts", () => {
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(),

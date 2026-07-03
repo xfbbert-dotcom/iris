@@ -773,6 +773,35 @@ If document types require specialized chunking, Iris may introduce document-type
 profiles for prose, tables, code, transcripts, and PDFs. Those profiles must
 still pass through strict numeric validation before reaching chunking logic.
 
+### 12.13 Redis Retry Duplicate Upsert
+
+Pressure:
+
+Redis-backed queues release an idempotency key when a worker dequeues an item so
+lost in-flight work can be recovered. If the platform or planner delivers the
+same idempotency key again while the first item is still processing, a pending
+duplicate with an older `attempts` value can already exist when the in-flight
+item fails. A simple `SADD`/`RPUSH` retry can then no-op and leave the older
+payload in Redis, weakening retry limits and delaying dead-letter visibility.
+
+Required architectural response:
+
+- Retry handling must preserve idempotency while upgrading pending duplicates to
+  the newest retry payload.
+- Redis retry paths for raw events, document sync jobs, and reindex jobs must
+  atomically replace a queued duplicate when the idempotency key already exists.
+- If no queued duplicate can be found, retry handling should enqueue the failed
+  payload rather than silently losing the retry.
+- Normal first-time enqueue semantics remain deduplicating and should not replace
+  an existing queued item.
+
+Evolution signal:
+
+If queue semantics grow beyond simple Redis lists, Iris should move retry
+ownership into a shared durable queue adapter with explicit in-flight leases.
+That adapter must retain the same rule: failed work advances retry state instead
+of being hidden behind an older duplicate.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

@@ -17,6 +17,23 @@ end
 return 0
 `;
 
+const UPSERT_RETRY_SCRIPT = `
+if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then
+  return redis.call("RPUSH", KEYS[2], ARGV[2])
+end
+
+local queued = redis.call("LRANGE", KEYS[2], 0, -1)
+for index, payload in ipairs(queued) do
+  local ok, decoded = pcall(cjson.decode, payload)
+  if ok and decoded["idempotencyKey"] == ARGV[1] then
+    redis.call("LSET", KEYS[2], index - 1, ARGV[2])
+    return 1
+  end
+end
+
+return redis.call("RPUSH", KEYS[2], ARGV[2])
+`;
+
 export type RedisRawEventQueueClient = {
   eval(
     script: string,
@@ -97,7 +114,7 @@ export function createRedisRawEventQueue({
         return { action: "dead_lettered", attempts };
       }
 
-      await enqueueSerializedRawEvent(client, seenKey, queueKey, failedEvent);
+      await upsertRetryingSerializedRawEvent(client, seenKey, queueKey, failedEvent);
       return { action: "requeued", attempts };
     },
 
@@ -118,6 +135,18 @@ async function enqueueSerializedRawEvent(
   event: RawEvent,
 ): Promise<void> {
   await client.eval(ENQUEUE_SCRIPT, {
+    keys: [seenKey, queueKey],
+    arguments: [event.idempotencyKey, serializeRawEvent(event)],
+  });
+}
+
+async function upsertRetryingSerializedRawEvent(
+  client: RedisRawEventQueueClient,
+  seenKey: string,
+  queueKey: string,
+  event: RawEvent,
+): Promise<void> {
+  await client.eval(UPSERT_RETRY_SCRIPT, {
     keys: [seenKey, queueKey],
     arguments: [event.idempotencyKey, serializeRawEvent(event)],
   });
