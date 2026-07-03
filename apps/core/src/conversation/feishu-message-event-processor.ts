@@ -83,7 +83,8 @@ function parseFeishuMessageEvent(event: RawEvent): UpsertConversationMessageInpu
   }
 
   const header = event.rawBody.header;
-  const eventType = isRecord(header) ? readString(header.event_type) : event.eventType;
+  const headerEventType = isRecord(header) ? readString(header.event_type) : "";
+  const eventType = headerEventType.length > 0 ? headerEventType : event.eventType;
   if (eventType !== "im.message.receive_v1") {
     return undefined;
   }

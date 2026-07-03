@@ -142,6 +142,48 @@ describe("FeishuMessageEventProcessor", () => {
     expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
   });
 
+  it("falls back to normalized event type when the Feishu header omits event_type", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const processor = createFeishuMessageEventProcessor({ messages });
+
+    await processor.process(
+      rawEventFixture({
+        eventType: "im.message.receive_v1",
+        rawBody: {
+          header: { event_id: "event-1" },
+          event: {
+            sender: {
+              sender_id: {
+                open_id: "open-1",
+              },
+            },
+            message: {
+              message_id: "message-1",
+              chat_id: "chat-1",
+              message_type: "text",
+              content: "{\"text\":\"Hello from fallback\"}",
+              create_time: "1782925200000",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(messages.upsertMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerMessageId: "message-1",
+        chatId: "chat-1",
+        text: "Hello from fallback",
+      }),
+    );
+  });
+
   it("persists non-text messages without text", async () => {
     const messages = {
       upsertMessage: vi.fn(async (input) => ({
