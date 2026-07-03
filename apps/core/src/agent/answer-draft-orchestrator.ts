@@ -93,8 +93,14 @@ export function createAnswerDraftOrchestrator({
 
 function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] {
   const seen = new Set<string>();
+  const normalizedMessages = messages
+    .map((message) => ({
+      speaker: message.speaker.trim(),
+      text: message.text.trim(),
+    }))
+    .filter((message) => message.speaker.length > 0 && message.text.length > 0);
 
-  return messages.filter((message) => {
+  return normalizedMessages.filter((message) => {
     const key = `${message.speaker}\u0000${message.text}`;
     if (seen.has(key)) {
       return false;

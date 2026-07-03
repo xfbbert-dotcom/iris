@@ -168,6 +168,50 @@ describe("AnswerDraftOrchestrator", () => {
     });
   });
 
+  it("deduplicates live chat messages after trimming speaker and text", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft answer." })),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => [
+        { speaker: " ou_a ", text: " Duplicated context " },
+      ]),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await orchestrator.generateDraft({
+      question: "What changed?",
+      chatId: "oc_1",
+      liveChatMessages: [
+        { speaker: "ou_a", text: "Duplicated context" },
+        { speaker: " ou_c ", text: " Current context " },
+      ],
+    });
+
+    expect(contextBuilder.buildContext).toHaveBeenCalledWith({
+      queryText: "What changed?",
+      liveChatMessages: [
+        { speaker: "ou_a", text: "Duplicated context" },
+        { speaker: "ou_c", text: "Current context" },
+      ],
+      fragmentLimit: undefined,
+      liveChatLimit: undefined,
+    });
+  });
+
   it("rejects blank model output", async () => {
     const orchestrator = createAnswerDraftOrchestrator({
       contextBuilder: {
