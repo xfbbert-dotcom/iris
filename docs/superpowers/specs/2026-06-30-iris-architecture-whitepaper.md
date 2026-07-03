@@ -723,6 +723,32 @@ If DLQ schemas become more complex, Iris should introduce versioned queue payloa
 decoders and a repair/export tool for operators. The repair tool must improve
 recovery visibility without weakening replay safety.
 
+### 12.11 Feishu Tenant Token Refresh Stampede
+
+Pressure:
+
+Many Iris operations share Feishu tenant access tokens. When the cached token is
+missing or expired, concurrent document sync, wiki lookup, or future Feishu API
+calls can arrive at the same time. If every caller performs its own refresh,
+Iris can create avoidable latency spikes, waste Feishu rate budget, and amplify
+transient token endpoint failures.
+
+Required architectural response:
+
+- Token providers must return valid cached tokens immediately.
+- Concurrent callers inside the same Core App process must share one in-flight
+  refresh request.
+- Failed or timed-out refreshes must clear the in-flight state so later calls can
+  retry.
+- Failed token responses must not be cached as successful credentials.
+
+Evolution signal:
+
+If Iris runs multiple Core App replicas and token refresh pressure appears across
+processes, introduce a distributed token cache or short-lived refresh lock. That
+cache must preserve timeout handling and must not turn token failures into stale
+credential reuse.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

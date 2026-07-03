@@ -43,6 +43,69 @@ describe("FeishuTenantAccessTokenProvider", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("coalesces concurrent tenant access token refreshes", async () => {
+    let resolveFetch: ((response: Response) => void) | undefined;
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    ) as typeof globalThis.fetch;
+    const provider = createFeishuTenantAccessTokenProvider({
+      baseUrl: "https://open.feishu.cn",
+      appId: "app-id",
+      appSecret: "app-secret",
+      fetch,
+      now: () => new Date("2026-07-03T02:00:00.000Z"),
+    });
+
+    const first = provider.getTenantAccessToken();
+    const second = provider.getTenantAccessToken();
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    resolveFetch?.(
+      jsonResponse({
+        code: 0,
+        tenant_access_token: "tenant-token-1",
+        expire: 7200,
+      }),
+    );
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      "tenant-token-1",
+      "tenant-token-1",
+    ]);
+    await expect(provider.getTenantAccessToken()).resolves.toBe("tenant-token-1");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears coalesced tenant token refreshes after failures", async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          code: 0,
+          tenant_access_token: "tenant-token-2",
+          expire: 7200,
+        }),
+      ) as typeof globalThis.fetch;
+    const provider = createFeishuTenantAccessTokenProvider({
+      baseUrl: "https://open.feishu.cn",
+      appId: "app-id",
+      appSecret: "app-secret",
+      fetch,
+      now: () => new Date("2026-07-03T02:00:00.000Z"),
+    });
+
+    await expect(
+      Promise.all([provider.getTenantAccessToken(), provider.getTenantAccessToken()]),
+    ).rejects.toThrow("network unavailable");
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    await expect(provider.getTenantAccessToken()).resolves.toBe("tenant-token-2");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("times out tenant access token requests", async () => {
     const fetch = vi.fn(async (_url, init) => {
       if (init?.signal === undefined) {

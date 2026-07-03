@@ -28,6 +28,7 @@ export function createFeishuTenantAccessTokenProvider({
   now = () => new Date(),
 }: FeishuTenantAccessTokenProviderDependencies): FeishuTenantAccessTokenProvider {
   let cachedToken: CachedToken | undefined;
+  let inFlightTokenRequest: Promise<string> | undefined;
 
   return {
     async getTenantAccessToken() {
@@ -35,48 +36,83 @@ export function createFeishuTenantAccessTokenProvider({
       if (cachedToken !== undefined && cachedToken.expiresAtMs > nowMs) {
         return cachedToken.token;
       }
+      if (inFlightTokenRequest !== undefined) {
+        return inFlightTokenRequest;
+      }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
+      inFlightTokenRequest = refreshTenantAccessToken({
+        baseUrl,
+        appId,
+        appSecret,
+        fetch,
+        timeoutMs,
+        cacheToken(token, expiresInSeconds) {
+          cachedToken = {
+            token,
+            expiresAtMs: nowMs + Math.max(0, expiresInSeconds * 1000 - tokenRefreshSkewMs),
+          };
+        },
+      });
       try {
-        const response = await fetch(
-          `${trimTrailingSlash(baseUrl)}/open-apis/auth/v3/tenant_access_token/internal`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-            signal: controller.signal,
-          },
-        );
-        const responseBody = await readJsonResponse(response);
-
-        if (!response.ok) {
-          throw new Error(
-            `Feishu tenant access token HTTP request failed with status ${
-              response.status
-            }: ${readErrorMessage(responseBody)}`,
-          );
-        }
-
-        const token = readTenantAccessToken(responseBody);
-        const expiresInSeconds = readExpireSeconds(responseBody);
-        cachedToken = {
-          token,
-          expiresAtMs: nowMs + Math.max(0, expiresInSeconds * 1000 - tokenRefreshSkewMs),
-        };
-
-        return token;
-      } catch (error) {
-        if (isAbortError(error)) {
-          throw new Error("Feishu tenant access token request timed out");
-        }
-        throw error;
+        return await inFlightTokenRequest;
       } finally {
-        clearTimeout(timeout);
+        inFlightTokenRequest = undefined;
       }
     },
   };
+}
+
+async function refreshTenantAccessToken({
+  baseUrl,
+  appId,
+  appSecret,
+  fetch,
+  timeoutMs,
+  cacheToken,
+}: {
+  baseUrl: string;
+  appId: string;
+  appSecret: string;
+  fetch: typeof globalThis.fetch;
+  timeoutMs: number;
+  cacheToken(token: string, expiresInSeconds: number): void;
+}): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(
+      `${trimTrailingSlash(baseUrl)}/open-apis/auth/v3/tenant_access_token/internal`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+        signal: controller.signal,
+      },
+    );
+    const responseBody = await readJsonResponse(response);
+
+    if (!response.ok) {
+      throw new Error(
+        `Feishu tenant access token HTTP request failed with status ${
+          response.status
+        }: ${readErrorMessage(responseBody)}`,
+      );
+    }
+
+    const token = readTenantAccessToken(responseBody);
+    const expiresInSeconds = readExpireSeconds(responseBody);
+    cacheToken(token, expiresInSeconds);
+
+    return token;
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error("Feishu tenant access token request timed out");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
