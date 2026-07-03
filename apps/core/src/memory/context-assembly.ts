@@ -16,9 +16,12 @@ export type PromptContextInput = {
 
 export function assemblePromptContext(input: PromptContextInput): string {
   const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
+  const meaningfulLiveChatMessages = input.liveChatMessages.filter(
+    (message) => message.text.trim().length > 0,
+  );
   const liveMessages = liveChatLimit === 0
     ? []
-    : input.liveChatMessages.slice(-liveChatLimit);
+    : meaningfulLiveChatMessages.slice(-liveChatLimit);
 
   return [
     "<background_documents>",

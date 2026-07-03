@@ -50,6 +50,24 @@ describe("assemblePromptContext", () => {
     expect(context).not.toContain("hidden message");
   });
 
+  it("filters blank live chat messages before applying the limit", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: [
+        { speaker: "User", text: "message-1" },
+        { speaker: "User", text: "   " },
+        { speaker: "Iris", text: "\n\t" },
+        { speaker: "User", text: "message-2" }
+      ],
+      liveChatLimit: 2
+    });
+
+    expect(context).toContain('<message speaker="User">message-1</message>');
+    expect(context).toContain('<message speaker="User">message-2</message>');
+    expect(context).not.toContain('<message speaker="User">   </message>');
+    expect(context).not.toContain('<message speaker="Iris">\n\t</message>');
+  });
+
   it("excludes live messages when liveChatLimit is negative", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],
