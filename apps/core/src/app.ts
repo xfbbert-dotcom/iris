@@ -241,21 +241,20 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         };
       }
 
+      const latestSnapshotsBySourceId = await documentSyncRuntime.sources.getLatestSnapshots({
+        sourceIds: sources.map((source) => source.id),
+      });
       return {
         ok: true,
-        sources: await Promise.all(
-          sources.map(async (source) => {
-            const latestSnapshot = await documentSyncRuntime.sources.getLatestSnapshot({
-              sourceId: source.id,
-            });
-            return {
-              ...source,
-              ...(latestSnapshot === undefined
-                ? {}
-                : { latestSnapshot: toDocumentSnapshotSummary(latestSnapshot) }),
-            };
-          }),
-        ),
+        sources: sources.map((source) => {
+          const latestSnapshot = latestSnapshotsBySourceId.get(source.id);
+          return {
+            ...source,
+            ...(latestSnapshot === undefined
+              ? {}
+              : { latestSnapshot: toDocumentSnapshotSummary(latestSnapshot) }),
+          };
+        }),
       };
     } catch {
       return reply.code(500).send({ ok: false, error: "document_source_lookup_failed" });

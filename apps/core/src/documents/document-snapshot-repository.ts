@@ -46,6 +46,7 @@ export interface DocumentSnapshotRepository {
   insertFailedSnapshot(input: InsertFailedSnapshotInput): Promise<DocumentSnapshot>;
   listSnapshotsForSource(documentSourceId: string): Promise<DocumentSnapshot[]>;
   findLatestSnapshotForSource(documentSourceId: string): Promise<DocumentSnapshot | undefined>;
+  findLatestSnapshotsForSources(documentSourceIds: string[]): Promise<DocumentSnapshot[]>;
   findSnapshotById(id: string): Promise<DocumentSnapshot | undefined>;
   listSuccessfulSnapshotsMissingProfile(input: {
     embeddingProfileId: string;
@@ -133,6 +134,24 @@ order by fetched_at desc, id asc
     async findLatestSnapshotForSource(documentSourceId) {
       const snapshots = await this.listSnapshotsForSource(documentSourceId);
       return snapshots[0];
+    },
+
+    async findLatestSnapshotsForSources(documentSourceIds) {
+      if (documentSourceIds.length === 0) {
+        return [];
+      }
+
+      const result = await dependencies.queryable.query<DocumentSnapshotRow>(
+        `
+select distinct on (document_source_id) *
+from document_snapshots
+where document_source_id = any($1::text[])
+order by document_source_id asc, fetched_at desc, id asc
+`,
+        [documentSourceIds],
+      );
+
+      return result.rows.map(mapSnapshotRow);
     },
 
     async findSnapshotById(id) {

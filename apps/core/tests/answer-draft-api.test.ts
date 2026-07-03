@@ -833,6 +833,7 @@ describe("document sync source inventory API", () => {
         listSnapshots: vi.fn(),
         getSnapshot: vi.fn(),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -890,9 +891,11 @@ describe("document sync source inventory API", () => {
         updatePolicy: vi.fn(),
         listSnapshots: vi.fn(),
         getSnapshot: vi.fn(),
-        getLatestSnapshot: vi
-          .fn()
-          .mockResolvedValueOnce({
+        getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(async () => new Map([
+          [
+            "source-1",
+            {
             id: "snapshot-1",
             documentSourceId: "source-1",
             sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
@@ -903,8 +906,9 @@ describe("document sync source inventory API", () => {
             fetchedAt: new Date("2026-07-03T04:00:00.000Z"),
             errorMessage: "Feishu returned 403",
             createdAt: new Date("2026-07-03T04:00:01.000Z"),
-          })
-          .mockResolvedValueOnce(undefined),
+            },
+          ],
+        ])),
       },
     });
     const app = buildApp({
@@ -938,10 +942,10 @@ describe("document sync source inventory API", () => {
       limit: 2,
       includeLatestSnapshot: true,
     });
-    expect(runtime.sources.getLatestSnapshot).toHaveBeenNthCalledWith(1, { sourceId: "source-1" });
-    expect(runtime.sources.getLatestSnapshot).toHaveBeenNthCalledWith(2, {
-      sourceId: "user-source-1",
+    expect(runtime.sources.getLatestSnapshots).toHaveBeenCalledWith({
+      sourceIds: ["source-1", "user-source-1"],
     });
+    expect(runtime.sources.getLatestSnapshot).not.toHaveBeenCalled();
   });
 
   it("lists document sources by source type", async () => {
@@ -953,6 +957,7 @@ describe("document sync source inventory API", () => {
         listSnapshots: vi.fn(),
         getSnapshot: vi.fn(),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1027,6 +1032,7 @@ describe("document sync source inventory API", () => {
         listSnapshots: vi.fn(),
         getSnapshot: vi.fn(),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1080,6 +1086,7 @@ describe("document sync source inventory API", () => {
           errorMessage: undefined,
           createdAt: new Date("2026-07-03T04:00:01.000Z"),
         })),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1153,6 +1160,7 @@ describe("document sync source inventory API", () => {
         listSnapshots: vi.fn(),
         getSnapshot: vi.fn(),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1201,6 +1209,7 @@ describe("document sync source policy API", () => {
         listSnapshots: vi.fn(),
         getSnapshot: vi.fn(),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1285,6 +1294,7 @@ describe("document sync source policy API", () => {
         listSnapshots: vi.fn(),
         getSnapshot: vi.fn(),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1353,6 +1363,7 @@ describe("document sync source snapshot inventory API", () => {
         ]),
         getSnapshot: vi.fn(),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1415,6 +1426,7 @@ describe("document sync source snapshot inventory API", () => {
           createdAt: new Date("2026-07-03T04:00:01.000Z"),
         })),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1470,6 +1482,7 @@ describe("document sync source snapshot inventory API", () => {
           createdAt: new Date("2026-07-03T04:00:01.000Z"),
         })),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1511,6 +1524,7 @@ describe("document sync source snapshot inventory API", () => {
           createdAt: new Date("2026-07-03T04:00:01.000Z"),
         })),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1551,6 +1565,7 @@ describe("document sync source snapshot inventory API", () => {
           errorMessage: undefined,
           createdAt: new Date("2026-07-03T05:00:01.000Z"),
         })),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1603,6 +1618,7 @@ describe("document sync source snapshot inventory API", () => {
           errorMessage: undefined,
           createdAt: new Date("2026-07-03T05:00:01.000Z"),
         })),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1668,6 +1684,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshot: vi.fn(async () => {
           throw new Error("database unavailable");
         }),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1761,6 +1778,7 @@ describe("document sync source snapshot inventory API", () => {
           throw new Error("database unavailable");
         }),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -1821,6 +1839,7 @@ describe("document sync source snapshot inventory API", () => {
         }),
         getSnapshot: vi.fn(),
         getLatestSnapshot: vi.fn(),
+        getLatestSnapshots: vi.fn(),
       },
     });
     const app = buildApp({
@@ -2472,6 +2491,7 @@ function fakeDocumentSyncRuntime(
       listSnapshots: vi.fn(async () => undefined),
       getSnapshot: vi.fn(async () => undefined),
       getLatestSnapshot: vi.fn(async () => undefined),
+      getLatestSnapshots: vi.fn(async () => new Map()),
     },
     deadLetters: {
       list: vi.fn(async () => []),

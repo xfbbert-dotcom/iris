@@ -100,6 +100,7 @@ describe("createDocumentSyncRuntime", () => {
       insertFailedSnapshot: vi.fn(),
       findSnapshotById: vi.fn(async () => snapshot),
       findLatestSnapshotForSource: vi.fn(async () => snapshot),
+      findLatestSnapshotsForSources: vi.fn(async () => [snapshot]),
       listSnapshotsForSource: vi.fn(async () => [snapshot]),
       listSuccessfulSnapshotsMissingProfile: vi.fn(async () => []),
     };
@@ -450,6 +451,15 @@ describe("createDocumentSyncRuntime", () => {
     ).resolves.toEqual(snapshot);
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
     expect(snapshots.findLatestSnapshotForSource).toHaveBeenCalledWith("source-1");
+    const latestSnapshots = await runtime?.sources.getLatestSnapshots({
+      sourceIds: ["source-1", "user-source-1"],
+    });
+    expect(latestSnapshots?.get("source-1")).toEqual(snapshot);
+    expect(latestSnapshots?.has("user-source-1")).toBe(false);
+    expect(snapshots.findLatestSnapshotsForSources).toHaveBeenCalledWith([
+      "source-1",
+      "user-source-1",
+    ]);
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();

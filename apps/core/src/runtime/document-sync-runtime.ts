@@ -78,6 +78,9 @@ export type DocumentSyncRuntime = {
     getLatestSnapshot(
       input: DocumentSourceLatestSnapshotInput,
     ): Promise<DocumentSnapshot | undefined>;
+    getLatestSnapshots(
+      input: DocumentSourceLatestSnapshotsInput,
+    ): Promise<Map<string, DocumentSnapshot>>;
   };
   enqueueSource(input: { documentSourceId: string }): Promise<ManualDocumentSyncEnqueueResult>;
   registerAuthorizedWikiDocument(
@@ -131,6 +134,10 @@ export type DocumentSourceLatestSnapshotInput = {
   sourceId: string;
 };
 
+export type DocumentSourceLatestSnapshotsInput = {
+  sourceIds: string[];
+};
+
 export type DocumentSyncRuntimeStatus = {
   enabled: true;
   running: boolean;
@@ -145,6 +152,7 @@ type PostgresPool = Queryable & { end(): Promise<void> };
 type DocumentSyncRuntimeSnapshots = DocumentSyncSnapshotWriter & {
   findSnapshotById(id: string): Promise<DocumentSnapshot | undefined>;
   findLatestSnapshotForSource(documentSourceId: string): Promise<DocumentSnapshot | undefined>;
+  findLatestSnapshotsForSources(documentSourceIds: string[]): Promise<DocumentSnapshot[]>;
   listSnapshotsForSource(documentSourceId: string): Promise<DocumentSnapshot[]>;
   listSuccessfulSnapshotsMissingProfile(input: {
     embeddingProfileId: string;
@@ -391,6 +399,12 @@ function createEnabledDocumentSyncRuntime({
         }
 
         return await snapshots.findLatestSnapshotForSource(input.sourceId);
+      },
+      async getLatestSnapshots(input) {
+        const latestSnapshots = await snapshots.findLatestSnapshotsForSources(input.sourceIds);
+        return new Map(
+          latestSnapshots.map((snapshot) => [snapshot.documentSourceId, snapshot]),
+        );
       },
     },
     async registerAuthorizedWikiDocument(input) {

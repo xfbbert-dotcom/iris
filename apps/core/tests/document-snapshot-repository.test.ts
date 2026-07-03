@@ -220,6 +220,69 @@ describe("DocumentSnapshotRepository", () => {
     });
   });
 
+  it("returns no latest snapshots for empty source ids without querying", async () => {
+    const query = vi.fn();
+    const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
+
+    await expect(repository.findLatestSnapshotsForSources([])).resolves.toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("finds latest snapshots for multiple sources", async () => {
+    const rows = [
+      {
+        id: "snapshot-1",
+        document_source_id: "source-1",
+        source_uri: "uri-1",
+        fetch_status: "failed",
+        body_text: null,
+        content_hash: null,
+        source_version: null,
+        fetched_at: new Date("2026-07-02T02:00:00.000Z"),
+        error_message: "Feishu returned 403",
+        created_at: new Date("2026-07-02T02:00:01.000Z"),
+      },
+      {
+        id: "snapshot-2",
+        document_source_id: "source-2",
+        source_uri: "uri-2",
+        fetch_status: "succeeded",
+        body_text: "new",
+        content_hash: "hash-2",
+        source_version: null,
+        fetched_at: new Date("2026-07-02T03:00:00.000Z"),
+        error_message: null,
+        created_at: new Date("2026-07-02T03:00:01.000Z"),
+      },
+    ];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("distinct on (document_source_id)");
+      expect(normalized).toContain("where document_source_id = any($1::text[])");
+      expect(normalized).toContain("order by document_source_id asc, fetched_at desc, id asc");
+      expect(values).toEqual([["source-1", "source-2"]]);
+      return { rows };
+    });
+    const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
+
+    await expect(
+      repository.findLatestSnapshotsForSources(["source-1", "source-2"]),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "snapshot-1",
+        documentSourceId: "source-1",
+        fetchStatus: "failed",
+        errorMessage: "Feishu returned 403",
+      }),
+      expect.objectContaining({
+        id: "snapshot-2",
+        documentSourceId: "source-2",
+        fetchStatus: "succeeded",
+        bodyText: "new",
+      }),
+    ]);
+  });
+
   it("finds a snapshot by id", async () => {
     const createdAt = new Date("2026-07-02T01:00:00.000Z");
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
