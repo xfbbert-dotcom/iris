@@ -182,7 +182,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     if (parsedQuery === undefined) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
-    const diagnostics = getAuditEventDiagnostics(auditLog.events, parsedQuery);
+    const diagnostics = getAuditEventDiagnostics(auditLog, parsedQuery);
 
     return {
       ok: true,
@@ -196,7 +196,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     if (parsedQuery === undefined) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
-    const diagnostics = getAuditEventDiagnostics(auditLog.events, parsedQuery);
+    const diagnostics = getAuditEventDiagnostics(auditLog, parsedQuery);
 
     return {
       ok: true,
@@ -844,15 +844,17 @@ function matchesAuditEventQuery(
   );
 }
 
-function getAuditEventDiagnostics(events: RecordedAuditEvent[], query: AuditEventSummaryQuery) {
-  const inspectedEvents = query.limit <= 0 ? [] : events.slice(-query.limit);
+function getAuditEventDiagnostics(auditLog: InMemoryAuditLog, query: AuditEventSummaryQuery) {
+  const inspectedEvents = query.limit <= 0 ? [] : auditLog.events.slice(-query.limit);
   const matchingEvents = inspectedEvents.filter((event) => matchesAuditEventQuery(event, query));
 
   return {
     matchingEvents,
     meta: {
       limit: query.limit,
-      retainedEventCount: events.length,
+      maxEventCount: auditLog.retention.maxEventCount,
+      retainedEventCount: auditLog.retention.retainedEventCount,
+      droppedEventCount: auditLog.retention.droppedEventCount,
       inspectedEventCount: inspectedEvents.length,
       matchingEventCount: matchingEvents.length,
       filters: {

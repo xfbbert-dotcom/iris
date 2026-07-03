@@ -96,6 +96,32 @@ describe("InMemoryAuditLog", () => {
     ]);
   });
 
+  it("reports in-memory retention capacity and dropped audit events", async () => {
+    const auditLog = new InMemoryAuditLog({ maxEvents: 2 });
+
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-2",
+      fragmentIds: ["fragment-2"],
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-3",
+      fragmentIds: ["fragment-3"],
+    });
+
+    expect(auditLog.retention).toEqual({
+      maxEventCount: 2,
+      retainedEventCount: 2,
+      droppedEventCount: 1,
+    });
+  });
+
   it("summarizes recent audit events by document and type", async () => {
     const recordedTimes = [
       new Date("2026-07-03T06:00:00.000Z"),

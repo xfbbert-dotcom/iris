@@ -280,7 +280,9 @@ describe("GET /internal/audit/events", () => {
       ok: true,
       meta: {
         limit: 2,
+        maxEventCount: 1000,
         retainedEventCount: 3,
+        droppedEventCount: 0,
         inspectedEventCount: 2,
         matchingEventCount: 2,
         filters: {},
@@ -339,12 +341,53 @@ describe("GET /internal/audit/events", () => {
       ok: true,
       meta: {
         limit: 0,
+        maxEventCount: 1000,
         retainedEventCount: 1,
+        droppedEventCount: 0,
         inspectedEventCount: 0,
         matchingEventCount: 0,
         filters: {},
       },
       events: [],
+    });
+  });
+
+  it("reports audit retention capacity and dropped event count", async () => {
+    const auditLog = new InMemoryAuditLog({ maxEvents: 2 });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-2",
+      fragmentIds: ["fragment-2"],
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-3",
+      fragmentIds: ["fragment-3"],
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events?limit=20",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().meta).toEqual({
+      limit: 20,
+      maxEventCount: 2,
+      retainedEventCount: 2,
+      droppedEventCount: 1,
+      inspectedEventCount: 2,
+      matchingEventCount: 2,
+      filters: {},
     });
   });
 
@@ -382,7 +425,9 @@ describe("GET /internal/audit/events", () => {
       ok: true,
       meta: {
         limit: 20,
+        maxEventCount: 1000,
         retainedEventCount: 3,
+        droppedEventCount: 0,
         inspectedEventCount: 3,
         matchingEventCount: 1,
         filters: {
@@ -464,7 +509,9 @@ describe("GET /internal/audit/events/summary", () => {
       ok: true,
       meta: {
         limit: 3,
+        maxEventCount: 1000,
         retainedEventCount: 4,
+        droppedEventCount: 0,
         inspectedEventCount: 3,
         matchingEventCount: 3,
         filters: {},
@@ -526,7 +573,9 @@ describe("GET /internal/audit/events/summary", () => {
       ok: true,
       meta: {
         limit: 0,
+        maxEventCount: 1000,
         retainedEventCount: 1,
+        droppedEventCount: 0,
         inspectedEventCount: 0,
         matchingEventCount: 0,
         filters: {},
@@ -569,7 +618,9 @@ describe("GET /internal/audit/events/summary", () => {
       ok: true,
       meta: {
         limit: 20,
+        maxEventCount: 1000,
         retainedEventCount: 3,
+        droppedEventCount: 0,
         inspectedEventCount: 3,
         matchingEventCount: 1,
         filters: {

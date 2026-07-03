@@ -37,6 +37,7 @@ export class InMemoryAuditLog implements AuditLog {
   readonly events: RecordedAuditEvent[] = [];
   private readonly maxEvents: number;
   private readonly now: () => Date;
+  private droppedEvents = 0;
 
   constructor(options: InMemoryAuditLogOptions = {}) {
     this.maxEvents = options.maxEvents ?? 1000;
@@ -55,7 +56,16 @@ export class InMemoryAuditLog implements AuditLog {
     const overflow = this.events.length - this.maxEvents;
     if (overflow > 0) {
       this.events.splice(0, overflow);
+      this.droppedEvents += overflow;
     }
+  }
+
+  get retention() {
+    return {
+      maxEventCount: this.maxEvents,
+      retainedEventCount: this.events.length,
+      droppedEventCount: this.droppedEvents,
+    };
   }
 
   summarizeRecent(options: AuditEventSummaryQuery): AuditEventSummary[] {
