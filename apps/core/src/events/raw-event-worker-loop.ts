@@ -130,9 +130,17 @@ export function createRawEventWorkerLoop({
         running,
         intervalMs: safeIntervalMs,
         batchLimit: safeBatchLimit,
-        ...(latestBatch === undefined ? {} : { latestBatch }),
+        ...(latestBatch === undefined ? {} : { latestBatch: cloneBatchSnapshot(latestBatch) }),
       };
     },
+  };
+}
+
+function cloneBatchSnapshot(snapshot: RawEventWorkerBatchSnapshot): RawEventWorkerBatchSnapshot {
+  return {
+    ...snapshot,
+    startedAt: new Date(snapshot.startedAt),
+    finishedAt: new Date(snapshot.finishedAt),
   };
 }
 

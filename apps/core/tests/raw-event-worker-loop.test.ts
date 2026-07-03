@@ -68,6 +68,48 @@ describe("RawEventWorkerLoop", () => {
     await loop.stop();
   });
 
+  it("returns latest batch snapshots that cannot mutate loop state", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T01:00:00.000Z"));
+    const worker = {
+      processBatch: vi.fn(async () => [
+        {
+          status: "processed" as const,
+          idempotencyKey: "raw-event:feishu:event-1",
+          eventType: "im.message.receive_v1",
+        },
+      ]),
+    };
+    const loop = createRawEventWorkerLoop({
+      worker,
+      intervalMs: 1000,
+      batchLimit: 25,
+    });
+
+    loop.start();
+    await vi.runOnlyPendingTimersAsync();
+
+    const firstSnapshot = loop.getSnapshot();
+    expect(firstSnapshot.latestBatch?.status).toBe("succeeded");
+    if (firstSnapshot.latestBatch?.status !== "succeeded") {
+      throw new Error("expected succeeded batch snapshot");
+    }
+
+    firstSnapshot.latestBatch.startedAt.setUTCFullYear(2030);
+    firstSnapshot.latestBatch.finishedAt.setUTCFullYear(2030);
+    firstSnapshot.latestBatch.processedCount = 999;
+
+    expect(loop.getSnapshot().latestBatch).toEqual({
+      status: "succeeded",
+      startedAt: new Date("2026-07-02T01:00:01.000Z"),
+      finishedAt: new Date("2026-07-02T01:00:01.000Z"),
+      processedCount: 1,
+      failedCount: 0,
+      failed: false,
+    });
+    await loop.stop();
+  });
+
   it("records failed batch errors and continues polling", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-02T01:00:00.000Z"));

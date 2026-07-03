@@ -130,9 +130,17 @@ export function createDocumentSyncWorkerLoop({
         running,
         intervalMs: safeIntervalMs,
         batchLimit: safeBatchLimit,
-        ...(latestBatch === undefined ? {} : { latestBatch }),
+        ...(latestBatch === undefined ? {} : { latestBatch: cloneBatchSnapshot(latestBatch) }),
       };
     },
+  };
+}
+
+function cloneBatchSnapshot(snapshot: DocumentSyncWorkerBatchSnapshot): DocumentSyncWorkerBatchSnapshot {
+  return {
+    ...snapshot,
+    startedAt: new Date(snapshot.startedAt),
+    finishedAt: new Date(snapshot.finishedAt),
   };
 }
 
