@@ -46,6 +46,36 @@ describe("FeishuMessageEventProcessor", () => {
     });
   });
 
+  it("skips disabled group messages without writing facts or discovering documents", async () => {
+    const messages = {
+      upsertMessage: vi.fn(),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => [{ sourceUri: "https://docs.feishu.cn/docx/a" }]),
+    };
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => undefined),
+    };
+    const runtimeController = {
+      canProcessIncomingEvent: vi.fn(() => false),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+      runtimeController,
+    });
+
+    await processor.process(rawEventFixture());
+
+    expect(runtimeController.canProcessIncomingEvent).toHaveBeenCalledWith({
+      groupId: "chat-1",
+    });
+    expect(messages.upsertMessage).not.toHaveBeenCalled();
+    expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
+    expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
+  });
+
   it("persists non-text messages without text", async () => {
     const messages = {
       upsertMessage: vi.fn(async (input) => ({

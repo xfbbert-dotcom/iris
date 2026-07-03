@@ -56,6 +56,9 @@ type RedisClient = RedisRawEventQueueClient & RedisDocumentSyncQueueClient & {
   quit(): Promise<unknown>;
 };
 type PostgresPool = Queryable & { end(): Promise<void> };
+type RuntimeGate = {
+  canProcessIncomingEvent(input: { groupId?: string }): boolean;
+};
 type GroupVisibleDocumentRegistry = Pick<
   AsyncDocumentSourceRegistry,
   "registerGroupVisibleDocument"
@@ -79,26 +82,30 @@ export type EventWorkerRuntimeDependencies = {
 export function createEventWorkerRuntime({
   env = process.env,
   dependencies = {},
+  runtimeController,
 }: {
   env?: EnvLike;
   dependencies?: EventWorkerRuntimeDependencies;
+  runtimeController?: RuntimeGate;
 } = {}): EventWorkerRuntime | undefined {
   const runtimeConfig = readEventWorkerRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
     return undefined;
   }
 
-  return createEnabledEventWorkerRuntime({ env, runtimeConfig, dependencies });
+  return createEnabledEventWorkerRuntime({ env, runtimeConfig, dependencies, runtimeController });
 }
 
 function createEnabledEventWorkerRuntime({
   env,
   runtimeConfig,
   dependencies,
+  runtimeController,
 }: {
   env: EnvLike;
   runtimeConfig: Extract<EventWorkerRuntimeConfig, { enabled: true }>;
   dependencies: EventWorkerRuntimeDependencies;
+  runtimeController: RuntimeGate | undefined;
 }): EventWorkerRuntime {
   const createRedis =
     dependencies.createRedisClient ??
@@ -139,6 +146,7 @@ function createEnabledEventWorkerRuntime({
     messages,
     documentLinkExtractor,
     groupVisibleDocumentRegistrar,
+    ...(runtimeController === undefined ? {} : { runtimeController }),
   });
   const queue = createRedisRawEventQueue({
     client: createLazyRedisQueueClient(redisConnection),

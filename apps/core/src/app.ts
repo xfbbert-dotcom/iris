@@ -50,7 +50,7 @@ export type BuildAppDependencies = {
   createAnswerDraftRuntime?: (
     input?: Parameters<typeof createDefaultAnswerDraftRuntime>[0],
   ) => AnswerDraftRuntime | undefined;
-  createEventWorkerRuntime?: () => EventWorkerRuntime | undefined;
+  createEventWorkerRuntime?: (input?: { runtimeController?: RuntimeController }) => EventWorkerRuntime | undefined;
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
   runtimeController?: RuntimeController;
@@ -123,7 +123,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
   reindexWorkerRuntime?.start();
   const eventWorkerRuntime =
-    (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)();
+    (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({ runtimeController });
   eventWorkerRuntime?.start();
   const documentSyncRuntime =
     (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();

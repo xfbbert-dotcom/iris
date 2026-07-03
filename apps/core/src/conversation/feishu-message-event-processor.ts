@@ -9,19 +9,31 @@ import type {
 } from "../documents/feishu-document-link-extractor.js";
 import type { GroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
 
+type RuntimeGate = {
+  canProcessIncomingEvent(input: { groupId?: string }): boolean;
+};
+
 export function createFeishuMessageEventProcessor({
   messages,
   documentLinkExtractor,
   groupVisibleDocumentRegistrar,
+  runtimeController,
 }: {
   messages: Pick<ConversationMessageRepository, "upsertMessage">;
   documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
   groupVisibleDocumentRegistrar?: Pick<GroupVisibleDocumentRegistrar, "registerDiscoveredLinks">;
+  runtimeController?: RuntimeGate;
 }) {
   return {
     async process(event: RawEvent): Promise<void> {
       const parsed = parseFeishuMessageEvent(event);
       if (parsed === undefined) {
+        return;
+      }
+      if (
+        runtimeController !== undefined &&
+        !runtimeController.canProcessIncomingEvent({ groupId: parsed.chatId })
+      ) {
         return;
       }
 

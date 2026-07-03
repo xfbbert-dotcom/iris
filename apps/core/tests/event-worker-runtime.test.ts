@@ -59,6 +59,9 @@ describe("createEventWorkerRuntime", () => {
     const processor = {
       process: vi.fn(async () => undefined),
     };
+    const runtimeController = {
+      canProcessIncomingEvent: vi.fn(() => true),
+    };
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),
       createRedisClient: vi.fn(() => redisClient),
@@ -75,6 +78,7 @@ describe("createEventWorkerRuntime", () => {
     const runtime = createEventWorkerRuntime({
       env: enabledEnv(),
       dependencies,
+      runtimeController,
     });
 
     expect(runtime).toBeDefined();
@@ -103,6 +107,7 @@ describe("createEventWorkerRuntime", () => {
       messages,
       documentLinkExtractor,
       groupVisibleDocumentRegistrar,
+      runtimeController,
     });
     runtime?.start();
     expect(loop.start).toHaveBeenCalledOnce();
