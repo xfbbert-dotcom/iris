@@ -172,6 +172,28 @@ describe("DocumentFragmentRepository", () => {
     ]);
   });
 
+  it("rejects invalid replacement vectors before deleting existing fragments", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.replaceFragmentsForSnapshot({
+        documentSourceId: "source-1",
+        documentSnapshotId: "snapshot-1",
+        sourceUri: "https://example.com/doc",
+        embeddingProfileId: "static-dev-6d",
+        chunks: [{ chunkIndex: 0, text: "Alpha" }],
+        embeddings: [[Number.NaN, 0, 0, 0, 0, 0]],
+      }),
+    ).rejects.toThrow("embedding vector contains invalid value");
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it("builds vector search query with limit", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       expect(normalizeSql(sql)).toContain("from document_fragments f");

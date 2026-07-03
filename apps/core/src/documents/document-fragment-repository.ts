@@ -92,6 +92,7 @@ export function createDocumentFragmentRepository(
       }
       const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
       const embeddingTable = resolveEmbeddingTable(profile.dimensions);
+      validateReplacementEmbeddings(input.chunks, input.embeddings, profile.dimensions);
 
       await dependencies.queryable.query(
         `
@@ -202,6 +203,20 @@ select exists (
       return result.rows[0]?.exists === true;
     },
   };
+}
+
+function validateReplacementEmbeddings(
+  chunks: DocumentChunk[],
+  embeddings: number[][],
+  dimension: number,
+): void {
+  for (const chunk of chunks) {
+    const embedding = embeddings[chunk.chunkIndex];
+    if (embedding === undefined) {
+      throw new Error(`missing embedding for chunk index ${chunk.chunkIndex}`);
+    }
+    validateVectorDimension(embedding, dimension);
+  }
 }
 
 export function serializeVector(vector: number[]): string {
@@ -351,5 +366,10 @@ function validateVectorDimension(vector: number[], dimension: number): void {
     throw new Error(
       `embedding vector length ${vector.length} does not match profile dimension ${dimension}`,
     );
+  }
+  for (const value of vector) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error("embedding vector contains invalid value");
+    }
   }
 }
