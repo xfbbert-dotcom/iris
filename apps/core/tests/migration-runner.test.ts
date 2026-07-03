@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
@@ -168,6 +168,21 @@ describe("defaultMigrationsDir", () => {
         "0004_embedding_profiles.sql",
         "0005_dimension_sharded_vector_storage.sql",
       ]),
+    );
+  });
+
+  it("includes migration to scope document fragment uniqueness by embedding profile", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0013_document_fragment_profile_uniqueness.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain(
+      "drop constraint if exists document_fragments_document_snapshot_id_chunk_index_key",
+    );
+    expect(normalized).toContain(
+      "unique (document_snapshot_id, embedding_profile_id, chunk_index)",
     );
   });
 });

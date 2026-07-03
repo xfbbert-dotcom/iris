@@ -170,16 +170,24 @@ order by chunk_index asc, id asc
 
       const result = await dependencies.queryable.query<RetrievedDocumentFragmentRow>(
         `
+with latest_snapshots as (
+  select distinct on (document_source_id) id
+  from document_snapshots
+  where fetch_status = 'succeeded'
+  order by document_source_id asc, fetched_at desc, id asc
+)
 select
   f.*,
   e.embedding,
   e.embedding <=> $2::vector as distance
 from document_fragments f
+join latest_snapshots
+  on f.document_snapshot_id = latest_snapshots.id
 join ${embeddingTable} e
   on e.document_fragment_id = f.id
 where f.embedding_profile_id = $1
   and e.embedding_profile_id = $1
-order by e.embedding <=> $2::vector asc
+order by e.embedding <=> $2::vector asc, f.document_source_id asc, f.chunk_index asc, f.id asc
 limit $3
 `,
         [input.embeddingProfileId, serializeVector(input.embedding), sanitizeLimit(input.limit)],
