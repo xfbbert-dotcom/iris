@@ -95,4 +95,70 @@ describe("InMemoryAuditLog", () => {
       },
     ]);
   });
+
+  it("summarizes recent audit events by document and type", async () => {
+    const recordedTimes = [
+      new Date("2026-07-03T06:00:00.000Z"),
+      new Date("2026-07-03T06:01:00.000Z"),
+      new Date("2026-07-03T06:02:00.000Z"),
+      new Date("2026-07-03T06:03:00.000Z"),
+    ];
+    let nowIndex = 0;
+    const auditLog = new InMemoryAuditLog({
+      now: () => recordedTimes[nowIndex++] ?? recordedTimes.at(-1)!,
+    });
+
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-old",
+      fragmentIds: ["fragment-old"],
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-2",
+      fragmentIds: ["fragment-2"],
+      message: "permission lookup failed",
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1", "fragment-3"],
+    });
+
+    expect(auditLog.summarizeRecent({ limit: 3 })).toEqual([
+      {
+        documentId: "source-1",
+        type: "permission_guard_denied",
+        eventCount: 2,
+        affectedFragmentCount: 2,
+        firstRecordedAt: new Date("2026-07-03T06:01:00.000Z"),
+        latestRecordedAt: new Date("2026-07-03T06:03:00.000Z"),
+      },
+      {
+        documentId: "source-2",
+        type: "permission_guard_error",
+        eventCount: 1,
+        affectedFragmentCount: 1,
+        firstRecordedAt: new Date("2026-07-03T06:02:00.000Z"),
+        latestRecordedAt: new Date("2026-07-03T06:02:00.000Z"),
+      },
+    ]);
+  });
+
+  it("returns no audit summary rows when the recent event limit is zero", async () => {
+    const auditLog = new InMemoryAuditLog();
+
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+
+    expect(auditLog.summarizeRecent({ limit: 0 })).toEqual([]);
+  });
 });

@@ -1,6 +1,10 @@
 import Fastify from "fastify";
 import { pathToFileURL } from "node:url";
-import { InMemoryAuditLog, type AuditEvent } from "./audit/audit-log.js";
+import {
+  InMemoryAuditLog,
+  type AuditEventSummary,
+  type RecordedAuditEvent,
+} from "./audit/audit-log.js";
 import {
   createFeishuGateway,
   type FeishuCallbackRequest
@@ -180,6 +184,18 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     return {
       ok: true,
       events: auditLog.events.slice(-limit).reverse().map(toAuditEventResponse),
+    };
+  });
+
+  app.get("/internal/audit/events/summary", async (request, reply) => {
+    const limit = parseDeadLetterLimit((request.query as { limit?: unknown }).limit);
+    if (limit === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    return {
+      ok: true,
+      summaries: auditLog.summarizeRecent({ limit }).map(toAuditEventSummaryResponse),
     };
   });
 
@@ -929,10 +945,19 @@ function toDocumentSourceSyncHealth(snapshot: DocumentSnapshot | undefined) {
   };
 }
 
-function toAuditEventResponse(event: AuditEvent): AuditEvent {
+function toAuditEventResponse(event: RecordedAuditEvent) {
   return {
     ...event,
     fragmentIds: [...event.fragmentIds],
+    recordedAt: event.recordedAt.toISOString(),
+  };
+}
+
+function toAuditEventSummaryResponse(summary: AuditEventSummary) {
+  return {
+    ...summary,
+    firstRecordedAt: summary.firstRecordedAt.toISOString(),
+    latestRecordedAt: summary.latestRecordedAt.toISOString(),
   };
 }
 

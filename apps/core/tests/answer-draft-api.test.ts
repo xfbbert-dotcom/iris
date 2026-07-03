@@ -311,6 +311,88 @@ describe("GET /internal/audit/events", () => {
   });
 });
 
+describe("GET /internal/audit/events/summary", () => {
+  it("returns recent audit event summaries newest evidence window first", async () => {
+    const recordedTimes = [
+      new Date("2026-07-03T06:00:00.000Z"),
+      new Date("2026-07-03T06:01:00.000Z"),
+      new Date("2026-07-03T06:02:00.000Z"),
+      new Date("2026-07-03T06:03:00.000Z"),
+    ];
+    let nowIndex = 0;
+    const auditLog = new InMemoryAuditLog({
+      now: () => recordedTimes[nowIndex++] ?? recordedTimes.at(-1)!,
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-old",
+      fragmentIds: ["fragment-old"],
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-2",
+      fragmentIds: ["fragment-2"],
+      message: "permission lookup failed",
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1", "fragment-3"],
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events/summary?limit=3",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      summaries: [
+        {
+          documentId: "source-1",
+          type: "permission_guard_denied",
+          eventCount: 2,
+          affectedFragmentCount: 2,
+          firstRecordedAt: "2026-07-03T06:01:00.000Z",
+          latestRecordedAt: "2026-07-03T06:03:00.000Z",
+        },
+        {
+          documentId: "source-2",
+          type: "permission_guard_error",
+          eventCount: 1,
+          affectedFragmentCount: 1,
+          firstRecordedAt: "2026-07-03T06:02:00.000Z",
+          latestRecordedAt: "2026-07-03T06:02:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("rejects invalid audit summary limits", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events/summary?limit=-1",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+});
+
 describe("POST /internal/reindex/document-profile", () => {
   it("returns 503 when reindex runtime is unavailable", async () => {
     const app = buildApp({
