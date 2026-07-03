@@ -37,16 +37,17 @@ export function createManualDocumentSyncPlanner({
 }): ManualDocumentSyncPlanner {
   return {
     async enqueueSource({ documentSourceId }) {
-      const source = await registry.findSourceById(documentSourceId);
+      const normalizedDocumentSourceId = documentSourceId.trim();
+      const source = await registry.findSourceById(normalizedDocumentSourceId);
 
       if (source === undefined) {
-        return { status: "not_found", documentSourceId };
+        return { status: "not_found", documentSourceId: normalizedDocumentSourceId };
       }
 
       if (source.permissionState === "denied") {
         return {
           status: "rejected",
-          documentSourceId,
+          documentSourceId: normalizedDocumentSourceId,
           reason: "permission_denied",
         };
       }
@@ -54,28 +55,32 @@ export function createManualDocumentSyncPlanner({
       if (!source.canUseForAnswering && !source.canUseForKnowledgeDrafts) {
         return {
           status: "rejected",
-          documentSourceId,
+          documentSourceId: normalizedDocumentSourceId,
           reason: "capability_disabled",
         };
       }
 
       if (source.syncState === "syncing") {
-        return { status: "skipped", documentSourceId, reason: "already_syncing" };
+        return {
+          status: "skipped",
+          documentSourceId: normalizedDocumentSourceId,
+          reason: "already_syncing",
+        };
       }
 
       if (source.syncState !== "pending") {
-        await registry.markSyncState(documentSourceId, "pending");
+        await registry.markSyncState(normalizedDocumentSourceId, "pending");
       }
 
       await queue.enqueue({
-        idempotencyKey: `manual-source-sync:${documentSourceId}:${requestId()}`,
-        documentSourceId,
+        idempotencyKey: `manual-source-sync:${normalizedDocumentSourceId}:${requestId()}`,
+        documentSourceId: normalizedDocumentSourceId,
         reason: "manual_source_sync",
         enqueuedAt: now(),
         attempts: 0,
       });
 
-      return { status: "enqueued", documentSourceId };
+      return { status: "enqueued", documentSourceId: normalizedDocumentSourceId };
     },
   };
 }

@@ -68,6 +68,30 @@ describe("ManualDocumentSyncPlanner", () => {
     expect(queue.enqueue).toHaveBeenCalledOnce();
   });
 
+  it("normalizes source ids before lookup and enqueueing", async () => {
+    const queue = { enqueue: vi.fn(async () => undefined) };
+    const registry = registryWith(source({ id: "source-1" }));
+    const planner = createManualDocumentSyncPlanner({
+      registry,
+      queue,
+      now: () => new Date("2026-07-03T03:00:00.000Z"),
+      requestId: () => "request-1",
+    });
+
+    await expect(planner.enqueueSource({ documentSourceId: " source-1 " })).resolves.toEqual({
+      status: "enqueued",
+      documentSourceId: "source-1",
+    });
+    expect(registry.findSourceById).toHaveBeenCalledWith("source-1");
+    expect(queue.enqueue).toHaveBeenCalledWith({
+      idempotencyKey: "manual-source-sync:source-1:request-1",
+      documentSourceId: "source-1",
+      reason: "manual_source_sync",
+      enqueuedAt: new Date("2026-07-03T03:00:00.000Z"),
+      attempts: 0,
+    } satisfies DocumentSyncJob);
+  });
+
   it("returns not_found for unknown sources", async () => {
     const queue = { enqueue: vi.fn(async () => undefined) };
     const registry = registryWith(undefined);
