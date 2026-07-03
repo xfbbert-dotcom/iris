@@ -62,9 +62,14 @@ export class InMemoryRawEventQueue implements RawEventQueue {
       return { action: "dead_lettered", attempts };
     }
 
-    if (!this.seenKeys.has(failedEvent.idempotencyKey)) {
+    const existingIndex = this.events.findIndex(
+      (event) => event.idempotencyKey === failedEvent.idempotencyKey,
+    );
+    if (existingIndex === -1) {
       this.seenKeys.add(failedEvent.idempotencyKey);
       this.events.push(cloneEvent(failedEvent));
+    } else {
+      this.events[existingIndex] = cloneEvent(failedEvent);
     }
 
     return { action: "requeued", attempts };

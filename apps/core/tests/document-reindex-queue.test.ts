@@ -128,6 +128,18 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([{ ...job, attempts: 1 }]);
   });
 
+  it("upgrades a pending duplicate when the in-flight job fails", async () => {
+    const queue = new InMemoryDocumentReindexQueue({ maxAttempts: 3 });
+    const job = jobFixture();
+
+    await queue.enqueue(job);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([job]);
+    await queue.enqueue({ ...job, enqueuedAt: new Date("2026-07-02T02:00:00.000Z") });
+    await queue.handleFailedJob({ job, errorMessage: "embedding failed" });
+
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([{ ...job, attempts: 1 }]);
+  });
+
   it("moves failed jobs to DLQ at max attempts", async () => {
     const queue = new InMemoryDocumentReindexQueue({ maxAttempts: 3 });
     const job = jobFixture({ attempts: 2 });

@@ -78,8 +78,15 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
       return { action: "dead_lettered", attempts };
     }
 
+    const existingIndex = this.jobs.findIndex(
+      (job) => job.idempotencyKey === failedJob.idempotencyKey,
+    );
     this.seenKeys.add(failedJob.idempotencyKey);
-    this.jobs.push(cloneJob(failedJob));
+    if (existingIndex === -1) {
+      this.jobs.push(cloneJob(failedJob));
+    } else {
+      this.jobs[existingIndex] = cloneJob(failedJob);
+    }
     return { action: "requeued", attempts };
   }
 
