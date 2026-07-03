@@ -59,7 +59,7 @@ describe("FeishuDocumentLinkExtractor", () => {
 
     expect(
       extractor.extractLinks(
-        "文档 https://docs.feishu.cn/docx/a，另一个 https://foo.feishu.cn/docx/b。",
+        "doc https://docs.feishu.cn/docx/a\uFF0Canother https://foo.feishu.cn/docx/b\u3002",
       ),
     ).toEqual([
       { sourceUri: "https://docs.feishu.cn/docx/a" },
