@@ -34,7 +34,7 @@ export type InMemoryAuditLogOptions = {
 };
 
 export class InMemoryAuditLog implements AuditLog {
-  readonly events: RecordedAuditEvent[] = [];
+  private readonly storedEvents: RecordedAuditEvent[] = [];
   private readonly maxEvents: number;
   private readonly now: () => Date;
   private droppedEvents = 0;
@@ -47,15 +47,19 @@ export class InMemoryAuditLog implements AuditLog {
     }
   }
 
+  get events(): RecordedAuditEvent[] {
+    return this.storedEvents.map(cloneRecordedEvent);
+  }
+
   async record(event: AuditEvent): Promise<void> {
-    this.events.push({
+    this.storedEvents.push({
       ...event,
       fragmentIds: [...event.fragmentIds],
       recordedAt: new Date(this.now()),
     });
-    const overflow = this.events.length - this.maxEvents;
+    const overflow = this.storedEvents.length - this.maxEvents;
     if (overflow > 0) {
-      this.events.splice(0, overflow);
+      this.storedEvents.splice(0, overflow);
       this.droppedEvents += overflow;
     }
   }
@@ -63,7 +67,7 @@ export class InMemoryAuditLog implements AuditLog {
   get retention() {
     return {
       maxEventCount: this.maxEvents,
-      retainedEventCount: this.events.length,
+      retainedEventCount: this.storedEvents.length,
       droppedEventCount: this.droppedEvents,
     };
   }
@@ -79,7 +83,7 @@ export class InMemoryAuditLog implements AuditLog {
       AuditEventSummary & { affectedFragmentIds: Set<string> }
     >();
 
-    for (const event of this.events.slice(-limit)) {
+    for (const event of this.storedEvents.slice(-limit)) {
       if (options.documentId !== undefined && event.documentId !== options.documentId) {
         continue;
       }
@@ -133,6 +137,14 @@ export class InMemoryAuditLog implements AuditLog {
         latestRecordedAt: new Date(summary.latestRecordedAt),
       }));
   }
+}
+
+function cloneRecordedEvent(event: RecordedAuditEvent): RecordedAuditEvent {
+  return {
+    ...event,
+    fragmentIds: [...event.fragmentIds],
+    recordedAt: new Date(event.recordedAt),
+  };
 }
 
 function sanitizeLimit(value: number): number {

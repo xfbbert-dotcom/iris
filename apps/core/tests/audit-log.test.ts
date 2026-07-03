@@ -49,6 +49,34 @@ describe("InMemoryAuditLog", () => {
     ]);
   });
 
+  it("clones returned events so readers cannot change history", async () => {
+    const recordedAt = new Date("2026-07-03T06:01:30.000Z");
+    const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
+
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+      message: "original",
+    });
+
+    const [returned] = auditLog.events;
+    returned.documentId = "source-mutated";
+    returned.fragmentIds.push("fragment-mutated");
+    returned.recordedAt.setUTCFullYear(2030);
+    returned.message = "mutated";
+
+    expect(auditLog.events).toEqual([
+      {
+        type: "permission_guard_error",
+        documentId: "source-1",
+        fragmentIds: ["fragment-1"],
+        message: "original",
+        recordedAt,
+      },
+    ]);
+  });
+
   it("rejects invalid max event limits", () => {
     expect(() => new InMemoryAuditLog({ maxEvents: 0 })).toThrow(
       "maxEvents must be a positive integer",
