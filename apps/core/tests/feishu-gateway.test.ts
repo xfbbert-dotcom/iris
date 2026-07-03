@@ -147,6 +147,18 @@ describe("FeishuGateway", () => {
     expect(queue.events[0]?.idempotencyKey).toBe("body-event");
   });
 
+  it("uses header event_id for the legacy queue when top-level event_id is missing", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: { header: { event_id: " header-event " } }
+    });
+
+    expect(queue.events[0]?.idempotencyKey).toBe("header-event");
+  });
+
   it("ignores a whitespace header and uses body event_id", async () => {
     const queue = new InMemoryEventQueue();
     const gateway = createFeishuGateway({ queue });
@@ -170,6 +182,26 @@ describe("FeishuGateway", () => {
 
     expect(queue.events[0]?.idempotencyKey).not.toBe("");
     expect(queue.events[0]?.idempotencyKey).not.toBe("   ");
+  });
+
+  it("deduplicates legacy queue retries without explicit event ids by stable body hash", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+    const body = {
+      event: {
+        message: {
+          message_id: "message-1",
+          chat_id: "chat-1",
+          content: "{\"text\":\"hello\"}"
+        }
+      }
+    };
+
+    await gateway.handleCallback({ headers: {}, body });
+    await gateway.handleCallback({ headers: {}, body });
+
+    expect(queue.events).toHaveLength(1);
+    expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]+$/);
   });
 
   it("enqueues raw Feishu events for async processing", async () => {

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   createRawEventIdempotencyKey,
   type RawEventQueue,
@@ -143,19 +142,7 @@ function isFeishuUrlVerificationPayload(
 }
 
 function resolveIdempotencyKey(request: FeishuCallbackRequest): string {
-  const headerKey = normalizeIdempotencyKey(request.headers["x-iris-event-id"]);
-  if (headerKey) {
-    return headerKey;
-  }
-
-  if (isRecord(request.body)) {
-    const bodyKey = normalizeIdempotencyKey(request.body.event_id);
-    if (bodyKey) {
-      return bodyKey;
-    }
-  }
-
-  return randomUUID();
+  return resolveRawEventId(request);
 }
 
 function normalizeIdempotencyKey(value: unknown): string | undefined {
