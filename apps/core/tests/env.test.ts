@@ -114,6 +114,18 @@ describe("readModelProviderConfig", () => {
       }),
     ).toThrow("IRIS_MODEL_TIMEOUT_MS must be a positive integer");
   });
+
+  it("rejects unsafe integer timeout values", () => {
+    expect(() =>
+      readModelProviderConfig({
+        IRIS_MODEL_PROVIDER: "openai-compatible",
+        IRIS_MODEL_BASE_URL: "https://api.example.com/v1",
+        IRIS_MODEL_API_KEY: "key-a",
+        IRIS_MODEL_NAME: "model-a",
+        IRIS_MODEL_TIMEOUT_MS: "9007199254740992",
+      }),
+    ).toThrow("IRIS_MODEL_TIMEOUT_MS must be a positive safe integer");
+  });
 });
 
 describe("readEmbeddingProviderConfig", () => {
@@ -187,6 +199,18 @@ describe("readEmbeddingProviderConfig", () => {
         IRIS_EMBEDDING_TIMEOUT_MS: "0",
       }),
     ).toThrow("IRIS_EMBEDDING_TIMEOUT_MS must be a positive integer");
+  });
+
+  it("rejects unsafe integer dimensions", () => {
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+        IRIS_EMBEDDING_DIMENSIONS: "9007199254740992",
+      }),
+    ).toThrow("IRIS_EMBEDDING_DIMENSIONS must be a positive safe integer");
   });
 });
 

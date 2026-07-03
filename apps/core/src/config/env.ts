@@ -248,6 +248,9 @@ function readPositiveIntegerEnv(
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${name} must be a positive integer`);
   }
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
 
   return parsed;
 }
@@ -264,6 +267,9 @@ function readOptionalPositiveIntegerEnv(
   const parsed = Number(trimmed);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${name} must be a positive integer`);
+  }
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a positive safe integer`);
   }
 
   return parsed;

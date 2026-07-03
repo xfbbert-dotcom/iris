@@ -665,6 +665,22 @@ Evolution signal:
 
 If audit durability becomes a compliance requirement, Iris should split audit persistence into a dedicated durable audit pipeline with retries and operator-visible backlog. That pipeline must not weaken answer-time permission enforcement.
 
+### 12.8 Runtime Configuration Numeric Safety
+
+Pressure:
+
+Iris uses environment variables for timeouts, worker batch limits, and embedding dimensions. JavaScript accepts integers beyond its safe precision range, which can silently distort operator intent before values reach timers, queues, or embedding-profile logic.
+
+Required architectural response:
+
+- Positive integer environment settings must also be safe JavaScript integers.
+- Unsafe integers must be rejected during config loading with explicit errors.
+- Validation should not invent product-specific business caps unless a separate architecture decision calls for them.
+
+Evolution signal:
+
+If operators need richer deployment profiles, Iris may add named configuration presets for internal rollout, staging, and production. Numeric validation must remain strict before preset values reach runtime components.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
