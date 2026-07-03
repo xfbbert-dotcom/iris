@@ -182,14 +182,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     if (parsedQuery === undefined) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
+    const diagnostics = getAuditEventDiagnostics(auditLog.events, parsedQuery);
 
     return {
       ok: true,
-      events: auditLog.events
-        .slice(-parsedQuery.limit)
-        .filter((event) => matchesAuditEventQuery(event, parsedQuery))
-        .reverse()
-        .map(toAuditEventResponse),
+      meta: diagnostics.meta,
+      events: diagnostics.matchingEvents.reverse().map(toAuditEventResponse),
     };
   });
 
@@ -198,9 +196,11 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     if (parsedQuery === undefined) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
+    const diagnostics = getAuditEventDiagnostics(auditLog.events, parsedQuery);
 
     return {
       ok: true,
+      meta: diagnostics.meta,
       summaries: auditLog.summarizeRecent(parsedQuery).map(toAuditEventSummaryResponse),
     };
   });
@@ -842,6 +842,25 @@ function matchesAuditEventQuery(
     (query.documentId === undefined || event.documentId === query.documentId) &&
     (query.type === undefined || event.type === query.type)
   );
+}
+
+function getAuditEventDiagnostics(events: RecordedAuditEvent[], query: AuditEventSummaryQuery) {
+  const inspectedEvents = query.limit <= 0 ? [] : events.slice(-query.limit);
+  const matchingEvents = inspectedEvents.filter((event) => matchesAuditEventQuery(event, query));
+
+  return {
+    matchingEvents,
+    meta: {
+      limit: query.limit,
+      retainedEventCount: events.length,
+      inspectedEventCount: inspectedEvents.length,
+      matchingEventCount: matchingEvents.length,
+      filters: {
+        ...(query.documentId === undefined ? {} : { documentId: query.documentId }),
+        ...(query.type === undefined ? {} : { type: query.type }),
+      },
+    },
+  };
 }
 
 function parseAuditEventType(value: unknown): AuditEvent["type"] | false | undefined {

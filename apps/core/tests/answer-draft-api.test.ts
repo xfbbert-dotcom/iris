@@ -278,6 +278,13 @@ describe("GET /internal/audit/events", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       ok: true,
+      meta: {
+        limit: 2,
+        retainedEventCount: 3,
+        inspectedEventCount: 2,
+        matchingEventCount: 2,
+        filters: {},
+      },
       events: [
         {
           type: "permission_guard_error",
@@ -342,6 +349,16 @@ describe("GET /internal/audit/events", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       ok: true,
+      meta: {
+        limit: 20,
+        retainedEventCount: 3,
+        inspectedEventCount: 3,
+        matchingEventCount: 1,
+        filters: {
+          documentId: "source-1",
+          type: "permission_guard_denied",
+        },
+      },
       events: [
         {
           type: "permission_guard_denied",
@@ -414,6 +431,13 @@ describe("GET /internal/audit/events/summary", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       ok: true,
+      meta: {
+        limit: 3,
+        retainedEventCount: 4,
+        inspectedEventCount: 3,
+        matchingEventCount: 3,
+        filters: {},
+      },
       summaries: [
         {
           documentId: "source-1",
@@ -481,6 +505,16 @@ describe("GET /internal/audit/events/summary", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       ok: true,
+      meta: {
+        limit: 20,
+        retainedEventCount: 3,
+        inspectedEventCount: 3,
+        matchingEventCount: 1,
+        filters: {
+          documentId: "source-1",
+          type: "permission_guard_denied",
+        },
+      },
       summaries: [
         {
           documentId: "source-1",
