@@ -283,6 +283,65 @@ describe("FeishuGateway", () => {
     });
   });
 
+  it("acknowledges raw Feishu events without waiting for queue persistence", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = {
+      enqueue: vi.fn(() => new Promise<void>(() => undefined)),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+    });
+
+    const response = await Promise.race([
+      gateway.handleCallback({
+        headers: {},
+        body: {
+          header: {
+            event_id: "event-slow-queue",
+            event_type: "im.message.receive_v1",
+          },
+        },
+      }),
+      new Promise<"timed-out">((resolve) => {
+        setTimeout(() => resolve("timed-out"), 0);
+      }),
+    ]);
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("reports raw queue persistence errors without failing Feishu acknowledgement", async () => {
+    const queue = new InMemoryEventQueue();
+    const enqueueError = new Error("redis unavailable");
+    const onEnqueueError = vi.fn();
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => {
+        throw enqueueError;
+      }),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+      onEnqueueError,
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: {
+        header: {
+          event_id: "event-rejected-queue",
+          event_type: "im.message.receive_v1",
+        },
+      },
+    });
+    await Promise.resolve();
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(onEnqueueError).toHaveBeenCalledWith(enqueueError);
+  });
+
   it("uses the legacy event queue only when no raw event queue is available", async () => {
     const queue = new InMemoryEventQueue();
     const rawEventQueue = { enqueue: vi.fn(async () => undefined) };

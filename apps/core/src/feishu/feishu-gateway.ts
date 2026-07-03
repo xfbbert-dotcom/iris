@@ -26,6 +26,7 @@ export type FeishuCallbackResponse =
 
 type SignalFilter = (event: unknown) => Promise<void>;
 type RequestVerifier = (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
+type EnqueueErrorHandler = (error: unknown) => void;
 type RuntimeGate = {
   canProcessIncomingEvent(input: { groupId?: string }): boolean;
 };
@@ -35,6 +36,7 @@ export type FeishuGatewayDependencies = {
   rawEventQueue?: Pick<RawEventQueue, "enqueue">;
   signalFilter?: SignalFilter;
   verifyRequest?: RequestVerifier;
+  onEnqueueError?: EnqueueErrorHandler;
   runtimeController?: RuntimeGate;
   now?: () => Date;
 };
@@ -82,24 +84,33 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
         };
       }
 
-      if (dependencies.rawEventQueue !== undefined) {
-        await dependencies.rawEventQueue.enqueue({
-          idempotencyKey: createRawEventIdempotencyKey({
-            provider: "feishu",
-            eventId: resolveRawEventId(request),
-          }),
-          provider: "feishu",
-          eventType: resolveEventType(request.body),
-          rawBody: request.body,
-          receivedAt,
-          attempts: 0,
-        });
+      const rawEventQueue = dependencies.rawEventQueue;
+      if (rawEventQueue !== undefined) {
+        enqueueWithoutWaiting(
+          () =>
+            rawEventQueue.enqueue({
+              idempotencyKey: createRawEventIdempotencyKey({
+                provider: "feishu",
+                eventId: resolveRawEventId(request),
+              }),
+              provider: "feishu",
+              eventType: resolveEventType(request.body),
+              rawBody: request.body,
+              receivedAt,
+              attempts: 0,
+            }),
+          dependencies.onEnqueueError,
+        );
       } else {
-        await dependencies.queue.enqueueRawFeishuEvent({
-          idempotencyKey: resolveIdempotencyKey(request),
-          receivedAt,
-          body: request.body
-        });
+        enqueueWithoutWaiting(
+          () =>
+            dependencies.queue.enqueueRawFeishuEvent({
+              idempotencyKey: resolveIdempotencyKey(request),
+              receivedAt,
+              body: request.body
+            }),
+          dependencies.onEnqueueError,
+        );
       }
 
       return {
@@ -108,6 +119,19 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
       };
     }
   };
+}
+
+function enqueueWithoutWaiting(
+  enqueue: () => Promise<void>,
+  onError: EnqueueErrorHandler | undefined,
+): void {
+  try {
+    void enqueue().catch((error: unknown) => {
+      onError?.(error);
+    });
+  } catch (error) {
+    onError?.(error);
+  }
 }
 
 function resolveRawEventId(request: FeishuCallbackRequest): string {
