@@ -376,7 +376,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
 
     const documentSourceId = readNonBlankId((request.params as { id?: unknown }).id);
-    if (documentSourceId === undefined) {
+    const includeLatestSnapshot = parseIncludeLatestSnapshot(
+      (request.query as { includeLatestSnapshot?: unknown }).includeLatestSnapshot,
+    );
+    if (documentSourceId === undefined || includeLatestSnapshot === false) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
@@ -385,8 +388,22 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       if (source === undefined) {
         return reply.code(404).send({ ok: false, error: "document_source_not_found" });
       }
+      if (includeLatestSnapshot !== true) {
+        return { ok: true, source };
+      }
 
-      return { ok: true, source };
+      const latestSnapshot = await documentSyncRuntime.sources.getLatestSnapshot({
+        sourceId: documentSourceId,
+      });
+      return {
+        ok: true,
+        source: {
+          ...source,
+          ...(latestSnapshot === undefined
+            ? {}
+            : { latestSnapshot: toDocumentSnapshotSummary(latestSnapshot) }),
+        },
+      };
     } catch {
       return reply.code(500).send({ ok: false, error: "document_source_lookup_failed" });
     }

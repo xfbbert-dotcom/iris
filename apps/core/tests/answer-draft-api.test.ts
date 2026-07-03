@@ -1060,6 +1060,73 @@ describe("document sync source inventory API", () => {
     expect(runtime.sources.get).toHaveBeenCalledWith("source-1");
   });
 
+  it("returns a document source by id with latest snapshot summary", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      sources: {
+        list: vi.fn(),
+        get: vi.fn(async () => authorizedWikiSource()),
+        updatePolicy: vi.fn(),
+        listSnapshots: vi.fn(),
+        getSnapshot: vi.fn(),
+        getLatestSnapshot: vi.fn(async () => ({
+          id: "snapshot-1",
+          documentSourceId: "source-1",
+          sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+          fetchStatus: "succeeded" as const,
+          bodyText: "Should not leak",
+          contentHash: "hash-1",
+          sourceVersion: undefined,
+          fetchedAt: new Date("2026-07-03T04:00:00.000Z"),
+          errorMessage: undefined,
+          createdAt: new Date("2026-07-03T04:00:01.000Z"),
+        })),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1?includeLatestSnapshot=true",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().source).toMatchObject({
+      id: "source-1",
+      latestSnapshot: {
+        id: "snapshot-1",
+        documentSourceId: "source-1",
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        fetchStatus: "succeeded",
+        contentHash: "hash-1",
+        fetchedAt: "2026-07-03T04:00:00.000Z",
+        createdAt: "2026-07-03T04:00:01.000Z",
+        bodyTextLength: 15,
+      },
+    });
+    expect(response.json().source.latestSnapshot).not.toHaveProperty("bodyText");
+    expect(response.json().source.latestSnapshot).not.toHaveProperty("bodyTextPreview");
+    expect(runtime.sources.get).toHaveBeenCalledWith("source-1");
+    expect(runtime.sources.getLatestSnapshot).toHaveBeenCalledWith({ sourceId: "source-1" });
+  });
+
+  it("rejects invalid source detail latest snapshot flags", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1?includeLatestSnapshot=false",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
   it("returns 404 for unknown document source ids", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
