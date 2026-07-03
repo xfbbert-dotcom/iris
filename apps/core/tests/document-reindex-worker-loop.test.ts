@@ -92,6 +92,38 @@ describe("DocumentReindexWorkerLoop", () => {
     await loop.stop();
   });
 
+  it("isolates throwing error hooks and continues polling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-02T01:00:00.000Z"));
+    const error = new Error("batch failed");
+    const worker = {
+      processBatch: vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce([]),
+    };
+    const onError = vi.fn(() => {
+      throw new Error("observer failed");
+    });
+    const loop = createDocumentReindexWorkerLoop({
+      worker,
+      intervalMs: 1000,
+      batchLimit: 25,
+      onError,
+    });
+
+    loop.start();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(onError).toHaveBeenCalledWith(error);
+    expect(loop.getSnapshot().latestBatch).toMatchObject({
+      status: "failed",
+      errorMessage: "batch failed",
+      failed: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(worker.processBatch).toHaveBeenCalledTimes(2);
+    await loop.stop();
+  });
+
   it("records successful batch result counts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-02T01:00:00.000Z"));

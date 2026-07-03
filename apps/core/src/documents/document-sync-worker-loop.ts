@@ -83,7 +83,7 @@ export function createDocumentSyncWorkerLoop({
         failed: true,
         errorMessage: error instanceof Error ? error.message : String(error),
       };
-      onError?.(error);
+      reportError(onError, error);
     }
   };
 
@@ -142,6 +142,14 @@ function cloneBatchSnapshot(snapshot: DocumentSyncWorkerBatchSnapshot): Document
     startedAt: new Date(snapshot.startedAt),
     finishedAt: new Date(snapshot.finishedAt),
   };
+}
+
+function reportError(onError: ((error: unknown) => void) | undefined, error: unknown): void {
+  try {
+    onError?.(error);
+  } catch {
+    // Observability hooks must not break worker polling.
+  }
 }
 
 function sanitizePositiveInteger(name: string, value: number): number {

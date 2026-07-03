@@ -615,6 +615,22 @@ Evolution signal:
 
 If document fetch stalls or Feishu rate limits become frequent, Iris may introduce a dedicated Document Fetch Service with request coalescing, adaptive backoff, per-source freshness policies, and provider-specific rate-limit handling. The service must still preserve source visibility and permission boundaries.
 
+### 12.5 Worker Observability Hook Failure
+
+Pressure:
+
+Worker loops may call observability hooks for batch failures. If those hooks throw because logging, metrics, or status capture code is broken, Iris must not turn an already-handled batch failure into an unhandled worker-loop rejection.
+
+Required architectural response:
+
+- Worker loops must record failed batch snapshots before reporting errors.
+- Error reporting hooks must be best effort and isolated from polling control flow.
+- A throwing observability hook must not stop future worker polling.
+
+Evolution signal:
+
+If observability becomes more complex, Iris may introduce a dedicated telemetry adapter with bounded queues and explicit drop policies. That adapter must remain noncritical to event processing, document sync, and reindex polling.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
