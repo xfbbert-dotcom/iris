@@ -428,6 +428,70 @@ describe("RedisDocumentSyncQueue", () => {
     ]);
   });
 
+  it("lists corrupt Redis DLQ payloads as non-replayable diagnostics", async () => {
+    const storedPayload = JSON.stringify({
+      id: "dlq-1",
+      job: {
+        ...job({ attempts: 3 }),
+        enqueuedAt: "2026-07-03T01:00:00.000Z",
+      },
+      errorMessage: "runner crashed",
+      failedAt: "2026-07-03T02:00:00.000Z",
+    });
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => ["{", storedPayload]),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({
+      client,
+      now: () => new Date("2026-07-03T13:00:00.000Z"),
+    });
+
+    await expect(queue.listDeadLetters({ limit: 2 })).resolves.toEqual([
+      {
+        id: expect.stringMatching(/^legacy:0:/),
+        rawPayload: "{",
+        errorMessage: "Invalid document sync dead letter JSON",
+        failedAt: new Date("2026-07-03T13:00:00.000Z"),
+        replayable: false,
+      },
+      {
+        id: "dlq-1",
+        job: job({ attempts: 3 }),
+        errorMessage: "runner crashed",
+        failedAt: new Date("2026-07-03T02:00:00.000Z"),
+        replayable: true,
+      },
+    ]);
+  });
+
+  it("deletes malformed Redis DLQ objects with stored ids", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-malformed",
+      rawPayload: 42,
+      errorMessage: "Invalid document sync job JSON",
+      failedAt: "2026-07-03T12:30:00.000Z",
+    });
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.deleteDeadLetter("dlq-malformed")).resolves.toBe("deleted");
+    expect(client.lRem).toHaveBeenCalledWith("iris:documents:sync:dlq", 1, payload);
+  });
+
   it("does not replay invalid raw payload DLQ entries", async () => {
     const payload = JSON.stringify({
       id: "dlq-invalid",

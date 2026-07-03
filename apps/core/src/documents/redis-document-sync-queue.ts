@@ -56,7 +56,7 @@ export function createRedisDocumentSyncQueue({
   const replayDeadLetter = async (
     id: string,
   ): Promise<"replayed" | "not_found" | "unsupported_legacy_item"> => {
-    const found = await findDeadLetterByStoredId(client, deadLetterKey, id);
+    const found = await findDeadLetterByStoredId(client, deadLetterKey, id, now);
     if (found === undefined) {
       return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
@@ -76,7 +76,7 @@ export function createRedisDocumentSyncQueue({
   const deleteDeadLetter = async (
     id: string,
   ): Promise<"deleted" | "not_found" | "unsupported_legacy_item"> => {
-    const found = await findDeadLetterByStoredId(client, deadLetterKey, id);
+    const found = await findDeadLetterByStoredId(client, deadLetterKey, id, now);
     if (found === undefined) {
       return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
@@ -158,7 +158,7 @@ export function createRedisDocumentSyncQueue({
       }
 
       const payloads = await client.lRange(deadLetterKey, 0, safeLimit - 1);
-      return payloads.map((payload, index) => parseDeadLetterPayload(payload, index).deadLetter);
+      return payloads.map((payload, index) => parseDeadLetterPayload(payload, index, now).deadLetter);
     },
 
     replayDeadLetter,
@@ -300,29 +300,55 @@ type ParsedDeadLetterPayload = {
   storedId?: string;
 };
 
-function parseDeadLetterPayload(payload: string, index: number): ParsedDeadLetterPayload {
+function parseDeadLetterPayload(
+  payload: string,
+  index: number,
+  now: () => Date,
+): ParsedDeadLetterPayload {
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
   } catch {
-    throw new Error("Invalid document sync dead letter JSON");
+    return createInvalidDeadLetterDiagnostic({
+      payload,
+      index,
+      errorMessage: "Invalid document sync dead letter JSON",
+      failedAt: now(),
+    });
   }
 
   if (!isRecord(parsed)) {
-    throw new Error("Invalid document sync dead letter payload");
+    return createInvalidDeadLetterDiagnostic({
+      payload,
+      index,
+      errorMessage: "Invalid document sync dead letter payload",
+      failedAt: now(),
+    });
   }
 
   const failedAt = new Date(readString(parsed.failedAt));
   const errorMessage = readString(parsed.errorMessage);
   const storedId = readString(parsed.id) || undefined;
   if (Number.isNaN(failedAt.getTime()) || errorMessage.length === 0) {
-    throw new Error("Invalid document sync dead letter payload");
+    return createInvalidDeadLetterDiagnostic({
+      payload,
+      index,
+      storedId,
+      errorMessage: "Invalid document sync dead letter payload",
+      failedAt: now(),
+    });
   }
 
   if (!isRecord(parsed.job)) {
     const rawPayload = readRawPayload(parsed.rawPayload);
     if (rawPayload === undefined) {
-      throw new Error("Invalid document sync dead letter payload");
+      return createInvalidDeadLetterDiagnostic({
+        payload,
+        index,
+        storedId,
+        errorMessage: "Invalid document sync dead letter payload",
+        failedAt,
+      });
     }
 
     return {
@@ -338,7 +364,19 @@ function parseDeadLetterPayload(payload: string, index: number): ParsedDeadLette
     };
   }
 
-  const job = parseDocumentSyncJob(JSON.stringify(parsed.job));
+  let job: DocumentSyncJob;
+  try {
+    job = parseDocumentSyncJob(JSON.stringify(parsed.job));
+  } catch (error) {
+    return createInvalidDeadLetterDiagnostic({
+      payload,
+      index,
+      storedId,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      failedAt,
+    });
+  }
+
   return {
     payload,
     storedId,
@@ -352,15 +390,36 @@ function parseDeadLetterPayload(payload: string, index: number): ParsedDeadLette
   };
 }
 
+function createInvalidDeadLetterDiagnostic(input: {
+  payload: string;
+  index: number;
+  storedId?: string;
+  errorMessage: string;
+  failedAt: Date;
+}): ParsedDeadLetterPayload {
+  return {
+    payload: input.payload,
+    storedId: input.storedId,
+    deadLetter: {
+      id: input.storedId ?? createLegacyDeadLetterId(input.payload, input.index),
+      rawPayload: input.payload,
+      errorMessage: input.errorMessage,
+      failedAt: input.failedAt,
+      replayable: false,
+    },
+  };
+}
+
 async function findDeadLetterByStoredId(
   client: RedisDocumentSyncQueueClient,
   deadLetterKey: string,
   id: string,
+  now: () => Date,
 ): Promise<ParsedDeadLetterPayload | undefined> {
   const payloads = await client.lRange(deadLetterKey, 0, -1);
 
   for (const [index, payload] of payloads.entries()) {
-    const parsed = parseDeadLetterPayload(payload, index);
+    const parsed = parseDeadLetterPayload(payload, index, now);
     if (parsed.storedId === id) {
       return parsed;
     }

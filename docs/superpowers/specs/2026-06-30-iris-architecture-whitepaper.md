@@ -698,6 +698,31 @@ Evolution signal:
 
 If queues gain schema versions, retry attempt validation should move into versioned payload decoders shared across raw event, document sync, and reindex queues.
 
+### 12.10 Redis Dead-Letter Record Corruption
+
+Pressure:
+
+Redis dead-letter queues are operator recovery surfaces. During manual repair,
+old deployments, interrupted writes, or external Redis manipulation, a DLQ list
+item may be malformed or non-JSON. If one corrupt item makes the whole DLQ list,
+replay, or delete operation throw, operators can lose visibility into the valid
+entries they need to recover Iris.
+
+Required architectural response:
+
+- DLQ list-management parsers must be tolerant at the operator boundary.
+- Corrupt DLQ records must be represented as non-replayable diagnostics rather
+  than crashing the whole list.
+- Diagnostics must preserve the exact raw Redis payload for inspection.
+- If a malformed record still exposes a stored id, delete-by-id may remove it.
+- Corrupt records must never be replayed into typed worker queues.
+
+Evolution signal:
+
+If DLQ schemas become more complex, Iris should introduce versioned queue payload
+decoders and a repair/export tool for operators. The repair tool must improve
+recovery visibility without weakening replay safety.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

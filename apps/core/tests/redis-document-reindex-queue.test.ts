@@ -386,6 +386,71 @@ describe("RedisDocumentReindexQueue", () => {
     ]);
   });
 
+  it("lists corrupt Redis DLQ payloads as non-replayable diagnostics", async () => {
+    const deadLetter = {
+      id: "dlq-1",
+      job: {
+        ...jobFixture({ attempts: 3 }),
+        enqueuedAt: "2026-07-02T01:00:00.000Z",
+      },
+      errorMessage: "embedding failed",
+      failedAt: "2026-07-02T01:05:00.000Z",
+    };
+    const payload = JSON.stringify(deadLetter);
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => ["{", payload]),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({
+      client,
+      now: () => new Date("2026-07-03T13:05:00.000Z"),
+    });
+
+    await expect(queue.listDeadLetters({ limit: 2 })).resolves.toEqual([
+      {
+        id: expect.stringMatching(/^legacy:0:/),
+        rawPayload: "{",
+        errorMessage: "Invalid document reindex dead letter JSON",
+        failedAt: new Date("2026-07-03T13:05:00.000Z"),
+        replayable: false,
+      },
+      {
+        id: "dlq-1",
+        job: jobFixture({ attempts: 3 }),
+        errorMessage: "embedding failed",
+        failedAt: new Date("2026-07-02T01:05:00.000Z"),
+        replayable: true,
+      },
+    ]);
+  });
+
+  it("deletes malformed Redis DLQ objects with stored ids", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-malformed",
+      rawPayload: 42,
+      errorMessage: "Invalid document reindex job JSON",
+      failedAt: "2026-07-03T12:35:00.000Z",
+    });
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.deleteDeadLetter("dlq-malformed")).resolves.toBe("deleted");
+    expect(client.lRem).toHaveBeenCalledWith("iris:reindex:documents:dlq", 1, payload);
+  });
+
   it("does not replay invalid raw payload DLQ entries", async () => {
     const payload = JSON.stringify({
       id: "dlq-invalid",
