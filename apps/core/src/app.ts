@@ -178,14 +178,18 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   app.get("/internal/audit/events", async (request, reply) => {
-    const limit = parseDeadLetterLimit((request.query as { limit?: unknown }).limit);
-    if (limit === undefined) {
+    const parsedQuery = parseAuditEventQuery(request.query);
+    if (parsedQuery === undefined) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
     return {
       ok: true,
-      events: auditLog.events.slice(-limit).reverse().map(toAuditEventResponse),
+      events: auditLog.events
+        .slice(-parsedQuery.limit)
+        .filter((event) => matchesAuditEventQuery(event, parsedQuery))
+        .reverse()
+        .map(toAuditEventResponse),
     };
   });
 
@@ -804,6 +808,10 @@ function parseDeadLetterLimit(value: unknown): number | undefined {
 }
 
 function parseAuditEventSummaryQuery(value: unknown): AuditEventSummaryQuery | undefined {
+  return parseAuditEventQuery(value);
+}
+
+function parseAuditEventQuery(value: unknown): AuditEventSummaryQuery | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -824,6 +832,16 @@ function parseAuditEventSummaryQuery(value: unknown): AuditEventSummaryQuery | u
     ...(documentId === undefined ? {} : { documentId }),
     ...(type === undefined ? {} : { type }),
   };
+}
+
+function matchesAuditEventQuery(
+  event: RecordedAuditEvent,
+  query: Pick<AuditEventSummaryQuery, "documentId" | "type">,
+): boolean {
+  return (
+    (query.documentId === undefined || event.documentId === query.documentId) &&
+    (query.type === undefined || event.type === query.type)
+  );
 }
 
 function parseAuditEventType(value: unknown): AuditEvent["type"] | false | undefined {
