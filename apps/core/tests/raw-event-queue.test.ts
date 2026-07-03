@@ -38,6 +38,12 @@ describe("InMemoryRawEventQueue", () => {
     );
   });
 
+  it("rejects blank event ids for idempotency keys", () => {
+    expect(() => createRawEventIdempotencyKey({ provider: "feishu", eventId: "   " })).toThrow(
+      "eventId must be nonblank",
+    );
+  });
+
   it("requeues failed events below max attempts", async () => {
     const queue = new InMemoryRawEventQueue({ maxAttempts: 3 });
     const event = eventFixture();

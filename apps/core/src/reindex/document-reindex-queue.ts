@@ -55,5 +55,17 @@ export interface DocumentReindexQueue {
 export function createDocumentReindexIdempotencyKey(
   input: CreateDocumentReindexIdempotencyKeyInput,
 ): string {
-  return `reindex:${input.embeddingProfileId.trim()}:${input.documentSnapshotId.trim()}`;
+  return `reindex:${normalizeNonBlankId(
+    input.embeddingProfileId,
+    "embeddingProfileId",
+  )}:${normalizeNonBlankId(input.documentSnapshotId, "documentSnapshotId")}`;
+}
+
+function normalizeNonBlankId(value: string, fieldName: string): string {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new Error(`${fieldName} must be nonblank`);
+  }
+
+  return normalized;
 }

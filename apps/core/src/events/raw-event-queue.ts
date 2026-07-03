@@ -35,5 +35,14 @@ export interface RawEventQueue {
 export function createRawEventIdempotencyKey(
   input: CreateRawEventIdempotencyKeyInput,
 ): string {
-  return `raw-event:${input.provider}:${input.eventId.trim()}`;
+  return `raw-event:${input.provider}:${normalizeNonBlankId(input.eventId, "eventId")}`;
+}
+
+function normalizeNonBlankId(value: string, fieldName: string): string {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new Error(`${fieldName} must be nonblank`);
+  }
+
+  return normalized;
 }

@@ -45,6 +45,21 @@ describe("InMemoryDocumentReindexQueue", () => {
     ).toBe("reindex:profile-1:snapshot-1");
   });
 
+  it("rejects blank ids for idempotency keys", () => {
+    expect(() =>
+      createDocumentReindexIdempotencyKey({
+        embeddingProfileId: "   ",
+        documentSnapshotId: "snapshot-1",
+      }),
+    ).toThrow("embeddingProfileId must be nonblank");
+    expect(() =>
+      createDocumentReindexIdempotencyKey({
+        embeddingProfileId: "profile-1",
+        documentSnapshotId: "   ",
+      }),
+    ).toThrow("documentSnapshotId must be nonblank");
+  });
+
   it("reports pending job count", async () => {
     const queue = new InMemoryDocumentReindexQueue();
 

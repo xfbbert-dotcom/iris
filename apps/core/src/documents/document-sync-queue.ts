@@ -49,5 +49,14 @@ export interface DocumentSyncQueue {
 export function createDocumentSyncIdempotencyKey(input: {
   documentSourceId: string;
 }): string {
-  return `document-sync:${input.documentSourceId.trim()}`;
+  return `document-sync:${normalizeNonBlankId(input.documentSourceId, "documentSourceId")}`;
+}
+
+function normalizeNonBlankId(value: string, fieldName: string): string {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new Error(`${fieldName} must be nonblank`);
+  }
+
+  return normalized;
 }

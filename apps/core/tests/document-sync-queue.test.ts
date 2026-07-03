@@ -16,6 +16,12 @@ describe("DocumentSyncQueue", () => {
     );
   });
 
+  it("rejects blank document source ids for idempotency keys", () => {
+    expect(() => createDocumentSyncIdempotencyKey({ documentSourceId: "   " })).toThrow(
+      "documentSourceId must be nonblank",
+    );
+  });
+
   it("dequeues jobs in enqueue order", async () => {
     const queue = createInMemoryDocumentSyncQueue();
     const first = job({ documentSourceId: "source-1" });
