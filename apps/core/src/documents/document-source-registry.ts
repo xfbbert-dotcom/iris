@@ -380,8 +380,7 @@ function registerSource(
     syncState:
       existing.syncState === "failed" && !hasExistingEvidence ? "pending" : existing.syncState,
     canUseForAnswering: existing.canUseForAnswering,
-    canUseForKnowledgeDrafts:
-      existing.canUseForKnowledgeDrafts || next.canUseForKnowledgeDrafts,
+    canUseForKnowledgeDrafts: shouldUseKnowledgeDrafts(existing, next),
     createdAt: new Date(existing.createdAt),
     updatedAt: now,
     evidence: hasExistingEvidence
@@ -439,6 +438,17 @@ function higherPrioritySourceType(
   second: DocumentSourceType,
 ): DocumentSourceType {
   return sourceTypePriority[first] >= sourceTypePriority[second] ? first : second;
+}
+
+function shouldUseKnowledgeDrafts(
+  existing: DocumentSource,
+  next: NextDocumentSource,
+): boolean {
+  if (existing.canUseForKnowledgeDrafts) {
+    return true;
+  }
+
+  return existing.sourceType === "user_submitted_document" && next.canUseForKnowledgeDrafts;
 }
 
 function evidenceExists(

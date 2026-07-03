@@ -452,6 +452,29 @@ describe("createDocumentSourceRegistry", () => {
     expect(reregistered.canUseForAnswering).toBe(false);
   });
 
+  it("keeps knowledge drafts disabled when re-registering the same group visible sourceUri", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    registry.setKnowledgeDraftsEnabled(source.id, false);
+    const reregistered = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-2",
+      originMessageId: "message-2",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    expect(reregistered.canUseForKnowledgeDrafts).toBe(false);
+  });
+
   it("keeps answering disabled while permission is denied", () => {
     const registry = createDocumentSourceRegistry({
       createId: () => "doc-source-1",

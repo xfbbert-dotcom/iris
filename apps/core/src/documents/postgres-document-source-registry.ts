@@ -358,7 +358,11 @@ set
   origin_message_id = coalesce(origin_message_id, $4),
   submitted_by_user_id = coalesce(submitted_by_user_id, $5),
   authorized_space_id = coalesce(authorized_space_id, $6),
-  can_use_for_knowledge_drafts = can_use_for_knowledge_drafts or $7,
+  can_use_for_knowledge_drafts = case
+    when can_use_for_knowledge_drafts then true
+    when source_type = 'user_submitted_document' then $7
+    else false
+  end,
   sync_state = case
     when sync_state = 'failed'
       and not exists (

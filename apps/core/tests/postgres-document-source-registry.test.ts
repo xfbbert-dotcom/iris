@@ -258,7 +258,7 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
 
     expect(update).toBeDefined();
     expect(normalizeSql(update?.sql ?? "")).toContain(
-      "can_use_for_knowledge_drafts = can_use_for_knowledge_drafts or $7",
+      "when source_type = 'user_submitted_document' then $7",
     );
     expect(update?.values).toEqual([
       "authorized_wiki_document",
@@ -277,6 +277,39 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
       null,
       "space-1",
     ]);
+  });
+
+  it("does not silently re-enable manually disabled knowledge drafts for knowledge-capable sources", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "group_visible_document",
+        can_use_for_knowledge_drafts: false,
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      originGroupId: "group-2",
+      originMessageId: "message-2",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when source_type = 'user_submitted_document' then $7",
+    );
+    expect(normalizeSql(update?.sql ?? "")).not.toContain(
+      "can_use_for_knowledge_drafts = can_use_for_knowledge_drafts or $7",
+    );
   });
 
   it("resets failed sync state to pending when registration adds new evidence", async () => {
