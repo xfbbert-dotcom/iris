@@ -317,6 +317,37 @@ describe("GET /internal/audit/events", () => {
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
   });
 
+  it("returns no audit events when the limit is zero", async () => {
+    const auditLog = new InMemoryAuditLog();
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events?limit=0",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      meta: {
+        limit: 0,
+        retainedEventCount: 1,
+        inspectedEventCount: 0,
+        matchingEventCount: 0,
+        filters: {},
+      },
+      events: [],
+    });
+  });
+
   it("filters recent audit events by document and event type", async () => {
     const recordedAt = new Date("2026-07-03T06:05:00.000Z");
     const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
@@ -471,6 +502,37 @@ describe("GET /internal/audit/events/summary", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("returns no audit summaries when the limit is zero", async () => {
+    const auditLog = new InMemoryAuditLog();
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events/summary?limit=0",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      meta: {
+        limit: 0,
+        retainedEventCount: 1,
+        inspectedEventCount: 0,
+        matchingEventCount: 0,
+        filters: {},
+      },
+      summaries: [],
+    });
   });
 
   it("filters audit event summaries by document and event type", async () => {
