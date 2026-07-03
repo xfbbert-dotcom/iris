@@ -299,6 +299,45 @@ describe("FeishuGateway", () => {
     expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
     expect(queue.events).toEqual([]);
   });
+
+  it("acknowledges disabled group events without queueing them", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const runtimeController = {
+      canProcessIncomingEvent: vi.fn(() => false),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+      runtimeController,
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: {
+        header: {
+          event_id: "event-disabled-group",
+          event_type: "im.message.receive_v1",
+        },
+        event: {
+          message: {
+            message_id: "message-disabled",
+            chat_id: "chat-disabled",
+            message_type: "text",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(runtimeController.canProcessIncomingEvent).toHaveBeenCalledWith({
+      groupId: "chat-disabled",
+    });
+    expect(rawEventQueue.enqueue).not.toHaveBeenCalled();
+    expect(queue.events).toEqual([]);
+  });
 });
 
 describe("Core App Feishu route", () => {

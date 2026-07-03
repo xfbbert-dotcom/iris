@@ -1,7 +1,21 @@
 import type { RuntimeConfig } from "../config/runtime-config.js";
 
+export type RuntimeControllerSnapshot = {
+  globalEnabled: boolean;
+  disabledGroupIds: string[];
+  capabilities: RuntimeConfig["capabilities"];
+};
+
 export class RuntimeController {
   constructor(private readonly config: RuntimeConfig) {}
+
+  getSnapshot(): RuntimeControllerSnapshot {
+    return {
+      globalEnabled: this.config.globalEnabled,
+      disabledGroupIds: [...this.config.disabledGroupIds].sort(),
+      capabilities: { ...this.config.capabilities },
+    };
+  }
 
   disableGlobal(): void {
     this.config.globalEnabled = false;
@@ -52,6 +66,17 @@ export class RuntimeController {
       this.config.globalEnabled &&
       !this.config.disabledGroupIds.has(normalized)
     );
+  }
+
+  canProcessIncomingEvent(input: { groupId?: string }): boolean {
+    if (!this.config.globalEnabled) {
+      return false;
+    }
+    if (input.groupId === undefined) {
+      return true;
+    }
+
+    return !this.config.disabledGroupIds.has(normalizeGroupId(input.groupId) ?? "");
   }
 
   canReplyWhenMentioned(groupId: string): boolean {

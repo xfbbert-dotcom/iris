@@ -26,12 +26,16 @@ export type FeishuCallbackResponse =
 
 type SignalFilter = (event: unknown) => Promise<void>;
 type RequestVerifier = (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
+type RuntimeGate = {
+  canProcessIncomingEvent(input: { groupId?: string }): boolean;
+};
 
 export type FeishuGatewayDependencies = {
   queue: EventQueue;
   rawEventQueue?: Pick<RawEventQueue, "enqueue">;
   signalFilter?: SignalFilter;
   verifyRequest?: RequestVerifier;
+  runtimeController?: RuntimeGate;
   now?: () => Date;
 };
 
@@ -65,6 +69,18 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
       }
 
       const receivedAt = now();
+      const groupId = resolveGroupId(request.body);
+      if (
+        dependencies.runtimeController !== undefined &&
+        !dependencies.runtimeController.canProcessIncomingEvent({
+          ...(groupId === undefined ? {} : { groupId }),
+        })
+      ) {
+        return {
+          statusCode: 200,
+          body: { ok: true },
+        };
+      }
 
       if (dependencies.rawEventQueue !== undefined) {
         await dependencies.rawEventQueue.enqueue({
@@ -133,6 +149,38 @@ function resolveEventType(body: unknown): string {
 
   const eventType = normalizeIdempotencyKey(body.event_type);
   return eventType ?? "unknown";
+}
+
+function resolveGroupId(body: unknown): string | undefined {
+  if (!isRecord(body)) {
+    return undefined;
+  }
+
+  const event = body.event;
+  if (isRecord(event)) {
+    const message = event.message;
+    if (isRecord(message)) {
+      const chatId = normalizeIdempotencyKey(message.chat_id);
+      if (chatId !== undefined) {
+        return chatId;
+      }
+    }
+
+    const eventChatId = normalizeIdempotencyKey(event.chat_id);
+    if (eventChatId !== undefined) {
+      return eventChatId;
+    }
+  }
+
+  const message = body.message;
+  if (isRecord(message)) {
+    const chatId = normalizeIdempotencyKey(message.chat_id);
+    if (chatId !== undefined) {
+      return chatId;
+    }
+  }
+
+  return normalizeIdempotencyKey(body.chat_id);
 }
 
 function isFeishuUrlVerificationPayload(

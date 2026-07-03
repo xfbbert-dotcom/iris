@@ -12,6 +12,8 @@ import {
   type FeishuCallbackRequest
 } from "./feishu/feishu-gateway.js";
 import { readFeishuAuthConfig } from "./config/env.js";
+import { RuntimeController } from "./admin/runtime-controller.js";
+import { createDefaultRuntimeConfig } from "./config/runtime-config.js";
 import { createFeishuRequestVerifier } from "./feishu/feishu-auth.js";
 import type { EventQueue } from "./queues/event-queue.js";
 import { InMemoryEventQueue } from "./queues/in-memory-event-queue.js";
@@ -51,6 +53,7 @@ export type BuildAppDependencies = {
   createEventWorkerRuntime?: () => EventWorkerRuntime | undefined;
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
+  runtimeController?: RuntimeController;
 };
 
 type ParsedJsonBody = {
@@ -106,6 +109,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const auditLog = dependencies.auditLog ?? new InMemoryAuditLog();
   const now = dependencies.now ?? (() => new Date());
+  const runtimeController =
+    dependencies.runtimeController ?? new RuntimeController(createDefaultRuntimeConfig());
   const answerDraftRuntime =
     dependencies.answerDraftOrchestrator === undefined
       ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
@@ -132,7 +137,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const gateway = createFeishuGateway({
     queue,
     rawEventQueue: dependencies.rawEventQueue ?? eventWorkerRuntime?.rawEventQueue,
-    verifyRequest: verifyFeishuRequest
+    verifyRequest: verifyFeishuRequest,
+    runtimeController,
   });
   const app = Fastify({ logger: false });
 
@@ -206,6 +212,50 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     };
 
     return buildInternalStatusSnapshot({ components, generatedAt: now() });
+  });
+
+  app.get("/internal/runtime-control/status", async () => ({
+    ok: true,
+    ...runtimeController.getSnapshot(),
+  }));
+
+  app.post("/internal/runtime-control/global", async (request, reply) => {
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseRuntimeEnabledRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    if (parsedRequest.enabled) {
+      runtimeController.enableGlobal();
+    } else {
+      runtimeController.disableGlobal();
+    }
+
+    return {
+      ok: true,
+      ...runtimeController.getSnapshot(),
+    };
+  });
+
+  app.post("/internal/runtime-control/groups/:groupId", async (request, reply) => {
+    const groupId = readNonBlankId((request.params as { groupId?: unknown }).groupId);
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseRuntimeEnabledRequest(body);
+    if (groupId === undefined || parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    if (parsedRequest.enabled) {
+      runtimeController.enableGroup(groupId);
+    } else {
+      runtimeController.disableGroup(groupId);
+    }
+
+    return {
+      ok: true,
+      ...runtimeController.getSnapshot(),
+    };
   });
 
   app.get("/internal/audit/events", async (request, reply) => {
@@ -1152,6 +1202,14 @@ function parseDocumentSourcePolicyUpdateRequest(
       ? { canUseForKnowledgeDrafts: value.canUseForKnowledgeDrafts as boolean }
       : {}),
   };
+}
+
+function parseRuntimeEnabledRequest(value: unknown): { enabled: boolean } | undefined {
+  if (!isRecord(value) || typeof value.enabled !== "boolean") {
+    return undefined;
+  }
+
+  return { enabled: value.enabled };
 }
 
 function parseDeadLetterBatchReplayRequest(
