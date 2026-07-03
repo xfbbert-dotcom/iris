@@ -24,6 +24,14 @@ describe("DocumentChunker", () => {
     ]);
   });
 
+  it("merges a short trailing block into the previous chunk when it fits", () => {
+    const chunker = createDocumentChunker({ maxChunkChars: 80, minChunkChars: 20 });
+
+    expect(chunker.chunkText("A decision paragraph with enough context.\n\nDone.")).toEqual([
+      { chunkIndex: 0, text: "A decision paragraph with enough context.\n\nDone." },
+    ]);
+  });
+
   it("returns no chunks for blank text", () => {
     const chunker = createDocumentChunker();
 

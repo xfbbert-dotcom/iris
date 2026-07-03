@@ -56,15 +56,23 @@ function mergeBlocks(
 ): string[] {
   const merged: string[] = [];
   let current = "";
+  const shortTrailingBlockChars = Math.ceil(options.minChunkChars / 2);
 
-  for (const block of blocks) {
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
+    const block = blocks[blockIndex] ?? "";
+    const isTrailingBlock = blockIndex === blocks.length - 1;
+
     if (current.length === 0) {
       current = block;
       continue;
     }
 
     const candidate = `${current}\n\n${block}`;
-    if (candidate.length <= options.maxChunkChars && current.length < options.minChunkChars) {
+    if (
+      candidate.length <= options.maxChunkChars &&
+      (current.length < options.minChunkChars ||
+        (isTrailingBlock && block.length < shortTrailingBlockChars))
+    ) {
       current = candidate;
       continue;
     }
