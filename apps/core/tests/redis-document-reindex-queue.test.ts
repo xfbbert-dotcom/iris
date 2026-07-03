@@ -105,12 +105,14 @@ describe("RedisDocumentReindexQueue", () => {
     const queue = createRedisDocumentReindexQueue({
       client,
       now: () => new Date("2026-07-03T12:35:00.000Z"),
+      idGenerator: () => "dlq-invalid",
     });
 
     await expect(queue.dequeueBatch(2)).resolves.toEqual([valid]);
     expect(client.rPush).toHaveBeenCalledWith(
       "iris:reindex:documents:dlq",
       JSON.stringify({
+        id: "dlq-invalid",
         rawPayload: "{",
         errorMessage: "Invalid document reindex job JSON",
         failedAt: "2026-07-03T12:35:00.000Z",
@@ -274,6 +276,79 @@ describe("RedisDocumentReindexQueue", () => {
     const [item] = await queue.listDeadLetters({ limit: 20 });
     expect(item.replayable).toBe(false);
     expect(item.id).toMatch(/^legacy:/);
+  });
+
+  it("lists invalid raw payload DLQ entries as non-replayable diagnostics", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-invalid",
+      rawPayload: "{",
+      errorMessage: "Invalid document reindex job JSON",
+      failedAt: "2026-07-03T12:35:00.000Z",
+    });
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: 20 })).resolves.toEqual([
+      {
+        id: "dlq-invalid",
+        rawPayload: "{",
+        errorMessage: "Invalid document reindex job JSON",
+        failedAt: new Date("2026-07-03T12:35:00.000Z"),
+        replayable: false,
+      },
+    ]);
+  });
+
+  it("does not replay invalid raw payload DLQ entries", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-invalid",
+      rawPayload: "{",
+      errorMessage: "Invalid document reindex job JSON",
+      failedAt: "2026-07-03T12:35:00.000Z",
+    });
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.replayDeadLetter("dlq-invalid")).resolves.toBe(
+      "unsupported_legacy_item",
+    );
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.rPush).not.toHaveBeenCalled();
+  });
+
+  it("deletes invalid raw payload DLQ entries by stable id", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-invalid",
+      rawPayload: "{",
+      errorMessage: "Invalid document reindex job JSON",
+      failedAt: "2026-07-03T12:35:00.000Z",
+    });
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.deleteDeadLetter("dlq-invalid")).resolves.toBe("deleted");
+    expect(client.lRem).toHaveBeenCalledWith("iris:reindex:documents:dlq", 1, payload);
   });
 
   it("replays Redis DLQ entries with attempts reset", async () => {

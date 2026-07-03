@@ -18,13 +18,25 @@ export type FailedDocumentSyncJobResult = {
   attempts: number;
 };
 
-export type DocumentSyncDeadLetter = {
+export type DocumentSyncJobDeadLetter = {
   id: string;
   job: DocumentSyncJob;
   errorMessage: string;
   failedAt: Date;
   replayable: boolean;
 };
+
+export type DocumentSyncInvalidPayloadDeadLetter = {
+  id: string;
+  rawPayload: string;
+  errorMessage: string;
+  failedAt: Date;
+  replayable: false;
+};
+
+export type DocumentSyncDeadLetter =
+  | DocumentSyncJobDeadLetter
+  | DocumentSyncInvalidPayloadDeadLetter;
 
 export type ReplayDocumentSyncDeadLettersResult = {
   replayedCount: number;

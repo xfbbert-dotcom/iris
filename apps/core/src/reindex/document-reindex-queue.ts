@@ -19,13 +19,25 @@ export type FailedDocumentReindexJobResult = {
   attempts: number;
 };
 
-export type DocumentReindexDeadLetter = {
+export type DocumentReindexJobDeadLetter = {
   id: string;
   job: DocumentReindexJob;
   errorMessage: string;
   failedAt: Date;
   replayable: boolean;
 };
+
+export type DocumentReindexInvalidPayloadDeadLetter = {
+  id: string;
+  rawPayload: string;
+  errorMessage: string;
+  failedAt: Date;
+  replayable: false;
+};
+
+export type DocumentReindexDeadLetter =
+  | DocumentReindexJobDeadLetter
+  | DocumentReindexInvalidPayloadDeadLetter;
 
 export type ReplayDocumentReindexDeadLettersResult = {
   replayedCount: number;

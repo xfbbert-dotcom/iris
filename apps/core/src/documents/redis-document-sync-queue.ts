@@ -76,6 +76,7 @@ export function createRedisDocumentSyncQueue({
           await client.rPush(
             deadLetterKey,
             JSON.stringify({
+              id: idGenerator(),
               rawPayload: payload,
               errorMessage: error instanceof Error ? error.message : String(error),
               failedAt: now().toISOString(),
@@ -132,6 +133,10 @@ export function createRedisDocumentSyncQueue({
       const found = await findDeadLetterByStoredId(client, deadLetterKey, id);
       if (found === undefined) {
         return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+      }
+
+      if (!("job" in found.deadLetter)) {
+        return "unsupported_legacy_item";
       }
 
       await client.lRem(deadLetterKey, 1, found.payload);
@@ -274,11 +279,10 @@ function parseDeadLetterPayload(payload: string, index: number): ParsedDeadLette
     throw new Error("Invalid document sync dead letter JSON");
   }
 
-  if (!isRecord(parsed) || !isRecord(parsed.job)) {
+  if (!isRecord(parsed)) {
     throw new Error("Invalid document sync dead letter payload");
   }
 
-  const job = parseDocumentSyncJob(JSON.stringify(parsed.job));
   const failedAt = new Date(readString(parsed.failedAt));
   const errorMessage = readString(parsed.errorMessage);
   const storedId = readString(parsed.id) || undefined;
@@ -286,6 +290,26 @@ function parseDeadLetterPayload(payload: string, index: number): ParsedDeadLette
     throw new Error("Invalid document sync dead letter payload");
   }
 
+  if (!isRecord(parsed.job)) {
+    const rawPayload = readString(parsed.rawPayload);
+    if (rawPayload.length === 0) {
+      throw new Error("Invalid document sync dead letter payload");
+    }
+
+    return {
+      payload,
+      storedId,
+      deadLetter: {
+        id: storedId ?? createLegacyDeadLetterId(payload, index),
+        rawPayload,
+        errorMessage,
+        failedAt,
+        replayable: false,
+      },
+    };
+  }
+
+  const job = parseDocumentSyncJob(JSON.stringify(parsed.job));
   return {
     payload,
     storedId,
