@@ -39,7 +39,9 @@ function formatBackgroundDocument(document: BackgroundDocument): string {
 }
 
 function formatLiveChatMessage(message: LiveChatMessage): string {
-  return `<message speaker="${escapeXml(message.speaker)}">${escapeXml(message.text)}</message>`;
+  return `<message speaker="${escapeXml(message.speaker.trim())}">${escapeXml(
+    message.text.trim(),
+  )}</message>`;
 }
 
 function sanitizeLiveChatLimit(value: number | undefined): number {

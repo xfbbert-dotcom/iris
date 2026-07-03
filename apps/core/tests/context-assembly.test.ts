@@ -68,6 +68,19 @@ describe("assemblePromptContext", () => {
     expect(context).not.toContain('<message speaker="Iris">\n\t</message>');
   });
 
+  it("trims live chat speaker and text when formatting messages", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: [
+        { speaker: " Alice ", text: "  Please check this.  " }
+      ]
+    });
+
+    expect(context).toContain('<message speaker="Alice">Please check this.</message>');
+    expect(context).not.toContain(" Alice ");
+    expect(context).not.toContain("  Please check this.  ");
+  });
+
   it("excludes live messages when liveChatLimit is negative", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],
