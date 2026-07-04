@@ -401,6 +401,29 @@ describe("internal API token guard", () => {
     expect(healthResponse.statusCode).toBe(200);
     expect(healthResponse.json()).toEqual({ ok: true, service: "iris-core" });
   });
+
+  it("rejects unauthorized internal requests before parsing JSON bodies", async () => {
+    const app = buildApp({
+      internalApiToken: "operator-secret",
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      headers: { "content-type": "application/json" },
+      payload: "{not-json",
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "internal_api_unauthorized",
+    });
+  });
 });
 
 describe("GET /internal/audit/status", () => {

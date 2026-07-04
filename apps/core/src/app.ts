@@ -199,7 +199,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
-  app.addHook("preHandler", async (request, reply) => {
+  app.addHook("onRequest", async (request, reply) => {
     if (internalApiToken === undefined || !isInternalApiRequest(request.url)) {
       return;
     }

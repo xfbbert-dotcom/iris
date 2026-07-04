@@ -12,6 +12,7 @@ Core reads an optional `IRIS_INTERNAL_API_TOKEN` value. When the token is config
 
 - every `/internal/*` request must include `Authorization: Bearer <token>`
 - unauthorized internal requests return `401 { "ok": false, "error": "internal_api_unauthorized" }`
+- the guard runs before body parsing, so malformed unauthorized JSON still returns 401
 - `/feishu/events` remains available for Feishu callbacks and keeps its existing Feishu signature
   verification path
 - `/health` remains unauthenticated for process health checks
