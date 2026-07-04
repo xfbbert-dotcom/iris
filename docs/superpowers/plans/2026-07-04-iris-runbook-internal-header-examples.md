@@ -50,7 +50,7 @@ npm run verify
 
 Expected: the command exits 0.
 
-- [ ] **Step 2: Commit, push, and verify PR checks**
+- [x] **Step 2: Commit, push, and verify PR checks**
 
 Commit the runbook update, push `codex/iris-document-source-registry`, update PR #3, and confirm
 GitHub Actions returns Core and AI Worker success.
