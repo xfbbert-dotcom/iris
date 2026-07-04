@@ -715,6 +715,8 @@ Required architectural response:
 
 - Positive integer environment settings must be written as decimal digit strings and must also be
   safe JavaScript integers.
+- The executable app listen port must use the same environment config boundary, default to `3000`,
+  and reject values outside the valid TCP port range.
 - Unsafe integers must be rejected during config loading with explicit errors.
 - Model, embedding, and Feishu OpenAPI base URLs must be absolute `http` or `https`
   URLs without embedded credentials, query strings, or fragments before provider or fetcher

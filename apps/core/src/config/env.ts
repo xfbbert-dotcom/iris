@@ -66,6 +66,15 @@ export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConf
   };
 }
 
+export function readServerPort(env: EnvLike = process.env): number {
+  const port = readPositiveIntegerEnv("PORT", env.PORT, 3000);
+  if (port > 65535) {
+    throw new Error("PORT must be between 1 and 65535");
+  }
+
+  return port;
+}
+
 export function readModelProviderConfig(env: EnvLike = process.env): ModelProviderConfig | undefined {
   const provider = readOptionalEnv(env.IRIS_MODEL_PROVIDER);
   if (provider === undefined) {

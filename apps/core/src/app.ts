@@ -11,7 +11,7 @@ import {
   createFeishuGateway,
   type FeishuCallbackRequest
 } from "./feishu/feishu-gateway.js";
-import { readFeishuAuthConfig } from "./config/env.js";
+import { readFeishuAuthConfig, readServerPort } from "./config/env.js";
 import {
   RuntimeController,
   type RuntimeCapabilityName
@@ -1720,5 +1720,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const app = buildApp();
-  await app.listen({ port: Number(process.env.PORT ?? 3000), host: "0.0.0.0" });
+  await app.listen({ port: readServerPort(), host: "0.0.0.0" });
 }

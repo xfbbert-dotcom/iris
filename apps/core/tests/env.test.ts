@@ -9,6 +9,7 @@ import {
   readDocumentSyncWorkerRuntimeConfig,
   readModelProviderConfig,
   readReindexWorkerRuntimeConfig,
+  readServerPort,
 } from "../src/config/env.js";
 
 describe("readFeishuAuthConfig", () => {
@@ -31,6 +32,29 @@ describe("readFeishuAuthConfig", () => {
         FEISHU_ENCRYPT_KEY: ""
       })
     ).toEqual({});
+  });
+});
+
+describe("readServerPort", () => {
+  it("defaults to port 3000", () => {
+    expect(readServerPort({})).toBe(3000);
+    expect(readServerPort({ PORT: "   " })).toBe(3000);
+  });
+
+  it("reads trimmed decimal port values", () => {
+    expect(readServerPort({ PORT: " 62761 " })).toBe(62761);
+  });
+
+  it("rejects invalid server port values", () => {
+    expect(() => readServerPort({ PORT: "0" })).toThrow(
+      "PORT must be a positive integer",
+    );
+    expect(() => readServerPort({ PORT: "65536" })).toThrow(
+      "PORT must be between 1 and 65535",
+    );
+    expect(() => readServerPort({ PORT: "1e3" })).toThrow(
+      "PORT must be a positive integer",
+    );
   });
 });
 
