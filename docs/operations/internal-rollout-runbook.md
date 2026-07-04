@@ -161,8 +161,11 @@ Invoke-RestMethod `
 
 Important status rules:
 
-- `status: "healthy"` means all components are enabled/running enough for current configuration.
-- `status: "degraded"` requires operator attention.
+- Top-level `status: "healthy"` means no reported component has `ok: false`.
+- Top-level `status: "degraded"` means at least one reported component has `ok: false`.
+- `summary.attentionSeverity` is the compact operator-priority signal: `critical` for degraded
+  components, `warning` for stopped enabled runtimes, `info` for disabled components, and `none`
+  when no component needs attention.
 - Non-empty raw event, document sync, or reindex DLQs degrade the matching component.
 - Disabled components are expected when the corresponding runtime is intentionally off.
 - `components.runtimeControl` mirrors the current global runtime gate. If its status is
