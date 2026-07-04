@@ -903,6 +903,7 @@ describe("GET /internal/status", () => {
       ok: false,
       enabled: true,
       enqueueFailureCount: 1,
+      degradedReason: "enqueue_failures_present",
       latestEnqueueError: {
         message: "redis unavailable",
         recordedAt: "2026-07-03T09:00:00.000Z",

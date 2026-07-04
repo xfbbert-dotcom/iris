@@ -135,6 +135,7 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
   "callExternalTools",
 ]);
 const deadLettersPresentReason = "dead_letters_present" as const;
+const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
@@ -1029,7 +1030,10 @@ function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
     enqueueFailureCount: state.enqueueFailureCount,
     ...(state.latestEnqueueError === undefined
       ? {}
-      : { latestEnqueueError: state.latestEnqueueError }),
+      : {
+          degradedReason: enqueueFailuresPresentReason,
+          latestEnqueueError: state.latestEnqueueError,
+        }),
   };
 }
 
