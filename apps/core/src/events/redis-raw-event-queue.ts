@@ -127,6 +127,7 @@ export function createRedisRawEventQueue({
           await client.sRem(seenKey, event.idempotencyKey);
           events.push(event);
         } catch (error) {
+          const idempotencyKey = readQueuedRawEventIdempotencyKey(payload);
           await client.rPush(
             deadLetterKey,
             JSON.stringify({
@@ -138,6 +139,9 @@ export function createRedisRawEventQueue({
               failedAt: now().toISOString(),
             }),
           );
+          if (idempotencyKey !== undefined) {
+            await client.sRem(seenKey, idempotencyKey);
+          }
         }
       }
 
@@ -450,6 +454,25 @@ function readString(value: unknown): string {
 
 function readRawPayload(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function readQueuedRawEventIdempotencyKey(payload: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+
+  const idempotencyKey = readString(parsed.idempotencyKey);
+  return idempotencyKey.length > 0 &&
+    idempotencyKey.length <= MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH
+    ? idempotencyKey
+    : undefined;
 }
 
 function readOptionalNonNegativeInteger(value: unknown): number | null | undefined {

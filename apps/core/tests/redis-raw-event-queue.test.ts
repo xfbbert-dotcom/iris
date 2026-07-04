@@ -300,6 +300,10 @@ describe("RedisRawEventQueue", () => {
         failedAt: "2026-07-03T12:05:00.000Z",
       }),
     );
+    expect(client.sRem).toHaveBeenCalledWith(
+      "iris:events:raw:seen",
+      "raw-event:feishu:event-missing-body",
+    );
   });
 
   it("requeues failed raw events below max attempts", async () => {

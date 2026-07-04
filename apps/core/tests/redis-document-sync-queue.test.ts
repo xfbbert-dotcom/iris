@@ -192,6 +192,43 @@ describe("RedisDocumentSyncQueue", () => {
     );
   });
 
+  it("releases parseable document sync seen keys for invalid queued payloads", async () => {
+    const invalid = {
+      ...job({ documentSourceId: "source-invalid" }),
+      reason: "unknown",
+      enqueuedAt: "2026-07-03T01:00:00.000Z",
+    };
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(async () => 1),
+      lPop: vi.fn().mockResolvedValueOnce(JSON.stringify(invalid)),
+    };
+    const queue = createRedisDocumentSyncQueue({
+      client,
+      now: () => new Date("2026-07-03T12:30:00.000Z"),
+      idGenerator: () => "dlq-invalid-payload",
+    });
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+    expect(client.sRem).toHaveBeenCalledWith(
+      "iris:documents:sync:seen",
+      "document-sync:source-invalid",
+    );
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:documents:sync:dlq",
+      JSON.stringify({
+        id: "dlq-invalid-payload",
+        rawPayload: JSON.stringify(invalid),
+        errorMessage: "Invalid document sync job payload",
+        failedAt: "2026-07-03T12:30:00.000Z",
+      }),
+    );
+  });
+
   it("round-trips job dates through JSON", () => {
     const syncJob = job();
 

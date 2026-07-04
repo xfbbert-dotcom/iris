@@ -126,6 +126,7 @@ export function createRedisDocumentSyncQueue({
           await client.sRem(seenKey, job.idempotencyKey);
           jobs.push(job);
         } catch (error) {
+          const idempotencyKey = readQueuedDocumentSyncIdempotencyKey(payload);
           await client.rPush(
             deadLetterKey,
             JSON.stringify({
@@ -137,6 +138,9 @@ export function createRedisDocumentSyncQueue({
               failedAt: now().toISOString(),
             }),
           );
+          if (idempotencyKey !== undefined) {
+            await client.sRem(seenKey, idempotencyKey);
+          }
         }
       }
 
@@ -290,6 +294,25 @@ function readString(value: unknown): string {
 
 function readRawPayload(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function readQueuedDocumentSyncIdempotencyKey(payload: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+
+  const idempotencyKey = readString(parsed.idempotencyKey);
+  return idempotencyKey.length > 0 &&
+    idempotencyKey.length <= MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS
+    ? idempotencyKey
+    : undefined;
 }
 
 function readOptionalNonNegativeInteger(value: unknown): number | null | undefined {

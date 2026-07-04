@@ -196,6 +196,43 @@ describe("RedisDocumentReindexQueue", () => {
     );
   });
 
+  it("releases parseable document reindex seen keys for invalid queued payloads", async () => {
+    const invalid = {
+      ...jobFixture({ documentSnapshotId: "snapshot-invalid" }),
+      reason: "unknown",
+      enqueuedAt: "2026-07-02T01:00:00.000Z",
+    };
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(async () => 1),
+      lPop: vi.fn().mockResolvedValueOnce(JSON.stringify(invalid)),
+    };
+    const queue = createRedisDocumentReindexQueue({
+      client,
+      now: () => new Date("2026-07-03T12:35:00.000Z"),
+      idGenerator: () => "dlq-invalid-payload",
+    });
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+    expect(client.sRem).toHaveBeenCalledWith(
+      "iris:reindex:documents:seen",
+      "reindex:profile-1536:snapshot-invalid",
+    );
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:reindex:documents:dlq",
+      JSON.stringify({
+        id: "dlq-invalid-payload",
+        rawPayload: JSON.stringify(invalid),
+        errorMessage: "Invalid document reindex job payload",
+        failedAt: "2026-07-03T12:35:00.000Z",
+      }),
+    );
+  });
+
   it("round-trips job dates through JSON", () => {
     const job = jobFixture();
 
