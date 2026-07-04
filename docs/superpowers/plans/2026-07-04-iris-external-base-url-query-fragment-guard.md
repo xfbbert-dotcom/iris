@@ -65,7 +65,7 @@ npm run verify
 
 Expected: the command exits 0.
 
-- [ ] **Step 3: Commit, push, and verify PR checks**
+- [x] **Step 3: Commit, push, and verify PR checks**
 
 Commit the query/fragment guard update, push `codex/iris-document-source-registry`, update PR #3,
 and confirm GitHub Actions returns Core and AI Worker success.
