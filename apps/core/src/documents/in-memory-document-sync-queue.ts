@@ -87,19 +87,19 @@ export function createInMemoryDocumentSyncQueue({
 
     async handleFailedJob(input) {
       const attempts = input.job.attempts + 1;
-      const failedJob = { ...input.job, attempts };
+      const failedJob = cloneJob({ ...input.job, attempts });
 
       if (attempts >= safeMaxAttempts) {
         deadLetters.push({
           id: idGenerator(),
-          job: cloneJob(failedJob),
+          job: failedJob,
           errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
           failedAt: now(),
         });
         return { action: "dead_lettered", attempts };
       }
 
-      jobsByIdempotencyKey.set(failedJob.idempotencyKey, cloneJob(failedJob));
+      jobsByIdempotencyKey.set(failedJob.idempotencyKey, failedJob);
       return { action: "requeued", attempts };
     },
 

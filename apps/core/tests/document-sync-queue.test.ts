@@ -90,6 +90,24 @@ describe("DocumentSyncQueue", () => {
     await expect(queue.getDeadLetterCount()).resolves.toBe(0);
   });
 
+  it("deduplicates retries with normalized document sync idempotency keys", async () => {
+    const queue = createInMemoryDocumentSyncQueue({ maxAttempts: 3 });
+    const syncJob = job();
+
+    await queue.handleFailedJob({
+      job: {
+        ...syncJob,
+        idempotencyKey: ` ${syncJob.idempotencyKey} `,
+        documentSourceId: ` ${syncJob.documentSourceId} `,
+      },
+      errorMessage: "runner crashed",
+    });
+    await queue.enqueue(syncJob);
+
+    await expect(queue.getPendingCount()).resolves.toBe(1);
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([{ ...syncJob, attempts: 1 }]);
+  });
+
   it("rejects unsafe integer max attempts", () => {
     expect(() => createInMemoryDocumentSyncQueue({ maxAttempts: 9007199254740992 })).toThrow(
       "maxAttempts must be a positive safe integer",
