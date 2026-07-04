@@ -698,6 +698,9 @@ Required architectural response:
 - Semantic fragment-search storage adapters must reject unsafe finite query
   limits before pgvector SQL is issued, while retaining the existing defensive
   `LIMIT 0` behavior for non-finite values.
+- Snapshot/reindex candidate storage adapters must reject unsafe finite query
+  limits before SQL is issued, while retaining defensive `LIMIT 0` behavior
+  for non-finite values.
 - Validation should not invent product-specific business caps unless a separate architecture decision calls for them.
 
 Evolution signal:

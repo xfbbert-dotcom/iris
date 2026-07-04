@@ -406,6 +406,19 @@ describe("DocumentSnapshotRepository", () => {
     ).resolves.toEqual([]);
     expect(query).toHaveBeenCalledTimes(2);
   });
+
+  it("rejects unsafe missing-profile limits before querying snapshots", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
+
+    await expect(
+      repository.listSuccessfulSnapshotsMissingProfile({
+        embeddingProfileId: "profile-1536",
+        limit: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("snapshot missing-profile limit must be a finite safe-magnitude number");
+    expect(query).not.toHaveBeenCalled();
+  });
 });
 
 runIfDatabase("DocumentSnapshotRepository with Postgres", () => {

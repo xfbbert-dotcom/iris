@@ -1,6 +1,6 @@
 # Iris Repository Limit Sanitization Plan
 
-**Goal:** Prevent non-finite repository limits from reaching SQL queries.
+**Goal:** Prevent non-finite and unsafe-magnitude repository limits from reaching SQL queries.
 
 - [x] **Step 1: Add failing repository coverage**
   - Recent conversation message listing sends limit `0` for `Infinity` and `NaN`.
@@ -17,3 +17,8 @@
 - [x] **Step 4: Commit and update PR**
   - Commit the patch with a scoped message.
   - Push the branch and append the PR description.
+
+- [x] **Step 5: Reject unsafe finite snapshot limits**
+  - Add a failing `DocumentSnapshotRepository` test proving `Number.MAX_SAFE_INTEGER + 1` is rejected before `listSuccessfulSnapshotsMissingProfile()` queries SQL.
+  - Update the snapshot repository `sanitizeLimit()` helper to reject unsafe finite values while preserving `Infinity` and `NaN` to `LIMIT 0`.
+  - Update the repository limit design and whitepaper numeric-safety notes.
