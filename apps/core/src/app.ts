@@ -1219,11 +1219,20 @@ function parseDeadLetterLimit(value: unknown): number | undefined {
   if (value === undefined) {
     return 20;
   }
-  if (typeof value === "string" && value.trim().length === 0) {
+
+  let parsed: number;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0 || !/^\d+$/u.test(trimmed)) {
+      return undefined;
+    }
+    parsed = Number(trimmed);
+  } else if (typeof value === "number") {
+    parsed = value;
+  } else {
     return undefined;
   }
 
-  const parsed = Number(value);
   if (!Number.isInteger(parsed) || !Number.isSafeInteger(parsed) || parsed < 0) {
     return undefined;
   }

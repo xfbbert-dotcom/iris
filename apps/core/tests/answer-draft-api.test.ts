@@ -948,6 +948,14 @@ describe("GET /internal/audit/events", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+
+    const scientificResponse = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events?limit=1e2",
+    });
+
+    expect(scientificResponse.statusCode).toBe(400);
+    expect(scientificResponse.json()).toEqual({ ok: false, error: "invalid_request" });
   });
 
   it("returns no audit events when the limit is zero", async () => {
@@ -1587,6 +1595,23 @@ describe("reindex dead-letter API", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("rejects non-decimal dead-letter list limits", async () => {
+    const runtime = fakeReindexRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/reindex/dead-letters?limit=0x10",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.deadLetters.list).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe dead-letter list limits", async () => {
@@ -2396,6 +2421,23 @@ describe("document sync source inventory API", () => {
     const response = await app.inject({
       method: "GET",
       url: "/internal/document-sync/sources?limit=9007199254740992",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.sources.list).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-decimal source inventory list limits", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?limit=10.0",
     });
 
     expect(response.statusCode).toBe(400);

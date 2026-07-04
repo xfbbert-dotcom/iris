@@ -9,14 +9,17 @@ malformed operator input into an apparently valid request.
 
 ## Decision
 
-Shared query-limit parsing must reject non-integer, negative, and unsafe integer
-values before applying the existing maximum cap. Safe large integers can still
-be capped to 100, but unsafe integers are invalid requests.
+Shared query-limit parsing must reject non-decimal strings, non-integer,
+negative, and unsafe integer values before applying the existing maximum cap.
+Safe large decimal integers can still be capped to 100, but unsafe integers are
+invalid requests.
 
 ## Consequences
 
 - Admin APIs fail loudly for numerically unsafe limits instead of silently
   normalizing them.
+- Scientific notation, hexadecimal notation, signed values, and decimal-point
+  forms are rejected instead of being coerced by JavaScript's `Number()`.
 - Dead-letter and source inventory endpoints share the same guard through the
   common parser.
 - Existing default and maximum cap behavior remains unchanged for safe values.
