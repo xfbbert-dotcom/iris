@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   createRawEventIdempotencyKey,
   MAX_RAW_EVENT_ID_LENGTH,
@@ -244,10 +246,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stableJsonHash(value: unknown): string {
   const serialized = JSON.stringify(value) ?? String(value);
-  let hash = 0;
-  for (let index = 0; index < serialized.length; index += 1) {
-    hash = (hash * 31 + serialized.charCodeAt(index)) >>> 0;
-  }
-
-  return `body-${hash.toString(16)}`;
+  return `body-${createHash("sha256").update(serialized).digest("hex")}`;
 }
