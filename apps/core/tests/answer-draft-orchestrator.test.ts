@@ -160,6 +160,64 @@ describe("AnswerDraftOrchestrator", () => {
     );
   });
 
+  it("rejects unsafe liveChatLimit values before loading stored context", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => []),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await expect(
+      orchestrator.generateDraft({
+        question: "What changed?",
+        chatId: "oc_1",
+        liveChatMessages: [],
+        liveChatLimit: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("liveChatLimit must be a finite safe-magnitude number");
+    expect(liveChatContextProvider.loadRecentMessages).not.toHaveBeenCalled();
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsafe fragmentLimit values before loading stored context", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => []),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await expect(
+      orchestrator.generateDraft({
+        question: "What changed?",
+        chatId: "oc_1",
+        liveChatMessages: [],
+        fragmentLimit: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("fragmentLimit must be a finite safe-magnitude number");
+    expect(liveChatContextProvider.loadRecentMessages).not.toHaveBeenCalled();
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+  });
+
   it("deduplicates stored and request live chat messages before building context", async () => {
     const contextBuilder = {
       buildContext: vi.fn(async () => ({

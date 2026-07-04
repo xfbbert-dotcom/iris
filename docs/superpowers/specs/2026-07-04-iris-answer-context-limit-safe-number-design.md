@@ -11,15 +11,19 @@ safe integer range.
 ## Decision
 
 The answer draft API must reject non-finite or unsafe-magnitude context limits
-before calling the orchestrator. Retrieval context building and prompt assembly
-must also reject unsafe-magnitude limits when called directly, so future
-internal callers cannot silently normalize ambiguous values into valid prompt
-budgets. Existing behavior for finite safe fractional or negative values is
-preserved, because downstream context assembly already floors and clamps them.
+before calling the orchestrator. The orchestrator must reject unsafe-magnitude
+limits before loading stored live chat context or building prompt context.
+Retrieval context building and prompt assembly must also reject
+unsafe-magnitude limits when called directly, so future internal callers cannot
+silently normalize ambiguous values into valid prompt budgets. Existing
+behavior for finite safe fractional or negative values is preserved, because
+downstream context assembly already floors and clamps them.
 
 ## Consequences
 
 - Malformed context-window requests fail before model orchestration.
+- Direct orchestrator calls fail before live-chat history reads when context
+  limits have unsafe numeric magnitude.
 - Large unsafe values cannot be silently normalized into a valid prompt budget.
 - Lower-level context builders keep their defensive caps for safe finite direct
   caller values.

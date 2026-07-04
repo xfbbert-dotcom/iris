@@ -60,6 +60,7 @@ export function createAnswerDraftOrchestrator({
         throw new Error("question must not be blank");
       }
 
+      assertSafeMagnitudeLimit(input.fragmentLimit, "fragmentLimit");
       const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
       const storedLiveChatMessages =
         input.chatId === undefined
@@ -95,11 +96,18 @@ export function createAnswerDraftOrchestrator({
 }
 
 function sanitizeLiveChatLimit(value: number | undefined): number | undefined {
+  assertSafeMagnitudeLimit(value, "liveChatLimit");
   if (value === undefined || !Number.isFinite(value)) {
     return undefined;
   }
 
   return Math.min(MAX_LIVE_CHAT_LIMIT, Math.max(0, Math.floor(value)));
+}
+
+function assertSafeMagnitudeLimit(value: number | undefined, fieldName: string): void {
+  if (value !== undefined && Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+    throw new Error(`${fieldName} must be a finite safe-magnitude number`);
+  }
 }
 
 function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] {
