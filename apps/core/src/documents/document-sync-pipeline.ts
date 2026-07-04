@@ -129,21 +129,21 @@ export function createDocumentSyncRunner({
       let fetchResult: DocumentBodyFetchResult;
 
       try {
-        fetchResult = await fetcher.fetch(source);
+        fetchResult = await fetcher.fetch(claimedSource);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
 
         let snapshot: DocumentSnapshot;
         try {
           snapshot = await snapshots.insertFailedSnapshot({
-            documentSourceId: source.id,
-            sourceUri: source.sourceUri,
+            documentSourceId: claimedSource.id,
+            sourceUri: claimedSource.sourceUri,
             errorMessage,
             fetchedAt: now(),
           });
-          await registry.markSyncState(source.id, "failed");
+          await registry.markSyncState(claimedSource.id, "failed");
         } catch (persistenceError) {
-          await markPendingAfterUnexpectedSyncFailure(registry, source.id);
+          await markPendingAfterUnexpectedSyncFailure(registry, claimedSource.id);
           throw persistenceError;
         }
 
@@ -152,13 +152,13 @@ export function createDocumentSyncRunner({
 
       try {
         const snapshot = await snapshots.insertSucceededSnapshot({
-          documentSourceId: source.id,
-          sourceUri: source.sourceUri,
+          documentSourceId: claimedSource.id,
+          sourceUri: claimedSource.sourceUri,
           bodyText: fetchResult.bodyText,
           sourceVersion: fetchResult.sourceVersion,
           fetchedAt: fetchResult.fetchedAt,
         });
-        await registry.markSyncState(source.id, "synced");
+        await registry.markSyncState(claimedSource.id, "synced");
         if (syncedSnapshotReindexer !== undefined) {
           await syncedSnapshotReindexer.enqueueSyncedSnapshotReindex({
             documentSnapshotId: snapshot.id,
@@ -167,7 +167,7 @@ export function createDocumentSyncRunner({
 
         return { status: "synced", source, snapshot };
       } catch (error) {
-        await markPendingAfterUnexpectedSyncFailure(registry, source.id);
+        await markPendingAfterUnexpectedSyncFailure(registry, claimedSource.id);
         throw error;
       }
     },

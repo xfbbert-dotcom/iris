@@ -176,7 +176,9 @@ describe("createDocumentSyncRunner", () => {
       "snapshot:succeeded",
       "mark:source-to-sync:synced",
     ]);
-    expect(fetcher.fetch).toHaveBeenCalledWith(candidate);
+    expect(fetcher.fetch).toHaveBeenCalledWith(
+      source({ id: "source-to-sync", syncState: "syncing" }),
+    );
     expect(snapshots.insertSucceededSnapshot).toHaveBeenCalledWith({
       documentSourceId: "source-to-sync",
       sourceUri: candidate.sourceUri,
@@ -238,6 +240,62 @@ describe("createDocumentSyncRunner", () => {
     expect(calls).toEqual(["mark:syncing", "snapshot:succeeded", "mark:synced", "reindex"]);
     expect(syncedSnapshotReindexer.enqueueSyncedSnapshotReindex).toHaveBeenCalledWith({
       documentSnapshotId: "snapshot-to-reindex",
+    });
+  });
+
+  it("uses the claimed source for external fetches and succeeded snapshots", async () => {
+    const candidate = source({
+      id: "source-claim-refresh",
+      sourceUri: "https://example.com/docs/stale-doc",
+    });
+    const claimedSource = source({
+      id: candidate.id,
+      sourceUri: "https://example.com/docs/claimed-doc",
+      syncState: "syncing",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) =>
+        syncState === "syncing"
+          ? claimedSource
+          : source({ ...claimedSource, id, syncState: syncState as DocumentSource["syncState"] }),
+      ),
+    };
+    const fetcher = {
+      fetch: vi.fn(async () => ({
+        bodyText: "Document body",
+        sourceVersion: "version-claimed",
+        fetchedAt,
+      })),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(async () =>
+        snapshot({
+          id: "snapshot-claimed",
+          documentSourceId: claimedSource.id,
+          sourceUri: claimedSource.sourceUri,
+          fetchedAt,
+        }),
+      ),
+      insertFailedSnapshot: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => failedAt,
+    });
+
+    await expect(runner.syncSourceById(candidate.id)).resolves.toMatchObject({
+      status: "synced",
+    });
+    expect(fetcher.fetch).toHaveBeenCalledWith(claimedSource);
+    expect(snapshots.insertSucceededSnapshot).toHaveBeenCalledWith({
+      documentSourceId: claimedSource.id,
+      sourceUri: claimedSource.sourceUri,
+      bodyText: "Document body",
+      sourceVersion: "version-claimed",
+      fetchedAt,
     });
   });
 
