@@ -42,9 +42,12 @@ Observed: focused processor tests passed with 12 passing tests.
 
 - [x] Update the architecture whitepaper Feishu Gateway/Event Layer guardrails.
 - [x] Run `npm run verify`.
-- [ ] Commit and push.
-- [ ] Watch PR #3 checks.
+- [x] Commit and push.
+- [x] Watch PR #3 checks.
 
 Observed: `npm run verify` passed. Core reported 744 passing tests and 4 skipped
 tests. Python worker tests reported 7 passing tests. Docker Compose config
 rendered successfully.
+
+Observed: pushed commit `6a9ee4e`; GitHub Actions reported AI Worker and Core
+success for PR #3.
