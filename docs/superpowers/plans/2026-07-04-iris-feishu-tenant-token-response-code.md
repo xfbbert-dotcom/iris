@@ -20,7 +20,7 @@
 **Files:**
 - Modify: `apps/core/tests/feishu-tenant-access-token-provider.test.ts`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Add a test inside `describe("FeishuTenantAccessTokenProvider", ...)`:
 
@@ -44,18 +44,20 @@ it("throws when successful token responses omit or mistype the Feishu code", asy
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `npm --workspace apps/core test -- feishu-tenant-access-token-provider.test.ts`
 
 Expected: FAIL because the current provider accepts the missing-code response.
+
+Observed: FAIL. The missing-code response resolved `"tenant-token"` instead of rejecting.
 
 ### Task 2: Minimal Implementation
 
 **Files:**
 - Modify: `apps/core/src/feishu/feishu-tenant-access-token-provider.ts`
 
-- [ ] **Step 1: Require numeric code before reading tenant token**
+- [x] **Step 1: Require numeric code before reading tenant token**
 
 Update `readTenantAccessToken()`:
 
@@ -69,21 +71,26 @@ if (code !== 0) {
 }
 ```
 
-- [ ] **Step 2: Run GREEN**
+- [x] **Step 2: Run GREEN**
 
 Run: `npm --workspace apps/core test -- feishu-tenant-access-token-provider.test.ts`
 
 Expected: PASS.
 
+Observed: PASS with 10 tenant access token provider tests passing.
+
 ### Task 3: Verification And PR
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run: `npm run verify`
 
 Expected: PASS for diff check, typecheck, Core tests, Python tests, and Docker Compose config.
 
-- [ ] **Step 2: Commit and push**
+Observed: PASS. Core reported 730 passing tests and 4 skipped tests. Python worker tests reported
+7 passing tests. Docker Compose config rendered successfully.
+
+- [x] **Step 2: Commit and push**
 
 Run:
 
@@ -93,8 +100,10 @@ git commit -m "fix: require feishu tenant token response codes"
 git push
 ```
 
-- [ ] **Step 3: Watch PR checks**
+- [x] **Step 3: Watch PR checks**
 
 Run: `gh pr checks 3 --watch --interval 10`
 
 Expected: Core and AI Worker checks pass.
+
+Observed: PASS. GitHub Actions reported Core and AI Worker success for PR #3.
