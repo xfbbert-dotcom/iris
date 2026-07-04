@@ -106,7 +106,11 @@ Expected: the command exits 0.
 Observed: `npm run verify` exited 0 with Core `820` passed / `4` skipped, Python `7` passed, and
 `docker compose config` succeeded.
 
-- [ ] **Step 2: Commit, push, and verify PR checks**
+- [x] **Step 2: Commit, push, and verify PR checks**
 
 Commit the in-memory queue ingress parity patch, push `codex/iris-document-source-registry`,
 update PR #3, and confirm GitHub Actions Core and AI Worker checks pass.
+
+Observed: committed `a84cd70b`, pushed `codex/iris-document-source-registry`, updated PR #3, and
+confirmed GitHub Actions Core and AI Worker checks passed for HEAD
+`a84cd70be8d891c4aab38499fede3d6e8621d8aa`.
