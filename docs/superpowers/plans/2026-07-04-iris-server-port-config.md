@@ -74,7 +74,7 @@ npm run verify
 
 Expected: the command exits 0.
 
-- [ ] **Step 5: Commit, push, and verify PR checks**
+- [x] **Step 5: Commit, push, and verify PR checks**
 
 Commit the server port config update, push `codex/iris-document-source-registry`, update PR #3,
 and confirm GitHub Actions returns Core and AI Worker success.
