@@ -27,6 +27,9 @@ $irisHeaders=@{Authorization="Bearer $env:IRIS_INTERNAL_API_TOKEN"}
 Add `-Headers $irisHeaders` to the internal `Invoke-RestMethod` examples below. `/health` and
 `/feishu/events` do not use this token.
 
+The bearer scheme is case-insensitive for client compatibility, but the token value must match
+`IRIS_INTERNAL_API_TOKEN` exactly.
+
 The token guard applies to the internal request path before any query string. For example,
 `/internal/status?details=1` and `/internal?probe=1` both require the same bearer token when
 `IRIS_INTERNAL_API_TOKEN` is set.

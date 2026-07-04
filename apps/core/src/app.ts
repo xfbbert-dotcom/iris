@@ -204,7 +204,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return;
     }
 
-    if (request.headers.authorization !== `Bearer ${internalApiToken}`) {
+    if (!isInternalApiAuthorized(request.headers.authorization, internalApiToken)) {
       return reply.code(401).send({
         ok: false,
         error: "internal_api_unauthorized",
@@ -1003,6 +1003,14 @@ function readInternalApiToken(value: string | undefined): string | undefined {
 function isInternalApiRequest(url: string): boolean {
   const path = url.split("?", 1)[0];
   return path === "/internal" || path.startsWith("/internal/");
+}
+
+function isInternalApiAuthorized(
+  authorization: string | undefined,
+  token: string,
+): boolean {
+  const match = /^Bearer\s+(.+)$/i.exec(authorization ?? "");
+  return match?.[1] === token;
 }
 
 async function closeRuntimeResources(

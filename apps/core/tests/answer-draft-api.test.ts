@@ -445,6 +445,25 @@ describe("internal API token guard", () => {
       error: "internal_api_unauthorized",
     });
   });
+
+  it("accepts bearer authorization scheme case-insensitively", async () => {
+    const app = buildApp({
+      internalApiToken: "operator-secret",
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: { authorization: "bearer operator-secret" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().schemaVersion).toBe(1);
+  });
 });
 
 describe("GET /internal/audit/status", () => {

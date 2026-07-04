@@ -398,7 +398,9 @@ Internal operator APIs must have an explicit protection boundary. During the ear
 Core may use a shared `IRIS_INTERNAL_API_TOKEN` Bearer guard for `/internal/*` routes while Feishu
 callback and health endpoints remain separately governed. The guard must match the request path
 before the query string so `/internal?probe=1` and `/internal/status?details=1` cannot bypass the
-boundary. This is a rollout control, not the final admin identity model.
+boundary. The `Bearer` scheme may be matched case-insensitively for HTTP client compatibility, but
+the token value itself must remain an exact shared-secret match. This is a rollout control, not the
+final admin identity model.
 
 When Iris is disabled, it should stop processing new messages, stop proactive speech, and stop executing tasks. Admins may still view logs and configuration.
 
