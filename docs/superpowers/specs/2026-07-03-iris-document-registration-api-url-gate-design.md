@@ -14,6 +14,10 @@ Accepted source URIs are normalized before they reach the document sync runtime 
 query strings and fragments. This keeps manual registration aligned with group-chat link discovery
 and prevents copied links from creating duplicate document sources for the same document path.
 
+The document sync runtime applies the same normalization and validation before writing to the
+registry. This keeps future internal callers from bypassing the HTTP API boundary and registering
+duplicate copied URLs.
+
 ## Scope
 
 This only gates the current Feishu-backed document registration APIs. Future support for uploaded files, PDFs, or external URLs should add explicit fetchers and registration paths rather than weakening this gate.
@@ -25,4 +29,5 @@ This only gates the current Feishu-backed document registration APIs. Future sup
 - URLs with embedded username/password credentials return `400 invalid_request`.
 - Copied links with query strings or fragments call the runtime with a canonical path-only
   `sourceUri`.
+- Direct document sync runtime registration also writes canonical path-only `sourceUri` values.
 - Valid existing docx/wiki registration flows continue to call the runtime unchanged.

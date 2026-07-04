@@ -327,7 +327,7 @@ describe("createDocumentSyncRuntime", () => {
     });
     await expect(
       runtime?.registerAuthorizedWikiDocument({
-        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1?from=copy#heading",
         title: "Handbook",
         authorizedSpaceId: "space-1",
         observedAt: new Date("2026-07-03T03:00:00.000Z"),
@@ -366,7 +366,7 @@ describe("createDocumentSyncRuntime", () => {
     });
     await expect(
       runtime?.registerUserSubmittedDocument({
-        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1?open=1#top",
         title: "User Guide",
         submittedByUserId: "ou_1",
         observedAt: new Date("2026-07-03T03:10:00.000Z"),

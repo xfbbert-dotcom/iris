@@ -11,7 +11,11 @@ import {
 } from "../config/env.js";
 import { readDatabaseConfig, type DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
-import { createFeishuDocumentBodyFetcher } from "../documents/feishu-document-body-fetcher.js";
+import {
+  createFeishuDocumentBodyFetcher,
+  parseFeishuDocxDocumentId,
+  parseFeishuWikiNodeToken,
+} from "../documents/feishu-document-body-fetcher.js";
 import {
   createDocumentSyncRunner,
   type DocumentBodyFetcher,
@@ -412,13 +416,19 @@ function createEnabledDocumentSyncRuntime({
       },
     },
     async registerAuthorizedWikiDocument(input) {
-      const source = await documentSources.registerAuthorizedWikiDocument(input);
+      const source = await documentSources.registerAuthorizedWikiDocument({
+        ...input,
+        sourceUri: normalizeFeishuRegistrationSourceUri(input.sourceUri),
+      });
       const enqueue = await manualPlanner.enqueueSource({ documentSourceId: source.id });
 
       return { source, enqueue };
     },
     async registerUserSubmittedDocument(input) {
-      const source = await documentSources.registerUserSubmittedDocument(input);
+      const source = await documentSources.registerUserSubmittedDocument({
+        ...input,
+        sourceUri: normalizeFeishuRegistrationSourceUri(input.sourceUri),
+      });
       const enqueue = await manualPlanner.enqueueSource({ documentSourceId: source.id });
 
       return { source, enqueue };
@@ -478,6 +488,20 @@ function sanitizeLimit(value: number): number {
   }
 
   return Math.max(0, Math.floor(value));
+}
+
+function normalizeFeishuRegistrationSourceUri(sourceUri: string): string {
+  if (
+    parseFeishuDocxDocumentId(sourceUri) === undefined &&
+    parseFeishuWikiNodeToken(sourceUri) === undefined
+  ) {
+    throw new Error("unsupported Feishu document source URI");
+  }
+
+  const url = new URL(sourceUri);
+  url.search = "";
+  url.hash = "";
+  return url.href;
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): DocumentSyncRuntimeDocumentSources {
