@@ -106,6 +106,22 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     );
   });
 
+  it("rejects vectors that do not match configured dimensions", async () => {
+    const provider = createOpenAICompatibleEmbeddingProvider({
+      config: {
+        ...config(),
+        dimensions: 3,
+      },
+      fetch: vi.fn(async () =>
+        jsonResponse({ data: [{ index: 0, embedding: [1, 0] }] }),
+      ),
+    });
+
+    await expect(provider.embedTexts(["alpha"])).rejects.toThrow(
+      "embedding vector length 2 does not match configured dimension 3",
+    );
+  });
+
   it("rejects invalid embedding response indexes before returning vectors", async () => {
     for (const data of [
       [

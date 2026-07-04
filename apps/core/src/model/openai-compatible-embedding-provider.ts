@@ -49,7 +49,7 @@ export function createOpenAICompatibleEmbeddingProvider({
           );
         }
 
-        const embeddings = readEmbeddingVectors(responseBody);
+        const embeddings = readEmbeddingVectors(responseBody, config.dimensions);
         if (embeddings.length !== texts.length) {
           throw new Error("embedding response count mismatch");
         }
@@ -82,7 +82,10 @@ async function readJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
-function readEmbeddingVectors(responseBody: unknown): number[][] {
+function readEmbeddingVectors(
+  responseBody: unknown,
+  expectedDimensions: number | undefined,
+): number[][] {
   if (!isRecord(responseBody) || !Array.isArray(responseBody.data)) {
     throw new Error("embedding provider response did not include embedding data");
   }
@@ -107,13 +110,21 @@ function readEmbeddingVectors(responseBody: unknown): number[][] {
       throw new Error("embedding provider response did not include embedding data");
     }
 
-    return item.embedding.map((value) => {
+    const vector = item.embedding.map((value) => {
       if (typeof value !== "number" || !Number.isFinite(value)) {
         throw new Error("embedding vector contains invalid value");
       }
 
       return value;
     });
+
+    if (expectedDimensions !== undefined && vector.length !== expectedDimensions) {
+      throw new Error(
+        `embedding vector length ${vector.length} does not match configured dimension ${expectedDimensions}`,
+      );
+    }
+
+    return vector;
   });
 }
 
