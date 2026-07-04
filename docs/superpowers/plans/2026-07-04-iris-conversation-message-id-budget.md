@@ -98,3 +98,25 @@ update PR #3, and confirm GitHub Actions Core and AI Worker checks pass.
 
 Observed: committed `5e53b9c`, pushed to `codex/iris-document-source-registry`, updated PR #3,
 and confirmed GitHub Actions Core and AI Worker checks passed.
+
+### Follow-up: Reject Blank Conversation Identifiers
+
+**Files:**
+- Modify: `apps/core/tests/postgres-conversation-message-repository.test.ts`
+- Modify: `apps/core/src/conversation/postgres-conversation-message-repository.ts`
+- Modify: `docs/superpowers/specs/2026-07-04-iris-conversation-message-id-budget-design.md`
+
+- [x] **Step 1: Add failing blank identifier tests**
+
+Cover blank `providerMessageId`, `chatId`, `senderId`, `messageType`, and
+`rawEventIdempotencyKey` before upsert, plus blank `listRecentByChat.chatId` before query.
+
+Observed: focused tests failed because blank values reached `queryable.query`, or recent-chat reads
+resolved instead of rejecting.
+
+- [x] **Step 2: Reject blank identifiers before SQL**
+
+Extend the shared identifier guard to reject values whose trimmed length is zero, without trimming
+or otherwise rewriting non-blank provider IDs.
+
+Observed: focused Postgres conversation message repository tests passed with `18` tests.

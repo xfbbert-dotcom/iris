@@ -106,6 +106,10 @@ export function createPostgresConversationMessageRepository({
 }
 
 function requireBoundedIdentifier(fieldName: string, value: string): string {
+  if (value.trim().length === 0) {
+    throw new Error(`${fieldName} must not be blank`);
+  }
+
   if (value.length > MAX_CONVERSATION_MESSAGE_ID_CHARS) {
     throw new Error(
       `${fieldName} must be at most ${MAX_CONVERSATION_MESSAGE_ID_CHARS} characters`,

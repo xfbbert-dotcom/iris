@@ -115,6 +115,39 @@ describe("PostgresConversationMessageRepository", () => {
     expect(queryable.query).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      field: "providerMessageId",
+      message: "providerMessageId must not be blank",
+    },
+    {
+      field: "chatId",
+      message: "chatId must not be blank",
+    },
+    {
+      field: "senderId",
+      message: "senderId must not be blank",
+    },
+    {
+      field: "messageType",
+      message: "messageType must not be blank",
+    },
+    {
+      field: "rawEventIdempotencyKey",
+      message: "rawEventIdempotencyKey must not be blank",
+    },
+  ] as const)("rejects blank $field before upsert", async ({ field, message }) => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+    const input: UpsertConversationMessageInput = {
+      ...baseUpsertInput(),
+      [field]: "   ",
+    };
+
+    await expect(repository.upsertMessage(input)).rejects.toThrow(message);
+    expect(queryable.query).not.toHaveBeenCalled();
+  });
+
   it("lists recent messages by chat", async () => {
     const queryable = fakeQueryable([
       {
@@ -159,6 +192,16 @@ describe("PostgresConversationMessageRepository", () => {
     await expect(
       repository.listRecentByChat({ chatId: "C".repeat(513), limit: 20 }),
     ).rejects.toThrow("chatId must be at most 512 characters");
+    expect(queryable.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects blank recent chat ids before querying Postgres", async () => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(repository.listRecentByChat({ chatId: "   ", limit: 20 })).rejects.toThrow(
+      "chatId must not be blank",
+    );
     expect(queryable.query).not.toHaveBeenCalled();
   });
 
