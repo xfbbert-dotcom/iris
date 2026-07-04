@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import { buildApp } from "../src/app.js";
 import type { RawEvent } from "../src/events/raw-event-queue.js";
@@ -228,6 +229,45 @@ describe("POST /internal/answer-drafts", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
+  it("truncates oversized live chat message fields before calling the orchestrator", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async (_input: AnswerDraftInput) => ({
+        answerText: "Draft answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const app = buildApp({ answerDraftOrchestrator });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        liveChatMessages: [
+          {
+            speaker: `${"S".repeat(300)} trailing speaker detail`,
+            text: `${"T".repeat(2500)} trailing message detail`,
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const request = answerDraftOrchestrator.generateDraft.mock.calls[0]?.[0];
+    if (request === undefined) {
+      throw new Error("expected generateDraft to be called");
+    }
+    expect(request.liveChatMessages[0].speaker.length).toBeLessThanOrEqual(256);
+    expect(request.liveChatMessages[0].speaker).toContain("[truncated]");
+    expect(request.liveChatMessages[0].speaker).not.toContain("trailing speaker detail");
+    expect(request.liveChatMessages[0].text.length).toBeLessThanOrEqual(2000);
+    expect(request.liveChatMessages[0].text).toContain("[truncated]");
+    expect(request.liveChatMessages[0].text).not.toContain("trailing message detail");
   });
 
   it("returns 400 for unsafe context limits", async () => {

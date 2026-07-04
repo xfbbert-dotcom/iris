@@ -141,6 +141,9 @@ const maxInternalStringLength = 512;
 const maxInternalSourceUriLength = 2048;
 const maxAnswerDraftQuestionLength = 4000;
 const maxAnswerDraftLiveChatMessageInputCount = 50;
+const maxAnswerDraftLiveChatSpeakerLength = 256;
+const maxAnswerDraftLiveChatTextLength = 2000;
+const internalTruncationMarker = " ... [truncated]";
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
@@ -1740,17 +1743,42 @@ function normalizeSupportedFeishuDocumentSourceUri(sourceUri: string): string | 
 }
 
 function parseLiveChatMessage(value: unknown): LiveChatMessage | undefined {
-  if (!isRecord(value) || typeof value.speaker !== "string" || typeof value.text !== "string") {
+  if (!isRecord(value)) {
     return undefined;
   }
 
-  const speaker = value.speaker.trim();
-  const text = value.text.trim();
-  if (speaker.length === 0 || text.length === 0) {
+  const speaker = readNonBlankTruncatedString(
+    value.speaker,
+    maxAnswerDraftLiveChatSpeakerLength,
+  );
+  const text = readNonBlankTruncatedString(value.text, maxAnswerDraftLiveChatTextLength);
+  if (speaker === undefined || text === undefined) {
     return undefined;
   }
 
   return { speaker, text };
+}
+
+function readNonBlankTruncatedString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  return truncateInternalString(trimmed, maxLength);
+}
+
+function truncateInternalString(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  const prefixChars = maxLength - internalTruncationMarker.length;
+  return `${value.slice(0, prefixChars).trimEnd()}${internalTruncationMarker}`;
 }
 
 function isFiniteSafeMagnitudeNumberOrUndefined(value: unknown): value is number | undefined {
