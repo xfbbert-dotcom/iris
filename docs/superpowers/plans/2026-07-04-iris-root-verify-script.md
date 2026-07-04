@@ -68,7 +68,7 @@ npm run verify
 
 Expected: the script exits 0 after diff check, typecheck, Vitest, pytest, and Compose config.
 
-- [ ] **Step 2: Commit, push, and verify PR checks**
+- [x] **Step 2: Commit, push, and verify PR checks**
 
 Commit the script and docs, push `codex/iris-document-source-registry`, update PR #3, and confirm
 GitHub Actions returns Core and AI Worker success.
