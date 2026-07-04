@@ -761,6 +761,41 @@ describe("createDocumentSourceRegistry", () => {
     ]);
   });
 
+  it("normalizes filter identifiers before matching sources", () => {
+    let id = 0;
+    const registry = createDocumentSourceRegistry({
+      createId: () => `doc-source-${++id}`,
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+
+    const groupSource = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: " group-1 ",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+    const wikiSource = registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/wiki/space-1",
+      authorizedSpaceId: " space-1 ",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+    const userSource = registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/uploads/user-guide.pdf",
+      submittedByUserId: " user-1 ",
+      observedAt: new Date("2026-07-01T04:03:00.000Z"),
+    });
+
+    expect(registry.listSourcesByGroupId(" group-1 ").map((source) => source.id)).toEqual([
+      groupSource.id,
+    ]);
+    expect(registry.listSourcesByAuthorizedSpaceId(" space-1 ").map((source) => source.id)).toEqual([
+      wikiSource.id,
+    ]);
+    expect(registry.listSourcesBySubmittingUserId(" user-1 ").map((source) => source.id)).toEqual([
+      userSource.id,
+    ]);
+  });
+
   it("keeps answering filter shortcuts independent from method binding", () => {
     const registry = createDocumentSourceRegistry({
       createId: () => "doc-source-1",

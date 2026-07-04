@@ -302,6 +302,11 @@ returning *
     listSourcesByAnsweringEnabled,
 
     listSourcesByGroupId(groupId) {
+      const normalizedGroupId = normalizeOptional("groupId", groupId);
+      if (normalizedGroupId === undefined) {
+        return Promise.resolve([]);
+      }
+
       return fetchSources(
         pool,
         `
@@ -313,11 +318,16 @@ or exists (
     and evidence.group_id = $1
 )
 `,
-        [groupId],
+        [normalizedGroupId],
       );
     },
 
     listSourcesByAuthorizedSpaceId(spaceId) {
+      const normalizedSpaceId = normalizeOptional("spaceId", spaceId);
+      if (normalizedSpaceId === undefined) {
+        return Promise.resolve([]);
+      }
+
       return fetchSources(
         pool,
         `
@@ -329,11 +339,16 @@ or exists (
     and evidence.space_id = $1
 )
 `,
-        [spaceId],
+        [normalizedSpaceId],
       );
     },
 
     listSourcesBySubmittingUserId(userId) {
+      const normalizedUserId = normalizeOptional("userId", userId);
+      if (normalizedUserId === undefined) {
+        return Promise.resolve([]);
+      }
+
       return fetchSources(
         pool,
         `
@@ -345,7 +360,7 @@ or exists (
     and evidence.user_id = $1
 )
 `,
-        [userId],
+        [normalizedUserId],
       );
     },
   };

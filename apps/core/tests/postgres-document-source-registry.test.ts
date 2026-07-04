@@ -582,6 +582,25 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     expect(sourceSelect?.values).toEqual([false]);
   });
 
+  it("normalizes filter identifiers before querying sources", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await expect(registry.listSourcesByGroupId(" group-1 ")).resolves.toHaveLength(1);
+    await expect(registry.listSourcesByAuthorizedSpaceId(" space-1 ")).resolves.toHaveLength(1);
+    await expect(registry.listSourcesBySubmittingUserId(" user-1 ")).resolves.toHaveLength(1);
+
+    const sourceSelects = fake.queries.filter((query) =>
+      normalizeSql(query.sql).startsWith("select * from document_sources"),
+    );
+
+    expect(sourceSelects.map((query) => query.values)).toEqual([
+      ["group-1"],
+      ["space-1"],
+      ["user-1"],
+    ]);
+  });
+
   it("keeps answering filter shortcuts independent from method binding", async () => {
     const fake = createFakePool();
     const registry = createPostgresDocumentSourceRegistry(fake.pool);

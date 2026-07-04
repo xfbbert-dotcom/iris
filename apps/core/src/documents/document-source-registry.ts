@@ -305,36 +305,51 @@ export function createDocumentSourceRegistry(
     listSourcesByAnsweringEnabled,
 
     listSourcesByGroupId(groupId) {
+      const normalizedGroupId = normalizeOptional("groupId", groupId);
+      if (normalizedGroupId === undefined) {
+        return [];
+      }
+
       return cloneSources(
         sortSources(
           Array.from(sourcesById.values()).filter(
             (source) =>
-              source.originGroupId === groupId ||
-              source.evidence.some((evidence) => evidence.groupId === groupId),
+              source.originGroupId === normalizedGroupId ||
+              source.evidence.some((evidence) => evidence.groupId === normalizedGroupId),
           ),
         ),
       );
     },
 
     listSourcesByAuthorizedSpaceId(spaceId) {
+      const normalizedSpaceId = normalizeOptional("spaceId", spaceId);
+      if (normalizedSpaceId === undefined) {
+        return [];
+      }
+
       return cloneSources(
         sortSources(
           Array.from(sourcesById.values()).filter(
             (source) =>
-              source.authorizedSpaceId === spaceId ||
-              source.evidence.some((evidence) => evidence.spaceId === spaceId),
+              source.authorizedSpaceId === normalizedSpaceId ||
+              source.evidence.some((evidence) => evidence.spaceId === normalizedSpaceId),
           ),
         ),
       );
     },
 
     listSourcesBySubmittingUserId(userId) {
+      const normalizedUserId = normalizeOptional("userId", userId);
+      if (normalizedUserId === undefined) {
+        return [];
+      }
+
       return cloneSources(
         sortSources(
           Array.from(sourcesById.values()).filter(
             (source) =>
-              source.submittedByUserId === userId ||
-              source.evidence.some((evidence) => evidence.userId === userId),
+              source.submittedByUserId === normalizedUserId ||
+              source.evidence.some((evidence) => evidence.userId === normalizedUserId),
           ),
         ),
       );
