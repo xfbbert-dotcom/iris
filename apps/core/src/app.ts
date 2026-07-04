@@ -1029,7 +1029,7 @@ function parseDeadLetterLimit(value: unknown): number | undefined {
   }
 
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  if (!Number.isInteger(parsed) || !Number.isSafeInteger(parsed) || parsed < 0) {
     return undefined;
   }
 

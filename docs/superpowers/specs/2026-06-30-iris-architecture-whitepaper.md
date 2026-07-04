@@ -686,6 +686,8 @@ Required architectural response:
 - Operator-facing numeric request fields that control batch or planning scope
   must reject unsafe integers at the API boundary, and planning components must
   defensively sanitize unsafe limits before reaching storage queries.
+- Admin list/query limits must also reject unsafe integers before applying
+  product caps such as maximum page size.
 - Validation should not invent product-specific business caps unless a separate architecture decision calls for them.
 
 Evolution signal:
