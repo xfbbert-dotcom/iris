@@ -16,6 +16,7 @@ export type FeishuDocumentBodyFetcherDependencies = {
 const DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_FEISHU_DOCUMENT_MAX_CONTENT_CHARS = 2_000_000;
 const RAW_CONTENT_RESPONSE_OVERHEAD_BYTES = 4096;
+export const MAX_FEISHU_DOCUMENT_TOKEN_CHARS = 512;
 
 const supportedSourceTypes = new Set<DocumentSourceType>([
   "group_visible_document",
@@ -54,8 +55,7 @@ function parseFeishuPathToken(sourceUri: string, markers: string[]): string | un
     return undefined;
   }
 
-  const token = segments[1];
-  return token === undefined || token.trim().length === 0 ? undefined : token;
+  return normalizeFeishuDocumentToken(segments[1]);
 }
 
 export function createFeishuDocumentBodyFetcher({
@@ -282,11 +282,25 @@ function readWikiDocumentId(responseBody: unknown): string {
   }
 
   const objectToken = responseBody.data.node.obj_token;
-  if (typeof objectToken !== "string" || objectToken.trim().length === 0) {
+  const documentToken = normalizeFeishuDocumentToken(objectToken);
+  if (documentToken === undefined) {
     throw new Error("Feishu wiki node response did not include document token");
   }
 
-  return objectToken.trim();
+  return documentToken;
+}
+
+function normalizeFeishuDocumentToken(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const token = value.trim();
+  if (token.length === 0 || token.length > MAX_FEISHU_DOCUMENT_TOKEN_CHARS) {
+    return undefined;
+  }
+
+  return token;
 }
 
 function readRawContent(responseBody: unknown, maxContentChars: number): string {

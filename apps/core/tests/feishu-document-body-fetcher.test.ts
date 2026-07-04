@@ -27,6 +27,9 @@ describe("FeishuDocumentBodyFetcher", () => {
     expect(
       parseFeishuDocxDocumentId("https://acme.feishu.cn/minutes/docx/doc_token_4"),
     ).toBeUndefined();
+    expect(
+      parseFeishuDocxDocumentId(`https://docs.feishu.cn/docx/${"d".repeat(513)}`),
+    ).toBeUndefined();
   });
 
   it("parses wiki node tokens from Feishu URLs", () => {
@@ -47,6 +50,9 @@ describe("FeishuDocumentBodyFetcher", () => {
     ).toBeUndefined();
     expect(
       parseFeishuWikiNodeToken("https://acme.feishu.cn/drive/wiki/wiki_token_4"),
+    ).toBeUndefined();
+    expect(
+      parseFeishuWikiNodeToken(`https://acme.feishu.cn/wiki/${"w".repeat(513)}`),
     ).toBeUndefined();
   });
 
@@ -303,6 +309,25 @@ describe("FeishuDocumentBodyFetcher", () => {
     await expect(
       fetcher.fetch(source({ sourceUri: "https://acme.feishu.cn/wiki/wiki_1" })),
     ).rejects.toThrow("unsupported Feishu wiki object type: sheet");
+  });
+
+  it("throws before raw content fetches when wiki node document tokens are oversized", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        code: 0,
+        data: { node: { obj_token: "d".repeat(513), obj_type: "docx" } },
+      }),
+    );
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(
+      fetcher.fetch(source({ sourceUri: "https://acme.feishu.cn/wiki/wiki_1" })),
+    ).rejects.toThrow("Feishu wiki node response did not include document token");
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("throws when raw content responses omit the Feishu code", async () => {

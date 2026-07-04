@@ -1,5 +1,6 @@
 import type { DocumentSource } from "../documents/document-source-registry.js";
 import {
+  MAX_FEISHU_DOCUMENT_TOKEN_CHARS,
   parseFeishuDocxDocumentId,
   parseFeishuWikiNodeToken,
 } from "../documents/feishu-document-body-fetcher.js";
@@ -218,8 +219,13 @@ function readWikiDocumentId(responseBody: unknown): string | undefined {
   }
 
   const objectToken = responseBody.data.node.obj_token;
-  return typeof objectToken === "string" && objectToken.trim().length > 0
-    ? objectToken.trim()
+  if (typeof objectToken !== "string") {
+    return undefined;
+  }
+
+  const documentToken = objectToken.trim();
+  return documentToken.length > 0 && documentToken.length <= MAX_FEISHU_DOCUMENT_TOKEN_CHARS
+    ? documentToken
     : undefined;
 }
 

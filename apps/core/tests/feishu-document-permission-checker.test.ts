@@ -137,6 +137,25 @@ describe("createFeishuDocumentPermissionChecker", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("returns false when wiki node document tokens are oversized", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        code: 0,
+        data: { node: { obj_type: "docx", obj_token: "d".repeat(513) } },
+      }),
+    );
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(
+      checker.canReadSource(source({ sourceUri: "https://example.feishu.cn/wiki/wiki-node" })),
+    ).resolves.toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects unsafe timeout values before checking permissions", () => {
     expect(() =>
       createFeishuDocumentPermissionChecker({
