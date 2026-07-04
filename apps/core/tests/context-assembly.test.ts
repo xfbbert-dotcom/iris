@@ -114,6 +114,23 @@ describe("assemblePromptContext", () => {
     expect(context).not.toContain("  Please check this.  ");
   });
 
+  it("truncates oversized live chat message text before formatting", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: [
+        { speaker: "Alice", text: `${"L".repeat(2100)} trailing live context` }
+      ]
+    });
+    const formattedMessage = context.match(
+      /<message speaker="Alice">(?<text>.*?)<\/message>/s,
+    )?.groups?.text;
+
+    expect(formattedMessage).toBeDefined();
+    expect(formattedMessage!.length).toBeLessThanOrEqual(2000);
+    expect(formattedMessage).toContain("[truncated]");
+    expect(formattedMessage).not.toContain("trailing live context");
+  });
+
   it("trims background document source and text when formatting documents", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [
@@ -127,6 +144,23 @@ describe("assemblePromptContext", () => {
     );
     expect(context).not.toContain(" feishu://doc/abc ");
     expect(context).not.toContain("  Useful document context.  ");
+  });
+
+  it("truncates oversized background document text before formatting", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [
+        { source: "doc-large", text: `${"D".repeat(1300)} trailing context` }
+      ],
+      liveChatMessages: []
+    });
+    const formattedDocument = context.match(
+      /<document source="doc-large">(?<text>.*?)<\/document>/s,
+    )?.groups?.text;
+
+    expect(formattedDocument).toBeDefined();
+    expect(formattedDocument!.length).toBeLessThanOrEqual(1200);
+    expect(formattedDocument).toContain("[truncated]");
+    expect(formattedDocument).not.toContain("trailing context");
   });
 
   it("caps background documents to the first 12 items", () => {

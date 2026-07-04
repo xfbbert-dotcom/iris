@@ -17,6 +17,9 @@ export type PromptContextInput = {
 const DEFAULT_LIVE_CHAT_LIMIT = 20;
 const MAX_LIVE_CHAT_LIMIT = 20;
 const MAX_BACKGROUND_DOCUMENT_LIMIT = 12;
+const MAX_BACKGROUND_DOCUMENT_TEXT_CHARS = 1200;
+const MAX_LIVE_CHAT_MESSAGE_TEXT_CHARS = 2000;
+const TRUNCATION_MARKER = " ... [truncated]";
 
 export function assemblePromptContext(input: PromptContextInput): string {
   const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
@@ -45,14 +48,23 @@ export function assemblePromptContext(input: PromptContextInput): string {
 
 function formatBackgroundDocument(document: BackgroundDocument): string {
   return `<document source="${escapeXml(document.source.trim())}">${escapeXml(
-    document.text.trim(),
+    truncatePromptText(document.text.trim(), MAX_BACKGROUND_DOCUMENT_TEXT_CHARS),
   )}</document>`;
 }
 
 function formatLiveChatMessage(message: LiveChatMessage): string {
   return `<message speaker="${escapeXml(message.speaker.trim())}">${escapeXml(
-    message.text.trim(),
+    truncatePromptText(message.text.trim(), MAX_LIVE_CHAT_MESSAGE_TEXT_CHARS),
   )}</message>`;
+}
+
+function truncatePromptText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  const prefixChars = maxChars - TRUNCATION_MARKER.length;
+  return `${value.slice(0, prefixChars).trimEnd()}${TRUNCATION_MARKER}`;
 }
 
 function sanitizeLiveChatLimit(value: number | undefined): number {
