@@ -134,6 +134,22 @@ describe("DocumentSyncWorker", () => {
       },
     ]);
   });
+
+  it("rejects unsafe batch limits before dequeuing jobs", async () => {
+    const queue = {
+      dequeueBatch: vi.fn(async () => []),
+      handleFailedJob: vi.fn(),
+    };
+    const worker = createDocumentSyncWorker({
+      queue,
+      runner: { syncSourceById: vi.fn() },
+    });
+
+    await expect(worker.processBatch({ limit: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow(
+      "document sync worker batch limit must be a finite safe-magnitude number",
+    );
+    expect(queue.dequeueBatch).not.toHaveBeenCalled();
+  });
 });
 
 function jobFixture(overrides: Partial<DocumentSyncJob> = {}): DocumentSyncJob {

@@ -43,6 +43,12 @@ Out of scope:
 - `DocumentSyncQueue.dequeueBatch(limit)`
 - `DocumentSyncRunner.syncSourceById(sourceId)`
 
+Direct `processBatch()` calls defensively sanitize non-finite limits to zero
+and reject finite limits beyond JavaScript's safe integer magnitude before
+calling `dequeueBatch()`. The worker loop also validates configured batch
+limits before polling starts, but direct worker calls remain guarded so tests,
+scripts, and future admin paths cannot bypass numeric safety.
+
 For each dequeued job, the worker calls `syncSourceById(job.documentSourceId)`.
 
 Result shape:

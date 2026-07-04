@@ -144,6 +144,18 @@ gh pr edit 3 --repo xfbbert-dotcom/iris --body "<updated body with Phase 2Y summ
 
 Expected: PR #3 contains Phase 2Y summary and checked test plan.
 
+## Task 4: Direct Batch Limit Safe Integers
+
+- [x] **Step 1: Add failing worker coverage**
+  - Prove `Number.MAX_SAFE_INTEGER + 1` rejects before `DocumentSyncQueue.dequeueBatch()`.
+
+- [x] **Step 2: Add safe-magnitude guard**
+  - Reject unsafe finite direct `processBatch()` limits while preserving existing non-finite-to-zero behavior.
+
+- [x] **Step 3: Verify focused and full suites**
+  - Run focused document sync worker tests.
+  - Run typecheck, Python tests, Docker Compose config, and full npm tests.
+
 ## Self-Review
 
 - Spec coverage: worker, loop, failure strategy, non-overlap, and deferred runtime wiring are covered.

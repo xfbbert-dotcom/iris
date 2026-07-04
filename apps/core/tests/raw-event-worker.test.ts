@@ -33,6 +33,22 @@ describe("RawEventWorker", () => {
     expect(queue.dequeueBatch).toHaveBeenNthCalledWith(2, 0);
   });
 
+  it("rejects unsafe batch limits before dequeuing events", async () => {
+    const queue = {
+      dequeueBatch: vi.fn(async () => []),
+      handleFailedEvent: vi.fn(),
+    };
+    const worker = createRawEventWorker({
+      queue,
+      processor: { process: vi.fn(async () => undefined) },
+    });
+
+    await expect(worker.processBatch({ limit: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow(
+      "raw event worker batch limit must be a finite safe-magnitude number",
+    );
+    expect(queue.dequeueBatch).not.toHaveBeenCalled();
+  });
+
   it("requeues failed events and continues processing", async () => {
     const first = eventFixture({ idempotencyKey: "raw-event:feishu:event-1" });
     const second = eventFixture({ idempotencyKey: "raw-event:feishu:event-2" });

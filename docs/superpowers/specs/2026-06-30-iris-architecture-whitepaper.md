@@ -685,6 +685,9 @@ Required architectural response:
   direct dependency injection cannot bypass environment validation.
 - Worker loops must re-validate interval and batch-limit values at construction
   time so direct composition cannot bypass environment validation.
+- Worker `processBatch()` entrypoints must reject unsafe finite batch limits
+  before dequeuing work, while retaining defensive `LIMIT 0` equivalent
+  behavior for non-finite direct-call values.
 - Operator-facing numeric request fields that control batch or planning scope
   must reject unsafe integers at the API boundary, and planning components must
   defensively sanitize unsafe limits before reaching storage queries.
