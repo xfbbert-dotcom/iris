@@ -98,6 +98,30 @@ describe("RedisRawEventQueue", () => {
     ).toThrow("Invalid raw event payload");
   });
 
+  it("rejects oversized queued raw event identifiers", () => {
+    const validPayload = {
+      ...eventFixture(),
+      receivedAt: "2026-07-02T01:00:00.000Z",
+    };
+
+    expect(() =>
+      parseRawEvent(
+        JSON.stringify({
+          ...validPayload,
+          idempotencyKey: `raw-event:feishu:${"e".repeat(513)}`,
+        }),
+      ),
+    ).toThrow("Invalid raw event payload");
+    expect(() =>
+      parseRawEvent(
+        JSON.stringify({
+          ...validPayload,
+          eventType: "t".repeat(513),
+        }),
+      ),
+    ).toThrow("Invalid raw event payload");
+  });
+
   it("dequeues raw events in FIFO order up to limit", async () => {
     const first = eventFixture({ idempotencyKey: "raw-event:feishu:event-1" });
     const second = eventFixture({ idempotencyKey: "raw-event:feishu:event-2" });
