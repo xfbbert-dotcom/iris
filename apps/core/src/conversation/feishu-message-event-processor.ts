@@ -109,7 +109,10 @@ function parseFeishuMessageEvent(event: RawEvent): UpsertConversationMessageInpu
     senderId: readSenderId(eventBody.sender),
     messageType,
     text: readText(messageType, message.content),
-    sentAt: readFeishuTimestamp(message.create_time, event.receivedAt),
+    sentAt: readFeishuTimestamp(
+      message.create_time,
+      readFeishuTimestamp(isRecord(header) ? header.create_time : undefined, event.receivedAt),
+    ),
     rawEventIdempotencyKey: event.idempotencyKey,
   };
 }
