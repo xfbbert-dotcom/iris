@@ -39,6 +39,12 @@ Run Python worker tests:
 npm run test:python
 ```
 
+Run the full local verification suite:
+
+```powershell
+npm run verify
+```
+
 ## Local Database
 
 Start local infrastructure:

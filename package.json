@@ -8,6 +8,7 @@
   "scripts": {
     "test": "npm --workspace apps/core test",
     "test:python": "cd workers/ai && python -m pytest",
-    "typecheck": "npm --workspace apps/core run typecheck"
+    "typecheck": "npm --workspace apps/core run typecheck",
+    "verify": "git diff --check && npm run typecheck && npm test && npm run test:python && docker compose config"
   }
 }

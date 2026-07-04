@@ -298,11 +298,7 @@ Recovery rule:
 Run the local verification suite before changing rollout configuration:
 
 ```powershell
-git diff --check
-npm run typecheck
-npm test
-npm run test:python
-docker compose config
+npm run verify
 ```
 
 For PR verification, GitHub Actions must show:
