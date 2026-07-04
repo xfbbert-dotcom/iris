@@ -184,6 +184,53 @@ describe("RedisDocumentReindexQueue", () => {
     ).toEqual(jobFixture());
   });
 
+  it("rejects oversized document reindex ids before creating idempotency keys", () => {
+    expect(() =>
+      createDocumentReindexIdempotencyKey({
+        embeddingProfileId: "p".repeat(513),
+        documentSnapshotId: "snapshot-1",
+      }),
+    ).toThrow("embeddingProfileId must be at most 512 characters");
+    expect(() =>
+      createDocumentReindexIdempotencyKey({
+        embeddingProfileId: "profile-1536",
+        documentSnapshotId: "s".repeat(513),
+      }),
+    ).toThrow("documentSnapshotId must be at most 512 characters");
+  });
+
+  it("rejects oversized queued document reindex identifiers", () => {
+    const validPayload = {
+      ...jobFixture(),
+      enqueuedAt: "2026-07-02T01:00:00.000Z",
+    };
+
+    expect(() =>
+      parseDocumentReindexJob(
+        JSON.stringify({
+          ...validPayload,
+          idempotencyKey: `reindex:${"p".repeat(513)}:snapshot-1`,
+        }),
+      ),
+    ).toThrow("Invalid document reindex job payload");
+    expect(() =>
+      parseDocumentReindexJob(
+        JSON.stringify({
+          ...validPayload,
+          embeddingProfileId: "p".repeat(513),
+        }),
+      ),
+    ).toThrow("Invalid document reindex job payload");
+    expect(() =>
+      parseDocumentReindexJob(
+        JSON.stringify({
+          ...validPayload,
+          documentSnapshotId: "s".repeat(513),
+        }),
+      ),
+    ).toThrow("Invalid document reindex job payload");
+  });
+
   it("reports Redis queue depth", async () => {
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(),

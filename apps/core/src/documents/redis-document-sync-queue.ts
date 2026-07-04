@@ -1,10 +1,13 @@
-import type {
-  DocumentSyncDeadLetter,
-  DocumentSyncJob,
-  DocumentSyncQueue,
-  FailedDocumentSyncJobInput,
-  FailedDocumentSyncJobResult,
-  ReplayDocumentSyncDeadLettersResult,
+import {
+  MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS,
+  MAX_DOCUMENT_SYNC_JOB_ID_CHARS,
+  createDocumentSyncIdempotencyKey,
+  type DocumentSyncDeadLetter,
+  type DocumentSyncJob,
+  type DocumentSyncQueue,
+  type FailedDocumentSyncJobInput,
+  type FailedDocumentSyncJobResult,
+  type ReplayDocumentSyncDeadLettersResult,
 } from "./document-sync-queue.js";
 import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
@@ -249,13 +252,18 @@ export function parseDocumentSyncJob(payload: string): DocumentSyncJob {
   }
 
   const enqueuedAt = new Date(readString(parsed.enqueuedAt));
+  const idempotencyKey = readString(parsed.idempotencyKey);
+  const documentSourceId = readString(parsed.documentSourceId);
   const reason = parsed.reason;
   const parsedAttempts = readOptionalNonNegativeInteger(parsed.attempts);
   const attempts = parsedAttempts ?? 0;
 
   if (
-    readString(parsed.idempotencyKey).length === 0 ||
-    readString(parsed.documentSourceId).length === 0 ||
+    idempotencyKey.length === 0 ||
+    idempotencyKey.length > MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS ||
+    documentSourceId.length === 0 ||
+    documentSourceId.length > MAX_DOCUMENT_SYNC_JOB_ID_CHARS ||
+    idempotencyKey !== createDocumentSyncIdempotencyKey({ documentSourceId }) ||
     !isValidReason(reason) ||
     Number.isNaN(enqueuedAt.getTime()) ||
     parsedAttempts === null
@@ -264,8 +272,8 @@ export function parseDocumentSyncJob(payload: string): DocumentSyncJob {
   }
 
   return {
-    idempotencyKey: readString(parsed.idempotencyKey),
-    documentSourceId: readString(parsed.documentSourceId),
+    idempotencyKey,
+    documentSourceId,
     reason,
     enqueuedAt,
     attempts,

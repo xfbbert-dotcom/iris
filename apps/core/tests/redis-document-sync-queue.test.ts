@@ -183,6 +183,36 @@ describe("RedisDocumentSyncQueue", () => {
     ).toEqual(job());
   });
 
+  it("rejects oversized document sync ids before creating idempotency keys", () => {
+    expect(() =>
+      createDocumentSyncIdempotencyKey({ documentSourceId: "s".repeat(513) }),
+    ).toThrow("documentSourceId must be at most 512 characters");
+  });
+
+  it("rejects oversized queued document sync identifiers", () => {
+    const validPayload = {
+      ...job(),
+      enqueuedAt: "2026-07-03T01:00:00.000Z",
+    };
+
+    expect(() =>
+      parseDocumentSyncJob(
+        JSON.stringify({
+          ...validPayload,
+          idempotencyKey: `document-sync:${"s".repeat(513)}`,
+        }),
+      ),
+    ).toThrow("Invalid document sync job payload");
+    expect(() =>
+      parseDocumentSyncJob(
+        JSON.stringify({
+          ...validPayload,
+          documentSourceId: "s".repeat(513),
+        }),
+      ),
+    ).toThrow("Invalid document sync job payload");
+  });
+
   it("round-trips manual source sync jobs through JSON", () => {
     const syncJob = job({ reason: "manual_source_sync" });
 

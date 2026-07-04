@@ -44,6 +44,11 @@ export type ReplayDocumentSyncDeadLettersResult = {
   unsupportedLegacyIds: string[];
 };
 
+export const MAX_DOCUMENT_SYNC_JOB_ID_CHARS = 512;
+const DOCUMENT_SYNC_IDEMPOTENCY_KEY_PREFIX = "document-sync:";
+export const MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS =
+  DOCUMENT_SYNC_IDEMPOTENCY_KEY_PREFIX.length + MAX_DOCUMENT_SYNC_JOB_ID_CHARS;
+
 export interface DocumentSyncQueue {
   enqueue(job: DocumentSyncJob): Promise<void>;
   dequeueBatch(limit: number): Promise<DocumentSyncJob[]>;
@@ -61,13 +66,19 @@ export interface DocumentSyncQueue {
 export function createDocumentSyncIdempotencyKey(input: {
   documentSourceId: string;
 }): string {
-  return `document-sync:${normalizeNonBlankId(input.documentSourceId, "documentSourceId")}`;
+  return `${DOCUMENT_SYNC_IDEMPOTENCY_KEY_PREFIX}${normalizeNonBlankId(
+    input.documentSourceId,
+    "documentSourceId",
+  )}`;
 }
 
 function normalizeNonBlankId(value: string, fieldName: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) {
     throw new Error(`${fieldName} must be nonblank`);
+  }
+  if (normalized.length > MAX_DOCUMENT_SYNC_JOB_ID_CHARS) {
+    throw new Error(`${fieldName} must be at most ${MAX_DOCUMENT_SYNC_JOB_ID_CHARS} characters`);
   }
 
   return normalized;

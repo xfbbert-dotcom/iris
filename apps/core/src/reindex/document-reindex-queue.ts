@@ -50,6 +50,14 @@ export type CreateDocumentReindexIdempotencyKeyInput = {
   documentSnapshotId: string;
 };
 
+export const MAX_DOCUMENT_REINDEX_JOB_ID_CHARS = 512;
+const DOCUMENT_REINDEX_IDEMPOTENCY_KEY_PREFIX = "reindex:";
+export const MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS =
+  DOCUMENT_REINDEX_IDEMPOTENCY_KEY_PREFIX.length +
+  MAX_DOCUMENT_REINDEX_JOB_ID_CHARS +
+  1 +
+  MAX_DOCUMENT_REINDEX_JOB_ID_CHARS;
+
 export interface DocumentReindexQueue {
   enqueue(job: DocumentReindexJob): Promise<void>;
   dequeueBatch(limit: number): Promise<DocumentReindexJob[]>;
@@ -67,7 +75,7 @@ export interface DocumentReindexQueue {
 export function createDocumentReindexIdempotencyKey(
   input: CreateDocumentReindexIdempotencyKeyInput,
 ): string {
-  return `reindex:${normalizeNonBlankId(
+  return `${DOCUMENT_REINDEX_IDEMPOTENCY_KEY_PREFIX}${normalizeNonBlankId(
     input.embeddingProfileId,
     "embeddingProfileId",
   )}:${normalizeNonBlankId(input.documentSnapshotId, "documentSnapshotId")}`;
@@ -77,6 +85,9 @@ function normalizeNonBlankId(value: string, fieldName: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) {
     throw new Error(`${fieldName} must be nonblank`);
+  }
+  if (normalized.length > MAX_DOCUMENT_REINDEX_JOB_ID_CHARS) {
+    throw new Error(`${fieldName} must be at most ${MAX_DOCUMENT_REINDEX_JOB_ID_CHARS} characters`);
   }
 
   return normalized;

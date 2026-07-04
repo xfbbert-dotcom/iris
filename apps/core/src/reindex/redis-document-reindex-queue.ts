@@ -1,10 +1,13 @@
-import type {
-  DocumentReindexDeadLetter,
-  DocumentReindexJob,
-  DocumentReindexQueue,
-  FailedDocumentReindexJobInput,
-  FailedDocumentReindexJobResult,
-  ReplayDocumentReindexDeadLettersResult,
+import {
+  MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS,
+  MAX_DOCUMENT_REINDEX_JOB_ID_CHARS,
+  createDocumentReindexIdempotencyKey,
+  type DocumentReindexDeadLetter,
+  type DocumentReindexJob,
+  type DocumentReindexQueue,
+  type FailedDocumentReindexJobInput,
+  type FailedDocumentReindexJobResult,
+  type ReplayDocumentReindexDeadLettersResult,
 } from "./document-reindex-queue.js";
 import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
@@ -252,24 +255,35 @@ export function parseDocumentReindexJob(payload: string): DocumentReindexJob {
   }
 
   const enqueuedAt = new Date(readString(parsed.enqueuedAt));
+  const idempotencyKey = readString(parsed.idempotencyKey);
+  const embeddingProfileId = readString(parsed.embeddingProfileId);
+  const documentSnapshotId = readString(parsed.documentSnapshotId);
   const reason = parsed.reason;
   const parsedAttempts = readOptionalNonNegativeInteger(parsed.attempts);
   const attempts = parsedAttempts ?? 0;
   if (
     !isValidReason(reason) ||
     Number.isNaN(enqueuedAt.getTime()) ||
-    readString(parsed.idempotencyKey).length === 0 ||
-    readString(parsed.embeddingProfileId).length === 0 ||
-    readString(parsed.documentSnapshotId).length === 0 ||
+    idempotencyKey.length === 0 ||
+    idempotencyKey.length > MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS ||
+    embeddingProfileId.length === 0 ||
+    embeddingProfileId.length > MAX_DOCUMENT_REINDEX_JOB_ID_CHARS ||
+    documentSnapshotId.length === 0 ||
+    documentSnapshotId.length > MAX_DOCUMENT_REINDEX_JOB_ID_CHARS ||
+    idempotencyKey !==
+      createDocumentReindexIdempotencyKey({
+        embeddingProfileId,
+        documentSnapshotId,
+      }) ||
     parsedAttempts === null
   ) {
     throw new Error("Invalid document reindex job payload");
   }
 
   return {
-    idempotencyKey: readString(parsed.idempotencyKey),
-    embeddingProfileId: readString(parsed.embeddingProfileId),
-    documentSnapshotId: readString(parsed.documentSnapshotId),
+    idempotencyKey,
+    embeddingProfileId,
+    documentSnapshotId,
     reason,
     enqueuedAt,
     attempts,
