@@ -403,6 +403,29 @@ describe("createDocumentSyncRuntime", () => {
     expect(manualPlanner.enqueueSource).toHaveBeenCalledWith({
       documentSourceId: "user-source-1",
     });
+    const authorizedRegistrationCount = documentSources.registerAuthorizedWikiDocument.mock.calls.length;
+    await expect(
+      runtime?.registerAuthorizedWikiDocument({
+        sourceUri: "http://docs.feishu.cn/docx/doc_token_1",
+        authorizedSpaceId: "space-1",
+        observedAt: new Date("2026-07-03T03:20:00.000Z"),
+      }),
+    ).rejects.toThrow("unsupported Feishu document source URI");
+    expect(documentSources.registerAuthorizedWikiDocument).toHaveBeenCalledTimes(
+      authorizedRegistrationCount,
+    );
+    const userSubmittedRegistrationCount =
+      documentSources.registerUserSubmittedDocument.mock.calls.length;
+    await expect(
+      runtime?.registerUserSubmittedDocument({
+        sourceUri: "http://docs.feishu.cn/docx/user_doc_token_1",
+        submittedByUserId: "ou_1",
+        observedAt: new Date("2026-07-03T03:30:00.000Z"),
+      }),
+    ).rejects.toThrow("unsupported Feishu document source URI");
+    expect(documentSources.registerUserSubmittedDocument).toHaveBeenCalledTimes(
+      userSubmittedRegistrationCount,
+    );
     await expect(runtime?.sources.list({ limit: 1 })).resolves.toEqual([inventorySource]);
     expect(documentSources.listSources).toHaveBeenCalledOnce();
     await expect(

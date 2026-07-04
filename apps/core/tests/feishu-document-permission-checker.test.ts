@@ -98,6 +98,9 @@ describe("createFeishuDocumentPermissionChecker", () => {
     await expect(
       checker.canReadSource(source({ sourceUri: "https://example.com/not-feishu" })),
     ).resolves.toBe(false);
+    await expect(
+      checker.canReadSource(source({ sourceUri: "http://example.feishu.cn/docx/doccnDirectToken" })),
+    ).resolves.toBe(false);
     expect(tokenProvider.getTenantAccessToken).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });

@@ -3859,6 +3859,27 @@ describe("authorized wiki document registration API", () => {
     expect(runtime.registerAuthorizedWikiDocument).not.toHaveBeenCalled();
   });
 
+  it("rejects non-HTTPS authorized wiki document URLs before registration", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/authorized-wiki-documents",
+      payload: {
+        sourceUri: "http://docs.feishu.cn/docx/doc_token_1",
+        authorizedSpaceId: "space-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.registerAuthorizedWikiDocument).not.toHaveBeenCalled();
+  });
+
   it("returns 500 when authorized wiki registration fails", async () => {
     const runtime = fakeDocumentSyncRuntime({
       registerAuthorizedWikiDocument: vi.fn(async () => {
@@ -4025,6 +4046,27 @@ describe("user submitted document registration API", () => {
       url: "/internal/document-sync/user-submitted-documents",
       payload: {
         sourceUri: "https://example.com/not-readable",
+        submittedByUserId: "ou_1",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.registerUserSubmittedDocument).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-HTTPS user submitted document URLs before registration", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/user-submitted-documents",
+      payload: {
+        sourceUri: "http://docs.feishu.cn/docx/user_doc_token_1",
         submittedByUserId: "ou_1",
       },
     });

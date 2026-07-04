@@ -34,6 +34,9 @@ function parseFeishuPathToken(sourceUri: string, markers: string[]): string | un
   } catch {
     return undefined;
   }
+  if (url.protocol !== "https:") {
+    return undefined;
+  }
   if (!isSupportedFeishuHost(url.hostname)) {
     return undefined;
   }
