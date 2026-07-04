@@ -138,7 +138,10 @@ function readTenantAccessToken(responseBody: unknown): string {
   }
 
   const code = responseBody.code;
-  if (typeof code === "number" && code !== 0) {
+  if (typeof code !== "number") {
+    throw new Error("Feishu tenant access token response did not include code");
+  }
+  if (code !== 0) {
     throw new Error(`Feishu tenant access token request failed: ${readErrorMessage(responseBody)}`);
   }
 

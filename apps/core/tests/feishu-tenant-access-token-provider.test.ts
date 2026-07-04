@@ -179,6 +179,24 @@ describe("FeishuTenantAccessTokenProvider", () => {
     );
   });
 
+  it("throws when successful token responses omit or mistype the Feishu code", async () => {
+    for (const body of [
+      { tenant_access_token: "tenant-token", expire: 7200 },
+      { code: "0", tenant_access_token: "tenant-token", expire: 7200 },
+    ]) {
+      const provider = createFeishuTenantAccessTokenProvider({
+        baseUrl: "https://open.feishu.cn",
+        appId: "app-id",
+        appSecret: "app-secret",
+        fetch: vi.fn(async () => jsonResponse(body)),
+      });
+
+      await expect(provider.getTenantAccessToken()).rejects.toThrow(
+        "Feishu tenant access token response did not include code",
+      );
+    }
+  });
+
   it("throws when token response omits the token", async () => {
     const provider = createFeishuTenantAccessTokenProvider({
       baseUrl: "https://open.feishu.cn",
