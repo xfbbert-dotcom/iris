@@ -24,7 +24,7 @@ When `IRIS_INTERNAL_API_TOKEN` is configured, every `/internal/*` request must i
 $irisHeaders=@{Authorization="Bearer $env:IRIS_INTERNAL_API_TOKEN"}
 ```
 
-Add `-Headers $irisHeaders` to the internal `Invoke-RestMethod` examples below. `/health` and
+The internal `Invoke-RestMethod` examples below include `-Headers $irisHeaders`. `/health` and
 `/feishu/events` do not use this token.
 
 The bearer scheme is case-insensitive for client compatibility, but the token value must match
@@ -136,7 +136,9 @@ Invoke-RestMethod http://localhost:3000/health
 Consolidated operator status:
 
 ```powershell
-Invoke-RestMethod http://localhost:3000/internal/status
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri http://localhost:3000/internal/status
 ```
 
 Important status rules:
@@ -153,6 +155,7 @@ Disable Iris globally:
 ```powershell
 Invoke-RestMethod `
   -Method Post `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/runtime-control/global `
   -ContentType "application/json" `
   -Body '{"enabled":false}'
@@ -163,6 +166,7 @@ Enable Iris globally:
 ```powershell
 Invoke-RestMethod `
   -Method Post `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/runtime-control/global `
   -ContentType "application/json" `
   -Body '{"enabled":true}'
@@ -173,6 +177,7 @@ Disable Iris for one Feishu group:
 ```powershell
 Invoke-RestMethod `
   -Method Post `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/runtime-control/groups/oc_group_id `
   -ContentType "application/json" `
   -Body '{"enabled":false}'
@@ -183,6 +188,7 @@ Update capabilities:
 ```powershell
 Invoke-RestMethod `
   -Method Patch `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/runtime-control/capabilities `
   -ContentType "application/json" `
   -Body '{"replyWhenMentioned":true,"readGroupDocuments":true,"retrieveKnowledgeBase":true}'
@@ -191,7 +197,9 @@ Invoke-RestMethod `
 Read current runtime control state:
 
 ```powershell
-Invoke-RestMethod http://localhost:3000/internal/runtime-control/status
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri http://localhost:3000/internal/runtime-control/status
 ```
 
 ## Document Operations
@@ -199,7 +207,9 @@ Invoke-RestMethod http://localhost:3000/internal/runtime-control/status
 List known document sources:
 
 ```powershell
-Invoke-RestMethod "http://localhost:3000/internal/document-sync/sources?limit=20&includeLatestSnapshot=true"
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/document-sync/sources?limit=20&includeLatestSnapshot=true"
 ```
 
 Register an authorized wiki document:
@@ -207,6 +217,7 @@ Register an authorized wiki document:
 ```powershell
 Invoke-RestMethod `
   -Method Post `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/document-sync/authorized-wiki-documents `
   -ContentType "application/json" `
   -Body '{"sourceUri":"https://example.feishu.cn/wiki/wiki_token","title":"Company Handbook","authorizedSpaceId":"space_1"}'
@@ -217,6 +228,7 @@ Register a user-submitted document:
 ```powershell
 Invoke-RestMethod `
   -Method Post `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/document-sync/user-submitted-documents `
   -ContentType "application/json" `
   -Body '{"sourceUri":"https://example.feishu.cn/docx/doc_token","title":"User Guide","submittedByUserId":"ou_1"}'
@@ -227,6 +239,7 @@ Manually enqueue a known source for sync:
 ```powershell
 Invoke-RestMethod `
   -Method Post `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/document-sync/sources/source_id/enqueue
 ```
 
@@ -235,6 +248,7 @@ Disable a source for answer retrieval:
 ```powershell
 Invoke-RestMethod `
   -Method Patch `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/document-sync/sources/source_id/policy `
   -ContentType "application/json" `
   -Body '{"canUseForAnswering":false}'
@@ -245,19 +259,25 @@ Invoke-RestMethod `
 Raw Feishu event DLQ:
 
 ```powershell
-Invoke-RestMethod "http://localhost:3000/internal/events/dead-letters?limit=20"
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/events/dead-letters?limit=20"
 ```
 
 Document sync DLQ:
 
 ```powershell
-Invoke-RestMethod "http://localhost:3000/internal/document-sync/dead-letters?limit=20"
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/document-sync/dead-letters?limit=20"
 ```
 
 Reindex DLQ:
 
 ```powershell
-Invoke-RestMethod "http://localhost:3000/internal/reindex/dead-letters?limit=20"
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/reindex/dead-letters?limit=20"
 ```
 
 Replay one DLQ item:
@@ -265,6 +285,7 @@ Replay one DLQ item:
 ```powershell
 Invoke-RestMethod `
   -Method Post `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/document-sync/dead-letters/dlq_id/replay
 ```
 
@@ -273,6 +294,7 @@ Replay a selected batch:
 ```powershell
 Invoke-RestMethod `
   -Method Post `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/document-sync/dead-letters/replay `
   -ContentType "application/json" `
   -Body '{"ids":["dlq_1","dlq_2"]}'
@@ -283,6 +305,7 @@ Delete an obsolete DLQ item:
 ```powershell
 Invoke-RestMethod `
   -Method Delete `
+  -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/document-sync/dead-letters/dlq_id
 ```
 
