@@ -37,9 +37,14 @@ Observed GREEN: `npm --workspace apps/core test -- answer-draft-api.test.ts -t
 ### Task 3: Verification And PR
 
 - [x] Run `npm run verify`.
-- [ ] Commit and push.
-- [ ] Watch PR #3 checks.
+- [x] Commit and push.
+- [x] Watch PR #3 checks.
 
 Verification: `npm run verify` passed with 54 Core test files, 750 passing
 tests, 4 skipped tests, 7 Python worker tests, and a valid Docker Compose
 configuration.
+
+PR update: pushed commit `7136907` (`feat: explain feishu gateway enqueue
+degradation`) to PR #3.
+
+Remote checks: GitHub Actions passed for AI Worker and Core.
