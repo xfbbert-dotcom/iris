@@ -204,6 +204,37 @@ describe("AnswerDraftOrchestrator", () => {
     expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized request live chat arrays before loading stored context", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => []),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await expect(
+      orchestrator.generateDraft({
+        question: "What changed?",
+        chatId: "oc_1",
+        liveChatMessages: Array.from({ length: 51 }, (_, index) => ({
+          speaker: "User",
+          text: `message-${index + 1}`,
+        })),
+      }),
+    ).rejects.toThrow("liveChatMessages must include at most 50 messages");
+    expect(liveChatContextProvider.loadRecentMessages).not.toHaveBeenCalled();
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+  });
+
   it("rejects unsafe fragmentLimit values before loading stored context", async () => {
     const contextBuilder = {
       buildContext: vi.fn(),

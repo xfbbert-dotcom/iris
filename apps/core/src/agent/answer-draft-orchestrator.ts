@@ -44,6 +44,7 @@ type LiveChatContextProvider = {
 
 const MAX_ANSWER_DRAFT_TEXT_CHARS = 8000;
 const MAX_ANSWER_DRAFT_QUESTION_CHARS = 4000;
+const MAX_REQUEST_LIVE_CHAT_MESSAGES = 50;
 const MAX_LIVE_CHAT_LIMIT = 20;
 const TRUNCATION_MARKER = " ... [truncated]";
 
@@ -64,6 +65,11 @@ export function createAnswerDraftOrchestrator({
       }
       if (question.length > MAX_ANSWER_DRAFT_QUESTION_CHARS) {
         throw new Error(`question must be at most ${MAX_ANSWER_DRAFT_QUESTION_CHARS} characters`);
+      }
+      if (input.liveChatMessages.length > MAX_REQUEST_LIVE_CHAT_MESSAGES) {
+        throw new Error(
+          `liveChatMessages must include at most ${MAX_REQUEST_LIVE_CHAT_MESSAGES} messages`,
+        );
       }
 
       assertSafeMagnitudeLimit(input.fragmentLimit, "fragmentLimit");
