@@ -7,6 +7,7 @@ recoverable before a full admin UI exists.
 
 The `/internal/*` endpoints are operator APIs, not public APIs. Until an authentication layer is
 added, expose Core only inside a trusted network, VPN, or private tunnel controlled by the team.
+Set `IRIS_INTERNAL_API_TOKEN` whenever Core is reachable outside a developer laptop.
 
 Never expose these endpoints directly to the public internet:
 
@@ -16,6 +17,15 @@ Never expose these endpoints directly to the public internet:
 - `/internal/reindex/*`
 - `/internal/audit/*`
 - `/internal/answer-drafts`
+
+When `IRIS_INTERNAL_API_TOKEN` is configured, every `/internal/*` request must include:
+
+```powershell
+$irisHeaders=@{Authorization="Bearer $env:IRIS_INTERNAL_API_TOKEN"}
+```
+
+Add `-Headers $irisHeaders` to the internal `Invoke-RestMethod` examples below. `/health` and
+`/feishu/events` do not use this token.
 
 ## Local Infrastructure
 
@@ -40,6 +50,7 @@ Minimal shared configuration:
 $env:DATABASE_URL="postgres://iris:iris@localhost:5432/iris"
 $env:REDIS_URL="redis://localhost:6379"
 $env:PORT="3000"
+$env:IRIS_INTERNAL_API_TOKEN="<operator-shared-secret>"
 ```
 
 Feishu callback verification:

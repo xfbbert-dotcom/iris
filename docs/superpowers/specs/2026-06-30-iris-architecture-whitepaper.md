@@ -394,6 +394,11 @@ The Admin Console must support:
 - pause for external tool calls;
 - system health and runtime status.
 
+Internal operator APIs must have an explicit protection boundary. During the early internal rollout,
+Core may use a shared `IRIS_INTERNAL_API_TOKEN` Bearer guard for `/internal/*` routes while Feishu
+callback and health endpoints remain separately governed. This is a rollout control, not the final
+admin identity model.
+
 When Iris is disabled, it should stop processing new messages, stop proactive speech, and stop executing tasks. Admins may still view logs and configuration.
 
 Feishu may still deliver events to the system while Iris is disabled. In that state, Iris should acknowledge or safely discard events according to Feishu platform requirements, but must not index message content, update semantic memory, generate replies, or execute actions unless an administrator explicitly re-enables the relevant scope.

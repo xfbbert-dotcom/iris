@@ -62,6 +62,7 @@ export type BuildAppDependencies = {
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
   runtimeController?: RuntimeController;
+  internalApiToken?: string;
 };
 
 type ParsedJsonBody = {
@@ -167,6 +168,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const feishuGatewayStatus: FeishuGatewayStatusState = {
     enqueueFailureCount: 0,
   };
+  const internalApiToken =
+    readInternalApiToken(dependencies.internalApiToken) ??
+    readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
   const gateway = createFeishuGateway({
     queue,
     rawEventQueue: dependencies.rawEventQueue ?? eventWorkerRuntime?.rawEventQueue,
@@ -192,6 +196,19 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       });
     } catch (error) {
       done(createBadJsonError());
+    }
+  });
+
+  app.addHook("preHandler", async (request, reply) => {
+    if (internalApiToken === undefined || !isInternalApiRequest(request.url)) {
+      return;
+    }
+
+    if (request.headers.authorization !== `Bearer ${internalApiToken}`) {
+      return reply.code(401).send({
+        ok: false,
+        error: "internal_api_unauthorized",
+      });
     }
   });
 
@@ -976,6 +993,15 @@ function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
       ? {}
       : { latestEnqueueError: state.latestEnqueueError }),
   };
+}
+
+function readInternalApiToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+function isInternalApiRequest(url: string): boolean {
+  return url === "/internal" || url.startsWith("/internal/");
 }
 
 async function closeRuntimeResources(

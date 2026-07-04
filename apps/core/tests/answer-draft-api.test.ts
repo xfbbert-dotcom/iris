@@ -357,6 +357,52 @@ describe("answer draft runtime wiring", () => {
   });
 });
 
+describe("internal API token guard", () => {
+  it("requires the configured bearer token for internal routes only", async () => {
+    const app = buildApp({
+      internalApiToken: "operator-secret",
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const missingTokenResponse = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+    });
+    const wrongTokenResponse = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: { authorization: "Bearer wrong-secret" },
+    });
+    const authorizedResponse = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: { authorization: "Bearer operator-secret" },
+    });
+    const healthResponse = await app.inject({
+      method: "GET",
+      url: "/health",
+    });
+
+    expect(missingTokenResponse.statusCode).toBe(401);
+    expect(missingTokenResponse.json()).toEqual({
+      ok: false,
+      error: "internal_api_unauthorized",
+    });
+    expect(wrongTokenResponse.statusCode).toBe(401);
+    expect(wrongTokenResponse.json()).toEqual({
+      ok: false,
+      error: "internal_api_unauthorized",
+    });
+    expect(authorizedResponse.statusCode).toBe(200);
+    expect(authorizedResponse.json().schemaVersion).toBe(1);
+    expect(healthResponse.statusCode).toBe(200);
+    expect(healthResponse.json()).toEqual({ ok: true, service: "iris-core" });
+  });
+});
+
 describe("GET /internal/audit/status", () => {
   it("returns in-memory audit log retention status", async () => {
     const auditLog = new InMemoryAuditLog({ maxEvents: 2 });
