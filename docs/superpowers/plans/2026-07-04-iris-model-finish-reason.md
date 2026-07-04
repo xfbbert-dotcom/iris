@@ -20,7 +20,7 @@
 **Files:**
 - Modify: `apps/core/tests/openai-compatible-model-provider.test.ts`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 Add this test inside `describe("OpenAICompatibleModelProvider", ...)`:
 
@@ -41,18 +41,21 @@ it("throws on explicitly truncated model responses", async () => {
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `npm --workspace apps/core test -- openai-compatible-model-provider.test.ts`
 
 Expected: FAIL because the current adapter returns `"Partial answer"`.
+
+Observed: FAIL. The truncated response resolved `{ answerText: "Partial answer" }` instead of
+rejecting.
 
 ### Task 2: Minimal Implementation
 
 **Files:**
 - Modify: `apps/core/src/model/openai-compatible-model-provider.ts`
 
-- [ ] **Step 1: Reject explicit non-normal finish reasons**
+- [x] **Step 1: Reject explicit non-normal finish reasons**
 
 After reading `firstChoice`, add:
 
@@ -63,21 +66,26 @@ if (finishReason !== undefined && finishReason !== null && finishReason !== "sto
 }
 ```
 
-- [ ] **Step 2: Run GREEN**
+- [x] **Step 2: Run GREEN**
 
 Run: `npm --workspace apps/core test -- openai-compatible-model-provider.test.ts`
 
 Expected: PASS.
 
+Observed: PASS with 8 model provider tests passing.
+
 ### Task 3: Verification And PR
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run: `npm run verify`
 
 Expected: PASS for diff check, typecheck, Core tests, Python tests, and Docker Compose config.
 
-- [ ] **Step 2: Commit and push**
+Observed: PASS. Core reported 732 passing tests and 4 skipped tests. Python worker tests reported
+7 passing tests. Docker Compose config rendered successfully.
+
+- [x] **Step 2: Commit and push**
 
 Run:
 
@@ -87,8 +95,10 @@ git commit -m "fix: reject truncated model responses"
 git push
 ```
 
-- [ ] **Step 3: Watch PR checks**
+- [x] **Step 3: Watch PR checks**
 
 Run: `gh pr checks 3 --watch --interval 10`
 
 Expected: Core and AI Worker checks pass.
+
+Observed: PASS. GitHub Actions reported Core and AI Worker success for PR #3.
