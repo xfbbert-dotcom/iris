@@ -7,11 +7,14 @@ Admin tooling can send duplicate dead-letter ids in a batch replay request, eith
 ## Decision
 
 Each dead-letter batch replay method deduplicates ids within the request while preserving first-seen order.
+Internal API parsing also deduplicates ids before calling runtime facades, so the operator-facing
+request is normalized once at the boundary while queues keep their own defensive dedupe.
 
 ## Scope
 
 - Applies to document sync and document reindex queues.
 - Applies to both in-memory and Redis queue implementations.
+- Applies to event, document sync, and reindex internal batch replay API parsing.
 - Does not change single-item replay behavior.
 - Does not change API request shape or maximum batch size.
 

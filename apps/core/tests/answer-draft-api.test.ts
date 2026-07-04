@@ -1546,7 +1546,7 @@ describe("reindex dead-letter API", () => {
     const response = await app.inject({
       method: "POST",
       url: "/internal/reindex/dead-letters/replay",
-      payload: { ids: ["dlq-1", "missing", "legacy:0:abc"] },
+      payload: { ids: ["dlq-1", "missing", "dlq-1", "legacy:0:abc", "missing"] },
     });
 
     expect(response.statusCode).toBe(200);
@@ -1843,7 +1843,7 @@ describe("event worker dead-letter API", () => {
     const response = await app.inject({
       method: "POST",
       url: "/internal/events/dead-letters/replay",
-      payload: { ids: ["dlq-1", "missing", "legacy:0:abc"] },
+      payload: { ids: ["dlq-1", "missing", "dlq-1", "legacy:0:abc", "missing"] },
     });
 
     expect(response.statusCode).toBe(200);
@@ -3357,7 +3357,7 @@ describe("document sync dead-letter API", () => {
     const response = await app.inject({
       method: "POST",
       url: "/internal/document-sync/dead-letters/replay",
-      payload: { ids: ["dlq-1", "missing", "legacy:0:abc"] },
+      payload: { ids: ["dlq-1", "missing", "dlq-1", "legacy:0:abc", "missing"] },
     });
 
     expect(response.statusCode).toBe(200);

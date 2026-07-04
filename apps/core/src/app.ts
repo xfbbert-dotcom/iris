@@ -1475,7 +1475,7 @@ function parseDeadLetterBatchReplayRequest(
     return undefined;
   }
 
-  return { ids: ids as string[] };
+  return { ids: Array.from(new Set(ids as string[])) };
 }
 
 function parseRegisterAuthorizedWikiDocumentRequest(
