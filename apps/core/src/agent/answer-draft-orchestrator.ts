@@ -42,7 +42,9 @@ type LiveChatContextProvider = {
   loadRecentMessages(input: { chatId: string; limit?: number }): Promise<LiveChatMessage[]>;
 };
 
+const MAX_ANSWER_DRAFT_TEXT_CHARS = 8000;
 const MAX_LIVE_CHAT_LIMIT = 20;
+const TRUNCATION_MARKER = " ... [truncated]";
 
 export function createAnswerDraftOrchestrator({
   contextBuilder,
@@ -85,7 +87,7 @@ export function createAnswerDraftOrchestrator({
         question,
         promptContext: context.promptContext,
       });
-      const answerText = modelResult.answerText.trim();
+      const answerText = truncateAnswerDraftText(modelResult.answerText.trim());
       if (answerText.length === 0) {
         throw new Error("model answer draft must not be blank");
       }
@@ -108,6 +110,15 @@ function assertSafeMagnitudeLimit(value: number | undefined, fieldName: string):
   if (value !== undefined && Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
     throw new Error(`${fieldName} must be a finite safe-magnitude number`);
   }
+}
+
+function truncateAnswerDraftText(value: string): string {
+  if (value.length <= MAX_ANSWER_DRAFT_TEXT_CHARS) {
+    return value;
+  }
+
+  const prefixChars = MAX_ANSWER_DRAFT_TEXT_CHARS - TRUNCATION_MARKER.length;
+  return `${value.slice(0, prefixChars).trimEnd()}${TRUNCATION_MARKER}`;
 }
 
 function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] {

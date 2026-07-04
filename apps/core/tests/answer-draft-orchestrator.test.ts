@@ -325,4 +325,31 @@ describe("AnswerDraftOrchestrator", () => {
       orchestrator.generateDraft({ question: "What changed?", liveChatMessages: [] }),
     ).rejects.toThrow("model answer draft must not be blank");
   });
+
+  it("truncates oversized model output before returning answer drafts", async () => {
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder: {
+        buildContext: vi.fn(async () => ({
+          promptContext: "<background_documents></background_documents>",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+        })),
+      },
+      model: {
+        generateAnswerDraft: vi.fn(async () => ({
+          answerText: `${"A".repeat(9000)} trailing model output`,
+        })),
+      },
+    });
+
+    const result = await orchestrator.generateDraft({
+      question: "What changed?",
+      liveChatMessages: [],
+    });
+
+    expect(result.answerText.length).toBeLessThanOrEqual(8000);
+    expect(result.answerText).toContain("[truncated]");
+    expect(result.answerText).not.toContain("trailing model output");
+  });
 });
