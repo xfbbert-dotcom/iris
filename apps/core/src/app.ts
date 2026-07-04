@@ -132,6 +132,7 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
   "writeKnowledgeBase",
   "callExternalTools",
 ]);
+const deadLettersPresentReason = "dead_letters_present" as const;
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
@@ -1034,7 +1035,8 @@ async function getEventWorkerStatus(runtime: EventWorkerRuntime | undefined) {
   }
 
   try {
-    return { ok: true, ...(await runtime.getStatus()) };
+    const status = await runtime.getStatus();
+    return withDeadLetterHealth(status, status.deadLetterEventCount);
   } catch {
     return {
       ok: false,
@@ -1051,7 +1053,8 @@ async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {
   }
 
   try {
-    return { ok: true, ...(await runtime.getStatus()) };
+    const status = await runtime.getStatus();
+    return withDeadLetterHealth(status, status.deadLetterJobCount);
   } catch {
     return {
       ok: false,
@@ -1068,7 +1071,8 @@ async function getReindexStatus(runtime: ReindexWorkerRuntime | undefined) {
   }
 
   try {
-    return { ok: true, ...(await runtime.getStatus()) };
+    const status = await runtime.getStatus();
+    return withDeadLetterHealth(status, status.deadLetterJobCount);
   } catch {
     return {
       ok: false,
@@ -1077,6 +1081,21 @@ async function getReindexStatus(runtime: ReindexWorkerRuntime | undefined) {
       error: "reindex_status_failed",
     };
   }
+}
+
+function withDeadLetterHealth<Status extends object>(
+  status: Status,
+  deadLetterCount: number,
+) {
+  if (deadLetterCount > 0) {
+    return {
+      ok: false,
+      ...status,
+      degradedReason: deadLettersPresentReason,
+    };
+  }
+
+  return { ok: true, ...status };
 }
 
 function parseReindexDocumentProfileRequest(

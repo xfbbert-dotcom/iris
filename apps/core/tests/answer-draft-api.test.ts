@@ -419,8 +419,8 @@ describe("GET /internal/status", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
-      ok: true,
-      status: "healthy",
+      ok: false,
+      status: "degraded",
       schemaVersion: 1,
       generatedAt: "2026-07-03T07:30:00.000Z",
       componentOrder: [
@@ -433,9 +433,9 @@ describe("GET /internal/status", () => {
       ],
       summary: {
         componentCount: 6,
-        healthyComponentCount: 6,
-        degradedComponentCount: 0,
-        degradedComponents: [],
+        healthyComponentCount: 4,
+        degradedComponentCount: 2,
+        degradedComponents: ["eventWorker", "documentSync"],
         enabledComponentCount: 5,
         disabledComponentCount: 1,
         disabledComponents: ["answerDraft"],
@@ -444,19 +444,21 @@ describe("GET /internal/status", () => {
         stoppedEnabledRuntimeComponentCount: 1,
         stoppedEnabledRuntimeComponents: ["reindex"],
         componentStatusCounts: {
-          healthy: 4,
+          healthy: 2,
           disabled: 1,
-          degraded: 0,
+          degraded: 2,
           stopped: 1,
         },
         attentionComponents: [
+          { name: "eventWorker", status: "degraded" },
+          { name: "documentSync", status: "degraded" },
           { name: "reindex", status: "stopped" },
           { name: "answerDraft", status: "disabled" },
         ],
-        attentionComponentCount: 2,
+        attentionComponentCount: 4,
         requiresOperatorAttention: true,
-        primaryAttentionComponent: { name: "reindex", status: "stopped" },
-        attentionSeverity: "warning",
+        primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
+        attentionSeverity: "critical",
       },
       components: {
         audit: {
@@ -482,24 +484,26 @@ describe("GET /internal/status", () => {
           enqueueFailureCount: 0,
         },
         eventWorker: {
-          status: "healthy",
-          ok: true,
+          status: "degraded",
+          ok: false,
           enabled: true,
           running: true,
           intervalMs: 1000,
           batchLimit: 50,
           pendingEventCount: 3,
           deadLetterEventCount: 1,
+          degradedReason: "dead_letters_present",
         },
         documentSync: {
-          status: "healthy",
-          ok: true,
+          status: "degraded",
+          ok: false,
           enabled: true,
           running: true,
           intervalMs: 2000,
           batchLimit: 10,
           pendingJobCount: 4,
           deadLetterJobCount: 2,
+          degradedReason: "dead_letters_present",
         },
         reindex: {
           status: "stopped",
@@ -514,6 +518,50 @@ describe("GET /internal/status", () => {
         },
       },
     });
+  });
+
+  it("marks reindex as degraded in the consolidated status when its DLQ is non-empty", async () => {
+    const reindexWorkerRuntime = fakeReindexRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+        intervalMs: 3000,
+        batchLimit: 25,
+        pendingJobCount: 0,
+        deadLetterJobCount: 3,
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => reindexWorkerRuntime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().components.reindex).toEqual({
+      status: "degraded",
+      ok: false,
+      enabled: true,
+      running: true,
+      activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+      intervalMs: 3000,
+      batchLimit: 25,
+      pendingJobCount: 0,
+      deadLetterJobCount: 3,
+      degradedReason: "dead_letters_present",
+    });
+    expect(response.json().summary.primaryAttentionComponent).toEqual({
+      name: "reindex",
+      status: "degraded",
+    });
+    expect(response.json().summary.attentionSeverity).toBe("critical");
   });
 
   it("keeps the consolidated status available when one component status fails", async () => {
@@ -549,9 +597,9 @@ describe("GET /internal/status", () => {
     expect(response.json().status).toBe("degraded");
     expect(response.json().summary).toEqual({
       componentCount: 6,
-      healthyComponentCount: 5,
-      degradedComponentCount: 1,
-      degradedComponents: ["eventWorker"],
+      healthyComponentCount: 4,
+      degradedComponentCount: 2,
+      degradedComponents: ["eventWorker", "documentSync"],
       enabledComponentCount: 4,
       disabledComponentCount: 2,
       disabledComponents: ["answerDraft", "reindex"],
@@ -560,17 +608,18 @@ describe("GET /internal/status", () => {
       stoppedEnabledRuntimeComponentCount: 1,
       stoppedEnabledRuntimeComponents: ["eventWorker"],
       componentStatusCounts: {
-        healthy: 3,
+        healthy: 2,
         disabled: 2,
-        degraded: 1,
+        degraded: 2,
         stopped: 0,
       },
       attentionComponents: [
         { name: "eventWorker", status: "degraded" },
+        { name: "documentSync", status: "degraded" },
         { name: "answerDraft", status: "disabled" },
         { name: "reindex", status: "disabled" },
       ],
-      attentionComponentCount: 3,
+      attentionComponentCount: 4,
       requiresOperatorAttention: true,
       primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
       attentionSeverity: "critical",
@@ -583,14 +632,15 @@ describe("GET /internal/status", () => {
       error: "event_worker_status_failed",
     });
     expect(response.json().components.documentSync).toEqual({
-      status: "healthy",
-      ok: true,
+      status: "degraded",
+      ok: false,
       enabled: true,
       running: true,
       intervalMs: 2000,
       batchLimit: 10,
       pendingJobCount: 4,
       deadLetterJobCount: 2,
+      degradedReason: "dead_letters_present",
     });
     expect(response.json().components.reindex).toEqual({
       status: "disabled",

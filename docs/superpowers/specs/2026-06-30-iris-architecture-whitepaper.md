@@ -159,6 +159,8 @@ Feishu Gateway's event ingestion path must be designed for overload. In high-vol
 
 Raw Feishu event DLQs are operator recovery surfaces. Iris must support bounded listing, explicit replay, and deletion for raw event dead letters. Replay must not remove the DLQ payload until the reset raw event has been accepted back into the queue.
 
+The consolidated internal status endpoint is the operator's first health surface. Non-empty DLQs for raw events, document sync jobs, or reindex jobs must mark the corresponding component as degraded with an explicit dead-letter reason, even when the worker is still running and the latest batch succeeded.
+
 Every event must preserve:
 
 - source group;
