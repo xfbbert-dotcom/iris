@@ -535,6 +535,13 @@ describe("createDocumentSyncRuntime", () => {
       "source-1",
       "user-source-1",
     ]);
+    const latestSnapshotLookupCount =
+      snapshots.findLatestSnapshotsForSources.mock.calls.length;
+    const emptyLatestSnapshots = await runtime?.sources.getLatestSnapshots({ sourceIds: [] });
+    expect(emptyLatestSnapshots?.size).toBe(0);
+    expect(snapshots.findLatestSnapshotsForSources).toHaveBeenCalledTimes(
+      latestSnapshotLookupCount,
+    );
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();

@@ -419,6 +419,10 @@ function createEnabledDocumentSyncRuntime({
         return await snapshots.findLatestSnapshotForSource(input.sourceId);
       },
       async getLatestSnapshots(input) {
+        if (input.sourceIds.length === 0) {
+          return new Map();
+        }
+
         const latestSnapshots = await snapshots.findLatestSnapshotsForSources(input.sourceIds);
         return new Map(
           latestSnapshots.map((snapshot) => [snapshot.documentSourceId, snapshot]),
