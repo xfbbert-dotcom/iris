@@ -96,15 +96,15 @@ replayDeadLetters(input: {
 Replay means:
 
 ```text
-remove item from DLQ
 reset job.attempts to 0
 push job to the main reindex queue
+remove item from DLQ
 return replayed
 ```
 
 Replay must not use the original first-enqueue idempotency set. The job already passed through the main queue before it reached DLQ; replay is an explicit operator action and must be allowed.
 
-If queue push fails after DLQ removal in Redis, the operation may return an error to the HTTP layer. Phase 2S does not introduce a two-phase transaction or Lua-based atomic replay. That hardening can be added if replay becomes frequent or high-risk.
+Redis replay must enqueue the reset job before removing the DLQ payload. If queue push fails, the operation returns an error to the HTTP layer and the original DLQ item remains recoverable. Phase 2S does not introduce a two-phase transaction or Lua-based atomic replay, but it must not delete the only recovery record before the replacement job is accepted.
 
 ## 6. Delete Semantics
 
@@ -137,13 +137,13 @@ Redis delete/replay finds the stored payload by ID, removes exactly one matching
 LREM dlq 1 payload
 ```
 
-Replay then pushes the reset job to:
+Replay first pushes the reset job to:
 
 ```text
 RPUSH queue <job with attempts 0>
 ```
 
-This is intentionally simple for v1. If duplicate IDs somehow exist, only the first matching payload should be removed.
+Then it removes the DLQ payload with `LREM`. This is intentionally simple for v1. If duplicate IDs somehow exist, only the first matching payload should be removed.
 
 ## 8. Internal APIs
 
