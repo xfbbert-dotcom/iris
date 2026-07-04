@@ -88,12 +88,18 @@ function readEmbeddingVectors(responseBody: unknown): number[][] {
   }
 
   const items = [...responseBody.data];
-  if (items.every((item) => isRecord(item) && typeof item.index === "number")) {
-    items.sort((a, b) => {
-      const left = isRecord(a) && typeof a.index === "number" ? a.index : 0;
-      const right = isRecord(b) && typeof b.index === "number" ? b.index : 0;
-      return left - right;
-    });
+  const indexes = items.map((item) => (isRecord(item) ? item.index : undefined));
+  if (indexes.some((index) => index !== undefined)) {
+    const validIndexes = indexes.filter((index): index is number =>
+      isValidEmbeddingResponseIndex(index, items.length),
+    );
+    if (validIndexes.length !== items.length || new Set(validIndexes).size !== items.length) {
+      throw new Error("embedding response indices were invalid");
+    }
+
+    items.sort(
+      (left, right) => readEmbeddingResponseIndex(left) - readEmbeddingResponseIndex(right),
+    );
   }
 
   return items.map((item) => {
@@ -109,6 +115,24 @@ function readEmbeddingVectors(responseBody: unknown): number[][] {
       return value;
     });
   });
+}
+
+function isValidEmbeddingResponseIndex(index: unknown, itemCount: number): index is number {
+  return (
+    typeof index === "number" &&
+    Number.isInteger(index) &&
+    Number.isSafeInteger(index) &&
+    index >= 0 &&
+    index < itemCount
+  );
+}
+
+function readEmbeddingResponseIndex(item: unknown): number {
+  if (!isRecord(item) || !isValidEmbeddingResponseIndex(item.index, Number.MAX_SAFE_INTEGER)) {
+    throw new Error("embedding response indices were invalid");
+  }
+
+  return item.index;
 }
 
 function readErrorMessage(responseBody: unknown): string {

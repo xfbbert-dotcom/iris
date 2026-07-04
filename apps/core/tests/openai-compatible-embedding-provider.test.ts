@@ -106,6 +106,29 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     );
   });
 
+  it("rejects invalid embedding response indexes before returning vectors", async () => {
+    for (const data of [
+      [
+        { index: 0, embedding: [1, 0, 0] },
+        { index: 0, embedding: [0, 1, 0] },
+      ],
+      [
+        { index: 0, embedding: [1, 0, 0] },
+        { index: 2, embedding: [0, 1, 0] },
+      ],
+      [{ index: 0, embedding: [1, 0, 0] }, { embedding: [0, 1, 0] }],
+    ]) {
+      const provider = createOpenAICompatibleEmbeddingProvider({
+        config: config(),
+        fetch: vi.fn(async () => jsonResponse({ data })),
+      });
+
+      await expect(provider.embedTexts(["alpha", "beta"])).rejects.toThrow(
+        "embedding response indices were invalid",
+      );
+    }
+  });
+
   it("throws on non-2xx responses", async () => {
     const provider = createOpenAICompatibleEmbeddingProvider({
       config: config(),
