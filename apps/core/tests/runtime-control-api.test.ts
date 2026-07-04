@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import { InMemoryAuditLog, type AuditEvent } from "../src/audit/audit-log.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
 import { isolateEnvVar } from "./test-env.js";
 
@@ -344,6 +345,113 @@ describe("runtime control API", () => {
         proactiveSpeech: false,
         writeKnowledgeBase: true,
       },
+    });
+  });
+
+  it("records successful runtime control changes in the audit log", async () => {
+    const recordedAt = new Date("2026-07-04T06:20:00.000Z");
+    const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: false },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/groups/chat-a",
+      payload: { enabled: false },
+    });
+    await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      payload: {
+        proactiveSpeech: false,
+        writeKnowledgeBase: true,
+      },
+    });
+
+    const events = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events?limit=20&type=runtime_control_updated",
+    });
+
+    expect(events.statusCode).toBe(200);
+    expect(events.json().events).toEqual([
+      {
+        type: "runtime_control_updated",
+        documentId: "runtime-control",
+        fragmentIds: [],
+        runtimeControlScope: "capability",
+        targetId: "writeKnowledgeBase",
+        enabled: true,
+        previousEnabled: false,
+        recordedAt: "2026-07-04T06:20:00.000Z",
+      },
+      {
+        type: "runtime_control_updated",
+        documentId: "runtime-control",
+        fragmentIds: [],
+        runtimeControlScope: "capability",
+        targetId: "proactiveSpeech",
+        enabled: false,
+        previousEnabled: true,
+        recordedAt: "2026-07-04T06:20:00.000Z",
+      },
+      {
+        type: "runtime_control_updated",
+        documentId: "runtime-control",
+        fragmentIds: [],
+        runtimeControlScope: "group",
+        targetId: "chat-a",
+        enabled: false,
+        previousEnabled: true,
+        recordedAt: "2026-07-04T06:20:00.000Z",
+      },
+      {
+        type: "runtime_control_updated",
+        documentId: "runtime-control",
+        fragmentIds: [],
+        runtimeControlScope: "global",
+        enabled: false,
+        previousEnabled: true,
+        recordedAt: "2026-07-04T06:20:00.000Z",
+      },
+    ]);
+  });
+
+  it("keeps runtime control mutations available when audit logging fails", async () => {
+    class FailingAuditLog extends InMemoryAuditLog {
+      override async record(_event: AuditEvent): Promise<void> {
+        throw new Error("audit sink unavailable");
+      }
+    }
+
+    const app = buildApp({
+      auditLog: new FailingAuditLog(),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: false },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      globalEnabled: false,
     });
   });
 

@@ -300,11 +300,18 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
+    const previousSnapshot = runtimeController.getSnapshot();
     if (parsedRequest.enabled) {
       runtimeController.enableGlobal();
     } else {
       runtimeController.disableGlobal();
     }
+    await recordRuntimeControlAuditEvent({
+      auditLog,
+      scope: "global",
+      enabled: parsedRequest.enabled,
+      previousEnabled: previousSnapshot.globalEnabled,
+    });
 
     return {
       ok: true,
@@ -320,11 +327,19 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
+    const previousSnapshot = runtimeController.getSnapshot();
     if (parsedRequest.enabled) {
       runtimeController.enableGroup(groupId);
     } else {
       runtimeController.disableGroup(groupId);
     }
+    await recordRuntimeControlAuditEvent({
+      auditLog,
+      scope: "group",
+      targetId: groupId,
+      enabled: parsedRequest.enabled,
+      previousEnabled: !previousSnapshot.disabledGroupIds.includes(groupId),
+    });
 
     return {
       ok: true,
@@ -339,10 +354,18 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
+    const previousSnapshot = runtimeController.getSnapshot();
     for (const [capability, enabled] of Object.entries(parsedRequest) as Array<
       [RuntimeCapabilityName, boolean]
     >) {
       runtimeController.setCapability(capability, enabled);
+      await recordRuntimeControlAuditEvent({
+        auditLog,
+        scope: "capability",
+        targetId: capability,
+        enabled,
+        previousEnabled: previousSnapshot.capabilities[capability],
+      });
     }
 
     return {
@@ -1269,7 +1292,33 @@ function parseAuditEventType(value: unknown): AuditEvent["type"] | false | undef
   }
 
   const type = value.trim();
-  return type === "permission_guard_denied" || type === "permission_guard_error" ? type : false;
+  return type === "permission_guard_denied" ||
+    type === "permission_guard_error" ||
+    type === "runtime_control_updated"
+    ? type
+    : false;
+}
+
+async function recordRuntimeControlAuditEvent(input: {
+  auditLog: InMemoryAuditLog;
+  scope: "global" | "group" | "capability";
+  enabled: boolean;
+  previousEnabled: boolean;
+  targetId?: string;
+}): Promise<void> {
+  try {
+    await input.auditLog.record({
+      type: "runtime_control_updated",
+      documentId: "runtime-control",
+      fragmentIds: [],
+      runtimeControlScope: input.scope,
+      enabled: input.enabled,
+      previousEnabled: input.previousEnabled,
+      ...(input.targetId === undefined ? {} : { targetId: input.targetId }),
+    });
+  } catch {
+    // Runtime control is an emergency surface; audit failure must not block it.
+  }
 }
 
 function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery | undefined {

@@ -207,6 +207,14 @@ Invoke-RestMethod `
 The same state is also summarized inside `GET /internal/status` as `components.runtimeControl`, so
 the consolidated operator snapshot can be used as the first health check during rollout.
 
+Inspect recent runtime-control changes:
+
+```powershell
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/audit/events?limit=20&type=runtime_control_updated"
+```
+
 ## Document Operations
 
 List known document sources:

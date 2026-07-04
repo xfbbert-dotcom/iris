@@ -1,9 +1,22 @@
-export type AuditEvent = {
+export type PermissionGuardAuditEvent = {
   type: "permission_guard_denied" | "permission_guard_error";
   documentId: string;
   fragmentIds: string[];
   message?: string;
 };
+
+export type RuntimeControlAuditEvent = {
+  type: "runtime_control_updated";
+  documentId: "runtime-control";
+  fragmentIds: string[];
+  runtimeControlScope: "global" | "group" | "capability";
+  enabled: boolean;
+  previousEnabled: boolean;
+  targetId?: string;
+  message?: string;
+};
+
+export type AuditEvent = PermissionGuardAuditEvent | RuntimeControlAuditEvent;
 
 export type RecordedAuditEvent = AuditEvent & {
   recordedAt: Date;
