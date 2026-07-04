@@ -39,9 +39,12 @@ Observed: focused normalizer tests passed with 13 passing tests.
 ### Task 3: Verification And PR
 
 - [x] Run `npm run verify`.
-- [ ] Commit and push.
-- [ ] Watch PR #3 checks.
+- [x] Commit and push.
+- [x] Watch PR #3 checks.
 
 Observed: `npm run verify` passed. Core reported 746 passing tests and 4 skipped
 tests. Python worker tests reported 7 passing tests. Docker Compose config
 rendered successfully.
+
+Observed: pushed commit `cfd189d`; GitHub Actions reported AI Worker and Core
+success for PR #3.
