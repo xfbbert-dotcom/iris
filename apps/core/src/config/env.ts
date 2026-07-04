@@ -153,7 +153,7 @@ export function readReindexWorkerRuntimeConfig(
 
   return {
     enabled: true,
-    redisUrl: readOptionalEnv(env.REDIS_URL) ?? "redis://localhost:6379",
+    redisUrl: readRedisUrlEnv(env.REDIS_URL),
     intervalMs: readTimerDelayEnv(
       "IRIS_REINDEX_WORKER_INTERVAL_MS",
       env.IRIS_REINDEX_WORKER_INTERVAL_MS,
@@ -177,7 +177,7 @@ export function readEventWorkerRuntimeConfig(
 
   return {
     enabled: true,
-    redisUrl: readOptionalEnv(env.REDIS_URL) ?? "redis://localhost:6379",
+    redisUrl: readRedisUrlEnv(env.REDIS_URL),
     intervalMs: readTimerDelayEnv(
       "IRIS_EVENT_WORKER_INTERVAL_MS",
       env.IRIS_EVENT_WORKER_INTERVAL_MS,
@@ -201,7 +201,7 @@ export function readDocumentSyncWorkerRuntimeConfig(
 
   return {
     enabled: true,
-    redisUrl: readOptionalEnv(env.REDIS_URL) ?? "redis://localhost:6379",
+    redisUrl: readRedisUrlEnv(env.REDIS_URL),
     intervalMs: readTimerDelayEnv(
       "IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS",
       env.IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS,
@@ -276,6 +276,21 @@ function readHttpBaseUrlEnv(name: string, value: string | undefined): string {
   }
 
   return trimTrailingSlash(trimmed);
+}
+
+function readRedisUrlEnv(value: string | undefined): string {
+  const trimmed = readOptionalEnv(value) ?? "redis://localhost:6379";
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("REDIS_URL must be a redis URL");
+  }
+  if (parsed.protocol !== "redis:" && parsed.protocol !== "rediss:") {
+    throw new Error("REDIS_URL must be a redis URL");
+  }
+
+  return trimmed;
 }
 
 function readPositiveIntegerEnv(

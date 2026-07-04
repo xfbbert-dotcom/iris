@@ -82,6 +82,18 @@ describe("readEventWorkerRuntimeConfig", () => {
     });
   });
 
+  it("accepts secure Redis URLs with credentials and database paths", () => {
+    expect(
+      readEventWorkerRuntimeConfig({
+        IRIS_EVENT_WORKER_ENABLED: "true",
+        REDIS_URL: " rediss://:secret@redis.example.com:6380/1 ",
+      }),
+    ).toMatchObject({
+      enabled: true,
+      redisUrl: "rediss://:secret@redis.example.com:6380/1",
+    });
+  });
+
   it("defaults enabled event worker interval, batch limit, and Redis URL", () => {
     expect(
       readEventWorkerRuntimeConfig({
@@ -102,6 +114,21 @@ describe("readEventWorkerRuntimeConfig", () => {
         IRIS_EVENT_WORKER_BATCH_LIMIT: "10.0",
       }),
     ).toThrow("IRIS_EVENT_WORKER_BATCH_LIMIT must be a positive integer");
+  });
+
+  it("rejects invalid Redis URLs when the event worker is enabled", () => {
+    expect(() =>
+      readEventWorkerRuntimeConfig({
+        IRIS_EVENT_WORKER_ENABLED: "true",
+        REDIS_URL: "not a url",
+      }),
+    ).toThrow("REDIS_URL must be a redis URL");
+    expect(() =>
+      readEventWorkerRuntimeConfig({
+        IRIS_EVENT_WORKER_ENABLED: "true",
+        REDIS_URL: "https://redis.example.com",
+      }),
+    ).toThrow("REDIS_URL must be a redis URL");
   });
 
   it("rejects intervals above Node's maximum timer delay", () => {
