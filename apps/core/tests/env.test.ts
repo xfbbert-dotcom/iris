@@ -103,6 +103,15 @@ describe("readEventWorkerRuntimeConfig", () => {
       }),
     ).toThrow("IRIS_EVENT_WORKER_BATCH_LIMIT must be a positive integer");
   });
+
+  it("rejects intervals above Node's maximum timer delay", () => {
+    expect(() =>
+      readEventWorkerRuntimeConfig({
+        IRIS_EVENT_WORKER_ENABLED: "true",
+        IRIS_EVENT_WORKER_INTERVAL_MS: "2147483648",
+      }),
+    ).toThrow("IRIS_EVENT_WORKER_INTERVAL_MS must not exceed 2147483647");
+  });
 });
 
 describe("readModelProviderConfig", () => {
@@ -168,6 +177,18 @@ describe("readModelProviderConfig", () => {
         IRIS_MODEL_TIMEOUT_MS: "9007199254740992",
       }),
     ).toThrow("IRIS_MODEL_TIMEOUT_MS must be a positive safe integer");
+  });
+
+  it("rejects timeout values above Node's maximum timer delay", () => {
+    expect(() =>
+      readModelProviderConfig({
+        IRIS_MODEL_PROVIDER: "openai-compatible",
+        IRIS_MODEL_BASE_URL: "https://api.example.com/v1",
+        IRIS_MODEL_API_KEY: "key-a",
+        IRIS_MODEL_NAME: "model-a",
+        IRIS_MODEL_TIMEOUT_MS: "2147483648",
+      }),
+    ).toThrow("IRIS_MODEL_TIMEOUT_MS must not exceed 2147483647");
   });
 
   it("rejects invalid model provider base URLs", () => {
@@ -298,6 +319,18 @@ describe("readEmbeddingProviderConfig", () => {
         IRIS_EMBEDDING_DIMENSIONS: "9007199254740992",
       }),
     ).toThrow("IRIS_EMBEDDING_DIMENSIONS must be a positive safe integer");
+  });
+
+  it("rejects timeout values above Node's maximum timer delay", () => {
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+        IRIS_EMBEDDING_TIMEOUT_MS: "2147483648",
+      }),
+    ).toThrow("IRIS_EMBEDDING_TIMEOUT_MS must not exceed 2147483647");
   });
 
   it("rejects invalid embedding provider base URLs", () => {
@@ -436,6 +469,15 @@ describe("readReindexWorkerRuntimeConfig", () => {
       }),
     ).toThrow("IRIS_REINDEX_WORKER_BATCH_LIMIT must be a positive integer");
   });
+
+  it("rejects intervals above Node's maximum timer delay", () => {
+    expect(() =>
+      readReindexWorkerRuntimeConfig({
+        IRIS_REINDEX_WORKER_ENABLED: "true",
+        IRIS_REINDEX_WORKER_INTERVAL_MS: "2147483648",
+      }),
+    ).toThrow("IRIS_REINDEX_WORKER_INTERVAL_MS must not exceed 2147483647");
+  });
 });
 
 describe("readDocumentSyncWorkerRuntimeConfig", () => {
@@ -489,6 +531,15 @@ describe("readDocumentSyncWorkerRuntimeConfig", () => {
         IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT: "-1",
       }),
     ).toThrow("IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT must be a positive integer");
+  });
+
+  it("rejects intervals above Node's maximum timer delay", () => {
+    expect(() =>
+      readDocumentSyncWorkerRuntimeConfig({
+        IRIS_DOCUMENT_SYNC_WORKER_ENABLED: "true",
+        IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS: "2147483648",
+      }),
+    ).toThrow("IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS must not exceed 2147483647");
   });
 });
 
@@ -563,6 +614,16 @@ describe("readFeishuOpenApiConfig", () => {
         IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: "0",
       }),
     ).toThrow("IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS must be a positive integer");
+  });
+
+  it("rejects Feishu document fetch timeouts above Node's maximum timer delay", () => {
+    expect(() =>
+      readFeishuOpenApiConfig({
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: "2147483648",
+      }),
+    ).toThrow("IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS must not exceed 2147483647");
   });
 
   it("rejects invalid Feishu OpenAPI base URLs", () => {

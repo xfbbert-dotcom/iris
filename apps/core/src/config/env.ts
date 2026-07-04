@@ -1,6 +1,7 @@
 import type { FeishuAuthConfig } from "../feishu/feishu-auth.js";
 
 export type EnvLike = Record<string, string | undefined>;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export type ModelProviderConfig = {
   provider: "openai-compatible";
@@ -89,7 +90,7 @@ export function readModelProviderConfig(env: EnvLike = process.env): ModelProvid
     baseUrl: readHttpBaseUrlEnv("IRIS_MODEL_BASE_URL", env.IRIS_MODEL_BASE_URL),
     apiKey: readRequiredEnv("IRIS_MODEL_API_KEY", env.IRIS_MODEL_API_KEY),
     model: readRequiredEnv("IRIS_MODEL_NAME", env.IRIS_MODEL_NAME),
-    timeoutMs: readPositiveIntegerEnv("IRIS_MODEL_TIMEOUT_MS", env.IRIS_MODEL_TIMEOUT_MS, 30000)
+    timeoutMs: readTimerDelayEnv("IRIS_MODEL_TIMEOUT_MS", env.IRIS_MODEL_TIMEOUT_MS, 30000)
   };
 }
 
@@ -115,7 +116,7 @@ export function readEmbeddingProviderConfig(
     apiKey: readRequiredEnv("IRIS_EMBEDDING_API_KEY", env.IRIS_EMBEDDING_API_KEY),
     model: readRequiredEnv("IRIS_EMBEDDING_MODEL", env.IRIS_EMBEDDING_MODEL),
     ...(dimensions === undefined ? {} : { dimensions }),
-    timeoutMs: readPositiveIntegerEnv(
+    timeoutMs: readTimerDelayEnv(
       "IRIS_EMBEDDING_TIMEOUT_MS",
       env.IRIS_EMBEDDING_TIMEOUT_MS,
       30000
@@ -153,7 +154,7 @@ export function readReindexWorkerRuntimeConfig(
   return {
     enabled: true,
     redisUrl: readOptionalEnv(env.REDIS_URL) ?? "redis://localhost:6379",
-    intervalMs: readPositiveIntegerEnv(
+    intervalMs: readTimerDelayEnv(
       "IRIS_REINDEX_WORKER_INTERVAL_MS",
       env.IRIS_REINDEX_WORKER_INTERVAL_MS,
       1000,
@@ -177,7 +178,7 @@ export function readEventWorkerRuntimeConfig(
   return {
     enabled: true,
     redisUrl: readOptionalEnv(env.REDIS_URL) ?? "redis://localhost:6379",
-    intervalMs: readPositiveIntegerEnv(
+    intervalMs: readTimerDelayEnv(
       "IRIS_EVENT_WORKER_INTERVAL_MS",
       env.IRIS_EVENT_WORKER_INTERVAL_MS,
       1000,
@@ -201,7 +202,7 @@ export function readDocumentSyncWorkerRuntimeConfig(
   return {
     enabled: true,
     redisUrl: readOptionalEnv(env.REDIS_URL) ?? "redis://localhost:6379",
-    intervalMs: readPositiveIntegerEnv(
+    intervalMs: readTimerDelayEnv(
       "IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS",
       env.IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS,
       1000,
@@ -222,7 +223,7 @@ export function readFeishuOpenApiConfig(env: EnvLike = process.env): FeishuOpenA
       "FEISHU_OPEN_BASE_URL",
       readOptionalEnv(env.FEISHU_OPEN_BASE_URL) ?? "https://open.feishu.cn",
     ),
-    documentFetchTimeoutMs: readPositiveIntegerEnv(
+    documentFetchTimeoutMs: readTimerDelayEnv(
       "IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS",
       env.IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS,
       10000,
@@ -296,6 +297,19 @@ function readPositiveIntegerEnv(
   }
   if (!Number.isSafeInteger(parsed)) {
     throw new Error(`${name} must be a positive safe integer`);
+  }
+
+  return parsed;
+}
+
+function readTimerDelayEnv(
+  name: string,
+  value: string | undefined,
+  defaultValue: number,
+): number {
+  const parsed = readPositiveIntegerEnv(name, value, defaultValue);
+  if (parsed > MAX_TIMER_DELAY_MS) {
+    throw new Error(`${name} must not exceed ${MAX_TIMER_DELAY_MS}`);
   }
 
   return parsed;
