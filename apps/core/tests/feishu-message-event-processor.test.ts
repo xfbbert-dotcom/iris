@@ -297,6 +297,46 @@ describe("FeishuMessageEventProcessor", () => {
     });
   });
 
+  it("ignores deeply nested Feishu post text beyond the traversal budget", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const processor = createFeishuMessageEventProcessor({ messages });
+
+    let content: unknown = { tag: "text", text: "too deep" };
+    for (let index = 0; index < 40; index += 1) {
+      content = [content];
+    }
+
+    await processor.process(
+      rawEventFixture({
+        rawBody: {
+          header: { event_id: "event-1", event_type: "im.message.receive_v1" },
+          event: {
+            message: {
+              message_id: "message-1",
+              chat_id: "chat-1",
+              message_type: "post",
+              content: JSON.stringify({ content }),
+              create_time: "1782925200000",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(messages.upsertMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageType: "post",
+        text: undefined,
+      }),
+    );
+  });
+
   it("ignores unsupported events", async () => {
     const messages = { upsertMessage: vi.fn() };
     const processor = createFeishuMessageEventProcessor({ messages });

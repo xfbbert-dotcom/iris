@@ -169,11 +169,20 @@ function readPostText(value: unknown): string | undefined {
 }
 
 const readablePostContentKeys = new Set(["title", "text", "href", "url"]);
+const MAX_POST_TEXT_TRAVERSAL_DEPTH = 20;
+const MAX_POST_TEXT_PARTS = 200;
 
-function collectPostTextParts(value: unknown, parts: string[]): void {
+function collectPostTextParts(value: unknown, parts: string[], depth = 0): void {
+  if (depth > MAX_POST_TEXT_TRAVERSAL_DEPTH || parts.length >= MAX_POST_TEXT_PARTS) {
+    return;
+  }
+
   if (Array.isArray(value)) {
     for (const item of value) {
-      collectPostTextParts(item, parts);
+      if (parts.length >= MAX_POST_TEXT_PARTS) {
+        break;
+      }
+      collectPostTextParts(item, parts, depth + 1);
     }
     return;
   }
@@ -189,7 +198,7 @@ function collectPostTextParts(value: unknown, parts: string[]): void {
     }
 
     if (Array.isArray(nestedValue) || isRecord(nestedValue)) {
-      collectPostTextParts(nestedValue, parts);
+      collectPostTextParts(nestedValue, parts, depth + 1);
     }
   }
 }
