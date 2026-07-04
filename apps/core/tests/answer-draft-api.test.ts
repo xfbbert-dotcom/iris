@@ -974,6 +974,47 @@ describe("GET /internal/status", () => {
     });
     expect(statusResponse.json().summary.attentionSeverity).toBe("critical");
   });
+
+  it("bounds Feishu gateway enqueue failure messages in the consolidated status", async () => {
+    const generatedAt = new Date("2026-07-03T09:05:00.000Z");
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => {
+        throw new Error(oversizedMessage);
+      }),
+    };
+    const app = buildApp({
+      rawEventQueue,
+      now: () => generatedAt,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload: {
+        header: {
+          event_id: "event-gateway-oversized-enqueue-failure",
+          event_type: "im.message.receive_v1",
+        },
+      },
+    });
+    await Promise.resolve();
+
+    const statusResponse = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+    });
+
+    const message = statusResponse.json().components.feishuGateway.latestEnqueueError.message;
+    expect(statusResponse.statusCode).toBe(200);
+    expect(message.length).toBeLessThanOrEqual(1000);
+    expect(message).toContain("[truncated]");
+    expect(message).not.toContain("trailing diagnostic detail");
+  });
 });
 
 describe("GET /internal/audit/events", () => {

@@ -17,6 +17,7 @@ import {
   RuntimeController,
   type RuntimeCapabilityName
 } from "./admin/runtime-controller.js";
+import { normalizeInternalStatusErrorMessage } from "./admin/internal-status-error-message.js";
 import { createDefaultRuntimeConfig } from "./config/runtime-config.js";
 import { createFeishuRequestVerifier } from "./feishu/feishu-auth.js";
 import type { EventQueue } from "./queues/event-queue.js";
@@ -184,7 +185,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     onEnqueueError(error) {
       feishuGatewayStatus.enqueueFailureCount += 1;
       feishuGatewayStatus.latestEnqueueError = {
-        message: error instanceof Error ? error.message : String(error),
+        message: normalizeInternalStatusErrorMessage(error),
         recordedAt: now().toISOString(),
       };
       dependencies.onFeishuGatewayEnqueueError?.(error);
