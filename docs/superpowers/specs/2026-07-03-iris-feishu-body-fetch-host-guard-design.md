@@ -9,6 +9,7 @@ Group-discovered links already pass through host filtering, but manual and autho
 ## Requirements
 
 - Parse docx/docs/wiki tokens only from supported Feishu/Lark hosts.
+- Reject URLs with embedded username/password credentials.
 - Keep existing docx/docs/wiki path parsing behavior for valid hosts.
 - Keep unsupported URL shapes returning `undefined`.
 
@@ -22,5 +23,7 @@ Group-discovered links already pass through host filtering, but manual and autho
 
 - `parseFeishuDocxDocumentId("https://evil.com/docx/token")` returns `undefined`.
 - `parseFeishuWikiNodeToken("https://evil.com/wiki/token")` returns `undefined`.
+- `parseFeishuDocxDocumentId("https://user:pass@docs.feishu.cn/docx/token")` returns
+  `undefined`.
 - Fetching a non-Feishu source URI rejects as an unsupported Feishu docx URL.
 - Full verification remains green.

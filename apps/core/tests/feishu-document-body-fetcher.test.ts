@@ -21,6 +21,9 @@ describe("FeishuDocumentBodyFetcher", () => {
     expect(parseFeishuDocxDocumentId("https://acme.feishu.cn/wiki/wiki_token")).toBeUndefined();
     expect(parseFeishuDocxDocumentId("https://evil.com/docx/doc_token_3")).toBeUndefined();
     expect(
+      parseFeishuDocxDocumentId("https://user:pass@docs.feishu.cn/docx/doc_token_1"),
+    ).toBeUndefined();
+    expect(
       parseFeishuDocxDocumentId("https://acme.feishu.cn/minutes/docx/doc_token_4"),
     ).toBeUndefined();
   });
@@ -37,6 +40,9 @@ describe("FeishuDocumentBodyFetcher", () => {
     );
     expect(parseFeishuWikiNodeToken("https://docs.feishu.cn/docx/doc_token_1")).toBeUndefined();
     expect(parseFeishuWikiNodeToken("https://evil.com/wiki/wiki_token_3")).toBeUndefined();
+    expect(
+      parseFeishuWikiNodeToken("https://user@acme.feishu.cn/wiki/wiki_token_1"),
+    ).toBeUndefined();
     expect(
       parseFeishuWikiNodeToken("https://acme.feishu.cn/drive/wiki/wiki_token_4"),
     ).toBeUndefined();

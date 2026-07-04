@@ -3806,6 +3806,27 @@ describe("authorized wiki document registration API", () => {
     expect(runtime.registerAuthorizedWikiDocument).not.toHaveBeenCalled();
   });
 
+  it("rejects authorized wiki document URLs with embedded credentials", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/authorized-wiki-documents",
+      payload: {
+        sourceUri: "https://user:pass@docs.feishu.cn/docx/doc_token_1",
+        authorizedSpaceId: "space-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.registerAuthorizedWikiDocument).not.toHaveBeenCalled();
+  });
+
   it("returns 500 when authorized wiki registration fails", async () => {
     const runtime = fakeDocumentSyncRuntime({
       registerAuthorizedWikiDocument: vi.fn(async () => {
