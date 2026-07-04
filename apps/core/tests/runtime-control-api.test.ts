@@ -455,6 +455,46 @@ describe("runtime control API", () => {
     });
   });
 
+  it("records an optional operator hint on runtime control audit events", async () => {
+    const recordedAt = new Date("2026-07-04T06:25:00.000Z");
+    const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      headers: {
+        "x-iris-operator": " alice@example.com ",
+      },
+      payload: { enabled: false },
+    });
+
+    const events = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events?limit=1&type=runtime_control_updated",
+    });
+
+    expect(events.statusCode).toBe(200);
+    expect(events.json().events).toEqual([
+      {
+        type: "runtime_control_updated",
+        documentId: "runtime-control",
+        fragmentIds: [],
+        runtimeControlScope: "global",
+        enabled: false,
+        previousEnabled: true,
+        operatorHint: "alice@example.com",
+        recordedAt: "2026-07-04T06:25:00.000Z",
+      },
+    ]);
+  });
+
   it("rejects invalid runtime capability updates", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,

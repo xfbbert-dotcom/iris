@@ -300,6 +300,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
+    const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
     const previousSnapshot = runtimeController.getSnapshot();
     if (parsedRequest.enabled) {
       runtimeController.enableGlobal();
@@ -311,6 +312,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       scope: "global",
       enabled: parsedRequest.enabled,
       previousEnabled: previousSnapshot.globalEnabled,
+      operatorHint,
     });
 
     return {
@@ -327,6 +329,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
+    const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
     const previousSnapshot = runtimeController.getSnapshot();
     if (parsedRequest.enabled) {
       runtimeController.enableGroup(groupId);
@@ -339,6 +342,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       targetId: groupId,
       enabled: parsedRequest.enabled,
       previousEnabled: !previousSnapshot.disabledGroupIds.includes(groupId),
+      operatorHint,
     });
 
     return {
@@ -354,6 +358,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
+    const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
     const previousSnapshot = runtimeController.getSnapshot();
     for (const [capability, enabled] of Object.entries(parsedRequest) as Array<
       [RuntimeCapabilityName, boolean]
@@ -365,6 +370,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         targetId: capability,
         enabled,
         previousEnabled: previousSnapshot.capabilities[capability],
+        operatorHint,
       });
     }
 
@@ -1305,6 +1311,7 @@ async function recordRuntimeControlAuditEvent(input: {
   enabled: boolean;
   previousEnabled: boolean;
   targetId?: string;
+  operatorHint?: string;
 }): Promise<void> {
   try {
     await input.auditLog.record({
@@ -1315,10 +1322,24 @@ async function recordRuntimeControlAuditEvent(input: {
       enabled: input.enabled,
       previousEnabled: input.previousEnabled,
       ...(input.targetId === undefined ? {} : { targetId: input.targetId }),
+      ...(input.operatorHint === undefined ? {} : { operatorHint: input.operatorHint }),
     });
   } catch {
     // Runtime control is an emergency surface; audit failure must not block it.
   }
+}
+
+function readOperatorHint(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 120 || /[\r\n]/.test(trimmed)) {
+    return undefined;
+  }
+
+  return trimmed;
 }
 
 function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery | undefined {

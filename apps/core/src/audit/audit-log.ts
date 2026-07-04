@@ -13,6 +13,7 @@ export type RuntimeControlAuditEvent = {
   enabled: boolean;
   previousEnabled: boolean;
   targetId?: string;
+  operatorHint?: string;
   message?: string;
 };
 

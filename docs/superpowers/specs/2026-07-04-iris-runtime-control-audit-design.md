@@ -17,9 +17,12 @@ Extend the in-memory audit event union with `runtime_control_updated`. The event
 - `targetId`: group ID or capability name when applicable
 - `enabled`: requested next value
 - `previousEnabled`: value before the mutation
+- `operatorHint`: optional trimmed `X-Iris-Operator` header value
 
 Record the audit event after a runtime-control mutation request is validated and applied. Capability
 updates record one event per changed capability so operators can inspect each flag independently.
+The optional operator hint is a diagnostic label, not an authenticated identity or authorization
+input.
 
 Audit writes are best-effort. Runtime control is an emergency operator surface; a broken audit sink
 must not prevent globally disabling Iris.
@@ -29,12 +32,13 @@ must not prevent globally disabling Iris.
 - Invalid runtime-control requests do not record audit events.
 - Successful global, group, and capability changes record `runtime_control_updated`.
 - `GET /internal/audit/events?type=runtime_control_updated` returns these events.
+- `X-Iris-Operator` may populate `operatorHint`, but missing or invalid hints do not block mutation.
 - Audit write failures do not change the runtime-control API response or mutation result.
 - This remains in-memory until the later durable admin/audit phase.
 
 ## Out Of Scope
 
-- Actor identity in audit events.
+- Authenticated actor identity in audit events.
 - Persistent audit storage.
 - A dedicated runtime-control audit endpoint.
 - Retrying failed audit writes.

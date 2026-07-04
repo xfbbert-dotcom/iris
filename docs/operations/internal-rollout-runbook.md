@@ -24,6 +24,16 @@ When `IRIS_INTERNAL_API_TOKEN` is configured, every `/internal/*` request must i
 $irisHeaders=@{Authorization="Bearer $env:IRIS_INTERNAL_API_TOKEN"}
 ```
 
+For runtime-control changes, operators may add an audit hint. This is not authentication; it is a
+human-readable trace label recorded on runtime-control audit events:
+
+```powershell
+$irisOperatorHeaders=@{
+  Authorization="Bearer $env:IRIS_INTERNAL_API_TOKEN"
+  "X-Iris-Operator"="alice@example.com"
+}
+```
+
 The internal `Invoke-RestMethod` examples below include `-Headers $irisHeaders`. `/health` and
 `/feishu/events` do not use this token.
 
@@ -214,6 +224,9 @@ Invoke-RestMethod `
   -Headers $irisHeaders `
   -Uri "http://localhost:3000/internal/audit/events?limit=20&type=runtime_control_updated"
 ```
+
+When a runtime-control mutation is sent with `X-Iris-Operator`, the audit event includes
+`operatorHint`.
 
 ## Document Operations
 
