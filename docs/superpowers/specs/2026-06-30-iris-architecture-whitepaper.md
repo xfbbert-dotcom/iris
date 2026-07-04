@@ -716,7 +716,7 @@ Required architectural response:
 - Positive integer environment settings must also be safe JavaScript integers.
 - Unsafe integers must be rejected during config loading with explicit errors.
 - Model, embedding, and Feishu OpenAPI base URLs must be absolute `http` or `https`
-  URLs before provider or fetcher runtimes are constructed.
+  URLs without query strings or fragments before provider or fetcher runtimes are constructed.
 - External I/O adapters must re-validate timeout values at construction time so
   direct dependency injection cannot bypass environment validation.
 - Worker loops must re-validate interval and batch-limit values at construction

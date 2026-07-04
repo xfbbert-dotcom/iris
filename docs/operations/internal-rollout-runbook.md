@@ -122,8 +122,8 @@ $env:IRIS_EMBEDDING_DIMENSIONS="1536"
 $env:IRIS_EMBEDDING_TIMEOUT_MS="30000"
 ```
 
-External base URLs must be absolute `http` or `https` URLs. Iris rejects invalid or non-HTTP(S)
-model, embedding, and Feishu OpenAPI base URLs during configuration loading.
+External base URLs must be absolute `http` or `https` URLs without query strings or fragments. Iris
+rejects invalid model, embedding, and Feishu OpenAPI base URLs during configuration loading.
 
 Enable internal answer drafting:
 

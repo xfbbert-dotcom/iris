@@ -249,13 +249,17 @@ function readRequiredEnv(name: string, value: string | undefined): string {
 
 function readHttpBaseUrlEnv(name: string, value: string | undefined): string {
   const trimmed = readRequiredEnv(name, value);
+  let parsed: URL;
   try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("unsupported protocol");
-    }
+    parsed = new URL(trimmed);
   } catch {
     throw new Error(`${name} must be an http(s) URL`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${name} must be an http(s) URL`);
+  }
+  if (parsed.search.length > 0 || parsed.hash.length > 0) {
+    throw new Error(`${name} must not include query or fragment`);
   }
 
   return trimTrailingSlash(trimmed);

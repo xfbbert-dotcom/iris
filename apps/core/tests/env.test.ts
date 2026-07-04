@@ -145,6 +145,14 @@ describe("readModelProviderConfig", () => {
         IRIS_MODEL_NAME: "model-a",
       }),
     ).toThrow("IRIS_MODEL_BASE_URL must be an http(s) URL");
+    expect(() =>
+      readModelProviderConfig({
+        IRIS_MODEL_PROVIDER: "openai-compatible",
+        IRIS_MODEL_BASE_URL: "https://api.example.com/v1?tenant=a",
+        IRIS_MODEL_API_KEY: "key-a",
+        IRIS_MODEL_NAME: "model-a",
+      }),
+    ).toThrow("IRIS_MODEL_BASE_URL must not include query or fragment");
   });
 });
 
@@ -250,6 +258,14 @@ describe("readEmbeddingProviderConfig", () => {
         IRIS_EMBEDDING_MODEL: "embedding-model",
       }),
     ).toThrow("IRIS_EMBEDDING_BASE_URL must be an http(s) URL");
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1#fragment",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+      }),
+    ).toThrow("IRIS_EMBEDDING_BASE_URL must not include query or fragment");
   });
 });
 
@@ -497,5 +513,12 @@ describe("readFeishuOpenApiConfig", () => {
         FEISHU_OPEN_BASE_URL: "ftp://open.feishu.cn",
       }),
     ).toThrow("FEISHU_OPEN_BASE_URL must be an http(s) URL");
+    expect(() =>
+      readFeishuOpenApiConfig({
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        FEISHU_OPEN_BASE_URL: "https://open.feishu.cn?tenant=a",
+      }),
+    ).toThrow("FEISHU_OPEN_BASE_URL must not include query or fragment");
   });
 });
