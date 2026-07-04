@@ -200,6 +200,35 @@ describe("DocumentSyncWorkerLoop", () => {
     await loop.stop();
   });
 
+  it("bounds failed batch error messages in loop snapshots", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-03T02:00:00.000Z"));
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const worker = {
+      processBatch: vi.fn(async () => {
+        throw new Error(oversizedMessage);
+      }),
+    };
+    const loop = createDocumentSyncWorkerLoop({
+      worker,
+      intervalMs: 1000,
+      batchLimit: 25,
+    });
+
+    loop.start();
+    await vi.runOnlyPendingTimersAsync();
+
+    const latestBatch = loop.getSnapshot().latestBatch;
+    expect(latestBatch?.status).toBe("failed");
+    if (latestBatch?.status !== "failed") {
+      throw new Error("expected failed batch snapshot");
+    }
+    expect(latestBatch.errorMessage.length).toBeLessThanOrEqual(1000);
+    expect(latestBatch.errorMessage).toContain("[truncated]");
+    expect(latestBatch.errorMessage).not.toContain("trailing diagnostic detail");
+    await loop.stop();
+  });
+
   it("does not overlap long-running batches", async () => {
     vi.useFakeTimers();
     let resolveBatch: (() => void) | undefined;

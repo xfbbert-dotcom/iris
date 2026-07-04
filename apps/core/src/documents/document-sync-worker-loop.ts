@@ -1,4 +1,5 @@
 import type { DocumentSyncWorkerResult } from "./document-sync-worker.js";
+import { normalizeWorkerLoopErrorMessage } from "../workers/worker-loop-error-message.js";
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -82,7 +83,7 @@ export function createDocumentSyncWorkerLoop({
         processedCount: 0,
         failedCount: 0,
         failed: true,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: normalizeWorkerLoopErrorMessage(error),
       };
       reportError(onError, error);
     }
