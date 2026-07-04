@@ -379,6 +379,45 @@ describe("FeishuMessageEventProcessor", () => {
       }),
     );
   });
+
+  it("falls back to the Feishu header timestamp for non-decimal message timestamps", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const processor = createFeishuMessageEventProcessor({ messages });
+
+    await processor.process(
+      rawEventFixture({
+        rawBody: {
+          header: {
+            event_id: "event-1",
+            event_type: "im.message.receive_v1",
+            create_time: "1782925260000",
+          },
+          event: {
+            message: {
+              message_id: "message-1",
+              chat_id: "chat-1",
+              message_type: "text",
+              content: "{\"text\":\"Scientific time\"}",
+              create_time: "1e3",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(messages.upsertMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Scientific time",
+        sentAt: new Date("2026-07-01T17:01:00.000Z"),
+      }),
+    );
+  });
 });
 
 function rawEventFixture(overrides: Partial<RawEvent> = {}): RawEvent {

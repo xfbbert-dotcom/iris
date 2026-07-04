@@ -195,14 +195,31 @@ function collectPostTextParts(value: unknown, parts: string[]): void {
 }
 
 function readFeishuTimestamp(value: unknown, fallback: Date): Date {
-  const parsed =
-    typeof value === "string" && value.trim().length > 0 ? Number(value.trim()) : undefined;
-  if (parsed === undefined || !Number.isFinite(parsed)) {
+  const parsed = readFeishuTimestampMillis(value);
+  if (parsed === undefined) {
     return fallback;
   }
 
   const date = new Date(parsed);
   return Number.isNaN(date.getTime()) ? fallback : date;
+}
+
+function readFeishuTimestampMillis(value: unknown): number | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!/^\d+$/u.test(trimmed)) {
+    return undefined;
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return parsed;
 }
 
 function readString(value: unknown): string {
