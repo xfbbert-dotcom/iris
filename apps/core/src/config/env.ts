@@ -58,6 +58,7 @@ export type FeishuOpenApiConfig = {
   appSecret: string;
   baseUrl: string;
   documentFetchTimeoutMs: number;
+  documentMaxContentChars: number;
 };
 
 export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConfig {
@@ -227,6 +228,11 @@ export function readFeishuOpenApiConfig(env: EnvLike = process.env): FeishuOpenA
       "IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS",
       env.IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS,
       10000,
+    ),
+    documentMaxContentChars: readPositiveIntegerEnv(
+      "IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS",
+      env.IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS,
+      2000000,
     ),
   };
 }

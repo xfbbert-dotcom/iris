@@ -582,12 +582,14 @@ describe("readFeishuOpenApiConfig", () => {
         FEISHU_APP_SECRET: " app-secret ",
         FEISHU_OPEN_BASE_URL: " https://open.example.com/ ",
         IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: " 2500 ",
+        IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS: " 12345 ",
       }),
     ).toEqual({
       appId: "app-id",
       appSecret: "app-secret",
       baseUrl: "https://open.example.com",
       documentFetchTimeoutMs: 2500,
+      documentMaxContentChars: 12345,
     });
   });
 
@@ -604,12 +606,14 @@ describe("readFeishuOpenApiConfig", () => {
         FEISHU_APP_SECRET: " app-secret ",
         FEISHU_OPEN_BASE_URL: " https://open.example.com/ ",
         IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: " 2500 ",
+        IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS: " 12345 ",
       }),
     ).toEqual({
       appId: "app-id",
       appSecret: "app-secret",
       baseUrl: "https://open.example.com",
       documentFetchTimeoutMs: 2500,
+      documentMaxContentChars: 12345,
     });
   });
 
@@ -624,6 +628,7 @@ describe("readFeishuOpenApiConfig", () => {
       appSecret: "app-secret",
       baseUrl: "https://open.feishu.cn",
       documentFetchTimeoutMs: 10000,
+      documentMaxContentChars: 2000000,
     });
   });
 
@@ -641,6 +646,16 @@ describe("readFeishuOpenApiConfig", () => {
         IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: "0",
       }),
     ).toThrow("IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS must be a positive integer");
+  });
+
+  it("rejects invalid Feishu document content size values", () => {
+    expect(() =>
+      readFeishuOpenApiConfig({
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS: "0",
+      }),
+    ).toThrow("IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS must be a positive integer");
   });
 
   it("rejects Feishu document fetch timeouts above Node's maximum timer delay", () => {

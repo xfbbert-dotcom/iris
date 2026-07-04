@@ -8,10 +8,12 @@ export type FeishuDocumentBodyFetcherDependencies = {
   tokenProvider: FeishuTenantAccessTokenProvider;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  maxContentChars?: number;
   now?: () => Date;
 };
 
 const DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS = 10_000;
+const DEFAULT_FEISHU_DOCUMENT_MAX_CONTENT_CHARS = 2_000_000;
 
 const supportedSourceTypes = new Set<DocumentSourceType>([
   "group_visible_document",
@@ -59,11 +61,16 @@ export function createFeishuDocumentBodyFetcher({
   tokenProvider,
   fetch = globalThis.fetch,
   timeoutMs = DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS,
+  maxContentChars = DEFAULT_FEISHU_DOCUMENT_MAX_CONTENT_CHARS,
   now = () => new Date(),
 }: FeishuDocumentBodyFetcherDependencies): DocumentBodyFetcher {
   const safeTimeoutMs = readPositiveSafeInteger(
     timeoutMs,
     "Feishu document fetch timeoutMs",
+  );
+  const safeMaxContentChars = readPositiveSafeInteger(
+    maxContentChars,
+    "Feishu document maxContentChars",
   );
 
   return {
@@ -113,7 +120,7 @@ export function createFeishuDocumentBodyFetcher({
         );
       }
 
-      const bodyText = readRawContent(responseBody);
+      const bodyText = readRawContent(responseBody, safeMaxContentChars);
       return {
         bodyText,
         fetchedAt: now(),
@@ -246,7 +253,7 @@ function readWikiDocumentId(responseBody: unknown): string {
   return objectToken.trim();
 }
 
-function readRawContent(responseBody: unknown): string {
+function readRawContent(responseBody: unknown, maxContentChars: number): string {
   if (!isRecord(responseBody)) {
     throw new Error("Feishu document raw content response did not include content");
   }
@@ -268,7 +275,12 @@ function readRawContent(responseBody: unknown): string {
     throw new Error("Feishu document raw content response did not include content");
   }
 
-  return content.trim();
+  const bodyText = content.trim();
+  if (bodyText.length > maxContentChars) {
+    throw new Error(`Feishu document raw content exceeds ${maxContentChars} characters`);
+  }
+
+  return bodyText;
 }
 
 function readErrorMessage(responseBody: unknown): string {

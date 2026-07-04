@@ -88,6 +88,7 @@ $env:FEISHU_APP_ID="<feishu-app-id>"
 $env:FEISHU_APP_SECRET="<feishu-app-secret>"
 $env:FEISHU_OPEN_BASE_URL="https://open.feishu.cn"
 $env:IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS="10000"
+$env:IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS="2000000"
 ```
 
 Enable background workers:

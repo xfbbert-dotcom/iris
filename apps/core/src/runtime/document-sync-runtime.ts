@@ -301,6 +301,7 @@ function createEnabledDocumentSyncRuntime({
     baseUrl: feishuConfig.baseUrl,
     tokenProvider,
     timeoutMs: feishuConfig.documentFetchTimeoutMs,
+    maxContentChars: feishuConfig.documentMaxContentChars,
   });
   const queue = createQueue(createLazyRedisDocumentSyncQueueClient(redisConnection));
   const manualPlanner = createManualPlanner({

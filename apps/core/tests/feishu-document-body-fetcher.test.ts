@@ -387,6 +387,19 @@ describe("FeishuDocumentBodyFetcher", () => {
     );
   });
 
+  it("rejects raw content that exceeds the configured content size", async () => {
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => jsonResponse({ code: 0, data: { content: "123456" } })),
+      maxContentChars: 5,
+    });
+
+    await expect(fetcher.fetch(source())).rejects.toThrow(
+      "Feishu document raw content exceeds 5 characters",
+    );
+  });
+
   it("throws on invalid raw content JSON", async () => {
     const fetcher = createFeishuDocumentBodyFetcher({
       baseUrl: "https://open.feishu.cn",
