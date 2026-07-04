@@ -28,6 +28,25 @@ describe("DocumentSyncWorkerLoop", () => {
     await loop.stop();
   });
 
+  it("rejects unsafe interval and batch limit values", () => {
+    const worker = { processBatch: vi.fn(async () => []) };
+
+    expect(() =>
+      createDocumentSyncWorkerLoop({
+        worker,
+        intervalMs: 9007199254740992,
+        batchLimit: 25,
+      }),
+    ).toThrow("intervalMs must be a positive safe integer");
+    expect(() =>
+      createDocumentSyncWorkerLoop({
+        worker,
+        intervalMs: 1000,
+        batchLimit: 9007199254740992,
+      }),
+    ).toThrow("batchLimit must be a positive safe integer");
+  });
+
   it("records successful batch result counts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-03T02:00:00.000Z"));

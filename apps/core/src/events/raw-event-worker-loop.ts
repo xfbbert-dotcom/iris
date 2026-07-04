@@ -156,6 +156,9 @@ function sanitizePositiveInteger(name: string, value: number): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer`);
   }
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
 
   return value;
 }

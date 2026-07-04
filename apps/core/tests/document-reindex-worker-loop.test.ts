@@ -28,6 +28,25 @@ describe("DocumentReindexWorkerLoop", () => {
     await loop.stop();
   });
 
+  it("rejects unsafe interval and batch limit values", () => {
+    const worker = { processBatch: vi.fn(async () => []) };
+
+    expect(() =>
+      createDocumentReindexWorkerLoop({
+        worker,
+        intervalMs: 9007199254740992,
+        batchLimit: 25,
+      }),
+    ).toThrow("intervalMs must be a positive safe integer");
+    expect(() =>
+      createDocumentReindexWorkerLoop({
+        worker,
+        intervalMs: 1000,
+        batchLimit: 9007199254740992,
+      }),
+    ).toThrow("batchLimit must be a positive safe integer");
+  });
+
   it("does not create duplicate loops on repeated start", async () => {
     vi.useFakeTimers();
     const worker = { processBatch: vi.fn(async () => []) };
