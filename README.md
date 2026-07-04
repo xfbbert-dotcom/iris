@@ -36,9 +36,7 @@ npm test
 Run Python worker tests:
 
 ```powershell
-cd workers/ai
-python -m pytest
-cd ../..
+npm run test:python
 ```
 
 ## Local Database

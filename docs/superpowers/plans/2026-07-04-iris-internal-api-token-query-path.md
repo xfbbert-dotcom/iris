@@ -80,7 +80,7 @@ Run:
 git diff --check
 npm run typecheck
 npm test
-Push-Location workers\ai; python -m pytest; Pop-Location
+npm run test:python
 docker compose config
 ```
 

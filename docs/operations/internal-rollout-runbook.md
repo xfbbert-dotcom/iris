@@ -301,9 +301,7 @@ Run the local verification suite before changing rollout configuration:
 git diff --check
 npm run typecheck
 npm test
-cd workers/ai
-python -m pytest
-cd ../..
+npm run test:python
 docker compose config
 ```
 
