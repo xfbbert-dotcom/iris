@@ -56,6 +56,9 @@ function formatLiveChatMessage(message: LiveChatMessage): string {
 }
 
 function sanitizeLiveChatLimit(value: number | undefined): number {
+  if (value !== undefined && Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+    throw new Error("liveChatLimit must be a finite safe-magnitude number");
+  }
   if (value === undefined || !Number.isFinite(value)) {
     return DEFAULT_LIVE_CHAT_LIMIT;
   }

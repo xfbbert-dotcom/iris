@@ -214,6 +214,19 @@ describe("assemblePromptContext", () => {
     }
   });
 
+  it("rejects unsafe liveChatLimit values before selecting live messages", () => {
+    expect(() =>
+      assemblePromptContext({
+        backgroundDocuments: [],
+        liveChatMessages: [
+          { speaker: "User", text: "message-1" },
+          { speaker: "User", text: "message-2" }
+        ],
+        liveChatLimit: Number.MAX_SAFE_INTEGER + 1
+      }),
+    ).toThrow("liveChatLimit must be a finite safe-magnitude number");
+  });
+
   it("escapes XML in background documents and live chat messages", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [
