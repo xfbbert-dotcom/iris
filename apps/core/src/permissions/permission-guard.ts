@@ -23,12 +23,18 @@ export async function filterFragmentsByLivePermission(
 ): Promise<PermissionGuardResult> {
   const allowedFragments: RetrievedDocumentFragment[] = [];
   const deniedDocumentIds = new Set<string>();
-  const permissionCache = new Map<string, PermissionResolution>();
   const fragmentIdsByDocumentId = groupFragmentIdsByDocumentId(input.fragments);
+  const permissionsByDocumentId = await resolvePermissionsByDocumentId(
+    [...fragmentIdsByDocumentId.keys()],
+    input.canReadDocument,
+  );
   const auditedDocumentIds = new Set<string>();
 
   for (const fragment of input.fragments) {
-    const permission = await resolvePermission(fragment.documentId, input.canReadDocument, permissionCache);
+    const permission = permissionsByDocumentId.get(fragment.documentId) ?? {
+      allowed: false,
+      error: new Error("missing permission resolution"),
+    };
     if (permission.allowed) {
       allowedFragments.push(fragment);
     } else {
@@ -54,25 +60,29 @@ type PermissionResolution =
   | { allowed: false; error?: unknown };
 type DeniedPermissionResolution = Extract<PermissionResolution, { allowed: false }>;
 
+async function resolvePermissionsByDocumentId(
+  documentIds: string[],
+  canReadDocument: (documentId: string) => Promise<boolean>,
+): Promise<Map<string, PermissionResolution>> {
+  const entries = await Promise.all(
+    documentIds.map(async (documentId) => [
+      documentId,
+      await resolvePermission(documentId, canReadDocument),
+    ] as const),
+  );
+
+  return new Map(entries);
+}
+
 async function resolvePermission(
   documentId: string,
   canReadDocument: (documentId: string) => Promise<boolean>,
-  permissionCache: Map<string, PermissionResolution>
 ): Promise<PermissionResolution> {
-  const cached = permissionCache.get(documentId);
-  if (cached !== undefined) {
-    return cached;
-  }
-
   try {
     const allowed = await canReadDocument(documentId);
-    const permission: PermissionResolution = allowed ? { allowed: true } : { allowed: false };
-    permissionCache.set(documentId, permission);
-    return permission;
+    return allowed ? { allowed: true } : { allowed: false };
   } catch (error) {
-    const permission: PermissionResolution = { allowed: false, error };
-    permissionCache.set(documentId, permission);
-    return permission;
+    return { allowed: false, error };
   }
 }
 

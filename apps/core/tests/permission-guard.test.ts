@@ -50,6 +50,37 @@ describe("filterFragmentsByLivePermission", () => {
     expect(result.deniedDocumentIds).toEqual([]);
   });
 
+  it("checks distinct document permissions concurrently while preserving output order", async () => {
+    const fragments = [
+      { id: "frag-1", documentId: "doc-slow-allowed", text: "Allowed content" },
+      { id: "frag-2", documentId: "doc-slow-denied", text: "Denied content" },
+      { id: "frag-3", documentId: "doc-fast-allowed", text: "More allowed content" },
+    ];
+    const resolvers = new Map<string, (allowed: boolean) => void>();
+    const canReadDocument = vi.fn(
+      async (documentId: string) =>
+        new Promise<boolean>((resolve) => {
+          resolvers.set(documentId, resolve);
+        }),
+    );
+
+    const pending = filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument,
+    });
+    await Promise.resolve();
+
+    expect(canReadDocument).toHaveBeenCalledTimes(3);
+    resolvers.get("doc-slow-denied")?.(false);
+    resolvers.get("doc-fast-allowed")?.(true);
+    resolvers.get("doc-slow-allowed")?.(true);
+
+    await expect(pending).resolves.toEqual({
+      allowedFragments: [fragments[0], fragments[2]],
+      deniedDocumentIds: ["doc-slow-denied"],
+    });
+  });
+
   it("checks duplicate denied document IDs once, excludes all denied fragments, and reports the document once", async () => {
     const fragments = [
       { id: "frag-1", documentId: "doc-denied", text: "Denied content A" },
