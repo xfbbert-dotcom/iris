@@ -248,7 +248,7 @@ describe("createEventWorkerRuntime", () => {
     await runtime?.close();
   });
 
-  it("does not compose mention replies when the bot open ID is not configured", async () => {
+  it("does not compose mention replies and reports missing setup reasons", async () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const redisClient = {
       connect: vi.fn(async () => redisClient),
@@ -309,6 +309,41 @@ describe("createEventWorkerRuntime", () => {
       mentionRepliesUnavailableReason: "missing_bot_open_id",
     });
     await runtime?.close();
+
+    const missingFeishuConfigRuntime = createEventWorkerRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_FEISHU_BOT_OPEN_ID: "ou_iris",
+      },
+      dependencies,
+      answerDraftOrchestrator: { generateDraft: vi.fn() },
+    } as Parameters<typeof createEventWorkerRuntime>[0] & {
+      answerDraftOrchestrator: { generateDraft: ReturnType<typeof vi.fn> };
+    });
+
+    await expect(missingFeishuConfigRuntime?.getStatus()).resolves.toMatchObject({
+      enabled: true,
+      mentionRepliesEnabled: false,
+      mentionRepliesUnavailableReason: "missing_feishu_openapi_config",
+    });
+    await missingFeishuConfigRuntime?.close();
+
+    const missingAnswerDraftRuntime = createEventWorkerRuntime({
+      env: {
+        ...enabledEnv(),
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        IRIS_FEISHU_BOT_OPEN_ID: "ou_iris",
+      },
+      dependencies,
+    });
+
+    await expect(missingAnswerDraftRuntime?.getStatus()).resolves.toMatchObject({
+      enabled: true,
+      mentionRepliesEnabled: false,
+      mentionRepliesUnavailableReason: "missing_answer_draft_orchestrator",
+    });
+    await missingAnswerDraftRuntime?.close();
   });
 });
 
