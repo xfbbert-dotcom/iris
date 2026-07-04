@@ -148,6 +148,10 @@ function cloneRecordedEvent(event: RecordedAuditEvent): RecordedAuditEvent {
 }
 
 function sanitizeLimit(value: number): number {
+  if (Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+    throw new Error("audit summary limit must be a finite safe-magnitude number");
+  }
+
   if (!Number.isFinite(value)) {
     return 0;
   }

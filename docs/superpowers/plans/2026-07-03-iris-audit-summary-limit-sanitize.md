@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prevent non-finite audit summary limits from summarizing all retained audit events.
+**Goal:** Prevent non-finite and unsafe-magnitude audit summary limits from summarizing all retained audit events.
 
-**Architecture:** Add a finite-aware `sanitizeLimit()` helper inside `audit-log.ts` and use it before the recent event window is built. Keep retention, grouping, filters, and sort behavior unchanged.
+**Architecture:** Add a finite-aware and safe-magnitude `sanitizeLimit()` helper inside `audit-log.ts` and use it before the recent event window is built. Keep retention, grouping, filters, and sort behavior unchanged.
 
 **Tech Stack:** TypeScript, Vitest.
 
@@ -59,3 +59,7 @@ git add apps/core/src/audit/audit-log.ts apps/core/tests/audit-log.test.ts docs/
 git commit -m "fix: sanitize audit summary limits"
 git push --force-with-lease origin codex/iris-document-source-registry
 ```
+
+- [x] **Step 7: Reject unsafe finite limits**
+  - Add a failing audit log test for `Number.MAX_SAFE_INTEGER + 1`.
+  - Reject unsafe finite limits before summarizing retained events, while preserving `Infinity` and `NaN` to `[]`.

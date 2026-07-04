@@ -229,6 +229,20 @@ describe("InMemoryAuditLog", () => {
     expect(auditLog.summarizeRecent({ limit: Number.NaN })).toEqual([]);
   });
 
+  it("rejects unsafe recent event limits", async () => {
+    const auditLog = new InMemoryAuditLog();
+
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+
+    expect(() => auditLog.summarizeRecent({ limit: Number.MAX_SAFE_INTEGER + 1 })).toThrow(
+      "audit summary limit must be a finite safe-magnitude number",
+    );
+  });
+
   it("filters audit summaries by document and event type", async () => {
     const recordedAt = new Date("2026-07-03T06:04:00.000Z");
     const auditLog = new InMemoryAuditLog({ now: () => recordedAt });

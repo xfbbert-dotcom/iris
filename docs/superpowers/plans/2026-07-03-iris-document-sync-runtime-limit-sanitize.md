@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prevent non-finite document sync runtime list limits from producing surprising inventory results.
+**Goal:** Prevent non-finite and unsafe-magnitude document sync runtime list limits from producing surprising inventory results.
 
-**Architecture:** Add a small finite-aware `sanitizeLimit()` helper in `document-sync-runtime.ts` and use it before array slicing. Cover both source inventory and source snapshot inventory through the existing runtime composition test.
+**Architecture:** Add a small finite-aware and safe-magnitude `sanitizeLimit()` helper in `document-sync-runtime.ts` and use it before array slicing. Cover both source inventory and source snapshot inventory through the existing runtime composition test.
 
 **Tech Stack:** TypeScript, Vitest.
 
@@ -59,3 +59,7 @@ git add apps/core/src/runtime/document-sync-runtime.ts apps/core/tests/document-
 git commit -m "fix: sanitize document sync runtime limits"
 git push --force-with-lease origin codex/iris-document-source-registry
 ```
+
+- [x] **Step 7: Reject unsafe finite limits**
+  - Add failing runtime assertions for `Number.MAX_SAFE_INTEGER + 1` on source inventory and snapshot inventory.
+  - Reject unsafe finite limits before array slicing, while preserving `Infinity` and `NaN` to empty results.

@@ -410,6 +410,9 @@ describe("createDocumentSyncRuntime", () => {
     ).resolves.toEqual([]);
     await expect(runtime?.sources.list({ limit: Number.NaN })).resolves.toEqual([]);
     await expect(
+      runtime?.sources.list({ limit: Number.MAX_SAFE_INTEGER + 1 }),
+    ).rejects.toThrow("document sync runtime list limit must be a finite safe-magnitude number");
+    await expect(
       runtime?.sources.list({ limit: 10, sourceType: "authorized_wiki_document" }),
     ).resolves.toEqual([inventorySource]);
     expect(documentSources.listSourcesByType).toHaveBeenCalledWith("authorized_wiki_document");
@@ -462,6 +465,12 @@ describe("createDocumentSyncRuntime", () => {
     await expect(
       runtime?.sources.listSnapshots({ id: "source-1", limit: Number.NaN }),
     ).resolves.toEqual([]);
+    await expect(
+      runtime?.sources.listSnapshots({
+        id: "source-1",
+        limit: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("document sync runtime list limit must be a finite safe-magnitude number");
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
     expect(snapshots.listSnapshotsForSource).toHaveBeenCalledWith("source-1");
     await expect(

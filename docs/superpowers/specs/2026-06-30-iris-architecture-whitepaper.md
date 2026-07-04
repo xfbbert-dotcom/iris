@@ -696,6 +696,9 @@ Required architectural response:
   defensively sanitize unsafe limits before reaching storage queries.
 - Admin list/query limits must also reject unsafe integers before applying
   product caps such as maximum page size.
+- Runtime list boundaries and audit-summary windows must reject unsafe finite
+  limits before slicing already-loaded arrays, while retaining empty-result
+  behavior for non-finite values.
 - Answer-context window limits must reject unsafe numeric magnitudes before
   model orchestration or live-chat history reads. Retrieval and prompt assembly
   components, live-chat context providers, and conversation-message storage
