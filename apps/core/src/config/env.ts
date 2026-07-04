@@ -220,6 +220,18 @@ export function readFeishuOpenApiConfig(env: EnvLike = process.env): FeishuOpenA
   };
 }
 
+export function readOptionalFeishuOpenApiConfig(
+  env: EnvLike = process.env,
+): FeishuOpenApiConfig | undefined {
+  const appId = readOptionalEnv(env.FEISHU_APP_ID);
+  const appSecret = readOptionalEnv(env.FEISHU_APP_SECRET);
+  if (appId === undefined && appSecret === undefined) {
+    return undefined;
+  }
+
+  return readFeishuOpenApiConfig(env);
+}
+
 function readOptionalEnv(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;

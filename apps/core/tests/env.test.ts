@@ -5,6 +5,7 @@ import {
   readEventWorkerRuntimeConfig,
   readFeishuAuthConfig,
   readFeishuOpenApiConfig,
+  readOptionalFeishuOpenApiConfig,
   readDocumentSyncWorkerRuntimeConfig,
   readModelProviderConfig,
   readReindexWorkerRuntimeConfig,
@@ -371,6 +372,32 @@ describe("readDocumentSyncWorkerRuntimeConfig", () => {
 });
 
 describe("readFeishuOpenApiConfig", () => {
+  it("returns undefined for optional Feishu OpenAPI config when credentials are absent", () => {
+    expect(readOptionalFeishuOpenApiConfig({})).toBeUndefined();
+  });
+
+  it("reads optional Feishu OpenAPI config when credentials are present", () => {
+    expect(
+      readOptionalFeishuOpenApiConfig({
+        FEISHU_APP_ID: " app-id ",
+        FEISHU_APP_SECRET: " app-secret ",
+        FEISHU_OPEN_BASE_URL: " https://open.example.com/ ",
+        IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: " 2500 ",
+      }),
+    ).toEqual({
+      appId: "app-id",
+      appSecret: "app-secret",
+      baseUrl: "https://open.example.com",
+      documentFetchTimeoutMs: 2500,
+    });
+  });
+
+  it("rejects partially configured optional Feishu OpenAPI credentials", () => {
+    expect(() => readOptionalFeishuOpenApiConfig({ FEISHU_APP_ID: "app-id" })).toThrow(
+      "FEISHU_APP_SECRET is required",
+    );
+  });
+
   it("reads Feishu OpenAPI config and trims values", () => {
     expect(
       readFeishuOpenApiConfig({

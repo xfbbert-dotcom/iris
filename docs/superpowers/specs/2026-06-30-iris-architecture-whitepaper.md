@@ -136,6 +136,8 @@ Document source policy updates from Admin Console are control-plane writes. When
 
 Local permission state is never enough for sensitive retrieval. Before document fragments retrieved from pgvector are passed into the LLM, TypeScript Core App must run a real-time permission guard against Feishu for the candidate document IDs whenever the answer depends on document content. This guard exists because indirect permission changes, such as parent-folder permission changes or group membership changes, may lag behind or bypass clean webhook notifications.
 
+Current implementation: answer-time `source-policy` retrieval first checks the local source registry and runtime capabilities, then, when Feishu OpenAPI credentials are configured, runs a Feishu live permission probe before allowing candidate fragments into prompt context. Direct docx/docs URLs are checked through document metadata lookup; wiki URLs are resolved through wiki node lookup and then checked as documents. Unsupported URLs, denied responses, failed checks, and timeouts are excluded from the prompt.
+
 Feishu document sync reads are external I/O and must always be bounded by request timeouts that cover both response headers and body consumption. If tenant-token acquisition, wiki-node lookup, raw-content fetch, or response body reading stalls, Iris must fail the document sync attempt and let the queue retry/dead-letter policy handle recovery rather than occupying a worker indefinitely.
 
 Document sync workers must not treat a stale pre-claim source read as permission to fetch. After a worker marks a source as `syncing`, it must treat the returned source record as authoritative, re-check permission state and usage capabilities, and abandon the fetch if the source has become denied or disabled. When this happens, the worker must restore the source to `pending` so future administrator changes can re-enable sync without leaving the source stuck in an in-flight state.
@@ -564,6 +566,12 @@ Required architectural response:
 - If real-time permission verification fails or times out for sensitive content, exclude that fragment from the prompt.
 - Record permission-guard denials and timeouts in audit logs.
 - Keep background invalidation jobs, but treat them as cleanup and acceleration rather than final enforcement.
+
+Implementation status:
+
+- TypeScript Core App now composes a Feishu live permission checker into answer-time `source-policy` retrieval whenever Feishu OpenAPI credentials are present.
+- The checker avoids external calls for unsupported document URLs, resolves wiki nodes before document checks, and uses bounded request timeouts.
+- The current checker is process-local. If latency, rate limiting, or repeated checks become material, the next architecture step is a dedicated Permission Guard Service.
 
 Evolution signal:
 

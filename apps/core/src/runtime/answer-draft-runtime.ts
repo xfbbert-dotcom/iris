@@ -3,6 +3,7 @@ import type { AuditLog } from "../audit/audit-log.js";
 import {
   readAnswerDraftRuntimeConfig,
   readEmbeddingProviderConfig,
+  readOptionalFeishuOpenApiConfig,
   readModelProviderConfig,
   type AnswerDraftPermissionMode,
   type EmbeddingProviderConfig,
@@ -33,6 +34,16 @@ import {
 } from "../documents/embedding-profile-repository.js";
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 import { createDocumentRetrievalContextBuilder } from "../memory/document-retrieval-context.js";
+import {
+  createFeishuDocumentPermissionChecker,
+  type FeishuDocumentPermissionChecker,
+  type FeishuDocumentPermissionCheckerDependencies,
+} from "../permissions/feishu-document-permission-checker.js";
+import {
+  createFeishuTenantAccessTokenProvider,
+  type FeishuTenantAccessTokenProvider,
+  type FeishuTenantAccessTokenProviderDependencies,
+} from "../feishu/feishu-tenant-access-token-provider.js";
 import {
   createLiveChatContextProvider,
   type LiveChatContextProvider,
@@ -68,6 +79,12 @@ export type AnswerDraftRuntimeDependencies = {
     "getStaticDevelopmentProfile" | "findOrCreateProfile" | "getProfileById"
   >;
   createEmbeddingProvider?: (config: EmbeddingProviderConfig) => EmbeddingProvider;
+  createFeishuTenantAccessTokenProvider?: (
+    dependencies: FeishuTenantAccessTokenProviderDependencies,
+  ) => FeishuTenantAccessTokenProvider;
+  createFeishuDocumentPermissionChecker?: (
+    dependencies: FeishuDocumentPermissionCheckerDependencies,
+  ) => FeishuDocumentPermissionChecker;
   auditLog?: AuditLog;
 };
 
@@ -121,6 +138,10 @@ export function createAnswerDraftRuntime({
   const createEmbedding =
     dependencies.createEmbeddingProvider ??
     ((config: EmbeddingProviderConfig) => createOpenAICompatibleEmbeddingProvider({ config }));
+  const createTokenProvider =
+    dependencies.createFeishuTenantAccessTokenProvider ?? createFeishuTenantAccessTokenProvider;
+  const createLivePermissionChecker =
+    dependencies.createFeishuDocumentPermissionChecker ?? createFeishuDocumentPermissionChecker;
 
   const pool = createPool(readDatabaseConfig(env));
   const profiles = createProfiles({ queryable: pool });
@@ -128,6 +149,14 @@ export function createAnswerDraftRuntime({
   const sourceRegistry =
     runtimeConfig.permissionMode === "source-policy"
       ? createSources({ queryable: pool })
+      : undefined;
+  const livePermissionChecker =
+    runtimeConfig.permissionMode === "source-policy"
+      ? createOptionalLivePermissionChecker({
+          env,
+          createTokenProvider,
+          createLivePermissionChecker,
+        })
       : undefined;
   const conversationMessages = createConversationMessages({ queryable: pool });
   const liveChatContextProvider = createLiveChatContext({ repository: conversationMessages });
@@ -150,6 +179,7 @@ export function createAnswerDraftRuntime({
           permissionMode: runtimeConfig.permissionMode,
           sourceRegistry,
           runtimeController,
+          livePermissionChecker,
         }),
         auditLog: dependencies.auditLog,
       });
@@ -174,39 +204,90 @@ function createCanReadDocument({
   permissionMode,
   sourceRegistry,
   runtimeController,
+  livePermissionChecker,
 }: {
   permissionMode: AnswerDraftPermissionMode;
   sourceRegistry?: Pick<AsyncDocumentSourceRegistry, "findSourceById">;
   runtimeController?: RuntimeRetrievalGate;
+  livePermissionChecker?: Pick<FeishuDocumentPermissionChecker, "canReadSource">;
 }): (documentSourceId: string) => Promise<boolean> {
   if (permissionMode === "allow-indexed") {
     return async () => true;
   }
 
   return (documentSourceId) =>
-    canReadBySourcePolicy(documentSourceId, sourceRegistry, runtimeController);
+    canReadBySourcePolicy(
+      documentSourceId,
+      sourceRegistry,
+      runtimeController,
+      livePermissionChecker,
+    );
 }
 
 async function canReadBySourcePolicy(
   documentSourceId: string,
   sourceRegistry: Pick<AsyncDocumentSourceRegistry, "findSourceById"> | undefined,
   runtimeController: RuntimeRetrievalGate | undefined,
+  livePermissionChecker: Pick<FeishuDocumentPermissionChecker, "canReadSource"> | undefined,
 ): Promise<boolean> {
   if (sourceRegistry === undefined) {
     return false;
   }
 
+  let source: DocumentSource | undefined;
   try {
-    const source = await sourceRegistry.findSourceById(documentSourceId);
-    return (
-      source !== undefined &&
-      source.canUseForAnswering &&
-      (source.permissionState === "unknown" || source.permissionState === "readable") &&
-      canUseSourceByRuntimeCapabilities(source, runtimeController)
-    );
+    source = await sourceRegistry.findSourceById(documentSourceId);
   } catch {
     return false;
   }
+  if (source === undefined) {
+    return false;
+  }
+
+  const locallyAllowed =
+    source.canUseForAnswering &&
+    (source.permissionState === "unknown" || source.permissionState === "readable") &&
+    canUseSourceByRuntimeCapabilities(source, runtimeController);
+  if (!locallyAllowed) {
+    return false;
+  }
+  if (livePermissionChecker === undefined) {
+    return true;
+  }
+
+  return livePermissionChecker.canReadSource(source);
+}
+
+function createOptionalLivePermissionChecker({
+  env,
+  createTokenProvider,
+  createLivePermissionChecker,
+}: {
+  env: EnvLike;
+  createTokenProvider: (
+    dependencies: FeishuTenantAccessTokenProviderDependencies,
+  ) => FeishuTenantAccessTokenProvider;
+  createLivePermissionChecker: (
+    dependencies: FeishuDocumentPermissionCheckerDependencies,
+  ) => FeishuDocumentPermissionChecker;
+}): FeishuDocumentPermissionChecker | undefined {
+  const feishuConfig = readOptionalFeishuOpenApiConfig(env);
+  if (feishuConfig === undefined) {
+    return undefined;
+  }
+
+  const tokenProvider = createTokenProvider({
+    baseUrl: feishuConfig.baseUrl,
+    appId: feishuConfig.appId,
+    appSecret: feishuConfig.appSecret,
+    timeoutMs: feishuConfig.documentFetchTimeoutMs,
+  });
+
+  return createLivePermissionChecker({
+    baseUrl: feishuConfig.baseUrl,
+    tokenProvider,
+    timeoutMs: feishuConfig.documentFetchTimeoutMs,
+  });
 }
 
 function canUseSourceByRuntimeCapabilities(

@@ -506,6 +506,91 @@ describe("createAnswerDraftRuntime", () => {
     expect(runtimeController.canProcessGroupMessage).not.toHaveBeenCalled();
   });
 
+  it("requires Feishu live permission guard when OpenAPI credentials are configured", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(async (_input: GenerateAnswerDraftInput) => ({
+        answerText: "Runtime draft",
+      })),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-live-allowed",
+          documentSourceId: "source-live-allowed",
+          text: "Live allowed document text",
+        }),
+        fragment({
+          id: "fragment-live-denied",
+          documentSourceId: "source-live-denied",
+          text: "Live denied document text",
+        }),
+      ]),
+    };
+    const sources: Record<string, DocumentSource | undefined> = {
+      "source-live-allowed": source({
+        id: "source-live-allowed",
+        sourceType: "authorized_wiki_document",
+        sourceUri: "https://example.feishu.cn/wiki/wikcnAllowed",
+        permissionState: "readable",
+      }),
+      "source-live-denied": source({
+        id: "source-live-denied",
+        sourceType: "authorized_wiki_document",
+        sourceUri: "https://example.feishu.cn/wiki/wikcnDenied",
+        permissionState: "readable",
+      }),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async (id: string) => sources[id]),
+    };
+    const livePermissionChecker = {
+      canReadSource: vi.fn(async (documentSource: DocumentSource) =>
+        documentSource.id === "source-live-allowed",
+      ),
+    };
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        FEISHU_OPEN_BASE_URL: "https://open.example.com/",
+        IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: "4000",
+      },
+      runtimeController: {
+        canReadDocuments: vi.fn(() => true),
+        canRetrieveKnowledgeBase: vi.fn(() => true),
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => model),
+        createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
+        createFeishuDocumentPermissionChecker: vi.fn(() => livePermissionChecker),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What can Iris use?",
+      liveChatMessages: [],
+    });
+
+    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    expect(promptContext).toContain("Live allowed document text");
+    expect(promptContext).not.toContain("Live denied document text");
+    expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-live-allowed"]);
+    expect(result?.deniedDocumentIds).toEqual(["source-live-denied"]);
+    expect(livePermissionChecker.canReadSource).toHaveBeenCalledWith(sources["source-live-allowed"]);
+    expect(livePermissionChecker.canReadSource).toHaveBeenCalledWith(sources["source-live-denied"]);
+  });
+
   it("uses configured OpenAI-compatible embedding provider when dimensions are 6", async () => {
     const embeddingProvider = { embedTexts: vi.fn(async () => [[0, 1, 0, 0, 0, 0]]) };
     const embeddingProfiles = {
