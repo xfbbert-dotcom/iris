@@ -1,5 +1,5 @@
 import type { RawEventWorkerResult } from "./raw-event-worker.js";
-import { normalizeWorkerLoopErrorMessage } from "../workers/worker-loop-error-message.js";
+import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -83,7 +83,7 @@ export function createRawEventWorkerLoop({
         processedCount: 0,
         failedCount: 0,
         failed: true,
-        errorMessage: normalizeWorkerLoopErrorMessage(error),
+        errorMessage: normalizeWorkerErrorMessage(error),
       };
       reportError(onError, error);
     }

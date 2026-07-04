@@ -6,7 +6,7 @@ Prevent oversized batch-level worker failures from bloating internal status snap
 
 ## Architecture
 
-Add `normalizeWorkerLoopErrorMessage` as the shared worker-loop diagnostic boundary. The helper:
+Add `normalizeWorkerErrorMessage` as the shared worker diagnostic boundary. The helper:
 
 - Converts `Error` and non-`Error` failures to text.
 - Trims short messages.

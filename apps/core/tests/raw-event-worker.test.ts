@@ -80,6 +80,37 @@ describe("RawEventWorker", () => {
       },
     ]);
   });
+
+  it("bounds failed event error messages before returning and requeueing", async () => {
+    const event = eventFixture({ idempotencyKey: "raw-event:feishu:oversized-error" });
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const queue = {
+      dequeueBatch: vi.fn(async () => [event]),
+      handleFailedEvent: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
+    };
+    const worker = createRawEventWorker({
+      queue,
+      processor: {
+        process: vi.fn(async () => {
+          throw new Error(oversizedMessage);
+        }),
+      },
+    });
+
+    const [result] = await worker.processBatch({ limit: 10 });
+
+    expect(result?.status).toBe("failed");
+    if (result?.status !== "failed") {
+      throw new Error("expected failed worker result");
+    }
+    expect(result.errorMessage.length).toBeLessThanOrEqual(1000);
+    expect(result.errorMessage).toContain("[truncated]");
+    expect(result.errorMessage).not.toContain("trailing diagnostic detail");
+    expect(queue.handleFailedEvent).toHaveBeenCalledWith({
+      event,
+      errorMessage: result.errorMessage,
+    });
+  });
 });
 
 function eventFixture(overrides: Partial<RawEvent> = {}): RawEvent {

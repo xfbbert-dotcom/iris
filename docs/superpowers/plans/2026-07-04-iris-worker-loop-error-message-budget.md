@@ -6,7 +6,7 @@
 
 **Goal:** Bound batch-level worker loop error messages before they enter internal status snapshots.
 
-**Architecture:** Add `normalizeWorkerLoopErrorMessage` and use it in raw event, document sync, and
+**Architecture:** Add `normalizeWorkerErrorMessage` and use it in raw event, document sync, and
 document reindex worker loops.
 
 **Tech Stack:** TypeScript, Vitest, existing worker loop tests.
@@ -49,7 +49,7 @@ Observed: all three new tests failed with `1227` character `errorMessage` values
 ### Task 2: Implement Worker Loop Error Budget
 
 **Files:**
-- Create: `apps/core/src/workers/worker-loop-error-message.ts`
+- Create: `apps/core/src/workers/worker-error-message.ts`
 - Modify: `apps/core/src/events/raw-event-worker-loop.ts`
 - Modify: `apps/core/src/documents/document-sync-worker-loop.ts`
 - Modify: `apps/core/src/reindex/document-reindex-worker-loop.ts`

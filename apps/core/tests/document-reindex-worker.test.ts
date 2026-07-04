@@ -213,6 +213,36 @@ describe("DocumentReindexWorker", () => {
     ]);
     expect(indexer.indexSnapshot).toHaveBeenCalledTimes(2);
   });
+
+  it("bounds failed processing error messages before returning and requeueing", async () => {
+    const queuedJob = job({ documentSnapshotId: "snapshot-oversized-error" });
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const queue = queueFixture([queuedJob], { action: "requeued", attempts: 1 });
+    const worker = createDocumentReindexWorker({
+      queue,
+      snapshots: { findSnapshotById: vi.fn(async () => snapshot()) },
+      fragments: { hasFragmentsForSnapshotProfile: vi.fn(async () => false) },
+      indexer: {
+        indexSnapshot: vi.fn(async () => {
+          throw new Error(oversizedMessage);
+        }),
+      },
+    });
+
+    const [result] = await worker.processBatch({ limit: 10 });
+
+    expect(result?.status).toBe("failed");
+    if (result?.status !== "failed") {
+      throw new Error("expected failed worker result");
+    }
+    expect(result.errorMessage.length).toBeLessThanOrEqual(1000);
+    expect(result.errorMessage).toContain("[truncated]");
+    expect(result.errorMessage).not.toContain("trailing diagnostic detail");
+    expect(queue.handleFailedJob).toHaveBeenCalledWith({
+      job: queuedJob,
+      errorMessage: result.errorMessage,
+    });
+  });
 });
 
 function queueFixture(

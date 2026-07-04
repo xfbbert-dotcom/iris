@@ -1,4 +1,5 @@
 import type { RawEvent, RawEventQueue } from "./raw-event-queue.js";
+import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
 
 export type RawEventWorkerResult =
   | {
@@ -37,7 +38,7 @@ export function createRawEventWorker(dependencies: RawEventWorkerDependencies) {
             eventType: event.eventType,
           });
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage = normalizeWorkerErrorMessage(error);
           const retryResult = await dependencies.queue.handleFailedEvent({ event, errorMessage });
           results.push({
             status: "failed",

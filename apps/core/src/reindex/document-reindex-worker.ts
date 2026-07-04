@@ -1,5 +1,6 @@
 import type { DocumentSemanticIndexResult } from "../documents/document-semantic-indexer.js";
 import type { DocumentSnapshot } from "../documents/document-snapshot-repository.js";
+import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
 import type { DocumentReindexJob, DocumentReindexQueue } from "./document-reindex-queue.js";
 
 export type DocumentReindexJobResult =
@@ -46,7 +47,7 @@ export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerD
         try {
           results.push(await processJob(dependencies, job));
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage = normalizeWorkerErrorMessage(error);
           const retryResult = await dependencies.queue.handleFailedJob({ job, errorMessage });
           results.push({
             status: "failed",

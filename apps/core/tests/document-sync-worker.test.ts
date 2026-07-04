@@ -135,6 +135,37 @@ describe("DocumentSyncWorker", () => {
     ]);
   });
 
+  it("bounds thrown runner errors before returning and requeueing", async () => {
+    const syncJob = jobFixture({ documentSourceId: "source-oversized-error" });
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const queue = {
+      dequeueBatch: vi.fn(async () => [syncJob]),
+      handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
+    };
+    const worker = createDocumentSyncWorker({
+      queue,
+      runner: {
+        syncSourceById: vi.fn(async () => {
+          throw new Error(oversizedMessage);
+        }),
+      },
+    });
+
+    const [result] = await worker.processBatch({ limit: 1 });
+
+    expect(result?.status).toBe("failed");
+    if (result?.status !== "failed") {
+      throw new Error("expected failed worker result");
+    }
+    expect(result.errorMessage.length).toBeLessThanOrEqual(1000);
+    expect(result.errorMessage).toContain("[truncated]");
+    expect(result.errorMessage).not.toContain("trailing diagnostic detail");
+    expect(queue.handleFailedJob).toHaveBeenCalledWith({
+      job: syncJob,
+      errorMessage: result.errorMessage,
+    });
+  });
+
   it("rejects unsafe batch limits before dequeuing jobs", async () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),

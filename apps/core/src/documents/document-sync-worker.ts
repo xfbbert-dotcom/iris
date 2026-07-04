@@ -1,5 +1,6 @@
 import type { DocumentSyncResult, DocumentSyncRunner } from "./document-sync-pipeline.js";
 import type { DocumentSyncJob, DocumentSyncQueue } from "./document-sync-queue.js";
+import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
 
 export type DocumentSyncWorkerResult =
   | {
@@ -51,7 +52,7 @@ async function processJob(
       syncStatus: result.status,
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = normalizeWorkerErrorMessage(error);
     const failureResult = await queue.handleFailedJob({ job, errorMessage });
 
     return {
