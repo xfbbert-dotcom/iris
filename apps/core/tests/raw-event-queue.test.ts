@@ -243,6 +243,19 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
   });
 
+  it("classifies legacy raw event DLQ ids as unsupported", async () => {
+    const queue = new InMemoryRawEventQueue();
+
+    await expect(queue.replayDeadLetter("legacy:0:abc")).resolves.toBe(
+      "unsupported_legacy_item",
+    );
+    await expect(queue.deleteDeadLetter("legacy:0:abc")).resolves.toBe(
+      "unsupported_legacy_item",
+    );
+    await expect(queue.replayDeadLetter("missing")).resolves.toBe("not_found");
+    await expect(queue.deleteDeadLetter("missing")).resolves.toBe("not_found");
+  });
+
   it("batch replays dead-lettered raw events", async () => {
     let nextId = 1;
     const queue = new InMemoryRawEventQueue({

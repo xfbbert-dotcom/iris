@@ -111,7 +111,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
   ): Promise<"replayed" | "not_found" | "unsupported_legacy_item"> {
     const index = this.deadLetters.findIndex((item) => item.id === id);
     if (index === -1) {
-      return "not_found";
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
 
     const [item] = this.deadLetters.splice(index, 1);
@@ -133,7 +133,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
   ): Promise<"deleted" | "not_found" | "unsupported_legacy_item"> {
     const index = this.deadLetters.findIndex((item) => item.id === id);
     if (index === -1) {
-      return "not_found";
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
 
     this.deadLetters.splice(index, 1);

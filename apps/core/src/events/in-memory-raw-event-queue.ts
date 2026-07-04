@@ -109,7 +109,7 @@ export class InMemoryRawEventQueue implements RawEventQueue {
   ): Promise<"replayed" | "not_found" | "unsupported_legacy_item"> {
     const index = this.deadLetters.findIndex((deadLetter) => deadLetter.id === id);
     if (index === -1) {
-      return "not_found";
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
 
     const [deadLetter] = this.deadLetters.splice(index, 1);
@@ -131,7 +131,7 @@ export class InMemoryRawEventQueue implements RawEventQueue {
   ): Promise<"deleted" | "not_found" | "unsupported_legacy_item"> {
     const index = this.deadLetters.findIndex((deadLetter) => deadLetter.id === id);
     if (index === -1) {
-      return "not_found";
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
 
     this.deadLetters.splice(index, 1);

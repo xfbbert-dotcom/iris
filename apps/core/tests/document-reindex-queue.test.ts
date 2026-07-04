@@ -301,6 +301,19 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
   });
 
+  it("classifies legacy document reindex DLQ ids as unsupported", async () => {
+    const queue = new InMemoryDocumentReindexQueue();
+
+    await expect(queue.replayDeadLetter("legacy:0:abc")).resolves.toBe(
+      "unsupported_legacy_item",
+    );
+    await expect(queue.deleteDeadLetter("legacy:0:abc")).resolves.toBe(
+      "unsupported_legacy_item",
+    );
+    await expect(queue.replayDeadLetter("missing")).resolves.toBe("not_found");
+    await expect(queue.deleteDeadLetter("missing")).resolves.toBe("not_found");
+  });
+
   it("batch replays dead-lettered jobs", async () => {
     let nextId = 1;
     const queue = new InMemoryDocumentReindexQueue({
