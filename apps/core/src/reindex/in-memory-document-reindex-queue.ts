@@ -116,8 +116,15 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
 
     const [item] = this.deadLetters.splice(index, 1);
     const replayedJob = cloneJob({ ...item.job, attempts: 0 });
+    const existingIndex = this.jobs.findIndex(
+      (job) => job.idempotencyKey === replayedJob.idempotencyKey,
+    );
     this.seenKeys.add(replayedJob.idempotencyKey);
-    this.jobs.push(replayedJob);
+    if (existingIndex === -1) {
+      this.jobs.push(replayedJob);
+    } else {
+      this.jobs[existingIndex] = replayedJob;
+    }
     return "replayed";
   }
 

@@ -274,6 +274,20 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([{ ...job, attempts: 0 }]);
   });
 
+  it("does not duplicate a pending job when replaying a dead letter with the same key", async () => {
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+    });
+    const job = jobFixture();
+
+    await queue.handleFailedJob({ job, errorMessage: "embedding failed" });
+    await queue.enqueue({ ...job, enqueuedAt: new Date("2026-07-02T02:00:00.000Z") });
+
+    await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([job]);
+  });
+
   it("deletes dead-lettered jobs without replaying them", async () => {
     const queue = new InMemoryDocumentReindexQueue({
       maxAttempts: 1,
