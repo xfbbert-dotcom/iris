@@ -676,6 +676,40 @@ describe("RedisDocumentSyncQueue", () => {
     });
   });
 
+  it("keeps Redis DLQ entries when replay enqueue fails", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-1",
+      job: {
+        ...job({ attempts: 3 }),
+        enqueuedAt: "2026-07-03T01:00:00.000Z",
+      },
+      errorMessage: "runner crashed",
+      failedAt: "2026-07-03T02:00:00.000Z",
+    });
+    const enqueueError = new Error("redis enqueue unavailable");
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(async () => {
+        throw enqueueError;
+      }),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.replayDeadLetter("dlq-1")).rejects.toThrow(
+      "redis enqueue unavailable",
+    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
+      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
+      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 0 }))],
+    });
+    expect(client.lRem).not.toHaveBeenCalled();
+  });
+
   it("deletes Redis DLQ entries by stable id", async () => {
     const payload = JSON.stringify({
       id: "dlq-1",

@@ -82,11 +82,11 @@ export function createRedisDocumentSyncQueue({
       return "unsupported_legacy_item";
     }
 
-    await client.lRem(deadLetterKey, 1, found.payload);
     await enqueueSerializedJob(client, seenKey, queueKey, {
       ...found.deadLetter.job,
       attempts: 0,
     });
+    await client.lRem(deadLetterKey, 1, found.payload);
     return "replayed";
   };
 

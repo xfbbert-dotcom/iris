@@ -31,6 +31,8 @@ Response and error style mirrors reindex DLQ APIs:
 ## Invariants
 
 - Replayed jobs reset `attempts` to `0`.
+- Redis replay must enqueue the reset job before removing the DLQ payload. If enqueue fails, the
+  original DLQ entry must remain recoverable.
 - Legacy Redis DLQ entries without stable IDs are never replayed or deleted by synthetic IDs.
 - Batch replay reports `replayedCount`, `notFoundIds`, and `unsupportedLegacyIds`.
 - Listing is bounded by a sanitized limit capped at 100.
