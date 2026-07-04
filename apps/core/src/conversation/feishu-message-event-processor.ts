@@ -22,6 +22,8 @@ type ParsedFeishuMessageEvent = UpsertConversationMessageInput & {
   mentions: FeishuMessageMention[];
 };
 
+const MAX_FEISHU_IDENTIFIER_CHARS = 512;
+
 export function createFeishuMessageEventProcessor({
   messages,
   documentLinkExtractor,
@@ -143,7 +145,7 @@ function readMentions(value: unknown): FeishuMessageMention[] {
       return [];
     }
 
-    const key = readOptionalString(item.key);
+    const key = readOptionalIdentifier(item.key);
     if (key === undefined) {
       return [];
     }
@@ -154,9 +156,9 @@ function readMentions(value: unknown): FeishuMessageMention[] {
         ...(readMentionOpenId(item.id) === undefined
           ? {}
           : { openId: readMentionOpenId(item.id) }),
-        ...(readOptionalString(item.name) === undefined
+        ...(readOptionalIdentifier(item.name) === undefined
           ? {}
-          : { name: readOptionalString(item.name) }),
+          : { name: readOptionalIdentifier(item.name) }),
       },
     ];
   });
@@ -167,7 +169,7 @@ function readMentionOpenId(id: unknown): string | undefined {
     return undefined;
   }
 
-  return readOptionalString(id.open_id);
+  return readOptionalIdentifier(id.open_id);
 }
 
 function readSenderId(sender: unknown): string | undefined {
@@ -176,9 +178,9 @@ function readSenderId(sender: unknown): string | undefined {
   }
 
   return (
-    readOptionalString(sender.sender_id.open_id) ??
-    readOptionalString(sender.sender_id.union_id) ??
-    readOptionalString(sender.sender_id.user_id)
+    readOptionalIdentifier(sender.sender_id.open_id) ??
+    readOptionalIdentifier(sender.sender_id.union_id) ??
+    readOptionalIdentifier(sender.sender_id.user_id)
   );
 }
 
@@ -285,7 +287,7 @@ function readFeishuTimestampMillis(value: unknown): number | undefined {
 }
 
 function readString(value: unknown): string {
-  return readOptionalString(value) ?? "";
+  return readOptionalIdentifier(value) ?? "";
 }
 
 function readOptionalString(value: unknown): string | undefined {
@@ -295,6 +297,15 @@ function readOptionalString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readOptionalIdentifier(value: unknown): string | undefined {
+  const trimmed = readOptionalString(value);
+  if (trimmed === undefined || trimmed.length > MAX_FEISHU_IDENTIFIER_CHARS) {
+    return undefined;
+  }
+
+  return trimmed;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

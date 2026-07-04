@@ -120,3 +120,26 @@ Extend the shared identifier guard to reject values whose trimmed length is zero
 or otherwise rewriting non-blank provider IDs.
 
 Observed: focused Postgres conversation message repository tests passed with `18` tests.
+
+### Follow-up: Bound Feishu Processor Message Identifiers
+
+**Files:**
+- Modify: `apps/core/tests/feishu-message-event-processor.test.ts`
+- Modify: `apps/core/src/conversation/feishu-message-event-processor.ts`
+- Modify: `docs/superpowers/specs/2026-07-04-iris-conversation-message-id-budget-design.md`
+
+- [x] **Step 1: Add failing processor identifier tests**
+
+Cover oversized required Feishu `message_id`, `chat_id`, and `message_type` values before message
+fact writes, plus oversized optional sender IDs.
+
+Observed: focused processor tests failed because oversized required identifiers reached
+`messages.upsertMessage`, and an oversized sender ID was passed through.
+
+- [x] **Step 2: Bound processor identifiers before fact writes**
+
+Apply a `512` character identifier budget while parsing required message IDs, chat IDs, message
+types, mention identifiers, and optional sender identifiers. Keep message text on the separate text
+budget path.
+
+Observed: focused Feishu message event processor tests passed with `18` tests.
