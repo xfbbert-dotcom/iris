@@ -260,12 +260,20 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   }));
 
   app.get("/internal/status", async () => {
+    const runtimeControlSnapshot = runtimeController.getSnapshot();
     const components = {
       audit: {
         ok: true,
         enabled: true,
         storage: "in_memory",
         retention: auditLog.retention,
+      },
+      runtimeControl: {
+        ok: true,
+        enabled: runtimeControlSnapshot.globalEnabled,
+        globalEnabled: runtimeControlSnapshot.globalEnabled,
+        disabledGroupIds: runtimeControlSnapshot.disabledGroupIds,
+        disabledGroupCount: runtimeControlSnapshot.disabledGroupIds.length,
       },
       answerDraft: {
         ok: true,

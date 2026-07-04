@@ -147,6 +147,8 @@ Important status rules:
 - `status: "degraded"` requires operator attention.
 - Non-empty raw event, document sync, or reindex DLQs degrade the matching component.
 - Disabled components are expected when the corresponding runtime is intentionally off.
+- `components.runtimeControl` mirrors the current global runtime gate. If its status is
+  `"disabled"`, Iris is globally off even if worker processes are still reachable.
 
 ## Runtime Control
 
@@ -201,6 +203,9 @@ Invoke-RestMethod `
   -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/runtime-control/status
 ```
+
+The same state is also summarized inside `GET /internal/status` as `components.runtimeControl`, so
+the consolidated operator snapshot can be used as the first health check during rollout.
 
 ## Document Operations
 

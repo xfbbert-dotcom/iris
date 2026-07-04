@@ -581,6 +581,7 @@ describe("GET /internal/status", () => {
       generatedAt: "2026-07-03T07:30:00.000Z",
       componentOrder: [
         "audit",
+        "runtimeControl",
         "answerDraft",
         "feishuGateway",
         "eventWorker",
@@ -588,11 +589,11 @@ describe("GET /internal/status", () => {
         "reindex",
       ],
       summary: {
-        componentCount: 6,
-        healthyComponentCount: 4,
+        componentCount: 7,
+        healthyComponentCount: 5,
         degradedComponentCount: 2,
         degradedComponents: ["eventWorker", "documentSync"],
-        enabledComponentCount: 5,
+        enabledComponentCount: 6,
         disabledComponentCount: 1,
         disabledComponents: ["answerDraft"],
         enabledRuntimeComponentCount: 3,
@@ -600,7 +601,7 @@ describe("GET /internal/status", () => {
         stoppedEnabledRuntimeComponentCount: 1,
         stoppedEnabledRuntimeComponents: ["reindex"],
         componentStatusCounts: {
-          healthy: 2,
+          healthy: 3,
           disabled: 1,
           degraded: 2,
           stopped: 1,
@@ -627,6 +628,14 @@ describe("GET /internal/status", () => {
             retainedEventCount: 1,
             droppedEventCount: 0,
           },
+        },
+        runtimeControl: {
+          status: "healthy",
+          ok: true,
+          enabled: true,
+          globalEnabled: true,
+          disabledGroupIds: [],
+          disabledGroupCount: 0,
         },
         answerDraft: {
           status: "disabled",
@@ -752,11 +761,11 @@ describe("GET /internal/status", () => {
     expect(response.json().ok).toBe(false);
     expect(response.json().status).toBe("degraded");
     expect(response.json().summary).toEqual({
-      componentCount: 6,
-      healthyComponentCount: 4,
+      componentCount: 7,
+      healthyComponentCount: 5,
       degradedComponentCount: 2,
       degradedComponents: ["eventWorker", "documentSync"],
-      enabledComponentCount: 4,
+      enabledComponentCount: 5,
       disabledComponentCount: 2,
       disabledComponents: ["answerDraft", "reindex"],
       enabledRuntimeComponentCount: 2,
@@ -764,7 +773,7 @@ describe("GET /internal/status", () => {
       stoppedEnabledRuntimeComponentCount: 1,
       stoppedEnabledRuntimeComponents: ["eventWorker"],
       componentStatusCounts: {
-        healthy: 2,
+        healthy: 3,
         disabled: 2,
         degraded: 2,
         stopped: 0,

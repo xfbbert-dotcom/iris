@@ -394,6 +394,10 @@ The Admin Console must support:
 - pause for external tool calls;
 - system health and runtime status.
 
+The consolidated operator status surface must include runtime-control state. An operator who reads
+`/internal/status` should be able to tell whether Iris is globally disabled and how many group
+scopes are disabled without needing to know the dedicated runtime-control endpoint first.
+
 Internal operator APIs must have an explicit protection boundary. During the early internal rollout,
 Core may use a shared `IRIS_INTERNAL_API_TOKEN` Bearer guard for `/internal/*` routes while Feishu
 callback and health endpoints remain separately governed. The guard must match the request path

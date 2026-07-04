@@ -100,6 +100,40 @@ describe("runtime control API", () => {
     expect(queue.events[0]?.idempotencyKey).toBe("event-enabled");
   });
 
+  it("surfaces global runtime disablement in consolidated status", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: false },
+    });
+
+    const status = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+    });
+
+    expect(status.statusCode).toBe(200);
+    expect(status.json().components.runtimeControl).toEqual({
+      status: "disabled",
+      ok: true,
+      enabled: false,
+      globalEnabled: false,
+      disabledGroupIds: [],
+      disabledGroupCount: 0,
+    });
+    expect(status.json().summary.attentionComponents).toContainEqual({
+      name: "runtimeControl",
+      status: "disabled",
+    });
+  });
+
   it("disables and re-enables Feishu event ingestion for one group", async () => {
     const queue = new InMemoryEventQueue();
     const app = buildApp({
