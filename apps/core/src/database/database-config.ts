@@ -18,6 +18,19 @@ export function readDatabaseConfig(
   if (!databaseUrl) {
     throw new MissingDatabaseConfigError();
   }
+  assertPostgresUrl(databaseUrl);
 
   return { databaseUrl };
+}
+
+function assertPostgresUrl(value: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("DATABASE_URL must be a postgres URL");
+  }
+  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
+    throw new Error("DATABASE_URL must be a postgres URL");
+  }
 }

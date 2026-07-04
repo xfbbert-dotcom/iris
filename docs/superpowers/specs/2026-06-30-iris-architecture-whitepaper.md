@@ -724,6 +724,10 @@ Required architectural response:
 - Redis connection URLs must be valid `redis://` or `rediss://` URLs before
   worker runtimes are constructed. Credentials and database paths may remain in
   the Redis URL because they are common deployment forms.
+- Database connection URLs must be valid `postgres://` or `postgresql://` URLs
+  before Postgres pools are constructed. Credentials, database paths, and query
+  parameters may remain in the database URL because they are common deployment
+  forms.
 - External I/O adapters must re-validate timeout values at construction time so
   direct dependency injection cannot bypass environment validation.
 - Worker loops must re-validate interval and batch-limit values at construction
