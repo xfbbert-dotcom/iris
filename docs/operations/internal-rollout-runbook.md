@@ -100,6 +100,14 @@ Check `GET /internal/events/status` or `GET /internal/status` for `mentionReplie
 before expecting @Iris replies in Feishu. If it is false, inspect
 `mentionRepliesUnavailableReason` for the missing setup step.
 
+Mention reply readiness reasons:
+
+| Reason | Meaning | Fix |
+| --- | --- | --- |
+| `missing_bot_open_id` | Iris cannot identify which Feishu mention belongs to itself. | Set `IRIS_FEISHU_BOT_OPEN_ID` to the bot open id from Feishu. |
+| `missing_feishu_openapi_config` | Iris can process events but cannot call Feishu OpenAPI to reply. | Set `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, and `FEISHU_OPEN_BASE_URL`. |
+| `missing_answer_draft_orchestrator` | Iris can receive mentions but cannot generate answers. | Enable internal answer drafts and configure model, embedding, and retrieval dependencies. |
+
 Enable background workers:
 
 ```powershell
