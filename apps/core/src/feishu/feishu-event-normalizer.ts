@@ -67,9 +67,16 @@ export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
     };
   }
 
-  const timestampMs = Number(createTime);
+  const timestampMs = readFeishuTimestampMillis(createTime);
+  if (timestampMs === undefined) {
+    return {
+      kind: "unsupported",
+      eventId,
+      reason: "missing_required_fields"
+    };
+  }
   const timestamp = new Date(timestampMs);
-  if (!Number.isFinite(timestampMs) || !Number.isFinite(timestamp.getTime())) {
+  if (!Number.isFinite(timestamp.getTime())) {
     return {
       kind: "unsupported",
       eventId,
@@ -100,6 +107,20 @@ function parseTextContent(content: string): string {
   } catch {
     return content;
   }
+}
+
+function readFeishuTimestampMillis(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!/^\d+$/u.test(trimmed)) {
+    return undefined;
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return parsed;
 }
 
 function extractFeishuDocumentLinks(text: string): string[] {

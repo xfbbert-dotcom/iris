@@ -181,6 +181,50 @@ describe("normalizeFeishuEvent", () => {
     });
   });
 
+  it("returns unsupported when create_time is not a decimal millisecond string", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-non-decimal-time",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-non-decimal-time",
+          chat_id: "chat-a",
+          create_time: "1e3",
+          message_type: "text",
+          content: "{\"text\":\"hello iris\"}"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-non-decimal-time",
+      reason: "missing_required_fields"
+    });
+  });
+
+  it("returns unsupported when create_time is zero", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-zero-time",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-zero-time",
+          chat_id: "chat-a",
+          create_time: "0",
+          message_type: "text",
+          content: "{\"text\":\"hello iris\"}"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-zero-time",
+      reason: "missing_required_fields"
+    });
+  });
+
   it("returns unsupported when message_type is missing", () => {
     const result = normalizeFeishuEvent({
       event_id: "event-missing-message-type",
