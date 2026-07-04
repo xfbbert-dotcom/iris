@@ -49,6 +49,11 @@ import {
 } from "./documents/feishu-document-body-fetcher.js";
 import { buildInternalStatusSnapshot } from "./admin/internal-status-snapshot.js";
 
+type EventWorkerRuntimeFactoryInput = {
+  runtimeController?: RuntimeController;
+  answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
+};
+
 export type BuildAppDependencies = {
   queue?: EventQueue;
   rawEventQueue?: Pick<RawEventQueue, "enqueue">;
@@ -60,7 +65,7 @@ export type BuildAppDependencies = {
   createAnswerDraftRuntime?: (
     input?: Parameters<typeof createDefaultAnswerDraftRuntime>[0],
   ) => AnswerDraftRuntime | undefined;
-  createEventWorkerRuntime?: (input?: { runtimeController?: RuntimeController }) => EventWorkerRuntime | undefined;
+  createEventWorkerRuntime?: (input?: EventWorkerRuntimeFactoryInput) => EventWorkerRuntime | undefined;
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
   runtimeController?: RuntimeController;

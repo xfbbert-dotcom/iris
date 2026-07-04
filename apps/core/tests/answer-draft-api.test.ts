@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
-import { buildApp } from "../src/app.js";
+import { buildApp, type BuildAppDependencies } from "../src/app.js";
 import type { RawEvent } from "../src/events/raw-event-queue.js";
 import type { DocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
@@ -401,6 +401,36 @@ describe("answer draft runtime wiring", () => {
     expect(createAnswerDraftRuntime).toHaveBeenCalledWith({
       dependencies: { auditLog },
       runtimeController: expect.any(Object),
+    });
+  });
+
+  it("passes the active answer draft orchestrator into the event worker runtime", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Runtime draft",
+        promptContext: "",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const createEventWorkerRuntimeMock = vi.fn();
+    const createEventWorkerRuntime: NonNullable<
+      BuildAppDependencies["createEventWorkerRuntime"]
+    > = (input) => {
+      createEventWorkerRuntimeMock(input);
+      expect(input?.answerDraftOrchestrator).toBe(answerDraftOrchestrator);
+      return undefined;
+    };
+
+    buildApp({
+      answerDraftOrchestrator,
+      createEventWorkerRuntime,
+    });
+
+    expect(createEventWorkerRuntimeMock).toHaveBeenCalledWith({
+      runtimeController: expect.any(Object),
+      answerDraftOrchestrator,
     });
   });
 
