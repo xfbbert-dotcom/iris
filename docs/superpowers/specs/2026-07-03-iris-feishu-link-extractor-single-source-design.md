@@ -11,6 +11,7 @@ Feishu message normalization exposed `documentLinks` metadata, while the actual 
 - support Feishu/Lark docx, docs, and wiki document paths,
 - reject unsupported file/minutes paths,
 - reject missing document tokens,
+- reject embedded URL credentials,
 - trim chat punctuation,
 - drop query strings and fragments before deduplication.
 
@@ -25,3 +26,4 @@ Feishu message normalization exposed `documentLinks` metadata, while the actual 
 - Link metadata and registration link discovery do not diverge.
 - Unsupported Feishu product links do not appear as document metadata.
 - Copied links with query strings collapse to one canonical source URI.
+- Credential-bearing links do not appear as document metadata.

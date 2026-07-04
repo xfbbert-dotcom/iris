@@ -76,4 +76,12 @@ describe("FeishuDocumentLinkExtractor", () => {
       ),
     ).toEqual([{ sourceUri: "https://docs.feishu.cn/docx/token" }]);
   });
+
+  it("ignores Feishu document links with embedded credentials", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks("doc https://user:pass@foo.feishu.cn/docx/token"),
+    ).toEqual([]);
+  });
 });

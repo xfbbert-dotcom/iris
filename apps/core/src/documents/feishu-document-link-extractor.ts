@@ -49,6 +49,9 @@ function normalizeCandidateUrl(candidate: string): string | undefined {
     if (!isSupportedDocumentPath(url)) {
       return undefined;
     }
+    if (url.username.length > 0 || url.password.length > 0) {
+      return undefined;
+    }
 
     url.search = "";
     url.hash = "";
