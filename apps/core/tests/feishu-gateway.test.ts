@@ -4,14 +4,22 @@ import { createFeishuGateway } from "../src/feishu/feishu-gateway.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
 import { isolateEnvVar } from "./test-env.js";
 
-let restoreInternalApiToken: () => void = () => undefined;
+let restoreTestEnv: () => void = () => undefined;
 
 beforeEach(() => {
-  restoreInternalApiToken = isolateEnvVar("IRIS_INTERNAL_API_TOKEN");
+  const restoreInternalApiToken = isolateEnvVar("IRIS_INTERNAL_API_TOKEN");
+  const restoreFeishuVerificationToken = isolateEnvVar("FEISHU_VERIFICATION_TOKEN");
+  const restoreFeishuEncryptKey = isolateEnvVar("FEISHU_ENCRYPT_KEY");
+
+  restoreTestEnv = () => {
+    restoreFeishuEncryptKey();
+    restoreFeishuVerificationToken();
+    restoreInternalApiToken();
+  };
 });
 
 afterEach(() => {
-  restoreInternalApiToken();
+  restoreTestEnv();
 });
 
 describe("InMemoryEventQueue", () => {
