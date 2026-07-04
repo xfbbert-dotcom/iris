@@ -46,6 +46,60 @@ describe("FeishuMessageEventProcessor", () => {
     });
   });
 
+  it("passes parsed Feishu mentions to the mention answer responder", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async () => ({ status: "skipped" as const, reason: "not_mentioned" as const })),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      mentionAnswerResponder,
+    });
+
+    await processor.process(
+      rawEventFixture({
+        rawBody: {
+          header: { event_id: "event-1", event_type: "im.message.receive_v1" },
+          event: {
+            sender: {
+              sender_id: {
+                open_id: "open-1",
+              },
+            },
+            message: {
+              message_id: "message-1",
+              chat_id: "chat-1",
+              message_type: "text",
+              content: "{\"text\":\"@_user_1 帮我总结\"}",
+              mentions: [
+                {
+                  key: "@_user_1",
+                  id: { open_id: "ou_iris" },
+                  name: "Iris",
+                },
+              ],
+              create_time: "1782925200000",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledWith({
+      messageId: "message-1",
+      chatId: "chat-1",
+      senderId: "open-1",
+      text: "@_user_1 帮我总结",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+  });
+
   it("skips disabled group messages without writing facts or discovering documents", async () => {
     const messages = {
       upsertMessage: vi.fn(),
@@ -122,6 +176,9 @@ describe("FeishuMessageEventProcessor", () => {
     const groupVisibleDocumentRegistrar = {
       registerDiscoveredLinks: vi.fn(async () => undefined),
     };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async () => ({ status: "skipped" as const, reason: "not_mentioned" as const })),
+    };
     const runtimeController = {
       canProcessIncomingEvent: vi.fn(() => true),
       canReadGroupContext: vi.fn(() => true),
@@ -131,6 +188,7 @@ describe("FeishuMessageEventProcessor", () => {
       messages,
       documentLinkExtractor,
       groupVisibleDocumentRegistrar,
+      mentionAnswerResponder,
       runtimeController,
     });
 
@@ -140,6 +198,36 @@ describe("FeishuMessageEventProcessor", () => {
     expect(runtimeController.canReadDocuments).toHaveBeenCalledOnce();
     expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
     expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
+    expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledWith({
+      messageId: "message-1",
+      chatId: "chat-1",
+      senderId: "open-1",
+      text: "Hello",
+      mentions: [],
+    });
+  });
+
+  it("does not call the mention answer responder for disabled incoming events", async () => {
+    const messages = {
+      upsertMessage: vi.fn(),
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(),
+    };
+    const runtimeController = {
+      canProcessIncomingEvent: vi.fn(() => false),
+      canReadGroupContext: vi.fn(() => true),
+      canReadDocuments: vi.fn(() => true),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      mentionAnswerResponder,
+      runtimeController,
+    });
+
+    await processor.process(rawEventFixture());
+
+    expect(mentionAnswerResponder.maybeRespond).not.toHaveBeenCalled();
   });
 
   it("falls back to normalized event type when the Feishu header omits event_type", async () => {

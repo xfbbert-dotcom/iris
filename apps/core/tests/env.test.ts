@@ -5,6 +5,7 @@ import {
   readEventWorkerRuntimeConfig,
   readFeishuAuthConfig,
   readFeishuOpenApiConfig,
+  readOptionalFeishuBotOpenId,
   readOptionalFeishuOpenApiConfig,
   readDocumentSyncWorkerRuntimeConfig,
   readModelProviderConfig,
@@ -32,6 +33,25 @@ describe("readFeishuAuthConfig", () => {
         FEISHU_ENCRYPT_KEY: ""
       })
     ).toEqual({});
+  });
+});
+
+describe("readOptionalFeishuBotOpenId", () => {
+  it("returns undefined when the Iris Feishu bot open ID is absent or blank", () => {
+    expect(readOptionalFeishuBotOpenId({})).toBeUndefined();
+    expect(readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: "   " })).toBeUndefined();
+  });
+
+  it("reads and trims the Iris Feishu bot open ID", () => {
+    expect(readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: " ou_iris " })).toBe(
+      "ou_iris",
+    );
+  });
+
+  it("rejects oversized Iris Feishu bot open IDs", () => {
+    expect(() =>
+      readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: "o".repeat(513) }),
+    ).toThrow("IRIS_FEISHU_BOT_OPEN_ID must be at most 512 characters");
   });
 });
 

@@ -3,9 +3,16 @@ import type pg from "pg";
 
 import {
   readEventWorkerRuntimeConfig,
+  readOptionalFeishuBotOpenId,
+  readOptionalFeishuOpenApiConfig,
   type EnvLike,
   type EventWorkerRuntimeConfig,
 } from "../config/env.js";
+import type { AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
+import {
+  createFeishuMentionAnswerResponder,
+  type FeishuMentionAnswerResponder,
+} from "../conversation/feishu-mention-answer-responder.js";
 import { createFeishuMessageEventProcessor } from "../conversation/feishu-message-event-processor.js";
 import {
   createPostgresConversationMessageRepository,
@@ -16,6 +23,14 @@ import { createPostgresPool } from "../database/postgres.js";
 import { createDiscoveredDocumentSyncPlanner } from "../documents/discovered-document-sync-planner.js";
 import type { DocumentSyncQueue } from "../documents/document-sync-queue.js";
 import { createFeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
+import {
+  createFeishuMessageReplier,
+  type FeishuMessageReplier,
+} from "../feishu/feishu-message-replier.js";
+import {
+  createFeishuTenantAccessTokenProvider,
+  type FeishuTenantAccessTokenProvider,
+} from "../feishu/feishu-tenant-access-token-provider.js";
 import { createGroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
 import {
   createPostgresDocumentSourceRegistry,
@@ -73,6 +88,7 @@ type RuntimeGate = {
   canProcessIncomingEvent(input: { groupId?: string }): boolean;
   canReadGroupContext(groupId: string): boolean;
   canReadDocuments(): boolean;
+  canReplyWhenMentioned?(groupId: string): boolean;
 };
 type GroupVisibleDocumentRegistry = Pick<
   AsyncDocumentSourceRegistry,
@@ -90,6 +106,9 @@ export type EventWorkerRuntimeDependencies = {
   ) => Pick<DocumentSyncQueue, "enqueue">;
   createDiscoveredDocumentSyncPlanner?: typeof createDiscoveredDocumentSyncPlanner;
   createGroupVisibleDocumentRegistrar?: typeof createGroupVisibleDocumentRegistrar;
+  createFeishuTenantAccessTokenProvider?: typeof createFeishuTenantAccessTokenProvider;
+  createFeishuMessageReplier?: typeof createFeishuMessageReplier;
+  createMentionAnswerResponder?: typeof createFeishuMentionAnswerResponder;
   createProcessor?: typeof createFeishuMessageEventProcessor;
   createWorkerLoop?: typeof createRawEventWorkerLoop;
 };
@@ -98,17 +117,25 @@ export function createEventWorkerRuntime({
   env = process.env,
   dependencies = {},
   runtimeController,
+  answerDraftOrchestrator,
 }: {
   env?: EnvLike;
   dependencies?: EventWorkerRuntimeDependencies;
   runtimeController?: RuntimeGate;
+  answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
 } = {}): EventWorkerRuntime | undefined {
   const runtimeConfig = readEventWorkerRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
     return undefined;
   }
 
-  return createEnabledEventWorkerRuntime({ env, runtimeConfig, dependencies, runtimeController });
+  return createEnabledEventWorkerRuntime({
+    env,
+    runtimeConfig,
+    dependencies,
+    runtimeController,
+    answerDraftOrchestrator,
+  });
 }
 
 function createEnabledEventWorkerRuntime({
@@ -116,11 +143,13 @@ function createEnabledEventWorkerRuntime({
   runtimeConfig,
   dependencies,
   runtimeController,
+  answerDraftOrchestrator,
 }: {
   env: EnvLike;
   runtimeConfig: Extract<EventWorkerRuntimeConfig, { enabled: true }>;
   dependencies: EventWorkerRuntimeDependencies;
   runtimeController: RuntimeGate | undefined;
+  answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
 }): EventWorkerRuntime {
   const createRedis =
     dependencies.createRedisClient ??
@@ -140,6 +169,12 @@ function createEnabledEventWorkerRuntime({
     dependencies.createDiscoveredDocumentSyncPlanner ?? createDiscoveredDocumentSyncPlanner;
   const createGroupVisibleRegistrar =
     dependencies.createGroupVisibleDocumentRegistrar ?? createGroupVisibleDocumentRegistrar;
+  const createTokenProvider =
+    dependencies.createFeishuTenantAccessTokenProvider ?? createFeishuTenantAccessTokenProvider;
+  const createMessageReplier =
+    dependencies.createFeishuMessageReplier ?? createFeishuMessageReplier;
+  const createMentionResponder =
+    dependencies.createMentionAnswerResponder ?? createFeishuMentionAnswerResponder;
   const createProcessor = dependencies.createProcessor ?? createFeishuMessageEventProcessor;
   const createLoop = dependencies.createWorkerLoop ?? createRawEventWorkerLoop;
 
@@ -157,10 +192,19 @@ function createEnabledEventWorkerRuntime({
     registry: documentSources,
     syncPlanner,
   });
+  const mentionAnswerResponder = createOptionalMentionAnswerResponder({
+    env,
+    answerDraftOrchestrator,
+    runtimeController,
+    createTokenProvider,
+    createMessageReplier,
+    createMentionResponder,
+  });
   const processor = createProcessor({
     messages,
     documentLinkExtractor,
     groupVisibleDocumentRegistrar,
+    ...(mentionAnswerResponder === undefined ? {} : { mentionAnswerResponder }),
     ...(runtimeController === undefined ? {} : { runtimeController }),
   });
   const queue = createRedisRawEventQueue({
@@ -219,6 +263,49 @@ function createEnabledEventWorkerRuntime({
       await pool.end();
     },
   };
+}
+
+function createOptionalMentionAnswerResponder({
+  env,
+  answerDraftOrchestrator,
+  runtimeController,
+  createTokenProvider,
+  createMessageReplier,
+  createMentionResponder,
+}: {
+  env: EnvLike;
+  answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
+  runtimeController: RuntimeGate | undefined;
+  createTokenProvider: typeof createFeishuTenantAccessTokenProvider;
+  createMessageReplier: typeof createFeishuMessageReplier;
+  createMentionResponder: typeof createFeishuMentionAnswerResponder;
+}): Pick<FeishuMentionAnswerResponder, "maybeRespond"> | undefined {
+  const botOpenId = readOptionalFeishuBotOpenId(env);
+  const feishuConfig = readOptionalFeishuOpenApiConfig(env);
+  if (botOpenId === undefined || feishuConfig === undefined || answerDraftOrchestrator === undefined) {
+    return undefined;
+  }
+
+  const tokenProvider: FeishuTenantAccessTokenProvider = createTokenProvider({
+    baseUrl: feishuConfig.baseUrl,
+    appId: feishuConfig.appId,
+    appSecret: feishuConfig.appSecret,
+    timeoutMs: feishuConfig.documentFetchTimeoutMs,
+  });
+  const replier: FeishuMessageReplier = createMessageReplier({
+    baseUrl: feishuConfig.baseUrl,
+    tokenProvider,
+    timeoutMs: feishuConfig.documentFetchTimeoutMs,
+  });
+
+  return createMentionResponder({
+    botOpenId,
+    answerDraftOrchestrator,
+    replier,
+    ...(runtimeController?.canReplyWhenMentioned === undefined
+      ? {}
+      : { canReplyWhenMentioned: runtimeController.canReplyWhenMentioned.bind(runtimeController) }),
+  });
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): GroupVisibleDocumentRegistry {

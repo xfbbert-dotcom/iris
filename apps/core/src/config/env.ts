@@ -61,11 +61,27 @@ export type FeishuOpenApiConfig = {
   documentMaxContentChars: number;
 };
 
+const MAX_FEISHU_BOT_OPEN_ID_CHARS = 512;
+
 export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConfig {
   return {
     verificationToken: readOptionalEnv(env.FEISHU_VERIFICATION_TOKEN),
     encryptKey: readOptionalEnv(env.FEISHU_ENCRYPT_KEY)
   };
+}
+
+export function readOptionalFeishuBotOpenId(env: EnvLike = process.env): string | undefined {
+  const botOpenId = readOptionalEnv(env.IRIS_FEISHU_BOT_OPEN_ID);
+  if (botOpenId === undefined) {
+    return undefined;
+  }
+  if (botOpenId.length > MAX_FEISHU_BOT_OPEN_ID_CHARS) {
+    throw new Error(
+      `IRIS_FEISHU_BOT_OPEN_ID must be at most ${MAX_FEISHU_BOT_OPEN_ID_CHARS} characters`,
+    );
+  }
+
+  return botOpenId;
 }
 
 export function readServerPort(env: EnvLike = process.env): number {

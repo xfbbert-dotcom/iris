@@ -87,9 +87,15 @@ Feishu OpenAPI access for document reads and live permission checks:
 $env:FEISHU_APP_ID="<feishu-app-id>"
 $env:FEISHU_APP_SECRET="<feishu-app-secret>"
 $env:FEISHU_OPEN_BASE_URL="https://open.feishu.cn"
+$env:IRIS_FEISHU_BOT_OPEN_ID="<iris-bot-open-id>"
 $env:IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS="10000"
 $env:IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS="2000000"
 ```
+
+`IRIS_FEISHU_BOT_OPEN_ID` lets Iris identify explicit @mentions from Feishu message events. When
+this value, Feishu OpenAPI credentials, and internal answer drafting are configured, the event worker
+can draft an answer and reply to messages that mention the Iris bot. Missing this value keeps event
+ingestion and document discovery running, but disables automatic @Iris replies.
 
 Enable background workers:
 
@@ -137,6 +143,10 @@ Enable internal answer drafting:
 $env:IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS="true"
 $env:IRIS_INTERNAL_DRAFT_PERMISSION_MODE="source-policy"
 ```
+
+Mention replies require both internal answer drafting and the `replyWhenMentioned` runtime
+capability. If Iris is globally disabled, the group is disabled, or `replyWhenMentioned` is false,
+Iris will store allowed message facts but will not answer in Feishu.
 
 Run Core:
 

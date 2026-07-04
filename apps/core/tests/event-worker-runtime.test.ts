@@ -140,6 +140,160 @@ describe("createEventWorkerRuntime", () => {
     expect(redisClient.quit).toHaveBeenCalledOnce();
     expect(pool.end).toHaveBeenCalledOnce();
   });
+
+  it("composes mention answer replies when bot identity and answer drafting are configured", () => {
+    const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
+    const redisClient = {
+      connect: vi.fn(async () => redisClient),
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(async () => null),
+      lLen: vi.fn(async () => 0),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(async () => 0),
+      sRem: vi.fn(),
+      quit: vi.fn(async () => undefined),
+    };
+    const loop = {
+      start: vi.fn(),
+      stop: vi.fn(async () => undefined),
+      isRunning: vi.fn(() => false),
+      getSnapshot: vi.fn(() => ({
+        running: false,
+        intervalMs: 1000,
+        batchLimit: 50,
+      })),
+    };
+    const messages = {
+      upsertMessage: vi.fn(),
+      listRecentByChat: vi.fn(),
+    };
+    const tokenProvider = { getTenantAccessToken: vi.fn() };
+    const replier = { replyText: vi.fn() };
+    const mentionAnswerResponder = { maybeRespond: vi.fn() };
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const runtimeController = {
+      canProcessIncomingEvent: vi.fn(() => true),
+      canReadGroupContext: vi.fn(() => true),
+      canReadDocuments: vi.fn(() => true),
+      canReplyWhenMentioned: vi.fn(() => true),
+    };
+    const dependencies = {
+      createPostgresPool: vi.fn(() => pool),
+      createRedisClient: vi.fn(() => redisClient),
+      createConversationMessageRepository: vi.fn(() => messages),
+      createDocumentSourceRegistry: vi.fn(() => ({ registerGroupVisibleDocument: vi.fn() })),
+      createDocumentLinkExtractor: vi.fn(() => ({ extractLinks: vi.fn(() => []) })),
+      createDocumentSyncQueue: vi.fn(() => ({ enqueue: vi.fn() })),
+      createDiscoveredDocumentSyncPlanner: vi.fn(() => ({
+        planRegisteredSources: vi.fn(async () => ({ enqueuedCount: 0, skippedCount: 0 })),
+      })),
+      createGroupVisibleDocumentRegistrar: vi.fn(() => ({
+        registerDiscoveredLinks: vi.fn(),
+      })),
+      createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
+      createFeishuMessageReplier: vi.fn(() => replier),
+      createMentionAnswerResponder: vi.fn(() => mentionAnswerResponder),
+      createProcessor: vi.fn(() => ({ process: vi.fn() })),
+      createWorkerLoop: vi.fn(() => loop),
+    };
+
+    createEventWorkerRuntime({
+      env: {
+        ...enabledEnv(),
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        IRIS_FEISHU_BOT_OPEN_ID: " ou_iris ",
+      },
+      dependencies,
+      runtimeController,
+      answerDraftOrchestrator,
+    } as Parameters<typeof createEventWorkerRuntime>[0] & {
+      answerDraftOrchestrator: typeof answerDraftOrchestrator;
+    });
+
+    expect(dependencies.createFeishuTenantAccessTokenProvider).toHaveBeenCalledWith({
+      baseUrl: "https://open.feishu.cn",
+      appId: "app-id",
+      appSecret: "app-secret",
+      timeoutMs: 10000,
+    });
+    expect(dependencies.createFeishuMessageReplier).toHaveBeenCalledWith({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider,
+      timeoutMs: 10000,
+    });
+    expect(dependencies.createMentionAnswerResponder).toHaveBeenCalledWith({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: expect.any(Function),
+    });
+    expect(dependencies.createProcessor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages,
+        mentionAnswerResponder,
+        runtimeController,
+      }),
+    );
+  });
+
+  it("does not compose mention replies when the bot open ID is not configured", () => {
+    const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
+    const redisClient = {
+      connect: vi.fn(async () => redisClient),
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(async () => null),
+      lLen: vi.fn(async () => 0),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(async () => 0),
+      sRem: vi.fn(),
+      quit: vi.fn(async () => undefined),
+    };
+    const dependencies = {
+      createPostgresPool: vi.fn(() => pool),
+      createRedisClient: vi.fn(() => redisClient),
+      createConversationMessageRepository: vi.fn(() => ({
+        upsertMessage: vi.fn(),
+        listRecentByChat: vi.fn(),
+      })),
+      createDocumentSourceRegistry: vi.fn(() => ({ registerGroupVisibleDocument: vi.fn() })),
+      createDocumentLinkExtractor: vi.fn(() => ({ extractLinks: vi.fn(() => []) })),
+      createDocumentSyncQueue: vi.fn(() => ({ enqueue: vi.fn() })),
+      createDiscoveredDocumentSyncPlanner: vi.fn(() => ({
+        planRegisteredSources: vi.fn(async () => ({ enqueuedCount: 0, skippedCount: 0 })),
+      })),
+      createGroupVisibleDocumentRegistrar: vi.fn(() => ({
+        registerDiscoveredLinks: vi.fn(),
+      })),
+      createMentionAnswerResponder: vi.fn(),
+      createProcessor: vi.fn(() => ({ process: vi.fn() })),
+      createWorkerLoop: vi.fn(() => ({
+        start: vi.fn(),
+        stop: vi.fn(async () => undefined),
+        isRunning: vi.fn(() => false),
+        getSnapshot: vi.fn(() => ({ running: false, intervalMs: 1000, batchLimit: 50 })),
+      })),
+    };
+
+    createEventWorkerRuntime({
+      env: {
+        ...enabledEnv(),
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+      },
+      dependencies,
+      answerDraftOrchestrator: { generateDraft: vi.fn() },
+    } as Parameters<typeof createEventWorkerRuntime>[0] & {
+      answerDraftOrchestrator: { generateDraft: ReturnType<typeof vi.fn> };
+    });
+
+    expect(dependencies.createMentionAnswerResponder).not.toHaveBeenCalled();
+    expect(dependencies.createProcessor).toHaveBeenCalledWith(
+      expect.not.objectContaining({ mentionAnswerResponder: expect.anything() }),
+    );
+  });
 });
 
 function enabledEnv() {

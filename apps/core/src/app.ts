@@ -164,7 +164,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
   reindexWorkerRuntime?.start();
   const eventWorkerRuntime =
-    (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({ runtimeController });
+    (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
+      runtimeController,
+      ...(answerDraftOrchestrator === undefined ? {} : { answerDraftOrchestrator }),
+    });
   eventWorkerRuntime?.start();
   const documentSyncRuntime =
     (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();

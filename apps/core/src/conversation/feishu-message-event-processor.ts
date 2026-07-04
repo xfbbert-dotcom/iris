@@ -4,6 +4,10 @@ import type {
 } from "./conversation-message-repository.js";
 import type { RawEvent } from "../events/raw-event-queue.js";
 import type {
+  FeishuMentionAnswerResponder,
+  FeishuMessageMention,
+} from "./feishu-mention-answer-responder.js";
+import type {
   FeishuDocumentLink,
   FeishuDocumentLinkExtractor,
 } from "../documents/feishu-document-link-extractor.js";
@@ -14,16 +18,21 @@ type RuntimeGate = {
   canReadGroupContext(groupId: string): boolean;
   canReadDocuments(): boolean;
 };
+type ParsedFeishuMessageEvent = UpsertConversationMessageInput & {
+  mentions: FeishuMessageMention[];
+};
 
 export function createFeishuMessageEventProcessor({
   messages,
   documentLinkExtractor,
   groupVisibleDocumentRegistrar,
+  mentionAnswerResponder,
   runtimeController,
 }: {
   messages: Pick<ConversationMessageRepository, "upsertMessage">;
   documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
   groupVisibleDocumentRegistrar?: Pick<GroupVisibleDocumentRegistrar, "registerDiscoveredLinks">;
+  mentionAnswerResponder?: Pick<FeishuMentionAnswerResponder, "maybeRespond">;
   runtimeController?: RuntimeGate;
 }) {
   return {
@@ -45,22 +54,28 @@ export function createFeishuMessageEventProcessor({
         return;
       }
 
-      await messages.upsertMessage(parsed);
-      if (runtimeController !== undefined && !runtimeController.canReadDocuments()) {
-        return;
+      const { mentions, ...messageFact } = parsed;
+      await messages.upsertMessage(messageFact);
+
+      if (runtimeController === undefined || runtimeController.canReadDocuments()) {
+        const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
+        if (links.length > 0 && groupVisibleDocumentRegistrar !== undefined) {
+          await groupVisibleDocumentRegistrar.registerDiscoveredLinks({
+            chatId: parsed.chatId,
+            messageId: parsed.providerMessageId,
+            senderId: parsed.senderId,
+            observedAt: parsed.sentAt,
+            links,
+          });
+        }
       }
 
-      const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
-      if (links.length === 0 || groupVisibleDocumentRegistrar === undefined) {
-        return;
-      }
-
-      await groupVisibleDocumentRegistrar.registerDiscoveredLinks({
-        chatId: parsed.chatId,
+      await mentionAnswerResponder?.maybeRespond({
         messageId: parsed.providerMessageId,
+        chatId: parsed.chatId,
         senderId: parsed.senderId,
-        observedAt: parsed.sentAt,
-        links,
+        text: parsed.text,
+        mentions,
       });
     },
   };
@@ -77,7 +92,7 @@ function extractDocumentLinks(
   return extractor.extractLinks(text);
 }
 
-function parseFeishuMessageEvent(event: RawEvent): UpsertConversationMessageInput | undefined {
+function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | undefined {
   if (event.provider !== "feishu" || !isRecord(event.rawBody)) {
     return undefined;
   }
@@ -109,12 +124,50 @@ function parseFeishuMessageEvent(event: RawEvent): UpsertConversationMessageInpu
     senderId: readSenderId(eventBody.sender),
     messageType,
     text: readText(messageType, message.content),
+    mentions: readMentions(message.mentions),
     sentAt: readFeishuTimestamp(
       message.create_time,
       readFeishuTimestamp(isRecord(header) ? header.create_time : undefined, event.receivedAt),
     ),
     rawEventIdempotencyKey: event.idempotencyKey,
   };
+}
+
+function readMentions(value: unknown): FeishuMessageMention[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item): FeishuMessageMention[] => {
+    if (!isRecord(item)) {
+      return [];
+    }
+
+    const key = readOptionalString(item.key);
+    if (key === undefined) {
+      return [];
+    }
+
+    return [
+      {
+        key,
+        ...(readMentionOpenId(item.id) === undefined
+          ? {}
+          : { openId: readMentionOpenId(item.id) }),
+        ...(readOptionalString(item.name) === undefined
+          ? {}
+          : { name: readOptionalString(item.name) }),
+      },
+    ];
+  });
+}
+
+function readMentionOpenId(id: unknown): string | undefined {
+  if (!isRecord(id)) {
+    return undefined;
+  }
+
+  return readOptionalString(id.open_id);
 }
 
 function readSenderId(sender: unknown): string | undefined {
