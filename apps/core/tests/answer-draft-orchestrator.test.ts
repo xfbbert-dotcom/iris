@@ -354,6 +354,48 @@ describe("AnswerDraftOrchestrator", () => {
     });
   });
 
+  it("truncates oversized live chat messages before building context", async () => {
+    let observedLiveChatMessages: Array<{ speaker: string; text: string }> | undefined;
+    const contextBuilder = {
+      buildContext: vi.fn(
+        async (input: { liveChatMessages: Array<{ speaker: string; text: string }> }) => {
+          observedLiveChatMessages = input.liveChatMessages;
+          return {
+            promptContext:
+              "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+            allowedFragments: [],
+            deniedDocumentIds: [],
+            retrievedFragmentCount: 0,
+          };
+        },
+      ),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft answer." })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+    });
+
+    await orchestrator.generateDraft({
+      question: "What changed?",
+      liveChatMessages: [
+        {
+          speaker: `${"S".repeat(400)} trailing speaker detail`,
+          text: `${"T".repeat(2500)} trailing message detail`,
+        },
+      ],
+    });
+
+    expect(observedLiveChatMessages?.[0]?.speaker.length).toBeLessThanOrEqual(256);
+    expect(observedLiveChatMessages?.[0]?.speaker).toContain("[truncated]");
+    expect(observedLiveChatMessages?.[0]?.speaker).not.toContain("trailing speaker detail");
+    expect(observedLiveChatMessages?.[0]?.text.length).toBeLessThanOrEqual(2000);
+    expect(observedLiveChatMessages?.[0]?.text).toContain("[truncated]");
+    expect(observedLiveChatMessages?.[0]?.text).not.toContain("trailing message detail");
+  });
+
   it("rejects blank model output", async () => {
     const orchestrator = createAnswerDraftOrchestrator({
       contextBuilder: {

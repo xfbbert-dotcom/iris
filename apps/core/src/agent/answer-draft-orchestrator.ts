@@ -45,6 +45,8 @@ type LiveChatContextProvider = {
 const MAX_ANSWER_DRAFT_TEXT_CHARS = 8000;
 const MAX_ANSWER_DRAFT_QUESTION_CHARS = 4000;
 const MAX_REQUEST_LIVE_CHAT_MESSAGES = 50;
+const MAX_LIVE_CHAT_SPEAKER_CHARS = 256;
+const MAX_LIVE_CHAT_TEXT_CHARS = 2000;
 const MAX_LIVE_CHAT_LIMIT = 20;
 const TRUNCATION_MARKER = " ... [truncated]";
 
@@ -123,11 +125,15 @@ function assertSafeMagnitudeLimit(value: number | undefined, fieldName: string):
 }
 
 function truncateAnswerDraftText(value: string): string {
-  if (value.length <= MAX_ANSWER_DRAFT_TEXT_CHARS) {
+  return truncateWithMarker(value, MAX_ANSWER_DRAFT_TEXT_CHARS);
+}
+
+function truncateWithMarker(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
     return value;
   }
 
-  const prefixChars = MAX_ANSWER_DRAFT_TEXT_CHARS - TRUNCATION_MARKER.length;
+  const prefixChars = maxChars - TRUNCATION_MARKER.length;
   return `${value.slice(0, prefixChars).trimEnd()}${TRUNCATION_MARKER}`;
 }
 
@@ -135,8 +141,8 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
   const seen = new Set<string>();
   const normalizedMessages = messages
     .map((message) => ({
-      speaker: message.speaker.trim(),
-      text: message.text.trim(),
+      speaker: truncateWithMarker(message.speaker.trim(), MAX_LIVE_CHAT_SPEAKER_CHARS),
+      text: truncateWithMarker(message.text.trim(), MAX_LIVE_CHAT_TEXT_CHARS),
     }))
     .filter((message) => message.speaker.length > 0 && message.text.length > 0);
 
