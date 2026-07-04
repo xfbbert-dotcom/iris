@@ -399,6 +399,87 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  app.get("/internal/events/dead-letters", async (request, reply) => {
+    if (eventWorkerRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "event_worker_unavailable" });
+    }
+
+    const limit = parseDeadLetterLimit((request.query as { limit?: unknown }).limit);
+    if (limit === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, deadLetters: await eventWorkerRuntime.deadLetters.list({ limit }) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "event_dead_letter_operation_failed"
+      });
+    }
+  });
+
+  app.post("/internal/events/dead-letters/replay", async (request, reply) => {
+    if (eventWorkerRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "event_worker_unavailable" });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseDeadLetterBatchReplayRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, ...(await eventWorkerRuntime.deadLetters.replayBatch(parsedRequest)) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "event_dead_letter_operation_failed"
+      });
+    }
+  });
+
+  app.post("/internal/events/dead-letters/:id/replay", async (request, reply) => {
+    if (eventWorkerRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "event_worker_unavailable" });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, status: await eventWorkerRuntime.deadLetters.replay(id) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "event_dead_letter_operation_failed"
+      });
+    }
+  });
+
+  app.delete("/internal/events/dead-letters/:id", async (request, reply) => {
+    if (eventWorkerRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "event_worker_unavailable" });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, status: await eventWorkerRuntime.deadLetters.delete(id) };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "event_dead_letter_operation_failed"
+      });
+    }
+  });
+
   app.get("/internal/document-sync/status", async (_request, reply) => {
     if (documentSyncRuntime === undefined) {
       return { ok: true, enabled: false, running: false };

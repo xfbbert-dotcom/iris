@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import { buildApp } from "../src/app.js";
+import type { RawEvent } from "../src/events/raw-event-queue.js";
 import type { DocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
@@ -1605,6 +1606,203 @@ describe("GET /internal/events/status", () => {
 
     expect(response.statusCode).toBe(500);
     expect(response.json()).toEqual({ ok: false, error: "event_worker_status_failed" });
+  });
+});
+
+describe("event worker dead-letter API", () => {
+  it("returns 503 when event runtime is unavailable", async () => {
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/events/dead-letters",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ ok: false, error: "event_worker_unavailable" });
+  });
+
+  it("lists event worker dead letters", async () => {
+    const runtime = fakeEventRuntime({
+      deadLetters: {
+        list: vi.fn(async () => [
+          {
+            id: "dlq-1",
+            event: rawEventFixture({ attempts: 3 }),
+            errorMessage: "processor failed",
+            failedAt: new Date("2026-07-04T01:00:00.000Z"),
+            replayable: true,
+          },
+        ]),
+        replay: vi.fn(async () => "not_found" as const),
+        delete: vi.fn(async () => "not_found" as const),
+        replayBatch: vi.fn(async () => ({
+          replayedCount: 0,
+          notFoundIds: [],
+          unsupportedLegacyIds: [],
+        })),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/events/dead-letters?limit=20",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      deadLetters: [
+        {
+          id: "dlq-1",
+          event: {
+            idempotencyKey: "raw-event:feishu:event-1",
+            provider: "feishu",
+            eventType: "im.message.receive_v1",
+            rawBody: { event_id: "event-1" },
+            receivedAt: "2026-07-02T01:00:00.000Z",
+            attempts: 3,
+          },
+          errorMessage: "processor failed",
+          failedAt: "2026-07-04T01:00:00.000Z",
+          replayable: true,
+        },
+      ],
+    });
+    expect(runtime.deadLetters.list).toHaveBeenCalledWith({ limit: 20 });
+  });
+
+  it("rejects invalid event dead-letter list limits", async () => {
+    const runtime = fakeEventRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/events/dead-letters?limit=-1",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.deadLetters.list).not.toHaveBeenCalled();
+  });
+
+  it("replays and deletes event worker dead letters", async () => {
+    const runtime = fakeEventRuntime({
+      deadLetters: {
+        list: vi.fn(async () => []),
+        replay: vi.fn(async () => "replayed" as const),
+        delete: vi.fn(async () => "deleted" as const),
+        replayBatch: vi.fn(async () => ({
+          replayedCount: 0,
+          notFoundIds: [],
+          unsupportedLegacyIds: [],
+        })),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => runtime,
+    });
+
+    const replayResponse = await app.inject({
+      method: "POST",
+      url: "/internal/events/dead-letters/dlq-1/replay",
+    });
+    const deleteResponse = await app.inject({
+      method: "DELETE",
+      url: "/internal/events/dead-letters/dlq-1",
+    });
+
+    expect(replayResponse.statusCode).toBe(200);
+    expect(replayResponse.json()).toEqual({ ok: true, status: "replayed" });
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(deleteResponse.json()).toEqual({ ok: true, status: "deleted" });
+    expect(runtime.deadLetters.replay).toHaveBeenCalledWith("dlq-1");
+    expect(runtime.deadLetters.delete).toHaveBeenCalledWith("dlq-1");
+  });
+
+  it("batch replays event worker dead letters", async () => {
+    const runtime = fakeEventRuntime({
+      deadLetters: {
+        list: vi.fn(async () => []),
+        replay: vi.fn(async () => "not_found" as const),
+        delete: vi.fn(async () => "not_found" as const),
+        replayBatch: vi.fn(async () => ({
+          replayedCount: 1,
+          notFoundIds: ["missing"],
+          unsupportedLegacyIds: ["legacy:0:abc"],
+        })),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/events/dead-letters/replay",
+      payload: { ids: ["dlq-1", "missing", "legacy:0:abc"] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      replayedCount: 1,
+      notFoundIds: ["missing"],
+      unsupportedLegacyIds: ["legacy:0:abc"],
+    });
+    expect(runtime.deadLetters.replayBatch).toHaveBeenCalledWith({
+      ids: ["dlq-1", "missing", "legacy:0:abc"],
+    });
+  });
+
+  it("returns 500 when event dead-letter operations fail", async () => {
+    const runtime = fakeEventRuntime({
+      deadLetters: {
+        list: vi.fn(async () => {
+          throw new Error("redis unavailable");
+        }),
+        replay: vi.fn(async () => "not_found" as const),
+        delete: vi.fn(async () => "not_found" as const),
+        replayBatch: vi.fn(async () => ({
+          replayedCount: 0,
+          notFoundIds: [],
+          unsupportedLegacyIds: [],
+        })),
+      },
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createEventWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/events/dead-letters",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "event_dead_letter_operation_failed",
+    });
   });
 });
 
@@ -3558,6 +3756,16 @@ function fakeReindexRuntime(overrides: Partial<ReindexWorkerRuntime> = {}): Rein
 
 function fakeEventRuntime(overrides: Partial<EventWorkerRuntime> = {}): EventWorkerRuntime {
   return {
+    deadLetters: {
+      list: vi.fn(async () => []),
+      replay: vi.fn(async () => "not_found" as const),
+      delete: vi.fn(async () => "not_found" as const),
+      replayBatch: vi.fn(async () => ({
+        replayedCount: 0,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      })),
+    },
     getStatus: vi.fn(async () => ({
       enabled: true as const,
       running: true,
@@ -3568,6 +3776,18 @@ function fakeEventRuntime(overrides: Partial<EventWorkerRuntime> = {}): EventWor
     })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function rawEventFixture(overrides: Partial<RawEvent> = {}): RawEvent {
+  return {
+    idempotencyKey: "raw-event:feishu:event-1",
+    provider: "feishu",
+    eventType: "im.message.receive_v1",
+    rawBody: { event_id: "event-1" },
+    receivedAt: new Date("2026-07-02T01:00:00.000Z"),
+    attempts: 0,
     ...overrides,
   };
 }

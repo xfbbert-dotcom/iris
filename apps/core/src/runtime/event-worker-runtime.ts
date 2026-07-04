@@ -25,8 +25,15 @@ import {
   createRedisDocumentSyncQueue,
   type RedisDocumentSyncQueueClient,
 } from "../documents/redis-document-sync-queue.js";
-import { createRedisRawEventQueue, type RedisRawEventQueueClient } from "../events/redis-raw-event-queue.js";
-import type { RawEventQueue } from "../events/raw-event-queue.js";
+import {
+  createRedisRawEventQueue,
+  type RedisRawEventQueueClient,
+} from "../events/redis-raw-event-queue.js";
+import type {
+  RawEventDeadLetter,
+  RawEventQueue,
+  ReplayRawEventDeadLettersResult,
+} from "../events/raw-event-queue.js";
 import { createRawEventWorker } from "../events/raw-event-worker.js";
 import {
   createRawEventWorkerLoop,
@@ -36,6 +43,12 @@ import {
 
 export type EventWorkerRuntime = {
   rawEventQueue?: Pick<RawEventQueue, "enqueue">;
+  deadLetters: {
+    list(input: { limit: number }): Promise<RawEventDeadLetter[]>;
+    replay(id: string): Promise<"replayed" | "not_found" | "unsupported_legacy_item">;
+    delete(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
+    replayBatch(input: { ids: string[] }): Promise<ReplayRawEventDeadLettersResult>;
+  };
   getStatus(): Promise<EventWorkerRuntimeStatus>;
   start(): void;
   close(): Promise<void>;
@@ -166,6 +179,20 @@ function createEnabledEventWorkerRuntime({
 
   return {
     rawEventQueue: queue,
+    deadLetters: {
+      list(input) {
+        return queue.listDeadLetters(input);
+      },
+      replay(id) {
+        return queue.replayDeadLetter(id);
+      },
+      delete(id) {
+        return queue.deleteDeadLetter(id);
+      },
+      replayBatch(input) {
+        return queue.replayDeadLetters(input);
+      },
+    },
     start() {
       loop.start();
     },
@@ -252,6 +279,14 @@ function createLazyRedisQueueClient(
     async lLen(key) {
       const client = await redisConnection;
       return client.lLen(key);
+    },
+    async lRange(key, start, stop) {
+      const client = await redisConnection;
+      return client.lRange(key, start, stop);
+    },
+    async lRem(key, count, value) {
+      const client = await redisConnection;
+      return client.lRem(key, count, value);
     },
     async sRem(key, member) {
       const client = await redisConnection;

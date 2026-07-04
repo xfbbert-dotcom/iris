@@ -157,6 +157,8 @@ Feishu messages, document links, files, mentions, user submissions, wiki updates
 
 Feishu Gateway's event ingestion path must be designed for overload. In high-volume groups, the gateway must avoid heavy signal filtering before acknowledgment. Raw events should be placed into Redis Queue or an equivalent durable queue first, then processed by asynchronous workers with idempotency keys, retry limits, backpressure, and dead-letter handling.
 
+Raw Feishu event DLQs are operator recovery surfaces. Iris must support bounded listing, explicit replay, and deletion for raw event dead letters. Replay must not remove the DLQ payload until the reset raw event has been accepted back into the queue.
+
 Every event must preserve:
 
 - source group;

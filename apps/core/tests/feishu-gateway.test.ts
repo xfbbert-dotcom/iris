@@ -553,6 +553,16 @@ describe("Core App Feishu route", () => {
       queue,
       createEventWorkerRuntime: () => ({
         rawEventQueue,
+        deadLetters: {
+          list: vi.fn(async () => []),
+          replay: vi.fn(async () => "not_found" as const),
+          delete: vi.fn(async () => "not_found" as const),
+          replayBatch: vi.fn(async () => ({
+            replayedCount: 0,
+            notFoundIds: [],
+            unsupportedLegacyIds: [],
+          })),
+        },
         start: vi.fn(),
         close: vi.fn(async () => undefined),
         getStatus: vi.fn(async () => ({

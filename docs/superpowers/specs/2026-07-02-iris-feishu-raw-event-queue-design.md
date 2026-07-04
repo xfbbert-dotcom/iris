@@ -41,7 +41,6 @@ This phase does not implement:
 - Iris replies;
 - Feishu message sending;
 - admin UI;
-- raw event DLQ list/replay/delete APIs;
 - authentication changes for internal routes.
 
 Those should be implemented as later phases that consume the reliable raw event stream.
@@ -87,6 +86,10 @@ export interface RawEventQueue {
   }>;
   getPendingCount(): Promise<number>;
   getDeadLetterCount(): Promise<number>;
+  listDeadLetters(input: { limit: number }): Promise<RawEventDeadLetter[]>;
+  replayDeadLetter(id: string): Promise<"replayed" | "not_found" | "unsupported_legacy_item">;
+  deleteDeadLetter(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
+  replayDeadLetters(input: { ids: string[] }): Promise<ReplayRawEventDeadLettersResult>;
 }
 ```
 
@@ -128,13 +131,28 @@ Dead-letter payload:
 
 ```ts
 {
+  id: string;
   event: RawEvent;
   errorMessage: string;
   failedAt: string;
 }
 ```
 
-Phase 2T only stores and counts raw event DLQ payloads. DLQ inspection and replay can be added later.
+Invalid queued payload diagnostics are stored as:
+
+```ts
+{
+  id: string;
+  rawPayload: string;
+  errorMessage: string;
+  failedAt: string;
+}
+```
+
+DLQ management is exposed through internal APIs. Replay resets `attempts` to `0` and, for Redis,
+must enqueue the event before removing the DLQ payload so an enqueue failure does not lose the only
+recovery record. Legacy DLQ payloads without stored IDs remain listable but are not replayable or
+deletable by synthetic IDs.
 
 ## 7. Gateway Integration
 

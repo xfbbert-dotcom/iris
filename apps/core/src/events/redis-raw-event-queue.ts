@@ -1,8 +1,10 @@
 import type {
   RawEvent,
+  RawEventDeadLetter,
   RawEventFailureInput,
   RawEventFailureResult,
   RawEventQueue,
+  ReplayRawEventDeadLettersResult,
 } from "./raw-event-queue.js";
 
 const DEFAULT_SEEN_KEY = "iris:events:raw:seen";
@@ -42,6 +44,8 @@ export type RedisRawEventQueueClient = {
   rPush(key: string, value: string): Promise<number>;
   lPop(key: string): Promise<string | null>;
   lLen(key: string): Promise<number>;
+  lRange(key: string, start: number, stop: number): Promise<string[]>;
+  lRem(key: string, count: number, value: string): Promise<number>;
   sRem(key: string, member: string): Promise<number>;
 };
 
@@ -52,6 +56,7 @@ export type RedisRawEventQueueOptions = {
   deadLetterKey?: string;
   maxAttempts?: number;
   now?: () => Date;
+  idGenerator?: () => string;
 };
 
 export function createRedisRawEventQueue({
@@ -61,8 +66,41 @@ export function createRedisRawEventQueue({
   deadLetterKey = DEFAULT_DEAD_LETTER_KEY,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   now = () => new Date(),
+  idGenerator = defaultIdGenerator,
 }: RedisRawEventQueueOptions): RawEventQueue {
   const safeMaxAttempts = sanitizeMaxAttempts(maxAttempts);
+
+  const replayDeadLetter = async (
+    id: string,
+  ): Promise<"replayed" | "not_found" | "unsupported_legacy_item"> => {
+    const found = await findDeadLetterByStoredId(client, deadLetterKey, id, now);
+    if (found === undefined) {
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+    }
+
+    if (!("event" in found.deadLetter) || !found.deadLetter.replayable) {
+      return "unsupported_legacy_item";
+    }
+
+    await enqueueSerializedRawEvent(client, seenKey, queueKey, {
+      ...found.deadLetter.event,
+      attempts: 0,
+    });
+    await client.lRem(deadLetterKey, 1, found.payload);
+    return "replayed";
+  };
+
+  const deleteDeadLetter = async (
+    id: string,
+  ): Promise<"deleted" | "not_found" | "unsupported_legacy_item"> => {
+    const found = await findDeadLetterByStoredId(client, deadLetterKey, id, now);
+    if (found === undefined) {
+      return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
+    }
+
+    await client.lRem(deadLetterKey, 1, found.payload);
+    return "deleted";
+  };
 
   return {
     async enqueue(event) {
@@ -87,6 +125,7 @@ export function createRedisRawEventQueue({
           await client.rPush(
             deadLetterKey,
             JSON.stringify({
+              id: idGenerator(),
               rawPayload: payload,
               errorMessage: error instanceof Error ? error.message : String(error),
               failedAt: now().toISOString(),
@@ -105,10 +144,11 @@ export function createRedisRawEventQueue({
       if (attempts >= safeMaxAttempts) {
         await client.rPush(
           deadLetterKey,
-          JSON.stringify({
-            event: serializeRawEventPayload(failedEvent),
+          serializeDeadLetteredRawEvent({
+            id: idGenerator(),
+            event: failedEvent,
             errorMessage: input.errorMessage,
-            failedAt: now().toISOString(),
+            failedAt: now(),
           }),
         );
         return { action: "dead_lettered", attempts };
@@ -124,6 +164,41 @@ export function createRedisRawEventQueue({
 
     getDeadLetterCount() {
       return client.lLen(deadLetterKey);
+    },
+
+    async listDeadLetters(input) {
+      const safeLimit = sanitizeLimit(input.limit);
+      if (safeLimit === 0) {
+        return [];
+      }
+
+      const payloads = await client.lRange(deadLetterKey, 0, safeLimit - 1);
+      return payloads.map((payload, index) => parseDeadLetterPayload(payload, index, now).deadLetter);
+    },
+
+    replayDeadLetter,
+
+    deleteDeadLetter,
+
+    async replayDeadLetters(input): Promise<ReplayRawEventDeadLettersResult> {
+      const result: ReplayRawEventDeadLettersResult = {
+        replayedCount: 0,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      };
+
+      for (const id of new Set(input.ids)) {
+        const replayResult = await replayDeadLetter(id);
+        if (replayResult === "replayed") {
+          result.replayedCount += 1;
+        } else if (replayResult === "not_found") {
+          result.notFoundIds.push(id);
+        } else {
+          result.unsupportedLegacyIds.push(id);
+        }
+      }
+
+      return result;
     },
   };
 }
@@ -199,8 +274,160 @@ function serializeRawEventPayload(event: RawEvent): Record<string, unknown> {
   };
 }
 
+function serializeDeadLetteredRawEvent(input: {
+  id: string;
+  event: RawEvent;
+  errorMessage: string;
+  failedAt: Date;
+}): string {
+  return JSON.stringify({
+    id: input.id,
+    event: serializeRawEventPayload(input.event),
+    errorMessage: input.errorMessage,
+    failedAt: input.failedAt.toISOString(),
+  });
+}
+
+type ParsedDeadLetterPayload = {
+  payload: string;
+  deadLetter: RawEventDeadLetter;
+  storedId?: string;
+};
+
+function parseDeadLetterPayload(
+  payload: string,
+  index: number,
+  now: () => Date,
+): ParsedDeadLetterPayload {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return createInvalidDeadLetterDiagnostic({
+      payload,
+      index,
+      errorMessage: "Invalid raw event dead letter JSON",
+      failedAt: now(),
+    });
+  }
+
+  if (!isRecord(parsed)) {
+    return createInvalidDeadLetterDiagnostic({
+      payload,
+      index,
+      errorMessage: "Invalid raw event dead letter payload",
+      failedAt: now(),
+    });
+  }
+
+  const failedAt = new Date(readString(parsed.failedAt));
+  const errorMessage = readString(parsed.errorMessage);
+  const storedId = readString(parsed.id) || undefined;
+  if (Number.isNaN(failedAt.getTime()) || errorMessage.length === 0) {
+    return createInvalidDeadLetterDiagnostic({
+      payload,
+      index,
+      storedId,
+      errorMessage: "Invalid raw event dead letter payload",
+      failedAt: now(),
+    });
+  }
+
+  if (!isRecord(parsed.event)) {
+    const rawPayload = readRawPayload(parsed.rawPayload);
+    if (rawPayload === undefined) {
+      return createInvalidDeadLetterDiagnostic({
+        payload,
+        index,
+        storedId,
+        errorMessage: "Invalid raw event dead letter payload",
+        failedAt,
+      });
+    }
+
+    return {
+      payload,
+      storedId,
+      deadLetter: {
+        id: storedId ?? createLegacyDeadLetterId(payload, index),
+        rawPayload,
+        errorMessage,
+        failedAt,
+        replayable: false,
+      },
+    };
+  }
+
+  let event: RawEvent;
+  try {
+    event = parseRawEvent(JSON.stringify(parsed.event));
+  } catch (error) {
+    return createInvalidDeadLetterDiagnostic({
+      payload,
+      index,
+      storedId,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      failedAt,
+    });
+  }
+
+  return {
+    payload,
+    storedId,
+    deadLetter: {
+      id: storedId ?? createLegacyDeadLetterId(payload, index),
+      event,
+      errorMessage,
+      failedAt,
+      replayable: storedId !== undefined,
+    },
+  };
+}
+
+function createInvalidDeadLetterDiagnostic(input: {
+  payload: string;
+  index: number;
+  storedId?: string;
+  errorMessage: string;
+  failedAt: Date;
+}): ParsedDeadLetterPayload {
+  return {
+    payload: input.payload,
+    storedId: input.storedId,
+    deadLetter: {
+      id: input.storedId ?? createLegacyDeadLetterId(input.payload, input.index),
+      rawPayload: input.payload,
+      errorMessage: input.errorMessage,
+      failedAt: input.failedAt,
+      replayable: false,
+    },
+  };
+}
+
+async function findDeadLetterByStoredId(
+  client: RedisRawEventQueueClient,
+  deadLetterKey: string,
+  id: string,
+  now: () => Date,
+): Promise<ParsedDeadLetterPayload | undefined> {
+  const payloads = await client.lRange(deadLetterKey, 0, -1);
+
+  for (const [index, payload] of payloads.entries()) {
+    const parsed = parseDeadLetterPayload(payload, index, now);
+    if (parsed.storedId === id) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readRawPayload(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function readOptionalNonNegativeInteger(value: unknown): number | null | undefined {
@@ -245,4 +472,17 @@ function sanitizeLimit(value: number): number {
   }
 
   return Math.max(0, Math.floor(value));
+}
+
+function defaultIdGenerator(): string {
+  return `dlq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function createLegacyDeadLetterId(payload: string, index: number): string {
+  let hash = 0;
+  for (let cursor = 0; cursor < payload.length; cursor += 1) {
+    hash = (hash * 31 + payload.charCodeAt(cursor)) >>> 0;
+  }
+
+  return `legacy:${index}:${hash.toString(16)}`;
 }

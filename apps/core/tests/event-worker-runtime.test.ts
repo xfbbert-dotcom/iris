@@ -132,6 +132,8 @@ describe("createEventWorkerRuntime", () => {
         failed: false,
       },
     });
+    await expect(runtime?.deadLetters.list({ limit: 20 })).resolves.toEqual([]);
+    expect(redisClient.lRange).toHaveBeenCalledWith("iris:events:raw:dlq", 0, 19);
 
     await runtime?.close();
     expect(loop.stop).toHaveBeenCalledOnce();
