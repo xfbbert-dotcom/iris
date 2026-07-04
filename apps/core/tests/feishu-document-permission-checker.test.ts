@@ -86,6 +86,38 @@ describe("createFeishuDocumentPermissionChecker", () => {
     );
   });
 
+  it("throws when successful document metadata responses omit the Feishu code", async () => {
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => jsonResponse({ data: { document: { title: "Spec" } } })),
+    });
+
+    await expect(
+      checker.canReadSource(
+        source({ sourceUri: "https://example.feishu.cn/docx/doccnMalformed" }),
+      ),
+    ).rejects.toThrow("Feishu document permission response did not include code");
+  });
+
+  it("throws before metadata checks when successful wiki node responses omit the Feishu code", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        data: { node: { obj_type: "docx", obj_token: "doccnWikiDocument" } },
+      }),
+    );
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(
+      checker.canReadSource(source({ sourceUri: "https://example.feishu.cn/wiki/wikcnNode" })),
+    ).rejects.toThrow("Feishu document permission response did not include code");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("returns false for unsupported document URLs", async () => {
     const fetch = vi.fn();
     const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };

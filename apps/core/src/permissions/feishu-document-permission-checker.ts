@@ -187,12 +187,11 @@ function isSuccessfulFeishuResponse(response: Response, responseBody: unknown): 
   if (!response.ok) {
     return false;
   }
-  if (!isRecord(responseBody)) {
-    return false;
+  if (!isRecord(responseBody) || typeof responseBody.code !== "number") {
+    throw new Error("Feishu document permission response did not include code");
   }
 
-  const code = responseBody.code;
-  return typeof code !== "number" || code === 0;
+  return responseBody.code === 0;
 }
 
 function throwIfTransientPermissionFailure(response: Response, responseBody: unknown): void {
