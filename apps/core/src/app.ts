@@ -1001,7 +1001,8 @@ function readInternalApiToken(value: string | undefined): string | undefined {
 }
 
 function isInternalApiRequest(url: string): boolean {
-  return url === "/internal" || url.startsWith("/internal/");
+  const path = url.split("?", 1)[0];
+  return path === "/internal" || path.startsWith("/internal/");
 }
 
 async function closeRuntimeResources(

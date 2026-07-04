@@ -424,6 +424,27 @@ describe("internal API token guard", () => {
       error: "internal_api_unauthorized",
     });
   });
+
+  it("guards internal root probes when a query string is present", async () => {
+    const app = buildApp({
+      internalApiToken: "operator-secret",
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal?probe=1",
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "internal_api_unauthorized",
+    });
+  });
 });
 
 describe("GET /internal/audit/status", () => {

@@ -13,6 +13,8 @@ Core reads an optional `IRIS_INTERNAL_API_TOKEN` value. When the token is config
 - every `/internal/*` request must include `Authorization: Bearer <token>`
 - unauthorized internal requests return `401 { "ok": false, "error": "internal_api_unauthorized" }`
 - the guard runs before body parsing, so malformed unauthorized JSON still returns 401
+- internal route detection strips query strings before matching, so `/internal?probe=1` and
+  `/internal/status?details=1` stay inside the same guard boundary
 - `/feishu/events` remains available for Feishu callbacks and keeps its existing Feishu signature
   verification path
 - `/health` remains unauthenticated for process health checks
@@ -22,6 +24,7 @@ When the token is not configured, internal endpoints keep the existing local-dev
 ## Invariants
 
 - The guard must run before internal route handlers.
+- The guard must evaluate the request path before the query string.
 - The guard must not affect Feishu event callbacks.
 - The guard must not affect `/health`.
 - Blank tokens are treated as absent.
