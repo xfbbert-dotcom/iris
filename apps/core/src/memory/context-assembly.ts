@@ -17,7 +17,9 @@ export type PromptContextInput = {
 const DEFAULT_LIVE_CHAT_LIMIT = 20;
 const MAX_LIVE_CHAT_LIMIT = 20;
 const MAX_BACKGROUND_DOCUMENT_LIMIT = 12;
+const MAX_BACKGROUND_DOCUMENT_SOURCE_ATTRIBUTE_CHARS = 512;
 const MAX_BACKGROUND_DOCUMENT_TEXT_CHARS = 1200;
+const MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS = 256;
 const MAX_LIVE_CHAT_MESSAGE_TEXT_CHARS = 2000;
 const TRUNCATION_MARKER = " ... [truncated]";
 
@@ -47,13 +49,19 @@ export function assemblePromptContext(input: PromptContextInput): string {
 }
 
 function formatBackgroundDocument(document: BackgroundDocument): string {
-  return `<document source="${escapeXml(document.source.trim())}">${escapeXml(
+  return `<document source="${formatXmlAttribute(
+    document.source,
+    MAX_BACKGROUND_DOCUMENT_SOURCE_ATTRIBUTE_CHARS,
+  )}">${escapeXml(
     truncatePromptText(document.text.trim(), MAX_BACKGROUND_DOCUMENT_TEXT_CHARS),
   )}</document>`;
 }
 
 function formatLiveChatMessage(message: LiveChatMessage): string {
-  return `<message speaker="${escapeXml(message.speaker.trim())}">${escapeXml(
+  return `<message speaker="${formatXmlAttribute(
+    message.speaker,
+    MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS,
+  )}">${escapeXml(
     truncatePromptText(message.text.trim(), MAX_LIVE_CHAT_MESSAGE_TEXT_CHARS),
   )}</message>`;
 }
@@ -65,6 +73,31 @@ function truncatePromptText(value: string, maxChars: number): string {
 
   const prefixChars = maxChars - TRUNCATION_MARKER.length;
   return `${value.slice(0, prefixChars).trimEnd()}${TRUNCATION_MARKER}`;
+}
+
+function formatXmlAttribute(value: string, maxChars: number): string {
+  const trimmed = value.trim();
+  const escaped = escapeXml(trimmed);
+  if (escaped.length <= maxChars) {
+    return escaped;
+  }
+
+  let low = 0;
+  let high = trimmed.length;
+  let best = escapeXml(TRUNCATION_MARKER);
+
+  while (low <= high) {
+    const midpoint = Math.floor((low + high) / 2);
+    const candidate = escapeXml(`${trimmed.slice(0, midpoint).trimEnd()}${TRUNCATION_MARKER}`);
+    if (candidate.length <= maxChars) {
+      best = candidate;
+      low = midpoint + 1;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+
+  return best;
 }
 
 function sanitizeLiveChatLimit(value: number | undefined): number {

@@ -131,6 +131,26 @@ describe("assemblePromptContext", () => {
     expect(formattedMessage).not.toContain("trailing live context");
   });
 
+  it("truncates oversized live chat speakers before formatting attributes", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: [
+        {
+          speaker: `${'"><&'.repeat(120)} trailing speaker identity`,
+          text: "Please keep the prompt anchored."
+        }
+      ]
+    });
+    const formattedSpeaker = context.match(
+      /<message speaker="(?<speaker>.*?)">Please keep the prompt anchored\.<\/message>/s,
+    )?.groups?.speaker;
+
+    expect(formattedSpeaker).toBeDefined();
+    expect(formattedSpeaker!.length).toBeLessThanOrEqual(256);
+    expect(formattedSpeaker).toContain("[truncated]");
+    expect(formattedSpeaker).not.toContain("trailing speaker identity");
+  });
+
   it("trims background document source and text when formatting documents", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [
@@ -161,6 +181,26 @@ describe("assemblePromptContext", () => {
     expect(formattedDocument!.length).toBeLessThanOrEqual(1200);
     expect(formattedDocument).toContain("[truncated]");
     expect(formattedDocument).not.toContain("trailing context");
+  });
+
+  it("truncates oversized background document sources before formatting attributes", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [
+        {
+          source: `${'"><&'.repeat(240)} trailing source identity`,
+          text: "Useful document context."
+        }
+      ],
+      liveChatMessages: []
+    });
+    const formattedSource = context.match(
+      /<document source="(?<source>.*?)">Useful document context\.<\/document>/s,
+    )?.groups?.source;
+
+    expect(formattedSource).toBeDefined();
+    expect(formattedSource!.length).toBeLessThanOrEqual(512);
+    expect(formattedSource).toContain("[truncated]");
+    expect(formattedSource).not.toContain("trailing source identity");
   });
 
   it("caps background documents to the first 12 items", () => {
