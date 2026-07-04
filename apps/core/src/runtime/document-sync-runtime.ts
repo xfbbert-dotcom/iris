@@ -56,6 +56,7 @@ import {
   createRedisDocumentSyncQueue,
   type RedisDocumentSyncQueueClient,
 } from "../documents/redis-document-sync-queue.js";
+import { closeRuntimeResources } from "./runtime-close.js";
 import {
   createFeishuTenantAccessTokenProvider,
   type FeishuTenantAccessTokenProvider,
@@ -462,9 +463,14 @@ function createEnabledDocumentSyncRuntime({
       },
     },
     async close() {
-      await loop.stop();
-      await redisConnection.then((client) => client.quit());
-      await pool.end();
+      await closeRuntimeResources([
+        () => loop.stop(),
+        async () => {
+          const client = await redisConnection;
+          await client.quit();
+        },
+        () => pool.end(),
+      ]);
     },
   };
 }

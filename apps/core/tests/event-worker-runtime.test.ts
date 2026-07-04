@@ -137,7 +137,8 @@ describe("createEventWorkerRuntime", () => {
     await expect(runtime?.deadLetters.list({ limit: 20 })).resolves.toEqual([]);
     expect(redisClient.lRange).toHaveBeenCalledWith("iris:events:raw:dlq", 0, 19);
 
-    await runtime?.close();
+    loop.stop.mockRejectedValueOnce(new Error("event loop stop failed"));
+    await expect(runtime?.close()).rejects.toThrow("event loop stop failed");
     expect(loop.stop).toHaveBeenCalledOnce();
     expect(redisClient.quit).toHaveBeenCalledOnce();
     expect(pool.end).toHaveBeenCalledOnce();

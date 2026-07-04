@@ -101,7 +101,8 @@ describe("createReindexWorkerRuntime", () => {
     await expect(runtime?.deadLetters.list({ limit: 20 })).resolves.toEqual([]);
     expect(redisClient.lRange).toHaveBeenCalledWith("iris:reindex:documents:dlq", 0, 19);
 
-    await runtime?.close();
+    loop.stop.mockRejectedValueOnce(new Error("reindex loop stop failed"));
+    await expect(runtime?.close()).rejects.toThrow("reindex loop stop failed");
     expect(loop.stop).toHaveBeenCalledOnce();
     expect(redisClient.quit).toHaveBeenCalledOnce();
     expect(pool.end).toHaveBeenCalledOnce();

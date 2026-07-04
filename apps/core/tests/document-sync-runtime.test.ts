@@ -543,7 +543,8 @@ describe("createDocumentSyncRuntime", () => {
       latestSnapshotLookupCount,
     );
 
-    await runtime?.close();
+    loop.stop.mockRejectedValueOnce(new Error("document sync loop stop failed"));
+    await expect(runtime?.close()).rejects.toThrow("document sync loop stop failed");
     expect(loop.stop).toHaveBeenCalledOnce();
     expect(redisClient.quit).toHaveBeenCalledOnce();
     expect(pool.end).toHaveBeenCalledOnce();

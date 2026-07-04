@@ -55,6 +55,7 @@ import {
   type RawEventWorkerBatchSnapshot,
   type RawEventWorkerLoop,
 } from "../events/raw-event-worker-loop.js";
+import { closeRuntimeResources } from "./runtime-close.js";
 
 export type EventWorkerRuntime = {
   rawEventQueue?: Pick<RawEventQueue, "enqueue">;
@@ -269,9 +270,14 @@ function createEnabledEventWorkerRuntime({
       };
     },
     async close() {
-      await loop.stop();
-      await redisConnection.then((client) => client.quit());
-      await pool.end();
+      await closeRuntimeResources([
+        () => loop.stop(),
+        async () => {
+          const client = await redisConnection;
+          await client.quit();
+        },
+        () => pool.end(),
+      ]);
     },
   };
 }
