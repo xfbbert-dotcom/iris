@@ -79,7 +79,10 @@ Expected: the command exits 0.
 Observed: `npm run verify` exited 0 with Core 750 passed / 4 skipped, Python 7 passed, and
 `docker compose config` succeeded.
 
-- [ ] **Step 2: Commit, push, and verify PR checks**
+- [x] **Step 2: Commit, push, and verify PR checks**
 
 Commit the test isolation change, push `codex/iris-document-source-registry`, update PR #3, and
 confirm GitHub Actions returns Core and AI Worker success.
+
+Observed: committed `62165bb`, pushed to `codex/iris-document-source-registry`, updated PR #3, and
+confirmed GitHub Actions Core and AI Worker checks passed.
