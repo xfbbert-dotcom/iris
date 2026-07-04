@@ -292,6 +292,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         globalEnabled: runtimeControlSnapshot.globalEnabled,
         disabledGroupIds: runtimeControlSnapshot.disabledGroupIds,
         disabledGroupCount: runtimeControlSnapshot.disabledGroupIds.length,
+        capabilities: runtimeControlSnapshot.capabilities,
       },
       answerDraft: {
         ok: true,

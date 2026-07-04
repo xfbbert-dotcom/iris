@@ -812,6 +812,16 @@ describe("GET /internal/status", () => {
           globalEnabled: true,
           disabledGroupIds: [],
           disabledGroupCount: 0,
+          capabilities: {
+            readGroupContext: true,
+            replyWhenMentioned: true,
+            readGroupDocuments: true,
+            retrieveKnowledgeBase: true,
+            proactiveSpeech: true,
+            generateKnowledgeDrafts: true,
+            writeKnowledgeBase: false,
+            callExternalTools: false,
+          },
         },
         answerDraft: {
           status: "disabled",

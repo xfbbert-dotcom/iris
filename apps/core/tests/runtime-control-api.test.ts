@@ -128,6 +128,16 @@ describe("runtime control API", () => {
       globalEnabled: false,
       disabledGroupIds: [],
       disabledGroupCount: 0,
+      capabilities: {
+        readGroupContext: true,
+        replyWhenMentioned: true,
+        readGroupDocuments: true,
+        retrieveKnowledgeBase: true,
+        proactiveSpeech: true,
+        generateKnowledgeDrafts: true,
+        writeKnowledgeBase: false,
+        callExternalTools: false,
+      },
     });
     expect(status.json().summary.attentionComponents).toContainEqual({
       name: "runtimeControl",

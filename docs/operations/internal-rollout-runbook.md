@@ -236,8 +236,9 @@ Invoke-RestMethod `
   -Uri http://localhost:3000/internal/runtime-control/status
 ```
 
-The same state is also summarized inside `GET /internal/status` as `components.runtimeControl`, so
-the consolidated operator snapshot can be used as the first health check during rollout.
+The same state is also summarized inside `GET /internal/status` as `components.runtimeControl`,
+including the current capability flags, so the consolidated operator snapshot can be used as the
+first health check during rollout.
 
 Inspect recent runtime-control changes:
 
