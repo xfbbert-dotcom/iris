@@ -2,6 +2,7 @@ export type PermissionGuardAuditEvent = {
   type: "permission_guard_denied" | "permission_guard_error";
   documentId: string;
   fragmentIds: string[];
+  operatorHint?: string;
   message?: string;
 };
 
@@ -36,6 +37,7 @@ export type AuditEventSummaryQuery = {
   limit: number;
   documentId?: string;
   type?: AuditEvent["type"];
+  operatorHint?: string;
 };
 
 export interface AuditLog {
@@ -102,6 +104,9 @@ export class InMemoryAuditLog implements AuditLog {
         continue;
       }
       if (options.type !== undefined && event.type !== options.type) {
+        continue;
+      }
+      if (options.operatorHint !== undefined && event.operatorHint !== options.operatorHint) {
         continue;
       }
 

@@ -495,6 +495,51 @@ describe("runtime control API", () => {
     ]);
   });
 
+  it("filters runtime control audit events by operator hint", async () => {
+    const auditLog = new InMemoryAuditLog();
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      headers: {
+        "x-iris-operator": "alice@example.com",
+      },
+      payload: { enabled: false },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      headers: {
+        "x-iris-operator": "bob@example.com",
+      },
+      payload: { enabled: true },
+    });
+
+    const events = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events?limit=20&type=runtime_control_updated&operatorHint=alice%40example.com",
+    });
+
+    expect(events.statusCode).toBe(200);
+    expect(events.json().meta.filters).toEqual({
+      type: "runtime_control_updated",
+      operatorHint: "alice@example.com",
+    });
+    expect(events.json().events).toHaveLength(1);
+    expect(events.json().events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      operatorHint: "alice@example.com",
+      enabled: false,
+    });
+  });
+
   it("rejects invalid runtime capability updates", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,

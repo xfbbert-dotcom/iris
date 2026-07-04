@@ -1243,10 +1243,13 @@ function parseAuditEventQuery(value: unknown): AuditEventSummaryQuery | undefine
   const limit = parseDeadLetterLimit(value.limit);
   const documentId = value.documentId === undefined ? undefined : readNonBlankId(value.documentId);
   const type = parseAuditEventType(value.type);
+  const operatorHint =
+    value.operatorHint === undefined ? undefined : readOperatorHint(value.operatorHint);
   if (
     limit === undefined ||
     (documentId === undefined && value.documentId !== undefined) ||
-    type === false
+    type === false ||
+    (operatorHint === undefined && value.operatorHint !== undefined)
   ) {
     return undefined;
   }
@@ -1255,16 +1258,18 @@ function parseAuditEventQuery(value: unknown): AuditEventSummaryQuery | undefine
     limit,
     ...(documentId === undefined ? {} : { documentId }),
     ...(type === undefined ? {} : { type }),
+    ...(operatorHint === undefined ? {} : { operatorHint }),
   };
 }
 
 function matchesAuditEventQuery(
   event: RecordedAuditEvent,
-  query: Pick<AuditEventSummaryQuery, "documentId" | "type">,
+  query: Pick<AuditEventSummaryQuery, "documentId" | "type" | "operatorHint">,
 ): boolean {
   return (
     (query.documentId === undefined || event.documentId === query.documentId) &&
-    (query.type === undefined || event.type === query.type)
+    (query.type === undefined || event.type === query.type) &&
+    (query.operatorHint === undefined || event.operatorHint === query.operatorHint)
   );
 }
 
@@ -1284,6 +1289,7 @@ function getAuditEventDiagnostics(auditLog: InMemoryAuditLog, query: AuditEventS
       filters: {
         ...(query.documentId === undefined ? {} : { documentId: query.documentId }),
         ...(query.type === undefined ? {} : { type: query.type }),
+        ...(query.operatorHint === undefined ? {} : { operatorHint: query.operatorHint }),
       },
     },
   };

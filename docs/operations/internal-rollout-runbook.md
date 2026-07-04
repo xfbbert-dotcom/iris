@@ -228,6 +228,14 @@ Invoke-RestMethod `
 When a runtime-control mutation is sent with `X-Iris-Operator`, the audit event includes
 `operatorHint`.
 
+Filter runtime-control changes by operator hint:
+
+```powershell
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/audit/events?limit=20&type=runtime_control_updated&operatorHint=alice%40example.com"
+```
+
 ## Document Operations
 
 List known document sources:

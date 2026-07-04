@@ -33,6 +33,10 @@ must not prevent globally disabling Iris.
 - Successful global, group, and capability changes record `runtime_control_updated`.
 - `GET /internal/audit/events?type=runtime_control_updated` returns these events.
 - `X-Iris-Operator` may populate `operatorHint`, but missing or invalid hints do not block mutation.
+- `GET /internal/audit/events?...&operatorHint=<value>` filters raw audit events by the same
+  sanitized operator hint value.
+- `GET /internal/audit/events/summary?...&operatorHint=<value>` uses the same filter before
+  grouping summaries.
 - Audit write failures do not change the runtime-control API response or mutation result.
 - This remains in-memory until the later durable admin/audit phase.
 
