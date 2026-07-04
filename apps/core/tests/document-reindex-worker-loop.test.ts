@@ -45,6 +45,13 @@ describe("DocumentReindexWorkerLoop", () => {
         batchLimit: 9007199254740992,
       }),
     ).toThrow("batchLimit must be a positive safe integer");
+    expect(() =>
+      createDocumentReindexWorkerLoop({
+        worker,
+        intervalMs: 2_147_483_648,
+        batchLimit: 25,
+      }),
+    ).toThrow("intervalMs must not exceed 2147483647");
   });
 
   it("does not create duplicate loops on repeated start", async () => {

@@ -1,6 +1,7 @@
 import type { RawEventWorkerResult } from "./raw-event-worker.js";
 
 type TimerHandle = ReturnType<typeof setTimeout>;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export type RawEventWorkerLoopDependencies = {
   worker: {
@@ -54,7 +55,7 @@ export function createRawEventWorkerLoop({
   setTimeout: scheduleTimeout = globalThis.setTimeout,
   clearTimeout: cancelTimeout = globalThis.clearTimeout,
 }: RawEventWorkerLoopDependencies): RawEventWorkerLoop {
-  const safeIntervalMs = sanitizePositiveInteger("intervalMs", intervalMs);
+  const safeIntervalMs = sanitizeTimerIntervalMs(intervalMs);
   const safeBatchLimit = sanitizePositiveInteger("batchLimit", batchLimit);
   let running = false;
   let timer: TimerHandle | undefined;
@@ -161,4 +162,13 @@ function sanitizePositiveInteger(name: string, value: number): number {
   }
 
   return value;
+}
+
+function sanitizeTimerIntervalMs(value: number): number {
+  const intervalMs = sanitizePositiveInteger("intervalMs", value);
+  if (intervalMs > MAX_TIMER_DELAY_MS) {
+    throw new Error(`intervalMs must not exceed ${MAX_TIMER_DELAY_MS}`);
+  }
+
+  return intervalMs;
 }

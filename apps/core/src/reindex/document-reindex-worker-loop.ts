@@ -1,6 +1,7 @@
 import type { DocumentReindexJobResult } from "./document-reindex-worker.js";
 
 type TimerHandle = ReturnType<typeof setTimeout>;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export type DocumentReindexWorkerLoopDependencies = {
   worker: {
@@ -56,7 +57,7 @@ export function createDocumentReindexWorkerLoop({
   setTimeout: scheduleTimeout = globalThis.setTimeout,
   clearTimeout: cancelTimeout = globalThis.clearTimeout,
 }: DocumentReindexWorkerLoopDependencies): DocumentReindexWorkerLoop {
-  const safeIntervalMs = sanitizePositiveInteger("intervalMs", intervalMs);
+  const safeIntervalMs = sanitizeTimerIntervalMs(intervalMs);
   const safeBatchLimit = sanitizePositiveInteger("batchLimit", batchLimit);
   let running = false;
   let timer: TimerHandle | undefined;
@@ -165,4 +166,13 @@ function sanitizePositiveInteger(name: string, value: number): number {
   }
 
   return value;
+}
+
+function sanitizeTimerIntervalMs(value: number): number {
+  const intervalMs = sanitizePositiveInteger("intervalMs", value);
+  if (intervalMs > MAX_TIMER_DELAY_MS) {
+    throw new Error(`intervalMs must not exceed ${MAX_TIMER_DELAY_MS}`);
+  }
+
+  return intervalMs;
 }

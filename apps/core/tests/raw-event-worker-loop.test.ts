@@ -45,6 +45,13 @@ describe("RawEventWorkerLoop", () => {
         batchLimit: 9007199254740992,
       }),
     ).toThrow("batchLimit must be a positive safe integer");
+    expect(() =>
+      createRawEventWorkerLoop({
+        worker,
+        intervalMs: 2_147_483_648,
+        batchLimit: 25,
+      }),
+    ).toThrow("intervalMs must not exceed 2147483647");
   });
 
   it("records successful batch result counts", async () => {

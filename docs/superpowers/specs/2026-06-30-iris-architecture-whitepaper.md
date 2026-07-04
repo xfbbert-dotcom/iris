@@ -725,6 +725,9 @@ Required architectural response:
   direct dependency injection cannot bypass environment validation.
 - Worker loops must re-validate interval and batch-limit values at construction
   time so direct composition cannot bypass environment validation.
+- Timeout and polling interval values that enter Node timers must also reject
+  values above `2147483647ms` so timer overflow cannot turn an operator's long
+  delay into an unexpectedly short timeout or polling loop.
 - Worker `processBatch()` entrypoints must reject unsafe finite batch limits
   before dequeuing work, while retaining defensive `LIMIT 0` equivalent
   behavior for non-finite direct-call values.
