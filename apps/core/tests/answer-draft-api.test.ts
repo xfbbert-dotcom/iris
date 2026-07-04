@@ -191,6 +191,45 @@ describe("POST /internal/answer-drafts", () => {
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when the question is oversized", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const app = buildApp({ answerDraftOrchestrator });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "q".repeat(4001),
+        liveChatMessages: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when too many live chat messages are supplied", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const app = buildApp({ answerDraftOrchestrator });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        liveChatMessages: Array.from({ length: 51 }, (_, index) => ({
+          speaker: "Alice",
+          text: `message-${index + 1}`,
+        })),
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
   it("returns 400 for unsafe context limits", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const app = buildApp({ answerDraftOrchestrator });

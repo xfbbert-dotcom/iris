@@ -138,6 +138,8 @@ const deadLettersPresentReason = "dead_letters_present" as const;
 const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
 const maxInternalStringLength = 512;
 const maxInternalSourceUriLength = 2048;
+const maxAnswerDraftQuestionLength = 4000;
+const maxAnswerDraftLiveChatMessageInputCount = 50;
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
@@ -1123,8 +1125,11 @@ function parseAnswerDraftRequest(value: unknown): AnswerDraftRequest | undefined
     return undefined;
   }
 
-  const question = typeof value.question === "string" ? value.question.trim() : "";
-  if (question.length === 0 || !Array.isArray(value.liveChatMessages)) {
+  const question = readNonBlankBoundedString(value.question, maxAnswerDraftQuestionLength);
+  if (question === undefined || !Array.isArray(value.liveChatMessages)) {
+    return undefined;
+  }
+  if (value.liveChatMessages.length > maxAnswerDraftLiveChatMessageInputCount) {
     return undefined;
   }
   const chatId = value.chatId === undefined ? undefined : readNonBlankId(value.chatId);
