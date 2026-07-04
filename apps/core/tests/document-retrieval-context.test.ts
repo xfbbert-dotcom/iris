@@ -192,6 +192,28 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(fragments.searchSimilarFragments).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized query text before embedding or vector search", async () => {
+    const embedder = { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => []),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder,
+      fragments,
+      canReadDocument: vi.fn(),
+    });
+
+    await expect(
+      builder.buildContext({
+        queryText: "q".repeat(4001),
+        liveChatMessages: [],
+      }),
+    ).rejects.toThrow("queryText must be at most 4000 characters");
+    expect(embedder.embedTexts).not.toHaveBeenCalled();
+    expect(fragments.searchSimilarFragments).not.toHaveBeenCalled();
+  });
+
   it("overfetches before permission filtering and keeps only the requested allowed fragments", async () => {
     const fragments = {
       searchSimilarFragments: vi.fn(async () => [

@@ -14,6 +14,7 @@ const DEFAULT_FRAGMENT_LIMIT = 8;
 const MAX_FRAGMENT_LIMIT = 12;
 const CANDIDATE_FETCH_MULTIPLIER = 3;
 const MAX_CANDIDATE_FRAGMENT_LIMIT = MAX_FRAGMENT_LIMIT * CANDIDATE_FETCH_MULTIPLIER;
+const MAX_QUERY_TEXT_CHARS = 4000;
 
 export type QueryEmbeddingProvider = Pick<EmbeddingProvider, "embedTexts">;
 
@@ -50,6 +51,7 @@ export function createDocumentRetrievalContextBuilder({
 }): DocumentRetrievalContextBuilder {
   return {
     async buildContext(input) {
+      const queryText = sanitizeQueryText(input.queryText);
       const fragmentLimit = sanitizeFragmentLimit(input.fragmentLimit);
       if (fragmentLimit === 0) {
         return {
@@ -64,7 +66,7 @@ export function createDocumentRetrievalContextBuilder({
         };
       }
 
-      const queryEmbedding = await embedQuery(input.queryText, embedder);
+      const queryEmbedding = await embedQuery(queryText, embedder);
       const candidateFragmentLimit = computeCandidateFragmentLimit(fragmentLimit);
       const retrievedFragments = await fragments.searchSimilarFragments({
         embeddingProfileId,
@@ -102,6 +104,14 @@ export function createDocumentRetrievalContextBuilder({
       };
     },
   };
+}
+
+function sanitizeQueryText(value: string): string {
+  if (value.length > MAX_QUERY_TEXT_CHARS) {
+    throw new Error(`queryText must be at most ${MAX_QUERY_TEXT_CHARS} characters`);
+  }
+
+  return value;
 }
 
 async function embedQuery(queryText: string, embedder: QueryEmbeddingProvider): Promise<number[]> {
