@@ -181,6 +181,25 @@ describe("OpenAICompatibleModelProvider", () => {
     ).rejects.toThrow("model provider response did not finish normally");
   });
 
+  it("rejects oversized model responses before parsing answer content", async () => {
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      fetch: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "Answer draft." } }],
+            padding: "x".repeat(300_000),
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    });
+
+    await expect(
+      provider.generateAnswerDraft({ question: "Q", promptContext: "C" }),
+    ).rejects.toThrow("model provider response exceeds 262144 bytes");
+  });
+
   it("aborts requests after timeout", async () => {
     const fetch = vi.fn(((_url: URL | RequestInfo, init?: RequestInit) => {
       init?.signal?.dispatchEvent(new Event("abort"));

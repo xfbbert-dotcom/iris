@@ -5,6 +5,7 @@ import { readExternalErrorMessage } from "../integrations/external-error-message
 
 const MAX_MODEL_QUESTION_CHARS = 4000;
 const MAX_MODEL_PROMPT_CONTEXT_CHARS = 80_000;
+const MAX_MODEL_RESPONSE_BYTES = 262_144;
 const ANSWER_DRAFT_SYSTEM_PROMPT = [
   "You are Iris, a company AI assistant.",
   "Answer only from the provided safe context.",
@@ -105,14 +106,86 @@ function joinBaseUrl(baseUrl: string, path: string): string {
 
 async function readJsonResponse(response: Response): Promise<unknown> {
   try {
+    const boundedText = await readBoundedResponseText(response);
+    if (boundedText !== undefined) {
+      return JSON.parse(boundedText);
+    }
+
     return await response.json();
   } catch (error) {
     if (isAbortError(error)) {
       throw error;
     }
+    if (error instanceof ResponseSizeError) {
+      throw error;
+    }
     throw new Error("model provider response was not valid JSON");
   }
 }
+
+async function readBoundedResponseText(response: Response): Promise<string | undefined> {
+  const body = response.body;
+  if (body !== undefined && body !== null) {
+    return readBoundedReadableStream(body);
+  }
+
+  if (typeof response.text === "function") {
+    const text = await response.text();
+    const byteLength = new TextEncoder().encode(text).byteLength;
+    if (byteLength > MAX_MODEL_RESPONSE_BYTES) {
+      throw new ResponseSizeError(
+        `model provider response exceeds ${MAX_MODEL_RESPONSE_BYTES} bytes`,
+      );
+    }
+    return text;
+  }
+
+  return undefined;
+}
+
+async function readBoundedReadableStream(body: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value === undefined) {
+        continue;
+      }
+
+      byteLength += value.byteLength;
+      if (byteLength > MAX_MODEL_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new ResponseSizeError(
+          `model provider response exceeds ${MAX_MODEL_RESPONSE_BYTES} bytes`,
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return new TextDecoder().decode(concatChunks(chunks, byteLength));
+}
+
+function concatChunks(chunks: Uint8Array[], byteLength: number): Uint8Array {
+  const buffer = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return buffer;
+}
+
+class ResponseSizeError extends Error {}
 
 function readAnswerContent(responseBody: unknown): string {
   if (!isRecord(responseBody)) {
