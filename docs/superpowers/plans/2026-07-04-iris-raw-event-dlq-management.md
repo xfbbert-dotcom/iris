@@ -84,7 +84,7 @@ python -m pytest
 docker compose config
 ```
 
-- [ ] **Step 2: Commit, push, and verify PR checks**
+- [x] **Step 2: Commit, push, and verify PR checks**
 
 Commit the implementation, push `codex/iris-document-source-registry`, and confirm GitHub Actions
 returns Core and AI Worker success.
