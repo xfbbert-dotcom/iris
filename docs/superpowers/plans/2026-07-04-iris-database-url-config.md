@@ -43,9 +43,12 @@ Observed: database config tests passed with 4 passing tests.
 
 - [x] Update the architecture whitepaper runtime configuration safety section.
 - [x] Run `npm run verify`.
-- [ ] Commit and push.
-- [ ] Watch PR #3 checks.
+- [x] Commit and push.
+- [x] Watch PR #3 checks.
 
 Observed: `npm run verify` passed. Core reported 743 passing tests and 4 skipped
 tests. Python worker tests reported 7 passing tests. Docker Compose config
 rendered successfully.
+
+Observed: pushed commit `36f0eb3`; GitHub Actions reported AI Worker and Core
+success for PR #3.
