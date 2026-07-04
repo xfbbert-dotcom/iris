@@ -6,6 +6,11 @@ import type {
   FailedDocumentReindexJobResult,
   ReplayDocumentReindexDeadLettersResult,
 } from "./document-reindex-queue.js";
+import {
+  MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS,
+  MAX_DOCUMENT_REINDEX_JOB_ID_CHARS,
+  createDocumentReindexIdempotencyKey,
+} from "./document-reindex-queue.js";
 import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -41,12 +46,13 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
   }
 
   async enqueue(job: DocumentReindexJob): Promise<void> {
-    if (this.seenKeys.has(job.idempotencyKey)) {
+    const clonedJob = cloneJob(job);
+    if (this.seenKeys.has(clonedJob.idempotencyKey)) {
       return;
     }
 
-    this.seenKeys.add(job.idempotencyKey);
-    this.jobs.push(cloneJob(job));
+    this.seenKeys.add(clonedJob.idempotencyKey);
+    this.jobs.push(clonedJob);
   }
 
   async dequeueBatch(limit: number): Promise<DocumentReindexJob[]> {
@@ -175,10 +181,39 @@ function sanitizeLimit(value: number): number {
 }
 
 function cloneJob(job: DocumentReindexJob): DocumentReindexJob {
+  const idempotencyKey = job.idempotencyKey.trim();
+  const embeddingProfileId = job.embeddingProfileId.trim();
+  const documentSnapshotId = job.documentSnapshotId.trim();
+  assertValidJob({ ...job, idempotencyKey, embeddingProfileId, documentSnapshotId });
   return {
     ...job,
+    idempotencyKey,
+    embeddingProfileId,
+    documentSnapshotId,
     enqueuedAt: new Date(job.enqueuedAt),
   };
+}
+
+function assertValidJob(job: DocumentReindexJob): void {
+  const embeddingProfileId = job.embeddingProfileId.trim();
+  const documentSnapshotId = job.documentSnapshotId.trim();
+  const idempotencyKey = job.idempotencyKey.trim();
+  if (
+    embeddingProfileId.length === 0 ||
+    embeddingProfileId.length > MAX_DOCUMENT_REINDEX_JOB_ID_CHARS ||
+    documentSnapshotId.length === 0 ||
+    documentSnapshotId.length > MAX_DOCUMENT_REINDEX_JOB_ID_CHARS ||
+    idempotencyKey.length === 0 ||
+    idempotencyKey.length > MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS ||
+    idempotencyKey !==
+      createDocumentReindexIdempotencyKey({ embeddingProfileId, documentSnapshotId }) ||
+    !Number.isInteger(job.attempts) ||
+    !Number.isSafeInteger(job.attempts) ||
+    job.attempts < 0 ||
+    Number.isNaN(job.enqueuedAt.getTime())
+  ) {
+    throw new Error("Invalid document reindex job payload");
+  }
 }
 
 function cloneDeadLetter(deadLetter: DeadLetteredDocumentReindexJob): DocumentReindexDeadLetter {

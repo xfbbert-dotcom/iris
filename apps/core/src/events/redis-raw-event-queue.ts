@@ -6,16 +6,16 @@ import type {
   RawEventQueue,
   ReplayRawEventDeadLettersResult,
 } from "./raw-event-queue.js";
-import { MAX_RAW_EVENT_ID_LENGTH } from "./raw-event-queue.js";
+import {
+  MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH,
+  MAX_RAW_EVENT_ID_LENGTH,
+} from "./raw-event-queue.js";
 import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
 const DEFAULT_SEEN_KEY = "iris:events:raw:seen";
 const DEFAULT_QUEUE_KEY = "iris:events:raw:queue";
 const DEFAULT_DEAD_LETTER_KEY = "iris:events:raw:dlq";
 const DEFAULT_MAX_ATTEMPTS = 3;
-const RAW_EVENT_IDEMPOTENCY_KEY_PREFIX = "raw-event:feishu:";
-const MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH =
-  RAW_EVENT_IDEMPOTENCY_KEY_PREFIX.length + MAX_RAW_EVENT_ID_LENGTH;
 
 const ENQUEUE_SCRIPT = `
 if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then

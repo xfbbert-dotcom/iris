@@ -29,6 +29,24 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([second]);
   });
 
+  it("rejects oversized in-memory raw event identifiers before enqueue", async () => {
+    const queue = new InMemoryRawEventQueue();
+
+    await expect(
+      queue.enqueue({
+        ...eventFixture(),
+        idempotencyKey: `raw-event:feishu:${"e".repeat(513)}`,
+      }),
+    ).rejects.toThrow("Invalid raw event payload");
+    await expect(
+      queue.enqueue({
+        ...eventFixture(),
+        eventType: "t".repeat(513),
+      }),
+    ).rejects.toThrow("Invalid raw event payload");
+    await expect(queue.getPendingCount()).resolves.toBe(0);
+  });
+
   it("releases dequeued event idempotency keys so later retries can enqueue", async () => {
     const queue = new InMemoryRawEventQueue();
     const event = eventFixture();

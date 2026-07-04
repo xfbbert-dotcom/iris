@@ -6,6 +6,10 @@ import type {
   RawEventQueue,
   ReplayRawEventDeadLettersResult,
 } from "./raw-event-queue.js";
+import {
+  MAX_RAW_EVENT_ID_LENGTH,
+  MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH,
+} from "./raw-event-queue.js";
 import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -41,12 +45,13 @@ export class InMemoryRawEventQueue implements RawEventQueue {
   }
 
   async enqueue(event: RawEvent): Promise<void> {
-    if (this.seenKeys.has(event.idempotencyKey)) {
+    const clonedEvent = cloneEvent(event);
+    if (this.seenKeys.has(clonedEvent.idempotencyKey)) {
       return;
     }
 
-    this.seenKeys.add(event.idempotencyKey);
-    this.events.push(cloneEvent(event));
+    this.seenKeys.add(clonedEvent.idempotencyKey);
+    this.events.push(clonedEvent);
   }
 
   async dequeueBatch(limit: number): Promise<RawEvent[]> {
@@ -181,11 +186,34 @@ function sanitizeLimit(value: number): number {
 }
 
 function cloneEvent(event: RawEvent): RawEvent {
+  const idempotencyKey = event.idempotencyKey.trim();
+  const eventType = event.eventType.trim();
+  assertValidEvent({ ...event, idempotencyKey, eventType });
   return {
     ...event,
+    idempotencyKey,
+    eventType,
     rawBody: structuredClone(event.rawBody),
     receivedAt: new Date(event.receivedAt),
   };
+}
+
+function assertValidEvent(event: RawEvent): void {
+  if (
+    event.idempotencyKey.trim().length === 0 ||
+    event.idempotencyKey.trim().length > MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH ||
+    event.provider !== "feishu" ||
+    event.eventType.trim().length === 0 ||
+    event.eventType.trim().length > MAX_RAW_EVENT_ID_LENGTH ||
+    typeof event.rawBody !== "object" ||
+    event.rawBody === null ||
+    Number.isNaN(event.receivedAt.getTime()) ||
+    !Number.isInteger(event.attempts) ||
+    !Number.isSafeInteger(event.attempts) ||
+    event.attempts < 0
+  ) {
+    throw new Error("Invalid raw event payload");
+  }
 }
 
 function cloneDeadLetter(deadLetter: DeadLetteredRawEvent): RawEventDeadLetter {

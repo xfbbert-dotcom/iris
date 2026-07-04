@@ -63,6 +63,20 @@ describe("DocumentSyncQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([first]);
   });
 
+  it("rejects oversized in-memory document sync job identifiers before enqueue", async () => {
+    const queue = createInMemoryDocumentSyncQueue();
+    const oversizedJob: DocumentSyncJob = {
+      ...job(),
+      idempotencyKey: `document-sync:${"s".repeat(513)}`,
+      documentSourceId: "s".repeat(513),
+    };
+
+    await expect(queue.enqueue(oversizedJob)).rejects.toThrow(
+      "Invalid document sync job payload",
+    );
+    await expect(queue.getPendingCount()).resolves.toBe(0);
+  });
+
   it("requeues failed jobs below max attempts", async () => {
     const queue = createInMemoryDocumentSyncQueue({ maxAttempts: 3 });
     const syncJob = job();

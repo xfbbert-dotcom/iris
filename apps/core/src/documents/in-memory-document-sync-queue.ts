@@ -4,6 +4,11 @@ import type {
   DocumentSyncQueue,
   ReplayDocumentSyncDeadLettersResult,
 } from "./document-sync-queue.js";
+import {
+  MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS,
+  MAX_DOCUMENT_SYNC_JOB_ID_CHARS,
+  createDocumentSyncIdempotencyKey,
+} from "./document-sync-queue.js";
 import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
 export type InMemoryDocumentSyncQueueOptions = {
@@ -58,11 +63,12 @@ export function createInMemoryDocumentSyncQueue({
 
   return {
     async enqueue(job) {
-      if (jobsByIdempotencyKey.has(job.idempotencyKey)) {
+      const clonedJob = cloneJob(job);
+      if (jobsByIdempotencyKey.has(clonedJob.idempotencyKey)) {
         return;
       }
 
-      jobsByIdempotencyKey.set(job.idempotencyKey, cloneJob(job));
+      jobsByIdempotencyKey.set(clonedJob.idempotencyKey, clonedJob);
     },
 
     async dequeueBatch(limit) {
@@ -145,10 +151,33 @@ function sanitizeLimit(value: number): number {
 }
 
 function cloneJob(job: DocumentSyncJob): DocumentSyncJob {
+  const idempotencyKey = job.idempotencyKey.trim();
+  const documentSourceId = job.documentSourceId.trim();
+  assertValidJob({ ...job, idempotencyKey, documentSourceId });
   return {
     ...job,
+    idempotencyKey,
+    documentSourceId,
     enqueuedAt: new Date(job.enqueuedAt),
   };
+}
+
+function assertValidJob(job: DocumentSyncJob): void {
+  const documentSourceId = job.documentSourceId.trim();
+  const idempotencyKey = job.idempotencyKey.trim();
+  if (
+    documentSourceId.length === 0 ||
+    documentSourceId.length > MAX_DOCUMENT_SYNC_JOB_ID_CHARS ||
+    idempotencyKey.length === 0 ||
+    idempotencyKey.length > MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS ||
+    idempotencyKey !== createDocumentSyncIdempotencyKey({ documentSourceId }) ||
+    !Number.isInteger(job.attempts) ||
+    !Number.isSafeInteger(job.attempts) ||
+    job.attempts < 0 ||
+    Number.isNaN(job.enqueuedAt.getTime())
+  ) {
+    throw new Error("Invalid document sync job payload");
+  }
 }
 
 function cloneDeadLetter(deadLetter: DeadLetteredDocumentSyncJob): DocumentSyncDeadLetter {

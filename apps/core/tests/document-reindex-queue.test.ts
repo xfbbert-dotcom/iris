@@ -108,6 +108,20 @@ describe("InMemoryDocumentReindexQueue", () => {
     ).toThrow("documentSnapshotId must be nonblank");
   });
 
+  it("rejects oversized in-memory document reindex job identifiers before enqueue", async () => {
+    const queue = new InMemoryDocumentReindexQueue();
+    const oversizedJob: DocumentReindexJob = {
+      ...jobFixture(),
+      idempotencyKey: `reindex:${"p".repeat(513)}:snapshot-1`,
+      embeddingProfileId: "p".repeat(513),
+    };
+
+    await expect(queue.enqueue(oversizedJob)).rejects.toThrow(
+      "Invalid document reindex job payload",
+    );
+    await expect(queue.getPendingCount()).resolves.toBe(0);
+  });
+
   it("reports pending job count", async () => {
     const queue = new InMemoryDocumentReindexQueue();
 
