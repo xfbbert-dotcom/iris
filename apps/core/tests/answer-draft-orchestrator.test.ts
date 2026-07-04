@@ -76,6 +76,21 @@ describe("AnswerDraftOrchestrator", () => {
     expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized questions before building context", async () => {
+    const contextBuilder = { buildContext: vi.fn() };
+    const model = { generateAnswerDraft: vi.fn() };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+
+    await expect(
+      orchestrator.generateDraft({
+        question: `${"Q".repeat(4001)} trailing question detail`,
+        liveChatMessages: [],
+      }),
+    ).rejects.toThrow("question must be at most 4000 characters");
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+  });
+
   it("loads stored live chat context when chatId is supplied", async () => {
     const contextBuilder = {
       buildContext: vi.fn(async () => ({

@@ -43,6 +43,7 @@ type LiveChatContextProvider = {
 };
 
 const MAX_ANSWER_DRAFT_TEXT_CHARS = 8000;
+const MAX_ANSWER_DRAFT_QUESTION_CHARS = 4000;
 const MAX_LIVE_CHAT_LIMIT = 20;
 const TRUNCATION_MARKER = " ... [truncated]";
 
@@ -60,6 +61,9 @@ export function createAnswerDraftOrchestrator({
       const question = input.question.trim();
       if (question.length === 0) {
         throw new Error("question must not be blank");
+      }
+      if (question.length > MAX_ANSWER_DRAFT_QUESTION_CHARS) {
+        throw new Error(`question must be at most ${MAX_ANSWER_DRAFT_QUESTION_CHARS} characters`);
       }
 
       assertSafeMagnitudeLimit(input.fragmentLimit, "fragmentLimit");
