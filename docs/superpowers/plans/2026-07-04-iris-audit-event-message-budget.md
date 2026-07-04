@@ -91,7 +91,10 @@ Expected: the command exits 0.
 Observed: `npm run verify` exited 0 with Core `782` passed / `4` skipped, Python `7` passed, and
 `docker compose config` succeeded.
 
-- [ ] **Step 2: Commit, push, and verify PR checks**
+- [x] **Step 2: Commit, push, and verify PR checks**
 
 Commit the audit event message budget helper, push `codex/iris-document-source-registry`, update
 PR #3, and confirm GitHub Actions Core and AI Worker checks pass.
+
+Observed: committed `77e58d9`, pushed to `codex/iris-document-source-registry`, updated PR #3,
+and confirmed GitHub Actions Core and AI Worker checks passed.
