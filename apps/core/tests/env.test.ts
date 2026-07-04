@@ -70,6 +70,15 @@ describe("readEventWorkerRuntimeConfig", () => {
       batchLimit: 50,
     });
   });
+
+  it("rejects non-decimal event worker numeric config values", () => {
+    expect(() =>
+      readEventWorkerRuntimeConfig({
+        IRIS_EVENT_WORKER_ENABLED: "true",
+        IRIS_EVENT_WORKER_BATCH_LIMIT: "10.0",
+      }),
+    ).toThrow("IRIS_EVENT_WORKER_BATCH_LIMIT must be a positive integer");
+  });
 });
 
 describe("readModelProviderConfig", () => {
@@ -112,6 +121,15 @@ describe("readModelProviderConfig", () => {
         IRIS_MODEL_API_KEY: "key-a",
         IRIS_MODEL_NAME: "model-a",
         IRIS_MODEL_TIMEOUT_MS: "0",
+      }),
+    ).toThrow("IRIS_MODEL_TIMEOUT_MS must be a positive integer");
+    expect(() =>
+      readModelProviderConfig({
+        IRIS_MODEL_PROVIDER: "openai-compatible",
+        IRIS_MODEL_BASE_URL: "https://api.example.com/v1",
+        IRIS_MODEL_API_KEY: "key-a",
+        IRIS_MODEL_NAME: "model-a",
+        IRIS_MODEL_TIMEOUT_MS: "1e3",
       }),
     ).toThrow("IRIS_MODEL_TIMEOUT_MS must be a positive integer");
   });
@@ -223,6 +241,15 @@ describe("readEmbeddingProviderConfig", () => {
         IRIS_EMBEDDING_API_KEY: "key-a",
         IRIS_EMBEDDING_MODEL: "embedding-model",
         IRIS_EMBEDDING_DIMENSIONS: "-1",
+      }),
+    ).toThrow("IRIS_EMBEDDING_DIMENSIONS must be a positive integer");
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+        IRIS_EMBEDDING_DIMENSIONS: "0x600",
       }),
     ).toThrow("IRIS_EMBEDDING_DIMENSIONS must be a positive integer");
 

@@ -277,6 +277,9 @@ function readPositiveIntegerEnv(
   if (trimmed === undefined) {
     return defaultValue;
   }
+  if (!/^\d+$/u.test(trimmed)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
 
   const parsed = Number(trimmed);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -296,6 +299,9 @@ function readOptionalPositiveIntegerEnv(
   const trimmed = readOptionalEnv(value);
   if (trimmed === undefined) {
     return undefined;
+  }
+  if (!/^\d+$/u.test(trimmed)) {
+    throw new Error(`${name} must be a positive integer`);
   }
 
   const parsed = Number(trimmed);
