@@ -109,18 +109,21 @@ Model and embedding providers:
 
 ```powershell
 $env:IRIS_MODEL_PROVIDER="openai-compatible"
-$env:IRIS_MODEL_BASE_URL="<model-base-url>"
+$env:IRIS_MODEL_BASE_URL="https://api.example.com/v1"
 $env:IRIS_MODEL_API_KEY="<model-api-key>"
 $env:IRIS_MODEL_NAME="<model-name>"
 $env:IRIS_MODEL_TIMEOUT_MS="30000"
 
 $env:IRIS_EMBEDDING_PROVIDER="openai-compatible"
-$env:IRIS_EMBEDDING_BASE_URL="<embedding-base-url>"
+$env:IRIS_EMBEDDING_BASE_URL="https://api.example.com/v1"
 $env:IRIS_EMBEDDING_API_KEY="<embedding-api-key>"
 $env:IRIS_EMBEDDING_MODEL="<embedding-model>"
 $env:IRIS_EMBEDDING_DIMENSIONS="1536"
 $env:IRIS_EMBEDDING_TIMEOUT_MS="30000"
 ```
+
+External base URLs must be absolute `http` or `https` URLs. Iris rejects invalid or non-HTTP(S)
+model, embedding, and Feishu OpenAPI base URLs during configuration loading.
 
 Enable internal answer drafting:
 

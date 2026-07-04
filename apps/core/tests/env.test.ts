@@ -127,6 +127,25 @@ describe("readModelProviderConfig", () => {
       }),
     ).toThrow("IRIS_MODEL_TIMEOUT_MS must be a positive safe integer");
   });
+
+  it("rejects invalid model provider base URLs", () => {
+    expect(() =>
+      readModelProviderConfig({
+        IRIS_MODEL_PROVIDER: "openai-compatible",
+        IRIS_MODEL_BASE_URL: "not-a-url",
+        IRIS_MODEL_API_KEY: "key-a",
+        IRIS_MODEL_NAME: "model-a",
+      }),
+    ).toThrow("IRIS_MODEL_BASE_URL must be an http(s) URL");
+    expect(() =>
+      readModelProviderConfig({
+        IRIS_MODEL_PROVIDER: "openai-compatible",
+        IRIS_MODEL_BASE_URL: "ftp://api.example.com/v1",
+        IRIS_MODEL_API_KEY: "key-a",
+        IRIS_MODEL_NAME: "model-a",
+      }),
+    ).toThrow("IRIS_MODEL_BASE_URL must be an http(s) URL");
+  });
 });
 
 describe("readEmbeddingProviderConfig", () => {
@@ -212,6 +231,25 @@ describe("readEmbeddingProviderConfig", () => {
         IRIS_EMBEDDING_DIMENSIONS: "9007199254740992",
       }),
     ).toThrow("IRIS_EMBEDDING_DIMENSIONS must be a positive safe integer");
+  });
+
+  it("rejects invalid embedding provider base URLs", () => {
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "not-a-url",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+      }),
+    ).toThrow("IRIS_EMBEDDING_BASE_URL must be an http(s) URL");
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "ftp://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+      }),
+    ).toThrow("IRIS_EMBEDDING_BASE_URL must be an http(s) URL");
   });
 });
 
@@ -442,5 +480,22 @@ describe("readFeishuOpenApiConfig", () => {
         IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: "0",
       }),
     ).toThrow("IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS must be a positive integer");
+  });
+
+  it("rejects invalid Feishu OpenAPI base URLs", () => {
+    expect(() =>
+      readFeishuOpenApiConfig({
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        FEISHU_OPEN_BASE_URL: "not-a-url",
+      }),
+    ).toThrow("FEISHU_OPEN_BASE_URL must be an http(s) URL");
+    expect(() =>
+      readFeishuOpenApiConfig({
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        FEISHU_OPEN_BASE_URL: "ftp://open.feishu.cn",
+      }),
+    ).toThrow("FEISHU_OPEN_BASE_URL must be an http(s) URL");
   });
 });

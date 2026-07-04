@@ -77,7 +77,7 @@ export function readModelProviderConfig(env: EnvLike = process.env): ModelProvid
 
   return {
     provider,
-    baseUrl: trimTrailingSlash(readRequiredEnv("IRIS_MODEL_BASE_URL", env.IRIS_MODEL_BASE_URL)),
+    baseUrl: readHttpBaseUrlEnv("IRIS_MODEL_BASE_URL", env.IRIS_MODEL_BASE_URL),
     apiKey: readRequiredEnv("IRIS_MODEL_API_KEY", env.IRIS_MODEL_API_KEY),
     model: readRequiredEnv("IRIS_MODEL_NAME", env.IRIS_MODEL_NAME),
     timeoutMs: readPositiveIntegerEnv("IRIS_MODEL_TIMEOUT_MS", env.IRIS_MODEL_TIMEOUT_MS, 30000)
@@ -102,9 +102,7 @@ export function readEmbeddingProviderConfig(
 
   return {
     provider,
-    baseUrl: trimTrailingSlash(
-      readRequiredEnv("IRIS_EMBEDDING_BASE_URL", env.IRIS_EMBEDDING_BASE_URL)
-    ),
+    baseUrl: readHttpBaseUrlEnv("IRIS_EMBEDDING_BASE_URL", env.IRIS_EMBEDDING_BASE_URL),
     apiKey: readRequiredEnv("IRIS_EMBEDDING_API_KEY", env.IRIS_EMBEDDING_API_KEY),
     model: readRequiredEnv("IRIS_EMBEDDING_MODEL", env.IRIS_EMBEDDING_MODEL),
     ...(dimensions === undefined ? {} : { dimensions }),
@@ -211,7 +209,10 @@ export function readFeishuOpenApiConfig(env: EnvLike = process.env): FeishuOpenA
   return {
     appId: readRequiredEnv("FEISHU_APP_ID", env.FEISHU_APP_ID),
     appSecret: readRequiredEnv("FEISHU_APP_SECRET", env.FEISHU_APP_SECRET),
-    baseUrl: trimTrailingSlash(readOptionalEnv(env.FEISHU_OPEN_BASE_URL) ?? "https://open.feishu.cn"),
+    baseUrl: readHttpBaseUrlEnv(
+      "FEISHU_OPEN_BASE_URL",
+      readOptionalEnv(env.FEISHU_OPEN_BASE_URL) ?? "https://open.feishu.cn",
+    ),
     documentFetchTimeoutMs: readPositiveIntegerEnv(
       "IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS",
       env.IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS,
@@ -244,6 +245,20 @@ function readRequiredEnv(name: string, value: string | undefined): string {
   }
 
   return trimmed;
+}
+
+function readHttpBaseUrlEnv(name: string, value: string | undefined): string {
+  const trimmed = readRequiredEnv(name, value);
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("unsupported protocol");
+    }
+  } catch {
+    throw new Error(`${name} must be an http(s) URL`);
+  }
+
+  return trimTrailingSlash(trimmed);
 }
 
 function readPositiveIntegerEnv(

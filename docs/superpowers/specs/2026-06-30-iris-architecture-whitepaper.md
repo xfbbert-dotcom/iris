@@ -701,16 +701,22 @@ Evolution signal:
 
 If audit durability becomes a compliance requirement, Iris should split audit persistence into a dedicated durable audit pipeline with retries and operator-visible backlog. That pipeline must not weaken answer-time permission enforcement.
 
-### 12.8 Runtime Configuration Numeric Safety
+### 12.8 Runtime Configuration Safety
 
 Pressure:
 
-Iris uses environment variables for timeouts, worker batch limits, and embedding dimensions. JavaScript accepts integers beyond its safe precision range, which can silently distort operator intent before values reach timers, queues, or embedding-profile logic.
+Iris uses environment variables for external base URLs, timeouts, worker batch limits, and embedding
+dimensions. JavaScript accepts integers beyond its safe precision range, which can silently distort
+operator intent before values reach timers, queues, or embedding-profile logic. Invalid external
+base URLs can defer configuration mistakes until request time, making rollout failures harder to
+diagnose.
 
 Required architectural response:
 
 - Positive integer environment settings must also be safe JavaScript integers.
 - Unsafe integers must be rejected during config loading with explicit errors.
+- Model, embedding, and Feishu OpenAPI base URLs must be absolute `http` or `https`
+  URLs before provider or fetcher runtimes are constructed.
 - External I/O adapters must re-validate timeout values at construction time so
   direct dependency injection cannot bypass environment validation.
 - Worker loops must re-validate interval and batch-limit values at construction
