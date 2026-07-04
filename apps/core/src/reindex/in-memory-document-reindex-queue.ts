@@ -6,6 +6,7 @@ import type {
   FailedDocumentReindexJobResult,
   ReplayDocumentReindexDeadLettersResult,
 } from "./document-reindex-queue.js";
+import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -72,7 +73,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
       this.deadLetters.push({
         id: this.idGenerator(),
         job: cloneJob(failedJob),
-        errorMessage: input.errorMessage,
+        errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
         failedAt: this.now(),
       });
       return { action: "dead_lettered", attempts };

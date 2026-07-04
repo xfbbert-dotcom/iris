@@ -6,6 +6,7 @@ import type {
   FailedDocumentReindexJobResult,
   ReplayDocumentReindexDeadLettersResult,
 } from "./document-reindex-queue.js";
+import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
 const DEFAULT_SEEN_KEY = "iris:reindex:documents:seen";
 const DEFAULT_QUEUE_KEY = "iris:reindex:documents:queue";
@@ -127,7 +128,9 @@ export function createRedisDocumentReindexQueue({
             JSON.stringify({
               id: idGenerator(),
               rawPayload: payload,
-              errorMessage: error instanceof Error ? error.message : String(error),
+              errorMessage: normalizeDeadLetterErrorMessage(
+                error instanceof Error ? error.message : String(error),
+              ),
               failedAt: now().toISOString(),
             }),
           );
@@ -285,7 +288,7 @@ function serializeDeadLetteredDocumentReindexJob(input: {
       ...input.job,
       enqueuedAt: input.job.enqueuedAt.toISOString(),
     },
-    errorMessage: input.errorMessage,
+    errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
     failedAt: input.failedAt.toISOString(),
   });
 }
@@ -353,7 +356,7 @@ function parseDeadLetterPayload(
       deadLetter: {
         id: storedId ?? createLegacyDeadLetterId(payload, index),
         rawPayload,
-        errorMessage,
+        errorMessage: normalizeDeadLetterErrorMessage(errorMessage),
         failedAt,
         replayable: false,
       },
@@ -368,7 +371,9 @@ function parseDeadLetterPayload(
       payload,
       index,
       storedId,
-      errorMessage: error instanceof Error ? error.message : String(error),
+      errorMessage: normalizeDeadLetterErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
       failedAt,
     });
   }
@@ -379,7 +384,7 @@ function parseDeadLetterPayload(
     deadLetter: {
       id: storedId ?? createLegacyDeadLetterId(payload, index),
       job,
-      errorMessage,
+      errorMessage: normalizeDeadLetterErrorMessage(errorMessage),
       failedAt,
       replayable: storedId !== undefined,
     },
@@ -399,7 +404,7 @@ function createInvalidDeadLetterDiagnostic(input: {
     deadLetter: {
       id: input.storedId ?? createLegacyDeadLetterId(input.payload, input.index),
       rawPayload: input.payload,
-      errorMessage: input.errorMessage,
+      errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
       failedAt: input.failedAt,
       replayable: false,
     },

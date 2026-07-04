@@ -388,6 +388,37 @@ describe("RedisRawEventQueue", () => {
     );
   });
 
+  it("bounds failed raw event DLQ error messages", async () => {
+    const rPush = vi.fn(async () => 1);
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush,
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({
+      client,
+      maxAttempts: 1,
+      now: () => new Date("2026-07-04T01:00:00.000Z"),
+      idGenerator: () => "dlq-oversized-error",
+    });
+    const event = eventFixture();
+
+    await queue.handleFailedEvent({
+      event,
+      errorMessage: `${"E".repeat(1200)} trailing diagnostic detail`,
+    });
+
+    const [, payload] = rPush.mock.calls[0] as unknown as [string, string];
+    const parsed = JSON.parse(payload) as { errorMessage: string };
+    expect(parsed.errorMessage.length).toBeLessThanOrEqual(1000);
+    expect(parsed.errorMessage).toContain("[truncated]");
+    expect(parsed.errorMessage).not.toContain("trailing diagnostic detail");
+  });
+
   it("lists Redis raw event DLQ entries and legacy entries", async () => {
     const eventDeadLetter = JSON.stringify({
       id: "dlq-1",

@@ -4,6 +4,7 @@ import type {
   DocumentSyncQueue,
   ReplayDocumentSyncDeadLettersResult,
 } from "./document-sync-queue.js";
+import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
 export type InMemoryDocumentSyncQueueOptions = {
   maxAttempts?: number;
@@ -86,7 +87,7 @@ export function createInMemoryDocumentSyncQueue({
         deadLetters.push({
           id: idGenerator(),
           job: cloneJob(failedJob),
-          errorMessage: input.errorMessage,
+          errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
           failedAt: now(),
         });
         return { action: "dead_lettered", attempts };
