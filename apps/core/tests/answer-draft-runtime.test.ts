@@ -260,6 +260,62 @@ describe("createAnswerDraftRuntime", () => {
     ]);
   });
 
+  it("fails closed for Feishu document fragments when live permission checks are unavailable", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(
+        async (_input: { question: string; promptContext: string }) => ({
+          answerText: "Runtime draft",
+        }),
+      ),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-feishu",
+          documentSourceId: "source-feishu",
+          sourceUri: "https://example.feishu.cn/docx/doccnAllowed",
+          text: "Feishu cached text",
+        }),
+      ]),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async () =>
+        source({
+          id: "source-feishu",
+          sourceUri: "https://example.feishu.cn/docx/doccnAllowed",
+          permissionState: "readable",
+        }),
+      ),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What can Iris use?",
+      liveChatMessages: [],
+    });
+
+    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    expect(promptContext).not.toContain("Feishu cached text");
+    expect(result?.allowedFragments).toEqual([]);
+    expect(result?.deniedDocumentIds).toEqual(["source-feishu"]);
+  });
+
   it("filters answer draft fragments through runtime retrieval capabilities", async () => {
     const model = {
       generateAnswerDraft: vi.fn(async (_input: GenerateAnswerDraftInput) => ({

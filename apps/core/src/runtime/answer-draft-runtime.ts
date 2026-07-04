@@ -28,6 +28,10 @@ import {
 } from "../documents/postgres-document-source-registry.js";
 import type { DocumentSource } from "../documents/document-source-registry.js";
 import {
+  parseFeishuDocxDocumentId,
+  parseFeishuWikiNodeToken,
+} from "../documents/feishu-document-body-fetcher.js";
+import {
   createEmbeddingProfileRepository,
   type EmbeddingProfile,
   type EmbeddingProfileRepository,
@@ -251,11 +255,21 @@ async function canReadBySourcePolicy(
   if (!locallyAllowed) {
     return false;
   }
-  if (livePermissionChecker === undefined) {
+  if (!requiresFeishuLivePermission(source)) {
     return true;
+  }
+  if (livePermissionChecker === undefined) {
+    return false;
   }
 
   return livePermissionChecker.canReadSource(source);
+}
+
+function requiresFeishuLivePermission(source: DocumentSource): boolean {
+  return (
+    parseFeishuDocxDocumentId(source.sourceUri) !== undefined ||
+    parseFeishuWikiNodeToken(source.sourceUri) !== undefined
+  );
 }
 
 function createOptionalLivePermissionChecker({

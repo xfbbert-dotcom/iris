@@ -155,6 +155,11 @@ $env:IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS="true"
 $env:IRIS_INTERNAL_DRAFT_PERMISSION_MODE="source-policy"
 ```
 
+In `source-policy` mode, Feishu docx/docs/wiki fragments require Feishu OpenAPI live permission
+checks before they can enter the model prompt. If `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, or
+`FEISHU_OPEN_BASE_URL` is missing, Iris fails closed for Feishu document content and answers from
+live chat plus any non-Feishu sources covered by local policy.
+
 Mention replies require both internal answer drafting and the `replyWhenMentioned` runtime
 capability. If Iris is globally disabled, the group is disabled, or `replyWhenMentioned` is false,
 Iris will store allowed message facts but will not answer in Feishu.
