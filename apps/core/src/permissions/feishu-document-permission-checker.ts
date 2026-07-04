@@ -103,6 +103,7 @@ async function resolveDocumentId({
     timeoutMs,
   });
 
+  throwIfTransientPermissionFailure(response, responseBody);
   if (!isSuccessfulFeishuResponse(response, responseBody)) {
     return undefined;
   }
@@ -135,6 +136,7 @@ async function canReadDocumentMetadata({
     timeoutMs,
   });
 
+  throwIfTransientPermissionFailure(response, responseBody);
   return isSuccessfulFeishuResponse(response, responseBody);
 }
 
@@ -191,6 +193,29 @@ function isSuccessfulFeishuResponse(response: Response, responseBody: unknown): 
 
   const code = responseBody.code;
   return typeof code !== "number" || code === 0;
+}
+
+function throwIfTransientPermissionFailure(response: Response, responseBody: unknown): void {
+  if (response.ok || response.status === 403 || response.status === 404) {
+    return;
+  }
+
+  throw new Error(
+    `Feishu document permission request failed with status ${response.status}: ${readErrorMessage(
+      responseBody,
+    )}`,
+  );
+}
+
+function readErrorMessage(responseBody: unknown): string {
+  if (isRecord(responseBody)) {
+    const message = responseBody.msg ?? responseBody.message;
+    if (typeof message === "string" && message.trim().length > 0) {
+      return message.trim();
+    }
+  }
+
+  return "unknown error";
 }
 
 function readWikiDocumentId(responseBody: unknown): string | undefined {

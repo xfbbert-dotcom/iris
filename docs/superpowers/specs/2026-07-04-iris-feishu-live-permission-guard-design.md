@@ -9,7 +9,8 @@ Iris already filters retrieved answer fragments through local source policy, but
 - Add a lightweight Feishu document permission checker for answer-time retrieval.
 - Use Feishu OpenAPI credentials when they are configured.
 - Keep the existing local source policy as the first gate.
-- Treat failed, timed-out, unsupported, or denied live checks as not readable.
+- Treat unsupported or explicitly denied/not-found live checks as not readable.
+- Treat transient Feishu failures and timeouts as permission guard errors while still excluding the fragment.
 - Do not introduce a separate Permission Guard Service in this phase.
 
 ## Architecture
@@ -19,7 +20,7 @@ The answer draft runtime will compose:
 1. Local registry policy: source exists, is usable for answering, permission state is `unknown` or `readable`, and runtime capabilities allow the source type.
 2. Optional Feishu live guard: when Feishu OpenAPI credentials are available, perform a lightweight document accessibility probe for the source URI before allowing fragments into prompt context.
 
-Direct docx/docs URLs are checked by calling the Feishu document metadata endpoint. Wiki URLs are resolved through the wiki node endpoint and then checked through the document metadata endpoint. Network failures and timeouts throw from the checker; the existing permission guard catches those errors, excludes fragments, and writes `permission_guard_error` audit events.
+Direct docx/docs URLs are checked by calling the Feishu document metadata endpoint. Wiki URLs are resolved through the wiki node endpoint and then checked through the document metadata endpoint. Explicit denied/not-found responses return `false`; transient HTTP failures, malformed responses, and timeouts throw from the checker. The existing permission guard catches those errors, excludes fragments, and writes `permission_guard_error` audit events.
 
 ## Non-Goals
 

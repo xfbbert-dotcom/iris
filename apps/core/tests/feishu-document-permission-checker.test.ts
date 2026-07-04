@@ -72,6 +72,20 @@ describe("createFeishuDocumentPermissionChecker", () => {
     ).resolves.toBe(false);
   });
 
+  it("throws when Feishu document metadata has a transient server failure", async () => {
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => jsonResponse({ code: 999, msg: "upstream unavailable" }, 500)),
+    });
+
+    await expect(
+      checker.canReadSource(source({ sourceUri: "https://example.feishu.cn/docx/doccnTransient" })),
+    ).rejects.toThrow(
+      "Feishu document permission request failed with status 500: upstream unavailable",
+    );
+  });
+
   it("returns false for unsupported document URLs", async () => {
     const fetch = vi.fn();
     const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
