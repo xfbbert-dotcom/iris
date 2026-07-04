@@ -177,6 +177,27 @@ describe("FeishuMessageReplier", () => {
     );
   });
 
+  it("rejects oversized Feishu reply responses before returning message ids", async () => {
+    const replier = createFeishuMessageReplier({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            code: 0,
+            data: { message_id: "reply-message-1" },
+            padding: "x".repeat(70_000),
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    });
+
+    await expect(replier.replyText({ messageId: "om_1", text: "Hello" })).rejects.toThrow(
+      "Feishu message reply response exceeds 65536 bytes",
+    );
+  });
+
   it("times out Feishu reply requests", async () => {
     const fetch = vi.fn(async (_url, init) => {
       if (init?.signal === undefined) {

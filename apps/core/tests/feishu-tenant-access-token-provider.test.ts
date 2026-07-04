@@ -179,6 +179,29 @@ describe("FeishuTenantAccessTokenProvider", () => {
     );
   });
 
+  it("rejects oversized token responses before caching them", async () => {
+    const provider = createFeishuTenantAccessTokenProvider({
+      baseUrl: "https://open.feishu.cn",
+      appId: "app-id",
+      appSecret: "app-secret",
+      fetch: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            code: 0,
+            tenant_access_token: "tenant-token",
+            expire: 7200,
+            padding: "x".repeat(70_000),
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    });
+
+    await expect(provider.getTenantAccessToken()).rejects.toThrow(
+      "Feishu tenant access token response exceeds 65536 bytes",
+    );
+  });
+
   it("throws when successful token responses omit or mistype the Feishu code", async () => {
     for (const body of [
       { tenant_access_token: "tenant-token", expire: 7200 },

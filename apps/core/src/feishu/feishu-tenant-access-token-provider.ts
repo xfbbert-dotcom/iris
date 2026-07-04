@@ -1,4 +1,5 @@
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readBoundedJsonResponse } from "../integrations/bounded-json-response.js";
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 export type FeishuTenantAccessTokenProvider = {
@@ -21,6 +22,7 @@ type CachedToken = {
 
 const tokenRefreshSkewMs = 60_000;
 const defaultTokenRequestTimeoutMs = 10_000;
+const maxTokenResponseBytes = 65_536;
 
 export function createFeishuTenantAccessTokenProvider({
   baseUrl,
@@ -97,7 +99,12 @@ async function refreshTenantAccessToken({
         signal: controller.signal,
       },
     );
-    const responseBody = await readJsonResponse(response);
+    const responseBody = await readBoundedJsonResponse({
+      response,
+      invalidJsonErrorMessage: "Feishu tenant access token response was not valid JSON",
+      maxResponseBytes: maxTokenResponseBytes,
+      responseSizeErrorMessage: `Feishu tenant access token response exceeds ${maxTokenResponseBytes} bytes`,
+    });
 
     if (!response.ok) {
       throw new Error(
@@ -119,17 +126,6 @@ async function refreshTenantAccessToken({
     throw error;
   } finally {
     clearTimeout(timeout);
-  }
-}
-
-async function readJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw error;
-    }
-    throw new Error("Feishu tenant access token response was not valid JSON");
   }
 }
 

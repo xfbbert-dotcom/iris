@@ -1,5 +1,6 @@
 import type { FeishuTenantAccessTokenProvider } from "./feishu-tenant-access-token-provider.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readBoundedJsonResponse } from "../integrations/bounded-json-response.js";
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 export type FeishuMessageReplier = {
@@ -22,6 +23,7 @@ const DEFAULT_FEISHU_MESSAGE_REPLY_TIMEOUT_MS = 10_000;
 const MAX_FEISHU_REPLY_MESSAGE_ID_CHARS = 512;
 const MAX_FEISHU_REPLY_TEXT_CHARS = 8000;
 const MAX_FEISHU_REPLY_UUID_CHARS = 50;
+const MAX_FEISHU_REPLY_RESPONSE_BYTES = 65_536;
 
 export function createFeishuMessageReplier({
   baseUrl,
@@ -114,7 +116,12 @@ async function fetchJsonWithTimeout({
       ...init,
       signal: controller.signal,
     });
-    const responseBody = await readJsonResponse(response);
+    const responseBody = await readBoundedJsonResponse({
+      response,
+      invalidJsonErrorMessage: "Feishu message reply response was not valid JSON",
+      maxResponseBytes: MAX_FEISHU_REPLY_RESPONSE_BYTES,
+      responseSizeErrorMessage: `Feishu message reply response exceeds ${MAX_FEISHU_REPLY_RESPONSE_BYTES} bytes`,
+    });
 
     return { response, responseBody };
   } catch (error) {
@@ -124,17 +131,6 @@ async function fetchJsonWithTimeout({
     throw error;
   } finally {
     clearTimeout(timeout);
-  }
-}
-
-async function readJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw error;
-    }
-    throw new Error("Feishu message reply response was not valid JSON");
   }
 }
 
