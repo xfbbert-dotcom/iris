@@ -20,7 +20,7 @@
 **Files:**
 - Modify: `apps/core/tests/feishu-document-body-fetcher.test.ts`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Add tests inside `describe("FeishuDocumentBodyFetcher", ...)`:
 
@@ -64,19 +64,22 @@ it("throws before raw content fetches when wiki node responses omit the Feishu c
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `npm --workspace apps/core test -- feishu-document-body-fetcher.test.ts`
 
 Expected: FAIL because the current fetcher accepts missing-code responses when content/node fields
 are present.
 
+Observed: FAIL. Raw content without `code` resolved a body snapshot, and wiki node without `code`
+continued into the raw-content fetch.
+
 ### Task 2: Minimal Implementation
 
 **Files:**
 - Modify: `apps/core/src/documents/feishu-document-body-fetcher.ts`
 
-- [ ] **Step 1: Require numeric code in both successful response readers**
+- [x] **Step 1: Require numeric code in both successful response readers**
 
 In `readWikiDocumentId()`:
 
@@ -102,21 +105,26 @@ if (code !== 0) {
 }
 ```
 
-- [ ] **Step 2: Run GREEN**
+- [x] **Step 2: Run GREEN**
 
 Run: `npm --workspace apps/core test -- feishu-document-body-fetcher.test.ts`
 
 Expected: PASS.
 
+Observed: PASS with 19 body fetcher tests passing.
+
 ### Task 3: Verification And PR
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run: `npm run verify`
 
 Expected: PASS for diff check, typecheck, Core tests, Python tests, and Docker Compose config.
 
-- [ ] **Step 2: Commit and push**
+Observed: PASS. Core reported 729 passing tests and 4 skipped tests. Python worker tests reported
+7 passing tests. Docker Compose config rendered successfully.
+
+- [x] **Step 2: Commit and push**
 
 Run:
 
@@ -126,8 +134,10 @@ git commit -m "fix: require feishu document body response codes"
 git push
 ```
 
-- [ ] **Step 3: Watch PR checks**
+- [x] **Step 3: Watch PR checks**
 
 Run: `gh pr checks 3 --watch --interval 10`
 
 Expected: Core and AI Worker checks pass.
+
+Observed: PASS. GitHub Actions reported Core and AI Worker success for PR #3.
