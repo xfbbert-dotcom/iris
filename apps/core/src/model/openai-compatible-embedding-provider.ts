@@ -1,6 +1,7 @@
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 import type { EmbeddingProviderConfig } from "../config/env.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 export type OpenAICompatibleEmbeddingProviderDependencies = {
   config: EmbeddingProviderConfig;
@@ -43,7 +44,7 @@ export function createOpenAICompatibleEmbeddingProvider({
 
         if (!response.ok) {
           throw new Error(
-            `embedding provider request failed with status ${response.status}: ${readErrorMessage(
+            `embedding provider request failed with status ${response.status}: ${readExternalErrorMessage(
               responseBody,
             )}`,
           );
@@ -144,17 +145,6 @@ function readEmbeddingResponseIndex(item: unknown): number {
   }
 
   return item.index;
-}
-
-function readErrorMessage(responseBody: unknown): string {
-  if (isRecord(responseBody) && isRecord(responseBody.error)) {
-    const message = responseBody.error.message;
-    if (typeof message === "string" && message.trim().length > 0) {
-      return message.trim();
-    }
-  }
-
-  return "unknown error";
 }
 
 function isAbortError(error: unknown): boolean {

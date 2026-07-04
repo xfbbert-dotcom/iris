@@ -5,6 +5,7 @@ import {
 } from "../documents/feishu-document-body-fetcher.js";
 import type { FeishuTenantAccessTokenProvider } from "../feishu/feishu-tenant-access-token-provider.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 export type FeishuDocumentPermissionChecker = {
   canReadSource(source: DocumentSource): Promise<boolean>;
@@ -200,21 +201,10 @@ function throwIfTransientPermissionFailure(response: Response, responseBody: unk
   }
 
   throw new Error(
-    `Feishu document permission request failed with status ${response.status}: ${readErrorMessage(
+    `Feishu document permission request failed with status ${response.status}: ${readExternalErrorMessage(
       responseBody,
     )}`,
   );
-}
-
-function readErrorMessage(responseBody: unknown): string {
-  if (isRecord(responseBody)) {
-    const message = responseBody.msg ?? responseBody.message;
-    if (typeof message === "string" && message.trim().length > 0) {
-      return message.trim();
-    }
-  }
-
-  return "unknown error";
 }
 
 function readWikiDocumentId(responseBody: unknown): string | undefined {

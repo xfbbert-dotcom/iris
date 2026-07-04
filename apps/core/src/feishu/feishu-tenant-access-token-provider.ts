@@ -1,4 +1,5 @@
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 export type FeishuTenantAccessTokenProvider = {
   getTenantAccessToken(): Promise<string>;
@@ -102,7 +103,7 @@ async function refreshTenantAccessToken({
       throw new Error(
         `Feishu tenant access token HTTP request failed with status ${
           response.status
-        }: ${readErrorMessage(responseBody)}`,
+        }: ${readExternalErrorMessage(responseBody)}`,
       );
     }
 
@@ -142,7 +143,9 @@ function readTenantAccessToken(responseBody: unknown): string {
     throw new Error("Feishu tenant access token response did not include code");
   }
   if (code !== 0) {
-    throw new Error(`Feishu tenant access token request failed: ${readErrorMessage(responseBody)}`);
+    throw new Error(
+      `Feishu tenant access token request failed: ${readExternalErrorMessage(responseBody)}`,
+    );
   }
 
   const token = responseBody.tenant_access_token;
@@ -159,17 +162,6 @@ function readExpireSeconds(responseBody: unknown): number {
   }
 
   return Number.isFinite(responseBody.expire) ? responseBody.expire : 0;
-}
-
-function readErrorMessage(responseBody: unknown): string {
-  if (isRecord(responseBody)) {
-    const message = responseBody.msg ?? responseBody.message;
-    if (typeof message === "string" && message.trim().length > 0) {
-      return message.trim();
-    }
-  }
-
-  return "unknown error";
 }
 
 function trimTrailingSlash(value: string): string {

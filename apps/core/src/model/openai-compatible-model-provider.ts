@@ -1,6 +1,7 @@
 import type { ModelProvider } from "../agent/answer-draft-orchestrator.js";
 import type { ModelProviderConfig } from "../config/env.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 export type OpenAICompatibleModelProviderDependencies = {
   config: ModelProviderConfig;
@@ -61,7 +62,7 @@ export function createOpenAICompatibleModelProvider({
 
         if (!response.ok) {
           throw new Error(
-            `model provider request failed with status ${response.status}: ${readErrorMessage(responseBody)}`,
+            `model provider request failed with status ${response.status}: ${readExternalErrorMessage(responseBody)}`,
           );
         }
 
@@ -123,17 +124,6 @@ function readAnswerContent(responseBody: unknown): string {
   }
 
   return content;
-}
-
-function readErrorMessage(responseBody: unknown): string {
-  if (isRecord(responseBody) && isRecord(responseBody.error)) {
-    const message = responseBody.error.message;
-    if (typeof message === "string" && message.trim().length > 0) {
-      return message.trim();
-    }
-  }
-
-  return "unknown error";
 }
 
 function isAbortError(error: unknown): boolean {

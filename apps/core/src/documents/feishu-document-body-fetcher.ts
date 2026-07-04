@@ -2,6 +2,7 @@ import type { DocumentBodyFetcher, DocumentBodyFetchResult } from "./document-sy
 import type { DocumentSource, DocumentSourceType } from "./document-source-registry.js";
 import type { FeishuTenantAccessTokenProvider } from "../feishu/feishu-tenant-access-token-provider.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 export type FeishuDocumentBodyFetcherDependencies = {
   baseUrl: string;
@@ -114,7 +115,7 @@ export function createFeishuDocumentBodyFetcher({
 
       if (!response.ok) {
         throw new Error(
-          `Feishu document raw content request failed with status ${response.status}: ${readErrorMessage(
+          `Feishu document raw content request failed with status ${response.status}: ${readExternalErrorMessage(
             responseBody,
           )}`,
         );
@@ -158,7 +159,7 @@ async function fetchWikiDocumentId({
 
   if (!response.ok) {
     throw new Error(
-      `Feishu wiki node request failed with status ${response.status}: ${readErrorMessage(
+      `Feishu wiki node request failed with status ${response.status}: ${readExternalErrorMessage(
         responseBody,
       )}`,
     );
@@ -230,7 +231,7 @@ function readWikiDocumentId(responseBody: unknown): string {
     throw new Error("Feishu wiki node response did not include code");
   }
   if (code !== 0) {
-    throw new Error(`Feishu wiki node request failed: ${readErrorMessage(responseBody)}`);
+    throw new Error(`Feishu wiki node request failed: ${readExternalErrorMessage(responseBody)}`);
   }
 
   if (!isRecord(responseBody.data) || !isRecord(responseBody.data.node)) {
@@ -263,7 +264,9 @@ function readRawContent(responseBody: unknown, maxContentChars: number): string 
     throw new Error("Feishu document raw content response did not include code");
   }
   if (code !== 0) {
-    throw new Error(`Feishu document raw content request failed: ${readErrorMessage(responseBody)}`);
+    throw new Error(
+      `Feishu document raw content request failed: ${readExternalErrorMessage(responseBody)}`,
+    );
   }
 
   if (!isRecord(responseBody.data)) {
@@ -281,17 +284,6 @@ function readRawContent(responseBody: unknown, maxContentChars: number): string 
   }
 
   return bodyText;
-}
-
-function readErrorMessage(responseBody: unknown): string {
-  if (isRecord(responseBody)) {
-    const message = responseBody.msg ?? responseBody.message;
-    if (typeof message === "string" && message.trim().length > 0) {
-      return message.trim();
-    }
-  }
-
-  return "unknown error";
 }
 
 function trimTrailingSlash(value: string): string {
