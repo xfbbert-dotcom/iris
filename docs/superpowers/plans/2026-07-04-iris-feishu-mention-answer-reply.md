@@ -159,7 +159,10 @@ Observed: `npm run verify` exited 0 on 2026-07-04. Core passed 58 test files
 with 848 tests passing and 4 skipped; Python worker tests passed 7/7; Docker Compose config rendered
 successfully.
 
-- [ ] **Step 3: Commit, push, update PR, and verify checks**
+- [x] **Step 3: Commit, push, update PR, and verify checks**
 
 Commit the mention reply patch, push `codex/iris-document-source-registry`, update PR #3, and
 confirm GitHub Actions Core and AI Worker checks pass.
+
+Observed: committed and pushed `84cd784b95c2e20e28d54cb91aad15de7fbb42ec`, updated PR #3, and
+confirmed GitHub Actions `Core` and `AI Worker` check runs completed successfully.
