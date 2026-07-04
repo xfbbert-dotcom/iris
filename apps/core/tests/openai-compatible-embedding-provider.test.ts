@@ -107,6 +107,21 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized embedding input text before external requests", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({ data: [{ index: 0, embedding: [1, 0, 0] }] }),
+    );
+    const provider = createOpenAICompatibleEmbeddingProvider({
+      config: config(),
+      fetch,
+    });
+
+    await expect(provider.embedTexts(["x".repeat(4001)])).rejects.toThrow(
+      "embedding input text must be at most 4000 characters",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("throws on invalid vector values", async () => {
     const provider = createOpenAICompatibleEmbeddingProvider({
       config: config(),

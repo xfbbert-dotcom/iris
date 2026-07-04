@@ -4,6 +4,7 @@ import { readPositiveSafeInteger } from "../config/numeric-guards.js";
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 const MAX_EMBEDDING_INPUT_TEXTS = 64;
+const MAX_EMBEDDING_INPUT_TEXT_CHARS = 4000;
 
 export type OpenAICompatibleEmbeddingProviderDependencies = {
   config: EmbeddingProviderConfig;
@@ -27,6 +28,11 @@ export function createOpenAICompatibleEmbeddingProvider({
       if (texts.length > MAX_EMBEDDING_INPUT_TEXTS) {
         throw new Error(
           `embedding input batch must include at most ${MAX_EMBEDDING_INPUT_TEXTS} texts`,
+        );
+      }
+      if (texts.some((text) => text.length > MAX_EMBEDDING_INPUT_TEXT_CHARS)) {
+        throw new Error(
+          `embedding input text must be at most ${MAX_EMBEDDING_INPUT_TEXT_CHARS} characters`,
         );
       }
 
