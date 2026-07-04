@@ -3,6 +3,9 @@ import type { ModelProviderConfig } from "../config/env.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
+const MAX_MODEL_QUESTION_CHARS = 4000;
+const MAX_MODEL_PROMPT_CONTEXT_CHARS = 80_000;
+
 export type OpenAICompatibleModelProviderDependencies = {
   config: ModelProviderConfig;
   fetch?: typeof fetch;
@@ -27,6 +30,9 @@ export function createOpenAICompatibleModelProvider({
 
   return {
     async generateAnswerDraft(input) {
+      assertMaxLength("question", input.question, MAX_MODEL_QUESTION_CHARS);
+      assertMaxLength("promptContext", input.promptContext, MAX_MODEL_PROMPT_CONTEXT_CHARS);
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -82,6 +88,12 @@ export function createOpenAICompatibleModelProvider({
       }
     },
   };
+}
+
+function assertMaxLength(fieldName: string, value: string, maxChars: number): void {
+  if (value.length > maxChars) {
+    throw new Error(`model ${fieldName} must be at most ${maxChars} characters`);
+  }
 }
 
 function joinBaseUrl(baseUrl: string, path: string): string {

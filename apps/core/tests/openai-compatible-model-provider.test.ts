@@ -94,6 +94,46 @@ describe("OpenAICompatibleModelProvider", () => {
     ).rejects.toThrow("model provider response did not include answer content");
   });
 
+  it("rejects oversized questions before external requests", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        choices: [{ message: { content: "Answer draft." } }],
+      }),
+    );
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      fetch,
+    });
+
+    await expect(
+      provider.generateAnswerDraft({
+        question: "Q".repeat(4001),
+        promptContext: "C",
+      }),
+    ).rejects.toThrow("model question must be at most 4000 characters");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized prompt contexts before external requests", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        choices: [{ message: { content: "Answer draft." } }],
+      }),
+    );
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      fetch,
+    });
+
+    await expect(
+      provider.generateAnswerDraft({
+        question: "Q",
+        promptContext: "C".repeat(80_001),
+      }),
+    ).rejects.toThrow("model promptContext must be at most 80000 characters");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("throws on explicitly truncated model responses", async () => {
     const provider = createOpenAICompatibleModelProvider({
       config: config(),
