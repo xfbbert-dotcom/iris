@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import {
   InMemoryAuditLog,
@@ -1034,7 +1035,14 @@ function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
 
 function readInternalApiToken(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed === "" ? undefined : trimmed;
+  if (trimmed === undefined || trimmed === "") {
+    return undefined;
+  }
+  if (!isSingleBearerToken(trimmed)) {
+    throw new Error("IRIS_INTERNAL_API_TOKEN must be a single bearer token");
+  }
+
+  return trimmed;
 }
 
 function isInternalApiRequest(url: string): boolean {
@@ -1046,8 +1054,26 @@ function isInternalApiAuthorized(
   authorization: string | undefined,
   token: string,
 ): boolean {
-  const match = /^Bearer\s+(.+)$/i.exec(authorization ?? "");
-  return match?.[1] === token;
+  const match = /^Bearer +([!-~]+)$/i.exec(authorization ?? "");
+  const presentedToken = match?.[1];
+  if (presentedToken === undefined || !isSingleBearerToken(presentedToken)) {
+    return false;
+  }
+
+  return safeTokenEqual(presentedToken, token);
+}
+
+function isSingleBearerToken(value: string): boolean {
+  return /^[!-~]+$/u.test(value) && !value.includes(",");
+}
+
+function safeTokenEqual(presentedToken: string, configuredToken: string): boolean {
+  const presentedTokenBytes = Buffer.from(presentedToken);
+  const configuredTokenBytes = Buffer.from(configuredToken);
+  return (
+    presentedTokenBytes.length === configuredTokenBytes.length &&
+    timingSafeEqual(presentedTokenBytes, configuredTokenBytes)
+  );
 }
 
 async function closeRuntimeResources(

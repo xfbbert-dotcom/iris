@@ -475,6 +475,54 @@ describe("internal API token guard", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().schemaVersion).toBe(1);
   });
+
+  it("rejects malformed bearer credentials for internal routes", async () => {
+    const app = buildApp({
+      internalApiToken: "operator-secret",
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const tabSeparatedResponse = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: { authorization: "Bearer\toperator-secret" },
+    });
+    const combinedCredentialResponse = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: { authorization: "Bearer operator-secret, Bearer other-secret" },
+    });
+
+    expect(tabSeparatedResponse.statusCode).toBe(401);
+    expect(tabSeparatedResponse.json()).toEqual({
+      ok: false,
+      error: "internal_api_unauthorized",
+    });
+    expect(combinedCredentialResponse.statusCode).toBe(401);
+    expect(combinedCredentialResponse.json()).toEqual({
+      ok: false,
+      error: "internal_api_unauthorized",
+    });
+  });
+
+  it("rejects configured internal API tokens that cannot be sent as one bearer credential", () => {
+    const invalidTokens = ["operator secret", "operator\tsecret", "operator,secret"];
+
+    for (const internalApiToken of invalidTokens) {
+      expect(() =>
+        buildApp({
+          internalApiToken,
+          createAnswerDraftRuntime: () => undefined,
+          createEventWorkerRuntime: () => undefined,
+          createDocumentSyncRuntime: () => undefined,
+          createReindexWorkerRuntime: () => undefined,
+        }),
+      ).toThrow("IRIS_INTERNAL_API_TOKEN must be a single bearer token");
+    }
+  });
 });
 
 describe("GET /internal/audit/status", () => {

@@ -40,6 +40,10 @@ The internal `Invoke-RestMethod` examples below include `-Headers $irisHeaders`.
 The bearer scheme is case-insensitive for client compatibility, but the token value must match
 `IRIS_INTERNAL_API_TOKEN` exactly.
 
+`IRIS_INTERNAL_API_TOKEN` must be a single visible ASCII token without spaces, tabs, line breaks, or
+commas. Generate it as one header-safe secret value, for example with letters, numbers, hyphens, and
+underscores.
+
 The token guard applies to the internal request path before any query string. For example,
 `/internal/status?details=1` and `/internal?probe=1` both require the same bearer token when
 `IRIS_INTERNAL_API_TOKEN` is set.
