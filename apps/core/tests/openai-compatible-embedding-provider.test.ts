@@ -93,6 +93,20 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     await expect(provider.embedTexts(["alpha"])).rejects.toThrow("embedding response count mismatch");
   });
 
+  it("rejects oversized embedding batches before external requests", async () => {
+    const fetch = vi.fn(async () => jsonResponse({ data: [] }));
+    const provider = createOpenAICompatibleEmbeddingProvider({
+      config: config(),
+      fetch,
+    });
+    const texts = Array.from({ length: 65 }, (_, index) => `text-${index}`);
+
+    await expect(provider.embedTexts(texts)).rejects.toThrow(
+      "embedding input batch must include at most 64 texts",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("throws on invalid vector values", async () => {
     const provider = createOpenAICompatibleEmbeddingProvider({
       config: config(),

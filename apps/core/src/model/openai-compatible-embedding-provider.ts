@@ -3,6 +3,8 @@ import type { EmbeddingProviderConfig } from "../config/env.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
+const MAX_EMBEDDING_INPUT_TEXTS = 64;
+
 export type OpenAICompatibleEmbeddingProviderDependencies = {
   config: EmbeddingProviderConfig;
   fetch?: typeof fetch;
@@ -21,6 +23,11 @@ export function createOpenAICompatibleEmbeddingProvider({
     async embedTexts(texts) {
       if (texts.length === 0) {
         return [];
+      }
+      if (texts.length > MAX_EMBEDDING_INPUT_TEXTS) {
+        throw new Error(
+          `embedding input batch must include at most ${MAX_EMBEDDING_INPUT_TEXTS} texts`,
+        );
       }
 
       const controller = new AbortController();
