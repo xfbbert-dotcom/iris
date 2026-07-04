@@ -20,6 +20,9 @@ type ConversationMessageRow = {
   created_at: Date;
 };
 
+const MAX_CONVERSATION_MESSAGE_TEXT_CHARS = 8000;
+const TRUNCATION_MARKER = " ... [truncated]";
+
 export function createPostgresConversationMessageRepository({
   queryable,
 }: {
@@ -59,7 +62,7 @@ export function createPostgresConversationMessageRepository({
           input.chatId,
           input.senderId ?? null,
           input.messageType,
-          input.text ?? null,
+          normalizeMessageText(input.text),
           input.sentAt,
           input.rawEventIdempotencyKey,
         ],
@@ -105,11 +108,23 @@ function mapRow(row: ConversationMessageRow): ConversationMessage {
     chatId: row.chat_id,
     senderId: row.sender_id ?? undefined,
     messageType: row.message_type,
-    text: row.text ?? undefined,
+    text: normalizeMessageText(row.text ?? undefined) ?? undefined,
     sentAt: row.sent_at,
     rawEventIdempotencyKey: row.raw_event_idempotency_key,
     createdAt: row.created_at,
   };
+}
+
+function normalizeMessageText(value: string | undefined): string | null {
+  if (value === undefined) {
+    return null;
+  }
+  if (value.length <= MAX_CONVERSATION_MESSAGE_TEXT_CHARS) {
+    return value;
+  }
+
+  const prefixChars = MAX_CONVERSATION_MESSAGE_TEXT_CHARS - TRUNCATION_MARKER.length;
+  return `${value.slice(0, prefixChars).trimEnd()}${TRUNCATION_MARKER}`;
 }
 
 function readOne<T>(rows: T[], errorMessage: string): T {
