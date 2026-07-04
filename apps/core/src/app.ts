@@ -1613,12 +1613,13 @@ function parseRegisterAuthorizedWikiDocumentRequest(
     return undefined;
   }
 
-  const sourceUri = readNonBlankId(value.sourceUri);
+  const rawSourceUri = readNonBlankId(value.sourceUri);
+  const sourceUri =
+    rawSourceUri === undefined ? undefined : normalizeSupportedFeishuDocumentSourceUri(rawSourceUri);
   const authorizedSpaceId = readNonBlankId(value.authorizedSpaceId);
   const title = value.title === undefined ? undefined : readNonBlankId(value.title);
   if (
     sourceUri === undefined ||
-    !isSupportedFeishuDocumentSourceUri(sourceUri) ||
     authorizedSpaceId === undefined ||
     (title === undefined && value.title !== undefined)
   ) {
@@ -1639,12 +1640,13 @@ function parseRegisterUserSubmittedDocumentRequest(
     return undefined;
   }
 
-  const sourceUri = readNonBlankId(value.sourceUri);
+  const rawSourceUri = readNonBlankId(value.sourceUri);
+  const sourceUri =
+    rawSourceUri === undefined ? undefined : normalizeSupportedFeishuDocumentSourceUri(rawSourceUri);
   const submittedByUserId = readNonBlankId(value.submittedByUserId);
   const title = value.title === undefined ? undefined : readNonBlankId(value.title);
   if (
     sourceUri === undefined ||
-    !isSupportedFeishuDocumentSourceUri(sourceUri) ||
     submittedByUserId === undefined ||
     (title === undefined && value.title !== undefined)
   ) {
@@ -1667,6 +1669,21 @@ function isSupportedFeishuDocumentSourceUri(sourceUri: string): boolean {
     parseFeishuDocxDocumentId(sourceUri) !== undefined ||
     parseFeishuWikiNodeToken(sourceUri) !== undefined
   );
+}
+
+function normalizeSupportedFeishuDocumentSourceUri(sourceUri: string): string | undefined {
+  if (!isSupportedFeishuDocumentSourceUri(sourceUri)) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(sourceUri);
+    url.search = "";
+    url.hash = "";
+    return url.href;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseLiveChatMessage(value: unknown): LiveChatMessage | undefined {
