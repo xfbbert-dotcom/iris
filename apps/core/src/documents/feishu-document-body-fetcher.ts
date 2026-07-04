@@ -2,6 +2,7 @@ import type { DocumentBodyFetcher, DocumentBodyFetchResult } from "./document-sy
 import type { DocumentSource, DocumentSourceType } from "./document-source-registry.js";
 import type { FeishuTenantAccessTokenProvider } from "../feishu/feishu-tenant-access-token-provider.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readBoundedJsonResponse } from "../integrations/bounded-json-response.js";
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 export type FeishuDocumentBodyFetcherDependencies = {
@@ -204,9 +205,9 @@ async function fetchJsonWithTimeout({
       signal: controller.signal,
     });
     rejectOversizedKnownResponse(response, maxResponseBytes, responseSizeErrorMessage);
-    const responseBody = await readJsonResponse({
+    const responseBody = await readBoundedJsonResponse({
       response,
-      errorMessage: jsonErrorMessage,
+      invalidJsonErrorMessage: jsonErrorMessage,
       maxResponseBytes,
       responseSizeErrorMessage,
     });
@@ -252,109 +253,6 @@ function assertSupportedSourceType(sourceType: DocumentSourceType): void {
     throw new Error(`unsupported Feishu document source type: ${sourceType}`);
   }
 }
-
-async function readJsonResponse({
-  response,
-  errorMessage,
-  maxResponseBytes,
-  responseSizeErrorMessage,
-}: {
-  response: Response;
-  errorMessage: string;
-  maxResponseBytes?: number;
-  responseSizeErrorMessage?: string;
-}): Promise<unknown> {
-  try {
-    if (maxResponseBytes !== undefined && responseSizeErrorMessage !== undefined) {
-      const boundedText = await readBoundedResponseText(
-        response,
-        maxResponseBytes,
-        responseSizeErrorMessage,
-      );
-      if (boundedText !== undefined) {
-        return JSON.parse(boundedText);
-      }
-    }
-
-    return await response.json();
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw error;
-    }
-    if (error instanceof ResponseSizeError) {
-      throw error;
-    }
-    throw new Error(errorMessage);
-  }
-}
-
-async function readBoundedResponseText(
-  response: Response,
-  maxResponseBytes: number,
-  errorMessage: string,
-): Promise<string | undefined> {
-  const body = response.body;
-  if (body !== undefined && body !== null) {
-    return readBoundedReadableStream(body, maxResponseBytes, errorMessage);
-  }
-
-  if (typeof response.text === "function") {
-    const text = await response.text();
-    const byteLength = new TextEncoder().encode(text).byteLength;
-    if (byteLength > maxResponseBytes) {
-      throw new ResponseSizeError(errorMessage);
-    }
-    return text;
-  }
-
-  return undefined;
-}
-
-async function readBoundedReadableStream(
-  body: ReadableStream<Uint8Array>,
-  maxResponseBytes: number,
-  errorMessage: string,
-): Promise<string> {
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (value === undefined) {
-        continue;
-      }
-
-      byteLength += value.byteLength;
-      if (byteLength > maxResponseBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw new ResponseSizeError(errorMessage);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  return new TextDecoder().decode(concatChunks(chunks, byteLength));
-}
-
-function concatChunks(chunks: Uint8Array[], byteLength: number): Uint8Array {
-  const buffer = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    buffer.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  return buffer;
-}
-
-class ResponseSizeError extends Error {}
 
 function readWikiDocumentId(responseBody: unknown): string {
   if (!isRecord(responseBody)) {
