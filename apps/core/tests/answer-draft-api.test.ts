@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import { buildApp } from "../src/app.js";
@@ -6,6 +6,17 @@ import type { RawEvent } from "../src/events/raw-event-queue.js";
 import type { DocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
+import { isolateEnvVar } from "./test-env.js";
+
+let restoreInternalApiToken: () => void = () => undefined;
+
+beforeEach(() => {
+  restoreInternalApiToken = isolateEnvVar("IRIS_INTERNAL_API_TOKEN");
+});
+
+afterEach(() => {
+  restoreInternalApiToken();
+});
 
 describe("POST /internal/answer-drafts", () => {
   it("calls the injected orchestrator and returns draft metadata", async () => {

@@ -1,7 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { createFeishuGateway } from "../src/feishu/feishu-gateway.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
+import { isolateEnvVar } from "./test-env.js";
+
+let restoreInternalApiToken: () => void = () => undefined;
+
+beforeEach(() => {
+  restoreInternalApiToken = isolateEnvVar("IRIS_INTERNAL_API_TOKEN");
+});
+
+afterEach(() => {
+  restoreInternalApiToken();
+});
 
 describe("InMemoryEventQueue", () => {
   it("stores raw Feishu events with idempotency keys", async () => {
