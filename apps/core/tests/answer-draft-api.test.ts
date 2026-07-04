@@ -160,6 +160,36 @@ describe("POST /internal/answer-drafts", () => {
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
   });
 
+  it("returns 400 for unsafe context limits", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const app = buildApp({ answerDraftOrchestrator });
+
+    const fragmentLimitResponse = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        liveChatMessages: [],
+        fragmentLimit: 9007199254740992,
+      },
+    });
+    const liveChatLimitResponse = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        liveChatMessages: [],
+        liveChatLimit: 9007199254740992,
+      },
+    });
+
+    expect(fragmentLimitResponse.statusCode).toBe(400);
+    expect(fragmentLimitResponse.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(liveChatLimitResponse.statusCode).toBe(400);
+    expect(liveChatLimitResponse.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
   it("returns 500 when draft generation fails", async () => {
     const app = buildApp({
       answerDraftOrchestrator: {

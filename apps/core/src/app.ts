@@ -931,7 +931,10 @@ function parseAnswerDraftRequest(value: unknown): AnswerDraftRequest | undefined
     return undefined;
   }
 
-  if (!isFiniteNumberOrUndefined(value.fragmentLimit) || !isFiniteNumberOrUndefined(value.liveChatLimit)) {
+  if (
+    !isFiniteSafeMagnitudeNumberOrUndefined(value.fragmentLimit) ||
+    !isFiniteSafeMagnitudeNumberOrUndefined(value.liveChatLimit)
+  ) {
     return undefined;
   }
 
@@ -1432,8 +1435,13 @@ function parseLiveChatMessage(value: unknown): LiveChatMessage | undefined {
   return { speaker, text };
 }
 
-function isFiniteNumberOrUndefined(value: unknown): value is number | undefined {
-  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+function isFiniteSafeMagnitudeNumberOrUndefined(value: unknown): value is number | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "number" &&
+      Number.isFinite(value) &&
+      Math.abs(value) <= Number.MAX_SAFE_INTEGER)
+  );
 }
 
 function createBadJsonError(): Error & { statusCode: number } {

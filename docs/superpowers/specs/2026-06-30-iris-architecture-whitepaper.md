@@ -690,6 +690,9 @@ Required architectural response:
   defensively sanitize unsafe limits before reaching storage queries.
 - Admin list/query limits must also reject unsafe integers before applying
   product caps such as maximum page size.
+- Answer-context window limits must reject unsafe numeric magnitudes before
+  model orchestration, even though lower layers still defensively cap prompt
+  budgets.
 - Validation should not invent product-specific business caps unless a separate architecture decision calls for them.
 
 Evolution signal:
