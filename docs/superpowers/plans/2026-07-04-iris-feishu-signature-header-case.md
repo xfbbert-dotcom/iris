@@ -37,9 +37,14 @@ passed with 6 Feishu auth tests.
 ### Task 3: Verification And PR
 
 - [x] Run `npm run verify`.
-- [ ] Commit and push.
-- [ ] Watch PR #3 checks.
+- [x] Commit and push.
+- [x] Watch PR #3 checks.
 
 Verification: `npm run verify` passed with 54 Core test files, 750 passing
 tests, 4 skipped tests, 7 Python worker tests, and a valid Docker Compose
 configuration.
+
+PR update: pushed commit `21e9756` (`fix: accept feishu signature header
+casing`) to PR #3.
+
+Remote checks: GitHub Actions passed for AI Worker and Core.
