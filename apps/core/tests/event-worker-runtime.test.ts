@@ -122,6 +122,7 @@ describe("createEventWorkerRuntime", () => {
       intervalMs: 1000,
       batchLimit: 50,
       mentionRepliesEnabled: false,
+      mentionRepliesUnavailableReason: "missing_bot_open_id",
       pendingEventCount: 42,
       deadLetterEventCount: 5,
       latestBatch: {
@@ -241,10 +242,13 @@ describe("createEventWorkerRuntime", () => {
       enabled: true,
       mentionRepliesEnabled: true,
     });
+    await expect(runtime?.getStatus()).resolves.not.toHaveProperty(
+      "mentionRepliesUnavailableReason",
+    );
     await runtime?.close();
   });
 
-  it("does not compose mention replies when the bot open ID is not configured", () => {
+  it("does not compose mention replies when the bot open ID is not configured", async () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const redisClient = {
       connect: vi.fn(async () => redisClient),
@@ -283,7 +287,7 @@ describe("createEventWorkerRuntime", () => {
       })),
     };
 
-    createEventWorkerRuntime({
+    const runtime = createEventWorkerRuntime({
       env: {
         ...enabledEnv(),
         FEISHU_APP_ID: "app-id",
@@ -299,6 +303,12 @@ describe("createEventWorkerRuntime", () => {
     expect(dependencies.createProcessor).toHaveBeenCalledWith(
       expect.not.objectContaining({ mentionAnswerResponder: expect.anything() }),
     );
+    await expect(runtime?.getStatus()).resolves.toMatchObject({
+      enabled: true,
+      mentionRepliesEnabled: false,
+      mentionRepliesUnavailableReason: "missing_bot_open_id",
+    });
+    await runtime?.close();
   });
 });
 

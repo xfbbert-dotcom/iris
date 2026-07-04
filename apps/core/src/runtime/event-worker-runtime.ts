@@ -75,10 +75,15 @@ export type EventWorkerRuntimeStatus = {
   intervalMs: number;
   batchLimit: number;
   mentionRepliesEnabled: boolean;
+  mentionRepliesUnavailableReason?: MentionReplyUnavailableReason;
   pendingEventCount: number;
   deadLetterEventCount: number;
   latestBatch?: RawEventWorkerBatchSnapshot;
 };
+export type MentionReplyUnavailableReason =
+  | "missing_bot_open_id"
+  | "missing_feishu_openapi_config"
+  | "missing_answer_draft_orchestrator";
 
 type RedisClient = RedisRawEventQueueClient & RedisDocumentSyncQueueClient & {
   connect(): Promise<unknown>;
@@ -193,7 +198,7 @@ function createEnabledEventWorkerRuntime({
     registry: documentSources,
     syncPlanner,
   });
-  const mentionAnswerResponder = createOptionalMentionAnswerResponder({
+  const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
     env,
     answerDraftOrchestrator,
     runtimeController,
@@ -201,6 +206,7 @@ function createEnabledEventWorkerRuntime({
     createMessageReplier,
     createMentionResponder,
   });
+  const mentionAnswerResponder = mentionAnswerReadiness.responder;
   const processor = createProcessor({
     messages,
     documentLinkExtractor,
@@ -252,6 +258,9 @@ function createEnabledEventWorkerRuntime({
         intervalMs: loopSnapshot.intervalMs,
         batchLimit: loopSnapshot.batchLimit,
         mentionRepliesEnabled: mentionAnswerResponder !== undefined,
+        ...(mentionAnswerReadiness.unavailableReason === undefined
+          ? {}
+          : { mentionRepliesUnavailableReason: mentionAnswerReadiness.unavailableReason }),
         pendingEventCount,
         deadLetterEventCount,
         ...(loopSnapshot.latestBatch === undefined
@@ -281,11 +290,21 @@ function createOptionalMentionAnswerResponder({
   createTokenProvider: typeof createFeishuTenantAccessTokenProvider;
   createMessageReplier: typeof createFeishuMessageReplier;
   createMentionResponder: typeof createFeishuMentionAnswerResponder;
-}): Pick<FeishuMentionAnswerResponder, "maybeRespond"> | undefined {
+}): {
+  responder?: Pick<FeishuMentionAnswerResponder, "maybeRespond">;
+  unavailableReason?: MentionReplyUnavailableReason;
+} {
   const botOpenId = readOptionalFeishuBotOpenId(env);
+  if (botOpenId === undefined) {
+    return { unavailableReason: "missing_bot_open_id" };
+  }
+
   const feishuConfig = readOptionalFeishuOpenApiConfig(env);
-  if (botOpenId === undefined || feishuConfig === undefined || answerDraftOrchestrator === undefined) {
-    return undefined;
+  if (feishuConfig === undefined) {
+    return { unavailableReason: "missing_feishu_openapi_config" };
+  }
+  if (answerDraftOrchestrator === undefined) {
+    return { unavailableReason: "missing_answer_draft_orchestrator" };
   }
 
   const tokenProvider: FeishuTenantAccessTokenProvider = createTokenProvider({
@@ -300,14 +319,16 @@ function createOptionalMentionAnswerResponder({
     timeoutMs: feishuConfig.documentFetchTimeoutMs,
   });
 
-  return createMentionResponder({
-    botOpenId,
-    answerDraftOrchestrator,
-    replier,
-    ...(runtimeController?.canReplyWhenMentioned === undefined
-      ? {}
-      : { canReplyWhenMentioned: runtimeController.canReplyWhenMentioned.bind(runtimeController) }),
-  });
+  return {
+    responder: createMentionResponder({
+      botOpenId,
+      answerDraftOrchestrator,
+      replier,
+      ...(runtimeController?.canReplyWhenMentioned === undefined
+        ? {}
+        : { canReplyWhenMentioned: runtimeController.canReplyWhenMentioned.bind(runtimeController) }),
+    }),
+  };
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): GroupVisibleDocumentRegistry {
