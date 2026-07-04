@@ -267,7 +267,10 @@ function mapSnapshotRow(row: DocumentSnapshotRow): DocumentSnapshot {
     contentHash: row.content_hash ?? undefined,
     sourceVersion: row.source_version ?? undefined,
     fetchedAt: row.fetched_at,
-    errorMessage: row.error_message ?? undefined,
+    errorMessage:
+      row.error_message === null
+        ? undefined
+        : normalizeDocumentSnapshotErrorMessage(row.error_message),
     createdAt: row.created_at,
   };
 }

@@ -387,6 +387,34 @@ describe("DocumentSnapshotRepository", () => {
     );
   });
 
+  it("bounds failed snapshot error messages read from database rows", async () => {
+    const createdAt = new Date("2026-07-02T01:00:00.000Z");
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const query = vi.fn(async () => ({
+      rows: [
+        {
+          id: "snapshot-failed",
+          document_source_id: "source-1",
+          source_uri: "https://example.com/doc",
+          fetch_status: "failed",
+          body_text: null,
+          content_hash: null,
+          source_version: null,
+          fetched_at: createdAt,
+          error_message: oversizedMessage,
+          created_at: createdAt,
+        },
+      ],
+    }));
+    const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
+
+    const snapshot = await repository.findSnapshotById("snapshot-failed");
+
+    expect(snapshot?.errorMessage?.length).toBeLessThanOrEqual(1000);
+    expect(snapshot?.errorMessage).toContain("[truncated]");
+    expect(snapshot?.errorMessage).not.toContain("trailing diagnostic detail");
+  });
+
   it("lists successful snapshots missing a profile", async () => {
     const createdAt = new Date("2026-07-02T01:00:00.000Z");
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
