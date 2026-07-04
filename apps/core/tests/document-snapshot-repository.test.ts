@@ -183,6 +183,52 @@ describe("DocumentSnapshotRepository", () => {
     });
   });
 
+  it("bounds failed snapshot error messages before inserting them", async () => {
+    const fetchedAt = new Date("2026-07-02T01:00:00.000Z");
+    const createdAt = new Date("2026-07-02T01:00:01.000Z");
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const query = vi.fn(async (_sql: string, values?: unknown[]) => {
+      const errorMessage = values?.[8];
+      expect(typeof errorMessage).toBe("string");
+      expect((errorMessage as string).length).toBeLessThanOrEqual(1000);
+      expect(errorMessage).toContain("[truncated]");
+      expect(errorMessage).not.toContain("trailing diagnostic detail");
+
+      return {
+        rows: [
+          {
+            id: "snapshot-failed",
+            document_source_id: "source-1",
+            source_uri: "https://example.feishu.cn/docx/A",
+            fetch_status: "failed",
+            body_text: null,
+            content_hash: null,
+            source_version: null,
+            fetched_at: fetchedAt,
+            error_message: errorMessage,
+            created_at: createdAt,
+          },
+        ],
+      };
+    });
+    const repository = createDocumentSnapshotRepository({
+      queryable: queryableFrom(query),
+      createId: () => "snapshot-failed",
+      now: () => createdAt,
+    });
+
+    const snapshot = await repository.insertFailedSnapshot({
+      documentSourceId: "source-1",
+      sourceUri: "https://example.feishu.cn/docx/A",
+      errorMessage: oversizedMessage,
+      fetchedAt,
+    });
+
+    expect(snapshot.errorMessage?.length).toBeLessThanOrEqual(1000);
+    expect(snapshot.errorMessage).toContain("[truncated]");
+    expect(snapshot.errorMessage).not.toContain("trailing diagnostic detail");
+  });
+
   it("lists snapshots for a source and fetches the latest snapshot", async () => {
     const rows = [
       {

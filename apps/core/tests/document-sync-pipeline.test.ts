@@ -455,6 +455,59 @@ describe("createDocumentSyncRunner", () => {
     });
   });
 
+  it("bounds failed snapshot error messages before storing and returning them", async () => {
+    const candidate = source({ id: "source-with-oversized-fetch-failure" });
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) =>
+        source({ id, syncState: syncState as DocumentSource["syncState"] }),
+      ),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(),
+      insertFailedSnapshot: vi.fn(async (input: { errorMessage: string }) =>
+        snapshot({
+          id: "snapshot-bounded-failure",
+          documentSourceId: candidate.id,
+          sourceUri: candidate.sourceUri,
+          fetchStatus: "failed",
+          bodyText: undefined,
+          contentHash: undefined,
+          sourceVersion: undefined,
+          fetchedAt: failedAt,
+          errorMessage: input.errorMessage,
+        }),
+      ),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw new Error(oversizedMessage);
+        }),
+      },
+      now: () => failedAt,
+    });
+
+    const result = await runner.syncSourceById("source-with-oversized-fetch-failure");
+
+    expect(snapshots.insertFailedSnapshot).toHaveBeenCalledWith({
+      documentSourceId: "source-with-oversized-fetch-failure",
+      sourceUri: candidate.sourceUri,
+      errorMessage: expect.stringContaining("[truncated]"),
+      fetchedAt: failedAt,
+    });
+    if (result.status !== "failed") {
+      throw new Error("expected failed sync result");
+    }
+    expect(result.errorMessage.length).toBeLessThanOrEqual(1000);
+    expect(result.errorMessage).toContain("[truncated]");
+    expect(result.errorMessage).not.toContain("trailing diagnostic detail");
+    expect(result.snapshot.errorMessage).toBe(result.errorMessage);
+  });
+
   it("stringifies non-Error fetch failures before recording them", async () => {
     const candidate = source({ id: "source-to-string-fail" });
     const failedSnapshot = snapshot({

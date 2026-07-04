@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { normalizeDocumentSnapshotErrorMessage } from "./document-snapshot-error-message.js";
+
 export type DocumentFetchStatus = "succeeded" | "failed";
 
 export interface DocumentSnapshot {
@@ -128,7 +130,7 @@ order by fetched_at desc, id asc
         contentHash: undefined,
         sourceVersion: undefined,
         fetchedAt: input.fetchedAt,
-        errorMessage: input.errorMessage,
+        errorMessage: normalizeDocumentSnapshotErrorMessage(input.errorMessage),
         createdAt: now(),
       });
     },

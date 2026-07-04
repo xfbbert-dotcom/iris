@@ -1,4 +1,5 @@
 import type { DocumentSnapshot } from "./document-snapshot-repository.js";
+import { normalizeDocumentSnapshotErrorMessage } from "./document-snapshot-error-message.js";
 import type { DocumentSource, DocumentSyncState } from "./document-source-registry.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -131,7 +132,9 @@ export function createDocumentSyncRunner({
       try {
         fetchResult = await fetcher.fetch(claimedSource);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = normalizeDocumentSnapshotErrorMessage(
+          error instanceof Error ? error.message : String(error),
+        );
 
         let snapshot: DocumentSnapshot;
         try {
