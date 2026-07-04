@@ -65,6 +65,11 @@ export interface RegisterUserSubmittedDocumentInput {
   observedAt: Date;
 }
 
+export interface UpdateDocumentSourcePolicyInput {
+  canUseForAnswering?: boolean;
+  canUseForKnowledgeDrafts?: boolean;
+}
+
 export interface DocumentSourceRegistryDependencies {
   createId?: () => string;
   now?: () => Date;
@@ -85,6 +90,7 @@ export interface DocumentSourceRegistry {
   markSyncState(id: string, syncState: DocumentSyncState): DocumentSource;
   setAnsweringEnabled(id: string, enabled: boolean): DocumentSource;
   setKnowledgeDraftsEnabled(id: string, enabled: boolean): DocumentSource;
+  updatePolicy(id: string, policy: UpdateDocumentSourcePolicyInput): DocumentSource;
   listSources(): DocumentSource[];
   listSourcesByType(sourceType: DocumentSourceType): DocumentSource[];
   findSourceById(id: string): DocumentSource | undefined;
@@ -241,6 +247,19 @@ export function createDocumentSourceRegistry(
     setKnowledgeDraftsEnabled(id, enabled) {
       const source = updateSourceById(sourcesById, sourcesByUri, resolvedDependencies, id, {
         canUseForKnowledgeDrafts: enabled,
+      });
+
+      return cloneSource(source);
+    },
+
+    updatePolicy(id, policy) {
+      const source = updateSourceById(sourcesById, sourcesByUri, resolvedDependencies, id, {
+        ...(policy.canUseForAnswering === undefined
+          ? {}
+          : { canUseForAnswering: policy.canUseForAnswering }),
+        ...(policy.canUseForKnowledgeDrafts === undefined
+          ? {}
+          : { canUseForKnowledgeDrafts: policy.canUseForKnowledgeDrafts }),
       });
 
       return cloneSource(source);

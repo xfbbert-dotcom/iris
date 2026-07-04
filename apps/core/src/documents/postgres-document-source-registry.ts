@@ -14,6 +14,7 @@ import {
   type RegisterAuthorizedWikiDocumentInput,
   type RegisterGroupVisibleDocumentInput,
   type RegisterUserSubmittedDocumentInput,
+  type UpdateDocumentSourcePolicyInput,
 } from "./document-source-registry.js";
 
 export interface AsyncDocumentSourceRegistry {
@@ -27,6 +28,7 @@ export interface AsyncDocumentSourceRegistry {
   markSyncState(id: string, syncState: DocumentSyncState): Promise<DocumentSource>;
   setAnsweringEnabled(id: string, enabled: boolean): Promise<DocumentSource>;
   setKnowledgeDraftsEnabled(id: string, enabled: boolean): Promise<DocumentSource>;
+  updatePolicy(id: string, policy: UpdateDocumentSourcePolicyInput): Promise<DocumentSource>;
   listSources(): Promise<DocumentSource[]>;
   listSourcesByType(sourceType: DocumentSourceType): Promise<DocumentSource[]>;
   findSourceById(id: string): Promise<DocumentSource | undefined>;
@@ -234,6 +236,31 @@ where id = $1
 returning *
 `,
         values: [id, enabled],
+      });
+    },
+
+    updatePolicy(id, policy) {
+      return updateSource(pool, resolvedDependencies, id, {
+        sql: `
+update document_sources
+set
+  can_use_for_answering = case
+    when permission_state = 'denied' then false
+    else coalesce($2::boolean, can_use_for_answering)
+  end,
+  can_use_for_knowledge_drafts = case
+    when permission_state = 'denied' then false
+    else coalesce($3::boolean, can_use_for_knowledge_drafts)
+  end,
+  updated_at = $4
+where id = $1
+returning *
+`,
+        values: [
+          id,
+          policy.canUseForAnswering ?? null,
+          policy.canUseForKnowledgeDrafts ?? null,
+        ],
       });
     },
 

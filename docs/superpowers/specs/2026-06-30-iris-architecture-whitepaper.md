@@ -132,6 +132,8 @@ Iris must not use a document link to bypass Feishu permissions. If a document is
 
 When a document source is marked `denied`, Iris must disable every document-content capability for that source, including answer retrieval and knowledge draft generation. Later rediscovery, source-type upgrades, or repeated registration must not silently re-enable denied document usage; only an explicit permission state change and administrator policy update may make the source usable again.
 
+Document source policy updates from Admin Console are control-plane writes. When one request changes more than one document-content capability, Iris must apply those policy fields as one authoritative source update rather than a sequence of independent writes. A failed policy update must not leave the source half-enabled or half-disabled.
+
 Local permission state is never enough for sensitive retrieval. Before document fragments retrieved from pgvector are passed into the LLM, TypeScript Core App must run a real-time permission guard against Feishu for the candidate document IDs whenever the answer depends on document content. This guard exists because indirect permission changes, such as parent-folder permission changes or group membership changes, may lag behind or bypass clean webhook notifications.
 
 Feishu document sync reads are external I/O and must always be bounded by request timeouts that cover both response headers and body consumption. If tenant-token acquisition, wiki-node lookup, raw-content fetch, or response body reading stalls, Iris must fail the document sync attempt and let the queue retry/dead-letter policy handle recovery rather than occupying a worker indefinitely.
@@ -836,6 +838,34 @@ Evolution signal:
 If Iris later introduces explicit cross-group document grants, those grants
 should be represented as first-class evidence rather than inferred from a
 group-visible source with missing group IDs.
+
+### 12.15 Document Source Policy Partial Update
+
+Pressure:
+
+Admin Console may update multiple usage capabilities for one document source in
+one request, such as disabling both answer retrieval and knowledge draft usage.
+If Core App implements this as two separate storage writes, a transient database
+or adapter failure between writes can leave the source half-updated. Operators
+then see a policy state that does not match their intent, and later retrieval or
+knowledge-governance gates may behave inconsistently.
+
+Required architectural response:
+
+- Treat one source policy request as one control-plane operation.
+- Use a registry-level `updatePolicy` boundary for multi-field capability
+  changes.
+- Postgres-backed policy updates must write all requested capability fields in
+  one statement or transaction boundary.
+- Denied-source capability locks must be preserved inside the same authoritative
+  update.
+
+Evolution signal:
+
+If source policy grows to include roles, group grants, publication scopes, or
+time-limited access, Iris should introduce a dedicated policy aggregate with
+versioned writes and optimistic concurrency. That aggregate must keep the same
+rule: one operator intent becomes one authoritative policy transition.
 
 Constitutional principle:
 

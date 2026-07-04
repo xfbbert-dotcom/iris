@@ -173,6 +173,7 @@ type DocumentSyncRuntimeDocumentSources = DocumentSyncRunnerRegistry &
     | "listSourcesByAnsweringEnabled"
     | "setAnsweringEnabled"
     | "setKnowledgeDraftsEnabled"
+    | "updatePolicy"
   >;
 type DocumentSyncRuntimeQueue = Pick<
   DocumentSyncQueue,
@@ -363,17 +364,15 @@ function createEnabledDocumentSyncRuntime({
         if (source === undefined) {
           return undefined;
         }
-        if (input.canUseForAnswering !== undefined) {
-          source = await documentSources.setAnsweringEnabled(input.id, input.canUseForAnswering);
-        }
-        if (input.canUseForKnowledgeDrafts !== undefined) {
-          source = await documentSources.setKnowledgeDraftsEnabled(
-            input.id,
-            input.canUseForKnowledgeDrafts,
-          );
-        }
 
-        return source;
+        return await documentSources.updatePolicy(input.id, {
+          ...(input.canUseForAnswering === undefined
+            ? {}
+            : { canUseForAnswering: input.canUseForAnswering }),
+          ...(input.canUseForKnowledgeDrafts === undefined
+            ? {}
+            : { canUseForKnowledgeDrafts: input.canUseForKnowledgeDrafts }),
+        });
       },
       async listSnapshots(input) {
         const source = await documentSources.findSourceById(input.id);

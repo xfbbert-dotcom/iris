@@ -95,6 +95,11 @@ describe("createDocumentSyncRuntime", () => {
         canUseForAnswering: false,
         canUseForKnowledgeDrafts: false,
       })),
+      updatePolicy: vi.fn(async () => ({
+        ...inventorySource,
+        canUseForAnswering: false,
+        canUseForKnowledgeDrafts: false,
+      })),
       markSyncState: vi.fn(),
       registerAuthorizedWikiDocument: vi.fn(async () => inventorySource),
       registerUserSubmittedDocument: vi.fn(async () => userSubmittedSource),
@@ -442,8 +447,12 @@ describe("createDocumentSyncRuntime", () => {
       canUseForKnowledgeDrafts: false,
     });
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
-    expect(documentSources.setAnsweringEnabled).toHaveBeenCalledWith("source-1", false);
-    expect(documentSources.setKnowledgeDraftsEnabled).toHaveBeenCalledWith("source-1", false);
+    expect(documentSources.updatePolicy).toHaveBeenCalledWith("source-1", {
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    expect(documentSources.setAnsweringEnabled).not.toHaveBeenCalled();
+    expect(documentSources.setKnowledgeDraftsEnabled).not.toHaveBeenCalled();
     await expect(
       runtime?.sources.listSnapshots({ id: "source-1", limit: 1 }),
     ).resolves.toEqual([snapshot]);

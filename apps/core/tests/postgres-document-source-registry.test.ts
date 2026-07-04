@@ -519,6 +519,36 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     expect(update?.values).toEqual(["source-1", true, now]);
   });
 
+  it("updatePolicy changes answering and knowledge draft policy in one statement", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.updatePolicy("source-1", {
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+
+    const updates = fake.queries.filter((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        normalized.includes("returning *")
+      );
+    });
+
+    expect(updates).toHaveLength(1);
+    expect(normalizeSql(updates[0]?.sql ?? "")).toContain(
+      "can_use_for_answering = case when permission_state = 'denied' then false else coalesce($2::boolean, can_use_for_answering) end",
+    );
+    expect(normalizeSql(updates[0]?.sql ?? "")).toContain(
+      "can_use_for_knowledge_drafts = case when permission_state = 'denied' then false else coalesce($3::boolean, can_use_for_knowledge_drafts) end",
+    );
+    expect(updates[0]?.values).toEqual(["source-1", false, false, now]);
+  });
+
   it("filters sources by answering enabled state", async () => {
     const fake = createFakePool({
       sourceRow: makeSourceRow({ can_use_for_answering: false }),

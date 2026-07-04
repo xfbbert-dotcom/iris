@@ -554,6 +554,28 @@ describe("createDocumentSourceRegistry", () => {
     expect(updated.canUseForKnowledgeDrafts).toBe(true);
   });
 
+  it("updates answering and knowledge draft policy together", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:05:00.000Z"),
+    });
+    const source = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const updated = registry.updatePolicy(source.id, {
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+
+    expect(updated.canUseForAnswering).toBe(false);
+    expect(updated.canUseForKnowledgeDrafts).toBe(false);
+    expect(updated.updatedAt).toEqual(new Date("2026-07-01T04:05:00.000Z"));
+  });
+
   it("throws DocumentSourceValidationError when mutating an unknown id", () => {
     const registry = createDocumentSourceRegistry({
       createId: () => "doc-source-1",
@@ -572,6 +594,11 @@ describe("createDocumentSourceRegistry", () => {
     expect(() => registry.setKnowledgeDraftsEnabled("missing-source", true)).toThrow(
       DocumentSourceValidationError,
     );
+    expect(() =>
+      registry.updatePolicy("missing-source", {
+        canUseForAnswering: false,
+      }),
+    ).toThrow(DocumentSourceValidationError);
   });
 
   it("lists sources in deterministic updatedAt order", () => {
