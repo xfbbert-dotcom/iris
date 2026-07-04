@@ -92,6 +92,21 @@ describe("ManualDocumentSyncPlanner", () => {
     } satisfies DocumentSyncJob);
   });
 
+  it("rejects blank and oversized source ids before registry lookup", async () => {
+    const queue = { enqueue: vi.fn(async () => undefined) };
+    const registry = registryWith(source({ id: "source-1" }));
+    const planner = createManualDocumentSyncPlanner({ registry, queue });
+
+    await expect(planner.enqueueSource({ documentSourceId: "   " })).rejects.toThrow(
+      "documentSourceId must be nonblank",
+    );
+    await expect(
+      planner.enqueueSource({ documentSourceId: "s".repeat(513) }),
+    ).rejects.toThrow("documentSourceId must be at most 512 characters");
+    expect(registry.findSourceById).not.toHaveBeenCalled();
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
   it("returns not_found for unknown sources", async () => {
     const queue = { enqueue: vi.fn(async () => undefined) };
     const registry = registryWith(undefined);

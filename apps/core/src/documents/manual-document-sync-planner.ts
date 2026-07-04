@@ -1,4 +1,5 @@
 import {
+  MAX_DOCUMENT_SYNC_JOB_ID_CHARS,
   type DocumentSyncQueue,
 } from "./document-sync-queue.js";
 import type { DocumentSource, DocumentSyncState } from "./document-source-registry.js";
@@ -37,7 +38,7 @@ export function createManualDocumentSyncPlanner({
 }): ManualDocumentSyncPlanner {
   return {
     async enqueueSource({ documentSourceId }) {
-      const normalizedDocumentSourceId = documentSourceId.trim();
+      const normalizedDocumentSourceId = normalizeDocumentSourceId(documentSourceId);
       const source = await registry.findSourceById(normalizedDocumentSourceId);
 
       if (source === undefined) {
@@ -83,6 +84,20 @@ export function createManualDocumentSyncPlanner({
       return { status: "enqueued", documentSourceId: normalizedDocumentSourceId };
     },
   };
+}
+
+function normalizeDocumentSourceId(documentSourceId: string): string {
+  const normalized = documentSourceId.trim();
+  if (normalized.length === 0) {
+    throw new Error("documentSourceId must be nonblank");
+  }
+  if (normalized.length > MAX_DOCUMENT_SYNC_JOB_ID_CHARS) {
+    throw new Error(
+      `documentSourceId must be at most ${MAX_DOCUMENT_SYNC_JOB_ID_CHARS} characters`,
+    );
+  }
+
+  return normalized;
 }
 
 function defaultRequestId(): string {
