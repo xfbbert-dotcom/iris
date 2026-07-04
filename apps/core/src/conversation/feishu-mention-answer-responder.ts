@@ -19,7 +19,7 @@ export type FeishuMentionAnswerInput = {
 
 export type FeishuMentionAnswerResult =
   | { status: "replied"; replyMessageId?: string }
-  | { status: "skipped"; reason: "not_mentioned" | "runtime_disabled" };
+  | { status: "skipped"; reason: "not_mentioned" | "runtime_disabled" | "self_message" };
 
 export type FeishuMentionAnswerResponder = {
   maybeRespond(input: FeishuMentionAnswerInput): Promise<FeishuMentionAnswerResult>;
@@ -47,6 +47,9 @@ export function createFeishuMentionAnswerResponder({
       const botMentionKeys = collectBotMentionKeys(input.mentions, normalizedBotOpenId);
       if (botMentionKeys.length === 0) {
         return { status: "skipped", reason: "not_mentioned" };
+      }
+      if (normalizeOptionalText(input.senderId) === normalizedBotOpenId) {
+        return { status: "skipped", reason: "self_message" };
       }
       if (!canReplyWhenMentioned(input.chatId)) {
         return { status: "skipped", reason: "runtime_disabled" };

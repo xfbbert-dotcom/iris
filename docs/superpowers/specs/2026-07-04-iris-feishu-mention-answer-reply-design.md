@@ -47,6 +47,7 @@ model.
 ## Safety Boundaries
 
 - Runtime control remains authoritative. `replyWhenMentioned` or a disabled group prevents replies.
+- Iris does not reply to messages sent by its own bot open ID, even if that message mentions Iris.
 - The responder does not bypass answer-draft retrieval, source policy, or permission guards.
 - The responder does not send replies directly through generic fetch; it uses `FeishuMessageReplier`.
 - Reply retries use a stable bounded UUID.

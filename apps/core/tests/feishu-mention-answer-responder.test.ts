@@ -110,6 +110,30 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(replier.replyText).not.toHaveBeenCalled();
   });
 
+  it("skips messages sent by the Iris bot itself", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const replier = { replyText: vi.fn() };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_message_1",
+        chatId: "oc_group_1",
+        senderId: "ou_iris",
+        text: "@_user_1 loop",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "skipped", reason: "self_message" });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
   it("replies with a clarification when Iris is mentioned without a question", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
