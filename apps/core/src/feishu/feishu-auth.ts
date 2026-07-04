@@ -82,7 +82,14 @@ function resolveVerificationToken(body: unknown): string | undefined {
 }
 
 function getHeader(headers: Record<string, string | undefined>, name: string): string | undefined {
-  return headers[name] ?? headers[name.toLowerCase()];
+  const normalizedName = name.toLowerCase();
+  for (const [headerName, value] of Object.entries(headers)) {
+    if (headerName.toLowerCase() === normalizedName) {
+      return value;
+    }
+  }
+
+  return undefined;
 }
 
 function safeEqual(actual: string, expected: string): boolean {

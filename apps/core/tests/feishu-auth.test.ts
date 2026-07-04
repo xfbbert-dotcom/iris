@@ -75,6 +75,24 @@ describe("Feishu auth primitives", () => {
     ).toBe(true);
   });
 
+  it("verifies signatures with mixed-case Feishu signature headers", () => {
+    const rawBody = JSON.stringify({ event: { message: "hello" } });
+    const timestamp = "1782864000";
+    const nonce = "nonce-1";
+
+    expect(
+      verifyFeishuSignature({
+        headers: {
+          "X-Lark-Request-Timestamp": timestamp,
+          "X-Lark-Request-Nonce": nonce,
+          "X-Lark-Signature": sign(timestamp, nonce, rawBody)
+        },
+        rawBody,
+        encryptKey
+      })
+    ).toBe(true);
+  });
+
   it("rejects invalid signatures without throwing", () => {
     expect(
       verifyFeishuSignature({
