@@ -39,9 +39,14 @@ passed with 31 Gateway tests.
 ### Task 3: Verification And PR
 
 - [x] Run `npm run verify`.
-- [ ] Commit and push.
-- [ ] Watch PR #3 checks.
+- [x] Commit and push.
+- [x] Watch PR #3 checks.
 
 Verification: `npm run verify` passed with 54 Core test files, 749 passing
 tests, 4 skipped tests, 7 Python worker tests, and a valid Docker Compose
 configuration.
+
+PR update: pushed commit `30fc860` (`fix: strengthen feishu body hash
+idempotency`) to PR #3.
+
+Remote checks: GitHub Actions passed for AI Worker and Core.
