@@ -319,6 +319,42 @@ describe("answer draft runtime wiring", () => {
     await app.close();
     expect(documentSyncRuntime.close).toHaveBeenCalledOnce();
   });
+
+  it("attempts to close every runtime when one runtime close fails", async () => {
+    const closeError = new Error("document sync close failed");
+    const answerDraftRuntime = {
+      answerDraftOrchestrator: {
+        generateDraft: vi.fn(async () => ({
+          answerText: "Runtime draft",
+          promptContext: "",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+        })),
+      },
+      close: vi.fn(async () => undefined),
+    };
+    const eventWorkerRuntime = fakeEventRuntime();
+    const reindexWorkerRuntime = fakeReindexRuntime();
+    const documentSyncRuntime = fakeDocumentSyncRuntime({
+      close: vi.fn(async () => {
+        throw closeError;
+      }),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => answerDraftRuntime,
+      createEventWorkerRuntime: () => eventWorkerRuntime,
+      createReindexWorkerRuntime: () => reindexWorkerRuntime,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+    });
+
+    await expect(app.close()).rejects.toThrow("document sync close failed");
+
+    expect(documentSyncRuntime.close).toHaveBeenCalledOnce();
+    expect(eventWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(reindexWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(answerDraftRuntime.close).toHaveBeenCalledOnce();
+  });
 });
 
 describe("GET /internal/audit/status", () => {

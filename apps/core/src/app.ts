@@ -956,10 +956,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   app.get("/health", async () => ({ ok: true, service: "iris-core" }));
 
   app.addHook("onClose", async () => {
-    await documentSyncRuntime?.close();
-    await eventWorkerRuntime?.close();
-    await reindexWorkerRuntime?.close();
-    await answerDraftRuntime?.close();
+    await closeRuntimeResources([
+      () => documentSyncRuntime?.close(),
+      () => eventWorkerRuntime?.close(),
+      () => reindexWorkerRuntime?.close(),
+      () => answerDraftRuntime?.close(),
+    ]);
   });
 
   return app;
@@ -974,6 +976,24 @@ function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
       ? {}
       : { latestEnqueueError: state.latestEnqueueError }),
   };
+}
+
+async function closeRuntimeResources(
+  closeOperations: Array<() => Promise<void> | undefined>,
+): Promise<void> {
+  let firstError: unknown;
+
+  for (const close of closeOperations) {
+    try {
+      await close();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+
+  if (firstError !== undefined) {
+    throw firstError;
+  }
 }
 
 function normalizeHeaders(headers: Record<string, unknown>): Record<string, string | undefined> {

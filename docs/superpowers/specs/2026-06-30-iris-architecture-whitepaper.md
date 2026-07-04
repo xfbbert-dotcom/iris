@@ -398,6 +398,8 @@ When Iris is disabled, it should stop processing new messages, stop proactive sp
 
 Feishu may still deliver events to the system while Iris is disabled. In that state, Iris should acknowledge or safely discard events according to Feishu platform requirements, but must not index message content, update semantic memory, generate replies, or execute actions unless an administrator explicitly re-enables the relevant scope.
 
+App shutdown is also a runtime-control boundary. If one composed runtime fails during close, Iris must still attempt to close the remaining runtimes before surfacing the shutdown error, so worker loops and external clients do not leak because an earlier cleanup step failed.
+
 Group management should show:
 
 - groups where Iris is installed;
