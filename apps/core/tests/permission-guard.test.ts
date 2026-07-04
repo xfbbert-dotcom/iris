@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { InMemoryAuditLog } from "../src/audit/audit-log.js";
+import { InMemoryAuditLog, type AuditEvent } from "../src/audit/audit-log.js";
 import { filterFragmentsByLivePermission } from "../src/permissions/permission-guard.js";
 
 describe("filterFragmentsByLivePermission", () => {
@@ -119,6 +119,36 @@ describe("filterFragmentsByLivePermission", () => {
         recordedAt: expect.any(Date),
       }
     ]);
+  });
+
+  it("bounds permission guard audit error messages before recording them", async () => {
+    const fragments = [{ id: "frag-1", documentId: "doc-timeout", text: "Uncertain content" }];
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const record = vi.fn(async (_event: AuditEvent) => undefined);
+    const auditLog = {
+      record,
+    };
+
+    await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async () => {
+        throw new Error(oversizedMessage);
+      },
+      auditLog,
+    });
+
+    expect(auditLog.record).toHaveBeenCalledWith({
+      type: "permission_guard_error",
+      documentId: "doc-timeout",
+      fragmentIds: ["frag-1"],
+      message: expect.stringContaining("[truncated]"),
+    });
+    const event = record.mock.calls[0]?.[0];
+    if (event === undefined) {
+      throw new Error("expected audit event");
+    }
+    expect(event.message?.length).toBeLessThanOrEqual(1000);
+    expect(event.message).not.toContain("trailing diagnostic detail");
   });
 
   it("does not fail permission filtering when audit recording fails", async () => {

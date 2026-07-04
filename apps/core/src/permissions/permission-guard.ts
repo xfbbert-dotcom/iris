@@ -1,4 +1,5 @@
 import type { AuditLog } from "../audit/audit-log.js";
+import { normalizeAuditEventMessage } from "../audit/audit-event-message.js";
 
 export type RetrievedDocumentFragment = {
   id: string;
@@ -104,7 +105,9 @@ async function auditDeniedPermission(input: {
       type: input.permission.error === undefined ? "permission_guard_denied" : "permission_guard_error",
       documentId: input.documentId,
       fragmentIds: input.fragmentIds,
-      ...(input.permission.error instanceof Error ? { message: input.permission.error.message } : {})
+      ...(input.permission.error instanceof Error
+        ? { message: normalizeAuditEventMessage(input.permission.error.message) }
+        : {})
     });
   } catch {
     // Audit logging is best-effort; permission filtering must stay fail-closed.

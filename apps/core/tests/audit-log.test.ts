@@ -49,6 +49,24 @@ describe("InMemoryAuditLog", () => {
     ]);
   });
 
+  it("bounds recorded audit event messages", async () => {
+    const recordedAt = new Date("2026-07-03T06:01:15.000Z");
+    const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+      message: oversizedMessage,
+    });
+
+    const [event] = auditLog.events;
+    expect(event?.message?.length).toBeLessThanOrEqual(1000);
+    expect(event?.message).toContain("[truncated]");
+    expect(event?.message).not.toContain("trailing diagnostic detail");
+  });
+
   it("clones returned events so readers cannot change history", async () => {
     const recordedAt = new Date("2026-07-03T06:01:30.000Z");
     const auditLog = new InMemoryAuditLog({ now: () => recordedAt });

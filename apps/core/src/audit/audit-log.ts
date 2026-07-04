@@ -1,3 +1,5 @@
+import { normalizeAuditEventMessage } from "./audit-event-message.js";
+
 export type PermissionGuardAuditEvent = {
   type: "permission_guard_denied" | "permission_guard_error";
   documentId: string;
@@ -68,9 +70,10 @@ export class InMemoryAuditLog implements AuditLog {
   }
 
   async record(event: AuditEvent): Promise<void> {
+    const normalizedEvent = normalizeAuditEvent(event);
     this.storedEvents.push({
-      ...event,
-      fragmentIds: [...event.fragmentIds],
+      ...normalizedEvent,
+      fragmentIds: [...normalizedEvent.fragmentIds],
       recordedAt: new Date(this.now()),
     });
     const overflow = this.storedEvents.length - this.maxEvents;
@@ -156,6 +159,15 @@ export class InMemoryAuditLog implements AuditLog {
         latestRecordedAt: new Date(summary.latestRecordedAt),
       }));
   }
+}
+
+function normalizeAuditEvent(event: AuditEvent): AuditEvent {
+  return {
+    ...event,
+    ...(event.message === undefined
+      ? {}
+      : { message: normalizeAuditEventMessage(event.message) }),
+  };
 }
 
 function cloneRecordedEvent(event: RecordedAuditEvent): RecordedAuditEvent {
