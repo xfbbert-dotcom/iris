@@ -185,6 +185,25 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     );
   });
 
+  it("rejects oversized embedding responses before returning vectors", async () => {
+    const provider = createOpenAICompatibleEmbeddingProvider({
+      config: config(),
+      fetch: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            data: [{ index: 0, embedding: [1, 0, 0] }],
+            padding: "x".repeat(8_500_000),
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    });
+
+    await expect(provider.embedTexts(["alpha"])).rejects.toThrow(
+      "embedding provider response exceeds 8388608 bytes",
+    );
+  });
+
   it("aborts requests after timeout", async () => {
     const fetch = vi.fn(((_url: URL | RequestInfo, init?: RequestInit) => {
       init?.signal?.dispatchEvent(new Event("abort"));

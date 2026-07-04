@@ -1,10 +1,12 @@
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 import type { EmbeddingProviderConfig } from "../config/env.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readBoundedJsonResponse } from "../integrations/bounded-json-response.js";
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 const MAX_EMBEDDING_INPUT_TEXTS = 64;
 const MAX_EMBEDDING_INPUT_TEXT_CHARS = 4000;
+const MAX_EMBEDDING_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export type OpenAICompatibleEmbeddingProviderDependencies = {
   config: EmbeddingProviderConfig;
@@ -86,14 +88,12 @@ function joinBaseUrl(baseUrl: string, path: string): string {
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw error;
-    }
-    throw new Error("embedding provider response was not valid JSON");
-  }
+  return readBoundedJsonResponse({
+    response,
+    invalidJsonErrorMessage: "embedding provider response was not valid JSON",
+    maxResponseBytes: MAX_EMBEDDING_RESPONSE_BYTES,
+    responseSizeErrorMessage: `embedding provider response exceeds ${MAX_EMBEDDING_RESPONSE_BYTES} bytes`,
+  });
 }
 
 function readEmbeddingVectors(
