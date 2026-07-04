@@ -100,6 +100,28 @@ describe("createFeishuDocumentPermissionChecker", () => {
     ).rejects.toThrow("Feishu document permission response did not include code");
   });
 
+  it("rejects oversized document metadata responses before allowing reads", async () => {
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            code: 0,
+            data: { document: { title: "Spec" }, padding: "x".repeat(70_000) },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    });
+
+    await expect(
+      checker.canReadSource(
+        source({ sourceUri: "https://example.feishu.cn/docx/doccnOversized" }),
+      ),
+    ).rejects.toThrow("Feishu document permission response exceeds 65536 bytes");
+  });
+
   it("throws before metadata checks when successful wiki node responses omit the Feishu code", async () => {
     const fetch = vi.fn(async () =>
       jsonResponse({

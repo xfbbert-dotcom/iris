@@ -6,6 +6,7 @@ import {
 } from "../documents/feishu-document-body-fetcher.js";
 import type { FeishuTenantAccessTokenProvider } from "../feishu/feishu-tenant-access-token-provider.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readBoundedJsonResponse } from "../integrations/bounded-json-response.js";
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 export type FeishuDocumentPermissionChecker = {
@@ -20,6 +21,7 @@ export type FeishuDocumentPermissionCheckerDependencies = {
 };
 
 const DEFAULT_FEISHU_DOCUMENT_PERMISSION_TIMEOUT_MS = 5_000;
+const MAX_FEISHU_PERMISSION_RESPONSE_BYTES = 65_536;
 
 export function createFeishuDocumentPermissionChecker({
   baseUrl,
@@ -161,7 +163,12 @@ async function fetchJsonWithTimeout({
       ...init,
       signal: controller.signal,
     });
-    const responseBody = await readJsonResponse(response);
+    const responseBody = await readBoundedJsonResponse({
+      response,
+      invalidJsonErrorMessage: "Feishu document permission response was not valid JSON",
+      maxResponseBytes: MAX_FEISHU_PERMISSION_RESPONSE_BYTES,
+      responseSizeErrorMessage: `Feishu document permission response exceeds ${MAX_FEISHU_PERMISSION_RESPONSE_BYTES} bytes`,
+    });
 
     return { response, responseBody };
   } catch (error) {
@@ -171,17 +178,6 @@ async function fetchJsonWithTimeout({
     throw error;
   } finally {
     clearTimeout(timeout);
-  }
-}
-
-async function readJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw error;
-    }
-    throw new Error("Feishu document permission response was not valid JSON");
   }
 }
 
