@@ -18,10 +18,11 @@ length exceeds the configured value. The rejection is an ordinary fetch failure,
 `DocumentSyncRunner` already records a failed snapshot and marks the source `failed`; operators can
 later adjust the limit and manually re-enqueue the source.
 
-The bound is intentionally applied after JSON parsing and after trimming the content string. It does
-not solve streaming protection for very large HTTP JSON bodies; that remains a future improvement.
-It does prevent oversized document text from entering snapshots, chunking, embedding, retrieval, or
-prompt assembly.
+The core bound is applied after JSON parsing and after trimming the content string. A later
+increment adds a `content-length` preflight for raw-content responses that are obviously too large
+before parsing. It still does not solve full streaming protection for chunked or missing-length HTTP
+JSON bodies; that remains a future improvement. It does prevent oversized document text from
+entering snapshots, chunking, embedding, retrieval, or prompt assembly.
 
 ## Invariants
 

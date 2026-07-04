@@ -15,6 +15,7 @@ export type FeishuDocumentBodyFetcherDependencies = {
 
 const DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_FEISHU_DOCUMENT_MAX_CONTENT_CHARS = 2_000_000;
+const RAW_CONTENT_RESPONSE_OVERHEAD_BYTES = 4096;
 
 const supportedSourceTypes = new Set<DocumentSourceType>([
   "group_visible_document",
@@ -111,6 +112,10 @@ export function createFeishuDocumentBodyFetcher({
         timeoutMs: safeTimeoutMs,
         timeoutMessage: "Feishu document raw content request timed out",
         jsonErrorMessage: "Feishu document raw content response was not valid JSON",
+        maxResponseBytes: safeMaxContentChars + RAW_CONTENT_RESPONSE_OVERHEAD_BYTES,
+        responseSizeErrorMessage: `Feishu document raw content response exceeds ${
+          safeMaxContentChars + RAW_CONTENT_RESPONSE_OVERHEAD_BYTES
+        } bytes`,
       });
 
       if (!response.ok) {
@@ -175,6 +180,8 @@ async function fetchJsonWithTimeout({
   timeoutMs,
   timeoutMessage,
   jsonErrorMessage,
+  maxResponseBytes,
+  responseSizeErrorMessage,
 }: {
   fetch: typeof globalThis.fetch;
   url: string;
@@ -182,6 +189,8 @@ async function fetchJsonWithTimeout({
   timeoutMs: number;
   timeoutMessage: string;
   jsonErrorMessage: string;
+  maxResponseBytes?: number;
+  responseSizeErrorMessage?: string;
 }): Promise<{ response: Response; responseBody: unknown }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -191,6 +200,7 @@ async function fetchJsonWithTimeout({
       ...init,
       signal: controller.signal,
     });
+    rejectOversizedKnownResponse(response, maxResponseBytes, responseSizeErrorMessage);
     const responseBody = await readJsonResponse(response, jsonErrorMessage);
 
     return { response, responseBody };
@@ -201,6 +211,31 @@ async function fetchJsonWithTimeout({
     throw error;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function rejectOversizedKnownResponse(
+  response: Response,
+  maxResponseBytes: number | undefined,
+  errorMessage: string | undefined,
+): void {
+  if (maxResponseBytes === undefined || errorMessage === undefined) {
+    return;
+  }
+
+  const contentLength = (response.headers as Headers | undefined)?.get("content-length");
+  if (contentLength === undefined || contentLength === null) {
+    return;
+  }
+
+  const trimmed = contentLength.trim();
+  if (!/^\d+$/u.test(trimmed)) {
+    return;
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed > maxResponseBytes) {
+    throw new Error(errorMessage);
   }
 }
 

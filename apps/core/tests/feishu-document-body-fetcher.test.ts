@@ -400,6 +400,26 @@ describe("FeishuDocumentBodyFetcher", () => {
     );
   });
 
+  it("rejects oversized raw content responses before parsing JSON when content-length is known", async () => {
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-length": "4102" }),
+        json: async () => {
+          throw new Error("json should not be read");
+        },
+      } as unknown as Response)),
+      maxContentChars: 5,
+    });
+
+    await expect(fetcher.fetch(source())).rejects.toThrow(
+      "Feishu document raw content response exceeds 4101 bytes",
+    );
+  });
+
   it("throws on invalid raw content JSON", async () => {
     const fetcher = createFeishuDocumentBodyFetcher({
       baseUrl: "https://open.feishu.cn",
