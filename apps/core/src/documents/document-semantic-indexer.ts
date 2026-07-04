@@ -14,17 +14,26 @@ export interface DocumentSemanticIndexer {
   indexSnapshot(snapshot: DocumentSnapshot): Promise<DocumentSemanticIndexResult>;
 }
 
+const DEFAULT_EMBEDDING_BATCH_SIZE = 64;
+
 export function createDocumentSemanticIndexer({
   chunker,
   embedder,
   embeddingProfileId,
   fragments,
+  embeddingBatchSize = DEFAULT_EMBEDDING_BATCH_SIZE,
 }: {
   chunker: DocumentChunker;
   embedder: EmbeddingProvider;
   embeddingProfileId: string;
   fragments: Pick<DocumentFragmentRepository, "replaceFragmentsForSnapshot">;
+  embeddingBatchSize?: number;
 }): DocumentSemanticIndexer {
+  const safeEmbeddingBatchSize = sanitizePositiveSafeInteger(
+    "embeddingBatchSize",
+    embeddingBatchSize,
+  );
+
   return {
     async indexSnapshot(snapshot) {
       if (snapshot.fetchStatus !== "succeeded") {
@@ -39,7 +48,11 @@ export function createDocumentSemanticIndexer({
         return { status: "skipped", snapshotId: snapshot.id, reason: "empty_body" };
       }
 
-      const embeddings = await embedder.embedTexts(chunks.map((chunk) => chunk.text));
+      const embeddings = await embedChunksInBatches({
+        chunks,
+        embedder,
+        batchSize: safeEmbeddingBatchSize,
+      });
       validateEmbeddings(chunks, embeddings);
 
       await fragments.replaceFragmentsForSnapshot({
@@ -54,6 +67,29 @@ export function createDocumentSemanticIndexer({
       return { status: "indexed", snapshotId: snapshot.id, fragmentCount: chunks.length };
     },
   };
+}
+
+async function embedChunksInBatches({
+  chunks,
+  embedder,
+  batchSize,
+}: {
+  chunks: DocumentChunk[];
+  embedder: EmbeddingProvider;
+  batchSize: number;
+}): Promise<number[][]> {
+  const embeddings: number[][] = [];
+
+  for (let index = 0; index < chunks.length; index += batchSize) {
+    const batch = chunks.slice(index, index + batchSize);
+    const batchEmbeddings = await embedder.embedTexts(batch.map((chunk) => chunk.text));
+    if (batchEmbeddings.length !== batch.length) {
+      throw new Error("embedding count mismatch");
+    }
+    embeddings.push(...batchEmbeddings);
+  }
+
+  return embeddings;
 }
 
 function validateEmbeddings(chunks: DocumentChunk[], embeddings: number[][]): void {
@@ -71,4 +107,12 @@ function validateEmbeddings(chunks: DocumentChunk[], embeddings: number[][]): vo
       }
     }
   }
+}
+
+function sanitizePositiveSafeInteger(fieldName: string, value: number): number {
+  if (!Number.isInteger(value) || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${fieldName} must be a positive safe integer`);
+  }
+
+  return value;
 }
