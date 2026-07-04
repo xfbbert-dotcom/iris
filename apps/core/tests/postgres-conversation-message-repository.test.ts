@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { UpsertConversationMessageInput } from "../src/conversation/conversation-message-repository.js";
 import {
   createPostgresConversationMessageRepository,
   type Queryable,
@@ -81,6 +82,39 @@ describe("PostgresConversationMessageRepository", () => {
     expect(storedText).not.toContain("trailing message detail");
   });
 
+  it.each([
+    {
+      field: "providerMessageId",
+      message: "providerMessageId must be at most 512 characters",
+    },
+    {
+      field: "chatId",
+      message: "chatId must be at most 512 characters",
+    },
+    {
+      field: "senderId",
+      message: "senderId must be at most 512 characters",
+    },
+    {
+      field: "messageType",
+      message: "messageType must be at most 512 characters",
+    },
+    {
+      field: "rawEventIdempotencyKey",
+      message: "rawEventIdempotencyKey must be at most 512 characters",
+    },
+  ] as const)("rejects oversized $field before upsert", async ({ field, message }) => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+    const input: UpsertConversationMessageInput = {
+      ...baseUpsertInput(),
+      [field]: "I".repeat(513),
+    };
+
+    await expect(repository.upsertMessage(input)).rejects.toThrow(message);
+    expect(queryable.query).not.toHaveBeenCalled();
+  });
+
   it("lists recent messages by chat", async () => {
     const queryable = fakeQueryable([
       {
@@ -116,6 +150,16 @@ describe("PostgresConversationMessageRepository", () => {
       expect.stringContaining("WHERE chat_id = $1"),
       ["chat-1", 20],
     );
+  });
+
+  it("rejects oversized recent chat ids before querying Postgres", async () => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(
+      repository.listRecentByChat({ chatId: "C".repeat(513), limit: 20 }),
+    ).rejects.toThrow("chatId must be at most 512 characters");
+    expect(queryable.query).not.toHaveBeenCalled();
   });
 
   it("bounds oversized legacy message text when reading rows", async () => {
@@ -179,6 +223,19 @@ describe("PostgresConversationMessageRepository", () => {
     expect(queryable.query).not.toHaveBeenCalled();
   });
 });
+
+function baseUpsertInput(): UpsertConversationMessageInput {
+  return {
+    provider: "feishu",
+    providerMessageId: "message-1",
+    chatId: "chat-1",
+    senderId: "user-1",
+    messageType: "text",
+    text: "Hello",
+    sentAt: new Date("2026-07-02T01:00:00.000Z"),
+    rawEventIdempotencyKey: "raw-event:feishu:event-1",
+  };
+}
 
 function fakeQueryable(rows: unknown[]): Queryable {
   const query = vi.fn(async () => ({ rows }));

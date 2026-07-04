@@ -20,6 +20,7 @@ type ConversationMessageRow = {
   created_at: Date;
 };
 
+export const MAX_CONVERSATION_MESSAGE_ID_CHARS = 512;
 const MAX_CONVERSATION_MESSAGE_TEXT_CHARS = 8000;
 const TRUNCATION_MARKER = " ... [truncated]";
 
@@ -30,7 +31,21 @@ export function createPostgresConversationMessageRepository({
 }): ConversationMessageRepository {
   return {
     async upsertMessage(input) {
-      const id = `${input.provider}:${input.providerMessageId}`;
+      const providerMessageId = requireBoundedIdentifier(
+        "providerMessageId",
+        input.providerMessageId,
+      );
+      const chatId = requireBoundedIdentifier("chatId", input.chatId);
+      const senderId =
+        input.senderId === undefined
+          ? null
+          : requireBoundedIdentifier("senderId", input.senderId);
+      const messageType = requireBoundedIdentifier("messageType", input.messageType);
+      const rawEventIdempotencyKey = requireBoundedIdentifier(
+        "rawEventIdempotencyKey",
+        input.rawEventIdempotencyKey,
+      );
+      const id = `${input.provider}:${providerMessageId}`;
       const result = await queryable.query<ConversationMessageRow>(
         `
         INSERT INTO conversation_messages (
@@ -58,13 +73,13 @@ export function createPostgresConversationMessageRepository({
         [
           id,
           input.provider,
-          input.providerMessageId,
-          input.chatId,
-          input.senderId ?? null,
-          input.messageType,
+          providerMessageId,
+          chatId,
+          senderId,
+          messageType,
           normalizeMessageText(input.text),
           input.sentAt,
-          input.rawEventIdempotencyKey,
+          rawEventIdempotencyKey,
         ],
       );
 
@@ -72,6 +87,7 @@ export function createPostgresConversationMessageRepository({
     },
 
     async listRecentByChat(input) {
+      const chatId = requireBoundedIdentifier("chatId", input.chatId);
       const limit = sanitizeLimit(input.limit);
       const result = await queryable.query<ConversationMessageRow>(
         `
@@ -81,12 +97,22 @@ export function createPostgresConversationMessageRepository({
         ORDER BY sent_at DESC, created_at DESC
         LIMIT $2
         `,
-        [input.chatId, limit],
+        [chatId, limit],
       );
 
       return result.rows.map(mapRow);
     },
   };
+}
+
+function requireBoundedIdentifier(fieldName: string, value: string): string {
+  if (value.length > MAX_CONVERSATION_MESSAGE_ID_CHARS) {
+    throw new Error(
+      `${fieldName} must be at most ${MAX_CONVERSATION_MESSAGE_ID_CHARS} characters`,
+    );
+  }
+
+  return value;
 }
 
 function sanitizeLimit(value: number): number {
