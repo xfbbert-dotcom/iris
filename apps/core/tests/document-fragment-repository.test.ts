@@ -280,6 +280,25 @@ describe("DocumentFragmentRepository", () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects unsafe vector search limits before querying fragments", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("fragment search limit must be a finite safe-magnitude number");
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it("rejects unsupported embedding dimensions", async () => {
     const repository = createDocumentFragmentRepository({
       queryable: queryableFrom(vi.fn(async () => ({ rows: [] }))),

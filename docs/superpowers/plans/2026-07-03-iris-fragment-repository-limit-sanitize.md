@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prevent non-finite vector search limits from reaching SQL.
+**Goal:** Prevent non-finite and unsafe-magnitude vector search limits from reaching SQL.
 
-**Architecture:** Add the same finite-aware limit guard already used by queue, worker, and repository boundaries to `DocumentFragmentRepository.searchSimilarFragments()`. Keep the change local to the repository and prove it with a focused unit test.
+**Architecture:** Add the same finite-aware and safe-magnitude limit guard already used by queue, worker, and repository boundaries to `DocumentFragmentRepository.searchSimilarFragments()`. Keep the change local to the repository and prove it with focused unit tests.
 
 **Tech Stack:** TypeScript, Vitest, pgvector SQL through `pg`.
 
@@ -59,3 +59,31 @@ git add apps/core/src/documents/document-fragment-repository.ts apps/core/tests/
 git commit -m "fix: sanitize fragment search limits"
 git push --force-with-lease origin codex/iris-document-source-registry
 ```
+
+### Task 2: Unsafe Finite Limit Guard
+
+**Files:**
+- Modify: `apps/core/tests/document-fragment-repository.test.ts`
+- Modify: `apps/core/src/documents/document-fragment-repository.ts`
+- Modify: `docs/superpowers/specs/2026-07-03-iris-fragment-repository-limit-sanitize-design.md`
+- Modify: `docs/superpowers/plans/2026-07-03-iris-fragment-repository-limit-sanitize.md`
+
+- [x] **Step 1: Write the failing test**
+
+Add a test named `rejects unsafe vector search limits before querying fragments` that calls `searchSimilarFragments()` with `Number.MAX_SAFE_INTEGER + 1`, expects `fragment search limit must be a finite safe-magnitude number`, and confirms the queryable is not called.
+
+- [x] **Step 2: Run test to verify it fails**
+
+Run: `npm test -- document-fragment-repository.test.ts` from `apps/core`.
+
+Observed: FAIL because `searchSimilarFragments()` resolved `[]` instead of rejecting.
+
+- [x] **Step 3: Write minimal implementation**
+
+Update `sanitizeLimit(value)` to reject finite values whose absolute value exceeds `Number.MAX_SAFE_INTEGER`, while retaining the existing `LIMIT 0` behavior for non-finite values.
+
+- [x] **Step 4: Run focused verification**
+
+Run: `npm test -- document-fragment-repository.test.ts` from `apps/core`.
+
+Observed: PASS with 11 passing tests and 1 skipped test in `document-fragment-repository.test.ts`.

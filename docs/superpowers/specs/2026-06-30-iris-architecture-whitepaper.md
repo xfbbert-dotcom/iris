@@ -695,6 +695,9 @@ Required architectural response:
   components, live-chat context providers, and conversation-message storage
   adapters must also reject unsafe numeric magnitudes when called directly,
   while retaining their defensive prompt-budget caps for safe finite values.
+- Semantic fragment-search storage adapters must reject unsafe finite query
+  limits before pgvector SQL is issued, while retaining the existing defensive
+  `LIMIT 0` behavior for non-finite values.
 - Validation should not invent product-specific business caps unless a separate architecture decision calls for them.
 
 Evolution signal:
