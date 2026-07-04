@@ -2,7 +2,10 @@ import type {
   DocumentSource,
   RegisterGroupVisibleDocumentInput,
 } from "./document-source-registry.js";
-import type { FeishuDocumentLink } from "./feishu-document-link-extractor.js";
+import {
+  MAX_FEISHU_DOCUMENT_LINKS_PER_MESSAGE,
+  type FeishuDocumentLink,
+} from "./feishu-document-link-extractor.js";
 
 export type GroupVisibleDocumentRegistrar = {
   registerDiscoveredLinks(input: {
@@ -53,16 +56,22 @@ export function createGroupVisibleDocumentRegistrar({
 
 function dedupeLinks(links: FeishuDocumentLink[]): FeishuDocumentLink[] {
   const seen = new Set<string>();
+  const dedupedLinks: FeishuDocumentLink[] = [];
 
-  return links.flatMap((link) => {
+  for (const link of links) {
     const sourceUri = link.sourceUri.trim();
     if (seen.has(sourceUri)) {
-      return [];
+      continue;
     }
     if (sourceUri.length === 0) {
-      return [];
+      continue;
     }
     seen.add(sourceUri);
-    return [{ ...link, sourceUri }];
-  });
+    dedupedLinks.push({ ...link, sourceUri });
+    if (dedupedLinks.length >= MAX_FEISHU_DOCUMENT_LINKS_PER_MESSAGE) {
+      break;
+    }
+  }
+
+  return dedupedLinks;
 }

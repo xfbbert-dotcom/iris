@@ -77,6 +77,20 @@ describe("FeishuDocumentLinkExtractor", () => {
     ).toEqual([{ sourceUri: "https://docs.feishu.cn/docx/token" }]);
   });
 
+  it("bounds distinct document links extracted from a single message", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+    const text = Array.from(
+      { length: 25 },
+      (_, index) => `https://docs.feishu.cn/docx/token-${index}`,
+    ).join(" ");
+
+    const links = extractor.extractLinks(text);
+
+    expect(links).toHaveLength(20);
+    expect(links[0]).toEqual({ sourceUri: "https://docs.feishu.cn/docx/token-0" });
+    expect(links[19]).toEqual({ sourceUri: "https://docs.feishu.cn/docx/token-19" });
+  });
+
   it("ignores Feishu document links with embedded credentials", () => {
     const extractor = createFeishuDocumentLinkExtractor();
 

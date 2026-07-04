@@ -133,6 +133,48 @@ describe("GroupVisibleDocumentRegistrar", () => {
     expect(syncPlanner.planRegisteredSources).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds discovered links from one message before registration and sync planning", async () => {
+    const registry = {
+      registerGroupVisibleDocument: vi.fn(async (input: { sourceUri: string }) =>
+        source({ id: input.sourceUri.split("/").at(-1), sourceUri: input.sourceUri }),
+      ),
+    };
+    const syncPlanner = {
+      planRegisteredSources: vi.fn(async (_sources: DocumentSource[]) => ({
+        enqueuedCount: 20,
+        skippedCount: 0,
+      })),
+    };
+    const registrar = createGroupVisibleDocumentRegistrar({ registry, syncPlanner });
+    const links = Array.from({ length: 25 }, (_, index) => ({
+      sourceUri: `https://docs.feishu.cn/docx/token-${index}`,
+    }));
+
+    await registrar.registerDiscoveredLinks({
+      chatId: "oc_1",
+      messageId: "om_1",
+      observedAt: new Date("2026-07-02T10:00:00.000Z"),
+      links,
+    });
+
+    expect(registry.registerGroupVisibleDocument).toHaveBeenCalledTimes(20);
+    expect(registry.registerGroupVisibleDocument).toHaveBeenLastCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/token-19",
+      originGroupId: "oc_1",
+      originMessageId: "om_1",
+      observedByUserId: undefined,
+      observedAt: new Date("2026-07-02T10:00:00.000Z"),
+    });
+    expect(syncPlanner.planRegisteredSources).toHaveBeenCalledTimes(1);
+    expect(syncPlanner.planRegisteredSources).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        source({ id: "token-19", sourceUri: "https://docs.feishu.cn/docx/token-19" }),
+      ]),
+    );
+    const plannedSources = syncPlanner.planRegisteredSources.mock.calls[0]?.[0];
+    expect(plannedSources).toHaveLength(20);
+  });
+
   it("rejects when sync planning fails", async () => {
     const registry = {
       registerGroupVisibleDocument: vi.fn(async () => source({ id: "source-1" })),
