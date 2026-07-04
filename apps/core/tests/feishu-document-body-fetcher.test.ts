@@ -330,6 +330,33 @@ describe("FeishuDocumentBodyFetcher", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects oversized wiki node responses before raw content fetches", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            code: 0,
+            data: {
+              node: { obj_token: "doc_token_from_wiki", obj_type: "docx" },
+              padding: "x".repeat(70_000),
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { content: "Doc body" } }));
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(
+      fetcher.fetch(source({ sourceUri: "https://acme.feishu.cn/wiki/wiki_1" })),
+    ).rejects.toThrow("Feishu wiki node response exceeds 65536 bytes");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("throws when raw content responses omit the Feishu code", async () => {
     const fetcher = createFeishuDocumentBodyFetcher({
       baseUrl: "https://open.feishu.cn",

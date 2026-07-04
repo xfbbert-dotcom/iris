@@ -16,6 +16,7 @@ export type FeishuDocumentBodyFetcherDependencies = {
 const DEFAULT_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_FEISHU_DOCUMENT_MAX_CONTENT_CHARS = 2_000_000;
 const RAW_CONTENT_RESPONSE_OVERHEAD_BYTES = 4096;
+const WIKI_NODE_RESPONSE_MAX_BYTES = 65_536;
 export const MAX_FEISHU_DOCUMENT_TOKEN_CHARS = 512;
 
 const supportedSourceTypes = new Set<DocumentSourceType>([
@@ -160,6 +161,8 @@ async function fetchWikiDocumentId({
     timeoutMs,
     timeoutMessage: "Feishu wiki node request timed out",
     jsonErrorMessage: "Feishu wiki node response was not valid JSON",
+    maxResponseBytes: WIKI_NODE_RESPONSE_MAX_BYTES,
+    responseSizeErrorMessage: `Feishu wiki node response exceeds ${WIKI_NODE_RESPONSE_MAX_BYTES} bytes`,
   });
 
   if (!response.ok) {
