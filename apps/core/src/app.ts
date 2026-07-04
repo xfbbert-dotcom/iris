@@ -826,7 +826,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ok: true,
         ...(await documentSyncRuntime.registerAuthorizedWikiDocument({
           ...parsedRequest,
-          observedAt: new Date(),
+          observedAt: now(),
         })),
       };
     } catch {
@@ -853,7 +853,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ok: true,
         ...(await documentSyncRuntime.registerUserSubmittedDocument({
           ...parsedRequest,
-          observedAt: new Date(),
+          observedAt: now(),
         })),
       };
     } catch {

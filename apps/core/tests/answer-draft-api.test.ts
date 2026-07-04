@@ -3963,6 +3963,7 @@ describe("authorized wiki document registration API", () => {
   });
 
   it("registers an authorized wiki document and enqueues sync", async () => {
+    const observedAt = new Date("2026-07-03T05:00:00.000Z");
     const runtime = fakeDocumentSyncRuntime({
       registerAuthorizedWikiDocument: vi.fn(async () => ({
         source: authorizedWikiSource(),
@@ -3975,6 +3976,7 @@ describe("authorized wiki document registration API", () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
+      now: () => observedAt,
     });
 
     const response = await app.inject({
@@ -4013,7 +4015,7 @@ describe("authorized wiki document registration API", () => {
       sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
       title: "Handbook",
       authorizedSpaceId: "space-1",
-      observedAt: expect.any(Date),
+      observedAt,
     });
   });
 
@@ -4202,6 +4204,7 @@ describe("user submitted document registration API", () => {
   });
 
   it("registers a user submitted document and enqueues sync", async () => {
+    const observedAt = new Date("2026-07-03T05:10:00.000Z");
     const runtime = fakeDocumentSyncRuntime({
       registerUserSubmittedDocument: vi.fn(async () => ({
         source: userSubmittedSource(),
@@ -4214,6 +4217,7 @@ describe("user submitted document registration API", () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
+      now: () => observedAt,
     });
 
     const response = await app.inject({
@@ -4252,7 +4256,7 @@ describe("user submitted document registration API", () => {
       sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
       title: "User Guide",
       submittedByUserId: "ou_1",
-      observedAt: expect.any(Date),
+      observedAt,
     });
   });
 
