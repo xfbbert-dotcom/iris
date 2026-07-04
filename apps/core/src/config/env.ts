@@ -258,6 +258,9 @@ function readHttpBaseUrlEnv(name: string, value: string | undefined): string {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`${name} must be an http(s) URL`);
   }
+  if (parsed.username.length > 0 || parsed.password.length > 0) {
+    throw new Error(`${name} must not include embedded credentials`);
+  }
   if (parsed.search.length > 0 || parsed.hash.length > 0) {
     throw new Error(`${name} must not include query or fragment`);
   }
