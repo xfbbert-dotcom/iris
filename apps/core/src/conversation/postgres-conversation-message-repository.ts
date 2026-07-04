@@ -87,6 +87,9 @@ export function createPostgresConversationMessageRepository({
 }
 
 function sanitizeLimit(value: number): number {
+  if (Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+    throw new Error("conversation message limit must be a finite safe-magnitude number");
+  }
   if (!Number.isFinite(value)) {
     return 0;
   }

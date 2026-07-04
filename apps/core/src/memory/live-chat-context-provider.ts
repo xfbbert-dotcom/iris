@@ -33,6 +33,9 @@ const DEFAULT_LIVE_CHAT_LIMIT = 20;
 const MAX_LIVE_CHAT_LIMIT = 20;
 
 function sanitizeLimit(value: number | undefined): number {
+  if (value !== undefined && Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+    throw new Error("live chat limit must be a finite safe-magnitude number");
+  }
   if (value === undefined || !Number.isFinite(value)) {
     return DEFAULT_LIVE_CHAT_LIMIT;
   }

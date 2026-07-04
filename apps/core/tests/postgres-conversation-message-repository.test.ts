@@ -105,6 +105,19 @@ describe("PostgresConversationMessageRepository", () => {
       ["chat-1", 0],
     );
   });
+
+  it("rejects unsafe recent message limits before querying Postgres", async () => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(
+      repository.listRecentByChat({
+        chatId: "chat-1",
+        limit: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("conversation message limit must be a finite safe-magnitude number");
+    expect(queryable.query).not.toHaveBeenCalled();
+  });
 });
 
 function fakeQueryable(rows: unknown[]): Queryable {

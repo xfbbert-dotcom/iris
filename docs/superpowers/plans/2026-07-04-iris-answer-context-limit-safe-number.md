@@ -14,10 +14,14 @@ context builders before model orchestration.
   `liveChatLimit` values.
 - [x] Add failing orchestrator tests proving unsafe limits are rejected before
   stored live-chat reads or context building.
+- [x] Add failing live-chat provider and conversation-message repository tests
+  proving unsafe limits are rejected before storage queries.
 - [x] Reject unsafe-magnitude values inside retrieval context building and
   prompt assembly direct-call paths.
 - [x] Reject unsafe-magnitude values inside the answer draft orchestrator before
   any live-chat history read.
+- [x] Reject unsafe-magnitude values inside live-chat context loading and
+  conversation-message storage direct-call paths.
 - [x] Preserve existing finite safe fractional and negative limit behavior for
   downstream clamps.
 - [x] Update the architecture whitepaper and focused design note.
