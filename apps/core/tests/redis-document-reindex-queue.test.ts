@@ -33,6 +33,39 @@ describe("RedisDocumentReindexQueue", () => {
     });
   });
 
+  it("normalizes jobs before Redis enqueue and retry upserts", async () => {
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client, maxAttempts: 3 });
+    const job = jobFixture({
+      idempotencyKey: " reindex:profile-1536:snapshot-1 ",
+      embeddingProfileId: " profile-1536 ",
+      documentSnapshotId: " snapshot-1 ",
+    });
+
+    await queue.enqueue(job);
+    await queue.handleFailedJob({ job, errorMessage: "embedding failed" });
+
+    expect(client.eval).toHaveBeenNthCalledWith(1, expect.stringContaining("SADD"), {
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+      arguments: [jobFixture().idempotencyKey, serializeDocumentReindexJob(jobFixture())],
+    });
+    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("SADD"), {
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+      arguments: [
+        jobFixture().idempotencyKey,
+        serializeDocumentReindexJob(jobFixture({ attempts: 1 })),
+      ],
+    });
+  });
+
   it("dequeues jobs in FIFO order up to limit", async () => {
     const first = jobFixture({ documentSnapshotId: "snapshot-1" });
     const second = jobFixture({ documentSnapshotId: "snapshot-2" });

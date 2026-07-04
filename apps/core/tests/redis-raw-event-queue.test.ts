@@ -33,6 +33,38 @@ describe("RedisRawEventQueue", () => {
     });
   });
 
+  it("normalizes raw events before Redis enqueue and retry upserts", async () => {
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({ client, maxAttempts: 3 });
+    const event = eventFixture({
+      idempotencyKey: " raw-event:feishu:event-1 ",
+      eventType: " im.message.receive_v1 ",
+    });
+
+    await queue.enqueue(event);
+    await queue.handleFailedEvent({ event, errorMessage: "processor failed" });
+
+    expect(client.eval).toHaveBeenNthCalledWith(1, expect.stringContaining("SADD"), {
+      keys: ["iris:events:raw:seen", "iris:events:raw:queue"],
+      arguments: [eventFixture().idempotencyKey, serializeRawEvent(eventFixture())],
+    });
+    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("SADD"), {
+      keys: ["iris:events:raw:seen", "iris:events:raw:queue"],
+      arguments: [
+        eventFixture().idempotencyKey,
+        serializeRawEvent({ ...eventFixture(), attempts: 1 }),
+      ],
+    });
+  });
+
   it("round-trips raw event dates through JSON", () => {
     const event = eventFixture();
 

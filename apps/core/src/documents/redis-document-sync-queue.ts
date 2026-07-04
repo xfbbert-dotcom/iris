@@ -217,9 +217,11 @@ async function enqueueSerializedJob(
   queueKey: string,
   job: DocumentSyncJob,
 ): Promise<void> {
+  const payload = serializeDocumentSyncJob(job);
+  const normalizedJob = parseDocumentSyncJob(payload);
   await client.eval(ENQUEUE_SCRIPT, {
     keys: [seenKey, queueKey],
-    arguments: [job.idempotencyKey, serializeDocumentSyncJob(job)],
+    arguments: [normalizedJob.idempotencyKey, payload],
   });
 }
 
@@ -229,14 +231,16 @@ async function upsertRetryingSerializedJob(
   queueKey: string,
   job: DocumentSyncJob,
 ): Promise<void> {
+  const payload = serializeDocumentSyncJob(job);
+  const normalizedJob = parseDocumentSyncJob(payload);
   await client.eval(UPSERT_RETRY_SCRIPT, {
     keys: [seenKey, queueKey],
-    arguments: [job.idempotencyKey, serializeDocumentSyncJob(job)],
+    arguments: [normalizedJob.idempotencyKey, payload],
   });
 }
 
 export function serializeDocumentSyncJob(job: DocumentSyncJob): string {
-  return JSON.stringify(serializeDocumentSyncJobPayload(job));
+  return JSON.stringify(serializeDocumentSyncJobPayload(normalizeDocumentSyncJob(job)));
 }
 
 export function parseDocumentSyncJob(payload: string): DocumentSyncJob {
@@ -320,15 +324,20 @@ function serializeDocumentSyncJobPayload(job: DocumentSyncJob): Record<string, u
   };
 }
 
+function normalizeDocumentSyncJob(job: DocumentSyncJob): DocumentSyncJob {
+  return parseDocumentSyncJob(JSON.stringify(serializeDocumentSyncJobPayload(job)));
+}
+
 function serializeDeadLetteredDocumentSyncJob(input: {
   id: string;
   job: DocumentSyncJob;
   errorMessage: string;
   failedAt: Date;
 }): string {
+  const job = normalizeDocumentSyncJob(input.job);
   return JSON.stringify({
     id: input.id,
-    job: serializeDocumentSyncJobPayload(input.job),
+    job: serializeDocumentSyncJobPayload(job),
     errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
     failedAt: input.failedAt.toISOString(),
   });

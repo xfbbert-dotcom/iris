@@ -216,9 +216,11 @@ async function enqueueSerializedRawEvent(
   queueKey: string,
   event: RawEvent,
 ): Promise<void> {
+  const payload = serializeRawEvent(event);
+  const normalizedEvent = parseRawEvent(payload);
   await client.eval(ENQUEUE_SCRIPT, {
     keys: [seenKey, queueKey],
-    arguments: [event.idempotencyKey, serializeRawEvent(event)],
+    arguments: [normalizedEvent.idempotencyKey, payload],
   });
 }
 
@@ -228,14 +230,16 @@ async function upsertRetryingSerializedRawEvent(
   queueKey: string,
   event: RawEvent,
 ): Promise<void> {
+  const payload = serializeRawEvent(event);
+  const normalizedEvent = parseRawEvent(payload);
   await client.eval(UPSERT_RETRY_SCRIPT, {
     keys: [seenKey, queueKey],
-    arguments: [event.idempotencyKey, serializeRawEvent(event)],
+    arguments: [normalizedEvent.idempotencyKey, payload],
   });
 }
 
 export function serializeRawEvent(event: RawEvent): string {
-  return JSON.stringify(serializeRawEventPayload(event));
+  return JSON.stringify(serializeRawEventPayload(normalizeRawEvent(event)));
 }
 
 export function parseRawEvent(payload: string): RawEvent {
@@ -285,15 +289,20 @@ function serializeRawEventPayload(event: RawEvent): Record<string, unknown> {
   };
 }
 
+function normalizeRawEvent(event: RawEvent): RawEvent {
+  return parseRawEvent(JSON.stringify(serializeRawEventPayload(event)));
+}
+
 function serializeDeadLetteredRawEvent(input: {
   id: string;
   event: RawEvent;
   errorMessage: string;
   failedAt: Date;
 }): string {
+  const event = normalizeRawEvent(input.event);
   return JSON.stringify({
     id: input.id,
-    event: serializeRawEventPayload(input.event),
+    event: serializeRawEventPayload(event),
     errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
     failedAt: input.failedAt.toISOString(),
   });

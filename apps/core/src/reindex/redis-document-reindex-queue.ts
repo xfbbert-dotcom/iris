@@ -217,9 +217,11 @@ async function enqueueSerializedJob(
   queueKey: string,
   job: DocumentReindexJob,
 ): Promise<void> {
+  const payload = serializeDocumentReindexJob(job);
+  const normalizedJob = parseDocumentReindexJob(payload);
   await client.eval(ENQUEUE_SCRIPT, {
     keys: [seenKey, queueKey],
-    arguments: [job.idempotencyKey, serializeDocumentReindexJob(job)],
+    arguments: [normalizedJob.idempotencyKey, payload],
   });
 }
 
@@ -229,17 +231,27 @@ async function upsertRetryingSerializedJob(
   queueKey: string,
   job: DocumentReindexJob,
 ): Promise<void> {
+  const payload = serializeDocumentReindexJob(job);
+  const normalizedJob = parseDocumentReindexJob(payload);
   await client.eval(UPSERT_RETRY_SCRIPT, {
     keys: [seenKey, queueKey],
-    arguments: [job.idempotencyKey, serializeDocumentReindexJob(job)],
+    arguments: [normalizedJob.idempotencyKey, payload],
   });
 }
 
 export function serializeDocumentReindexJob(job: DocumentReindexJob): string {
-  return JSON.stringify({
+  return JSON.stringify(serializeDocumentReindexJobPayload(normalizeDocumentReindexJob(job)));
+}
+
+function normalizeDocumentReindexJob(job: DocumentReindexJob): DocumentReindexJob {
+  return parseDocumentReindexJob(JSON.stringify(serializeDocumentReindexJobPayload(job)));
+}
+
+function serializeDocumentReindexJobPayload(job: DocumentReindexJob): Record<string, unknown> {
+  return {
     ...job,
     enqueuedAt: job.enqueuedAt.toISOString(),
-  });
+  };
 }
 
 export function parseDocumentReindexJob(payload: string): DocumentReindexJob {
@@ -296,12 +308,10 @@ function serializeDeadLetteredDocumentReindexJob(input: {
   errorMessage: string;
   failedAt: Date;
 }): string {
+  const job = normalizeDocumentReindexJob(input.job);
   return JSON.stringify({
     id: input.id,
-    job: {
-      ...input.job,
-      enqueuedAt: input.job.enqueuedAt.toISOString(),
-    },
+    job: serializeDocumentReindexJobPayload(job),
     errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
     failedAt: input.failedAt.toISOString(),
   });

@@ -33,6 +33,35 @@ describe("RedisDocumentSyncQueue", () => {
     });
   });
 
+  it("normalizes jobs before Redis enqueue and retry upserts", async () => {
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({ client, maxAttempts: 3 });
+    const syncJob = job({
+      idempotencyKey: " document-sync:source-1 ",
+      documentSourceId: " source-1 ",
+    });
+
+    await queue.enqueue(syncJob);
+    await queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" });
+
+    expect(client.eval).toHaveBeenNthCalledWith(1, expect.stringContaining("SADD"), {
+      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
+      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job())],
+    });
+    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("SADD"), {
+      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
+      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 1 }))],
+    });
+  });
+
   it("dequeues jobs in FIFO order up to limit", async () => {
     const first = job({ documentSourceId: "source-1" });
     const second = job({ documentSourceId: "source-2" });
