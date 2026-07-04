@@ -6,6 +6,10 @@ The architecture constitution lives at:
 
 `docs/superpowers/specs/2026-06-30-iris-architecture-whitepaper.md`
 
+The internal rollout runbook lives at:
+
+`docs/operations/internal-rollout-runbook.md`
+
 The first implementation slice builds:
 
 - TypeScript Core App
