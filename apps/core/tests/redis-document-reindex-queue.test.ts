@@ -113,6 +113,24 @@ describe("RedisDocumentReindexQueue", () => {
     expect(client.lPop).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe dequeue limits before popping Redis jobs", async () => {
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+      lPop: vi.fn(async () => null),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.dequeueBatch(Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow(
+      "document reindex queue limit must be a finite safe-magnitude number",
+    );
+    expect(client.lPop).not.toHaveBeenCalled();
+  });
+
   it("dead-letters invalid queued payloads and continues dequeuing valid jobs", async () => {
     const valid = jobFixture({ documentSnapshotId: "snapshot-valid" });
     const client: RedisDocumentReindexQueueClient = {
@@ -352,6 +370,24 @@ describe("RedisDocumentReindexQueue", () => {
 
     await expect(queue.listDeadLetters({ limit: Number.POSITIVE_INFINITY })).resolves.toEqual([]);
     await expect(queue.listDeadLetters({ limit: Number.NaN })).resolves.toEqual([]);
+    expect(client.lRange).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsafe Redis DLQ list limits before reading Redis", async () => {
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(
+      queue.listDeadLetters({ limit: Number.MAX_SAFE_INTEGER + 1 }),
+    ).rejects.toThrow("document reindex queue limit must be a finite safe-magnitude number");
     expect(client.lRange).not.toHaveBeenCalled();
   });
 

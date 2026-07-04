@@ -72,6 +72,18 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([event]);
   });
 
+  it("rejects unsafe dequeue limits without consuming events", async () => {
+    const queue = new InMemoryRawEventQueue();
+    const event = eventFixture();
+
+    await queue.enqueue(event);
+
+    await expect(queue.dequeueBatch(Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow(
+      "raw event queue limit must be a finite safe-magnitude number",
+    );
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([event]);
+  });
+
   it("creates stable idempotency keys", () => {
     expect(createRawEventIdempotencyKey({ provider: "feishu", eventId: "evt-1" })).toBe(
       "raw-event:feishu:evt-1",

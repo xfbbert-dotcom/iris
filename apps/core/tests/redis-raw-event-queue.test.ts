@@ -149,6 +149,22 @@ describe("RedisRawEventQueue", () => {
     expect(client.lPop).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe dequeue limits before popping Redis events", async () => {
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lPop: vi.fn(async () => null),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({ client });
+
+    await expect(queue.dequeueBatch(Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow(
+      "raw event queue limit must be a finite safe-magnitude number",
+    );
+    expect(client.lPop).not.toHaveBeenCalled();
+  });
+
   it("dead-letters invalid queued payloads and continues dequeuing valid events", async () => {
     const valid = eventFixture({ idempotencyKey: "raw-event:feishu:event-valid" });
     const client: RedisRawEventQueueClient = {
