@@ -1,5 +1,6 @@
 import {
   MAX_DOCUMENT_SYNC_JOB_ID_CHARS,
+  createDocumentSyncIdempotencyKey,
   type DocumentSyncQueue,
 } from "./document-sync-queue.js";
 import type { DocumentSource, DocumentSyncState } from "./document-source-registry.js";
@@ -29,12 +30,10 @@ export function createManualDocumentSyncPlanner({
   registry,
   queue,
   now = () => new Date(),
-  requestId = defaultRequestId,
 }: {
   registry: ManualDocumentSyncPlannerRegistry;
   queue: Pick<DocumentSyncQueue, "enqueue">;
   now?: () => Date;
-  requestId?: () => string;
 }): ManualDocumentSyncPlanner {
   return {
     async enqueueSource({ documentSourceId }) {
@@ -74,7 +73,9 @@ export function createManualDocumentSyncPlanner({
       }
 
       await queue.enqueue({
-        idempotencyKey: `manual-source-sync:${normalizedDocumentSourceId}:${requestId()}`,
+        idempotencyKey: createDocumentSyncIdempotencyKey({
+          documentSourceId: normalizedDocumentSourceId,
+        }),
         documentSourceId: normalizedDocumentSourceId,
         reason: "manual_source_sync",
         enqueuedAt: now(),
@@ -98,8 +99,4 @@ function normalizeDocumentSourceId(documentSourceId: string): string {
   }
 
   return normalized;
-}
-
-function defaultRequestId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }

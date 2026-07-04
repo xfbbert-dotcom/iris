@@ -4,6 +4,7 @@ import {
   createManualDocumentSyncPlanner,
   type ManualDocumentSyncPlannerRegistry,
 } from "../src/documents/manual-document-sync-planner.js";
+import { createInMemoryDocumentSyncQueue } from "../src/documents/in-memory-document-sync-queue.js";
 import type { DocumentSyncJob } from "../src/documents/document-sync-queue.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 
@@ -15,7 +16,6 @@ describe("ManualDocumentSyncPlanner", () => {
       registry,
       queue,
       now: () => new Date("2026-07-03T03:00:00.000Z"),
-      requestId: () => "request-1",
     });
 
     await expect(planner.enqueueSource({ documentSourceId: "source-1" })).resolves.toEqual({
@@ -23,7 +23,7 @@ describe("ManualDocumentSyncPlanner", () => {
       documentSourceId: "source-1",
     });
     expect(queue.enqueue).toHaveBeenCalledWith({
-      idempotencyKey: "manual-source-sync:source-1:request-1",
+      idempotencyKey: "document-sync:source-1",
       documentSourceId: "source-1",
       reason: "manual_source_sync",
       enqueuedAt: new Date("2026-07-03T03:00:00.000Z"),
@@ -39,7 +39,6 @@ describe("ManualDocumentSyncPlanner", () => {
       registry,
       queue,
       now: () => new Date("2026-07-03T03:00:00.000Z"),
-      requestId: () => "request-1",
     });
 
     await expect(planner.enqueueSource({ documentSourceId: "source-1" })).resolves.toEqual({
@@ -57,7 +56,6 @@ describe("ManualDocumentSyncPlanner", () => {
       registry,
       queue,
       now: () => new Date("2026-07-03T03:00:00.000Z"),
-      requestId: () => "request-1",
     });
 
     await expect(planner.enqueueSource({ documentSourceId: "source-1" })).resolves.toEqual({
@@ -75,7 +73,6 @@ describe("ManualDocumentSyncPlanner", () => {
       registry,
       queue,
       now: () => new Date("2026-07-03T03:00:00.000Z"),
-      requestId: () => "request-1",
     });
 
     await expect(planner.enqueueSource({ documentSourceId: " source-1 " })).resolves.toEqual({
@@ -84,7 +81,7 @@ describe("ManualDocumentSyncPlanner", () => {
     });
     expect(registry.findSourceById).toHaveBeenCalledWith("source-1");
     expect(queue.enqueue).toHaveBeenCalledWith({
-      idempotencyKey: "manual-source-sync:source-1:request-1",
+      idempotencyKey: "document-sync:source-1",
       documentSourceId: "source-1",
       reason: "manual_source_sync",
       enqueuedAt: new Date("2026-07-03T03:00:00.000Z"),
@@ -105,6 +102,30 @@ describe("ManualDocumentSyncPlanner", () => {
     ).rejects.toThrow("documentSourceId must be at most 512 characters");
     expect(registry.findSourceById).not.toHaveBeenCalled();
     expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("enqueues manual jobs into the real in-memory document sync queue", async () => {
+    const queue = createInMemoryDocumentSyncQueue();
+    const registry = registryWith(source({ id: "source-1" }));
+    const planner = createManualDocumentSyncPlanner({
+      registry,
+      queue,
+      now: () => new Date("2026-07-03T03:00:00.000Z"),
+    });
+
+    await expect(planner.enqueueSource({ documentSourceId: "source-1" })).resolves.toEqual({
+      status: "enqueued",
+      documentSourceId: "source-1",
+    });
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([
+      {
+        idempotencyKey: "document-sync:source-1",
+        documentSourceId: "source-1",
+        reason: "manual_source_sync",
+        enqueuedAt: new Date("2026-07-03T03:00:00.000Z"),
+        attempts: 0,
+      },
+    ]);
   });
 
   it("returns not_found for unknown sources", async () => {
