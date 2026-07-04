@@ -112,6 +112,10 @@ function readAnswerContent(responseBody: unknown): string {
   if (!isRecord(firstChoice) || !isRecord(firstChoice.message)) {
     throw new Error("model provider response did not include answer content");
   }
+  const finishReason = firstChoice.finish_reason;
+  if (finishReason !== undefined && finishReason !== null && finishReason !== "stop") {
+    throw new Error("model provider response did not finish normally");
+  }
 
   const content = firstChoice.message.content;
   if (typeof content !== "string") {

@@ -94,6 +94,21 @@ describe("OpenAICompatibleModelProvider", () => {
     ).rejects.toThrow("model provider response did not include answer content");
   });
 
+  it("throws on explicitly truncated model responses", async () => {
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          choices: [{ finish_reason: "length", message: { content: "Partial answer" } }],
+        }),
+      ),
+    });
+
+    await expect(
+      provider.generateAnswerDraft({ question: "Q", promptContext: "C" }),
+    ).rejects.toThrow("model provider response did not finish normally");
+  });
+
   it("aborts requests after timeout", async () => {
     const fetch = vi.fn(((_url: URL | RequestInfo, init?: RequestInit) => {
       init?.signal?.dispatchEvent(new Event("abort"));
