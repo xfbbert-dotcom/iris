@@ -21,7 +21,7 @@
 **Files:**
 - Modify: `apps/core/tests/answer-draft-api.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add two tests inside `describe("internal API token guard", ...)`:
 
@@ -67,18 +67,21 @@ it("rejects configured internal API tokens that cannot be sent as one bearer cre
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `npm --workspace apps/core test -- answer-draft-api.test.ts -t "internal API token guard"`
 
 Expected: FAIL because the current parser accepts `Bearer\toperator-secret` and does not reject invalid configured tokens.
+
+Observed: FAIL with `expected 200 to be 401` for the tab-separated header and `expected
+[Function] to throw an error` for invalid configured tokens.
 
 ### Task 2: Minimal Implementation
 
 **Files:**
 - Modify: `apps/core/src/app.ts`
 
-- [ ] **Step 1: Implement strict token helpers**
+- [x] **Step 1: Implement strict token helpers**
 
 Import `timingSafeEqual` from `node:crypto`, reject configured tokens that include whitespace,
 control characters, or commas, and require literal spaces in the request header:
@@ -111,29 +114,35 @@ function isSingleBearerToken(value: string): boolean {
 }
 ```
 
-- [ ] **Step 2: Run GREEN**
+- [x] **Step 2: Run GREEN**
 
 Run: `npm --workspace apps/core test -- answer-draft-api.test.ts -t "internal API token guard"`
 
 Expected: PASS.
+
+Observed: PASS with 6 internal API token guard tests passing and 130 unrelated tests skipped by
+the focused filter.
 
 ### Task 3: Runbook And Verification
 
 **Files:**
 - Modify: `docs/operations/internal-rollout-runbook.md`
 
-- [ ] **Step 1: Document the token rule**
+- [x] **Step 1: Document the token rule**
 
 Add a short note under the existing bearer-token paragraph: `IRIS_INTERNAL_API_TOKEN` must be a
 single visible ASCII token without spaces, tabs, line breaks, or commas.
 
-- [ ] **Step 2: Run full verification**
+- [x] **Step 2: Run full verification**
 
 Run: `npm run verify`
 
 Expected: PASS for diff check, typecheck, Core tests, Python tests, and Docker Compose config.
 
-- [ ] **Step 3: Commit and push**
+Observed: PASS. Core reported 725 passing tests and 4 skipped tests. Python worker tests reported
+7 passing tests. Docker Compose config rendered successfully.
+
+- [x] **Step 3: Commit and push**
 
 Run:
 
@@ -143,8 +152,10 @@ git commit -m "fix: harden internal api bearer token parsing"
 git push
 ```
 
-- [ ] **Step 4: Watch PR checks**
+- [x] **Step 4: Watch PR checks**
 
 Run: `gh pr checks 3 --watch --interval 10`
 
 Expected: Core and AI Worker checks pass.
+
+Observed: PASS. GitHub Actions reported Core and AI Worker success for PR #3.
