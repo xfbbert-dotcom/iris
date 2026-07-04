@@ -136,6 +136,8 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
 ]);
 const deadLettersPresentReason = "dead_letters_present" as const;
 const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
+const maxInternalStringLength = 512;
+const maxInternalSourceUriLength = 2048;
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
@@ -1643,7 +1645,10 @@ function parseRegisterAuthorizedWikiDocumentRequest(
     return undefined;
   }
 
-  const rawSourceUri = readNonBlankId(value.sourceUri);
+  const rawSourceUri = readNonBlankBoundedString(
+    value.sourceUri,
+    maxInternalSourceUriLength,
+  );
   const sourceUri =
     rawSourceUri === undefined ? undefined : normalizeSupportedFeishuDocumentSourceUri(rawSourceUri);
   const authorizedSpaceId = readNonBlankId(value.authorizedSpaceId);
@@ -1670,7 +1675,10 @@ function parseRegisterUserSubmittedDocumentRequest(
     return undefined;
   }
 
-  const rawSourceUri = readNonBlankId(value.sourceUri);
+  const rawSourceUri = readNonBlankBoundedString(
+    value.sourceUri,
+    maxInternalSourceUriLength,
+  );
   const sourceUri =
     rawSourceUri === undefined ? undefined : normalizeSupportedFeishuDocumentSourceUri(rawSourceUri);
   const submittedByUserId = readNonBlankId(value.submittedByUserId);
@@ -1691,7 +1699,16 @@ function parseRegisterUserSubmittedDocumentRequest(
 }
 
 function readNonBlankId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return readNonBlankBoundedString(value, maxInternalStringLength);
+}
+
+function readNonBlankBoundedString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= maxLength ? trimmed : undefined;
 }
 
 function isSupportedFeishuDocumentSourceUri(sourceUri: string): boolean {

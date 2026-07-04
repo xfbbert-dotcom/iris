@@ -172,6 +172,25 @@ describe("POST /internal/answer-drafts", () => {
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when chatId is oversized", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const app = buildApp({ answerDraftOrchestrator });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: {
+        question: "What changed?",
+        chatId: "c".repeat(513),
+        liveChatMessages: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
   it("returns 400 for unsafe context limits", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const app = buildApp({ answerDraftOrchestrator });
@@ -2445,6 +2464,23 @@ describe("document sync source inventory API", () => {
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
   });
 
+  it("rejects oversized source inventory filter IDs before runtime lookup", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/document-sync/sources?groupId=${"g".repeat(513)}`,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.sources.list).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid source inventory list limits", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
@@ -3864,6 +3900,28 @@ describe("authorized wiki document registration API", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+  });
+
+  it("rejects oversized authorized wiki document titles before registration", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/authorized-wiki-documents",
+      payload: {
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+        title: "t".repeat(513),
+        authorizedSpaceId: "space-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.registerAuthorizedWikiDocument).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported authorized wiki document URLs before registration", async () => {
