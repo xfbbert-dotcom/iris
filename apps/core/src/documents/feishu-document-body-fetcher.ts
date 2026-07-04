@@ -219,7 +219,10 @@ function readWikiDocumentId(responseBody: unknown): string {
   }
 
   const code = responseBody.code;
-  if (typeof code === "number" && code !== 0) {
+  if (typeof code !== "number") {
+    throw new Error("Feishu wiki node response did not include code");
+  }
+  if (code !== 0) {
     throw new Error(`Feishu wiki node request failed: ${readErrorMessage(responseBody)}`);
   }
 
@@ -249,7 +252,10 @@ function readRawContent(responseBody: unknown): string {
   }
 
   const code = responseBody.code;
-  if (typeof code === "number" && code !== 0) {
+  if (typeof code !== "number") {
+    throw new Error("Feishu document raw content response did not include code");
+  }
+  if (code !== 0) {
     throw new Error(`Feishu document raw content request failed: ${readErrorMessage(responseBody)}`);
   }
 

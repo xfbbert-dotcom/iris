@@ -305,6 +305,44 @@ describe("FeishuDocumentBodyFetcher", () => {
     ).rejects.toThrow("unsupported Feishu wiki object type: sheet");
   });
 
+  it("throws when raw content responses omit the Feishu code", async () => {
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => jsonResponse({ data: { content: "Doc body" } })),
+    });
+
+    await expect(fetcher.fetch(source())).rejects.toThrow(
+      "Feishu document raw content response did not include code",
+    );
+  });
+
+  it("throws before raw content fetches when wiki node responses omit the Feishu code", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        data: { node: { obj_token: "doc_token_from_wiki", obj_type: "docx" } },
+      }),
+    );
+    const fetcher = createFeishuDocumentBodyFetcher({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(
+      fetcher.fetch(
+        source({
+          sourceType: "authorized_wiki_document",
+          sourceUri: "https://acme.feishu.cn/wiki/wiki_token_1",
+          originGroupId: undefined,
+          originMessageId: undefined,
+          authorizedSpaceId: "space-1",
+        }),
+      ),
+    ).rejects.toThrow("Feishu wiki node response did not include code");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("throws on non-ok wiki node responses", async () => {
     const fetcher = createFeishuDocumentBodyFetcher({
       baseUrl: "https://open.feishu.cn",
