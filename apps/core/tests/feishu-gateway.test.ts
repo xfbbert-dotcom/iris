@@ -627,6 +627,7 @@ describe("Core App Feishu route", () => {
           running: false,
           intervalMs: 1000,
           batchLimit: 10,
+          mentionRepliesEnabled: false,
           pendingEventCount: 0,
           deadLetterEventCount: 0,
         })),

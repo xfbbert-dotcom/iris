@@ -121,6 +121,7 @@ describe("createEventWorkerRuntime", () => {
       running: true,
       intervalMs: 1000,
       batchLimit: 50,
+      mentionRepliesEnabled: false,
       pendingEventCount: 42,
       deadLetterEventCount: 5,
       latestBatch: {
@@ -141,7 +142,7 @@ describe("createEventWorkerRuntime", () => {
     expect(pool.end).toHaveBeenCalledOnce();
   });
 
-  it("composes mention answer replies when bot identity and answer drafting are configured", () => {
+  it("composes mention answer replies when bot identity and answer drafting are configured", async () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const redisClient = {
       connect: vi.fn(async () => redisClient),
@@ -198,7 +199,7 @@ describe("createEventWorkerRuntime", () => {
       createWorkerLoop: vi.fn(() => loop),
     };
 
-    createEventWorkerRuntime({
+    const runtime = createEventWorkerRuntime({
       env: {
         ...enabledEnv(),
         FEISHU_APP_ID: "app-id",
@@ -236,6 +237,11 @@ describe("createEventWorkerRuntime", () => {
         runtimeController,
       }),
     );
+    await expect(runtime?.getStatus()).resolves.toMatchObject({
+      enabled: true,
+      mentionRepliesEnabled: true,
+    });
+    await runtime?.close();
   });
 
   it("does not compose mention replies when the bot open ID is not configured", () => {

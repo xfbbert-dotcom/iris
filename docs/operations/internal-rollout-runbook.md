@@ -96,6 +96,8 @@ $env:IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS="2000000"
 this value, Feishu OpenAPI credentials, and internal answer drafting are configured, the event worker
 can draft an answer and reply to messages that mention the Iris bot. Missing this value keeps event
 ingestion and document discovery running, but disables automatic @Iris replies.
+Check `GET /internal/events/status` or `GET /internal/status` for `mentionRepliesEnabled: true`
+before expecting @Iris replies in Feishu.
 
 Enable background workers:
 

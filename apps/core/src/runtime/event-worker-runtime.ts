@@ -74,6 +74,7 @@ export type EventWorkerRuntimeStatus = {
   running: boolean;
   intervalMs: number;
   batchLimit: number;
+  mentionRepliesEnabled: boolean;
   pendingEventCount: number;
   deadLetterEventCount: number;
   latestBatch?: RawEventWorkerBatchSnapshot;
@@ -250,6 +251,7 @@ function createEnabledEventWorkerRuntime({
         running: loopSnapshot.running,
         intervalMs: loopSnapshot.intervalMs,
         batchLimit: loopSnapshot.batchLimit,
+        mentionRepliesEnabled: mentionAnswerResponder !== undefined,
         pendingEventCount,
         deadLetterEventCount,
         ...(loopSnapshot.latestBatch === undefined
