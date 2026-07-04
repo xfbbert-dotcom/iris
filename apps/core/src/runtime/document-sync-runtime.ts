@@ -358,8 +358,13 @@ function createEnabledDocumentSyncRuntime({
     },
     sources: {
       async list(input) {
+        const limit = sanitizeLimit(input.limit);
+        if (limit === 0) {
+          return [];
+        }
+
         const sources = await listDocumentSources(documentSources, input);
-        return sources.slice(0, sanitizeLimit(input.limit));
+        return sources.slice(0, limit);
       },
       async get(id) {
         return await documentSources.findSourceById(id);
@@ -380,13 +385,17 @@ function createEnabledDocumentSyncRuntime({
         });
       },
       async listSnapshots(input) {
+        const limit = sanitizeLimit(input.limit);
         const source = await documentSources.findSourceById(input.id);
         if (source === undefined) {
           return undefined;
         }
+        if (limit === 0) {
+          return [];
+        }
 
         const sourceSnapshots = await snapshots.listSnapshotsForSource(input.id);
-        return sourceSnapshots.slice(0, sanitizeLimit(input.limit));
+        return sourceSnapshots.slice(0, limit);
       },
       async getSnapshot(input) {
         const source = await documentSources.findSourceById(input.sourceId);

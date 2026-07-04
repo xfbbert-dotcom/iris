@@ -433,9 +433,11 @@ describe("createDocumentSyncRuntime", () => {
       runtime?.sources.list({ limit: Number.POSITIVE_INFINITY }),
     ).resolves.toEqual([]);
     await expect(runtime?.sources.list({ limit: Number.NaN })).resolves.toEqual([]);
+    const listSourcesCountBeforeUnsafeLimit = documentSources.listSources.mock.calls.length;
     await expect(
       runtime?.sources.list({ limit: Number.MAX_SAFE_INTEGER + 1 }),
     ).rejects.toThrow("document sync runtime list limit must be a finite safe-magnitude number");
+    expect(documentSources.listSources).toHaveBeenCalledTimes(listSourcesCountBeforeUnsafeLimit);
     await expect(
       runtime?.sources.list({ limit: 10, sourceType: "authorized_wiki_document" }),
     ).resolves.toEqual([inventorySource]);
@@ -489,12 +491,21 @@ describe("createDocumentSyncRuntime", () => {
     await expect(
       runtime?.sources.listSnapshots({ id: "source-1", limit: Number.NaN }),
     ).resolves.toEqual([]);
+    const findSourceCountBeforeUnsafeSnapshotLimit = documentSources.findSourceById.mock.calls.length;
+    const listSnapshotsCountBeforeUnsafeSnapshotLimit =
+      snapshots.listSnapshotsForSource.mock.calls.length;
     await expect(
       runtime?.sources.listSnapshots({
         id: "source-1",
         limit: Number.MAX_SAFE_INTEGER + 1,
       }),
     ).rejects.toThrow("document sync runtime list limit must be a finite safe-magnitude number");
+    expect(documentSources.findSourceById).toHaveBeenCalledTimes(
+      findSourceCountBeforeUnsafeSnapshotLimit,
+    );
+    expect(snapshots.listSnapshotsForSource).toHaveBeenCalledTimes(
+      listSnapshotsCountBeforeUnsafeSnapshotLimit,
+    );
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
     expect(snapshots.listSnapshotsForSource).toHaveBeenCalledWith("source-1");
     await expect(
