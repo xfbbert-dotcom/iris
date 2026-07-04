@@ -250,15 +250,13 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
-  it("sanitizes non-finite vector search limits to zero", async () => {
-    const query = vi.fn(async (_sql: string, values?: unknown[]) => {
-      expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 0]);
-      return { rows: [] };
-    });
+  it("treats non-finite vector search limits as empty results without looking up profiles", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const getProfileById = vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 }));
     const repository = createDocumentFragmentRepository({
       queryable: queryableFrom(query),
       embeddingProfiles: {
-        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+        getProfileById,
       },
     });
 
@@ -277,15 +275,17 @@ describe("DocumentFragmentRepository", () => {
       }),
     ).resolves.toEqual([]);
 
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(getProfileById).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
   });
 
-  it("rejects unsafe vector search limits before querying fragments", async () => {
+  it("rejects unsafe vector search limits before querying profiles or fragments", async () => {
     const query = vi.fn(async () => ({ rows: [] }));
+    const getProfileById = vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 }));
     const repository = createDocumentFragmentRepository({
       queryable: queryableFrom(query),
       embeddingProfiles: {
-        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+        getProfileById,
       },
     });
 
@@ -296,6 +296,7 @@ describe("DocumentFragmentRepository", () => {
         limit: Number.MAX_SAFE_INTEGER + 1,
       }),
     ).rejects.toThrow("fragment search limit must be a finite safe-magnitude number");
+    expect(getProfileById).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
   });
 

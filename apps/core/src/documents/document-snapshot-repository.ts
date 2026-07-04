@@ -175,6 +175,11 @@ where id = $1
     },
 
     async listSuccessfulSnapshotsMissingProfile(input) {
+      const limit = sanitizeLimit(input.limit);
+      if (limit === 0) {
+        return [];
+      }
+
       const result = await dependencies.queryable.query<DocumentSnapshotRow>(
         `
 with latest_successful_snapshots as (
@@ -194,7 +199,7 @@ where not exists (
 order by s.fetched_at asc, s.id asc
 limit $2
 `,
-        [input.embeddingProfileId, sanitizeLimit(input.limit)],
+        [input.embeddingProfileId, limit],
       );
 
       return result.rows.map(mapSnapshotRow);

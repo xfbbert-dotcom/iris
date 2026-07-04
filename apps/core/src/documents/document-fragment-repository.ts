@@ -164,6 +164,11 @@ order by chunk_index asc, id asc
     },
 
     async searchSimilarFragments(input) {
+      const limit = sanitizeLimit(input.limit);
+      if (limit === 0) {
+        return [];
+      }
+
       const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
       const embeddingTable = resolveEmbeddingTable(profile.dimensions);
       validateVectorDimension(input.embedding, profile.dimensions);
@@ -190,7 +195,7 @@ where f.embedding_profile_id = $1
 order by e.embedding <=> $2::vector asc, f.document_source_id asc, f.chunk_index asc, f.id asc
 limit $3
 `,
-        [input.embeddingProfileId, serializeVector(input.embedding), sanitizeLimit(input.limit)],
+        [input.embeddingProfileId, serializeVector(input.embedding), limit],
       );
 
       return result.rows.map(mapRetrievedFragmentRow);

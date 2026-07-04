@@ -459,11 +459,8 @@ describe("DocumentSnapshotRepository", () => {
     ]);
   });
 
-  it("sanitizes non-finite missing-profile limits to zero", async () => {
-    const query = vi.fn(async (_sql: string, values?: unknown[]) => {
-      expect(values).toEqual(["profile-1536", 0]);
-      return { rows: [] };
-    });
+  it("treats non-finite missing-profile limits as empty results without querying snapshots", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
     const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
 
     await expect(
@@ -478,7 +475,7 @@ describe("DocumentSnapshotRepository", () => {
         limit: Number.NaN,
       }),
     ).resolves.toEqual([]);
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(query).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe missing-profile limits before querying snapshots", async () => {
