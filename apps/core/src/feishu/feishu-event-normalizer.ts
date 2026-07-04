@@ -21,9 +21,10 @@ export type IrisUnsupportedEvent = {
 };
 
 const feishuDocumentLinkExtractor = createFeishuDocumentLinkExtractor();
+const MAX_FEISHU_IDENTIFIER_CHARS = 512;
 
 export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
-  const eventId = readString(payload, "event_id") ?? "unknown";
+  const eventId = readBoundedString(payload, "event_id") ?? "unknown";
   const event = readObject(payload, "event");
   const message = readObject(event, "message");
 
@@ -37,9 +38,9 @@ export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
 
   const sender = readObject(event, "sender");
   const senderId = readObject(sender, "sender_id");
-  const senderOpenId = readString(senderId, "open_id");
-  const messageId = readString(message, "message_id");
-  const chatId = readString(message, "chat_id");
+  const senderOpenId = readBoundedString(senderId, "open_id");
+  const messageId = readBoundedString(message, "message_id");
+  const chatId = readBoundedString(message, "chat_id");
   const createTime = readString(message, "create_time");
   const messageType = readString(message, "message_type");
   const content = readString(message, "content");
@@ -135,6 +136,15 @@ function readObject(source: unknown, key: string): Record<string, unknown> | und
 function readString(source: unknown, key: string): string | undefined {
   const value = readValue(source, key);
   return typeof value === "string" ? value : undefined;
+}
+
+function readBoundedString(source: unknown, key: string): string | undefined {
+  const value = readString(source, key);
+  if (value === undefined || value.length > MAX_FEISHU_IDENTIFIER_CHARS) {
+    return undefined;
+  }
+
+  return value;
 }
 
 function readValue(source: unknown, key: string): unknown {

@@ -159,6 +159,28 @@ describe("normalizeFeishuEvent", () => {
     });
   });
 
+  it("returns unsupported when required identifiers are oversized", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-oversized-id",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "m".repeat(513),
+          chat_id: "chat-a",
+          create_time: "1710000000000",
+          message_type: "text",
+          content: "{\"text\":\"hello iris\"}"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-oversized-id",
+      reason: "missing_required_fields"
+    });
+  });
+
   it("returns unsupported when create_time is not a valid timestamp", () => {
     const result = normalizeFeishuEvent({
       event_id: "event-invalid-time",
