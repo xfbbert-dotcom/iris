@@ -46,6 +46,8 @@ export type CreateRawEventIdempotencyKeyInput = {
   eventId: string;
 };
 
+export const MAX_RAW_EVENT_ID_LENGTH = 512;
+
 export interface RawEventQueue {
   enqueue(event: RawEvent): Promise<void>;
   dequeueBatch(limit: number): Promise<RawEvent[]>;
@@ -68,6 +70,9 @@ function normalizeNonBlankId(value: string, fieldName: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) {
     throw new Error(`${fieldName} must be nonblank`);
+  }
+  if (normalized.length > MAX_RAW_EVENT_ID_LENGTH) {
+    throw new Error(`${fieldName} must be at most ${MAX_RAW_EVENT_ID_LENGTH} characters`);
   }
 
   return normalized;

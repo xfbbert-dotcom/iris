@@ -259,6 +259,32 @@ describe("FeishuGateway", () => {
     expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]+$/);
   });
 
+  it("falls back to a body hash when Feishu event ids are oversized", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const gateway = createFeishuGateway({ queue, rawEventQueue });
+    const body = {
+      header: {
+        event_id: "a".repeat(513),
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
+          message_id: "message-1",
+          chat_id: "chat-1",
+        },
+      },
+    };
+
+    await gateway.handleCallback({ headers: {}, body });
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: expect.stringMatching(/^raw-event:feishu:body-[a-f0-9]+$/),
+      }),
+    );
+  });
+
   it("enqueues raw Feishu events for async processing", async () => {
     const queue = new InMemoryEventQueue();
     const rawEventQueue = { enqueue: vi.fn(async () => undefined) };

@@ -99,6 +99,12 @@ describe("InMemoryRawEventQueue", () => {
     );
   });
 
+  it("rejects oversized event ids for idempotency keys", () => {
+    expect(() =>
+      createRawEventIdempotencyKey({ provider: "feishu", eventId: "a".repeat(513) }),
+    ).toThrow("eventId must be at most 512 characters");
+  });
+
   it("requeues failed events below max attempts", async () => {
     const queue = new InMemoryRawEventQueue({ maxAttempts: 3 });
     const event = eventFixture();

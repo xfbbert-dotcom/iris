@@ -157,6 +157,10 @@ Feishu messages, document links, files, mentions, user submissions, wiki updates
 
 Feishu Gateway's event ingestion path must be designed for overload. In high-volume groups, the gateway must avoid heavy signal filtering before acknowledgment. Raw events should be placed into Redis Queue or an equivalent durable queue first, then processed by asynchronous workers with idempotency keys, retry limits, backpressure, and dead-letter handling.
 
+Raw event idempotency keys must be bounded. Platform event IDs can seed stable
+deduplication keys, but oversized external IDs must be ignored in favor of a
+stable body hash so malformed callbacks cannot create oversized Redis keys.
+
 Raw Feishu event DLQs are operator recovery surfaces. Iris must support bounded listing, explicit replay, and deletion for raw event dead letters. Replay must not remove the DLQ payload until the reset raw event has been accepted back into the queue.
 
 Feishu rich-text message parsing must be bounded. Post-message text extraction should preserve normal readable text and links, but it must cap traversal depth and collected text parts so malformed or unusually large payloads cannot monopolize an event worker.

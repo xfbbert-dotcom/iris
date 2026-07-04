@@ -1,5 +1,6 @@
 import {
   createRawEventIdempotencyKey,
+  MAX_RAW_EVENT_ID_LENGTH,
   type RawEventQueue,
 } from "../events/raw-event-queue.js";
 import type { EventQueue } from "../queues/event-queue.js";
@@ -234,7 +235,7 @@ function normalizeIdempotencyKey(value: unknown): string | undefined {
   }
 
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return trimmed.length > 0 && trimmed.length <= MAX_RAW_EVENT_ID_LENGTH ? trimmed : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
