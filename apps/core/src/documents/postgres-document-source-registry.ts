@@ -3,8 +3,11 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 
 import {
+  DOCUMENT_SOURCE_URI_MAX_CHARS,
   DocumentSourceValidationError,
   higherPriorityDocumentSourceType,
+  normalizeDocumentSourceOptionalString,
+  normalizeDocumentSourceRequiredString,
   type DocumentPermissionState,
   type DocumentSource,
   type DocumentSourceEvidence,
@@ -95,15 +98,19 @@ export function createPostgresDocumentSourceRegistry(
 
   return {
     registerGroupVisibleDocument(input) {
-      const sourceUri = requireNonBlank("sourceUri", input.sourceUri);
+      const sourceUri = requireNonBlank(
+        "sourceUri",
+        input.sourceUri,
+        DOCUMENT_SOURCE_URI_MAX_CHARS,
+      );
       const originGroupId = requireNonBlank("originGroupId", input.originGroupId);
       const originMessageId = requireNonBlank("originMessageId", input.originMessageId);
-      const observedByUserId = normalizeOptional(input.observedByUserId);
+      const observedByUserId = normalizeOptional("observedByUserId", input.observedByUserId);
 
       return registerSource(pool, resolvedDependencies, {
         sourceType: "group_visible_document",
         sourceUri,
-        title: normalizeOptional(input.title),
+        title: normalizeOptional("title", input.title),
         originGroupId,
         originMessageId,
         submittedByUserId: undefined,
@@ -123,7 +130,11 @@ export function createPostgresDocumentSourceRegistry(
     },
 
     registerAuthorizedWikiDocument(input) {
-      const sourceUri = requireNonBlank("sourceUri", input.sourceUri);
+      const sourceUri = requireNonBlank(
+        "sourceUri",
+        input.sourceUri,
+        DOCUMENT_SOURCE_URI_MAX_CHARS,
+      );
       const authorizedSpaceId = requireNonBlank(
         "authorizedSpaceId",
         input.authorizedSpaceId,
@@ -132,7 +143,7 @@ export function createPostgresDocumentSourceRegistry(
       return registerSource(pool, resolvedDependencies, {
         sourceType: "authorized_wiki_document",
         sourceUri,
-        title: normalizeOptional(input.title),
+        title: normalizeOptional("title", input.title),
         originGroupId: undefined,
         originMessageId: undefined,
         submittedByUserId: undefined,
@@ -152,7 +163,11 @@ export function createPostgresDocumentSourceRegistry(
     },
 
     registerUserSubmittedDocument(input) {
-      const sourceUri = requireNonBlank("sourceUri", input.sourceUri);
+      const sourceUri = requireNonBlank(
+        "sourceUri",
+        input.sourceUri,
+        DOCUMENT_SOURCE_URI_MAX_CHARS,
+      );
       const submittedByUserId = requireNonBlank(
         "submittedByUserId",
         input.submittedByUserId,
@@ -161,7 +176,7 @@ export function createPostgresDocumentSourceRegistry(
       return registerSource(pool, resolvedDependencies, {
         sourceType: "user_submitted_document",
         sourceUri,
-        title: normalizeOptional(input.title),
+        title: normalizeOptional("title", input.title),
         originGroupId: undefined,
         originMessageId: undefined,
         submittedByUserId,
@@ -659,20 +674,14 @@ function mapEvidenceRow(row: EvidenceRow): DocumentSourceEvidence {
   };
 }
 
-function requireNonBlank(fieldName: string, value: string): string {
-  const normalized = value.trim();
-  if (normalized.length === 0) {
-    throw new DocumentSourceValidationError(`${fieldName} must not be blank`);
-  }
-
-  return normalized;
+function requireNonBlank(fieldName: string, value: string, maxLength?: number): string {
+  return normalizeDocumentSourceRequiredString(fieldName, value, maxLength);
 }
 
-function normalizeOptional(value: string | undefined): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : undefined;
+function normalizeOptional(
+  fieldName: string,
+  value: string | undefined,
+  maxLength?: number,
+): string | undefined {
+  return normalizeDocumentSourceOptionalString(fieldName, value, maxLength);
 }

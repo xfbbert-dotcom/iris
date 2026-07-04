@@ -140,6 +140,32 @@ describe("createDocumentSourceRegistry", () => {
     ).toThrow(DocumentSourceValidationError);
   });
 
+  it("rejects oversized registration strings before storing evidence", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+
+    expect(() =>
+      registry.registerGroupVisibleDocument({
+        sourceUri: "x".repeat(2049),
+        originGroupId: "group-1",
+        originMessageId: "message-1",
+        observedAt: new Date("2026-07-01T04:01:00.000Z"),
+      }),
+    ).toThrow("sourceUri must be at most 2048 characters");
+    expect(() =>
+      registry.registerGroupVisibleDocument({
+        sourceUri: "https://example.com/docs/doc-1",
+        title: "t".repeat(513),
+        originGroupId: "group-1",
+        originMessageId: "message-1",
+        observedAt: new Date("2026-07-01T04:01:00.000Z"),
+      }),
+    ).toThrow("title must be at most 512 characters");
+    expect(registry.listSources()).toEqual([]);
+  });
+
   it("registers an authorized_wiki_document with defaults and evidence", () => {
     const createdAt = new Date("2026-07-01T04:00:00.000Z");
     const observedAt = new Date("2026-07-01T04:02:00.000Z");

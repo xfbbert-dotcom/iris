@@ -82,6 +82,9 @@ export class DocumentSourceValidationError extends Error {
   }
 }
 
+export const DOCUMENT_SOURCE_URI_MAX_CHARS = 2048;
+export const DOCUMENT_SOURCE_METADATA_MAX_CHARS = 512;
+
 export interface DocumentSourceRegistry {
   registerGroupVisibleDocument(input: RegisterGroupVisibleDocumentInput): DocumentSource;
   registerAuthorizedWikiDocument(input: RegisterAuthorizedWikiDocumentInput): DocumentSource;
@@ -123,10 +126,14 @@ export function createDocumentSourceRegistry(
 
   return {
     registerGroupVisibleDocument(input) {
-      const sourceUri = requireNonBlank("sourceUri", input.sourceUri);
+      const sourceUri = requireNonBlank(
+        "sourceUri",
+        input.sourceUri,
+        DOCUMENT_SOURCE_URI_MAX_CHARS,
+      );
       const originGroupId = requireNonBlank("originGroupId", input.originGroupId);
       const originMessageId = requireNonBlank("originMessageId", input.originMessageId);
-      const observedByUserId = normalizeOptional(input.observedByUserId);
+      const observedByUserId = normalizeOptional("observedByUserId", input.observedByUserId);
       const source = registerSource(
         sourcesById,
         sourcesByUri,
@@ -134,7 +141,7 @@ export function createDocumentSourceRegistry(
         {
           sourceType: "group_visible_document",
           sourceUri,
-          title: normalizeOptional(input.title),
+          title: normalizeOptional("title", input.title),
           originGroupId,
           originMessageId,
           submittedByUserId: undefined,
@@ -157,7 +164,11 @@ export function createDocumentSourceRegistry(
     },
 
     registerAuthorizedWikiDocument(input) {
-      const sourceUri = requireNonBlank("sourceUri", input.sourceUri);
+      const sourceUri = requireNonBlank(
+        "sourceUri",
+        input.sourceUri,
+        DOCUMENT_SOURCE_URI_MAX_CHARS,
+      );
       const authorizedSpaceId = requireNonBlank("authorizedSpaceId", input.authorizedSpaceId);
       const source = registerSource(
         sourcesById,
@@ -166,7 +177,7 @@ export function createDocumentSourceRegistry(
         {
           sourceType: "authorized_wiki_document",
           sourceUri,
-          title: normalizeOptional(input.title),
+          title: normalizeOptional("title", input.title),
           originGroupId: undefined,
           originMessageId: undefined,
           submittedByUserId: undefined,
@@ -189,7 +200,11 @@ export function createDocumentSourceRegistry(
     },
 
     registerUserSubmittedDocument(input) {
-      const sourceUri = requireNonBlank("sourceUri", input.sourceUri);
+      const sourceUri = requireNonBlank(
+        "sourceUri",
+        input.sourceUri,
+        DOCUMENT_SOURCE_URI_MAX_CHARS,
+      );
       const submittedByUserId = requireNonBlank("submittedByUserId", input.submittedByUserId);
       const source = registerSource(
         sourcesById,
@@ -198,7 +213,7 @@ export function createDocumentSourceRegistry(
         {
           sourceType: "user_submitted_document",
           sourceUri,
-          title: normalizeOptional(input.title),
+          title: normalizeOptional("title", input.title),
           originGroupId: undefined,
           originMessageId: undefined,
           submittedByUserId,
@@ -508,22 +523,52 @@ function cloneEvidence(evidence: DocumentSourceEvidence): DocumentSourceEvidence
   };
 }
 
-function requireNonBlank(fieldName: string, value: string): string {
+export function normalizeDocumentSourceRequiredString(
+  fieldName: string,
+  value: string,
+  maxLength = DOCUMENT_SOURCE_METADATA_MAX_CHARS,
+): string {
   const normalized = value.trim();
   if (normalized.length === 0) {
     throw new DocumentSourceValidationError(`${fieldName} must not be blank`);
+  }
+  if (normalized.length > maxLength) {
+    throw new DocumentSourceValidationError(
+      `${fieldName} must be at most ${maxLength} characters`,
+    );
   }
 
   return normalized;
 }
 
-function normalizeOptional(value: string | undefined): string | undefined {
+export function normalizeDocumentSourceOptionalString(
+  fieldName: string,
+  value: string | undefined,
+  maxLength = DOCUMENT_SOURCE_METADATA_MAX_CHARS,
+): string | undefined {
   if (value === undefined) {
     return undefined;
   }
 
   const normalized = value.trim();
+  if (normalized.length > maxLength) {
+    throw new DocumentSourceValidationError(
+      `${fieldName} must be at most ${maxLength} characters`,
+    );
+  }
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function requireNonBlank(fieldName: string, value: string, maxLength?: number): string {
+  return normalizeDocumentSourceRequiredString(fieldName, value, maxLength);
+}
+
+function normalizeOptional(
+  fieldName: string,
+  value: string | undefined,
+  maxLength?: number,
+): string | undefined {
+  return normalizeDocumentSourceOptionalString(fieldName, value, maxLength);
 }
 
 function cloneSource(source: DocumentSource): DocumentSource {
