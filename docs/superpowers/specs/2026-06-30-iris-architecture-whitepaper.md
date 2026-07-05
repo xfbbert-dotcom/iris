@@ -1257,6 +1257,32 @@ projection layer: replaying the same event should produce the same projected
 source state and timestamp. The v1 contract remains that Feishu retry noise
 must not masquerade as fresh document activity.
 
+### 12.24 Document Sync Failure Formatting Must Not Lose Failed Snapshots
+
+Pressure:
+
+Document sync fetch failures should become failed snapshots and observable
+source state. JavaScript dependencies can throw arbitrary values. If Iris fails
+while formatting that thrown value, the failed snapshot is not recorded and the
+source may miss the intended recoverable `failed` transition.
+
+Required architectural response:
+
+- Fetch-failure error-message normalization in the document sync runner must be
+  best-effort and non-throwing.
+- Standard `Error` values should keep using their message.
+- Non-standard thrown values may be stringified when safe, but values that
+  cannot be stringified must degrade to `unknown error`.
+- Blank and oversized messages must continue through the existing document
+  snapshot error-message normalizer.
+
+Evolution signal:
+
+If Iris later adopts typed integration errors, this compatibility behavior
+should remain at the boundary where unknown dependency failures enter the
+document sync state machine. The v1 contract remains that a fetch failure should
+be visible as a failed snapshot whenever snapshot persistence itself is healthy.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

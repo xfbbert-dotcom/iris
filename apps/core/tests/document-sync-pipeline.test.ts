@@ -557,6 +557,56 @@ describe("createDocumentSyncRunner", () => {
     });
   });
 
+  it("records unknown error when a fetch failure cannot be stringified", async () => {
+    const candidate = source({ id: "source-with-unstringifiable-fetch-failure" });
+    const failedSnapshot = snapshot({
+      id: "snapshot-unstringifiable-failed",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchStatus: "failed",
+      bodyText: undefined,
+      contentHash: undefined,
+      sourceVersion: undefined,
+      fetchedAt: failedAt,
+      errorMessage: "unknown error",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) =>
+        source({ id, syncState: syncState as DocumentSource["syncState"] }),
+      ),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(),
+      insertFailedSnapshot: vi.fn(async () => failedSnapshot),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw Object.create(null);
+        }),
+      },
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-unstringifiable-fetch-failure"),
+    ).resolves.toEqual({
+      status: "failed",
+      source: candidate,
+      snapshot: failedSnapshot,
+      errorMessage: "unknown error",
+    });
+    expect(snapshots.insertFailedSnapshot).toHaveBeenCalledWith({
+      documentSourceId: "source-with-unstringifiable-fetch-failure",
+      sourceUri: candidate.sourceUri,
+      errorMessage: "unknown error",
+      fetchedAt: failedAt,
+    });
+  });
+
   it("rejects when recording a succeeded snapshot fails without recording a failed snapshot", async () => {
     const candidate = source({ id: "source-with-snapshot-write-failure" });
     const registry = registryReturning(candidate);

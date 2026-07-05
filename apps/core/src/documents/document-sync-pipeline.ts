@@ -132,9 +132,7 @@ export function createDocumentSyncRunner({
       try {
         fetchResult = await fetcher.fetch(claimedSource);
       } catch (error) {
-        const errorMessage = normalizeDocumentSnapshotErrorMessage(
-          error instanceof Error ? error.message : String(error),
-        );
+        const errorMessage = normalizeSyncFailureErrorMessage(error);
 
         let snapshot: DocumentSnapshot;
         try {
@@ -175,6 +173,18 @@ export function createDocumentSyncRunner({
       }
     },
   };
+}
+
+function normalizeSyncFailureErrorMessage(error: unknown): string {
+  return normalizeDocumentSnapshotErrorMessage(readSyncFailureErrorMessage(error));
+}
+
+function readSyncFailureErrorMessage(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "unknown error";
+  }
 }
 
 type DocumentSyncRejectionReason = Extract<
