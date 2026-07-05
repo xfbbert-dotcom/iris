@@ -310,10 +310,23 @@ function readQueuedDocumentSyncIdempotencyKey(payload: string): string | undefin
   }
 
   const idempotencyKey = readString(parsed.idempotencyKey);
-  return idempotencyKey.length > 0 &&
-    idempotencyKey.length <= MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS
-    ? idempotencyKey
-    : undefined;
+  const documentSourceId = readString(parsed.documentSourceId);
+  if (
+    idempotencyKey.length === 0 ||
+    idempotencyKey.length > MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS ||
+    documentSourceId.length === 0
+  ) {
+    return undefined;
+  }
+
+  let expectedIdempotencyKey: string;
+  try {
+    expectedIdempotencyKey = createDocumentSyncIdempotencyKey({ documentSourceId });
+  } catch {
+    return undefined;
+  }
+
+  return idempotencyKey === expectedIdempotencyKey ? idempotencyKey : undefined;
 }
 
 function readOptionalNonNegativeInteger(value: unknown): number | null | undefined {

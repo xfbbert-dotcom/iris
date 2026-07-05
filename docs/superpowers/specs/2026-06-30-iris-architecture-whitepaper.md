@@ -961,7 +961,39 @@ ownership into a shared durable queue adapter with explicit in-flight leases.
 That adapter must retain the same rule: failed work advances retry state instead
 of being hidden behind an older duplicate.
 
-### 12.14 Group-Visible Retrieval Source Evidence
+### 12.14 Redis Seen Release Guard
+
+Pressure:
+
+Redis-backed queues also release seen keys when a queued payload is invalid and
+has been moved to DLQ. That cleanup prevents a corrupt item from blocking future
+work forever. However, Redis state may be manually repaired, stale, or partially
+corrupted. If cleanup trusts only an `idempotencyKey` string from an invalid
+payload, that payload can unlock unrelated work and let duplicate jobs enter the
+system.
+
+Required architectural response:
+
+- Invalid-payload cleanup must never release a seen key from the key string
+  alone.
+- Document sync cleanup must recompute the canonical key from
+  `documentSourceId` and release only on an exact match.
+- Document reindex cleanup must recompute the canonical key from
+  `embeddingProfileId` and `documentSnapshotId` and release only on an exact
+  match.
+- Raw event cleanup must at least prove Feishu provenance and the canonical
+  `raw-event:feishu:` key shape before releasing.
+- Payloads that cannot pass this lightweight check still go to DLQ, but they do
+  not mutate the seen set.
+
+Evolution signal:
+
+If queues move to versioned payloads or a leased queue adapter, seen-release
+guards should become part of the shared decoder contract. The operator recovery
+surface must preserve the same principle: cleanup may unblock its own key, never
+one inferred from untrusted data alone.
+
+### 12.15 Group-Visible Retrieval Source Evidence
 
 Pressure:
 
@@ -987,7 +1019,7 @@ If Iris later introduces explicit cross-group document grants, those grants
 should be represented as first-class evidence rather than inferred from a
 group-visible source with missing group IDs.
 
-### 12.15 Document Source Policy Partial Update
+### 12.16 Document Source Policy Partial Update
 
 Pressure:
 
@@ -1018,7 +1050,7 @@ time-limited access, Iris should introduce a dedicated policy aggregate with
 versioned writes and optimistic concurrency. That aggregate must keep the same
 rule: one operator intent becomes one authoritative policy transition.
 
-### 12.16 Mention Reply Duplicate Delivery Guard
+### 12.17 Mention Reply Duplicate Delivery Guard
 
 Pressure:
 

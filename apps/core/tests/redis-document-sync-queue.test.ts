@@ -255,6 +255,41 @@ describe("RedisDocumentSyncQueue", () => {
     );
   });
 
+  it("does not release mismatched document sync seen keys from invalid queued payloads", async () => {
+    const invalid = {
+      ...job({ documentSourceId: "source-invalid" }),
+      idempotencyKey: "document-sync:source-1",
+      reason: "unknown",
+      enqueuedAt: "2026-07-03T01:00:00.000Z",
+    };
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(async () => 1),
+      lPop: vi.fn().mockResolvedValueOnce(JSON.stringify(invalid)),
+    };
+    const queue = createRedisDocumentSyncQueue({
+      client,
+      now: () => new Date("2026-07-03T12:30:00.000Z"),
+      idGenerator: () => "dlq-mismatched-payload",
+    });
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+    expect(client.sRem).not.toHaveBeenCalled();
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:documents:sync:dlq",
+      JSON.stringify({
+        id: "dlq-mismatched-payload",
+        rawPayload: JSON.stringify(invalid),
+        errorMessage: "Invalid document sync job payload",
+        failedAt: "2026-07-03T12:30:00.000Z",
+      }),
+    );
+  });
+
   it("round-trips job dates through JSON", () => {
     const syncJob = job();
 

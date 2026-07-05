@@ -479,10 +479,28 @@ function readQueuedDocumentReindexIdempotencyKey(payload: string): string | unde
   }
 
   const idempotencyKey = readString(parsed.idempotencyKey);
-  return idempotencyKey.length > 0 &&
-    idempotencyKey.length <= MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS
-    ? idempotencyKey
-    : undefined;
+  const embeddingProfileId = readString(parsed.embeddingProfileId);
+  const documentSnapshotId = readString(parsed.documentSnapshotId);
+  if (
+    idempotencyKey.length === 0 ||
+    idempotencyKey.length > MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS ||
+    embeddingProfileId.length === 0 ||
+    documentSnapshotId.length === 0
+  ) {
+    return undefined;
+  }
+
+  let expectedIdempotencyKey: string;
+  try {
+    expectedIdempotencyKey = createDocumentReindexIdempotencyKey({
+      embeddingProfileId,
+      documentSnapshotId,
+    });
+  } catch {
+    return undefined;
+  }
+
+  return idempotencyKey === expectedIdempotencyKey ? idempotencyKey : undefined;
 }
 
 function readOptionalNonNegativeInteger(value: unknown): number | null | undefined {

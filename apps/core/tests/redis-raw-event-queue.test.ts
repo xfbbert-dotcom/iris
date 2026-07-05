@@ -334,6 +334,42 @@ describe("RedisRawEventQueue", () => {
     );
   });
 
+  it("does not release raw event seen keys from non-Feishu invalid queued payloads", async () => {
+    const invalidPayload = JSON.stringify({
+      idempotencyKey: "raw-event:feishu:event-1",
+      provider: "slack",
+      eventType: "im.message.receive_v1",
+      receivedAt: "2026-07-02T01:00:00.000Z",
+      attempts: 0,
+    });
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(async () => 1),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      lPop: vi.fn().mockResolvedValueOnce(invalidPayload),
+      sRem: vi.fn(async () => 1),
+    };
+    const queue = createRedisRawEventQueue({
+      client,
+      now: () => new Date("2026-07-03T12:10:00.000Z"),
+      idGenerator: () => "dlq-non-feishu-payload",
+    });
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+    expect(client.sRem).not.toHaveBeenCalled();
+    expect(client.rPush).toHaveBeenCalledWith(
+      "iris:events:raw:dlq",
+      JSON.stringify({
+        id: "dlq-non-feishu-payload",
+        rawPayload: invalidPayload,
+        errorMessage: "Invalid raw event payload",
+        failedAt: "2026-07-03T12:10:00.000Z",
+      }),
+    );
+  });
+
   it("requeues failed raw events below max attempts", async () => {
     const client: RedisRawEventQueueClient = {
       eval: vi.fn(async () => 1),

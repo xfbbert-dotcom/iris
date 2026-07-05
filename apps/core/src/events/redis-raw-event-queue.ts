@@ -7,6 +7,7 @@ import type {
   ReplayRawEventDeadLettersResult,
 } from "./raw-event-queue.js";
 import {
+  createRawEventIdempotencyKey,
   MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH,
   MAX_RAW_EVENT_ID_LENGTH,
   MAX_RAW_EVENT_QUEUE_LIMIT,
@@ -17,6 +18,10 @@ const DEFAULT_SEEN_KEY = "iris:events:raw:seen";
 const DEFAULT_QUEUE_KEY = "iris:events:raw:queue";
 const DEFAULT_DEAD_LETTER_KEY = "iris:events:raw:dlq";
 const DEFAULT_MAX_ATTEMPTS = 3;
+const FEISHU_RAW_EVENT_IDEMPOTENCY_KEY_PREFIX = createRawEventIdempotencyKey({
+  provider: "feishu",
+  eventId: "event",
+}).slice(0, -"event".length);
 
 const ENQUEUE_SCRIPT = `
 if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then
@@ -470,10 +475,23 @@ function readQueuedRawEventIdempotencyKey(payload: string): string | undefined {
   }
 
   const idempotencyKey = readString(parsed.idempotencyKey);
-  return idempotencyKey.length > 0 &&
-    idempotencyKey.length <= MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH
-    ? idempotencyKey
-    : undefined;
+  if (
+    parsed.provider !== "feishu" ||
+    idempotencyKey.length === 0 ||
+    idempotencyKey.length > MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH ||
+    !isFeishuRawEventIdempotencyKey(idempotencyKey)
+  ) {
+    return undefined;
+  }
+
+  return idempotencyKey;
+}
+
+function isFeishuRawEventIdempotencyKey(idempotencyKey: string): boolean {
+  return (
+    idempotencyKey.startsWith(FEISHU_RAW_EVENT_IDEMPOTENCY_KEY_PREFIX) &&
+    idempotencyKey.length > FEISHU_RAW_EVENT_IDEMPOTENCY_KEY_PREFIX.length
+  );
 }
 
 function readOptionalNonNegativeInteger(value: unknown): number | null | undefined {
