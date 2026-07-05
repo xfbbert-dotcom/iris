@@ -735,6 +735,62 @@ describe("createAnswerDraftRuntime", () => {
     );
   });
 
+  it("retries runtime embedding initialization after a transient failure", async () => {
+    const embeddingProvider = { embedTexts: vi.fn(async () => [[0, 1, 0, 0, 0, 0]]) };
+    const embeddingProfiles = {
+      getStaticDevelopmentProfile: vi.fn(),
+      findOrCreateProfile: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("profile store unavailable"))
+        .mockResolvedValueOnce(
+          profile({
+            id: "openai-compatible:text-embedding-small:6",
+            provider: "openai-compatible",
+            model: "text-embedding-small",
+            dimensions: 6,
+            displayName: "OpenAI-compatible text-embedding-small (6d)",
+          }),
+        ),
+      getProfileById: vi.fn(),
+    };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "embed-key",
+        IRIS_EMBEDDING_MODEL: "text-embedding-small",
+        IRIS_EMBEDDING_DIMENSIONS: "6",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => embeddingProfiles),
+        createEmbeddingProvider: vi.fn(() => embeddingProvider),
+      },
+    });
+
+    await expect(
+      runtime?.answerDraftOrchestrator.generateDraft({
+        question: "First attempt",
+        liveChatMessages: [],
+      }),
+    ).rejects.toThrow("profile store unavailable");
+
+    await expect(
+      runtime?.answerDraftOrchestrator.generateDraft({
+        question: "Second attempt",
+        liveChatMessages: [],
+      }),
+    ).resolves.toMatchObject({ answerText: "Draft" });
+    expect(embeddingProfiles.findOrCreateProfile).toHaveBeenCalledTimes(2);
+    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith(["Second attempt"]);
+  });
+
   it("uses configured OpenAI-compatible embedding provider when dimensions are 1536", async () => {
     const vector = Array.from({ length: 1536 }, (_, index) => index / 1536);
     const embeddingProvider = { embedTexts: vi.fn(async () => [vector]) };

@@ -173,6 +173,9 @@ export function createAnswerDraftRuntime({
         embeddingConfig,
         profiles,
         createEmbeddingProvider: createEmbedding,
+      }).catch((error: unknown) => {
+        runtimeEmbeddingPromise = undefined;
+        throw error;
       });
       const runtimeEmbedding = await runtimeEmbeddingPromise;
       const contextBuilder = createDocumentRetrievalContextBuilder({
