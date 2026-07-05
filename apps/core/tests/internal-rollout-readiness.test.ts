@@ -85,7 +85,7 @@ describe("buildInternalRolloutReadinessReport", () => {
         envVars: ["IRIS_INTERNAL_DRAFT_PERMISSION_MODE", "FEISHU_APP_ID", "FEISHU_APP_SECRET"],
       },
       internalApiToken: {
-        status: "warn",
+        status: "fail",
         envVars: ["IRIS_INTERNAL_API_TOKEN"],
       },
     });
@@ -151,6 +151,23 @@ describe("buildInternalRolloutReadinessReport", () => {
         status: "fail",
         detail:
           "FEISHU_VERIFICATION_TOKEN is required for v1 Feishu URL verification; FEISHU_ENCRYPT_KEY only adds signature verification.",
+      },
+    });
+  });
+
+  it("blocks rollout readiness when the internal operator API token is missing", () => {
+    const report = buildInternalRolloutReadinessReport(
+      readyRolloutEnv({
+        IRIS_INTERNAL_API_TOKEN: "",
+      }),
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.status).toBe("blocked");
+    expect(checksById(report)).toMatchObject({
+      internalApiToken: {
+        status: "fail",
+        detail: "IRIS_INTERNAL_API_TOKEN is required before internal rollout.",
       },
     });
   });

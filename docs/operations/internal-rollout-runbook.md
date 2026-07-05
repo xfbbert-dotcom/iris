@@ -7,7 +7,8 @@ recoverable before a full admin UI exists.
 
 The `/internal/*` endpoints are operator APIs, not public APIs. Until an authentication layer is
 added, expose Core only inside a trusted network, VPN, or private tunnel controlled by the team.
-Set `IRIS_INTERNAL_API_TOKEN` whenever Core is reachable outside a developer laptop.
+`IRIS_INTERNAL_API_TOKEN` is required before the internal rollout readiness profile can pass; do
+not invite the first group while operator APIs are missing a bearer-token guard.
 
 Never expose these endpoints directly to the public internet:
 
@@ -19,7 +20,7 @@ Never expose these endpoints directly to the public internet:
 - `/internal/audit/*`
 - `/internal/answer-drafts`
 
-When `IRIS_INTERNAL_API_TOKEN` is configured, every `/internal/*` request must include:
+Every `/internal/*` request must include:
 
 ```powershell
 $irisHeaders=@{Authorization="Bearer $env:IRIS_INTERNAL_API_TOKEN"}
@@ -261,10 +262,10 @@ Invoke-RestMethod `
 
 Use readiness before inviting the first internal group. `status: "ready"` means chat ingestion,
 document sync, semantic reindexing, @Iris answer drafting, Feishu OpenAPI access, and the
-source-policy permission guard are configured. `status: "ready_with_warnings"` means no blocking
-configuration is missing, but the listed warnings should be handled before exposing Core beyond a
-trusted private network. `status: "blocked"` means Iris is not ready for the 20-30 person rollout;
-check each failed item and the listed `envVars`.
+source-policy permission guard, and internal operator API token are configured.
+`status: "ready_with_warnings"` means no blocking configuration is missing, but the listed warnings
+should be handled before exposing Core beyond a trusted private network. `status: "blocked"` means
+Iris is not ready for the 20-30 person rollout; check each failed item and the listed `envVars`.
 
 Important status rules:
 

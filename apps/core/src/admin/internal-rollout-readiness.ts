@@ -276,9 +276,7 @@ const checkDefinitions: CheckDefinition[] = [
     evaluate(env) {
       const token = env.IRIS_INTERNAL_API_TOKEN?.trim();
       if (token === undefined || token.length === 0) {
-        return warn(
-          "IRIS_INTERNAL_API_TOKEN is not set; keep Core on a trusted private network until it is configured.",
-        );
+        return fail("IRIS_INTERNAL_API_TOKEN is required before internal rollout.");
       }
       if (!isSingleVisibleAsciiToken(token)) {
         return fail(

@@ -426,13 +426,13 @@ admin identity model.
 Internal rollout readiness is a configuration contract, not a runtime-health substitute. Iris must
 provide a shared readiness profile for the first 20-30 person rollout through both a local CLI and
 an internal operator endpoint. The profile must fail blocked configurations that would prevent the
-core product loop from working: Feishu event ingestion, document sync, semantic reindexing, @Iris
-answer drafting, Feishu OpenAPI access, bot identity, model provider, embedding provider, and
-`source-policy` live permission checks. It may warn, rather than block, for deployment-boundary
-choices such as a missing internal API token when the operator is deliberately keeping Core inside a
-trusted private network. The readiness surface must list the responsible environment variables and
-must not attempt live network calls; live status remains the responsibility of `/internal/status`
-and the worker-specific status endpoints.
+core product loop or operator boundary from working: Feishu event ingestion, document sync, semantic
+reindexing, @Iris answer drafting, Feishu OpenAPI access, bot identity, model provider, embedding
+provider, `source-policy` live permission checks, and `IRIS_INTERNAL_API_TOKEN`. A trusted private
+network is still required, but it is not a substitute for the v1 bearer-token guard on `/internal/*`
+operator APIs. The readiness surface must list the responsible environment variables and must not
+attempt live network calls; live status remains the responsibility of `/internal/status` and the
+worker-specific status endpoints.
 
 For v1 Feishu callback readiness, `FEISHU_VERIFICATION_TOKEN` is required. `FEISHU_ENCRYPT_KEY` may
 be configured for request signature verification, but it must not be treated as encrypted callback
