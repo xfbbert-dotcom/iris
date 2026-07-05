@@ -297,9 +297,10 @@ describe("createAnswerDraftRuntime", () => {
         recordedAt: expect.any(Date),
       },
       {
-        type: "permission_guard_denied",
+        type: "permission_guard_error",
         documentId: "source-error",
         fragmentIds: ["fragment-error"],
+        message: "registry unavailable",
         recordedAt: expect.any(Date),
       },
     ]);

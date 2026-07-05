@@ -30,4 +30,4 @@ No audit events are recorded when no audit log is configured.
 
 ## Testing
 
-Add a runtime test that uses `source-policy`, injects an `InMemoryAuditLog`, and verifies disabled, denied, stale, missing, and lookup-error sources generate audit events while the allowed fragment remains in prompt context.
+Add a runtime test that uses `source-policy`, injects an `InMemoryAuditLog`, and verifies disabled, denied, stale, missing, and lookup-error sources generate audit events while the allowed fragment remains in prompt context. Source-registry lookup errors are `permission_guard_error`; ordinary local policy exclusions are `permission_guard_denied`.

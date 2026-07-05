@@ -266,12 +266,7 @@ async function canReadBySourcePolicy(
     return false;
   }
 
-  let source: DocumentSource | undefined;
-  try {
-    source = await sourceRegistry.findSourceById(documentSourceId);
-  } catch {
-    return false;
-  }
+  const source = await sourceRegistry.findSourceById(documentSourceId);
   if (source === undefined) {
     return false;
   }

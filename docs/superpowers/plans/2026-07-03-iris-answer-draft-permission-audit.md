@@ -54,7 +54,7 @@ expect(auditLog.events).toEqual([
 ]);
 ```
 
-`source-error` is denied rather than error-audited because `source-policy` intentionally fail-closes registry lookup errors into `false`.
+Historical note: this original expectation was superseded by `2026-07-05-iris-source-registry-lookup-error-audit`. Source-registry lookup errors now still fail closed, but they propagate through the permission guard as `permission_guard_error` so operators can distinguish infrastructure failures from ordinary denials.
 
 - [x] **Step 2: Verify red**
 
