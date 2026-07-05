@@ -7,6 +7,43 @@ describe("createEventWorkerRuntime", () => {
     expect(createEventWorkerRuntime({ env: {} })).toBeUndefined();
   });
 
+  it("preflights partial mention reply config before opening resources", () => {
+    const createPostgresPool = vi.fn(() => ({
+      query: vi.fn(),
+      end: vi.fn(async () => undefined),
+    }));
+    const redisClient = {
+      connect: vi.fn(async () => redisClient),
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(async () => null),
+      lLen: vi.fn(async () => 0),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(async () => 0),
+      sRem: vi.fn(),
+      quit: vi.fn(async () => undefined),
+    };
+    const createRedisClient = vi.fn(() => redisClient);
+
+    expect(() =>
+      createEventWorkerRuntime({
+        env: {
+          ...enabledEnv(),
+          IRIS_FEISHU_BOT_OPEN_ID: "ou_iris",
+          FEISHU_APP_ID: "app-id",
+        },
+        dependencies: {
+          createPostgresPool,
+          createRedisClient,
+        },
+      }),
+    ).toThrow("FEISHU_APP_SECRET is required");
+
+    expect(createPostgresPool).not.toHaveBeenCalled();
+    expect(createRedisClient).not.toHaveBeenCalled();
+    expect(redisClient.connect).not.toHaveBeenCalled();
+  });
+
   it("composes Redis queue, message repository, processor, worker, and loop when enabled", async () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const redisClient = {

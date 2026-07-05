@@ -186,6 +186,15 @@ function createEnabledEventWorkerRuntime({
   const createProcessor = dependencies.createProcessor ?? createFeishuMessageEventProcessor;
   const createLoop = dependencies.createWorkerLoop ?? createRawEventWorkerLoop;
 
+  const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
+    env,
+    answerDraftOrchestrator,
+    runtimeController,
+    createTokenProvider,
+    createMessageReplier,
+    createMentionResponder,
+  });
+  const mentionAnswerResponder = mentionAnswerReadiness.responder;
   const pool = createPool(readDatabaseConfig(env));
   const redis = createRedis(runtimeConfig.redisUrl);
   const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
@@ -200,15 +209,6 @@ function createEnabledEventWorkerRuntime({
     registry: documentSources,
     syncPlanner,
   });
-  const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
-    env,
-    answerDraftOrchestrator,
-    runtimeController,
-    createTokenProvider,
-    createMessageReplier,
-    createMentionResponder,
-  });
-  const mentionAnswerResponder = mentionAnswerReadiness.responder;
   const processor = createProcessor({
     messages,
     documentLinkExtractor,

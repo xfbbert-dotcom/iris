@@ -289,6 +289,7 @@ function createEnabledDocumentSyncRuntime({
   const createLoop = dependencies.createWorkerLoop ?? createDocumentSyncWorkerLoop;
 
   const feishuConfig = readFeishuOpenApiConfig(env);
+  const embeddingConfig = readDocumentSyncReindexEmbeddingConfig(env);
   const pool = createPool(readDatabaseConfig(env));
   const redis = createRedis(runtimeConfig.redisUrl);
   const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
@@ -312,7 +313,7 @@ function createEnabledDocumentSyncRuntime({
     queue,
   });
   const syncedSnapshotReindexer = createSyncedSnapshotReindexer({
-    embeddingConfig: readEmbeddingProviderConfig(env),
+    embeddingConfig,
     createReindexQueue,
     createReindexPlanner,
     snapshots,
@@ -515,6 +516,23 @@ function normalizeFeishuRegistrationSourceUri(sourceUri: string): string {
   }
 
   return normalized;
+}
+
+function readDocumentSyncReindexEmbeddingConfig(
+  env: EnvLike,
+): EmbeddingProviderConfig | undefined {
+  const embeddingConfig = readEmbeddingProviderConfig(env);
+  if (embeddingConfig === undefined) {
+    return undefined;
+  }
+  if (embeddingConfig.dimensions === undefined) {
+    throw new Error(
+      "IRIS_EMBEDDING_DIMENSIONS is required when document sync reindex enqueue is enabled",
+    );
+  }
+  assertSupportedRuntimeEmbeddingDimension(embeddingConfig.dimensions);
+
+  return embeddingConfig;
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): DocumentSyncRuntimeDocumentSources {

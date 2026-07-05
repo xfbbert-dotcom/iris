@@ -8,6 +8,46 @@ describe("createDocumentSyncRuntime", () => {
     expect(createDocumentSyncRuntime({ env: {} })).toBeUndefined();
   });
 
+  it("preflights missing reindex embedding dimensions before opening resources", () => {
+    const createPostgresPool = vi.fn(() => ({
+      query: vi.fn(),
+      end: vi.fn(async () => undefined),
+    }));
+    const redisClient = {
+      connect: vi.fn(async () => redisClient),
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(async () => null),
+      lLen: vi.fn(async () => 0),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(async () => 0),
+      sRem: vi.fn(),
+      quit: vi.fn(async () => undefined),
+    };
+    const createRedisClient = vi.fn(() => redisClient);
+
+    expect(() =>
+      createDocumentSyncRuntime({
+        env: {
+          ...enabledEnv(),
+          IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+          IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+          IRIS_EMBEDDING_API_KEY: "key",
+          IRIS_EMBEDDING_MODEL: "text-embedding-small",
+          IRIS_EMBEDDING_DIMENSIONS: undefined,
+        },
+        dependencies: {
+          createPostgresPool,
+          createRedisClient,
+        },
+      }),
+    ).toThrow("IRIS_EMBEDDING_DIMENSIONS is required when document sync reindex enqueue is enabled");
+
+    expect(createPostgresPool).not.toHaveBeenCalled();
+    expect(createRedisClient).not.toHaveBeenCalled();
+    expect(redisClient.connect).not.toHaveBeenCalled();
+  });
+
   it("composes Feishu document sync worker dependencies when enabled", async () => {
     const latestBatch = {
       status: "succeeded" as const,
