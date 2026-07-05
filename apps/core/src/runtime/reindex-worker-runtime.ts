@@ -48,6 +48,7 @@ import {
   type RedisDocumentReindexQueueClient,
 } from "../reindex/redis-document-reindex-queue.js";
 import { closeRuntimeResources } from "./runtime-close.js";
+import { observeStartupPromise } from "./startup-promise.js";
 
 export type ReindexWorkerRuntime = {
   activeEmbeddingProfileId: string;
@@ -146,7 +147,7 @@ export function createReindexWorkerRuntime({
 
   const pool = createPool(readDatabaseConfig(env));
   const redis = createRedis(runtimeConfig.redisUrl);
-  const redisConnection = redis.connect().then(() => redis);
+  const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
   const queue = createRedisDocumentReindexQueue({
     client: createLazyRedisQueueClient(redisConnection),
   });
@@ -156,12 +157,14 @@ export function createReindexWorkerRuntime({
     model: embeddingConfig.model,
     dimensions: embeddingConfig.dimensions,
   });
-  const activeProfilePromise = profiles.findOrCreateProfile({
-    provider: "openai-compatible",
-    model: embeddingConfig.model,
-    dimensions: embeddingConfig.dimensions,
-    displayName: `OpenAI-compatible ${embeddingConfig.model} (${embeddingConfig.dimensions}d)`,
-  });
+  const activeProfilePromise = observeStartupPromise(
+    profiles.findOrCreateProfile({
+      provider: "openai-compatible",
+      model: embeddingConfig.model,
+      dimensions: embeddingConfig.dimensions,
+      displayName: `OpenAI-compatible ${embeddingConfig.model} (${embeddingConfig.dimensions}d)`,
+    }),
+  );
   const snapshots = createSnapshots({ queryable: pool });
   const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
   const embedder = createEmbedding(embeddingConfig);

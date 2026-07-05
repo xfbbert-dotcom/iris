@@ -56,6 +56,7 @@ import {
   type RawEventWorkerLoop,
 } from "../events/raw-event-worker-loop.js";
 import { closeRuntimeResources } from "./runtime-close.js";
+import { observeStartupPromise } from "./startup-promise.js";
 
 export type EventWorkerRuntime = {
   rawEventQueue?: Pick<RawEventQueue, "enqueue">;
@@ -187,7 +188,7 @@ function createEnabledEventWorkerRuntime({
 
   const pool = createPool(readDatabaseConfig(env));
   const redis = createRedis(runtimeConfig.redisUrl);
-  const redisConnection = redis.connect().then(() => redis);
+  const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
   const messages = createMessages({ queryable: pool });
   const documentSources = createDocumentSources(pool);
   const documentLinkExtractor = createDocumentLinkExtractor();

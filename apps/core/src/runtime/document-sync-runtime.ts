@@ -71,6 +71,7 @@ import {
   createRedisDocumentReindexQueue,
   type RedisDocumentReindexQueueClient,
 } from "../reindex/redis-document-reindex-queue.js";
+import { observeStartupPromise } from "./startup-promise.js";
 
 const MAX_DOCUMENT_SYNC_RUNTIME_LIST_LIMIT = 100;
 
@@ -291,7 +292,7 @@ function createEnabledDocumentSyncRuntime({
   const feishuConfig = readFeishuOpenApiConfig(env);
   const pool = createPool(readDatabaseConfig(env));
   const redis = createRedis(runtimeConfig.redisUrl);
-  const redisConnection = redis.connect().then(() => redis);
+  const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
   const documentSources = createDocumentSources(pool);
   const snapshots = createSnapshots({ queryable: pool });
   const tokenProvider = createTokenProvider({
