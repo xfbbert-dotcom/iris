@@ -1,6 +1,7 @@
 import {
   MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS,
   MAX_DOCUMENT_SYNC_JOB_ID_CHARS,
+  MAX_DOCUMENT_SYNC_QUEUE_LIMIT,
   createDocumentSyncIdempotencyKey,
   type DocumentSyncDeadLetter,
   type DocumentSyncJob,
@@ -522,7 +523,7 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_DOCUMENT_SYNC_QUEUE_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 function defaultIdGenerator(): string {

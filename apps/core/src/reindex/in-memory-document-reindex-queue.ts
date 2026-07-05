@@ -9,6 +9,7 @@ import type {
 import {
   MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS,
   MAX_DOCUMENT_REINDEX_JOB_ID_CHARS,
+  MAX_DOCUMENT_REINDEX_QUEUE_LIMIT,
   createDocumentReindexIdempotencyKey,
 } from "./document-reindex-queue.js";
 import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
@@ -184,7 +185,7 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_DOCUMENT_REINDEX_QUEUE_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 function cloneJob(job: DocumentReindexJob): DocumentReindexJob {

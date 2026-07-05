@@ -51,6 +51,7 @@ export type CreateDocumentReindexIdempotencyKeyInput = {
 };
 
 export const MAX_DOCUMENT_REINDEX_JOB_ID_CHARS = 512;
+export const MAX_DOCUMENT_REINDEX_QUEUE_LIMIT = 100;
 const DOCUMENT_REINDEX_IDEMPOTENCY_KEY_PREFIX = "reindex:";
 export const MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS =
   DOCUMENT_REINDEX_IDEMPOTENCY_KEY_PREFIX.length +

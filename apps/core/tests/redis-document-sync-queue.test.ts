@@ -142,6 +142,28 @@ describe("RedisDocumentSyncQueue", () => {
     expect(client.lPop).not.toHaveBeenCalled();
   });
 
+  it("caps oversized dequeue limits before popping Redis jobs", async () => {
+    let nextJob = 0;
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(async () => 1),
+      lPop: vi.fn(async () => {
+        const current = nextJob;
+        nextJob += 1;
+        return serializeDocumentSyncJob(job({ documentSourceId: `source-${current}` }));
+      }),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.dequeueBatch(101)).resolves.toHaveLength(100);
+
+    expect(client.lPop).toHaveBeenCalledTimes(100);
+  });
+
   it("rejects unsafe dequeue limits before popping Redis jobs", async () => {
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(),
@@ -563,6 +585,23 @@ describe("RedisDocumentSyncQueue", () => {
         replayable: false,
       },
     ]);
+  });
+
+  it("caps oversized Redis DLQ list limits", async () => {
+    const client: RedisDocumentSyncQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentSyncQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: 101 })).resolves.toEqual([]);
+
+    expect(client.lRange).toHaveBeenCalledWith("iris:documents:sync:dlq", 0, 99);
   });
 
   it("preserves whitespace-only invalid raw payload DLQ diagnostics", async () => {

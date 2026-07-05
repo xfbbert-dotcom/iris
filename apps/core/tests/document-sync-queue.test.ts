@@ -48,6 +48,18 @@ describe("DocumentSyncQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([syncJob]);
   });
 
+  it("caps oversized dequeue limits", async () => {
+    const queue = createInMemoryDocumentSyncQueue();
+    for (let index = 0; index < 101; index += 1) {
+      await queue.enqueue(job({ documentSourceId: `source-${index}` }));
+    }
+
+    await expect(queue.dequeueBatch(101)).resolves.toHaveLength(100);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([
+      job({ documentSourceId: "source-100" }),
+    ]);
+  });
+
   it("deduplicates jobs by idempotency key", async () => {
     const queue = createInMemoryDocumentSyncQueue();
     const first = job({ documentSourceId: "source-1" });
@@ -161,6 +173,28 @@ describe("DocumentSyncQueue", () => {
       "document sync queue limit must be a finite safe-magnitude number",
     );
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toHaveLength(1);
+  });
+
+  it("caps oversized in-memory DLQ list limits", async () => {
+    const queue = createInMemoryDocumentSyncQueue({
+      maxAttempts: 1,
+      idGenerator: (() => {
+        let nextId = 0;
+        return () => `dlq-${nextId++}`;
+      })(),
+    });
+
+    for (let index = 0; index < 101; index += 1) {
+      await queue.handleFailedJob({
+        job: job({ documentSourceId: `source-${index}` }),
+        errorMessage: "runner crashed",
+      });
+    }
+
+    const deadLetters = await queue.listDeadLetters({ limit: 101 });
+
+    expect(deadLetters).toHaveLength(100);
+    expect(deadLetters.at(-1)?.id).toBe("dlq-99");
   });
 
   it("deletes in-memory DLQ entries", async () => {

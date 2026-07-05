@@ -78,6 +78,18 @@ describe("InMemoryDocumentReindexQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([job]);
   });
 
+  it("caps oversized dequeue limits", async () => {
+    const queue = new InMemoryDocumentReindexQueue();
+    for (let index = 0; index < 101; index += 1) {
+      await queue.enqueue(jobFixture({ documentSnapshotId: `snapshot-${index}` }));
+    }
+
+    await expect(queue.dequeueBatch(101)).resolves.toHaveLength(100);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([
+      jobFixture({ documentSnapshotId: "snapshot-100" }),
+    ]);
+  });
+
   it("creates stable idempotency keys", () => {
     expect(
       createDocumentReindexIdempotencyKey({
@@ -258,6 +270,28 @@ describe("InMemoryDocumentReindexQueue", () => {
       "document reindex queue limit must be a finite safe-magnitude number",
     );
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toHaveLength(1);
+  });
+
+  it("caps oversized dead-letter list limits", async () => {
+    const queue = new InMemoryDocumentReindexQueue({
+      maxAttempts: 1,
+      idGenerator: (() => {
+        let nextId = 0;
+        return () => `dlq-${nextId++}`;
+      })(),
+    });
+
+    for (let index = 0; index < 101; index += 1) {
+      await queue.handleFailedJob({
+        job: jobFixture({ documentSnapshotId: `snapshot-${index}` }),
+        errorMessage: "embedding failed",
+      });
+    }
+
+    const deadLetters = await queue.listDeadLetters({ limit: 101 });
+
+    expect(deadLetters).toHaveLength(100);
+    expect(deadLetters.at(-1)?.id).toBe("dlq-99");
   });
 
   it("replays dead-lettered jobs with attempts reset", async () => {

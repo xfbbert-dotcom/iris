@@ -146,6 +146,30 @@ describe("RedisDocumentReindexQueue", () => {
     expect(client.lPop).not.toHaveBeenCalled();
   });
 
+  it("caps oversized dequeue limits before popping Redis jobs", async () => {
+    let nextJob = 0;
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(async () => 1),
+      lPop: vi.fn(async () => {
+        const current = nextJob;
+        nextJob += 1;
+        return serializeDocumentReindexJob(
+          jobFixture({ documentSnapshotId: `snapshot-${current}` }),
+        );
+      }),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.dequeueBatch(101)).resolves.toHaveLength(100);
+
+    expect(client.lPop).toHaveBeenCalledTimes(100);
+  });
+
   it("rejects unsafe dequeue limits before popping Redis jobs", async () => {
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(),
@@ -471,6 +495,23 @@ describe("RedisDocumentReindexQueue", () => {
       },
     ]);
     expect(client.lRange).toHaveBeenCalledWith("iris:reindex:documents:dlq", 0, 19);
+  });
+
+  it("caps oversized Redis DLQ list limits", async () => {
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: 101 })).resolves.toEqual([]);
+
+    expect(client.lRange).toHaveBeenCalledWith("iris:reindex:documents:dlq", 0, 99);
   });
 
   it("treats non-finite Redis DLQ list limits as zero", async () => {
