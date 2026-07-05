@@ -34,11 +34,13 @@ Run the focused runtime test and confirm the promise resolves before the fix.
 
 - [x] **Step 1: Add parser coverage**
 
-Assert comma-contaminated docx and wiki token segments parse as unsupported.
+Assert comma-contaminated docx and wiki token segments parse as unsupported, including
+percent-encoded comma variants.
 
 - [x] **Step 2: Reject ASCII commas in Feishu document tokens**
 
-Return `undefined` from the shared token normalizer when the token contains an ASCII comma.
+Return `undefined` from the shared token normalizer when the token contains a literal or
+percent-encoded ASCII comma.
 
 - [x] **Step 3: Verify GREEN**
 

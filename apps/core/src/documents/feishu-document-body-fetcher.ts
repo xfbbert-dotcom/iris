@@ -19,7 +19,7 @@ const DEFAULT_FEISHU_DOCUMENT_MAX_CONTENT_CHARS = 2_000_000;
 const RAW_CONTENT_RESPONSE_OVERHEAD_BYTES = 4096;
 const WIKI_NODE_RESPONSE_MAX_BYTES = 65_536;
 export const MAX_FEISHU_DOCUMENT_TOKEN_CHARS = 512;
-const invalidFeishuDocumentTokenPattern = /,/u;
+const invalidFeishuDocumentTokenPattern = /,|%2c/iu;
 
 const supportedSourceTypes = new Set<DocumentSourceType>([
   "group_visible_document",
