@@ -49,6 +49,18 @@ describe("buildInternalRolloutReadinessReport", () => {
         status: "fail",
         envVars: ["IRIS_FEISHU_BOT_OPEN_ID"],
       },
+      eventWorker: {
+        status: "fail",
+        envVars: ["IRIS_EVENT_WORKER_ENABLED", "REDIS_URL"],
+      },
+      documentSyncWorker: {
+        status: "fail",
+        envVars: ["IRIS_DOCUMENT_SYNC_WORKER_ENABLED", "REDIS_URL"],
+      },
+      reindexWorker: {
+        status: "fail",
+        envVars: ["IRIS_REINDEX_WORKER_ENABLED", "REDIS_URL"],
+      },
       answerDraftModel: {
         status: "fail",
         envVars: [

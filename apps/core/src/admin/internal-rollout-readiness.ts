@@ -97,6 +97,10 @@ const checkDefinitions: CheckDefinition[] = [
       if (!config.enabled) {
         return fail("IRIS_EVENT_WORKER_ENABLED=true is required so Iris can learn from Feishu chat.");
       }
+      const redisUrl = readRequiredReadinessEnv(env.REDIS_URL);
+      if (redisUrl === undefined) {
+        return fail("REDIS_URL must be explicitly configured for the rollout event worker.");
+      }
 
       return pass("Feishu event worker is enabled and Redis is configured.");
     },
@@ -112,6 +116,10 @@ const checkDefinitions: CheckDefinition[] = [
           "IRIS_DOCUMENT_SYNC_WORKER_ENABLED=true is required so Iris can fetch visible documents.",
         );
       }
+      const redisUrl = readRequiredReadinessEnv(env.REDIS_URL);
+      if (redisUrl === undefined) {
+        return fail("REDIS_URL must be explicitly configured for the rollout document sync worker.");
+      }
 
       return pass("Document sync worker is enabled and Redis is configured.");
     },
@@ -126,6 +134,10 @@ const checkDefinitions: CheckDefinition[] = [
         return fail(
           "IRIS_REINDEX_WORKER_ENABLED=true is required so synced documents become searchable.",
         );
+      }
+      const redisUrl = readRequiredReadinessEnv(env.REDIS_URL);
+      if (redisUrl === undefined) {
+        return fail("REDIS_URL must be explicitly configured for the rollout reindex worker.");
       }
 
       return pass("Semantic reindex worker is enabled and Redis is configured.");
@@ -296,6 +308,15 @@ function getHighestSeverity(input: {
 
 function normalizeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown readiness check error";
+}
+
+function readRequiredReadinessEnv(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (trimmed === undefined || trimmed.length === 0) {
+    return undefined;
+  }
+
+  return trimmed;
 }
 
 function isSingleVisibleAsciiToken(value: string): boolean {
