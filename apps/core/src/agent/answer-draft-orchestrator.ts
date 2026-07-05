@@ -83,10 +83,10 @@ export function createAnswerDraftOrchestrator({
               chatId: input.chatId,
               limit: liveChatLimit,
             }) ?? [];
-      const liveChatMessages = dedupeLiveChatMessages([
-        ...storedLiveChatMessages,
-        ...input.liveChatMessages,
-      ]);
+      const liveChatMessages = selectLiveChatWindow(
+        dedupeLiveChatMessages([...storedLiveChatMessages, ...input.liveChatMessages]),
+        liveChatLimit,
+      );
 
       const context = await contextBuilder.buildContext({
         queryText: question,
@@ -154,6 +154,18 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
     seen.add(key);
     return true;
   });
+}
+
+function selectLiveChatWindow(
+  messages: LiveChatMessage[],
+  liveChatLimit: number | undefined,
+): LiveChatMessage[] {
+  const limit = liveChatLimit ?? MAX_LIVE_CHAT_LIMIT;
+  if (limit <= 0) {
+    return [];
+  }
+
+  return messages.slice(-limit);
 }
 
 function toAnswerDraftResult(

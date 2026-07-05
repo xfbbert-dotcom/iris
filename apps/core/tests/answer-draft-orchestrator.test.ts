@@ -175,6 +175,52 @@ describe("AnswerDraftOrchestrator", () => {
     );
   });
 
+  it("caps combined stored and request live chat messages before building context", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft answer." })),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () =>
+        Array.from({ length: 25 }, (_, index) => ({
+          speaker: "Stored",
+          text: `stored-${index + 1}`,
+        })),
+      ),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await orchestrator.generateDraft({
+      question: "What changed?",
+      chatId: "oc_1",
+      liveChatMessages: [{ speaker: "Current", text: "current-1" }],
+    });
+
+    expect(contextBuilder.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        liveChatMessages: [
+          ...Array.from({ length: 19 }, (_, index) => ({
+            speaker: "Stored",
+            text: `stored-${index + 7}`,
+          })),
+          { speaker: "Current", text: "current-1" },
+        ],
+      }),
+    );
+  });
+
   it("rejects unsafe liveChatLimit values before loading stored context", async () => {
     const contextBuilder = {
       buildContext: vi.fn(),
