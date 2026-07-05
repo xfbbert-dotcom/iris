@@ -46,6 +46,7 @@ export function createPostgresConversationMessageRepository({
         "rawEventIdempotencyKey",
         input.rawEventIdempotencyKey,
       );
+      const sentAt = normalizeConversationDate("sentAt", input.sentAt);
       const id = `${input.provider}:${providerMessageId}`;
       const result = await queryable.query<ConversationMessageRow>(
         `
@@ -79,7 +80,7 @@ export function createPostgresConversationMessageRepository({
           senderId,
           messageType,
           normalizeMessageText(input.text),
-          input.sentAt,
+          sentAt,
           rawEventIdempotencyKey,
         ],
       );
@@ -126,6 +127,15 @@ function sanitizeLimit(value: number): number {
   }
 
   return Math.min(MAX_CONVERSATION_MESSAGE_LIST_LIMIT, Math.max(0, Math.floor(value)));
+}
+
+function normalizeConversationDate(fieldName: string, value: Date): Date {
+  const normalized = new Date(value);
+  if (Number.isNaN(normalized.getTime())) {
+    throw new Error(`${fieldName} must be a valid date`);
+  }
+
+  return normalized;
 }
 
 function mapRow(row: ConversationMessageRow): ConversationMessage {

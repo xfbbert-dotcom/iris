@@ -82,6 +82,19 @@ describe("PostgresConversationMessageRepository", () => {
     expect(storedText).not.toContain("trailing message detail");
   });
 
+  it("rejects invalid sentAt values before upsert", async () => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(
+      repository.upsertMessage({
+        ...baseUpsertInput(),
+        sentAt: new Date("invalid"),
+      }),
+    ).rejects.toThrow("sentAt must be a valid date");
+    expect(queryable.query).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       field: "providerMessageId",

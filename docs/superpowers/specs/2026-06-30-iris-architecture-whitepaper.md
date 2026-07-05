@@ -138,6 +138,10 @@ Document snapshot timestamps must be valid before persistence. Invalid `fetchedA
 rejected before succeeded or failed snapshot inserts so snapshot ordering, latest-snapshot lookup,
 and downstream indexing remain deterministic.
 
+Conversation message timestamps must be valid before persistence. Invalid `sentAt` values are
+rejected before live-chat context upserts so recent-message ordering remains trustworthy for
+answer-time context assembly.
+
 Iris must not use a document link to bypass Feishu permissions. If a document is deleted or its permissions change, Iris's index must be invalidated, refreshed, or downgraded.
 
 When a document source is marked `denied`, Iris must disable every document-content capability for that source, including answer retrieval and knowledge draft generation. Later rediscovery, source-type upgrades, or repeated registration must not silently re-enable denied document usage; only an explicit permission state change and administrator policy update may make the source usable again.
