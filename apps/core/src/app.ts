@@ -151,6 +151,7 @@ const maxAnswerDraftQuestionLength = 4000;
 const maxAnswerDraftLiveChatMessageInputCount = 50;
 const maxAnswerDraftLiveChatSpeakerLength = 256;
 const maxAnswerDraftLiveChatTextLength = 2000;
+const maxJsonBodyBytes = 256 * 1024;
 const internalTruncationMarker = " ... [truncated]";
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
@@ -206,7 +207,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     },
     runtimeController,
   });
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, bodyLimit: maxJsonBodyBytes });
 
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, payload, done) => {
     const rawBody = typeof payload === "string" ? payload : payload.toString("utf8");

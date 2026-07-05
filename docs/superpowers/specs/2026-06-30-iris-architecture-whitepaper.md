@@ -52,6 +52,8 @@ Feishu Gateway translates between Feishu and Iris. It must not make agent decisi
 
 Feishu Gateway must acknowledge Feishu event callbacks immediately. The gateway should validate only the minimum required request authenticity, derive a bounded idempotency key, schedule raw event persistence, and return HTTP 200 within the platform timeout budget. Signal filtering, denoising, classification, memory extraction, queue persistence, and agent decisions must happen asynchronously after the gateway response.
 
+Core App applies a global `256 KiB` JSON body budget before custom JSON parsing, Feishu verification, internal API validation, or queue enqueueing. Oversized direct JSON uploads are out of scope for the v1 chat and operator API surface; future larger ingestion paths need dedicated endpoints with their own streaming/storage budgets.
+
 ### 3.2 Conversation Memory
 
 Conversation Memory stores the context Iris is allowed to know:
