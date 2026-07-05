@@ -19,7 +19,10 @@ export type FeishuMentionAnswerInput = {
 
 export type FeishuMentionAnswerResult =
   | { status: "replied"; replyMessageId?: string }
-  | { status: "skipped"; reason: "not_mentioned" | "runtime_disabled" | "self_message" };
+  | {
+      status: "skipped";
+      reason: "not_mentioned" | "runtime_disabled" | "self_message" | "duplicate_message";
+    };
 
 export type FeishuMentionAnswerResponder = {
   maybeRespond(input: FeishuMentionAnswerInput): Promise<FeishuMentionAnswerResult>;
@@ -34,6 +37,7 @@ export type FeishuMentionAnswerResponderDependencies = {
 
 const BLANK_MENTION_CLARIFICATION = "我在，直接告诉我你想让我处理什么。";
 const MAX_MENTION_QUESTION_CHARS = 4000;
+const MAX_RECENT_REPLY_MESSAGE_IDS = 1000;
 const TRUNCATION_MARKER = " ... [truncated]";
 
 export function createFeishuMentionAnswerResponder({
@@ -43,6 +47,7 @@ export function createFeishuMentionAnswerResponder({
   canReplyWhenMentioned = () => true,
 }: FeishuMentionAnswerResponderDependencies): FeishuMentionAnswerResponder {
   const normalizedBotOpenId = normalizeRequiredOpenId(botOpenId);
+  const replyDeduper = new RecentReplyDeduper(MAX_RECENT_REPLY_MESSAGE_IDS);
 
   return {
     async maybeRespond(input) {
@@ -57,40 +62,90 @@ export function createFeishuMentionAnswerResponder({
         return { status: "skipped", reason: "runtime_disabled" };
       }
 
-      const question = truncateQuestion(stripMentionKeys(input.text ?? "", botMentionKeys));
-      const replyUuid = createReplyUuid(input.messageId);
-      if (question.length === 0) {
-        return toRepliedResult(
+      if (!replyDeduper.tryClaim(input.messageId)) {
+        return { status: "skipped", reason: "duplicate_message" };
+      }
+
+      try {
+        const question = truncateQuestion(stripMentionKeys(input.text ?? "", botMentionKeys));
+        const replyUuid = createReplyUuid(input.messageId);
+        if (question.length === 0) {
+          const result = toRepliedResult(
+            await replier.replyText({
+              messageId: input.messageId,
+              text: BLANK_MENTION_CLARIFICATION,
+              replyInThread: true,
+              uuid: replyUuid,
+            }),
+          );
+          replyDeduper.markReplied(input.messageId);
+          return result;
+        }
+
+        const answer = await answerDraftOrchestrator.generateDraft({
+          question,
+          chatId: input.chatId,
+          liveChatMessages: [
+            {
+              speaker: normalizeOptionalText(input.senderId) ?? "unknown",
+              text: question,
+            },
+          ],
+        });
+
+        const result = toRepliedResult(
           await replier.replyText({
             messageId: input.messageId,
-            text: BLANK_MENTION_CLARIFICATION,
+            text: answer.answerText,
             replyInThread: true,
             uuid: replyUuid,
           }),
         );
+        replyDeduper.markReplied(input.messageId);
+        return result;
+      } catch (error) {
+        replyDeduper.release(input.messageId);
+        throw error;
       }
-
-      const answer = await answerDraftOrchestrator.generateDraft({
-        question,
-        chatId: input.chatId,
-        liveChatMessages: [
-          {
-            speaker: normalizeOptionalText(input.senderId) ?? "unknown",
-            text: question,
-          },
-        ],
-      });
-
-      return toRepliedResult(
-        await replier.replyText({
-          messageId: input.messageId,
-          text: answer.answerText,
-          replyInThread: true,
-          uuid: replyUuid,
-        }),
-      );
     },
   };
+}
+
+class RecentReplyDeduper {
+  private readonly inFlightMessageIds = new Set<string>();
+  private readonly repliedMessageIds = new Set<string>();
+  private readonly repliedMessageIdOrder: string[] = [];
+
+  constructor(private readonly maxRepliedMessageIds: number) {}
+
+  tryClaim(messageId: string): boolean {
+    if (this.inFlightMessageIds.has(messageId) || this.repliedMessageIds.has(messageId)) {
+      return false;
+    }
+
+    this.inFlightMessageIds.add(messageId);
+    return true;
+  }
+
+  markReplied(messageId: string): void {
+    this.inFlightMessageIds.delete(messageId);
+    if (this.repliedMessageIds.has(messageId)) {
+      return;
+    }
+
+    this.repliedMessageIds.add(messageId);
+    this.repliedMessageIdOrder.push(messageId);
+    while (this.repliedMessageIdOrder.length > this.maxRepliedMessageIds) {
+      const expiredMessageId = this.repliedMessageIdOrder.shift();
+      if (expiredMessageId !== undefined) {
+        this.repliedMessageIds.delete(expiredMessageId);
+      }
+    }
+  }
+
+  release(messageId: string): void {
+    this.inFlightMessageIds.delete(messageId);
+  }
 }
 
 function collectBotMentionKeys(
