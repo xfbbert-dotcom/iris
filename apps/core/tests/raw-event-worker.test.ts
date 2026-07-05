@@ -49,6 +49,21 @@ describe("RawEventWorker", () => {
     expect(queue.dequeueBatch).not.toHaveBeenCalled();
   });
 
+  it("caps oversized batch limits before dequeuing events", async () => {
+    const queue = {
+      dequeueBatch: vi.fn(async () => []),
+      handleFailedEvent: vi.fn(),
+    };
+    const worker = createRawEventWorker({
+      queue,
+      processor: { process: vi.fn(async () => undefined) },
+    });
+
+    await expect(worker.processBatch({ limit: 101 })).resolves.toEqual([]);
+
+    expect(queue.dequeueBatch).toHaveBeenCalledWith(100);
+  });
+
   it("requeues failed events and continues processing", async () => {
     const first = eventFixture({ idempotencyKey: "raw-event:feishu:event-1" });
     const second = eventFixture({ idempotencyKey: "raw-event:feishu:event-2" });

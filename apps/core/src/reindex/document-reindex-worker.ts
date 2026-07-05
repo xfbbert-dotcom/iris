@@ -37,6 +37,8 @@ export type DocumentReindexWorkerDependencies = {
   };
 };
 
+const MAX_DOCUMENT_REINDEX_WORKER_BATCH_LIMIT = 100;
+
 export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerDependencies) {
   return {
     async processBatch({ limit }: { limit: number }): Promise<DocumentReindexJobResult[]> {
@@ -75,7 +77,7 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_DOCUMENT_REINDEX_WORKER_BATCH_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 async function processJob(

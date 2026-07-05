@@ -63,6 +63,20 @@ describe("DocumentReindexWorker", () => {
     expect(queue.dequeueBatch).not.toHaveBeenCalled();
   });
 
+  it("caps oversized batch limits before dequeuing jobs", async () => {
+    const queue = queueFixture([]);
+    const worker = createDocumentReindexWorker({
+      queue,
+      snapshots: { findSnapshotById: vi.fn() },
+      fragments: { hasFragmentsForSnapshotProfile: vi.fn() },
+      indexer: { indexSnapshot: vi.fn() },
+    });
+
+    await expect(worker.processBatch({ limit: 101 })).resolves.toEqual([]);
+
+    expect(queue.dequeueBatch).toHaveBeenCalledWith(100);
+  });
+
   it("skips missing snapshots", async () => {
     const worker = createDocumentReindexWorker({
       queue: queueFixture([job()]),

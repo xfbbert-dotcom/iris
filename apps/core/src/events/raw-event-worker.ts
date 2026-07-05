@@ -23,6 +23,8 @@ export type RawEventWorkerDependencies = {
   };
 };
 
+const MAX_RAW_EVENT_WORKER_BATCH_LIMIT = 100;
+
 export function createRawEventWorker(dependencies: RawEventWorkerDependencies) {
   return {
     async processBatch({ limit }: { limit: number }): Promise<RawEventWorkerResult[]> {
@@ -65,5 +67,5 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_RAW_EVENT_WORKER_BATCH_LIMIT, Math.max(0, Math.floor(value)));
 }

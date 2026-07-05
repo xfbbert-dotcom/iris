@@ -181,6 +181,21 @@ describe("DocumentSyncWorker", () => {
     );
     expect(queue.dequeueBatch).not.toHaveBeenCalled();
   });
+
+  it("caps oversized batch limits before dequeuing jobs", async () => {
+    const queue = {
+      dequeueBatch: vi.fn(async () => []),
+      handleFailedJob: vi.fn(),
+    };
+    const worker = createDocumentSyncWorker({
+      queue,
+      runner: { syncSourceById: vi.fn() },
+    });
+
+    await expect(worker.processBatch({ limit: 101 })).resolves.toEqual([]);
+
+    expect(queue.dequeueBatch).toHaveBeenCalledWith(100);
+  });
 });
 
 function jobFixture(overrides: Partial<DocumentSyncJob> = {}): DocumentSyncJob {
