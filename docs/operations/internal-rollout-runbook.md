@@ -202,6 +202,10 @@ live chat plus any non-Feishu sources covered by local policy.
 Mention replies require both internal answer drafting and the `replyWhenMentioned` runtime
 capability. If Iris is globally disabled, the group is disabled, or `replyWhenMentioned` is false,
 Iris will store allowed message facts but will not answer in Feishu.
+When Feishu retries the same mentioned message, Iris skips duplicate `messageId` deliveries while a
+reply is in flight or after a successful reply, while failed reply attempts remain retryable. This
+protects model budget and reply API calls in the v1 single-Core deployment; a future multi-replica
+deployment should move this short-lived dedupe state into Redis.
 
 Before starting the internal rollout, run the same readiness profile locally:
 

@@ -166,3 +166,47 @@ confirm GitHub Actions Core and AI Worker checks pass.
 
 Observed: committed and pushed `84cd784b95c2e20e28d54cb91aad15de7fbb42ec`, updated PR #3, and
 confirmed GitHub Actions `Core` and `AI Worker` check runs completed successfully.
+
+### Task 5: Hardening - Local Mention Reply Deduplication
+
+**Files:**
+- Modify: `apps/core/src/conversation/feishu-mention-answer-responder.ts`
+- Modify: `apps/core/tests/feishu-mention-answer-responder.test.ts`
+- Modify: `docs/superpowers/specs/2026-07-04-iris-feishu-mention-answer-reply-design.md`
+- Modify: `docs/superpowers/plans/2026-07-04-iris-feishu-mention-answer-reply.md`
+- Modify: `docs/superpowers/specs/2026-06-30-iris-architecture-whitepaper.md`
+- Modify: `docs/operations/internal-rollout-runbook.md`
+
+- [x] **Step 1: Add failing duplicate delivery tests**
+
+Cover:
+
+- duplicate mentioned messages after a successful reply skip without calling the model again;
+- duplicate mentioned messages while the first reply is still in flight skip immediately;
+- a retried mentioned message after a failed reply attempt is allowed.
+
+Observed: focused responder tests failed because duplicate deliveries still generated and replied
+more than once.
+
+- [x] **Step 2: Add bounded in-process mention reply dedupe**
+
+Add a responder-local `messageId` deduper that claims in-flight replies, remembers successful
+replies, and releases the claim on generation or reply dispatch failure. Keep Feishu's deterministic
+reply `uuid` as the platform-side visible reply guard.
+
+Observed: focused responder tests passed with 10 tests. Focused Feishu processor, Redis raw queue,
+and event worker runtime regressions passed with 57 tests.
+
+- [x] **Step 3: Verify and publish**
+
+Run:
+
+```powershell
+npm run verify
+```
+
+Observed: `npm run verify` exited 0 on 2026-07-05. Core passed 63 test files with 954 tests passing
+and 4 skipped; Python worker tests passed 7/7; Docker Compose config rendered successfully.
+
+Observed: committed and pushed `25af4a7f7429db1d6b666451833f8149bf07a1ac`, updated PR #3, and
+confirmed GitHub Actions `Core` and `AI Worker` check runs completed successfully.

@@ -983,6 +983,37 @@ time-limited access, Iris should introduce a dedicated policy aggregate with
 versioned writes and optimistic concurrency. That aggregate must keep the same
 rule: one operator intent becomes one authoritative policy transition.
 
+### 12.16 Mention Reply Duplicate Delivery Guard
+
+Pressure:
+
+Feishu can retry a message event after callback or worker failures. Iris also
+releases raw-event idempotency keys at dequeue time so lost in-flight work can be
+recovered. A deterministic Feishu reply `uuid` protects the visible reply in the
+platform, but it does not prevent Iris from generating the same answer twice or
+calling the Feishu reply API twice during a local retry or concurrent duplicate
+delivery window.
+
+Required architectural response:
+
+- Mention reply responders must deduplicate by source `messageId`, not only by
+  raw-event idempotency key.
+- The local deduper must claim a message while reply generation is in flight and
+  skip concurrent duplicates.
+- Successful replies must be remembered in a bounded recent-message set so later
+  platform retries do not regenerate the same answer.
+- Failed answer generation or reply dispatch must release the local claim so a
+  valid retry can proceed.
+- The deterministic Feishu `uuid` remains required as the platform-side visible
+  reply idempotency guard.
+
+Evolution signal:
+
+If Iris runs multiple Core App replicas, this responder-local guard should move
+to a shared short-lived idempotency store such as Redis. The behavior must stay
+the same: duplicates should not consume model budget or call reply APIs again,
+while failed attempts remain retryable.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

@@ -32,8 +32,14 @@ Raw Feishu event
 ```
 
 The reply uses a deterministic Feishu `uuid` derived from the source message id. If Feishu retries
-the same event or Iris retries the raw-event worker, the reply call stays deduplicated by Feishu for
-the supported dedupe window.
+the same event or Iris retries the raw-event worker, Feishu can deduplicate the visible reply for the
+supported dedupe window.
+
+Iris also keeps a bounded in-process mention reply deduper keyed by the source `messageId`. This
+deduper claims a message while a reply is in flight, remembers successful replies, and releases the
+claim when answer generation or reply dispatch fails. Feishu `uuid` remains the platform-side
+visible reply guard; the local deduper prevents duplicate model generation and duplicate reply API
+calls during retry or concurrent delivery windows.
 
 ## Question Extraction
 
@@ -51,6 +57,8 @@ model.
 - The responder does not bypass answer-draft retrieval, source policy, or permission guards.
 - The responder does not send replies directly through generic fetch; it uses `FeishuMessageReplier`.
 - Reply retries use a stable bounded UUID.
+- Duplicate Feishu deliveries for the same `messageId` are skipped locally while a reply is in
+  flight or after a successful reply; failed attempts release the local claim so a retry can proceed.
 - Missing `IRIS_FEISHU_BOT_OPEN_ID`, missing Feishu OpenAPI credentials, or disabled answer-draft
   runtime means the event worker still stores facts but does not auto-reply.
 
@@ -81,6 +89,9 @@ Add unit tests for the responder, processor integration, event runtime compositi
 - non-bot mentions skip;
 - disabled runtime gate skips;
 - blank mention replies with a clarification without model calls;
+- duplicate deliveries after success or during in-flight reply generation skip without calling the
+  model or Feishu reply API again;
+- a retry after a failed reply attempt is allowed;
 - processor passes parsed mentions to the responder without blocking replies when document reading is
   disabled;
 - event runtime composes the responder only when bot open ID, Feishu OpenAPI config, and answer
