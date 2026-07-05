@@ -84,6 +84,17 @@ $env:DATABASE_URL="postgres://iris:iris@localhost:5432/iris"
 npm --workspace apps/core run db:migrate
 ```
 
+After the local database is running, run the optional Postgres-backed integration tests before
+changing database migrations or repository behavior:
+
+```powershell
+$env:DATABASE_URL="postgres://iris:iris@localhost:5432/iris"
+npm --workspace apps/core test -- `
+  postgres-document-source-registry.test.ts `
+  document-snapshot-repository.test.ts `
+  document-fragment-repository.test.ts
+```
+
 ## Core Runtime Environment
 
 Use `.env.example` as the non-secret checklist for the variables below. Keep real values in your
