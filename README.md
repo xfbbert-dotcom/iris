@@ -51,6 +51,12 @@ Check the internal rollout configuration profile:
 npm run readiness
 ```
 
+To validate a private env file directly:
+
+```powershell
+npm run readiness -- --env-file .env
+```
+
 Use `.env.example` as the non-secret variable checklist for local or private rollout setup.
 
 ## Local Database

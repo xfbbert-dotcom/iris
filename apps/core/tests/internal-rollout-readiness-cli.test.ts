@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildInternalRolloutReadinessEnv,
   formatInternalRolloutReadinessReport,
   getInternalRolloutReadinessExitCode,
+  parseEnvFileContents,
 } from "../src/admin/internal-rollout-readiness-cli.js";
 import { buildInternalRolloutReadinessReport } from "../src/admin/internal-rollout-readiness.js";
 import type { EnvLike } from "../src/config/env.js";
@@ -30,9 +32,48 @@ describe("internal rollout readiness CLI helpers", () => {
     ).toBe(0);
     expect(getInternalRolloutReadinessExitCode(buildInternalRolloutReadinessReport({}))).toBe(1);
   });
+
+  it("parses dotenv-style env files used by rollout operators", () => {
+    expect(
+      parseEnvFileContents(`
+# comment
+DATABASE_URL = postgres://iris:iris@localhost:5432/iris
+export REDIS_URL="redis://localhost:6379"
+IRIS_MODEL_NAME='gpt-4.1-mini'
+EMPTY_VALUE=
+      `),
+    ).toEqual({
+      DATABASE_URL: "postgres://iris:iris@localhost:5432/iris",
+      REDIS_URL: "redis://localhost:6379",
+      IRIS_MODEL_NAME: "gpt-4.1-mini",
+      EMPTY_VALUE: "",
+    });
+  });
+
+  it("loads an explicit env file over the base process environment", () => {
+    const env = buildInternalRolloutReadinessEnv({
+      args: ["--env-file", ".env.rollout"],
+      env: readyRolloutEnv({ PORT: "65536" }),
+      readTextFile: (path) => {
+        expect(path).toBe(".env.rollout");
+        return "PORT=3000\n";
+      },
+    });
+
+    expect(buildInternalRolloutReadinessReport(env)).toMatchObject({
+      ok: true,
+      status: "ready",
+    });
+  });
+
+  it("rejects invalid env file lines with the line number", () => {
+    expect(() => parseEnvFileContents("DATABASE_URL=postgres://example\nnot valid")).toThrow(
+      "Invalid env file line 2",
+    );
+  });
 });
 
-function readyRolloutEnv(): EnvLike {
+function readyRolloutEnv(overrides: EnvLike = {}): EnvLike {
   return {
     DATABASE_URL: "postgres://iris:iris@localhost:5432/iris",
     REDIS_URL: "redis://localhost:6379",
@@ -56,5 +97,6 @@ function readyRolloutEnv(): EnvLike {
     IRIS_EMBEDDING_API_KEY: "embedding-key",
     IRIS_EMBEDDING_MODEL: "embedding-model",
     IRIS_EMBEDDING_DIMENSIONS: "1536",
+    ...overrides,
   };
 }

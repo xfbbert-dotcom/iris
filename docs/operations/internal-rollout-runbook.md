@@ -174,6 +174,12 @@ Before starting the internal rollout, run the same readiness profile locally:
 npm run readiness
 ```
 
+Or validate a private env file directly:
+
+```powershell
+npm run readiness -- --env-file .env
+```
+
 The command prints the readiness JSON and exits with code `1` when any blocking check fails.
 
 Run Core:
