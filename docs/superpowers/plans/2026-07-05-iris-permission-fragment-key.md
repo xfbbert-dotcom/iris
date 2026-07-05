@@ -6,4 +6,4 @@
 - [x] Verify the focused retrieval context test passes.
 - [x] Run focused permission/retrieval tests.
 - [x] Run full repository verification.
-- [ ] Commit and push the hardening change to the PR branch.
+- [x] Commit and push the hardening change to the PR branch.
