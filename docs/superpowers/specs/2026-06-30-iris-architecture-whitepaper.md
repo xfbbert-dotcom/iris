@@ -247,6 +247,12 @@ The retrieval order is not the same as prompt assembly order. Agent Orchestrator
 
 Document recall must be budgeted and ranked so large PDFs or technical specifications cannot flood the context window and erase the user's current intent.
 
+Live-chat history loading may scan more raw group events than it injects into the prompt because
+recent Feishu traffic can include images, stickers, blank text, or document-only messages. The
+current v1 Core implementation scans up to three times the requested live-chat output window, capped
+at 100 raw messages, then filters to non-blank text and injects at most the latest 20 useful text
+messages. This backfill improves answer continuity without increasing the prompt's live-chat budget.
+
 Constitutional principle:
 
 > Iris may use semantic memory for recall, but must use fact-layer sources for important claims. Long-term memory must be traceable, deletable, correctable, and permission-bounded.
