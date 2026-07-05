@@ -8,6 +8,14 @@ export type Queryable = {
   query: <T = unknown>(sql: string, values?: unknown[]) => Promise<{ rows: T[] }>;
 };
 
+type TransactionClient = Queryable & {
+  release(): void;
+};
+
+type TransactionalQueryable = Queryable & {
+  connect(): Promise<TransactionClient>;
+};
+
 export type EmbeddingProfileLookup = {
   getProfileById(id: string): Promise<{ id: string; dimensions: number }>;
 };
@@ -96,45 +104,47 @@ export function createDocumentFragmentRepository(
       const embeddingTable = resolveEmbeddingTable(profile.dimensions);
       validateReplacementEmbeddings(input.chunks, input.embeddings, profile.dimensions);
 
-      await dependencies.queryable.query(
-        `
+      return withTransactionIfSupported(dependencies.queryable, async (queryable) => {
+        await queryable.query(
+          `
 delete from document_fragments
 where document_snapshot_id = $1
   and embedding_profile_id = $2
 `,
-        [input.documentSnapshotId, input.embeddingProfileId],
-      );
+          [input.documentSnapshotId, input.embeddingProfileId],
+        );
 
-      const fragments: DocumentFragment[] = [];
-      for (const chunk of input.chunks) {
-        const embedding = input.embeddings[chunk.chunkIndex];
-        if (embedding === undefined) {
-          throw new Error(`missing embedding for chunk index ${chunk.chunkIndex}`);
+        const fragments: DocumentFragment[] = [];
+        for (const chunk of input.chunks) {
+          const embedding = input.embeddings[chunk.chunkIndex];
+          if (embedding === undefined) {
+            throw new Error(`missing embedding for chunk index ${chunk.chunkIndex}`);
+          }
+          validateVectorDimension(embedding, profile.dimensions);
+
+          const inserted = await insertFragment(queryable, {
+            id: createId(),
+            documentSourceId: input.documentSourceId,
+            documentSnapshotId: input.documentSnapshotId,
+            sourceUri: input.sourceUri,
+            chunkIndex: chunk.chunkIndex,
+            text: chunk.text,
+            contentHash: hashText(chunk.text),
+            embedding: [],
+            embeddingProfileId: input.embeddingProfileId,
+            createdAt: now(),
+          });
+          await insertFragmentEmbedding(queryable, embeddingTable, {
+            documentFragmentId: inserted.id,
+            embeddingProfileId: input.embeddingProfileId,
+            embedding,
+            createdAt: inserted.createdAt,
+          });
+          fragments.push({ ...inserted, embedding });
         }
-        validateVectorDimension(embedding, profile.dimensions);
 
-        const inserted = await insertFragment(dependencies.queryable, {
-          id: createId(),
-          documentSourceId: input.documentSourceId,
-          documentSnapshotId: input.documentSnapshotId,
-          sourceUri: input.sourceUri,
-          chunkIndex: chunk.chunkIndex,
-          text: chunk.text,
-          contentHash: hashText(chunk.text),
-          embedding: [],
-          embeddingProfileId: input.embeddingProfileId,
-          createdAt: now(),
-        });
-        await insertFragmentEmbedding(dependencies.queryable, embeddingTable, {
-          documentFragmentId: inserted.id,
-          embeddingProfileId: input.embeddingProfileId,
-          embedding,
-          createdAt: inserted.createdAt,
-        });
-        fragments.push({ ...inserted, embedding });
-      }
-
-      return fragments;
+        return fragments;
+      });
     },
 
     async listFragmentsForSource(documentSourceId) {
@@ -219,6 +229,36 @@ select exists (
       return result.rows[0]?.exists === true;
     },
   };
+}
+
+async function withTransactionIfSupported<T>(
+  queryable: Queryable,
+  operation: (queryable: Queryable) => Promise<T>,
+): Promise<T> {
+  if (!supportsTransactions(queryable)) {
+    return operation(queryable);
+  }
+
+  const client = await queryable.connect();
+  try {
+    await client.query("begin");
+    const result = await operation(client);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch {
+      // Preserve the original mutation failure.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function supportsTransactions(queryable: Queryable): queryable is TransactionalQueryable {
+  return "connect" in queryable && typeof queryable.connect === "function";
 }
 
 function validateReplacementEmbeddings(

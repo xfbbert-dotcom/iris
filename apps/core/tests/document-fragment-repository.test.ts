@@ -194,6 +194,180 @@ describe("DocumentFragmentRepository", () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it("wraps fragment replacement mutations in a transaction when the queryable supports clients", async () => {
+    const createdAt = new Date("2026-07-05T01:00:00.000Z");
+    const calls: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        const normalized = normalizeSql(sql);
+        if (normalized === "begin" || normalized === "commit" || normalized === "rollback") {
+          calls.push(normalized);
+          return { rows: [] };
+        }
+        if (normalized.startsWith("delete from document_fragments")) {
+          calls.push("delete fragments");
+          return { rows: [] };
+        }
+        if (normalized.startsWith("insert into document_fragments")) {
+          calls.push("insert fragment");
+          return {
+            rows: [
+              {
+                id: "fragment-tx",
+                document_source_id: "source-1",
+                document_snapshot_id: "snapshot-1",
+                source_uri: "https://example.com/doc",
+                chunk_index: 0,
+                text: "Alpha",
+                content_hash: "hash-alpha",
+                embedding_profile_id: "static-dev-6d",
+                created_at: createdAt,
+              },
+            ],
+          };
+        }
+        if (normalized.startsWith("insert into document_fragment_embeddings_6")) {
+          calls.push("insert embedding");
+          return { rows: [] };
+        }
+        throw new Error(`unexpected SQL: ${normalized}`);
+      }),
+      release: vi.fn(() => {
+        calls.push("release");
+      }),
+    };
+    const queryable = {
+      query: vi.fn(async () => {
+        throw new Error("direct query should not be used for transactional replacement");
+      }),
+      connect: vi.fn(async () => client),
+    };
+    const repository = createDocumentFragmentRepository({
+      queryable,
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+      createId: () => "fragment-tx",
+      now: () => createdAt,
+    });
+
+    await expect(
+      repository.replaceFragmentsForSnapshot({
+        documentSourceId: "source-1",
+        documentSnapshotId: "snapshot-1",
+        sourceUri: "https://example.com/doc",
+        embeddingProfileId: "static-dev-6d",
+        chunks: [{ chunkIndex: 0, text: "Alpha" }],
+        embeddings: [[1, 0, 0, 0, 0, 0]],
+      }),
+    ).resolves.toEqual([
+      {
+        id: "fragment-tx",
+        documentSourceId: "source-1",
+        documentSnapshotId: "snapshot-1",
+        sourceUri: "https://example.com/doc",
+        chunkIndex: 0,
+        text: "Alpha",
+        contentHash: "hash-alpha",
+        embedding: [1, 0, 0, 0, 0, 0],
+        embeddingProfileId: "static-dev-6d",
+        createdAt,
+      },
+    ]);
+    expect(queryable.connect).toHaveBeenCalledOnce();
+    expect(queryable.query).not.toHaveBeenCalled();
+    expect(calls).toEqual([
+      "begin",
+      "delete fragments",
+      "insert fragment",
+      "insert embedding",
+      "commit",
+      "release",
+    ]);
+  });
+
+  it("rolls back transactional fragment replacement when a mutation fails", async () => {
+    const calls: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        const normalized = normalizeSql(sql);
+        if (normalized === "begin" || normalized === "rollback") {
+          calls.push(normalized);
+          return { rows: [] };
+        }
+        if (normalized === "commit") {
+          calls.push("commit");
+          return { rows: [] };
+        }
+        if (normalized.startsWith("delete from document_fragments")) {
+          calls.push("delete fragments");
+          return { rows: [] };
+        }
+        if (normalized.startsWith("insert into document_fragments")) {
+          calls.push("insert fragment");
+          return {
+            rows: [
+              {
+                id: "fragment-rollback",
+                document_source_id: "source-1",
+                document_snapshot_id: "snapshot-1",
+                source_uri: "https://example.com/doc",
+                chunk_index: 0,
+                text: "Alpha",
+                content_hash: "hash-alpha",
+                embedding_profile_id: "static-dev-6d",
+                created_at: new Date("2026-07-05T01:00:00.000Z"),
+              },
+            ],
+          };
+        }
+        if (normalized.startsWith("insert into document_fragment_embeddings_6")) {
+          calls.push("insert embedding");
+          throw new Error("embedding write failed");
+        }
+        throw new Error(`unexpected SQL: ${normalized}`);
+      }),
+      release: vi.fn(() => {
+        calls.push("release");
+      }),
+    };
+    const queryable = {
+      query: vi.fn(async () => {
+        throw new Error("direct query should not be used for transactional replacement");
+      }),
+      connect: vi.fn(async () => client),
+    };
+    const repository = createDocumentFragmentRepository({
+      queryable,
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+      createId: () => "fragment-rollback",
+      now: () => new Date("2026-07-05T01:00:00.000Z"),
+    });
+
+    await expect(
+      repository.replaceFragmentsForSnapshot({
+        documentSourceId: "source-1",
+        documentSnapshotId: "snapshot-1",
+        sourceUri: "https://example.com/doc",
+        embeddingProfileId: "static-dev-6d",
+        chunks: [{ chunkIndex: 0, text: "Alpha" }],
+        embeddings: [[1, 0, 0, 0, 0, 0]],
+      }),
+    ).rejects.toThrow("embedding write failed");
+    expect(queryable.connect).toHaveBeenCalledOnce();
+    expect(queryable.query).not.toHaveBeenCalled();
+    expect(calls).toEqual([
+      "begin",
+      "delete fragments",
+      "insert fragment",
+      "insert embedding",
+      "rollback",
+      "release",
+    ]);
+  });
+
   it("builds vector search query with limit", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       expect(normalizeSql(sql)).toContain("from document_fragments f");
