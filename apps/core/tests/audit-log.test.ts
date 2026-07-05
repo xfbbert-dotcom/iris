@@ -324,4 +324,53 @@ describe("InMemoryAuditLog", () => {
       },
     ]);
   });
+
+  it("applies filtered audit summary limits after matching retained events", async () => {
+    const recordedTimes = [
+      new Date("2026-07-05T02:00:00.000Z"),
+      new Date("2026-07-05T02:01:00.000Z"),
+      new Date("2026-07-05T02:02:00.000Z"),
+    ];
+    let nowIndex = 0;
+    const auditLog = new InMemoryAuditLog({
+      now: () => recordedTimes[nowIndex++] ?? recordedTimes.at(-1)!,
+    });
+
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-2",
+      fragmentIds: ["fragment-2"],
+      message: "newer unrelated event",
+    });
+    await auditLog.record({
+      type: "runtime_control_updated",
+      documentId: "runtime-control",
+      fragmentIds: [],
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+    });
+
+    expect(
+      auditLog.summarizeRecent({
+        limit: 1,
+        documentId: "source-1",
+        type: "permission_guard_denied",
+      }),
+    ).toEqual([
+      {
+        documentId: "source-1",
+        type: "permission_guard_denied",
+        eventCount: 1,
+        affectedFragmentCount: 1,
+        firstRecordedAt: new Date("2026-07-05T02:00:00.000Z"),
+        latestRecordedAt: new Date("2026-07-05T02:00:00.000Z"),
+      },
+    ]);
+  });
 });

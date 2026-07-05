@@ -1403,6 +1403,71 @@ describe("GET /internal/audit/events", () => {
     });
   });
 
+  it("applies filtered audit event limits after matching retained events", async () => {
+    const recordedTimes = [
+      new Date("2026-07-05T02:10:00.000Z"),
+      new Date("2026-07-05T02:11:00.000Z"),
+      new Date("2026-07-05T02:12:00.000Z"),
+    ];
+    let nowIndex = 0;
+    const auditLog = new InMemoryAuditLog({
+      now: () => recordedTimes[nowIndex++] ?? recordedTimes.at(-1)!,
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-2",
+      fragmentIds: ["fragment-2"],
+      message: "newer unrelated event",
+    });
+    await auditLog.record({
+      type: "runtime_control_updated",
+      documentId: "runtime-control",
+      fragmentIds: [],
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events?limit=1&documentId=source-1&type=permission_guard_denied",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      meta: {
+        limit: 1,
+        maxEventCount: 1000,
+        retainedEventCount: 3,
+        droppedEventCount: 0,
+        inspectedEventCount: 3,
+        matchingEventCount: 1,
+        filters: {
+          documentId: "source-1",
+          type: "permission_guard_denied",
+        },
+      },
+      events: [
+        {
+          type: "permission_guard_denied",
+          documentId: "source-1",
+          fragmentIds: ["fragment-1"],
+          recordedAt: "2026-07-05T02:10:00.000Z",
+        },
+      ],
+    });
+  });
+
   it("rejects invalid audit event filters", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
@@ -1593,6 +1658,73 @@ describe("GET /internal/audit/events/summary", () => {
           affectedFragmentCount: 1,
           firstRecordedAt: "2026-07-03T06:04:00.000Z",
           latestRecordedAt: "2026-07-03T06:04:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("applies filtered audit summary limits after matching retained events", async () => {
+    const recordedTimes = [
+      new Date("2026-07-05T02:20:00.000Z"),
+      new Date("2026-07-05T02:21:00.000Z"),
+      new Date("2026-07-05T02:22:00.000Z"),
+    ];
+    let nowIndex = 0;
+    const auditLog = new InMemoryAuditLog({
+      now: () => recordedTimes[nowIndex++] ?? recordedTimes.at(-1)!,
+    });
+    await auditLog.record({
+      type: "permission_guard_denied",
+      documentId: "source-1",
+      fragmentIds: ["fragment-1"],
+    });
+    await auditLog.record({
+      type: "permission_guard_error",
+      documentId: "source-2",
+      fragmentIds: ["fragment-2"],
+      message: "newer unrelated event",
+    });
+    await auditLog.record({
+      type: "runtime_control_updated",
+      documentId: "runtime-control",
+      fragmentIds: [],
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+    });
+    const app = buildApp({
+      auditLog,
+      createAnswerDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/audit/events/summary?limit=1&documentId=source-1&type=permission_guard_denied",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      meta: {
+        limit: 1,
+        maxEventCount: 1000,
+        retainedEventCount: 3,
+        droppedEventCount: 0,
+        inspectedEventCount: 3,
+        matchingEventCount: 1,
+        filters: {
+          documentId: "source-1",
+          type: "permission_guard_denied",
+        },
+      },
+      summaries: [
+        {
+          documentId: "source-1",
+          type: "permission_guard_denied",
+          eventCount: 1,
+          affectedFragmentCount: 1,
+          firstRecordedAt: "2026-07-05T02:20:00.000Z",
+          latestRecordedAt: "2026-07-05T02:20:00.000Z",
         },
       ],
     });

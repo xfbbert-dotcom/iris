@@ -104,17 +104,7 @@ export class InMemoryAuditLog implements AuditLog {
       AuditEventSummary & { affectedFragmentIds: Set<string> }
     >();
 
-    for (const event of this.storedEvents.slice(-limit)) {
-      if (options.documentId !== undefined && event.documentId !== options.documentId) {
-        continue;
-      }
-      if (options.type !== undefined && event.type !== options.type) {
-        continue;
-      }
-      if (options.operatorHint !== undefined && event.operatorHint !== options.operatorHint) {
-        continue;
-      }
-
+    for (const event of selectRecentMatchingEvents(this.storedEvents, options, limit)) {
       const key = `${event.documentId}:${event.type}`;
       const existing = summaries.get(key);
       if (existing === undefined) {
@@ -161,6 +151,34 @@ export class InMemoryAuditLog implements AuditLog {
         latestRecordedAt: new Date(summary.latestRecordedAt),
       }));
   }
+}
+
+function selectRecentMatchingEvents(
+  events: RecordedAuditEvent[],
+  options: AuditEventSummaryQuery,
+  limit: number,
+): RecordedAuditEvent[] {
+  const candidateEvents = hasAuditQueryFilters(options)
+    ? events.filter((event) => matchesAuditQuery(event, options))
+    : events;
+
+  return candidateEvents.slice(-limit);
+}
+
+function hasAuditQueryFilters(options: AuditEventSummaryQuery): boolean {
+  return (
+    options.documentId !== undefined ||
+    options.type !== undefined ||
+    options.operatorHint !== undefined
+  );
+}
+
+function matchesAuditQuery(event: RecordedAuditEvent, options: AuditEventSummaryQuery): boolean {
+  return (
+    (options.documentId === undefined || event.documentId === options.documentId) &&
+    (options.type === undefined || event.type === options.type) &&
+    (options.operatorHint === undefined || event.operatorHint === options.operatorHint)
+  );
 }
 
 function normalizeAuditEvent(event: AuditEvent): AuditEvent {

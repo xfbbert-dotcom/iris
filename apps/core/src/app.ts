@@ -1375,8 +1375,15 @@ function matchesAuditEventQuery(
 }
 
 function getAuditEventDiagnostics(auditLog: InMemoryAuditLog, query: AuditEventSummaryQuery) {
-  const inspectedEvents = query.limit <= 0 ? [] : auditLog.events.slice(-query.limit);
-  const matchingEvents = inspectedEvents.filter((event) => matchesAuditEventQuery(event, query));
+  const retainedEvents = auditLog.events;
+  const hasFilters = hasAuditEventQueryFilters(query);
+  const matchingRetainedEvents = hasFilters
+    ? retainedEvents.filter((event) => matchesAuditEventQuery(event, query))
+    : retainedEvents;
+  const inspectedEvents =
+    query.limit <= 0 ? [] : hasFilters ? retainedEvents : retainedEvents.slice(-query.limit);
+  const matchingEvents =
+    query.limit <= 0 ? [] : matchingRetainedEvents.slice(-query.limit);
 
   return {
     matchingEvents,
@@ -1386,7 +1393,12 @@ function getAuditEventDiagnostics(auditLog: InMemoryAuditLog, query: AuditEventS
       retainedEventCount: auditLog.retention.retainedEventCount,
       droppedEventCount: auditLog.retention.droppedEventCount,
       inspectedEventCount: inspectedEvents.length,
-      matchingEventCount: matchingEvents.length,
+      matchingEventCount:
+        query.limit <= 0
+          ? 0
+          : hasFilters
+            ? matchingRetainedEvents.length
+            : matchingEvents.length,
       filters: {
         ...(query.documentId === undefined ? {} : { documentId: query.documentId }),
         ...(query.type === undefined ? {} : { type: query.type }),
@@ -1394,6 +1406,14 @@ function getAuditEventDiagnostics(auditLog: InMemoryAuditLog, query: AuditEventS
       },
     },
   };
+}
+
+function hasAuditEventQueryFilters(query: AuditEventSummaryQuery): boolean {
+  return (
+    query.documentId !== undefined ||
+    query.type !== undefined ||
+    query.operatorHint !== undefined
+  );
 }
 
 function parseAuditEventType(value: unknown): AuditEvent["type"] | false | undefined {
