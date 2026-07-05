@@ -245,6 +245,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function stableJsonHash(value: unknown): string {
-  const serialized = JSON.stringify(value) ?? String(value);
+  const serialized = serializeForStableHash(value);
   return `body-${createHash("sha256").update(serialized).digest("hex")}`;
+}
+
+function serializeForStableHash(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
