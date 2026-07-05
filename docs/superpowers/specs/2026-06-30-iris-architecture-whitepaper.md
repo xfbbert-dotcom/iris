@@ -1311,6 +1311,31 @@ If Iris later wraps every integration failure in typed errors, this safe-message
 reader can become a legacy compatibility boundary. The v1 contract remains that
 permission guard errors are both safe and diagnosable.
 
+### 12.26 Internal Status Error Formatting Must Not Hide Degradation
+
+Pressure:
+
+Internal status is the operator's first place to see gateway enqueue failures
+and runtime degradation. If status error formatting itself throws because a
+dependency produced a non-standard thrown value, the status surface can lose the
+very degradation signal it is supposed to expose.
+
+Required architectural response:
+
+- Internal status error-message normalization must be best-effort and
+  non-throwing.
+- Standard `Error` values should keep using their message.
+- Non-standard thrown values may be stringified when safe, but values that
+  cannot be stringified must degrade to `unknown error`.
+- Existing blank and oversized status-message normalization must remain.
+
+Evolution signal:
+
+As Iris gains richer health probes, each probe may return typed status errors.
+This normalizer remains the compatibility boundary for unexpected failures. The
+v1 contract remains: status reporting should not fail while formatting a status
+failure.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
