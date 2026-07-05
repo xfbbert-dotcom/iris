@@ -22,6 +22,7 @@ export type IrisUnsupportedEvent = {
 
 const feishuDocumentLinkExtractor = createFeishuDocumentLinkExtractor();
 const MAX_FEISHU_IDENTIFIER_CHARS = 512;
+const MAX_FEISHU_MESSAGE_CONTENT_CHARS = 64_000;
 
 export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
   const eventId = readBoundedString(payload, "event_id") ?? "unknown";
@@ -43,7 +44,7 @@ export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
   const chatId = readBoundedString(message, "chat_id");
   const createTime = readString(message, "create_time");
   const messageType = readString(message, "message_type");
-  const content = readString(message, "content");
+  const content = readBoundedString(message, "content", MAX_FEISHU_MESSAGE_CONTENT_CHARS);
 
   if (
     messageId === undefined ||
@@ -138,9 +139,13 @@ function readString(source: unknown, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function readBoundedString(source: unknown, key: string): string | undefined {
+function readBoundedString(
+  source: unknown,
+  key: string,
+  maxChars = MAX_FEISHU_IDENTIFIER_CHARS,
+): string | undefined {
   const value = readString(source, key);
-  if (value === undefined || value.length > MAX_FEISHU_IDENTIFIER_CHARS) {
+  if (value === undefined || value.length > maxChars) {
     return undefined;
   }
 

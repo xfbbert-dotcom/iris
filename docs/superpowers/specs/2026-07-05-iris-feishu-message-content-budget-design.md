@@ -23,6 +23,10 @@ before `JSON.parse`.
   document discovery cannot be triggered by an over-budget payload.
 - Mention handling still receives the parsed message metadata and mentions, but
   the message text is absent.
+- The legacy `normalizeFeishuEvent` compatibility path applies the same content
+  budget before parsing. Because its normalized group-message shape requires
+  `text`, over-budget content is returned as `unsupported` instead of emitting a
+  giant text event.
 
 ## Rationale
 
@@ -46,3 +50,4 @@ content body.
 - Oversized content does not reach document-link extraction.
 - Existing oversized extracted text still truncates to 8,000 characters when the
   content JSON itself is within budget.
+- Legacy event normalization rejects oversized content before link extraction.

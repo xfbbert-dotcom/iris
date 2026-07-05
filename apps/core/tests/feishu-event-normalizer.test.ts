@@ -159,6 +159,30 @@ describe("normalizeFeishuEvent", () => {
     });
   });
 
+  it("returns unsupported when text content is oversized", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-oversized-content",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-oversized-content",
+          chat_id: "chat-a",
+          create_time: "1710000000000",
+          message_type: "text",
+          content: JSON.stringify({
+            text: `${"T".repeat(70_000)} https://docs.feishu.cn/docx/oversized`
+          })
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-oversized-content",
+      reason: "missing_required_fields"
+    });
+  });
+
   it("returns unsupported when required identifiers are oversized", () => {
     const result = normalizeFeishuEvent({
       event_id: "event-oversized-id",

@@ -16,9 +16,11 @@ content is treated as unreadable message text rather than as a failed event.
 
 - [x] Add failing coverage for an oversized Feishu text content payload.
 - [x] Guard `message.content` length before `JSON.parse`.
+- [x] Apply the same content budget to the legacy Feishu event normalizer.
 - [x] Confirm normal extracted-text truncation still works.
 - [x] Update the architecture whitepaper with the pre-parse content budget rule.
 
 ## Verification
 
 - `npm --workspace apps/core run test -- tests/feishu-message-event-processor.test.ts`
+- `npm --workspace apps/core run test -- tests/feishu-event-normalizer.test.ts`
