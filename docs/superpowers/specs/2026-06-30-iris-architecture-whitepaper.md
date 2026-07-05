@@ -1343,6 +1343,37 @@ This normalizer remains the compatibility boundary for unexpected failures. The
 v1 contract remains: status reporting should not fail while formatting a status
 failure.
 
+### 12.27 Redis Processing Recovery Is Single-Consumer Only
+
+Pressure:
+
+Redis-backed raw event, document sync, and reindex queues use a pending list, a
+processing list, and a startup recovery step that moves abandoned processing
+payloads back to pending before polling. This prevents silent loss after a
+single worker crashes. It does not provide in-flight ownership. If two worker
+replicas consume the same queue at the same time, one replica can recover
+another replica's active processing payload and duplicate work before the first
+replica acknowledges it.
+
+Required architectural response:
+
+- Iris v1 internal rollout must run at most one active consumer loop for each
+  Redis queue family: raw events, document sync, and document reindex.
+- Deployment and operations docs must treat horizontal worker replicas as
+  unsupported until the queue adapter has leases or per-consumer processing
+  ownership.
+- Worker processing must remain idempotent because at-least-once delivery still
+  applies after crashes, Redis partial failures, and operator DLQ replay.
+- Consolidated status and DLQ surfaces remain the recovery mechanism for the
+  single-consumer rollout shape.
+
+Evolution signal:
+
+Before Iris scales worker replicas horizontally, replace the shared processing
+list recovery model with a leased queue adapter. The adapter must make
+ownership explicit, recover only expired leases, and preserve current
+idempotency, retry, and dead-letter guarantees.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

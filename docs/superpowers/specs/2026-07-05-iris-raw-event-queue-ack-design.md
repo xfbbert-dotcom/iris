@@ -18,4 +18,8 @@ The Feishu gateway returns HTTP 200 as soon as a raw event is enqueued. After th
 
 ## Scope
 
-This patch only hardens the raw Feishu event queue. Document sync and reindex queues use similar polling patterns and can receive the same ACK lease design in a later focused patch.
+This patch originally hardened the raw Feishu event queue. The same ACK/processing-list pattern now
+also applies to document sync and document reindex queues.
+
+The v1 processing-list recovery model is single-consumer only. It protects a crashed worker in the
+internal rollout shape, but it is not a lease-based multi-replica queue.

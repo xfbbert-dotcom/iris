@@ -160,6 +160,13 @@ $env:IRIS_DOCUMENT_SYNC_WORKER_ENABLED="true"
 $env:IRIS_REINDEX_WORKER_ENABLED="true"
 ```
 
+For the 20-30 person v1 rollout, run only one active Core worker consumer for each Redis queue
+family: raw events, document sync, and document reindex. The current Redis queue adapter recovers a
+shared `processing` list before polling, which protects a single crashed worker from losing work but
+is not safe for horizontal worker replicas. Do not scale Core or standalone worker processes beyond
+one active consumer per queue until Iris has a leased queue adapter with per-consumer ownership and
+expired-lease recovery.
+
 Optional worker tuning:
 
 ```powershell
