@@ -183,19 +183,22 @@ Cover:
 
 - duplicate mentioned messages after a successful reply skip without calling the model again;
 - duplicate mentioned messages while the first reply is still in flight skip immediately;
+- duplicate mentioned messages first suppressed by runtime control do not answer later after
+  replies are re-enabled;
 - a retried mentioned message after a failed reply attempt is allowed.
 
 Observed: focused responder tests failed because duplicate deliveries still generated and replied
-more than once.
+more than once, and because runtime-disabled suppressions were not remembered across duplicate
+deliveries.
 
 - [x] **Step 2: Add bounded in-process mention reply dedupe**
 
 Add a responder-local `messageId` deduper that claims in-flight replies, remembers successful
-replies, and releases the claim on generation or reply dispatch failure. Keep Feishu's deterministic
-reply `uuid` as the platform-side visible reply guard.
+replies and runtime-disabled suppressions, and releases the claim on generation or reply dispatch
+failure. Keep Feishu's deterministic reply `uuid` as the platform-side visible reply guard.
 
-Observed: focused responder tests passed with 10 tests. Focused Feishu processor, Redis raw queue,
-and event worker runtime regressions passed with 57 tests.
+Observed: focused responder tests passed with 11 tests. Focused Feishu processor, event worker
+runtime, and runtime-control regressions passed with 37 tests.
 
 - [x] **Step 3: Verify and publish**
 
@@ -205,7 +208,7 @@ Run:
 npm run verify
 ```
 
-Observed: `npm run verify` exited 0 on 2026-07-05. Core passed 63 test files with 954 tests passing
+Observed: `npm run verify` exited 0 on 2026-07-05. Core passed 63 test files with 955 tests passing
 and 4 skipped; Python worker tests passed 7/7; Docker Compose config rendered successfully.
 
 Observed: committed and pushed `25af4a7f7429db1d6b666451833f8149bf07a1ac`, updated PR #3, and

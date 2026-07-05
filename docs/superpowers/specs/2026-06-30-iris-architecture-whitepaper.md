@@ -1000,8 +1000,9 @@ Required architectural response:
   raw-event idempotency key.
 - The local deduper must claim a message while reply generation is in flight and
   skip concurrent duplicates.
-- Successful replies must be remembered in a bounded recent-message set so later
-  platform retries do not regenerate the same answer.
+- Successful replies and runtime-disabled suppressions must be remembered in a
+  bounded recent-message set so later platform retries do not regenerate the same
+  answer or answer an old message after replies are re-enabled.
 - Failed answer generation or reply dispatch must release the local claim so a
   valid retry can proceed.
 - The deterministic Feishu `uuid` remains required as the platform-side visible

@@ -58,15 +58,16 @@ export function createFeishuMentionAnswerResponder({
       if (normalizeOptionalText(input.senderId) === normalizedBotOpenId) {
         return { status: "skipped", reason: "self_message" };
       }
-      if (!canReplyWhenMentioned(input.chatId)) {
-        return { status: "skipped", reason: "runtime_disabled" };
-      }
-
       if (!replyDeduper.tryClaim(input.messageId)) {
         return { status: "skipped", reason: "duplicate_message" };
       }
 
       try {
+        if (!canReplyWhenMentioned(input.chatId)) {
+          replyDeduper.markHandled(input.messageId);
+          return { status: "skipped", reason: "runtime_disabled" };
+        }
+
         const question = truncateQuestion(stripMentionKeys(input.text ?? "", botMentionKeys));
         const replyUuid = createReplyUuid(input.messageId);
         if (question.length === 0) {
@@ -78,7 +79,7 @@ export function createFeishuMentionAnswerResponder({
               uuid: replyUuid,
             }),
           );
-          replyDeduper.markReplied(input.messageId);
+          replyDeduper.markHandled(input.messageId);
           return result;
         }
 
@@ -101,7 +102,7 @@ export function createFeishuMentionAnswerResponder({
             uuid: replyUuid,
           }),
         );
-        replyDeduper.markReplied(input.messageId);
+        replyDeduper.markHandled(input.messageId);
         return result;
       } catch (error) {
         replyDeduper.release(input.messageId);
@@ -127,7 +128,7 @@ class RecentReplyDeduper {
     return true;
   }
 
-  markReplied(messageId: string): void {
+  markHandled(messageId: string): void {
     this.inFlightMessageIds.delete(messageId);
     if (this.repliedMessageIds.has(messageId)) {
       return;

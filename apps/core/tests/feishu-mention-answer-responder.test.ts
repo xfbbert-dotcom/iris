@@ -183,6 +183,46 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(replier.replyText).not.toHaveBeenCalled();
   });
 
+  it("does not answer an old duplicate mention after replies are re-enabled", async () => {
+    let repliesEnabled = false;
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => repliesEnabled),
+    });
+    const input = {
+      messageId: "om_disabled_then_retried",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "runtime_disabled",
+    });
+    repliesEnabled = true;
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "duplicate_message",
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
   it("skips messages sent by the Iris bot itself", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const replier = { replyText: vi.fn() };

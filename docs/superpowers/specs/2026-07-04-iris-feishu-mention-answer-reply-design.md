@@ -36,10 +36,11 @@ the same event or Iris retries the raw-event worker, Feishu can deduplicate the 
 supported dedupe window.
 
 Iris also keeps a bounded in-process mention reply deduper keyed by the source `messageId`. This
-deduper claims a message while a reply is in flight, remembers successful replies, and releases the
-claim when answer generation or reply dispatch fails. Feishu `uuid` remains the platform-side
-visible reply guard; the local deduper prevents duplicate model generation and duplicate reply API
-calls during retry or concurrent delivery windows.
+deduper claims a message while a reply is in flight, remembers successful replies and
+runtime-disabled suppressions, and releases the claim when answer generation or reply dispatch fails.
+Feishu `uuid` remains the platform-side visible reply guard; the local deduper prevents duplicate
+model generation, delayed old-message replies after runtime re-enable, and duplicate reply API calls
+during retry or concurrent delivery windows.
 
 ## Question Extraction
 
@@ -59,6 +60,8 @@ model.
 - Reply retries use a stable bounded UUID.
 - Duplicate Feishu deliveries for the same `messageId` are skipped locally while a reply is in
   flight or after a successful reply; failed attempts release the local claim so a retry can proceed.
+- A mentioned message suppressed by runtime control is also remembered locally so a later duplicate
+  delivery does not answer an old message after replies are re-enabled.
 - Missing `IRIS_FEISHU_BOT_OPEN_ID`, missing Feishu OpenAPI credentials, or disabled answer-draft
   runtime means the event worker still stores facts but does not auto-reply.
 
@@ -91,6 +94,8 @@ Add unit tests for the responder, processor integration, event runtime compositi
 - blank mention replies with a clarification without model calls;
 - duplicate deliveries after success or during in-flight reply generation skip without calling the
   model or Feishu reply API again;
+- duplicate deliveries after a runtime-disabled suppression skip even if replies are later
+  re-enabled;
 - a retry after a failed reply attempt is allowed;
 - processor passes parsed mentions to the responder without blocking replies when document reading is
   disabled;
