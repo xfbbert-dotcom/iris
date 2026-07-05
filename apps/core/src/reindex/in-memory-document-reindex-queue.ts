@@ -31,6 +31,7 @@ export type InMemoryDocumentReindexQueueOptions = {
 
 export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
   private readonly jobs: DocumentReindexJob[] = [];
+  private readonly inFlightJobs = new Map<string, DocumentReindexJob>();
   private readonly deadLetters: DeadLetteredDocumentReindexJob[] = [];
   private readonly seenKeys = new Set<string>();
   private readonly maxAttempts: number;
@@ -60,10 +61,16 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
     const safeLimit = sanitizeLimit(limit);
     const jobs = this.jobs.splice(0, safeLimit);
     for (const job of jobs) {
-      this.seenKeys.delete(job.idempotencyKey);
+      this.inFlightJobs.set(job.idempotencyKey, cloneJob(job));
     }
 
     return jobs.map(cloneJob);
+  }
+
+  async handleProcessedJob(job: DocumentReindexJob): Promise<void> {
+    const clonedJob = cloneJob(job);
+    this.inFlightJobs.delete(clonedJob.idempotencyKey);
+    this.seenKeys.delete(clonedJob.idempotencyKey);
   }
 
   async getPendingCount(): Promise<number> {
@@ -73,8 +80,10 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
   async handleFailedJob(
     input: FailedDocumentReindexJobInput,
   ): Promise<FailedDocumentReindexJobResult> {
-    const attempts = input.job.attempts + 1;
-    const failedJob = cloneJob({ ...input.job, attempts });
+    const originalJob = cloneJob(input.job);
+    const attempts = originalJob.attempts + 1;
+    const failedJob = cloneJob({ ...originalJob, attempts });
+    this.inFlightJobs.delete(originalJob.idempotencyKey);
 
     if (attempts >= this.maxAttempts) {
       this.deadLetters.push({
@@ -83,6 +92,7 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
         errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
         failedAt: this.now(),
       });
+      this.seenKeys.delete(failedJob.idempotencyKey);
       return { action: "dead_lettered", attempts };
     }
 
@@ -117,6 +127,9 @@ export class InMemoryDocumentReindexQueue implements DocumentReindexQueue {
 
     const [item] = this.deadLetters.splice(index, 1);
     const replayedJob = cloneJob({ ...item.job, attempts: 0 });
+    if (this.inFlightJobs.has(replayedJob.idempotencyKey)) {
+      return "replayed";
+    }
     const existingIndex = this.jobs.findIndex(
       (job) => job.idempotencyKey === replayedJob.idempotencyKey,
     );

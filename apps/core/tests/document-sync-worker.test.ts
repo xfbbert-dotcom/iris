@@ -16,6 +16,7 @@ describe("DocumentSyncWorker", () => {
     const job = jobFixture({ documentSourceId: "source-1" });
     const queue = {
       dequeueBatch: vi.fn(async () => [job]),
+      handleProcessedJob: vi.fn(async () => undefined),
       handleFailedJob: vi.fn(),
     };
     const runner = {
@@ -37,6 +38,8 @@ describe("DocumentSyncWorker", () => {
     ] satisfies DocumentSyncWorkerResult[]);
     expect(queue.dequeueBatch).toHaveBeenCalledWith(10);
     expect(runner.syncSourceById).toHaveBeenCalledWith("source-1");
+    expect(queue.handleProcessedJob).toHaveBeenCalledWith(job);
+    expect(queue.handleFailedJob).not.toHaveBeenCalled();
   });
 
   it("treats runner-handled failed syncs as processed jobs", async () => {
@@ -44,6 +47,7 @@ describe("DocumentSyncWorker", () => {
     const worker = createDocumentSyncWorker({
       queue: {
         dequeueBatch: vi.fn(async () => [job]),
+        handleProcessedJob: vi.fn(async () => undefined),
         handleFailedJob: vi.fn(),
       },
       runner: {
@@ -71,6 +75,7 @@ describe("DocumentSyncWorker", () => {
     const second = jobFixture({ documentSourceId: "source-2" });
     const queue = {
       dequeueBatch: vi.fn(async () => [first, second]),
+      handleProcessedJob: vi.fn(async () => undefined),
       handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
     };
     const worker = createDocumentSyncWorker({
@@ -107,6 +112,7 @@ describe("DocumentSyncWorker", () => {
       job: first,
       errorMessage: "runner crashed",
     });
+    expect(queue.handleProcessedJob).toHaveBeenCalledWith(second);
   });
 
   it("retries transient failure handling errors before continuing the batch", async () => {
@@ -114,6 +120,7 @@ describe("DocumentSyncWorker", () => {
     const second = jobFixture({ documentSourceId: "source-2" });
     const queue = {
       dequeueBatch: vi.fn(async () => [first, second]),
+      handleProcessedJob: vi.fn(async () => undefined),
       handleFailedJob: vi
         .fn()
         .mockRejectedValueOnce(new Error("redis unavailable"))
@@ -157,6 +164,7 @@ describe("DocumentSyncWorker", () => {
     const worker = createDocumentSyncWorker({
       queue: {
         dequeueBatch: vi.fn(async () => [syncJob]),
+        handleProcessedJob: vi.fn(async () => undefined),
         handleFailedJob: vi.fn(async () => ({ action: "dead_lettered" as const, attempts: 3 })),
       },
       runner: {
@@ -183,6 +191,7 @@ describe("DocumentSyncWorker", () => {
     const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
     const queue = {
       dequeueBatch: vi.fn(async () => [syncJob]),
+      handleProcessedJob: vi.fn(async () => undefined),
       handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
     };
     const worker = createDocumentSyncWorker({
@@ -212,6 +221,7 @@ describe("DocumentSyncWorker", () => {
   it("rejects unsafe batch limits before dequeuing jobs", async () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),
+      handleProcessedJob: vi.fn(async () => undefined),
       handleFailedJob: vi.fn(),
     };
     const worker = createDocumentSyncWorker({
@@ -228,6 +238,7 @@ describe("DocumentSyncWorker", () => {
   it("rejects non-finite batch limits before dequeuing jobs", async () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),
+      handleProcessedJob: vi.fn(async () => undefined),
       handleFailedJob: vi.fn(),
     };
     const worker = createDocumentSyncWorker({
@@ -247,6 +258,7 @@ describe("DocumentSyncWorker", () => {
   it("caps oversized batch limits before dequeuing jobs", async () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),
+      handleProcessedJob: vi.fn(async () => undefined),
       handleFailedJob: vi.fn(),
     };
     const worker = createDocumentSyncWorker({

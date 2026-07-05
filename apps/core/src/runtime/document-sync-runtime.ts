@@ -187,6 +187,7 @@ type DocumentSyncRuntimeQueue = Pick<
   | "dequeueBatch"
   | "enqueue"
   | "getPendingCount"
+  | "handleProcessedJob"
   | "handleFailedJob"
   | "getDeadLetterCount"
   | "listDeadLetters"

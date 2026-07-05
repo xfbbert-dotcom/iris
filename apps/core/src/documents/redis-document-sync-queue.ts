@@ -14,6 +14,7 @@ import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-mes
 
 const DEFAULT_SEEN_KEY = "iris:documents:sync:seen";
 const DEFAULT_QUEUE_KEY = "iris:documents:sync:queue";
+const DEFAULT_PROCESSING_KEY = "iris:documents:sync:processing";
 const DEFAULT_DEAD_LETTER_KEY = "iris:documents:sync:dlq";
 const DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -22,6 +23,26 @@ if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then
   return redis.call("RPUSH", KEYS[2], ARGV[2])
 end
 return 0
+`;
+
+const DEQUEUE_SCRIPT = `
+local payload = redis.call("LPOP", KEYS[1])
+if payload then
+  redis.call("RPUSH", KEYS[2], payload)
+  return payload
+end
+return nil
+`;
+
+const RECOVER_PROCESSING_SCRIPT = `
+local recovered = 0
+local payload = redis.call("RPOP", KEYS[1])
+while payload do
+  redis.call("LPUSH", KEYS[2], payload)
+  recovered = recovered + 1
+  payload = redis.call("RPOP", KEYS[1])
+end
+return recovered
 `;
 
 const UPSERT_RETRY_SCRIPT = `
@@ -45,7 +66,7 @@ export type RedisDocumentSyncQueueClient = {
   eval(
     script: string,
     options: { keys: string[]; arguments: string[] },
-  ): Promise<number | string>;
+  ): Promise<number | string | null>;
   rPush(key: string, value: string): Promise<number>;
   lPop(key: string): Promise<string | null>;
   lLen(key: string): Promise<number>;
@@ -58,6 +79,7 @@ export type RedisDocumentSyncQueueOptions = {
   client: RedisDocumentSyncQueueClient;
   seenKey?: string;
   queueKey?: string;
+  processingKey?: string;
   deadLetterKey?: string;
   maxAttempts?: number;
   now?: () => Date;
@@ -68,6 +90,7 @@ export function createRedisDocumentSyncQueue({
   client,
   seenKey = DEFAULT_SEEN_KEY,
   queueKey = DEFAULT_QUEUE_KEY,
+  processingKey = DEFAULT_PROCESSING_KEY,
   deadLetterKey = DEFAULT_DEAD_LETTER_KEY,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   now = () => new Date(),
@@ -116,15 +139,15 @@ export function createRedisDocumentSyncQueue({
       const safeLimit = sanitizeLimit(limit);
       const jobs: DocumentSyncJob[] = [];
 
+      await recoverProcessingJobsIfPresent(client, processingKey, queueKey);
       for (let index = 0; index < safeLimit; index += 1) {
-        const payload = await client.lPop(queueKey);
+        const payload = await dequeueSerializedJob(client, queueKey, processingKey);
         if (payload === null) {
           break;
         }
 
         try {
           const job = parseDocumentSyncJob(payload);
-          await client.sRem(seenKey, job.idempotencyKey);
           jobs.push(job);
         } catch (error) {
           const idempotencyKey = readQueuedDocumentSyncIdempotencyKey(payload);
@@ -139,6 +162,7 @@ export function createRedisDocumentSyncQueue({
               failedAt: now().toISOString(),
             }),
           );
+          await client.lRem(processingKey, 1, payload);
           if (idempotencyKey !== undefined) {
             await client.sRem(seenKey, idempotencyKey);
           }
@@ -146,6 +170,13 @@ export function createRedisDocumentSyncQueue({
       }
 
       return jobs;
+    },
+
+    async handleProcessedJob(job: DocumentSyncJob): Promise<void> {
+      const payload = serializeDocumentSyncJob(job);
+      const normalizedJob = parseDocumentSyncJob(payload);
+      await client.lRem(processingKey, 1, payload);
+      await client.sRem(seenKey, normalizedJob.idempotencyKey);
     },
 
     getPendingCount() {
@@ -157,6 +188,7 @@ export function createRedisDocumentSyncQueue({
     ): Promise<FailedDocumentSyncJobResult> {
       const attempts = input.job.attempts + 1;
       const failedJob = { ...input.job, attempts };
+      const originalPayload = serializeDocumentSyncJob(input.job);
 
       if (attempts >= safeMaxAttempts) {
         await client.rPush(
@@ -168,10 +200,13 @@ export function createRedisDocumentSyncQueue({
             failedAt: now(),
           }),
         );
+        await client.lRem(processingKey, 1, originalPayload);
+        await client.sRem(seenKey, parseDocumentSyncJob(originalPayload).idempotencyKey);
         return { action: "dead_lettered", attempts };
       }
 
       await upsertRetryingSerializedJob(client, seenKey, queueKey, failedJob);
+      await client.lRem(processingKey, 1, originalPayload);
       return { action: "requeued", attempts };
     },
 
@@ -228,6 +263,35 @@ async function enqueueSerializedJob(
     keys: [seenKey, queueKey],
     arguments: [normalizedJob.idempotencyKey, payload],
   });
+}
+
+async function recoverProcessingJobsIfPresent(
+  client: RedisDocumentSyncQueueClient,
+  processingKey: string,
+  queueKey: string,
+): Promise<void> {
+  const processingCount = await client.lLen(processingKey);
+  if (typeof processingCount !== "number" || processingCount <= 0) {
+    return;
+  }
+
+  await client.eval(RECOVER_PROCESSING_SCRIPT, {
+    keys: [processingKey, queueKey],
+    arguments: [],
+  });
+}
+
+async function dequeueSerializedJob(
+  client: RedisDocumentSyncQueueClient,
+  queueKey: string,
+  processingKey: string,
+): Promise<string | null> {
+  const result = await client.eval(DEQUEUE_SCRIPT, {
+    keys: [queueKey, processingKey],
+    arguments: [],
+  });
+
+  return typeof result === "string" ? result : null;
 }
 
 async function upsertRetryingSerializedJob(

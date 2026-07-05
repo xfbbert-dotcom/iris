@@ -25,10 +25,30 @@ describe("InMemoryDocumentReindexQueue", () => {
 
     await queue.enqueue(first);
     await expect(queue.dequeueBatch(1)).resolves.toEqual([first]);
+    await queue.handleProcessedJob(first);
 
     await queue.enqueue(second);
 
     await expect(queue.dequeueBatch(1)).resolves.toEqual([second]);
+  });
+
+  it("keeps dequeued job idempotency keys claimed until processing succeeds", async () => {
+    const queue = new InMemoryDocumentReindexQueue();
+    const first = jobFixture();
+    const afterProcessing = {
+      ...first,
+      enqueuedAt: new Date("2026-07-02T02:00:00.000Z"),
+    };
+
+    await queue.enqueue(first);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([first]);
+    await queue.enqueue(afterProcessing);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+
+    await queue.handleProcessedJob(first);
+    await queue.enqueue(afterProcessing);
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([afterProcessing]);
   });
 
   it("dequeues at most the requested batch size in FIFO order", async () => {

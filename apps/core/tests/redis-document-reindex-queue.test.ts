@@ -70,63 +70,147 @@ describe("RedisDocumentReindexQueue", () => {
     const first = jobFixture({ documentSnapshotId: "snapshot-1" });
     const second = jobFixture({ documentSnapshotId: "snapshot-2" });
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn(),
+      eval: vi
+        .fn()
+        .mockResolvedValueOnce(serializeDocumentReindexJob(first))
+        .mockResolvedValueOnce(serializeDocumentReindexJob(second))
+        .mockResolvedValueOnce(null),
       rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
       sRem: vi.fn(),
-      lPop: vi
-        .fn()
-        .mockResolvedValueOnce(serializeDocumentReindexJob(first))
-        .mockResolvedValueOnce(serializeDocumentReindexJob(second))
-        .mockResolvedValueOnce(null),
+      lPop: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
     await expect(queue.dequeueBatch(10)).resolves.toEqual([first, second]);
-    expect(client.lPop).toHaveBeenCalledTimes(3);
+    expect(client.eval).toHaveBeenCalledTimes(3);
+    expect(client.lPop).not.toHaveBeenCalled();
   });
 
-  it("releases dequeued job idempotency keys from the Redis seen set", async () => {
+  it("keeps dequeued job idempotency keys claimed until processing succeeds", async () => {
     const job = jobFixture();
     const client = {
-      eval: vi.fn(),
+      eval: vi.fn().mockResolvedValueOnce(serializeDocumentReindexJob(job)),
       rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
       sRem: vi.fn(async () => 1),
-      lPop: vi.fn().mockResolvedValueOnce(serializeDocumentReindexJob(job)),
+      lPop: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
     await expect(queue.dequeueBatch(1)).resolves.toEqual([job]);
+    expect(client.sRem).not.toHaveBeenCalled();
+
+    await queue.handleProcessedJob(job);
+
     expect(client.sRem).toHaveBeenCalledWith(
       "iris:reindex:documents:seen",
       job.idempotencyKey,
     );
   });
 
-  it("respects dequeue batch limits", async () => {
-    const first = jobFixture({ documentSnapshotId: "snapshot-1" });
-    const second = jobFixture({ documentSnapshotId: "snapshot-2" });
+  it("moves dequeued Redis document reindex jobs into the processing list before ACK", async () => {
+    const job = jobFixture({ documentSnapshotId: "snapshot-processing" });
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn(async () => serializeDocumentReindexJob(job)),
       rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
       sRem: vi.fn(),
-      lPop: vi
+      lPop: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([job]);
+
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("RPUSH"), {
+      keys: ["iris:reindex:documents:queue", "iris:reindex:documents:processing"],
+      arguments: [],
+    });
+    expect(client.lPop).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
+  });
+
+  it("removes processed Redis document reindex jobs from the processing list on ACK", async () => {
+    const job = jobFixture({ documentSnapshotId: "snapshot-processed" });
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(async () => 1),
+      sRem: vi.fn(async () => 1),
+      lPop: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await queue.handleProcessedJob(job);
+
+    expect(client.lRem).toHaveBeenCalledWith(
+      "iris:reindex:documents:processing",
+      1,
+      serializeDocumentReindexJob(job),
+    );
+    expect(client.sRem).toHaveBeenCalledWith(
+      "iris:reindex:documents:seen",
+      job.idempotencyKey,
+    );
+  });
+
+  it("recovers abandoned Redis processing jobs before dequeueing new work", async () => {
+    const job = jobFixture({ documentSnapshotId: "snapshot-recovered" });
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi
+        .fn()
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(serializeDocumentReindexJob(job))
+        .mockResolvedValueOnce(null),
+      rPush: vi.fn(),
+      lLen: vi.fn(async (key) => (key === "iris:reindex:documents:processing" ? 1 : 0)),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+      lPop: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.dequeueBatch(10)).resolves.toEqual([job]);
+
+    expect(client.eval).toHaveBeenNthCalledWith(1, expect.stringContaining("RPOP"), {
+      keys: ["iris:reindex:documents:processing", "iris:reindex:documents:queue"],
+      arguments: [],
+    });
+    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("LPOP"), {
+      keys: ["iris:reindex:documents:queue", "iris:reindex:documents:processing"],
+      arguments: [],
+    });
+  });
+
+  it("respects dequeue batch limits", async () => {
+    const first = jobFixture({ documentSnapshotId: "snapshot-1" });
+    const second = jobFixture({ documentSnapshotId: "snapshot-2" });
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi
         .fn()
         .mockResolvedValueOnce(serializeDocumentReindexJob(first))
         .mockResolvedValueOnce(serializeDocumentReindexJob(second)),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+      lPop: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
     await expect(queue.dequeueBatch(1)).resolves.toEqual([first]);
-    expect(client.lPop).toHaveBeenCalledTimes(1);
+    expect(client.eval).toHaveBeenCalledTimes(1);
+    expect(client.lPop).not.toHaveBeenCalled();
   });
 
   it("rejects non-finite dequeue limits before popping Redis jobs", async () => {
@@ -148,30 +232,32 @@ describe("RedisDocumentReindexQueue", () => {
       "document reindex queue limit must be a finite safe-magnitude number",
     );
     expect(client.lPop).not.toHaveBeenCalled();
+    expect(client.eval).not.toHaveBeenCalled();
   });
 
   it("caps oversized dequeue limits before popping Redis jobs", async () => {
     let nextJob = 0;
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn(),
-      rPush: vi.fn(),
-      lLen: vi.fn(),
-      lRange: vi.fn(),
-      lRem: vi.fn(),
-      sRem: vi.fn(async () => 1),
-      lPop: vi.fn(async () => {
+      eval: vi.fn(async () => {
         const current = nextJob;
         nextJob += 1;
         return serializeDocumentReindexJob(
           jobFixture({ documentSnapshotId: `snapshot-${current}` }),
         );
       }),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      sRem: vi.fn(async () => 1),
+      lPop: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
     await expect(queue.dequeueBatch(101)).resolves.toHaveLength(100);
 
-    expect(client.lPop).toHaveBeenCalledTimes(100);
+    expect(client.eval).toHaveBeenCalledTimes(100);
+    expect(client.lPop).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe dequeue limits before popping Redis jobs", async () => {
@@ -190,21 +276,22 @@ describe("RedisDocumentReindexQueue", () => {
       "document reindex queue limit must be a finite safe-magnitude number",
     );
     expect(client.lPop).not.toHaveBeenCalled();
+    expect(client.eval).not.toHaveBeenCalled();
   });
 
   it("dead-letters invalid queued payloads and continues dequeuing valid jobs", async () => {
     const valid = jobFixture({ documentSnapshotId: "snapshot-valid" });
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn(),
+      eval: vi
+        .fn()
+        .mockResolvedValueOnce("{")
+        .mockResolvedValueOnce(serializeDocumentReindexJob(valid)),
       rPush: vi.fn(async () => 1),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
       sRem: vi.fn(),
-      lPop: vi
-        .fn()
-        .mockResolvedValueOnce("{")
-        .mockResolvedValueOnce(serializeDocumentReindexJob(valid)),
+      lPop: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({
       client,
@@ -231,13 +318,13 @@ describe("RedisDocumentReindexQueue", () => {
       enqueuedAt: "2026-07-02T01:00:00.000Z",
     };
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn().mockResolvedValueOnce(JSON.stringify(invalid)),
       rPush: vi.fn(async () => 1),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
       sRem: vi.fn(async () => 1),
-      lPop: vi.fn().mockResolvedValueOnce(JSON.stringify(invalid)),
+      lPop: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({
       client,
@@ -269,13 +356,13 @@ describe("RedisDocumentReindexQueue", () => {
       enqueuedAt: "2026-07-02T01:00:00.000Z",
     };
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn().mockResolvedValueOnce(JSON.stringify(invalid)),
       rPush: vi.fn(async () => 1),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
       sRem: vi.fn(async () => 1),
-      lPop: vi.fn().mockResolvedValueOnce(JSON.stringify(invalid)),
+      lPop: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({
       client,
@@ -424,6 +511,10 @@ describe("RedisDocumentReindexQueue", () => {
     };
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(async (script, options) => {
+        if (script.includes("LPOP")) {
+          return state.queue.shift() ?? null;
+        }
+
         const [idempotencyKey, payload] = options.arguments;
         if (!state.seen.has(idempotencyKey)) {
           state.seen.add(idempotencyKey);

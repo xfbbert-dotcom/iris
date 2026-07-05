@@ -194,6 +194,7 @@ function documentSyncDependencies({ connect }: { connect: ReturnType<typeof vi.f
       enqueue: vi.fn(async () => undefined),
       dequeueBatch: vi.fn(async () => []),
       getPendingCount: vi.fn(async () => 0),
+      handleProcessedJob: vi.fn(async () => undefined),
       handleFailedJob: vi.fn(),
       getDeadLetterCount: vi.fn(async () => 0),
       listDeadLetters: vi.fn(async () => []),

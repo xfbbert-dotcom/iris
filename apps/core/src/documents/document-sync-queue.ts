@@ -53,6 +53,7 @@ export const MAX_DOCUMENT_SYNC_IDEMPOTENCY_KEY_CHARS =
 export interface DocumentSyncQueue {
   enqueue(job: DocumentSyncJob): Promise<void>;
   dequeueBatch(limit: number): Promise<DocumentSyncJob[]>;
+  handleProcessedJob(job: DocumentSyncJob): Promise<void>;
   getPendingCount(): Promise<number>;
   handleFailedJob(input: FailedDocumentSyncJobInput): Promise<FailedDocumentSyncJobResult>;
   getDeadLetterCount(): Promise<number>;

@@ -32,6 +32,7 @@ export function createInMemoryDocumentSyncQueue({
 }: InMemoryDocumentSyncQueueOptions = {}): DocumentSyncQueue {
   const safeMaxAttempts = sanitizeMaxAttempts(maxAttempts);
   const jobsByIdempotencyKey = new Map<string, DocumentSyncJob>();
+  const inFlightJobsByIdempotencyKey = new Map<string, DocumentSyncJob>();
   const deadLetters: DeadLetteredDocumentSyncJob[] = [];
 
   const replayDeadLetter = async (
@@ -42,10 +43,13 @@ export function createInMemoryDocumentSyncQueue({
       return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
 
-    const [deadLetter] = deadLetters.splice(index, 1);
-    jobsByIdempotencyKey.set(
-      deadLetter.job.idempotencyKey,
-      cloneJob({ ...deadLetter.job, attempts: 0 }),
+      const [deadLetter] = deadLetters.splice(index, 1);
+      if (inFlightJobsByIdempotencyKey.has(deadLetter.job.idempotencyKey)) {
+        return "replayed";
+      }
+      jobsByIdempotencyKey.set(
+        deadLetter.job.idempotencyKey,
+        cloneJob({ ...deadLetter.job, attempts: 0 }),
     );
     return "replayed";
   };
@@ -65,7 +69,10 @@ export function createInMemoryDocumentSyncQueue({
   return {
     async enqueue(job) {
       const clonedJob = cloneJob(job);
-      if (jobsByIdempotencyKey.has(clonedJob.idempotencyKey)) {
+      if (
+        jobsByIdempotencyKey.has(clonedJob.idempotencyKey) ||
+        inFlightJobsByIdempotencyKey.has(clonedJob.idempotencyKey)
+      ) {
         return;
       }
 
@@ -77,9 +84,15 @@ export function createInMemoryDocumentSyncQueue({
       const jobs = Array.from(jobsByIdempotencyKey.values()).slice(0, batchSize);
       for (const job of jobs) {
         jobsByIdempotencyKey.delete(job.idempotencyKey);
+        inFlightJobsByIdempotencyKey.set(job.idempotencyKey, cloneJob(job));
       }
 
       return jobs.map(cloneJob);
+    },
+
+    async handleProcessedJob(job) {
+      const clonedJob = cloneJob(job);
+      inFlightJobsByIdempotencyKey.delete(clonedJob.idempotencyKey);
     },
 
     async getPendingCount() {
@@ -87,8 +100,10 @@ export function createInMemoryDocumentSyncQueue({
     },
 
     async handleFailedJob(input) {
-      const attempts = input.job.attempts + 1;
-      const failedJob = cloneJob({ ...input.job, attempts });
+      const originalJob = cloneJob(input.job);
+      const attempts = originalJob.attempts + 1;
+      const failedJob = cloneJob({ ...originalJob, attempts });
+      inFlightJobsByIdempotencyKey.delete(originalJob.idempotencyKey);
 
       if (attempts >= safeMaxAttempts) {
         deadLetters.push({

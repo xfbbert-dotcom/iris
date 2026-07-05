@@ -30,6 +30,7 @@ describe("DocumentReindexWorker", () => {
       },
     ]);
     expect(indexer.indexSnapshot).toHaveBeenCalledWith(snapshot({ id: "snapshot-1" }));
+    expect(queue.handleProcessedJob).toHaveBeenCalledWith(job());
   });
 
   it("rejects non-finite batch limits before dequeuing jobs", async () => {
@@ -81,8 +82,9 @@ describe("DocumentReindexWorker", () => {
   });
 
   it("skips missing snapshots", async () => {
+    const queue = queueFixture([job()]);
     const worker = createDocumentReindexWorker({
-      queue: queueFixture([job()]),
+      queue,
       snapshots: { findSnapshotById: vi.fn(async () => undefined) },
       fragments: { hasFragmentsForSnapshotProfile: vi.fn() },
       indexer: { indexSnapshot: vi.fn() },
@@ -96,6 +98,7 @@ describe("DocumentReindexWorker", () => {
         reason: "snapshot_not_found",
       },
     ]);
+    expect(queue.handleProcessedJob).toHaveBeenCalledWith(job());
   });
 
   it("skips failed snapshots", async () => {
@@ -320,6 +323,7 @@ function queueFixture(
 ) {
   return {
     dequeueBatch: vi.fn(async () => jobs),
+    handleProcessedJob: vi.fn(async () => undefined),
     handleFailedJob: vi.fn(async () => failedResult),
   };
 }

@@ -163,6 +163,7 @@ describe("createDocumentSyncRuntime", () => {
       enqueue: vi.fn(async () => undefined),
       dequeueBatch: vi.fn(async () => []),
       getPendingCount: vi.fn(async () => 3),
+      handleProcessedJob: vi.fn(async () => undefined),
       handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
       getDeadLetterCount: vi.fn(async () => 2),
       listDeadLetters: vi.fn(async () => [

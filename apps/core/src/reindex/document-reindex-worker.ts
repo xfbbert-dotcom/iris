@@ -26,7 +26,7 @@ export type DocumentReindexJobResult =
     };
 
 export type DocumentReindexWorkerDependencies = {
-  queue: Pick<DocumentReindexQueue, "dequeueBatch" | "handleFailedJob">;
+  queue: Pick<DocumentReindexQueue, "dequeueBatch" | "handleProcessedJob" | "handleFailedJob">;
   snapshots: {
     findSnapshotById(id: string): Promise<DocumentSnapshot | undefined>;
   };
@@ -52,7 +52,9 @@ export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerD
 
       for (const job of jobs) {
         try {
-          results.push(await processJob(dependencies, job));
+          const result = await processJob(dependencies, job);
+          await dependencies.queue.handleProcessedJob(job);
+          results.push(result);
         } catch (error) {
           const errorMessage = normalizeWorkerErrorMessage(error);
           const retryResult = await handleFailedJobWithRetry({

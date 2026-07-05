@@ -90,6 +90,25 @@ describe("DocumentSyncQueue", () => {
     await expect(queue.dequeueBatch(10)).resolves.toEqual([first]);
   });
 
+  it("keeps dequeued job idempotency keys claimed until processing succeeds", async () => {
+    const queue = createInMemoryDocumentSyncQueue();
+    const first = job({ documentSourceId: "source-1" });
+    const afterProcessing = {
+      ...first,
+      enqueuedAt: new Date("2026-07-03T01:10:00.000Z"),
+    };
+
+    await queue.enqueue(first);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([first]);
+    await queue.enqueue(afterProcessing);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+
+    await queue.handleProcessedJob(first);
+    await queue.enqueue(afterProcessing);
+
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([afterProcessing]);
+  });
+
   it("rejects oversized in-memory document sync job identifiers before enqueue", async () => {
     const queue = createInMemoryDocumentSyncQueue();
     const oversizedJob: DocumentSyncJob = {

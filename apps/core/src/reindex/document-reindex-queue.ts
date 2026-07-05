@@ -62,6 +62,7 @@ export const MAX_DOCUMENT_REINDEX_IDEMPOTENCY_KEY_CHARS =
 export interface DocumentReindexQueue {
   enqueue(job: DocumentReindexJob): Promise<void>;
   dequeueBatch(limit: number): Promise<DocumentReindexJob[]>;
+  handleProcessedJob(job: DocumentReindexJob): Promise<void>;
   getPendingCount(): Promise<number>;
   handleFailedJob(
     input: FailedDocumentReindexJobInput,

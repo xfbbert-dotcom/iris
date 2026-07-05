@@ -23,7 +23,7 @@ export type DocumentSyncWorkerResult =
     };
 
 export type DocumentSyncWorkerDependencies = {
-  queue: Pick<DocumentSyncQueue, "dequeueBatch" | "handleFailedJob">;
+  queue: Pick<DocumentSyncQueue, "dequeueBatch" | "handleProcessedJob" | "handleFailedJob">;
   runner: Pick<DocumentSyncRunner, "syncSourceById">;
 };
 
@@ -48,10 +48,11 @@ export function createDocumentSyncWorker(dependencies: DocumentSyncWorkerDepende
 async function processJob(
   job: DocumentSyncJob,
   runner: Pick<DocumentSyncRunner, "syncSourceById">,
-  queue: Pick<DocumentSyncQueue, "handleFailedJob">,
+  queue: Pick<DocumentSyncQueue, "handleProcessedJob" | "handleFailedJob">,
 ): Promise<DocumentSyncWorkerResult> {
   try {
     const result = await runner.syncSourceById(job.documentSourceId);
+    await queue.handleProcessedJob(job);
     return {
       status: "processed",
       idempotencyKey: job.idempotencyKey,
