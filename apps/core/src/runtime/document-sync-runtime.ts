@@ -13,8 +13,7 @@ import { readDatabaseConfig, type DatabaseConfig } from "../database/database-co
 import { createPostgresPool } from "../database/postgres.js";
 import {
   createFeishuDocumentBodyFetcher,
-  parseFeishuDocxDocumentId,
-  parseFeishuWikiNodeToken,
+  normalizeFeishuDocumentSourceUri,
 } from "../documents/feishu-document-body-fetcher.js";
 import {
   createDocumentSyncRunner,
@@ -510,17 +509,12 @@ function sanitizeLimit(value: number): number {
 }
 
 function normalizeFeishuRegistrationSourceUri(sourceUri: string): string {
-  if (
-    parseFeishuDocxDocumentId(sourceUri) === undefined &&
-    parseFeishuWikiNodeToken(sourceUri) === undefined
-  ) {
+  const normalized = normalizeFeishuDocumentSourceUri(sourceUri);
+  if (normalized === undefined) {
     throw new Error("unsupported Feishu document source URI");
   }
 
-  const url = new URL(sourceUri);
-  url.search = "";
-  url.hash = "";
-  return url.href;
+  return normalized;
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): DocumentSyncRuntimeDocumentSources {

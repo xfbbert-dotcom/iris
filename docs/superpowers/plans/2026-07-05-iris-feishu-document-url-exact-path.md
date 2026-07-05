@@ -57,8 +57,10 @@ Expected: core tests, Python worker tests, and Docker Compose validation pass.
 - Modify: `apps/core/src/documents/feishu-document-body-fetcher.ts`
 - Modify: `apps/core/src/documents/feishu-document-link-extractor.ts`
 - Modify: `apps/core/src/app.ts`
+- Modify: `apps/core/src/runtime/document-sync-runtime.ts`
 - Modify: `apps/core/tests/feishu-document-link-extractor.test.ts`
 - Modify: `apps/core/tests/answer-draft-api.test.ts`
+- Modify: `apps/core/tests/document-sync-runtime.test.ts`
 
 - [x] **Step 1: Write failing trailing-slash normalization tests**
 
@@ -75,10 +77,18 @@ Expected: fails because canonicalized source URIs still contain the trailing sla
 - [x] **Step 3: Share Feishu document URL canonicalization**
 
 Export `normalizeFeishuDocumentSourceUri()` from the Feishu document body fetcher and reuse it in
-group link extraction and internal registration parsing.
+group link extraction, internal API registration parsing, and direct document sync runtime
+registration.
 
 - [x] **Step 4: Run focused tests and confirm green**
 
 Run: `npm --workspace apps/core run test -- tests/feishu-document-link-extractor.test.ts tests/answer-draft-api.test.ts`
 
 Expected: all focused tests pass.
+
+- [x] **Step 5: Run direct runtime focused test and confirm green**
+
+Run: `npm --workspace apps/core run test -- tests/document-sync-runtime.test.ts`
+
+Expected: the runtime passes normalized source URIs without query strings, fragments, or trailing
+slashes into the registry.
