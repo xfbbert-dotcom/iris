@@ -148,13 +148,6 @@ export function createAnswerDraftRuntime({
   const createLivePermissionChecker =
     dependencies.createFeishuDocumentPermissionChecker ?? createFeishuDocumentPermissionChecker;
 
-  const pool = createPool(readDatabaseConfig(env));
-  const profiles = createProfiles({ queryable: pool });
-  const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
-  const sourceRegistry =
-    runtimeConfig.permissionMode === "source-policy"
-      ? createSources({ queryable: pool })
-      : undefined;
   const livePermissionChecker =
     runtimeConfig.permissionMode === "source-policy"
       ? createOptionalLivePermissionChecker({
@@ -162,6 +155,13 @@ export function createAnswerDraftRuntime({
           createTokenProvider,
           createLivePermissionChecker,
         })
+      : undefined;
+  const pool = createPool(readDatabaseConfig(env));
+  const profiles = createProfiles({ queryable: pool });
+  const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
+  const sourceRegistry =
+    runtimeConfig.permissionMode === "source-policy"
+      ? createSources({ queryable: pool })
       : undefined;
   const conversationMessages = createConversationMessages({ queryable: pool });
   const liveChatContextProvider = createRuntimeGatedLiveChatContextProvider({

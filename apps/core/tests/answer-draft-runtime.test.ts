@@ -12,6 +12,28 @@ describe("createAnswerDraftRuntime", () => {
     expect(createAnswerDraftRuntime({ env: {} })).toBeUndefined();
   });
 
+  it("preflights answer live permission config before opening resources", () => {
+    const createPostgresPool = vi.fn(() => ({
+      query: vi.fn(),
+      end: vi.fn(async () => undefined),
+    }));
+
+    expect(() =>
+      createAnswerDraftRuntime({
+        env: {
+          ...enabledEnv(),
+          IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+          FEISHU_APP_ID: "app-id",
+        },
+        dependencies: {
+          createPostgresPool,
+        },
+      }),
+    ).toThrow("FEISHU_APP_SECRET is required");
+
+    expect(createPostgresPool).not.toHaveBeenCalled();
+  });
+
   it("composes runtime dependencies when explicitly enabled", async () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const conversationMessages = { listRecentByChat: vi.fn(async () => []) };
