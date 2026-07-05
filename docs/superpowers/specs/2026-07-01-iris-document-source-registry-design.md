@@ -190,6 +190,7 @@ Rules:
 - If `permissionState` becomes `denied`, `canUseForAnswering` must become `false`.
 - If `permissionState` becomes `stale`, `canUseForAnswering` may remain true only if a later real-time permission guard is required before context injection. For v1, keep it true but make the state visible.
 - If a source is disabled for answering by an admin, later registration should not silently re-enable it.
+- If a source is disabled for knowledge draft usage by an admin, later source-type upgrades should not silently re-enable it. The registry must distinguish default user-submitted document policy from an explicit admin override.
 
 Phase 2B known limitation:
 
@@ -236,6 +237,7 @@ Unit tests should cover:
 - no downgrade from admin authorization to group/user source;
 - permission denied disables answering;
 - admin-disabled answering is not silently re-enabled by re-registration;
+- admin-disabled knowledge draft usage is not silently re-enabled by source-type upgrades;
 - duplicate Feishu message retries do not append duplicate evidence;
 - querying by type, group, space, user, id, and URI;
 - deterministic ordering;

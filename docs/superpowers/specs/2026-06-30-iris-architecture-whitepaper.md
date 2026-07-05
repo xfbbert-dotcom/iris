@@ -132,6 +132,8 @@ Iris must not use a document link to bypass Feishu permissions. If a document is
 
 When a document source is marked `denied`, Iris must disable every document-content capability for that source, including answer retrieval and knowledge draft generation. Later rediscovery, source-type upgrades, or repeated registration must not silently re-enable denied document usage; only an explicit permission state change and administrator policy update may make the source usable again.
 
+When an administrator disables a document source capability, Iris must preserve that operator intent across later rediscovery or source-type upgrades. This includes the subtle case where a user-submitted document defaults to `canUseForKnowledgeDrafts=false`: the system must distinguish that default from an explicit admin override before auto-enabling knowledge draft usage after an authorized wiki upgrade.
+
 Document source policy updates from Admin Console are control-plane writes. When one request changes more than one document-content capability, Iris must apply those policy fields as one authoritative source update rather than a sequence of independent writes. A failed policy update must not leave the source half-enabled or half-disabled.
 
 Local permission state is never enough for sensitive retrieval. Before document fragments retrieved from pgvector are passed into the LLM, TypeScript Core App must run a real-time permission guard against Feishu for the candidate document IDs whenever the answer depends on document content. This guard exists because indirect permission changes, such as parent-folder permission changes or group membership changes, may lag behind or bypass clean webhook notifications.
@@ -958,6 +960,9 @@ Required architectural response:
   one statement or transaction boundary.
 - Denied-source capability locks must be preserved inside the same authoritative
   update.
+- Policy storage must preserve explicit admin overrides separately from source
+  type defaults, so later rediscovery or source-type upgrades cannot silently
+  undo an operator's disable decision.
 
 Evolution signal:
 
