@@ -291,12 +291,17 @@ describe("RedisDocumentReindexQueue", () => {
 
   it("dead-letters invalid queued payloads and continues dequeuing valid jobs", async () => {
     const valid = jobFixture({ documentSnapshotId: "snapshot-valid" });
+    let dequeueCount = 0;
+    const evalRedis = vi.fn(async (script: string) => {
+      if (script.includes("LPOP")) {
+        dequeueCount += 1;
+        return dequeueCount === 1 ? "{" : serializeDocumentReindexJob(valid);
+      }
+      return 1;
+    });
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi
-        .fn()
-        .mockResolvedValueOnce("{")
-        .mockResolvedValueOnce(serializeDocumentReindexJob(valid)),
-      rPush: vi.fn(async () => 1),
+      eval: evalRedis,
+      rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
@@ -310,15 +315,22 @@ describe("RedisDocumentReindexQueue", () => {
     });
 
     await expect(queue.dequeueBatch(2)).resolves.toEqual([valid]);
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:reindex:documents:dlq",
-      JSON.stringify({
-        id: "dlq-invalid",
-        rawPayload: "{",
-        errorMessage: "Invalid document reindex job JSON",
-        failedAt: "2026-07-03T12:35:00.000Z",
-      }),
-    );
+    expect(evalRedis).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:reindex:documents:dlq", "iris:reindex:documents:processing", "iris:reindex:documents:seen"],
+      arguments: [
+        JSON.stringify({
+          id: "dlq-invalid",
+          rawPayload: "{",
+          errorMessage: "Invalid document reindex job JSON",
+          failedAt: "2026-07-03T12:35:00.000Z",
+        }),
+        "{",
+        "",
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("releases parseable document reindex seen keys for invalid queued payloads", async () => {
@@ -327,13 +339,15 @@ describe("RedisDocumentReindexQueue", () => {
       reason: "unknown",
       enqueuedAt: "2026-07-02T01:00:00.000Z",
     };
+    const invalidPayload = JSON.stringify(invalid);
+    const evalRedis = vi.fn(async (script: string) => (script.includes("LPOP") ? invalidPayload : 1));
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn().mockResolvedValueOnce(JSON.stringify(invalid)),
-      rPush: vi.fn(async () => 1),
+      eval: evalRedis,
+      rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
-      sRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
       lPop: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({
@@ -343,19 +357,22 @@ describe("RedisDocumentReindexQueue", () => {
     });
 
     await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
-    expect(client.sRem).toHaveBeenCalledWith(
-      "iris:reindex:documents:seen",
-      "reindex:profile-1536:snapshot-invalid",
-    );
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:reindex:documents:dlq",
-      JSON.stringify({
-        id: "dlq-invalid-payload",
-        rawPayload: JSON.stringify(invalid),
-        errorMessage: "Invalid document reindex job payload",
-        failedAt: "2026-07-03T12:35:00.000Z",
-      }),
-    );
+    expect(evalRedis).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:reindex:documents:dlq", "iris:reindex:documents:processing", "iris:reindex:documents:seen"],
+      arguments: [
+        JSON.stringify({
+          id: "dlq-invalid-payload",
+          rawPayload: invalidPayload,
+          errorMessage: "Invalid document reindex job payload",
+          failedAt: "2026-07-03T12:35:00.000Z",
+        }),
+        invalidPayload,
+        "reindex:profile-1536:snapshot-invalid",
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("does not release mismatched document reindex seen keys from invalid queued payloads", async () => {
@@ -365,13 +382,15 @@ describe("RedisDocumentReindexQueue", () => {
       reason: "unknown",
       enqueuedAt: "2026-07-02T01:00:00.000Z",
     };
+    const invalidPayload = JSON.stringify(invalid);
+    const evalRedis = vi.fn(async (script: string) => (script.includes("LPOP") ? invalidPayload : 1));
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn().mockResolvedValueOnce(JSON.stringify(invalid)),
-      rPush: vi.fn(async () => 1),
+      eval: evalRedis,
+      rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
-      sRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
       lPop: vi.fn(),
     };
     const queue = createRedisDocumentReindexQueue({
@@ -381,16 +400,22 @@ describe("RedisDocumentReindexQueue", () => {
     });
 
     await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+    expect(evalRedis).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:reindex:documents:dlq", "iris:reindex:documents:processing", "iris:reindex:documents:seen"],
+      arguments: [
+        JSON.stringify({
+          id: "dlq-mismatched-payload",
+          rawPayload: invalidPayload,
+          errorMessage: "Invalid document reindex job payload",
+          failedAt: "2026-07-03T12:35:00.000Z",
+        }),
+        invalidPayload,
+        "",
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
+    expect(client.lRem).not.toHaveBeenCalled();
     expect(client.sRem).not.toHaveBeenCalled();
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:reindex:documents:dlq",
-      JSON.stringify({
-        id: "dlq-mismatched-payload",
-        rawPayload: JSON.stringify(invalid),
-        errorMessage: "Invalid document reindex job payload",
-        failedAt: "2026-07-03T12:35:00.000Z",
-      }),
-    );
   });
 
   it("round-trips job dates through JSON", () => {

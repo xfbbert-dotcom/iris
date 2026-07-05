@@ -95,7 +95,10 @@ return redis.call("LREM", KEYS[3], 1, ARGV[3])
 const ACK_DEAD_LETTER_SCRIPT = `
 if redis.call("LREM", KEYS[2], 1, ARGV[2]) > 0 then
   redis.call("RPUSH", KEYS[1], ARGV[1])
-  return redis.call("SREM", KEYS[3], ARGV[3])
+  if ARGV[3] ~= "" then
+    return redis.call("SREM", KEYS[3], ARGV[3])
+  end
+  return 1
 end
 return 0
 `;
@@ -189,8 +192,11 @@ export function createRedisDocumentSyncQueue({
           jobs.push(job);
         } catch (error) {
           const idempotencyKey = readQueuedDocumentSyncIdempotencyKey(payload);
-          await client.rPush(
+          await acknowledgeDeadLetteredSerializedJob(
+            client,
             deadLetterKey,
+            processingKey,
+            seenKey,
             JSON.stringify({
               id: idGenerator(),
               rawPayload: payload,
@@ -199,11 +205,9 @@ export function createRedisDocumentSyncQueue({
               ),
               failedAt: now().toISOString(),
             }),
+            payload,
+            idempotencyKey,
           );
-          await client.lRem(processingKey, 1, payload);
-          if (idempotencyKey !== undefined) {
-            await client.sRem(seenKey, idempotencyKey);
-          }
         }
       }
 
@@ -389,11 +393,11 @@ async function acknowledgeDeadLetteredSerializedJob(
   seenKey: string,
   deadLetterPayload: string,
   originalPayload: string,
-  idempotencyKey: string,
+  idempotencyKey: string | undefined,
 ): Promise<void> {
   await client.eval(ACK_DEAD_LETTER_SCRIPT, {
     keys: [deadLetterKey, processingKey, seenKey],
-    arguments: [deadLetterPayload, originalPayload, idempotencyKey],
+    arguments: [deadLetterPayload, originalPayload, idempotencyKey ?? ""],
   });
 }
 

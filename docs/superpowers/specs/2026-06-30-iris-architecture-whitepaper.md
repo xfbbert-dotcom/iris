@@ -1465,6 +1465,39 @@ When Iris moves to a leased queue adapter, dead-letter ACK must become one
 adapter-level commit that records the terminal failure, clears in-flight
 ownership, and releases idempotency state together.
 
+### 12.31 Redis Invalid Payload DLQ ACK Must Be Atomic
+
+Pressure:
+
+When Redis dequeue moves a payload into the processing list and Iris then fails
+to parse or validate that payload, the worker must preserve a diagnostic DLQ
+entry and remove the bad processing payload. If the DLQ write, processing-list
+cleanup, and optional seen-key release are split across separate commands, a
+transient Redis failure can leave the corrupt payload recoverable while also
+creating a DLQ diagnostic, or it can keep a safe idempotency key blocked after
+the bad payload is no longer actionable.
+
+Required architectural response:
+
+- Invalid queued payload handling for raw events, document sync jobs, and
+  reindex jobs must write the diagnostic DLQ payload, remove the exact
+  processing payload, and release the seen key when a safe key can be derived in
+  one Redis eval/Lua operation.
+- The script must skip seen-key release when the payload cannot prove a safe
+  idempotency key, so corrupted or mismatched payloads cannot unlock unrelated
+  work.
+- Diagnostic DLQ payloads must keep bounded, operator-readable error messages
+  and stable generated ids.
+- The DLQ payload must be written only after the exact processing payload is
+  removed, so client retries cannot duplicate invalid-payload diagnostics.
+- The v1 single-consumer recovery contract remains unchanged.
+
+Evolution signal:
+
+When Iris moves to a leased queue adapter, invalid-payload DLQ ACK must remain
+one adapter-level commit that records the diagnostic failure, clears in-flight
+ownership, and conditionally releases idempotency state.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

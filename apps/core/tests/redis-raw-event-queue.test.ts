@@ -351,17 +351,22 @@ describe("RedisRawEventQueue", () => {
 
   it("dead-letters invalid queued payloads and continues dequeuing valid events", async () => {
     const valid = eventFixture({ idempotencyKey: "raw-event:feishu:event-valid" });
+    let dequeueCount = 0;
+    const evalRedis = vi.fn(async (script: string) => {
+      if (script.includes("LPOP")) {
+        dequeueCount += 1;
+        return dequeueCount === 1 ? "{" : serializeRawEvent(valid);
+      }
+      return 1;
+    });
     const client: RedisRawEventQueueClient = {
-      eval: vi
-        .fn()
-        .mockResolvedValueOnce("{")
-        .mockResolvedValueOnce(serializeRawEvent(valid)),
-      rPush: vi.fn(async () => 1),
+      eval: evalRedis,
+      rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
       lPop: vi.fn(),
-      sRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisRawEventQueue({
       client,
@@ -370,15 +375,22 @@ describe("RedisRawEventQueue", () => {
     });
 
     await expect(queue.dequeueBatch(2)).resolves.toEqual([valid]);
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:events:raw:dlq",
-      JSON.stringify({
-        id: "dlq-invalid-json",
-        rawPayload: "{",
-        errorMessage: "Invalid raw event JSON",
-        failedAt: "2026-07-03T12:00:00.000Z",
-      }),
-    );
+    expect(evalRedis).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:events:raw:dlq", "iris:events:raw:processing", "iris:events:raw:seen"],
+      arguments: [
+        JSON.stringify({
+          id: "dlq-invalid-json",
+          rawPayload: "{",
+          errorMessage: "Invalid raw event JSON",
+          failedAt: "2026-07-03T12:00:00.000Z",
+        }),
+        "{",
+        "",
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("dead-letters raw event payloads with missing bodies and continues dequeuing", async () => {
@@ -390,17 +402,22 @@ describe("RedisRawEventQueue", () => {
       receivedAt: "2026-07-02T01:00:00.000Z",
       attempts: 0,
     });
+    let dequeueCount = 0;
+    const evalRedis = vi.fn(async (script: string) => {
+      if (script.includes("LPOP")) {
+        dequeueCount += 1;
+        return dequeueCount === 1 ? invalidPayload : serializeRawEvent(valid);
+      }
+      return 1;
+    });
     const client: RedisRawEventQueueClient = {
-      eval: vi
-        .fn()
-        .mockResolvedValueOnce(invalidPayload)
-        .mockResolvedValueOnce(serializeRawEvent(valid)),
-      rPush: vi.fn(async () => 1),
+      eval: evalRedis,
+      rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
       lPop: vi.fn(),
-      sRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisRawEventQueue({
       client,
@@ -409,19 +426,22 @@ describe("RedisRawEventQueue", () => {
     });
 
     await expect(queue.dequeueBatch(2)).resolves.toEqual([valid]);
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:events:raw:dlq",
-      JSON.stringify({
-        id: "dlq-invalid-payload",
-        rawPayload: invalidPayload,
-        errorMessage: "Invalid raw event payload",
-        failedAt: "2026-07-03T12:05:00.000Z",
-      }),
-    );
-    expect(client.sRem).toHaveBeenCalledWith(
-      "iris:events:raw:seen",
-      "raw-event:feishu:event-missing-body",
-    );
+    expect(evalRedis).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:events:raw:dlq", "iris:events:raw:processing", "iris:events:raw:seen"],
+      arguments: [
+        JSON.stringify({
+          id: "dlq-invalid-payload",
+          rawPayload: invalidPayload,
+          errorMessage: "Invalid raw event payload",
+          failedAt: "2026-07-03T12:05:00.000Z",
+        }),
+        invalidPayload,
+        "raw-event:feishu:event-missing-body",
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("does not release raw event seen keys from non-Feishu invalid queued payloads", async () => {
@@ -432,14 +452,15 @@ describe("RedisRawEventQueue", () => {
       receivedAt: "2026-07-02T01:00:00.000Z",
       attempts: 0,
     });
+    const evalRedis = vi.fn(async (script: string) => (script.includes("LPOP") ? invalidPayload : 1));
     const client: RedisRawEventQueueClient = {
-      eval: vi.fn().mockResolvedValueOnce(invalidPayload),
-      rPush: vi.fn(async () => 1),
+      eval: evalRedis,
+      rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
       lRem: vi.fn(),
       lPop: vi.fn(),
-      sRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
     };
     const queue = createRedisRawEventQueue({
       client,
@@ -448,16 +469,22 @@ describe("RedisRawEventQueue", () => {
     });
 
     await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+    expect(evalRedis).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:events:raw:dlq", "iris:events:raw:processing", "iris:events:raw:seen"],
+      arguments: [
+        JSON.stringify({
+          id: "dlq-non-feishu-payload",
+          rawPayload: invalidPayload,
+          errorMessage: "Invalid raw event payload",
+          failedAt: "2026-07-03T12:10:00.000Z",
+        }),
+        invalidPayload,
+        "",
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
+    expect(client.lRem).not.toHaveBeenCalled();
     expect(client.sRem).not.toHaveBeenCalled();
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:events:raw:dlq",
-      JSON.stringify({
-        id: "dlq-non-feishu-payload",
-        rawPayload: invalidPayload,
-        errorMessage: "Invalid raw event payload",
-        failedAt: "2026-07-03T12:10:00.000Z",
-      }),
-    );
   });
 
   it("requeues failed raw events below max attempts", async () => {
