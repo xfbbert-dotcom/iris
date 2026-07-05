@@ -483,6 +483,30 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     ]);
   });
 
+  it("does not unconditionally refresh updated_at for idempotent duplicate evidence retries", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain("updated_at = case when");
+    expect(normalizeSql(update?.sql ?? "")).not.toContain("updated_at = $8");
+  });
+
   it("rolls back and releases the client when registration fails", async () => {
     const fake = createFakePool({
       failOnSql: (sql) =>

@@ -435,24 +435,42 @@ function registerSource(
   }
 
   const hasExistingEvidence = evidenceExists(existing.evidence, next.evidence);
+  const mergedSourceType = higherPrioritySourceType(existing.sourceType, next.sourceType);
+  const mergedTitle = existing.title ?? next.title;
+  const mergedOriginGroupId = existing.originGroupId ?? next.originGroupId;
+  const mergedOriginMessageId = existing.originMessageId ?? next.originMessageId;
+  const mergedSubmittedByUserId = existing.submittedByUserId ?? next.submittedByUserId;
+  const mergedAuthorizedSpaceId = existing.authorizedSpaceId ?? next.authorizedSpaceId;
+  const mergedSyncState =
+    existing.syncState === "failed" && !hasExistingEvidence ? "pending" : existing.syncState;
+  const mergedCanUseForKnowledgeDrafts = shouldUseKnowledgeDrafts(
+    existing,
+    next,
+    knowledgeDraftsPolicyOverriddenById.has(existing.id),
+  );
+  const shouldRefreshUpdatedAt =
+    !hasExistingEvidence ||
+    mergedSourceType !== existing.sourceType ||
+    mergedTitle !== existing.title ||
+    mergedOriginGroupId !== existing.originGroupId ||
+    mergedOriginMessageId !== existing.originMessageId ||
+    mergedSubmittedByUserId !== existing.submittedByUserId ||
+    mergedAuthorizedSpaceId !== existing.authorizedSpaceId ||
+    mergedSyncState !== existing.syncState ||
+    mergedCanUseForKnowledgeDrafts !== existing.canUseForKnowledgeDrafts;
   const merged: DocumentSource = {
     ...existing,
-    sourceType: higherPrioritySourceType(existing.sourceType, next.sourceType),
-    title: existing.title ?? next.title,
-    originGroupId: existing.originGroupId ?? next.originGroupId,
-    originMessageId: existing.originMessageId ?? next.originMessageId,
-    submittedByUserId: existing.submittedByUserId ?? next.submittedByUserId,
-    authorizedSpaceId: existing.authorizedSpaceId ?? next.authorizedSpaceId,
-    syncState:
-      existing.syncState === "failed" && !hasExistingEvidence ? "pending" : existing.syncState,
+    sourceType: mergedSourceType,
+    title: mergedTitle,
+    originGroupId: mergedOriginGroupId,
+    originMessageId: mergedOriginMessageId,
+    submittedByUserId: mergedSubmittedByUserId,
+    authorizedSpaceId: mergedAuthorizedSpaceId,
+    syncState: mergedSyncState,
     canUseForAnswering: existing.canUseForAnswering,
-    canUseForKnowledgeDrafts: shouldUseKnowledgeDrafts(
-      existing,
-      next,
-      knowledgeDraftsPolicyOverriddenById.has(existing.id),
-    ),
+    canUseForKnowledgeDrafts: mergedCanUseForKnowledgeDrafts,
     createdAt: new Date(existing.createdAt),
-    updatedAt: now,
+    updatedAt: shouldRefreshUpdatedAt ? now : new Date(existing.updatedAt),
     evidence: hasExistingEvidence
       ? existing.evidence.map(cloneEvidence)
       : [...existing.evidence.map(cloneEvidence), cloneEvidence(next.evidence)],

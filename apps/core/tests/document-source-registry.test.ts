@@ -324,6 +324,31 @@ describe("createDocumentSourceRegistry", () => {
     expect(retried.evidence[0]?.observedAt).toEqual(new Date("2026-07-01T04:01:00.000Z"));
   });
 
+  it("does not refresh updatedAt for duplicate evidence retries without metadata changes", () => {
+    let now = new Date("2026-07-01T04:00:00.000Z");
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => now,
+    });
+
+    const first = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+    now = new Date("2026-07-01T05:00:00.000Z");
+    const retried = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T05:01:00.000Z"),
+    });
+
+    expect(retried.updatedAt).toEqual(first.updatedAt);
+    expect(registry.listSources()[0]?.updatedAt).toEqual(first.updatedAt);
+  });
+
   it("upgrades sourceType for admin authorization and does not downgrade later", () => {
     const registry = createDocumentSourceRegistry({
       createId: () => "doc-source-1",

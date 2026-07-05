@@ -455,7 +455,35 @@ set
     then 'pending'
     else sync_state
   end,
-  updated_at = $8
+  updated_at = case
+    when source_type is distinct from $1
+      or (title is null and $2 is not null)
+      or (origin_group_id is null and $3 is not null)
+      or (origin_message_id is null and $4 is not null)
+      or (submitted_by_user_id is null and $5 is not null)
+      or (authorized_space_id is null and $6 is not null)
+      or can_use_for_knowledge_drafts is distinct from (
+        case
+          when permission_state = 'denied' then false
+          when knowledge_drafts_policy_overridden then can_use_for_knowledge_drafts
+          when can_use_for_knowledge_drafts then true
+          when source_type = 'user_submitted_document' then $7
+          else false
+        end
+      )
+      or not exists (
+        select 1
+        from document_source_evidence evidence
+        where evidence.kind = $10
+          and evidence.source_uri = $11
+          and coalesce(evidence.group_id, '') = coalesce($12, '')
+          and coalesce(evidence.message_id, '') = coalesce($13, '')
+          and coalesce(evidence.user_id, '') = coalesce($14, '')
+          and coalesce(evidence.space_id, '') = coalesce($15, '')
+      )
+    then $8
+    else updated_at
+  end
 where id = $9
 `,
       [

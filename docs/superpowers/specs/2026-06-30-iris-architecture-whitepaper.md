@@ -1229,6 +1229,34 @@ normalizer can become a compatibility boundary for legacy thrown values. The v1
 contract should remain: failure handling must not fail while formatting the
 failure.
 
+### 12.23 Document Source Retries Must Not Refresh UpdatedAt
+
+Pressure:
+
+Feishu retries can deliver the same message event and the same discovered
+document link more than once. Iris already deduplicates source evidence by
+semantic evidence keys, including `messageId`, but a duplicate retry that still
+refreshes `updatedAt` makes an old source look newly changed. That can distort
+operator views, latest-source ordering, and manual rollout judgment.
+
+Required architectural response:
+
+- Document-source registration must preserve `updatedAt` for duplicate evidence
+  retries when no effective source metadata, source type, sync state, or policy
+  value changes.
+- Registration must still refresh `updatedAt` when new evidence is added, a
+  source type is upgraded, missing metadata is filled, failed sync is reset to
+  pending, or effective knowledge-draft policy changes.
+- The in-memory v1 registry and Postgres registry must follow the same
+  idempotency contract.
+
+Evolution signal:
+
+When source provenance becomes event-sourced, this rule should move into the
+projection layer: replaying the same event should produce the same projected
+source state and timestamp. The v1 contract remains that Feishu retry noise
+must not masquerade as fresh document activity.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
