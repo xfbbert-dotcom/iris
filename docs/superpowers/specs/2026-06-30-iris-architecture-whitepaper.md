@@ -177,12 +177,15 @@ Feishu messages, document links, files, mentions, user submissions, wiki updates
 
 Feishu Gateway's event ingestion path must be designed for overload. In high-volume groups, the gateway must avoid heavy signal filtering and Redis persistence work before acknowledgment. Raw events should be scheduled into Redis Queue or an equivalent durable queue immediately after acknowledgement, then processed by asynchronous workers with idempotency keys, retry limits, backpressure, and dead-letter handling.
 
-Raw event idempotency keys must be bounded. Platform event IDs can seed stable
-deduplication keys, but oversized external IDs must be ignored in favor of a
-canonical body hash so malformed callbacks cannot create oversized Redis keys.
-The fallback hash sorts JSON object keys recursively before SHA-256 hashing so
-semantically identical callbacks do not duplicate merely because object key order
-changed.
+Raw event idempotency keys must be bounded. Platform event IDs seed the primary
+deduplication keys. When a Feishu message callback lacks a usable event ID, the
+message ID becomes the secondary deduplication key so platform retries with
+slightly different wrapper metadata do not duplicate the same message event. If
+neither ID is usable, Iris falls back to a canonical body hash. Oversized
+external IDs must be ignored so malformed callbacks cannot create oversized Redis
+keys. The fallback hash sorts JSON object keys recursively before SHA-256 hashing
+so semantically identical callbacks do not duplicate merely because object key
+order changed.
 
 Raw Feishu event DLQs are operator recovery surfaces. Iris must support bounded listing, explicit replay, and deletion for raw event dead letters. Replay must not remove the DLQ payload until the reset raw event has been accepted back into the queue.
 

@@ -176,9 +176,37 @@ function resolveRawEventId(request: FeishuCallbackRequest): string {
     if (bodyEventId) {
       return bodyEventId;
     }
+
+    const messageEventId = resolveMessageEventId(request.body);
+    if (messageEventId) {
+      return messageEventId;
+    }
   }
 
   return stableJsonHash(request.body);
+}
+
+function resolveMessageEventId(body: Record<string, unknown>): string | undefined {
+  const event = body.event;
+  if (isRecord(event)) {
+    const message = event.message;
+    if (isRecord(message)) {
+      const messageId = normalizeIdempotencyKey(message.message_id);
+      if (messageId !== undefined) {
+        return normalizeIdempotencyKey(`message:${messageId}`);
+      }
+    }
+  }
+
+  const message = body.message;
+  if (isRecord(message)) {
+    const messageId = normalizeIdempotencyKey(message.message_id);
+    if (messageId !== undefined) {
+      return normalizeIdempotencyKey(`message:${messageId}`);
+    }
+  }
+
+  return undefined;
 }
 
 function resolveEventType(body: unknown): string {

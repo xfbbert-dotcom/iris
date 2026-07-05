@@ -212,6 +212,9 @@ reply is in flight, after a successful reply, or after runtime control suppresse
 Failed reply attempts remain retryable. This protects model budget and reply API calls in the v1
 single-Core deployment, and prevents old mentions from being answered after replies are re-enabled;
 a future multi-replica deployment should move this short-lived dedupe state into Redis.
+At the gateway layer, valid Feishu event IDs deduplicate raw callbacks first. If a message callback
+lacks a usable event ID, Iris falls back to `messageId` before using the canonical body hash, so
+retry wrappers that add metadata do not create duplicate message events.
 
 Before starting the internal rollout, run the same readiness profile locally:
 

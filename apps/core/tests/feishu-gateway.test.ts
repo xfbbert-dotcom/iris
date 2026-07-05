@@ -275,7 +275,7 @@ describe("FeishuGateway", () => {
     expect(queue.events[0]?.idempotencyKey).not.toBe("   ");
   });
 
-  it("deduplicates legacy queue retries without explicit event ids by stable body hash", async () => {
+  it("deduplicates legacy queue retries without explicit event ids by message id", async () => {
     const queue = new InMemoryEventQueue();
     const gateway = createFeishuGateway({ queue });
     const body = {
@@ -293,7 +293,44 @@ describe("FeishuGateway", () => {
     await flushDeferredEnqueue();
 
     expect(queue.events).toHaveLength(1);
-    expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]+$/);
+    expect(queue.events[0]?.idempotencyKey).toBe("message:message-1");
+  });
+
+  it("deduplicates message retries by message id when Feishu event ids are missing", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        event: {
+          message: {
+            message_id: "message-retry-1",
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        retry_count: 1,
+        event: {
+          message: {
+            message_id: "message-retry-1",
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+    await flushDeferredEnqueue();
+
+    expect(queue.events).toHaveLength(1);
+    expect(queue.events[0]?.idempotencyKey).toBe("message:message-retry-1");
   });
 
   it("deduplicates fallback body hashes independent of JSON object key order", async () => {
@@ -305,7 +342,6 @@ describe("FeishuGateway", () => {
       body: {
         event: {
           message: {
-            message_id: "message-1",
             chat_id: "chat-1",
             content: "{\"text\":\"hello\"}",
           },
@@ -321,7 +357,6 @@ describe("FeishuGateway", () => {
           message: {
             content: "{\"text\":\"hello\"}",
             chat_id: "chat-1",
-            message_id: "message-1",
           },
         },
       },
@@ -361,7 +396,7 @@ describe("FeishuGateway", () => {
     expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]{64}$/);
   });
 
-  it("falls back to a body hash when Feishu event ids are oversized", async () => {
+  it("uses message ids when Feishu event ids are oversized", async () => {
     const queue = new InMemoryEventQueue();
     const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
     const gateway = createFeishuGateway({ queue, rawEventQueue });
@@ -373,6 +408,32 @@ describe("FeishuGateway", () => {
       event: {
         message: {
           message_id: "message-1",
+          chat_id: "chat-1",
+        },
+      },
+    };
+
+    await gateway.handleCallback({ headers: {}, body });
+    await flushDeferredEnqueue();
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "raw-event:feishu:message:message-1",
+      }),
+    );
+  });
+
+  it("falls back to a body hash when Feishu event and message ids are unavailable", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const gateway = createFeishuGateway({ queue, rawEventQueue });
+    const body = {
+      header: {
+        event_id: "a".repeat(513),
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
           chat_id: "chat-1",
         },
       },
