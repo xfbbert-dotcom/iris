@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { DocumentReindexJob } from "../src/reindex/document-reindex-queue.js";
 import { createReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 
 describe("createReindexWorkerRuntime", () => {
@@ -122,6 +123,90 @@ describe("createReindexWorkerRuntime", () => {
     ).rejects.toThrow("embeddingProfileId does not match active reindex profile");
   });
 
+  it("guards runtime worker jobs to the active embedding profile", async () => {
+    const staleJob = reindexJob({
+      embeddingProfileId: "profile-old",
+      documentSnapshotId: "snapshot-stale",
+    });
+    const stalePayload = JSON.stringify({
+      ...staleJob,
+      enqueuedAt: staleJob.enqueuedAt.toISOString(),
+    });
+    const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
+    let dequeueCount = 0;
+    const redisClient = {
+      connect: vi.fn(async () => redisClient),
+      eval: vi.fn(async (_script: string, options: { keys: string[] }) => {
+        if (options.keys[0] === "iris:reindex:documents:queue") {
+          dequeueCount += 1;
+          return dequeueCount === 1 ? stalePayload : null;
+        }
+
+        return 1;
+      }),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(async () => null),
+      lLen: vi.fn(async () => 0),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
+      quit: vi.fn(async () => undefined),
+    };
+    const embeddingProfile = embeddingProfileFixture();
+    const snapshots = {
+      listSuccessfulSnapshotsMissingProfile: vi.fn(async () => []),
+      findSnapshotById: vi.fn(),
+    };
+    const fragments = {
+      replaceFragmentsForSnapshot: vi.fn(),
+      hasFragmentsForSnapshotProfile: vi.fn(),
+    };
+    let capturedWorker:
+      | { processBatch(input: { limit: number }): Promise<unknown> }
+      | undefined;
+    const loop = {
+      start: vi.fn(),
+      stop: vi.fn(async () => undefined),
+      isRunning: vi.fn(() => false),
+      getSnapshot: vi.fn(() => ({ running: false, intervalMs: 1000, batchLimit: 25 })),
+    };
+    const createWorkerLoop = vi.fn(
+      (input: { worker: { processBatch(input: { limit: number }): Promise<unknown> } }) => {
+        capturedWorker = input.worker;
+        return loop;
+      },
+    );
+
+    createReindexWorkerRuntime({
+      env: enabledEnv(),
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createRedisClient: vi.fn(() => redisClient),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          findOrCreateProfile: vi.fn(async () => embeddingProfile),
+          getProfileById: vi.fn(async () => embeddingProfile),
+          getStaticDevelopmentProfile: vi.fn(),
+        })),
+        createDocumentSnapshotRepository: vi.fn(() => snapshots),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createEmbeddingProvider: vi.fn(() => ({ embedTexts: vi.fn(async () => []) })),
+        createWorkerLoop,
+      },
+    });
+
+    await expect(capturedWorker?.processBatch({ limit: 1 })).resolves.toEqual([
+      {
+        status: "skipped",
+        documentSnapshotId: "snapshot-stale",
+        embeddingProfileId: "profile-old",
+        reason: "profile_not_active",
+      },
+    ]);
+    expect(snapshots.findSnapshotById).not.toHaveBeenCalled();
+    expect(fragments.hasFragmentsForSnapshotProfile).not.toHaveBeenCalled();
+    expect(fragments.replaceFragmentsForSnapshot).not.toHaveBeenCalled();
+  });
+
   it("requires embedding provider config when enabled", () => {
     expect(() =>
       createReindexWorkerRuntime({
@@ -169,6 +254,21 @@ function embeddingProfileFixture() {
     displayName: "OpenAI-compatible text-embedding-small (1536d)",
     status: "active" as const,
     createdAt: new Date("2026-07-02T01:00:00.000Z"),
+  };
+}
+
+function reindexJob(overrides: Partial<DocumentReindexJob> = {}): DocumentReindexJob {
+  const embeddingProfileId = overrides.embeddingProfileId ?? "profile-1536";
+  const documentSnapshotId = overrides.documentSnapshotId ?? "snapshot-1";
+
+  return {
+    idempotencyKey: `reindex:${embeddingProfileId}:${documentSnapshotId}`,
+    embeddingProfileId,
+    documentSnapshotId,
+    reason: "manual_profile_reindex",
+    enqueuedAt: new Date("2026-07-02T01:00:00.000Z"),
+    attempts: 0,
+    ...overrides,
   };
 }
 

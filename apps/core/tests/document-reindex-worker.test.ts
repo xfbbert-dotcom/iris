@@ -139,6 +139,34 @@ describe("DocumentReindexWorker", () => {
     ]);
   });
 
+  it("skips inactive embedding profile jobs before reading snapshots", async () => {
+    const staleJob = job({ embeddingProfileId: "profile-old" });
+    const queue = queueFixture([staleJob]);
+    const snapshots = { findSnapshotById: vi.fn() };
+    const fragments = { hasFragmentsForSnapshotProfile: vi.fn() };
+    const indexer = { indexSnapshot: vi.fn() };
+    const worker = createDocumentReindexWorker({
+      queue,
+      snapshots,
+      fragments,
+      indexer,
+      activeEmbeddingProfileId: "profile-active",
+    });
+
+    await expect(worker.processBatch({ limit: 10 })).resolves.toEqual([
+      {
+        status: "skipped",
+        documentSnapshotId: "snapshot-1",
+        embeddingProfileId: "profile-old",
+        reason: "profile_not_active",
+      },
+    ]);
+    expect(snapshots.findSnapshotById).not.toHaveBeenCalled();
+    expect(fragments.hasFragmentsForSnapshotProfile).not.toHaveBeenCalled();
+    expect(indexer.indexSnapshot).not.toHaveBeenCalled();
+    expect(queue.handleProcessedJob).toHaveBeenCalledWith(staleJob);
+  });
+
   it("requeues failed processing jobs below the retry limit", async () => {
     const queuedJob = job();
     const queue = queueFixture([queuedJob], { action: "requeued", attempts: 1 });

@@ -13,7 +13,11 @@ export type DocumentReindexJobResult =
       status: "skipped";
       documentSnapshotId: string;
       embeddingProfileId: string;
-      reason: "already_indexed" | "snapshot_not_successful" | "snapshot_not_found";
+      reason:
+        | "already_indexed"
+        | "snapshot_not_successful"
+        | "snapshot_not_found"
+        | "profile_not_active";
     }
   | {
       status: "failed";
@@ -27,6 +31,7 @@ export type DocumentReindexJobResult =
 
 export type DocumentReindexWorkerDependencies = {
   queue: Pick<DocumentReindexQueue, "dequeueBatch" | "handleProcessedJob" | "handleFailedJob">;
+  activeEmbeddingProfileId?: string;
   snapshots: {
     findSnapshotById(id: string): Promise<DocumentSnapshot | undefined>;
   };
@@ -112,6 +117,13 @@ async function processJob(
   dependencies: DocumentReindexWorkerDependencies,
   job: DocumentReindexJob,
 ): Promise<DocumentReindexJobResult> {
+  if (
+    dependencies.activeEmbeddingProfileId !== undefined &&
+    job.embeddingProfileId !== dependencies.activeEmbeddingProfileId
+  ) {
+    return skipped(job, "profile_not_active");
+  }
+
   const snapshot = await dependencies.snapshots.findSnapshotById(job.documentSnapshotId);
   if (snapshot === undefined) {
     return skipped(job, "snapshot_not_found");
@@ -143,7 +155,11 @@ async function processJob(
 
 function skipped(
   job: DocumentReindexJob,
-  reason: "already_indexed" | "snapshot_not_successful" | "snapshot_not_found",
+  reason:
+    | "already_indexed"
+    | "snapshot_not_successful"
+    | "snapshot_not_found"
+    | "profile_not_active",
 ): DocumentReindexJobResult {
   return {
     status: "skipped",

@@ -1528,6 +1528,38 @@ When Iris moves to a leased queue adapter, DLQ replay must remain one
 adapter-level operator action that transfers ownership from DLQ storage back to
 pending work without exposing both states at once.
 
+### 12.33 Reindex Jobs Must Match The Active Embedding Profile
+
+Pressure:
+
+Iris v1 runs one active embedding profile at a time. Normal reindex planning
+validates that manual and document-synced reindex jobs use the active profile,
+but Redis queues and DLQs can still contain stale jobs from an older embedding
+model or dimension. If a stale job is processed by a worker whose indexer writes
+the current active profile, Iris can report work under the stale profile while
+mutating fragments for the active profile, making operator status and retrieval
+state disagree.
+
+Required architectural response:
+
+- The reindex worker runtime must pass the current `activeEmbeddingProfileId`
+  into the worker.
+- The worker must check a job's `embeddingProfileId` before reading snapshots,
+  checking fragments, embedding text, or replacing fragments.
+- Jobs whose profile is not active must be acknowledged as processed with a
+  `profile_not_active` skip result, not retried or dead-lettered, because the
+  payload is obsolete rather than transiently failed.
+- Manual reindex APIs must continue to reject non-active profiles at ingress.
+- Reindex queue and DLQ replay remain at-least-once mechanisms; profile
+  isolation is the last safety gate before side effects.
+
+Evolution signal:
+
+If Iris later supports multiple active embedding profiles at the same time,
+reindex workers must become profile-scoped or queue namespaces must carry
+profile ownership explicitly. Until then, one worker may only mutate fragments
+for its configured active profile.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

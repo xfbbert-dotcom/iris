@@ -181,6 +181,7 @@ export function createReindexWorkerRuntime({
   };
   const worker = createDocumentReindexWorker({
     queue,
+    activeEmbeddingProfileId,
     snapshots,
     fragments,
     indexer,
