@@ -1202,6 +1202,33 @@ can become a typed capability policy per message type. The v1 contract should
 remain: explicit mentions get honest feedback about what Iris could and could
 not read.
 
+### 12.22 Worker Error Normalization Must Not Throw
+
+Pressure:
+
+Raw event ingestion, document sync, and document reindex workers all rely on a
+shared failure path to update retry state, write dead letters, and expose batch
+errors. JavaScript dependencies can throw arbitrary values. If Iris attempts to
+stringify a non-standard thrown value and that stringify operation itself
+throws, the failure handler becomes the new failure and the original event may
+lose its observable retry/dead-letter trail.
+
+Required architectural response:
+
+- Worker error-message normalization must be best-effort and non-throwing.
+- Standard `Error` values should keep using their trimmed `.message`.
+- Non-standard thrown values may be stringified when safe, but values that
+  cannot be stringified must degrade to `unknown error`.
+- Blank and oversized worker error messages must keep the existing fallback and
+  truncation policy.
+
+Evolution signal:
+
+If Iris later adopts typed error envelopes across queues and integrations, this
+normalizer can become a compatibility boundary for legacy thrown values. The v1
+contract should remain: failure handling must not fail while formatting the
+failure.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
