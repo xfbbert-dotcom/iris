@@ -602,10 +602,17 @@ describe("RedisDocumentReindexQueue", () => {
     await expect(
       queue.handleFailedJob({ job, errorMessage: "embedding failed" }),
     ).resolves.toEqual({ action: "dead_lettered", attempts: 3 });
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:reindex:documents:dlq",
-      expect.stringContaining("embedding failed"),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:reindex:documents:dlq", "iris:reindex:documents:processing", "iris:reindex:documents:seen"],
+      arguments: [
+        expect.stringContaining("embedding failed"),
+        serializeDocumentReindexJob(job),
+        job.idempotencyKey,
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
     await expect(queue.getDeadLetterCount()).resolves.toBe(5);
     expect(client.lLen).toHaveBeenCalledWith("iris:reindex:documents:dlq");
   });

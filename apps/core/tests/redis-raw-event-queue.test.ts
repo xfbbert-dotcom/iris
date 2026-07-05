@@ -570,10 +570,17 @@ describe("RedisRawEventQueue", () => {
     await expect(
       queue.handleFailedEvent({ event, errorMessage: "processor failed" }),
     ).resolves.toEqual({ action: "dead_lettered", attempts: 3 });
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:events:raw:dlq",
-      expect.stringContaining("processor failed"),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:events:raw:dlq", "iris:events:raw:processing", "iris:events:raw:seen"],
+      arguments: [
+        expect.stringContaining("processor failed"),
+        serializeRawEvent(event),
+        event.idempotencyKey,
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
     await expect(queue.getDeadLetterCount()).resolves.toBe(5);
   });
 
@@ -597,25 +604,30 @@ describe("RedisRawEventQueue", () => {
 
     await queue.handleFailedEvent({ event, errorMessage: "processor failed" });
 
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:events:raw:dlq",
-      JSON.stringify({
-        id: "dlq-1",
-        event: {
-          ...eventFixture({ attempts: 1 }),
-          receivedAt: "2026-07-02T01:00:00.000Z",
-        },
-        errorMessage: "processor failed",
-        failedAt: "2026-07-04T01:00:00.000Z",
-      }),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:events:raw:dlq", "iris:events:raw:processing", "iris:events:raw:seen"],
+      arguments: [
+        JSON.stringify({
+          id: "dlq-1",
+          event: {
+            ...eventFixture({ attempts: 1 }),
+            receivedAt: "2026-07-02T01:00:00.000Z",
+          },
+          errorMessage: "processor failed",
+          failedAt: "2026-07-04T01:00:00.000Z",
+        }),
+        serializeRawEvent(event),
+        event.idempotencyKey,
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
   });
 
   it("bounds failed raw event DLQ error messages", async () => {
-    const rPush = vi.fn(async () => 1);
+    const evalRedis = vi.fn();
     const client: RedisRawEventQueueClient = {
-      eval: vi.fn(),
-      rPush,
+      eval: evalRedis,
+      rPush: vi.fn(),
       lPop: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
@@ -635,7 +647,11 @@ describe("RedisRawEventQueue", () => {
       errorMessage: `${"E".repeat(1200)} trailing diagnostic detail`,
     });
 
-    const [, payload] = rPush.mock.calls[0] as unknown as [string, string];
+    const [, evalOptions] = evalRedis.mock.calls[0] as unknown as [
+      string,
+      { keys: string[]; arguments: string[] },
+    ];
+    const payload = evalOptions.arguments[0];
     const parsed = JSON.parse(payload) as { errorMessage: string };
     expect(parsed.errorMessage.length).toBeLessThanOrEqual(1000);
     expect(parsed.errorMessage).toContain("[truncated]");

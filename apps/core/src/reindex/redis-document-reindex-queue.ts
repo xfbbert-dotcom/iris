@@ -92,6 +92,14 @@ end
 return redis.call("LREM", KEYS[3], 1, ARGV[3])
 `;
 
+const ACK_DEAD_LETTER_SCRIPT = `
+if redis.call("LREM", KEYS[2], 1, ARGV[2]) > 0 then
+  redis.call("RPUSH", KEYS[1], ARGV[1])
+  return redis.call("SREM", KEYS[3], ARGV[3])
+end
+return 0
+`;
+
 export type RedisDocumentReindexQueueClient = {
   eval(
     script: string,
@@ -218,17 +226,20 @@ export function createRedisDocumentReindexQueue({
       const originalPayload = serializeDocumentReindexJob(input.job);
 
       if (attempts >= safeMaxAttempts) {
-        await client.rPush(
+        await acknowledgeDeadLetteredSerializedJob(
+          client,
           deadLetterKey,
+          processingKey,
+          seenKey,
           serializeDeadLetteredDocumentReindexJob({
             id: idGenerator(),
             job: failedJob,
             errorMessage: input.errorMessage,
             failedAt: now(),
           }),
+          originalPayload,
+          parseDocumentReindexJob(originalPayload).idempotencyKey,
         );
-        await client.lRem(processingKey, 1, originalPayload);
-        await client.sRem(seenKey, parseDocumentReindexJob(originalPayload).idempotencyKey);
         return { action: "dead_lettered", attempts };
       }
 
@@ -368,6 +379,21 @@ async function acknowledgeRetryingSerializedJob(
   await client.eval(ACK_RETRY_SCRIPT, {
     keys: [seenKey, queueKey, processingKey],
     arguments: [normalizedJob.idempotencyKey, payload, originalPayload],
+  });
+}
+
+async function acknowledgeDeadLetteredSerializedJob(
+  client: RedisDocumentReindexQueueClient,
+  deadLetterKey: string,
+  processingKey: string,
+  seenKey: string,
+  deadLetterPayload: string,
+  originalPayload: string,
+  idempotencyKey: string,
+): Promise<void> {
+  await client.eval(ACK_DEAD_LETTER_SCRIPT, {
+    keys: [deadLetterKey, processingKey, seenKey],
+    arguments: [deadLetterPayload, originalPayload, idempotencyKey],
   });
 }
 

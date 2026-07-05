@@ -1425,8 +1425,8 @@ Required architectural response:
   already queued duplicate when present, otherwise push the retry payload.
 - DLQ replay keeps using retry/upsert semantics but remains separate from
   processing ACK because DLQ items are not processing-list claims.
-- Dead-letter transitions remain a separate path until a pressure test proves
-  they need a larger atomic transition.
+- Dead-letter transitions use their own atomic ACK path because they also own
+  processing-list cleanup and idempotency-key release.
 - The v1 single-consumer recovery contract remains unchanged.
 
 Evolution signal:
@@ -1434,6 +1434,36 @@ Evolution signal:
 When Iris moves to a leased queue adapter, retry ACK must become one
 adapter-level commit that records the retry attempt and clears in-flight
 ownership together.
+
+### 12.30 Redis Dead-Letter ACK Must Be Atomic
+
+Pressure:
+
+When a Redis-backed raw event, document sync job, or reindex job reaches max
+attempts, Iris must move the failed payload into the DLQ, remove the original
+processing payload, and release the idempotency key. If those mutations are
+split across separate commands, a transient failure can leave a DLQ entry while
+the original processing payload remains recoverable, or it can strand a seen key
+after the work has already been dead-lettered.
+
+Required architectural response:
+
+- Max-attempt Redis failure handling for raw events, document sync jobs, and
+  reindex jobs must write the DLQ payload, remove the exact processing payload,
+  and release the seen key in one Redis eval/Lua operation.
+- The DLQ payload must be written only after the exact processing payload is
+  removed, so a client retry after a successful but unacknowledged eval cannot
+  duplicate dead-letter entries.
+- Error messages stored in DLQ entries must remain bounded and diagnostic.
+- DLQ replay and DLQ deletion remain separate operator-controlled operations;
+  this ACK only covers worker-owned processing-to-DLQ transitions.
+- The v1 single-consumer recovery contract remains unchanged.
+
+Evolution signal:
+
+When Iris moves to a leased queue adapter, dead-letter ACK must become one
+adapter-level commit that records the terminal failure, clears in-flight
+ownership, and releases idempotency state together.
 
 Constitutional principle:
 

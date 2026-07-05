@@ -618,10 +618,17 @@ describe("RedisDocumentSyncQueue", () => {
     await expect(
       queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" }),
     ).resolves.toEqual({ action: "dead_lettered", attempts: 3 });
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:documents:sync:dlq",
-      expect.stringContaining("runner crashed"),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:documents:sync:dlq", "iris:documents:sync:processing", "iris:documents:sync:seen"],
+      arguments: [
+        expect.stringContaining("runner crashed"),
+        serializeDocumentSyncJob(syncJob),
+        syncJob.idempotencyKey,
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
     await expect(queue.getDeadLetterCount()).resolves.toBe(5);
     expect(client.lLen).toHaveBeenCalledWith("iris:documents:sync:dlq");
   });
@@ -642,21 +649,27 @@ describe("RedisDocumentSyncQueue", () => {
       now: () => new Date("2026-07-03T02:00:00.000Z"),
       idGenerator: () => "dlq-1",
     });
+    const syncJob = job();
 
-    await queue.handleFailedJob({ job: job(), errorMessage: "runner crashed" });
+    await queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" });
 
-    expect(client.rPush).toHaveBeenCalledWith(
-      "iris:documents:sync:dlq",
-      JSON.stringify({
-        id: "dlq-1",
-        job: {
-          ...job({ attempts: 1 }),
-          enqueuedAt: "2026-07-03T01:00:00.000Z",
-        },
-        errorMessage: "runner crashed",
-        failedAt: "2026-07-03T02:00:00.000Z",
-      }),
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SREM"), {
+      keys: ["iris:documents:sync:dlq", "iris:documents:sync:processing", "iris:documents:sync:seen"],
+      arguments: [
+        JSON.stringify({
+          id: "dlq-1",
+          job: {
+            ...job({ attempts: 1 }),
+            enqueuedAt: "2026-07-03T01:00:00.000Z",
+          },
+          errorMessage: "runner crashed",
+          failedAt: "2026-07-03T02:00:00.000Z",
+        }),
+        serializeDocumentSyncJob(syncJob),
+        syncJob.idempotencyKey,
+      ],
+    });
+    expect(client.rPush).not.toHaveBeenCalled();
   });
 
   it("lists Redis DLQ entries and marks legacy entries as non-replayable", async () => {

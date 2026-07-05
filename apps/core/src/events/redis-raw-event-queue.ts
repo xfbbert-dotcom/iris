@@ -98,6 +98,14 @@ end
 return redis.call("LREM", KEYS[3], 1, ARGV[3])
 `;
 
+const ACK_DEAD_LETTER_SCRIPT = `
+if redis.call("LREM", KEYS[2], 1, ARGV[2]) > 0 then
+  redis.call("RPUSH", KEYS[1], ARGV[1])
+  return redis.call("SREM", KEYS[3], ARGV[3])
+end
+return 0
+`;
+
 export type RedisRawEventQueueClient = {
   eval(
     script: string,
@@ -218,17 +226,20 @@ export function createRedisRawEventQueue({
       const originalPayload = serializeRawEvent(input.event);
 
       if (attempts >= safeMaxAttempts) {
-        await client.rPush(
+        await acknowledgeDeadLetteredSerializedRawEvent(
+          client,
           deadLetterKey,
+          processingKey,
+          seenKey,
           serializeDeadLetteredRawEvent({
             id: idGenerator(),
             event: failedEvent,
             errorMessage: input.errorMessage,
             failedAt: now(),
           }),
+          originalPayload,
+          parseRawEvent(originalPayload).idempotencyKey,
         );
-        await client.lRem(processingKey, 1, originalPayload);
-        await client.sRem(seenKey, parseRawEvent(originalPayload).idempotencyKey);
         return { action: "dead_lettered", attempts };
       }
 
@@ -372,6 +383,21 @@ async function acknowledgeRetryingSerializedRawEvent(
   await client.eval(ACK_RETRY_SCRIPT, {
     keys: [seenKey, queueKey, processingKey],
     arguments: [normalizedEvent.idempotencyKey, payload, originalPayload],
+  });
+}
+
+async function acknowledgeDeadLetteredSerializedRawEvent(
+  client: RedisRawEventQueueClient,
+  deadLetterKey: string,
+  processingKey: string,
+  seenKey: string,
+  deadLetterPayload: string,
+  originalPayload: string,
+  idempotencyKey: string,
+): Promise<void> {
+  await client.eval(ACK_DEAD_LETTER_SCRIPT, {
+    keys: [deadLetterKey, processingKey, seenKey],
+    arguments: [deadLetterPayload, originalPayload, idempotencyKey],
   });
 }
 
