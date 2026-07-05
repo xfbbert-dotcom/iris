@@ -253,6 +253,23 @@ describe("PostgresConversationMessageRepository", () => {
     );
   });
 
+  it("caps oversized recent message limits before querying Postgres", async () => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(
+      repository.listRecentByChat({
+        chatId: "chat-1",
+        limit: 101,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(queryable.query).toHaveBeenCalledWith(
+      expect.stringContaining("WHERE chat_id = $1"),
+      ["chat-1", 100],
+    );
+  });
+
   it("rejects unsafe recent message limits before querying Postgres", async () => {
     const queryable = fakeQueryable([]);
     const repository = createPostgresConversationMessageRepository({ queryable });

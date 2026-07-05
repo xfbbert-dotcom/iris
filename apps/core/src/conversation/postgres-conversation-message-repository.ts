@@ -21,6 +21,7 @@ type ConversationMessageRow = {
 };
 
 export const MAX_CONVERSATION_MESSAGE_ID_CHARS = 512;
+const MAX_CONVERSATION_MESSAGE_LIST_LIMIT = 100;
 const MAX_CONVERSATION_MESSAGE_TEXT_CHARS = 8000;
 const TRUNCATION_MARKER = " ... [truncated]";
 
@@ -127,7 +128,7 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_CONVERSATION_MESSAGE_LIST_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 function mapRow(row: ConversationMessageRow): ConversationMessage {
