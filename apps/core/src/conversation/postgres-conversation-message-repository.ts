@@ -121,11 +121,8 @@ function requireBoundedIdentifier(fieldName: string, value: string): string {
 }
 
 function sanitizeLimit(value: number): number {
-  if (Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+  if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
     throw new Error("conversation message limit must be a finite safe-magnitude number");
-  }
-  if (!Number.isFinite(value)) {
-    return 0;
   }
 
   return Math.min(MAX_CONVERSATION_MESSAGE_LIST_LIMIT, Math.max(0, Math.floor(value)));

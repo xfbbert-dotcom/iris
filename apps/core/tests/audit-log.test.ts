@@ -234,7 +234,7 @@ describe("InMemoryAuditLog", () => {
     expect(auditLog.summarizeRecent({ limit: 0 })).toEqual([]);
   });
 
-  it("returns no audit summary rows for non-finite recent event limits", async () => {
+  it("rejects non-finite recent event limits", async () => {
     const auditLog = new InMemoryAuditLog();
 
     await auditLog.record({
@@ -243,8 +243,12 @@ describe("InMemoryAuditLog", () => {
       fragmentIds: ["fragment-1"],
     });
 
-    expect(auditLog.summarizeRecent({ limit: Number.POSITIVE_INFINITY })).toEqual([]);
-    expect(auditLog.summarizeRecent({ limit: Number.NaN })).toEqual([]);
+    expect(() => auditLog.summarizeRecent({ limit: Number.POSITIVE_INFINITY })).toThrow(
+      "audit summary limit must be a finite safe-magnitude number",
+    );
+    expect(() => auditLog.summarizeRecent({ limit: Number.NaN })).toThrow(
+      "audit summary limit must be a finite safe-magnitude number",
+    );
   });
 
   it("caps oversized recent event limits before summarizing", async () => {

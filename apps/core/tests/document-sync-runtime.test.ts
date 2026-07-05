@@ -436,10 +436,16 @@ describe("createDocumentSyncRuntime", () => {
       })),
     );
     await expect(runtime?.sources.list({ limit: 101 })).resolves.toHaveLength(100);
+    const listSourcesCountBeforeNonFiniteLimit = documentSources.listSources.mock.calls.length;
     await expect(
       runtime?.sources.list({ limit: Number.POSITIVE_INFINITY }),
-    ).resolves.toEqual([]);
-    await expect(runtime?.sources.list({ limit: Number.NaN })).resolves.toEqual([]);
+    ).rejects.toThrow("document sync runtime list limit must be a finite safe-magnitude number");
+    await expect(runtime?.sources.list({ limit: Number.NaN })).rejects.toThrow(
+      "document sync runtime list limit must be a finite safe-magnitude number",
+    );
+    expect(documentSources.listSources).toHaveBeenCalledTimes(
+      listSourcesCountBeforeNonFiniteLimit,
+    );
     const listSourcesCountBeforeUnsafeLimit = documentSources.listSources.mock.calls.length;
     await expect(
       runtime?.sources.list({ limit: Number.MAX_SAFE_INTEGER + 1 }),
@@ -501,12 +507,21 @@ describe("createDocumentSyncRuntime", () => {
     await expect(
       runtime?.sources.listSnapshots({ id: "source-1", limit: 101 }),
     ).resolves.toHaveLength(100);
+    const findSourceCountBeforeNonFiniteSnapshotLimit = documentSources.findSourceById.mock.calls.length;
+    const listSnapshotsCountBeforeNonFiniteSnapshotLimit =
+      snapshots.listSnapshotsForSource.mock.calls.length;
     await expect(
       runtime?.sources.listSnapshots({ id: "source-1", limit: Number.POSITIVE_INFINITY }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("document sync runtime list limit must be a finite safe-magnitude number");
     await expect(
       runtime?.sources.listSnapshots({ id: "source-1", limit: Number.NaN }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("document sync runtime list limit must be a finite safe-magnitude number");
+    expect(documentSources.findSourceById).toHaveBeenCalledTimes(
+      findSourceCountBeforeNonFiniteSnapshotLimit,
+    );
+    expect(snapshots.listSnapshotsForSource).toHaveBeenCalledTimes(
+      listSnapshotsCountBeforeNonFiniteSnapshotLimit,
+    );
     const findSourceCountBeforeUnsafeSnapshotLimit = documentSources.findSourceById.mock.calls.length;
     const listSnapshotsCountBeforeUnsafeSnapshotLimit =
       snapshots.listSnapshotsForSource.mock.calls.length;

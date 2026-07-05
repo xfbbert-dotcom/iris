@@ -271,7 +271,7 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
-  it("treats non-finite vector search limits as empty results without looking up profiles", async () => {
+  it("rejects non-finite vector search limits before querying profiles or fragments", async () => {
     const query = vi.fn(async () => ({ rows: [] }));
     const getProfileById = vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 }));
     const repository = createDocumentFragmentRepository({
@@ -287,14 +287,14 @@ describe("DocumentFragmentRepository", () => {
         embedding: [1, 2, 3, 4, 5, 6],
         limit: Number.POSITIVE_INFINITY,
       }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("fragment search limit must be a finite safe-magnitude number");
     await expect(
       repository.searchSimilarFragments({
         embeddingProfileId: "static-dev-6d",
         embedding: [1, 2, 3, 4, 5, 6],
         limit: Number.NaN,
       }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("fragment search limit must be a finite safe-magnitude number");
 
     expect(getProfileById).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();

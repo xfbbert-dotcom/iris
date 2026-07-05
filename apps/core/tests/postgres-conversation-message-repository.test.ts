@@ -230,27 +230,18 @@ describe("PostgresConversationMessageRepository", () => {
     expect(message!.text).not.toContain("trailing legacy detail");
   });
 
-  it("sanitizes non-finite recent message limits to zero", async () => {
+  it("rejects non-finite recent message limits before querying Postgres", async () => {
     const queryable = fakeQueryable([]);
     const repository = createPostgresConversationMessageRepository({ queryable });
 
     await expect(
       repository.listRecentByChat({ chatId: "chat-1", limit: Number.POSITIVE_INFINITY }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("conversation message limit must be a finite safe-magnitude number");
     await expect(
       repository.listRecentByChat({ chatId: "chat-1", limit: Number.NaN }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("conversation message limit must be a finite safe-magnitude number");
 
-    expect(queryable.query).toHaveBeenNthCalledWith(
-      1,
-      expect.stringContaining("WHERE chat_id = $1"),
-      ["chat-1", 0],
-    );
-    expect(queryable.query).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining("WHERE chat_id = $1"),
-      ["chat-1", 0],
-    );
+    expect(queryable.query).not.toHaveBeenCalled();
   });
 
   it("caps oversized recent message limits before querying Postgres", async () => {
