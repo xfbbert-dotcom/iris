@@ -98,4 +98,15 @@ describe("FeishuDocumentLinkExtractor", () => {
       extractor.extractLinks("doc https://user:pass@foo.feishu.cn/docx/token"),
     ).toEqual([]);
   });
+
+  it("ignores oversized Feishu document links before later valid links", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+    const oversizedToken = "a".repeat(2100);
+
+    expect(
+      extractor.extractLinks(
+        `bad https://docs.feishu.cn/docx/${oversizedToken} good https://docs.feishu.cn/docx/valid`,
+      ),
+    ).toEqual([{ sourceUri: "https://docs.feishu.cn/docx/valid" }]);
+  });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
 import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-mention-answer-responder.js";
 import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
 
@@ -84,6 +85,42 @@ describe("FeishuMentionAnswerResponder", () => {
 
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
     expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("truncates oversized mentioned questions before drafting an answer", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async (_input: AnswerDraftInput) => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_message_1",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: `@_user_1 ${"Q".repeat(5000)} trailing detail`,
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    const request = answerDraftOrchestrator.generateDraft.mock.calls[0]?.[0];
+    expect(request).toBeDefined();
+    expect(request?.question.length).toBeLessThanOrEqual(4000);
+    expect(request?.question).toContain("[truncated]");
+    expect(request?.question).not.toContain("trailing detail");
+    expect(request?.liveChatMessages).toEqual([
+      { speaker: "ou_alice", text: request?.question },
+    ]);
   });
 
   it("skips mentioned messages when runtime control disables replies", async () => {

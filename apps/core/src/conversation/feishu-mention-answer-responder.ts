@@ -33,6 +33,8 @@ export type FeishuMentionAnswerResponderDependencies = {
 };
 
 const BLANK_MENTION_CLARIFICATION = "我在，直接告诉我你想让我处理什么。";
+const MAX_MENTION_QUESTION_CHARS = 4000;
+const TRUNCATION_MARKER = " ... [truncated]";
 
 export function createFeishuMentionAnswerResponder({
   botOpenId,
@@ -55,7 +57,7 @@ export function createFeishuMentionAnswerResponder({
         return { status: "skipped", reason: "runtime_disabled" };
       }
 
-      const question = stripMentionKeys(input.text ?? "", botMentionKeys);
+      const question = truncateQuestion(stripMentionKeys(input.text ?? "", botMentionKeys));
       const replyUuid = createReplyUuid(input.messageId);
       if (question.length === 0) {
         return toRepliedResult(
@@ -114,6 +116,15 @@ function stripMentionKeys(text: string, mentionKeys: string[]): string {
   }
 
   return question.replace(/\s+/gu, " ").trim();
+}
+
+function truncateQuestion(value: string): string {
+  if (value.length <= MAX_MENTION_QUESTION_CHARS) {
+    return value;
+  }
+
+  const prefixChars = MAX_MENTION_QUESTION_CHARS - TRUNCATION_MARKER.length;
+  return `${value.slice(0, prefixChars).trimEnd()}${TRUNCATION_MARKER}`;
 }
 
 function createReplyUuid(messageId: string): string {

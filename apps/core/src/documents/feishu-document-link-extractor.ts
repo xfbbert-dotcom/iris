@@ -1,3 +1,5 @@
+import { DOCUMENT_SOURCE_URI_MAX_CHARS } from "./document-source-registry.js";
+
 export type FeishuDocumentLink = {
   sourceUri: string;
 };
@@ -60,6 +62,10 @@ function normalizeCandidateUrl(candidate: string): string | undefined {
 
     url.search = "";
     url.hash = "";
+
+    if (url.href.length > DOCUMENT_SOURCE_URI_MAX_CHARS) {
+      return undefined;
+    }
 
     return url.href;
   } catch {
