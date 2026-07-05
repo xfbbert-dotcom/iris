@@ -84,7 +84,10 @@ Observed: `npm run verify` passed. Core reported 65 test files passed with 1013 
 and 4 skipped; Python worker reported 7 tests passed; Docker Compose config rendered
 successfully.
 
-- [ ] **Step 3: Commit, push, update PR, and verify checks**
+- [x] **Step 3: Commit, push, update PR, and verify checks**
 
 Commit the prompt hardening, push `codex/iris-document-source-registry`, update PR #3, and confirm
 GitHub Actions `Core` and `AI Worker` checks pass.
+
+Observed: committed as `5517021`, pushed to PR #3, updated the PR body, and confirmed GitHub
+Actions `Core` and `AI Worker` checks passed.
