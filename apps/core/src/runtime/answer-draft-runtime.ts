@@ -95,6 +95,7 @@ export type AnswerDraftRuntimeDependencies = {
 type RuntimeRetrievalGate = {
   canReadDocuments(): boolean;
   canRetrieveKnowledgeBase(): boolean;
+  canReadGroupContext?(groupId: string): boolean;
   canProcessGroupMessage?(groupId: string): boolean;
 };
 
@@ -163,7 +164,10 @@ export function createAnswerDraftRuntime({
         })
       : undefined;
   const conversationMessages = createConversationMessages({ queryable: pool });
-  const liveChatContextProvider = createLiveChatContext({ repository: conversationMessages });
+  const liveChatContextProvider = createRuntimeGatedLiveChatContextProvider({
+    delegate: createLiveChatContext({ repository: conversationMessages }),
+    runtimeController,
+  });
   const model = createModel(modelConfig);
   const embeddingConfig = readEmbeddingProviderConfig(env);
   let runtimeEmbeddingPromise: Promise<RuntimeEmbedding> | undefined;
@@ -203,6 +207,27 @@ export function createAnswerDraftRuntime({
     answerDraftOrchestrator,
     close() {
       return pool.end();
+    },
+  };
+}
+
+function createRuntimeGatedLiveChatContextProvider({
+  delegate,
+  runtimeController,
+}: {
+  delegate: LiveChatContextProvider;
+  runtimeController?: RuntimeRetrievalGate;
+}): LiveChatContextProvider {
+  return {
+    async loadRecentMessages(input) {
+      if (
+        runtimeController?.canReadGroupContext !== undefined &&
+        !runtimeController.canReadGroupContext(input.chatId)
+      ) {
+        return [];
+      }
+
+      return delegate.loadRecentMessages(input);
     },
   };
 }

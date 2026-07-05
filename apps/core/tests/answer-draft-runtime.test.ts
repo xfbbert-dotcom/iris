@@ -126,6 +126,51 @@ describe("createAnswerDraftRuntime", () => {
     );
   });
 
+  it("does not load stored live chat context when group context reading is disabled", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(async (_input: GenerateAnswerDraftInput) => ({
+        answerText: "Runtime draft",
+      })),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => [
+        { speaker: "Alice", text: "Historical group context should stay hidden." },
+      ]),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canReadGroupContext: vi.fn(() => false),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: enabledEnv(),
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => ({ searchSimilarFragments: vi.fn(async () => []) })),
+        createLiveChatContextProvider: vi.fn(() => liveChatContextProvider),
+        createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What should Iris say?",
+      chatId: "chat-muted",
+      liveChatMessages: [{ speaker: "Bob", text: "Current explicit request context." }],
+    });
+
+    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    expect(runtimeController.canReadGroupContext).toHaveBeenCalledWith("chat-muted");
+    expect(liveChatContextProvider.loadRecentMessages).not.toHaveBeenCalled();
+    expect(promptContext).not.toContain("Historical group context should stay hidden.");
+    expect(promptContext).toContain("Current explicit request context.");
+  });
+
   it("filters answer draft fragments through local source policy", async () => {
     const model = {
       generateAnswerDraft: vi.fn(

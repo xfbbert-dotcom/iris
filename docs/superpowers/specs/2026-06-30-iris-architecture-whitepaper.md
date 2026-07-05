@@ -478,6 +478,12 @@ Constitutional principle:
 
 > All Iris capabilities must be controllable by administrators. Proactivity must be adjustable. High-risk capabilities must support emergency pause.
 
+`readGroupContext` is a hard runtime boundary for passive group memory. When disabled for a group or
+globally, Iris must stop writing new group-message facts and must not automatically load stored live
+chat history into answer prompts. A user may still explicitly provide the current request text to
+Iris when mention replies are enabled, but previously persisted group chat history must stay out of
+the answer-time context until group-context reading is re-enabled.
+
 ## 9. Technical Stack And Deployment
 
 Minimum v1 deployment:

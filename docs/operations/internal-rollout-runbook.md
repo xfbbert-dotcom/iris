@@ -311,6 +311,10 @@ Invoke-RestMethod `
   -Body '{"replyWhenMentioned":true,"readGroupDocuments":true,"retrieveKnowledgeBase":true}'
 ```
 
+For emergency context isolation, set `readGroupContext` to `false`. Iris will stop writing new group
+message facts and will not automatically load stored live chat history into answer prompts. Direct
+mention replies can still use the current explicit request when `replyWhenMentioned` remains enabled.
+
 Read current runtime control state:
 
 ```powershell
