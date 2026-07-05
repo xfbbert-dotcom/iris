@@ -746,15 +746,18 @@ Required architectural response:
   behavior for non-finite direct-call values.
 - Queue `dequeueBatch()` and DLQ list entrypoints must reject unsafe finite
   limits before consuming in-memory entries or issuing Redis `lPop`/`lRange`,
-  while retaining empty-result behavior for non-finite values.
+  while retaining empty-result behavior for non-finite values. For v1, queue
+  batch reads and DLQ list reads must cap safe finite direct-call limits to 100.
 - Operator-facing numeric request fields that control batch or planning scope
   must reject unsafe integers at the API boundary, and planning components must
   defensively sanitize unsafe limits before reaching storage queries.
 - Admin list/query limits must also reject unsafe integers before applying
-  product caps such as maximum page size.
+  product caps such as maximum page size. For v1, the shared internal admin page
+  cap is 100.
 - Runtime list boundaries and audit-summary windows must reject unsafe finite
   limits before slicing already-loaded arrays, while retaining empty-result
-  behavior for non-finite values.
+  behavior for non-finite values. For v1, document-sync runtime lists and audit
+  summary windows cap safe finite direct-call limits to 100.
 - Answer-context window limits must reject unsafe numeric magnitudes before
   model orchestration or live-chat history reads. Retrieval and prompt assembly
   components, live-chat context providers, and conversation-message storage
@@ -762,11 +765,16 @@ Required architectural response:
   while retaining their defensive prompt-budget caps for safe finite values.
 - Semantic fragment-search storage adapters must reject unsafe finite query
   limits before pgvector SQL is issued, while retaining the existing defensive
-  `LIMIT 0` behavior for non-finite values.
+  `LIMIT 0` behavior for non-finite values. For v1, direct fragment search caps
+  safe finite storage limits to 100; answer-time retrieval keeps its smaller
+  prompt-specific candidate cap.
 - Snapshot/reindex candidate storage adapters must reject unsafe finite query
   limits before SQL is issued, while retaining defensive `LIMIT 0` behavior
-  for non-finite values.
-- Validation should not invent product-specific business caps unless a separate architecture decision calls for them.
+  for non-finite values. For v1, direct missing-profile and conversation-history
+  storage queries cap safe finite limits to 100.
+- Validation should not invent new product-specific business caps unless a
+  separate architecture decision calls for them. Raising any v1 cap above 100
+  requires revisiting operator UX, storage cost, and abuse resistance together.
 
 Evolution signal:
 
