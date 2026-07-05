@@ -193,6 +193,8 @@ Feishu message content parsing must be bounded before and after JSON parsing. Th
 
 The consolidated internal status endpoint is the operator's first health surface. Non-empty DLQs for raw events, document sync jobs, or reindex jobs must mark the corresponding component as degraded with an explicit dead-letter reason, even when the worker is still running and the latest batch succeeded.
 
+Enabled runtime components that report `running: false` must make the consolidated top-level status non-healthy, even when their component-level `ok` field is otherwise true. A stopped enabled worker means Iris is configured to perform that job but is not actually doing it. Intentionally disabled components remain visible as disabled/info attention items rather than being treated as runtime failures.
+
 Every event must preserve:
 
 - source group;

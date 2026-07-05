@@ -127,6 +127,28 @@ describe("buildInternalStatusSnapshot", () => {
     expect(snapshot.summary.attentionSeverity).toBe("none");
   });
 
+  it("marks enabled stopped runtime components as not ok", () => {
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-03T08:07:00.000Z"),
+      components: {
+        reindex: {
+          ok: true,
+          enabled: true,
+          running: false,
+        },
+      },
+    });
+
+    expect(snapshot.ok).toBe(false);
+    expect(snapshot.status).toBe("degraded");
+    expect(snapshot.summary.stoppedEnabledRuntimeComponents).toEqual(["reindex"]);
+    expect(snapshot.summary.primaryAttentionComponent).toEqual({
+      name: "reindex",
+      status: "stopped",
+    });
+    expect(snapshot.summary.attentionSeverity).toBe("warning");
+  });
+
   it("does not share nested component values with the returned snapshot", () => {
     const latestBatch = {
       status: "succeeded" as const,

@@ -25,7 +25,9 @@ export function buildInternalStatusSnapshot<
   const requiresOperatorAttention = attentionComponentCount > 0;
   const primaryAttentionComponent = attentionComponents[0] ?? null;
   const attentionSeverity = getAttentionSeverity(primaryAttentionComponent);
-  const ok = healthyComponentCount === componentStatuses.length;
+  const ok =
+    healthyComponentCount === componentStatuses.length &&
+    stoppedEnabledRuntimeComponents.length === 0;
 
   return {
     ok,

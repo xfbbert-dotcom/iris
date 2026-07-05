@@ -265,20 +265,24 @@ Invoke-RestMethod `
 ```
 
 Use readiness before inviting the first internal group. `status: "ready"` means chat ingestion,
-document sync, semantic reindexing, @Iris answer drafting, Feishu OpenAPI access, and the
-source-policy permission guard, and internal operator API token are configured.
+document sync, semantic reindexing, @Iris answer drafting, Feishu OpenAPI access, the source-policy
+permission guard, and the internal operator API token are configured.
 `status: "ready_with_warnings"` means no blocking configuration is missing, but the listed warnings
 should be handled before exposing Core beyond a trusted private network. `status: "blocked"` means
 Iris is not ready for the 20-30 person rollout; check each failed item and the listed `envVars`.
 
 Important status rules:
 
-- Top-level `status: "healthy"` means no reported component has `ok: false`.
-- Top-level `status: "degraded"` means at least one reported component has `ok: false`.
+- Top-level `status: "healthy"` means no reported component has `ok: false` and no enabled
+  runtime component is stopped.
+- Top-level `status: "degraded"` means at least one reported component has `ok: false`, or an
+  enabled runtime component reports `running: false`.
 - `summary.attentionSeverity` is the compact operator-priority signal: `critical` for degraded
   components, `warning` for stopped enabled runtimes, `info` for disabled components, and `none`
   when no component needs attention.
 - Non-empty raw event, document sync, or reindex DLQs degrade the matching component.
+- Stopped enabled runtimes are warning-level failures because Iris is configured to do the work but
+  the worker is not running.
 - Disabled components are expected when the corresponding runtime is intentionally off.
 - `components.runtimeControl` mirrors the current global runtime gate. If its status is
   `"disabled"`, Iris is globally off even if worker processes are still reachable.
