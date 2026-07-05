@@ -405,6 +405,11 @@ The Admin Console must support:
 The consolidated operator status surface must include runtime-control state. An operator who reads
 `/internal/status` should be able to tell whether Iris is globally disabled and how many group
 scopes are disabled without needing to know the dedicated runtime-control endpoint first.
+It must also surface broken core chat wiring. If the Feishu event worker is running but @Iris
+mention replies are unavailable because bot identity, Feishu OpenAPI config, or the answer draft
+orchestrator is missing, the consolidated `eventWorker` component must be degraded with
+`degradedReason: "mention_replies_unavailable"`. Non-empty raw-event DLQs still take precedence as
+`degradedReason: "dead_letters_present"`.
 
 Internal operator APIs must have an explicit protection boundary. During the early internal rollout,
 Core may use a shared `IRIS_INTERNAL_API_TOKEN` Bearer guard for `/internal/*` routes while Feishu

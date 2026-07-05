@@ -958,6 +958,53 @@ describe("GET /internal/status", () => {
     expect(response.json().summary.attentionSeverity).toBe("critical");
   });
 
+  it("marks event worker as degraded when mention replies are unavailable", async () => {
+    const eventWorkerRuntime = fakeEventRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 50,
+        mentionRepliesEnabled: false,
+        mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
+        pendingEventCount: 0,
+        deadLetterEventCount: 0,
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => eventWorkerRuntime,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().components.eventWorker).toEqual({
+      status: "degraded",
+      ok: false,
+      enabled: true,
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 50,
+      mentionRepliesEnabled: false,
+      mentionRepliesUnavailableReason: "missing_bot_open_id",
+      pendingEventCount: 0,
+      deadLetterEventCount: 0,
+      degradedReason: "mention_replies_unavailable",
+    });
+    expect(response.json().summary.degradedComponents).toContain("eventWorker");
+    expect(response.json().summary.primaryAttentionComponent).toEqual({
+      name: "eventWorker",
+      status: "degraded",
+    });
+    expect(response.json().summary.attentionSeverity).toBe("critical");
+  });
+
   it("keeps the consolidated status available when one component status fails", async () => {
     const eventWorkerRuntime = fakeEventRuntime({
       getStatus: vi.fn(async () => {

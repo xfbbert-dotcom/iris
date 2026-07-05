@@ -138,6 +138,9 @@ ingestion and document discovery running, but disables automatic @Iris replies.
 Check `GET /internal/events/status` or `GET /internal/status` for `mentionRepliesEnabled: true`
 before expecting @Iris replies in Feishu. If it is false, inspect
 `mentionRepliesUnavailableReason` for the missing setup step.
+In the consolidated `/internal/status` response, missing mention-reply wiring marks the
+`eventWorker` component as degraded with `degradedReason: "mention_replies_unavailable"` so the
+operator dashboard does not look healthy while @Iris is unable to answer.
 
 Mention reply readiness reasons:
 

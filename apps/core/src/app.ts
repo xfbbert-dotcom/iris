@@ -144,6 +144,7 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
 ]);
 const deadLettersPresentReason = "dead_letters_present" as const;
 const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
+const mentionRepliesUnavailableReason = "mention_replies_unavailable" as const;
 const maxInternalStringLength = 512;
 const maxInternalSourceUriLength = 2048;
 const maxReindexDocumentProfileLimit = 100;
@@ -1201,7 +1202,7 @@ async function getEventWorkerStatus(runtime: EventWorkerRuntime | undefined) {
 
   try {
     const status = await runtime.getStatus();
-    return withDeadLetterHealth(status, status.deadLetterEventCount);
+    return withEventWorkerHealth(status);
   } catch {
     return {
       ok: false,
@@ -1210,6 +1211,23 @@ async function getEventWorkerStatus(runtime: EventWorkerRuntime | undefined) {
       error: "event_worker_status_failed",
     };
   }
+}
+
+function withEventWorkerHealth(status: Awaited<ReturnType<EventWorkerRuntime["getStatus"]>>) {
+  const deadLetterHealth = withDeadLetterHealth(status, status.deadLetterEventCount);
+  if (!deadLetterHealth.ok) {
+    return deadLetterHealth;
+  }
+
+  if (status.mentionRepliesUnavailableReason !== undefined) {
+    return {
+      ok: false,
+      ...status,
+      degradedReason: mentionRepliesUnavailableReason,
+    };
+  }
+
+  return deadLetterHealth;
 }
 
 async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {
