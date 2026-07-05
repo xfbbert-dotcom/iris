@@ -89,10 +89,9 @@ changing database migrations or repository behavior:
 
 ```powershell
 $env:DATABASE_URL="postgres://iris:iris@localhost:5432/iris"
-npm --workspace apps/core test -- `
-  postgres-document-source-registry.test.ts `
-  document-snapshot-repository.test.ts `
-  document-fragment-repository.test.ts
+npm --workspace apps/core test -- postgres-document-source-registry.test.ts
+npm --workspace apps/core test -- document-snapshot-repository.test.ts
+npm --workspace apps/core test -- document-fragment-repository.test.ts
 ```
 
 ## Core Runtime Environment

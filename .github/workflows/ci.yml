@@ -11,6 +11,20 @@ jobs:
   core:
     name: Core
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: iris
+          POSTGRES_PASSWORD: iris
+          POSTGRES_DB: iris
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U iris -d iris"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,6 +43,14 @@ jobs:
 
       - name: Test core
         run: npm test
+
+      - name: Test Postgres integrations
+        env:
+          DATABASE_URL: postgres://iris:iris@localhost:5432/iris
+        run: |
+          npm --workspace apps/core test -- postgres-document-source-registry.test.ts
+          npm --workspace apps/core test -- document-snapshot-repository.test.ts
+          npm --workspace apps/core test -- document-fragment-repository.test.ts
 
       - name: Validate Docker Compose
         run: docker compose config
