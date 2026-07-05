@@ -28,6 +28,12 @@ describe("FeishuDocumentBodyFetcher", () => {
       parseFeishuDocxDocumentId("https://acme.feishu.cn/minutes/docx/doc_token_4"),
     ).toBeUndefined();
     expect(
+      parseFeishuDocxDocumentId("https://docs.feishu.cn/docx/doc_token_1/trailing"),
+    ).toBeUndefined();
+    expect(
+      parseFeishuDocxDocumentId("https://acme.feishu.cn/docs/doc_token_2/trailing"),
+    ).toBeUndefined();
+    expect(
       parseFeishuDocxDocumentId(`https://docs.feishu.cn/docx/${"d".repeat(513)}`),
     ).toBeUndefined();
     expect(
@@ -56,6 +62,9 @@ describe("FeishuDocumentBodyFetcher", () => {
     ).toBeUndefined();
     expect(
       parseFeishuWikiNodeToken("https://acme.feishu.cn/drive/wiki/wiki_token_4"),
+    ).toBeUndefined();
+    expect(
+      parseFeishuWikiNodeToken("https://acme.feishu.cn/wiki/wiki_token_1/trailing"),
     ).toBeUndefined();
     expect(
       parseFeishuWikiNodeToken(`https://acme.feishu.cn/wiki/${"w".repeat(513)}`),

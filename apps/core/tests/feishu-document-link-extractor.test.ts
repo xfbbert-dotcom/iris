@@ -8,11 +8,11 @@ describe("FeishuDocumentLinkExtractor", () => {
 
     expect(
       extractor.extractLinks(
-        "docs: https://docs.feishu.cn/docx/abc and https://acme.larksuite.com/wiki/space/doc",
+        "docs: https://docs.feishu.cn/docx/abc and https://acme.larksuite.com/wiki/wiki_token",
       ),
     ).toEqual([
       { sourceUri: "https://docs.feishu.cn/docx/abc" },
-      { sourceUri: "https://acme.larksuite.com/wiki/space/doc" },
+      { sourceUri: "https://acme.larksuite.com/wiki/wiki_token" },
     ]);
   });
 
@@ -42,6 +42,16 @@ describe("FeishuDocumentLinkExtractor", () => {
         "missing tokens https://foo.feishu.cn/docx and https://foo.feishu.cn/wiki/",
       ),
     ).toEqual([]);
+  });
+
+  it("ignores Feishu document links with extra path segments", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks(
+        "bad https://foo.feishu.cn/wiki/space/doc good https://docs.feishu.cn/wiki/wiki_token",
+      ),
+    ).toEqual([{ sourceUri: "https://docs.feishu.cn/wiki/wiki_token" }]);
   });
 
   it("trims trailing chat punctuation and deduplicates repeated links", () => {

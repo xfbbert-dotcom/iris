@@ -57,6 +57,9 @@ function parseFeishuPathToken(sourceUri: string, markers: string[]): string | un
   if (marker === undefined || !markers.includes(marker)) {
     return undefined;
   }
+  if (segments.length !== 2) {
+    return undefined;
+  }
 
   return normalizeFeishuDocumentToken(segments[1]);
 }
