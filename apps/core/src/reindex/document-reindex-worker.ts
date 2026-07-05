@@ -1,7 +1,11 @@
 import type { DocumentSemanticIndexResult } from "../documents/document-semantic-indexer.js";
 import type { DocumentSnapshot } from "../documents/document-snapshot-repository.js";
 import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
-import type { DocumentReindexJob, DocumentReindexQueue } from "./document-reindex-queue.js";
+import type {
+  DocumentReindexJob,
+  DocumentReindexQueue,
+  FailedDocumentReindexJobResult,
+} from "./document-reindex-queue.js";
 
 export type DocumentReindexJobResult =
   | { status: "indexed"; documentSnapshotId: string; embeddingProfileId: string; fragmentCount: number }
@@ -38,6 +42,7 @@ export type DocumentReindexWorkerDependencies = {
 };
 
 const MAX_DOCUMENT_REINDEX_WORKER_BATCH_LIMIT = 100;
+const MAX_FAILURE_HANDLER_ATTEMPTS = 3;
 
 export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerDependencies) {
   return {
@@ -50,7 +55,11 @@ export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerD
           results.push(await processJob(dependencies, job));
         } catch (error) {
           const errorMessage = normalizeWorkerErrorMessage(error);
-          const retryResult = await dependencies.queue.handleFailedJob({ job, errorMessage });
+          const retryResult = await handleFailedJobWithRetry({
+            queue: dependencies.queue,
+            job,
+            errorMessage,
+          });
           results.push({
             status: "failed",
             documentSnapshotId: job.documentSnapshotId,
@@ -66,6 +75,27 @@ export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerD
       return results;
     },
   };
+}
+
+async function handleFailedJobWithRetry({
+  queue,
+  job,
+  errorMessage,
+}: {
+  queue: Pick<DocumentReindexQueue, "handleFailedJob">;
+  job: DocumentReindexJob;
+  errorMessage: string;
+}): Promise<FailedDocumentReindexJobResult> {
+  let latestError: unknown;
+  for (let attempt = 1; attempt <= MAX_FAILURE_HANDLER_ATTEMPTS; attempt += 1) {
+    try {
+      return await queue.handleFailedJob({ job, errorMessage });
+    } catch (error) {
+      latestError = error;
+    }
+  }
+
+  throw latestError;
 }
 
 function sanitizeLimit(value: number): number {

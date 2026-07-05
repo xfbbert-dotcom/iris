@@ -231,6 +231,55 @@ describe("DocumentReindexWorker", () => {
     expect(indexer.indexSnapshot).toHaveBeenCalledTimes(2);
   });
 
+  it("retries transient failure handling errors before continuing the batch", async () => {
+    const firstJob = job({ documentSnapshotId: "snapshot-1" });
+    const secondJob = job({
+      idempotencyKey: "reindex:profile-1536:snapshot-2",
+      documentSnapshotId: "snapshot-2",
+    });
+    const queue = queueFixture([firstJob, secondJob], { action: "requeued", attempts: 1 });
+    queue.handleFailedJob
+      .mockRejectedValueOnce(new Error("redis unavailable"))
+      .mockResolvedValueOnce({ action: "requeued" as const, attempts: 1 });
+    const indexer = {
+      indexSnapshot: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("embedding failed"))
+        .mockResolvedValueOnce({
+          status: "indexed" as const,
+          snapshotId: "snapshot-2",
+          fragmentCount: 1,
+        }),
+    };
+    const worker = createDocumentReindexWorker({
+      queue,
+      snapshots: {
+        findSnapshotById: vi.fn(async (id: string) => snapshot({ id })),
+      },
+      fragments: { hasFragmentsForSnapshotProfile: vi.fn(async () => false) },
+      indexer,
+    });
+
+    await expect(worker.processBatch({ limit: 10 })).resolves.toEqual([
+      {
+        status: "failed",
+        documentSnapshotId: "snapshot-1",
+        embeddingProfileId: "profile-1536",
+        reason: "processing_error",
+        errorMessage: "embedding failed",
+        retryAction: "requeued",
+        attempts: 1,
+      },
+      {
+        status: "indexed",
+        documentSnapshotId: "snapshot-2",
+        embeddingProfileId: "profile-1536",
+        fragmentCount: 1,
+      },
+    ]);
+    expect(queue.handleFailedJob).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds failed processing error messages before returning and requeueing", async () => {
     const queuedJob = job({ documentSnapshotId: "snapshot-oversized-error" });
     const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;

@@ -1,5 +1,9 @@
 import type { DocumentSyncResult, DocumentSyncRunner } from "./document-sync-pipeline.js";
-import type { DocumentSyncJob, DocumentSyncQueue } from "./document-sync-queue.js";
+import type {
+  DocumentSyncJob,
+  DocumentSyncQueue,
+  FailedDocumentSyncJobResult,
+} from "./document-sync-queue.js";
 import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
 
 export type DocumentSyncWorkerResult =
@@ -24,6 +28,7 @@ export type DocumentSyncWorkerDependencies = {
 };
 
 const MAX_DOCUMENT_SYNC_WORKER_BATCH_LIMIT = 100;
+const MAX_FAILURE_HANDLER_ATTEMPTS = 3;
 
 export function createDocumentSyncWorker(dependencies: DocumentSyncWorkerDependencies) {
   return {
@@ -55,7 +60,7 @@ async function processJob(
     };
   } catch (error) {
     const errorMessage = normalizeWorkerErrorMessage(error);
-    const failureResult = await queue.handleFailedJob({ job, errorMessage });
+    const failureResult = await handleFailedJobWithRetry({ queue, job, errorMessage });
 
     return {
       status: "failed",
@@ -66,6 +71,27 @@ async function processJob(
       attempts: failureResult.attempts,
     };
   }
+}
+
+async function handleFailedJobWithRetry({
+  queue,
+  job,
+  errorMessage,
+}: {
+  queue: Pick<DocumentSyncQueue, "handleFailedJob">;
+  job: DocumentSyncJob;
+  errorMessage: string;
+}): Promise<FailedDocumentSyncJobResult> {
+  let latestError: unknown;
+  for (let attempt = 1; attempt <= MAX_FAILURE_HANDLER_ATTEMPTS; attempt += 1) {
+    try {
+      return await queue.handleFailedJob({ job, errorMessage });
+    } catch (error) {
+      latestError = error;
+    }
+  }
+
+  throw latestError;
 }
 
 function sanitizeLimit(value: number): number {

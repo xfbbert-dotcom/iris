@@ -109,6 +109,49 @@ describe("DocumentSyncWorker", () => {
     });
   });
 
+  it("retries transient failure handling errors before continuing the batch", async () => {
+    const first = jobFixture({ documentSourceId: "source-1" });
+    const second = jobFixture({ documentSourceId: "source-2" });
+    const queue = {
+      dequeueBatch: vi.fn(async () => [first, second]),
+      handleFailedJob: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("redis unavailable"))
+        .mockResolvedValueOnce({ action: "requeued" as const, attempts: 1 }),
+    };
+    const worker = createDocumentSyncWorker({
+      queue,
+      runner: {
+        syncSourceById: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("runner crashed"))
+          .mockResolvedValueOnce({
+            status: "skipped",
+            source: sourceFixture({ id: "source-2" }),
+            reason: "already_synced",
+          }),
+      },
+    });
+
+    await expect(worker.processBatch({ limit: 5 })).resolves.toEqual([
+      {
+        status: "failed",
+        idempotencyKey: first.idempotencyKey,
+        documentSourceId: "source-1",
+        errorMessage: "runner crashed",
+        retryAction: "requeued",
+        attempts: 1,
+      },
+      {
+        status: "processed",
+        idempotencyKey: second.idempotencyKey,
+        documentSourceId: "source-2",
+        syncStatus: "skipped",
+      },
+    ]);
+    expect(queue.handleFailedJob).toHaveBeenCalledTimes(2);
+  });
+
   it("records dead-lettered runner errors", async () => {
     const syncJob = jobFixture({ documentSourceId: "source-dead-letter" });
     const worker = createDocumentSyncWorker({
