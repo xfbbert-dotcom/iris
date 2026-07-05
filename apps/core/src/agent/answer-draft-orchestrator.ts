@@ -149,14 +149,15 @@ function dedupeLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] 
     }))
     .filter((message) => message.speaker.length > 0 && message.text.length > 0);
 
-  return normalizedMessages.filter((message) => {
+  return normalizedMessages.reduceRight<LiveChatMessage[]>((deduplicated, message) => {
     const key = `${message.speaker}\u0000${message.text}`;
     if (seen.has(key)) {
-      return false;
+      return deduplicated;
     }
     seen.add(key);
-    return true;
-  });
+    deduplicated.unshift(message);
+    return deduplicated;
+  }, []);
 }
 
 function selectLiveChatWindow(

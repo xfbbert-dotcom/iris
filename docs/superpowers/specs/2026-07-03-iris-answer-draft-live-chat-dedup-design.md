@@ -10,10 +10,11 @@ Duplicated live chat context wastes prompt space and can make recent conversatio
 
 Deduplicate live chat messages inside `AnswerDraftOrchestrator` after stored and request messages are combined.
 
-Two messages are considered duplicates when both `speaker` and `text` match exactly. The first occurrence is kept so stored chronological context remains stable, and later duplicates are skipped.
+Two messages are considered duplicates when both `speaker` and `text` match exactly. The newest occurrence is kept so a repeated current message cannot be displaced by an older stored copy. The remaining messages keep chronological order.
 
 ## Quality Bar
 
 - Deduplication happens before `contextBuilder.buildContext`.
+- Deduplication happens before the live chat context window is selected, and the newest duplicate survives the window.
 - The model still receives the same prompt assembled by the context builder.
 - The behavior is covered by an orchestrator test.

@@ -405,8 +405,8 @@ describe("AnswerDraftOrchestrator", () => {
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
       queryText: "What changed?",
       liveChatMessages: [
-        { speaker: "ou_a", text: "Duplicated context" },
         { speaker: "ou_b", text: "Stored context" },
+        { speaker: "ou_a", text: "Duplicated context" },
         { speaker: "ou_c", text: "Current context" },
       ],
       fragmentLimit: undefined,
@@ -455,6 +455,53 @@ describe("AnswerDraftOrchestrator", () => {
       ],
       fragmentLimit: undefined,
       liveChatLimit: undefined,
+    });
+  });
+
+  it("keeps the newest duplicate live chat message before applying the context window", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft answer." })),
+    };
+    const storedMessages = [
+      { speaker: "ou_a", text: "Repeated current request" },
+      ...Array.from({ length: 19 }, (_, index) => ({
+        speaker: `ou_${index}`,
+        text: `stored-${index}`,
+      })),
+    ];
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => storedMessages),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await orchestrator.generateDraft({
+      question: "What changed?",
+      chatId: "oc_1",
+      liveChatMessages: [{ speaker: "ou_a", text: "Repeated current request" }],
+      liveChatLimit: 20,
+    });
+
+    expect(contextBuilder.buildContext).toHaveBeenCalledWith({
+      queryText: "What changed?",
+      liveChatMessages: [
+        ...storedMessages.slice(1),
+        { speaker: "ou_a", text: "Repeated current request" },
+      ],
+      fragmentLimit: undefined,
+      liveChatLimit: 20,
     });
   });
 
