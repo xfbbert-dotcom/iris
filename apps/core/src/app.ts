@@ -1074,16 +1074,20 @@ function readInternalApiToken(value: string | undefined): string | undefined {
 }
 
 function isInternalApiRequest(url: string): boolean {
-  const path = url.split("?", 1)[0];
+  const path = pathBeforeQuery(url);
   if (isInternalApiPath(path)) {
     return true;
   }
 
   try {
-    return isInternalApiPath(decodeURIComponent(path));
+    return isInternalApiPath(pathBeforeQuery(decodeURIComponent(path)));
   } catch {
     return false;
   }
+}
+
+function pathBeforeQuery(url: string): string {
+  return url.split("?", 1)[0];
 }
 
 function isInternalApiPath(path: string): boolean {

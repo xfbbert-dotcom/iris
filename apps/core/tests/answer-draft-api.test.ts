@@ -602,6 +602,10 @@ describe("internal API token guard", () => {
       method: "GET",
       url: "/internal%2Fstatus",
     });
+    const encodedQuerySeparatorResponse = await app.inject({
+      method: "GET",
+      url: "/%69nternal%3Fprobe=1",
+    });
 
     expect(encodedLeadingCharacterResponse.statusCode).toBe(401);
     expect(encodedLeadingCharacterResponse.json()).toEqual({
@@ -610,6 +614,11 @@ describe("internal API token guard", () => {
     });
     expect(encodedSeparatorResponse.statusCode).toBe(401);
     expect(encodedSeparatorResponse.json()).toEqual({
+      ok: false,
+      error: "internal_api_unauthorized",
+    });
+    expect(encodedQuerySeparatorResponse.statusCode).toBe(401);
+    expect(encodedQuerySeparatorResponse.json()).toEqual({
       ok: false,
       error: "internal_api_unauthorized",
     });
