@@ -139,10 +139,13 @@ async function embedQuery(queryText: string, embedder: QueryEmbeddingProvider): 
 }
 
 function sanitizeFragmentLimit(value: number | undefined): number {
-  if (value !== undefined && Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+  if (
+    value !== undefined &&
+    (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER)
+  ) {
     throw new Error("fragmentLimit must be a finite safe-magnitude number");
   }
-  if (value === undefined || !Number.isFinite(value)) {
+  if (value === undefined) {
     return DEFAULT_FRAGMENT_LIMIT;
   }
 
