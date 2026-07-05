@@ -80,6 +80,16 @@ describe("FeishuDocumentLinkExtractor", () => {
     ]);
   });
 
+  it("ignores percent-encoded comma contaminated document tokens", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks(
+        "doc https://docs.feishu.cn/docx/token%2Cplease good https://foo.feishu.cn/docx/next",
+      ),
+    ).toEqual([{ sourceUri: "https://foo.feishu.cn/docx/next" }]);
+  });
+
   it("drops copied link query strings and fragments before deduplication", () => {
     const extractor = createFeishuDocumentLinkExtractor();
 

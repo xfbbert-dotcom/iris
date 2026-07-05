@@ -1,5 +1,8 @@
 import { DOCUMENT_SOURCE_URI_MAX_CHARS } from "./document-source-registry.js";
-import { MAX_FEISHU_DOCUMENT_TOKEN_CHARS } from "./feishu-document-body-fetcher.js";
+import {
+  parseFeishuDocxDocumentId,
+  parseFeishuWikiNodeToken,
+} from "./feishu-document-body-fetcher.js";
 
 export type FeishuDocumentLink = {
   sourceUri: string;
@@ -84,15 +87,8 @@ function isSupportedHost(hostname: string): boolean {
 }
 
 function isSupportedDocumentPath(url: URL): boolean {
-  const pathSegments = url.pathname.split("/").filter(Boolean);
-  const firstPathSegment = pathSegments[0]?.toLowerCase();
-  const documentToken = pathSegments[1]?.trim();
   return (
-    documentToken !== undefined &&
-    documentToken.length > 0 &&
-    documentToken.length <= MAX_FEISHU_DOCUMENT_TOKEN_CHARS &&
-    (firstPathSegment === "docx" ||
-      firstPathSegment === "docs" ||
-      firstPathSegment === "wiki")
+    parseFeishuDocxDocumentId(url.href) !== undefined ||
+    parseFeishuWikiNodeToken(url.href) !== undefined
   );
 }

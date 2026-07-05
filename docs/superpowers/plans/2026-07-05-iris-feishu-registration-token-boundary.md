@@ -48,6 +48,8 @@ Run runtime, document body fetcher, and group link extractor tests.
 
 ### Task 3: Documentation And Full Verification
 
+- [x] Reuse the shared Feishu parser from group chat link discovery so `%2C` candidates are not
+  registered as group-visible sources.
 - [x] Add internal API regression coverage for authorized wiki and user-submitted registration routes.
 - [x] Update the architecture whitepaper, registry design note, and internal rollout runbook.
 - [x] Run `npm run verify`.

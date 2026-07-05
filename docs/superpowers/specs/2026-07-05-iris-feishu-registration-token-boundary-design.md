@@ -12,6 +12,10 @@ comma or percent-encoded ASCII comma. Document source registration uses this par
 canonicalizing and writing a source, so `https://docs.feishu.cn/docx/token,please` is rejected
 instead of becoming a pending document source.
 
+Group chat link discovery also delegates supported docx/docs/wiki token validation to the shared
+parser after its chat-text URL boundary pass. This prevents a group-visible source from being
+registered with a token shape that later permission checks or document sync would reject.
+
 ## Invariants
 
 - Group chat discovery, authorized wiki registration, user-submitted registration, permission checks,
