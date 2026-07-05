@@ -72,6 +72,13 @@ const checkDefinitions: CheckDefinition[] = [
       if (auth.verificationToken === undefined && auth.encryptKey === undefined) {
         return fail("Set FEISHU_VERIFICATION_TOKEN or FEISHU_ENCRYPT_KEY before exposing callbacks.");
       }
+      const templateFailure = findTemplatePlaceholderEnv(env, [
+        "FEISHU_VERIFICATION_TOKEN",
+        "FEISHU_ENCRYPT_KEY",
+      ]);
+      if (templateFailure !== undefined) {
+        return fail(`${templateFailure} must be replaced with a real rollout value`);
+      }
 
       return pass("Feishu callback verification is configured.");
     },
@@ -82,6 +89,15 @@ const checkDefinitions: CheckDefinition[] = [
     envVars: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_OPEN_BASE_URL"],
     evaluate(env) {
       readFeishuOpenApiConfig(env);
+      const templateFailure = findTemplatePlaceholderEnv(env, [
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "FEISHU_OPEN_BASE_URL",
+      ]);
+      if (templateFailure !== undefined) {
+        return fail(`${templateFailure} must be replaced with a real rollout value`);
+      }
+
       return pass("Feishu OpenAPI credentials are configured for document reads and replies.");
     },
   },
@@ -93,6 +109,10 @@ const checkDefinitions: CheckDefinition[] = [
       const botOpenId = readOptionalFeishuBotOpenId(env);
       if (botOpenId === undefined) {
         return fail("IRIS_FEISHU_BOT_OPEN_ID is required for @Iris mention replies.");
+      }
+      const templateFailure = findTemplatePlaceholderEnv(env, ["IRIS_FEISHU_BOT_OPEN_ID"]);
+      if (templateFailure !== undefined) {
+        return fail(`${templateFailure} must be replaced with a real rollout value`);
       }
 
       return pass("Iris bot open id is configured.");
@@ -180,6 +200,14 @@ const checkDefinitions: CheckDefinition[] = [
       if (config === undefined) {
         return fail("Configure an OpenAI-compatible model provider for answer drafting.");
       }
+      const templateFailure = findTemplatePlaceholderEnv(env, [
+        "IRIS_MODEL_BASE_URL",
+        "IRIS_MODEL_API_KEY",
+        "IRIS_MODEL_NAME",
+      ]);
+      if (templateFailure !== undefined) {
+        return fail(`${templateFailure} must be replaced with a real rollout value`);
+      }
 
       return pass("Answer model provider is configured.");
     },
@@ -203,6 +231,14 @@ const checkDefinitions: CheckDefinition[] = [
         return fail("IRIS_EMBEDDING_DIMENSIONS is required for document retrieval quality.");
       }
       assertSupportedRuntimeEmbeddingDimension(config.dimensions);
+      const templateFailure = findTemplatePlaceholderEnv(env, [
+        "IRIS_EMBEDDING_BASE_URL",
+        "IRIS_EMBEDDING_API_KEY",
+        "IRIS_EMBEDDING_MODEL",
+      ]);
+      if (templateFailure !== undefined) {
+        return fail(`${templateFailure} must be replaced with a real rollout value`);
+      }
 
       return pass("Document embedding provider is configured with a supported dimension.");
     },
@@ -220,6 +256,13 @@ const checkDefinitions: CheckDefinition[] = [
         return fail("Use IRIS_INTERNAL_DRAFT_PERMISSION_MODE=source-policy for live Feishu checks.");
       }
       readFeishuOpenApiConfig(env);
+      const templateFailure = findTemplatePlaceholderEnv(env, [
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+      ]);
+      if (templateFailure !== undefined) {
+        return fail(`${templateFailure} must be replaced with a real rollout value`);
+      }
 
       return pass("Answer drafting uses source-policy with Feishu OpenAPI live checks available.");
     },
@@ -239,6 +282,10 @@ const checkDefinitions: CheckDefinition[] = [
         return fail(
           "IRIS_INTERNAL_API_TOKEN must be a single visible ASCII token without whitespace or commas",
         );
+      }
+      const templateFailure = findTemplatePlaceholderEnv(env, ["IRIS_INTERNAL_API_TOKEN"]);
+      if (templateFailure !== undefined) {
+        return fail(`${templateFailure} must be replaced with a real rollout value`);
       }
 
       return pass("Internal operator APIs have a bearer token configured.");
@@ -327,6 +374,17 @@ function readRequiredReadinessEnv(value: string | undefined): string | undefined
   }
 
   return trimmed;
+}
+
+function findTemplatePlaceholderEnv(env: EnvLike, names: string[]): string | undefined {
+  return names.find((name) => {
+    const value = env[name]?.trim();
+    return value !== undefined && value.length > 0 && isTemplatePlaceholderValue(value);
+  });
+}
+
+function isTemplatePlaceholderValue(value: string): boolean {
+  return value.startsWith("replace-with-") || value.includes("api.example.com");
 }
 
 function isSingleVisibleAsciiToken(value: string): boolean {
