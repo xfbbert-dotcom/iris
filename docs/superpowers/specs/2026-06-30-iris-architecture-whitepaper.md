@@ -412,6 +412,17 @@ boundary. The `Bearer` scheme may be matched case-insensitively for HTTP client 
 the token value itself must remain an exact shared-secret match. This is a rollout control, not the
 final admin identity model.
 
+Internal rollout readiness is a configuration contract, not a runtime-health substitute. Iris must
+provide a shared readiness profile for the first 20-30 person rollout through both a local CLI and
+an internal operator endpoint. The profile must fail blocked configurations that would prevent the
+core product loop from working: Feishu event ingestion, document sync, semantic reindexing, @Iris
+answer drafting, Feishu OpenAPI access, bot identity, model provider, embedding provider, and
+`source-policy` live permission checks. It may warn, rather than block, for deployment-boundary
+choices such as a missing internal API token when the operator is deliberately keeping Core inside a
+trusted private network. The readiness surface must list the responsible environment variables and
+must not attempt live network calls; live status remains the responsibility of `/internal/status`
+and the worker-specific status endpoints.
+
 When Iris is disabled, it should stop processing new messages, stop proactive speech, and stop executing tasks. Admins may still view logs and configuration.
 
 Feishu may still deliver events to the system while Iris is disabled. In that state, Iris should acknowledge or safely discard events according to Feishu platform requirements, but must not index message content, update semantic memory, generate replies, or execute actions unless an administrator explicitly re-enables the relevant scope.
