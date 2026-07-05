@@ -66,6 +66,9 @@ npm --workspace apps/core run db:migrate
 
 ## Core Runtime Environment
 
+Use `.env.example` as the non-secret checklist for the variables below. Keep real values in your
+local shell, deployment secret store, or private runtime configuration.
+
 Minimal shared configuration:
 
 ```powershell

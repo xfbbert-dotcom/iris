@@ -45,6 +45,14 @@ Run the full local verification suite:
 npm run verify
 ```
 
+Check the internal rollout configuration profile:
+
+```powershell
+npm run readiness
+```
+
+Use `.env.example` as the non-secret variable checklist for local or private rollout setup.
+
 ## Local Database
 
 Start local infrastructure:
