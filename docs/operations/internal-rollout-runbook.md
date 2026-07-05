@@ -12,6 +12,7 @@ Set `IRIS_INTERNAL_API_TOKEN` whenever Core is reachable outside a developer lap
 Never expose these endpoints directly to the public internet:
 
 - `/internal/runtime-control/*`
+- `/internal/readiness`
 - `/internal/document-sync/*`
 - `/internal/events/*`
 - `/internal/reindex/*`
@@ -185,6 +186,21 @@ Invoke-RestMethod `
   -Headers $irisHeaders `
   -Uri http://localhost:3000/internal/status
 ```
+
+Pre-rollout configuration readiness:
+
+```powershell
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri http://localhost:3000/internal/readiness
+```
+
+Use readiness before inviting the first internal group. `status: "ready"` means chat ingestion,
+document sync, semantic reindexing, @Iris answer drafting, Feishu OpenAPI access, and the
+source-policy permission guard are configured. `status: "ready_with_warnings"` means no blocking
+configuration is missing, but the listed warnings should be handled before exposing Core beyond a
+trusted private network. `status: "blocked"` means Iris is not ready for the 20-30 person rollout;
+check each failed item and the listed `envVars`.
 
 Important status rules:
 

@@ -12,7 +12,7 @@ import {
   createFeishuGateway,
   type FeishuCallbackRequest
 } from "./feishu/feishu-gateway.js";
-import { readFeishuAuthConfig, readServerPort } from "./config/env.js";
+import { readFeishuAuthConfig, readServerPort, type EnvLike } from "./config/env.js";
 import {
   RuntimeController,
   type RuntimeCapabilityName
@@ -48,6 +48,7 @@ import {
   parseFeishuWikiNodeToken,
 } from "./documents/feishu-document-body-fetcher.js";
 import { buildInternalStatusSnapshot } from "./admin/internal-status-snapshot.js";
+import { buildInternalRolloutReadinessReport } from "./admin/internal-rollout-readiness.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
@@ -70,6 +71,7 @@ export type BuildAppDependencies = {
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
   runtimeController?: RuntimeController;
   internalApiToken?: string;
+  readinessEnv?: EnvLike;
 };
 
 type ParsedJsonBody = {
@@ -307,6 +309,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
     return buildInternalStatusSnapshot({ components, generatedAt: now() });
   });
+
+  app.get("/internal/readiness", async () =>
+    buildInternalRolloutReadinessReport(dependencies.readinessEnv ?? process.env),
+  );
 
   app.get("/internal/runtime-control/status", async () => ({
     ok: true,
