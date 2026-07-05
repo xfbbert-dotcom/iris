@@ -60,15 +60,15 @@ export function createFeishuMessageEventProcessor({
         return;
       }
 
-      const { mentions: _mentions, ...messageFact } = parsed;
-      await messages.upsertMessage(messageFact);
-
       let mentionResponseError: unknown;
       try {
         await maybeRespondToMention(parsed, mentionAnswerResponder);
       } catch (error) {
         mentionResponseError = error;
       }
+
+      const { mentions: _mentions, ...messageFact } = parsed;
+      await messages.upsertMessage(messageFact);
 
       let documentDiscoveryError: unknown;
       if (runtimeController === undefined || runtimeController.canReadDocuments()) {

@@ -416,6 +416,67 @@ describe("FeishuMessageEventProcessor", () => {
     expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).toHaveBeenCalledOnce();
   });
 
+  it("still attempts explicit mention replies when message fact persistence fails", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async () => {
+        throw new Error("conversation store unavailable");
+      }),
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async () => ({ status: "replied" as const })),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => [{ sourceUri: "https://docs.feishu.cn/docx/a" }]),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      mentionAnswerResponder,
+      documentLinkExtractor,
+    });
+
+    await expect(
+      processor.process(
+        rawEventFixture({
+          rawBody: {
+            header: { event_id: "event-1", event_type: "im.message.receive_v1" },
+            event: {
+              sender: {
+                sender_id: {
+                  open_id: "open-1",
+                },
+              },
+              message: {
+                message_id: "message-1",
+                chat_id: "chat-1",
+                message_type: "text",
+                content: JSON.stringify({
+                  text: "@_user_1 please help",
+                }),
+                mentions: [
+                  {
+                    key: "@_user_1",
+                    id: { open_id: "ou_iris" },
+                    name: "Iris",
+                  },
+                ],
+                create_time: "1782925200000",
+              },
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow("conversation store unavailable");
+
+    expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledWith({
+      messageId: "message-1",
+      chatId: "chat-1",
+      senderId: "open-1",
+      text: "@_user_1 please help",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+    expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
+  });
+
   it("does not call the mention answer responder for disabled incoming events", async () => {
     const messages = {
       upsertMessage: vi.fn(),

@@ -1118,17 +1118,21 @@ the final guard.
 
 Pressure:
 
-A single Feishu message can both mention Iris and contain document links. If
-document discovery, document-source registration, or document-sync planning
-fails before the mention responder runs, Iris can appear silent to the user even
-though the explicit @Iris request could still be answered. This is especially
-painful during a first 20-30 person rollout because a transient sync queue issue
-would look like a broken chat assistant.
+A single Feishu message can mention Iris, create a conversation fact, and contain
+document links. If message fact persistence, document discovery,
+document-source registration, or document-sync planning fails before the mention
+responder runs, Iris can appear silent to the user even though the explicit
+@Iris request could still be answered. This is especially painful during a first
+20-30 person rollout because a transient database or sync queue issue would look
+like a broken chat assistant.
 
 Required architectural response:
 
-- After message parsing and fact persistence, explicit mention response attempts
-  must not be blocked by document discovery or document sync planning failures.
+- After message parsing and runtime gating, explicit mention response attempts
+  must not be blocked by message fact persistence, document discovery, or
+  document sync planning failures.
+- Message fact persistence must still run after the reply attempt and must still
+  surface failures so the raw-event worker can retry memory recovery.
 - Document discovery must still run for the same event when possible.
 - If document discovery fails, the processor should surface that failure after
   the reply attempt so the raw-event worker can retry memory recovery.
