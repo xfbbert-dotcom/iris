@@ -260,8 +260,24 @@ function stableJsonHash(value: unknown): string {
 
 function serializeForStableHash(value: unknown): string {
   try {
-    return JSON.stringify(value) ?? String(value);
+    return JSON.stringify(toCanonicalJsonValue(value)) ?? String(value);
   } catch {
     return String(value);
   }
+}
+
+function toCanonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => toCanonicalJsonValue(item));
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, toCanonicalJsonValue(value[key])]),
+  );
 }

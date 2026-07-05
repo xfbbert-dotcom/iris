@@ -267,6 +267,41 @@ describe("FeishuGateway", () => {
     expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]+$/);
   });
 
+  it("deduplicates fallback body hashes independent of JSON object key order", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        event: {
+          message: {
+            message_id: "message-1",
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+        schema: "2.0",
+      },
+    });
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        event: {
+          message: {
+            content: "{\"text\":\"hello\"}",
+            chat_id: "chat-1",
+            message_id: "message-1",
+          },
+        },
+      },
+    });
+
+    expect(queue.events).toHaveLength(1);
+    expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]{64}$/);
+  });
+
   it("uses a SHA-256 digest for fallback body idempotency keys", async () => {
     const queue = new InMemoryEventQueue();
     const gateway = createFeishuGateway({ queue });
