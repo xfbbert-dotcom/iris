@@ -250,6 +250,27 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
+  it("caps oversized vector search limits before querying fragments", async () => {
+    const query = vi.fn(async (_sql: string, values?: unknown[]) => {
+      expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 100]);
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: 101,
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("treats non-finite vector search limits as empty results without looking up profiles", async () => {
     const query = vi.fn(async () => ({ rows: [] }));
     const getProfileById = vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 }));

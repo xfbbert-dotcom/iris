@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { DocumentChunk } from "./document-chunker.js";
 
+const MAX_FRAGMENT_SEARCH_LIMIT = 100;
+
 export type Queryable = {
   query: <T = unknown>(sql: string, values?: unknown[]) => Promise<{ rows: T[] }>;
 };
@@ -246,7 +248,7 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_FRAGMENT_SEARCH_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 async function insertFragment(

@@ -459,6 +459,21 @@ describe("DocumentSnapshotRepository", () => {
     ]);
   });
 
+  it("caps oversized missing-profile limits before querying snapshots", async () => {
+    const query = vi.fn(async (_sql: string, values?: unknown[]) => {
+      expect(values).toEqual(["profile-1536", 100]);
+      return { rows: [] };
+    });
+    const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
+
+    await expect(
+      repository.listSuccessfulSnapshotsMissingProfile({
+        embeddingProfileId: "profile-1536",
+        limit: 101,
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("treats non-finite missing-profile limits as empty results without querying snapshots", async () => {
     const query = vi.fn(async () => ({ rows: [] }));
     const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
