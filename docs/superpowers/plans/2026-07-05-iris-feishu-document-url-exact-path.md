@@ -50,3 +50,35 @@ Expected: all focused tests pass.
 Run: `npm run verify`
 
 Expected: core tests, Python worker tests, and Docker Compose validation pass.
+
+### Task 3: Canonicalize Trailing Slashes
+
+**Files:**
+- Modify: `apps/core/src/documents/feishu-document-body-fetcher.ts`
+- Modify: `apps/core/src/documents/feishu-document-link-extractor.ts`
+- Modify: `apps/core/src/app.ts`
+- Modify: `apps/core/tests/feishu-document-link-extractor.test.ts`
+- Modify: `apps/core/tests/answer-draft-api.test.ts`
+
+- [x] **Step 1: Write failing trailing-slash normalization tests**
+
+Extend group link extraction and internal registration tests so copied URLs such as
+`https://docs.feishu.cn/docx/token/?from=copy#heading` normalize to
+`https://docs.feishu.cn/docx/token`.
+
+- [x] **Step 2: Run focused tests and confirm red**
+
+Run: `npm --workspace apps/core run test -- tests/feishu-document-link-extractor.test.ts tests/answer-draft-api.test.ts`
+
+Expected: fails because canonicalized source URIs still contain the trailing slash.
+
+- [x] **Step 3: Share Feishu document URL canonicalization**
+
+Export `normalizeFeishuDocumentSourceUri()` from the Feishu document body fetcher and reuse it in
+group link extraction and internal registration parsing.
+
+- [x] **Step 4: Run focused tests and confirm green**
+
+Run: `npm --workspace apps/core run test -- tests/feishu-document-link-extractor.test.ts tests/answer-draft-api.test.ts`
+
+Expected: all focused tests pass.

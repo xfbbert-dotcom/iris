@@ -44,8 +44,7 @@ import {
 import type { DocumentSourceType } from "./documents/document-source-registry.js";
 import type { DocumentSnapshot } from "./documents/document-snapshot-repository.js";
 import {
-  parseFeishuDocxDocumentId,
-  parseFeishuWikiNodeToken,
+  normalizeFeishuDocumentSourceUri,
 } from "./documents/feishu-document-body-fetcher.js";
 import { buildInternalStatusSnapshot } from "./admin/internal-status-snapshot.js";
 import { buildInternalRolloutReadinessReport } from "./admin/internal-rollout-readiness.js";
@@ -1771,26 +1770,8 @@ function readNonBlankBoundedString(value: unknown, maxLength: number): string | 
   return trimmed.length > 0 && trimmed.length <= maxLength ? trimmed : undefined;
 }
 
-function isSupportedFeishuDocumentSourceUri(sourceUri: string): boolean {
-  return (
-    parseFeishuDocxDocumentId(sourceUri) !== undefined ||
-    parseFeishuWikiNodeToken(sourceUri) !== undefined
-  );
-}
-
 function normalizeSupportedFeishuDocumentSourceUri(sourceUri: string): string | undefined {
-  if (!isSupportedFeishuDocumentSourceUri(sourceUri)) {
-    return undefined;
-  }
-
-  try {
-    const url = new URL(sourceUri);
-    url.search = "";
-    url.hash = "";
-    return url.href;
-  } catch {
-    return undefined;
-  }
+  return normalizeFeishuDocumentSourceUri(sourceUri);
 }
 
 function parseLiveChatMessage(value: unknown): LiveChatMessage | undefined {

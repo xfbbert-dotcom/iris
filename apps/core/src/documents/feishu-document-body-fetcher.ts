@@ -35,6 +35,25 @@ export function parseFeishuWikiNodeToken(sourceUri: string): string | undefined 
   return parseFeishuPathToken(sourceUri, ["wiki"]);
 }
 
+export function normalizeFeishuDocumentSourceUri(sourceUri: string): string | undefined {
+  if (
+    parseFeishuDocxDocumentId(sourceUri) === undefined &&
+    parseFeishuWikiNodeToken(sourceUri) === undefined
+  ) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(sourceUri);
+    url.search = "";
+    url.hash = "";
+    url.pathname = trimTrailingSlash(url.pathname);
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseFeishuPathToken(sourceUri: string, markers: string[]): string | undefined {
   let url: URL;
   try {

@@ -1,8 +1,5 @@
 import { DOCUMENT_SOURCE_URI_MAX_CHARS } from "./document-source-registry.js";
-import {
-  parseFeishuDocxDocumentId,
-  parseFeishuWikiNodeToken,
-} from "./feishu-document-body-fetcher.js";
+import { normalizeFeishuDocumentSourceUri } from "./feishu-document-body-fetcher.js";
 
 export type FeishuDocumentLink = {
   sourceUri: string;
@@ -53,42 +50,13 @@ function normalizeCandidateUrl(candidate: string): string | undefined {
   }
 
   try {
-    const url = new URL(normalized);
-    if (!isSupportedHost(url.hostname)) {
-      return undefined;
-    }
-    if (!isSupportedDocumentPath(url)) {
-      return undefined;
-    }
-    if (url.username.length > 0 || url.password.length > 0) {
+    const sourceUri = normalizeFeishuDocumentSourceUri(normalized);
+    if (sourceUri === undefined || sourceUri.length > DOCUMENT_SOURCE_URI_MAX_CHARS) {
       return undefined;
     }
 
-    url.search = "";
-    url.hash = "";
-
-    if (url.href.length > DOCUMENT_SOURCE_URI_MAX_CHARS) {
-      return undefined;
-    }
-
-    return url.href;
+    return sourceUri;
   } catch {
     return undefined;
   }
-}
-
-function isSupportedHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  return (
-    host === "docs.feishu.cn" ||
-    host.endsWith(".feishu.cn") ||
-    host.endsWith(".larksuite.com")
-  );
-}
-
-function isSupportedDocumentPath(url: URL): boolean {
-  return (
-    parseFeishuDocxDocumentId(url.href) !== undefined ||
-    parseFeishuWikiNodeToken(url.href) !== undefined
-  );
 }

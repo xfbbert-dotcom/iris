@@ -4145,7 +4145,7 @@ describe("authorized wiki document registration API", () => {
       method: "POST",
       url: "/internal/document-sync/authorized-wiki-documents",
       payload: {
-        sourceUri: "https://docs.feishu.cn/docx/doc_token_1?from=copy#heading",
+        sourceUri: "https://docs.feishu.cn/docx/doc_token_1/?from=copy#heading",
         authorizedSpaceId: "space-1",
       },
     });
@@ -4407,7 +4407,7 @@ describe("user submitted document registration API", () => {
       method: "POST",
       url: "/internal/document-sync/user-submitted-documents",
       payload: {
-        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1?open=1#top",
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1/?open=1#top",
         submittedByUserId: "ou_1",
       },
     });

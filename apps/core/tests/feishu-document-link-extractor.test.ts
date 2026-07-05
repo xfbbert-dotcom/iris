@@ -105,7 +105,7 @@ describe("FeishuDocumentLinkExtractor", () => {
 
     expect(
       extractor.extractLinks(
-        "doc https://docs.feishu.cn/docx/token?from=from_copylink#heading and https://docs.feishu.cn/docx/token?open_in_browser=true",
+        "doc https://docs.feishu.cn/docx/token/?from=from_copylink#heading and https://docs.feishu.cn/docx/token?open_in_browser=true",
       ),
     ).toEqual([{ sourceUri: "https://docs.feishu.cn/docx/token" }]);
   });
