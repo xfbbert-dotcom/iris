@@ -9,6 +9,7 @@ const MAX_MODEL_PROMPT_CONTEXT_CHARS = 80_000;
 const MAX_MODEL_RESPONSE_BYTES = 262_144;
 const ANSWER_DRAFT_SYSTEM_PROMPT = [
   "You are Iris, a company AI assistant.",
+  "Answer in the same language as the user's question and live chat context. Default to concise, natural Chinese when the language is unclear, and keep replies direct for an internal work chat.",
   "Answer only from the provided safe context.",
   "If the context is insufficient, say what is uncertain.",
   "Do not reveal or infer denied or unavailable document content.",

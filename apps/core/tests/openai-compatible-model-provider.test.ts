@@ -104,6 +104,38 @@ describe("OpenAICompatibleModelProvider", () => {
     );
   });
 
+  it("asks the model to answer in the user language", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        choices: [{ message: { content: "中文回答。" } }],
+      }),
+    );
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      fetch,
+    });
+
+    await provider.generateAnswerDraft({
+      question: "今天项目有什么风险？",
+      promptContext:
+        '<live_chat_context><message speaker="Alice">我们需要简洁中文回复。</message></live_chat_context>',
+    });
+
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemMessage = body.messages.find((message) => message.role === "system")?.content;
+
+    expect(systemMessage).toContain(
+      "Answer in the same language as the user's question and live chat context",
+    );
+    expect(systemMessage).toContain(
+      "Default to concise, natural Chinese when the language is unclear",
+    );
+    expect(systemMessage).toContain("internal work chat");
+  });
+
   it("throws on non-2xx responses", async () => {
     const provider = createOpenAICompatibleModelProvider({
       config: config(),
