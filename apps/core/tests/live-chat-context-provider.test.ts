@@ -92,6 +92,21 @@ describe("LiveChatContextProvider", () => {
     ).rejects.toThrow("live chat limit must be a finite safe-magnitude number");
     expect(repository.listRecentByChat).not.toHaveBeenCalled();
   });
+
+  it("rejects non-finite custom limits before querying the repository", async () => {
+    const repository = {
+      listRecentByChat: vi.fn(async () => []),
+    };
+    const provider = createLiveChatContextProvider({ repository });
+
+    await expect(
+      provider.loadRecentMessages({
+        chatId: "oc_1",
+        limit: Number.NaN,
+      }),
+    ).rejects.toThrow("live chat limit must be a finite safe-magnitude number");
+    expect(repository.listRecentByChat).not.toHaveBeenCalled();
+  });
 });
 
 function message(overrides: Partial<ConversationMessage>): ConversationMessage {

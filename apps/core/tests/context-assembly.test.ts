@@ -269,22 +269,18 @@ describe("assemblePromptContext", () => {
     expect(context).toContain('<message speaker="User">message-3</message>');
   });
 
-  it("falls back to the latest 20 messages for non-finite liveChatLimit values", () => {
-    const liveChatMessages = Array.from({ length: 25 }, (_, index) => ({
-      speaker: "User",
-      text: `message-${index + 1}`
-    }));
-
+  it("rejects non-finite liveChatLimit values before selecting live messages", () => {
     for (const liveChatLimit of [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN]) {
-      const context = assemblePromptContext({
-        backgroundDocuments: [],
-        liveChatMessages,
-        liveChatLimit
-      });
-
-      expect(context).not.toContain('<message speaker="User">message-1</message>');
-      expect(context).toContain('<message speaker="User">message-6</message>');
-      expect(context).toContain('<message speaker="User">message-25</message>');
+      expect(() =>
+        assemblePromptContext({
+          backgroundDocuments: [],
+          liveChatMessages: [
+            { speaker: "User", text: "message-1" },
+            { speaker: "User", text: "message-2" }
+          ],
+          liveChatLimit
+        }),
+      ).toThrow("liveChatLimit must be a finite safe-magnitude number");
     }
   });
 
