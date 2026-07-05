@@ -29,6 +29,7 @@ Observed: focused answer-draft runtime tests failed because the runtime did not 
 
 **Files:**
 - Modify: `apps/core/src/runtime/answer-draft-runtime.ts`
+- Modify: `apps/core/src/conversation/feishu-message-event-processor.ts`
 
 - [x] **Step 1: Extend the runtime retrieval gate**
 
@@ -40,6 +41,14 @@ Return no stored live chat messages, and do not call the delegate provider, when
 reading is disabled for the chat.
 
 Observed: focused answer-draft runtime tests passed with `15` tests.
+
+- [x] **Step 3: Preserve current-message mention handling**
+
+Keep Feishu message persistence and document discovery disabled when group-context reading is off,
+but still pass the current parsed message to the mention responder so explicit @Iris requests remain
+available under `replyWhenMentioned`.
+
+Observed: focused Feishu message processor and answer-draft runtime tests passed with `34` tests.
 
 ### Task 3: Document The Boundary
 

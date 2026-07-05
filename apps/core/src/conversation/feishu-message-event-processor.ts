@@ -55,10 +55,11 @@ export function createFeishuMessageEventProcessor({
         runtimeController !== undefined &&
         !runtimeController.canReadGroupContext(parsed.chatId)
       ) {
+        await maybeRespondToMention(parsed, mentionAnswerResponder);
         return;
       }
 
-      const { mentions, ...messageFact } = parsed;
+      const { mentions: _mentions, ...messageFact } = parsed;
       await messages.upsertMessage(messageFact);
 
       if (runtimeController === undefined || runtimeController.canReadDocuments()) {
@@ -74,15 +75,22 @@ export function createFeishuMessageEventProcessor({
         }
       }
 
-      await mentionAnswerResponder?.maybeRespond({
-        messageId: parsed.providerMessageId,
-        chatId: parsed.chatId,
-        senderId: parsed.senderId,
-        text: parsed.text,
-        mentions,
-      });
+      await maybeRespondToMention(parsed, mentionAnswerResponder);
     },
   };
+}
+
+function maybeRespondToMention(
+  parsed: ParsedFeishuMessageEvent,
+  mentionAnswerResponder: Pick<FeishuMentionAnswerResponder, "maybeRespond"> | undefined,
+): Promise<unknown> {
+  return mentionAnswerResponder?.maybeRespond({
+    messageId: parsed.providerMessageId,
+    chatId: parsed.chatId,
+    senderId: parsed.senderId,
+    text: parsed.text,
+    mentions: parsed.mentions,
+  }) ?? Promise.resolve(undefined);
 }
 
 function extractDocumentLinks(

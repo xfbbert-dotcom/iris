@@ -204,6 +204,9 @@ describe("FeishuMessageEventProcessor", () => {
     const groupVisibleDocumentRegistrar = {
       registerDiscoveredLinks: vi.fn(async () => undefined),
     };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async () => ({ status: "skipped" as const, reason: "not_mentioned" as const })),
+    };
     const runtimeController = {
       canProcessIncomingEvent: vi.fn(() => true),
       canReadGroupContext: vi.fn(() => false),
@@ -213,6 +216,7 @@ describe("FeishuMessageEventProcessor", () => {
       messages,
       documentLinkExtractor,
       groupVisibleDocumentRegistrar,
+      mentionAnswerResponder,
       runtimeController,
     });
 
@@ -222,6 +226,13 @@ describe("FeishuMessageEventProcessor", () => {
     expect(messages.upsertMessage).not.toHaveBeenCalled();
     expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
     expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
+    expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledWith({
+      messageId: "message-1",
+      chatId: "chat-1",
+      senderId: "open-1",
+      text: "Hello",
+      mentions: [],
+    });
   });
 
   it("persists messages but skips document discovery when document reading is disabled", async () => {

@@ -16,6 +16,8 @@ Answer draft runtime must gate stored live chat retrieval through the shared run
 - when `canReadGroupContext(chatId)` is false, do not call the stored live chat provider;
 - keep explicit request-scoped `liveChatMessages` supplied by the caller, because those represent
   the current user request rather than passive historical memory;
+- Feishu message processing may still pass the current parsed message to the mention responder when
+  group-context reading is disabled, while skipping message fact persistence and document discovery;
 - preserve existing behavior when no runtime controller is supplied, so unit and development
   compositions remain simple.
 
@@ -29,4 +31,6 @@ Answer draft runtime must gate stored live chat retrieval through the shared run
 
 - Disabling group-context reading keeps stored live chat history out of answer prompts.
 - The current explicit request context can still be included in answer prompts.
+- The current message can still be considered for an @Iris reply without being stored as passive
+  group memory.
 - The live chat provider is not called for disabled group-context reads.
