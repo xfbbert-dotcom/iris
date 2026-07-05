@@ -1,4 +1,4 @@
-import type { RawEvent, RawEventQueue } from "./raw-event-queue.js";
+import type { RawEvent, RawEventFailureResult, RawEventQueue } from "./raw-event-queue.js";
 import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
 
 export type RawEventWorkerResult =
@@ -24,6 +24,7 @@ export type RawEventWorkerDependencies = {
 };
 
 const MAX_RAW_EVENT_WORKER_BATCH_LIMIT = 100;
+const MAX_FAILURE_HANDLER_ATTEMPTS = 3;
 
 export function createRawEventWorker(dependencies: RawEventWorkerDependencies) {
   return {
@@ -41,7 +42,11 @@ export function createRawEventWorker(dependencies: RawEventWorkerDependencies) {
           });
         } catch (error) {
           const errorMessage = normalizeWorkerErrorMessage(error);
-          const retryResult = await dependencies.queue.handleFailedEvent({ event, errorMessage });
+          const retryResult = await handleFailedEventWithRetry({
+            queue: dependencies.queue,
+            event,
+            errorMessage,
+          });
           results.push({
             status: "failed",
             idempotencyKey: event.idempotencyKey,
@@ -56,6 +61,27 @@ export function createRawEventWorker(dependencies: RawEventWorkerDependencies) {
       return results;
     },
   };
+}
+
+async function handleFailedEventWithRetry({
+  queue,
+  event,
+  errorMessage,
+}: {
+  queue: Pick<RawEventQueue, "handleFailedEvent">;
+  event: RawEvent;
+  errorMessage: string;
+}): Promise<RawEventFailureResult> {
+  let latestError: unknown;
+  for (let attempt = 1; attempt <= MAX_FAILURE_HANDLER_ATTEMPTS; attempt += 1) {
+    try {
+      return await queue.handleFailedEvent({ event, errorMessage });
+    } catch (error) {
+      latestError = error;
+    }
+  }
+
+  throw latestError;
 }
 
 function sanitizeLimit(value: number): number {

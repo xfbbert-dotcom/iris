@@ -99,6 +99,42 @@ describe("RawEventWorker", () => {
     ]);
   });
 
+  it("retries transient failure handling errors before continuing the batch", async () => {
+    const first = eventFixture({ idempotencyKey: "raw-event:feishu:event-1" });
+    const second = eventFixture({ idempotencyKey: "raw-event:feishu:event-2" });
+    const queue = {
+      dequeueBatch: vi.fn(async () => [first, second]),
+      handleFailedEvent: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("redis unavailable"))
+        .mockResolvedValueOnce({ action: "requeued" as const, attempts: 1 }),
+    };
+    const processor = {
+      process: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("processor failed"))
+        .mockResolvedValueOnce(undefined),
+    };
+    const worker = createRawEventWorker({ queue, processor });
+
+    await expect(worker.processBatch({ limit: 10 })).resolves.toEqual([
+      {
+        status: "failed",
+        idempotencyKey: "raw-event:feishu:event-1",
+        eventType: "im.message.receive_v1",
+        errorMessage: "processor failed",
+        retryAction: "requeued",
+        attempts: 1,
+      },
+      {
+        status: "processed",
+        idempotencyKey: "raw-event:feishu:event-2",
+        eventType: "im.message.receive_v1",
+      },
+    ]);
+    expect(queue.handleFailedEvent).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds failed event error messages before returning and requeueing", async () => {
     const event = eventFixture({ idempotencyKey: "raw-event:feishu:oversized-error" });
     const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
