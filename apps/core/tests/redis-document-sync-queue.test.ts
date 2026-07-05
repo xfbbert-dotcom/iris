@@ -103,10 +103,14 @@ describe("RedisDocumentSyncQueue", () => {
 
     await queue.handleProcessedJob(syncJob);
 
-    expect(client.sRem).toHaveBeenCalledWith(
-      "iris:documents:sync:seen",
-      syncJob.idempotencyKey,
+    expect(client.eval).toHaveBeenLastCalledWith(
+      expect.stringContaining("SREM"),
+      {
+        keys: ["iris:documents:sync:processing", "iris:documents:sync:seen"],
+        arguments: [serializeDocumentSyncJob(syncJob), syncJob.idempotencyKey],
+      },
     );
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("moves dequeued Redis document sync jobs into the processing list before ACK", async () => {
@@ -135,7 +139,7 @@ describe("RedisDocumentSyncQueue", () => {
   it("removes processed Redis document sync jobs from the processing list on ACK", async () => {
     const syncJob = job({ documentSourceId: "source-processed" });
     const client: RedisDocumentSyncQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn(async () => 1),
       rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
@@ -147,15 +151,16 @@ describe("RedisDocumentSyncQueue", () => {
 
     await queue.handleProcessedJob(syncJob);
 
-    expect(client.lRem).toHaveBeenCalledWith(
-      "iris:documents:sync:processing",
-      1,
-      serializeDocumentSyncJob(syncJob),
+    expect(client.eval).toHaveBeenCalledWith(
+      expect.stringContaining("LREM"),
+      {
+        keys: ["iris:documents:sync:processing", "iris:documents:sync:seen"],
+        arguments: [serializeDocumentSyncJob(syncJob), syncJob.idempotencyKey],
+      },
     );
-    expect(client.sRem).toHaveBeenCalledWith(
-      "iris:documents:sync:seen",
-      syncJob.idempotencyKey,
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SREM"), expect.anything());
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("recovers abandoned Redis processing jobs before dequeueing new work", async () => {

@@ -34,6 +34,13 @@ end
 return nil
 `;
 
+const ACK_PROCESSED_SCRIPT = `
+if redis.call("LREM", KEYS[1], 1, ARGV[1]) > 0 then
+  return redis.call("SREM", KEYS[2], ARGV[2])
+end
+return 0
+`;
+
 const RECOVER_PROCESSING_SCRIPT = `
 local recovered = 0
 local payload = redis.call("RPOP", KEYS[1])
@@ -173,10 +180,7 @@ export function createRedisDocumentReindexQueue({
     },
 
     async handleProcessedJob(job: DocumentReindexJob): Promise<void> {
-      const payload = serializeDocumentReindexJob(job);
-      const normalizedJob = parseDocumentReindexJob(payload);
-      await client.lRem(processingKey, 1, payload);
-      await client.sRem(seenKey, normalizedJob.idempotencyKey);
+      await acknowledgeProcessedSerializedJob(client, processingKey, seenKey, job);
     },
 
     getPendingCount() {
@@ -292,6 +296,20 @@ async function dequeueSerializedJob(
   });
 
   return typeof result === "string" ? result : null;
+}
+
+async function acknowledgeProcessedSerializedJob(
+  client: RedisDocumentReindexQueueClient,
+  processingKey: string,
+  seenKey: string,
+  job: DocumentReindexJob,
+): Promise<void> {
+  const payload = serializeDocumentReindexJob(job);
+  const normalizedJob = parseDocumentReindexJob(payload);
+  await client.eval(ACK_PROCESSED_SCRIPT, {
+    keys: [processingKey, seenKey],
+    arguments: [payload, normalizedJob.idempotencyKey],
+  });
 }
 
 async function upsertRetryingSerializedJob(

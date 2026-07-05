@@ -193,10 +193,14 @@ describe("RedisRawEventQueue", () => {
     expect(client.sRem).not.toHaveBeenCalled();
     await queue.handleProcessedEvent(event);
 
-    expect(client.sRem).toHaveBeenCalledWith(
-      "iris:events:raw:seen",
-      event.idempotencyKey,
+    expect(client.eval).toHaveBeenLastCalledWith(
+      expect.stringContaining("SREM"),
+      {
+        keys: ["iris:events:raw:processing", "iris:events:raw:seen"],
+        arguments: [serializeRawEvent(event), event.idempotencyKey],
+      },
     );
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("moves dequeued Redis raw events into the processing list before ACK", async () => {
@@ -225,7 +229,7 @@ describe("RedisRawEventQueue", () => {
   it("removes processed Redis raw events from the processing list on ACK", async () => {
     const event = eventFixture({ idempotencyKey: "raw-event:feishu:event-processed" });
     const client: RedisRawEventQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn(async () => 1),
       rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
@@ -237,15 +241,16 @@ describe("RedisRawEventQueue", () => {
 
     await queue.handleProcessedEvent(event);
 
-    expect(client.lRem).toHaveBeenCalledWith(
-      "iris:events:raw:processing",
-      1,
-      serializeRawEvent(event),
+    expect(client.eval).toHaveBeenCalledWith(
+      expect.stringContaining("LREM"),
+      {
+        keys: ["iris:events:raw:processing", "iris:events:raw:seen"],
+        arguments: [serializeRawEvent(event), event.idempotencyKey],
+      },
     );
-    expect(client.sRem).toHaveBeenCalledWith(
-      "iris:events:raw:seen",
-      event.idempotencyKey,
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SREM"), expect.anything());
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("recovers abandoned Redis processing events before dequeueing new work", async () => {

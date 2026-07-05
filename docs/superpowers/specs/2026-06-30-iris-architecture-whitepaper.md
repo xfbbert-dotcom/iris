@@ -1374,6 +1374,37 @@ list recovery model with a leased queue adapter. The adapter must make
 ownership explicit, recover only expired leases, and preserve current
 idempotency, retry, and dead-letter guarantees.
 
+### 12.28 Redis Processed ACK Must Be Atomic
+
+Pressure:
+
+After a worker successfully processes a Redis-backed raw event, document sync
+job, or reindex job, Iris must remove the processing payload and release the
+corresponding idempotency key. If those two Redis mutations are issued as
+separate commands, a transient failure after processing-list removal but before
+seen-key release can strand the idempotency key without any queued or
+processing payload. Future work with the same key may then be blocked even
+though there is nothing left to process or recover.
+
+Required architectural response:
+
+- Successful Redis ACK for raw events, document sync jobs, and reindex jobs must
+  remove the processing payload and release the seen key in one Redis eval/Lua
+  operation.
+- ACK must release the seen key only after the exact processing payload is
+  removed, so a missing or already-recovered processing item cannot unlock a
+  queued duplicate.
+- Dequeue must continue to keep seen keys claimed until successful ACK.
+- Failed processing paths still own retry/DLQ state transitions and must not
+  rely on successful ACK cleanup.
+- The single-consumer v1 recovery contract remains unchanged.
+
+Evolution signal:
+
+When Iris moves to a leased queue adapter, processed ACK must remain a single
+adapter-level commit that clears in-flight ownership and idempotency state
+together.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

@@ -107,10 +107,14 @@ describe("RedisDocumentReindexQueue", () => {
 
     await queue.handleProcessedJob(job);
 
-    expect(client.sRem).toHaveBeenCalledWith(
-      "iris:reindex:documents:seen",
-      job.idempotencyKey,
+    expect(client.eval).toHaveBeenLastCalledWith(
+      expect.stringContaining("SREM"),
+      {
+        keys: ["iris:reindex:documents:processing", "iris:reindex:documents:seen"],
+        arguments: [serializeDocumentReindexJob(job), job.idempotencyKey],
+      },
     );
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("moves dequeued Redis document reindex jobs into the processing list before ACK", async () => {
@@ -139,7 +143,7 @@ describe("RedisDocumentReindexQueue", () => {
   it("removes processed Redis document reindex jobs from the processing list on ACK", async () => {
     const job = jobFixture({ documentSnapshotId: "snapshot-processed" });
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn(async () => 1),
       rPush: vi.fn(),
       lLen: vi.fn(),
       lRange: vi.fn(),
@@ -151,15 +155,16 @@ describe("RedisDocumentReindexQueue", () => {
 
     await queue.handleProcessedJob(job);
 
-    expect(client.lRem).toHaveBeenCalledWith(
-      "iris:reindex:documents:processing",
-      1,
-      serializeDocumentReindexJob(job),
+    expect(client.eval).toHaveBeenCalledWith(
+      expect.stringContaining("LREM"),
+      {
+        keys: ["iris:reindex:documents:processing", "iris:reindex:documents:seen"],
+        arguments: [serializeDocumentReindexJob(job), job.idempotencyKey],
+      },
     );
-    expect(client.sRem).toHaveBeenCalledWith(
-      "iris:reindex:documents:seen",
-      job.idempotencyKey,
-    );
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SREM"), expect.anything());
+    expect(client.lRem).not.toHaveBeenCalled();
+    expect(client.sRem).not.toHaveBeenCalled();
   });
 
   it("recovers abandoned Redis processing jobs before dequeueing new work", async () => {

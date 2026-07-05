@@ -40,6 +40,13 @@ end
 return nil
 `;
 
+const ACK_PROCESSED_SCRIPT = `
+if redis.call("LREM", KEYS[1], 1, ARGV[1]) > 0 then
+  return redis.call("SREM", KEYS[2], ARGV[2])
+end
+return 0
+`;
+
 const RECOVER_PROCESSING_SCRIPT = `
 local recovered = 0
 local payload = redis.call("RPOP", KEYS[1])
@@ -179,10 +186,7 @@ export function createRedisRawEventQueue({
     },
 
     async handleProcessedEvent(event: RawEvent): Promise<void> {
-      const payload = serializeRawEvent(event);
-      const normalizedEvent = parseRawEvent(payload);
-      await client.lRem(processingKey, 1, payload);
-      await client.sRem(seenKey, normalizedEvent.idempotencyKey);
+      await acknowledgeProcessedSerializedRawEvent(client, processingKey, seenKey, event);
     },
 
     async handleFailedEvent(input: RawEventFailureInput): Promise<RawEventFailureResult> {
@@ -296,6 +300,20 @@ async function dequeueSerializedRawEvent(
   });
 
   return typeof result === "string" ? result : null;
+}
+
+async function acknowledgeProcessedSerializedRawEvent(
+  client: RedisRawEventQueueClient,
+  processingKey: string,
+  seenKey: string,
+  event: RawEvent,
+): Promise<void> {
+  const payload = serializeRawEvent(event);
+  const normalizedEvent = parseRawEvent(payload);
+  await client.eval(ACK_PROCESSED_SCRIPT, {
+    keys: [processingKey, seenKey],
+    arguments: [payload, normalizedEvent.idempotencyKey],
+  });
 }
 
 async function upsertRetryingSerializedRawEvent(
