@@ -108,6 +108,11 @@ export function createDocumentSyncRunner({
 
       const initialRejectionReason = getSyncRejectionReason(source);
       if (initialRejectionReason !== undefined) {
+        if (source.syncState === "syncing") {
+          const restoredSource = await registry.markSyncState(source.id, "pending");
+          return { status: "rejected", source: restoredSource, reason: initialRejectionReason };
+        }
+
         return { status: "rejected", source, reason: initialRejectionReason };
       }
 

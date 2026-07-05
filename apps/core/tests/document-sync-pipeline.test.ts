@@ -764,6 +764,77 @@ describe("createDocumentSyncRunner", () => {
     expect(registry.markSyncState).not.toHaveBeenCalled();
   });
 
+  it("restores stale syncing denied sources to pending before rejecting them", async () => {
+    const deniedSyncing = source({
+      id: "source-denied-while-syncing",
+      permissionState: "denied",
+      syncState: "syncing",
+    });
+    const restoredDenied = source({
+      id: deniedSyncing.id,
+      permissionState: "denied",
+      syncState: "pending",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => deniedSyncing),
+      markSyncState: vi.fn(async (_id: string, syncState: string) =>
+        source({
+          id: deniedSyncing.id,
+          permissionState: "denied",
+          syncState: syncState as DocumentSource["syncState"],
+        }),
+      ),
+    };
+    const { runner, fetcher, snapshots } = runnerWith({ registry });
+
+    await expect(runner.syncSourceById(deniedSyncing.id)).resolves.toEqual({
+      status: "rejected",
+      source: restoredDenied,
+      reason: "permission_denied",
+    });
+    expect(registry.markSyncState).toHaveBeenCalledWith(deniedSyncing.id, "pending");
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(snapshots.insertSucceededSnapshot).not.toHaveBeenCalled();
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("restores stale syncing disabled sources to pending before rejecting them", async () => {
+    const disabledSyncing = source({
+      id: "source-disabled-while-syncing",
+      syncState: "syncing",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const restoredDisabled = source({
+      id: disabledSyncing.id,
+      syncState: "pending",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => disabledSyncing),
+      markSyncState: vi.fn(async (_id: string, syncState: string) =>
+        source({
+          id: disabledSyncing.id,
+          syncState: syncState as DocumentSource["syncState"],
+          canUseForAnswering: false,
+          canUseForKnowledgeDrafts: false,
+        }),
+      ),
+    };
+    const { runner, fetcher, snapshots } = runnerWith({ registry });
+
+    await expect(runner.syncSourceById(disabledSyncing.id)).resolves.toEqual({
+      status: "rejected",
+      source: restoredDisabled,
+      reason: "capability_disabled",
+    });
+    expect(registry.markSyncState).toHaveBeenCalledWith(disabledSyncing.id, "pending");
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(snapshots.insertSucceededSnapshot).not.toHaveBeenCalled();
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+  });
+
   it("skips sources that are already syncing without fetching", async () => {
     const syncingSource = source({ syncState: "syncing" });
     const registry = registryReturning(syncingSource);
