@@ -196,7 +196,7 @@ describe("RedisRawEventQueue", () => {
     );
   });
 
-  it("treats non-finite dequeue limits as zero", async () => {
+  it("rejects non-finite dequeue limits before popping Redis events", async () => {
     const client: RedisRawEventQueueClient = {
       eval: vi.fn(),
       rPush: vi.fn(),
@@ -208,8 +208,12 @@ describe("RedisRawEventQueue", () => {
     };
     const queue = createRedisRawEventQueue({ client });
 
-    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).resolves.toEqual([]);
-    await expect(queue.dequeueBatch(Number.NaN)).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).rejects.toThrow(
+      "raw event queue limit must be a finite safe-magnitude number",
+    );
+    await expect(queue.dequeueBatch(Number.NaN)).rejects.toThrow(
+      "raw event queue limit must be a finite safe-magnitude number",
+    );
     expect(client.lPop).not.toHaveBeenCalled();
   });
 

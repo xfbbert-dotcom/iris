@@ -16,7 +16,7 @@ describe("RawEventWorker", () => {
     ]);
   });
 
-  it("sanitizes non-finite batch limits to zero", async () => {
+  it("rejects non-finite batch limits before dequeuing events", async () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),
       handleFailedEvent: vi.fn(),
@@ -26,11 +26,14 @@ describe("RawEventWorker", () => {
       processor: { process: vi.fn(async () => undefined) },
     });
 
-    await expect(worker.processBatch({ limit: Number.POSITIVE_INFINITY })).resolves.toEqual([]);
-    await expect(worker.processBatch({ limit: Number.NaN })).resolves.toEqual([]);
+    await expect(worker.processBatch({ limit: Number.POSITIVE_INFINITY })).rejects.toThrow(
+      "raw event worker batch limit must be a finite safe-magnitude number",
+    );
+    await expect(worker.processBatch({ limit: Number.NaN })).rejects.toThrow(
+      "raw event worker batch limit must be a finite safe-magnitude number",
+    );
 
-    expect(queue.dequeueBatch).toHaveBeenNthCalledWith(1, 0);
-    expect(queue.dequeueBatch).toHaveBeenNthCalledWith(2, 0);
+    expect(queue.dequeueBatch).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe batch limits before dequeuing events", async () => {

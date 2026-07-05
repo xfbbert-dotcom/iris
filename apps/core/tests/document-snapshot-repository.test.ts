@@ -474,7 +474,7 @@ describe("DocumentSnapshotRepository", () => {
     ).resolves.toEqual([]);
   });
 
-  it("treats non-finite missing-profile limits as empty results without querying snapshots", async () => {
+  it("rejects non-finite missing-profile limits without querying snapshots", async () => {
     const query = vi.fn(async () => ({ rows: [] }));
     const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
 
@@ -483,13 +483,13 @@ describe("DocumentSnapshotRepository", () => {
         embeddingProfileId: "profile-1536",
         limit: Number.POSITIVE_INFINITY,
       }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("snapshot missing-profile limit must be a finite safe-magnitude number");
     await expect(
       repository.listSuccessfulSnapshotsMissingProfile({
         embeddingProfileId: "profile-1536",
         limit: Number.NaN,
       }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("snapshot missing-profile limit must be a finite safe-magnitude number");
     expect(query).not.toHaveBeenCalled();
   });
 

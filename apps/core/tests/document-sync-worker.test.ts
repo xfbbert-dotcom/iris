@@ -182,6 +182,25 @@ describe("DocumentSyncWorker", () => {
     expect(queue.dequeueBatch).not.toHaveBeenCalled();
   });
 
+  it("rejects non-finite batch limits before dequeuing jobs", async () => {
+    const queue = {
+      dequeueBatch: vi.fn(async () => []),
+      handleFailedJob: vi.fn(),
+    };
+    const worker = createDocumentSyncWorker({
+      queue,
+      runner: { syncSourceById: vi.fn() },
+    });
+
+    await expect(worker.processBatch({ limit: Number.POSITIVE_INFINITY })).rejects.toThrow(
+      "document sync worker batch limit must be a finite safe-magnitude number",
+    );
+    await expect(worker.processBatch({ limit: Number.NaN })).rejects.toThrow(
+      "document sync worker batch limit must be a finite safe-magnitude number",
+    );
+    expect(queue.dequeueBatch).not.toHaveBeenCalled();
+  });
+
   it("caps oversized batch limits before dequeuing jobs", async () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),

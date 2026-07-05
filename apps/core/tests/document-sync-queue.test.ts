@@ -48,6 +48,21 @@ describe("DocumentSyncQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([syncJob]);
   });
 
+  it("rejects non-finite dequeue limits without consuming jobs", async () => {
+    const queue = createInMemoryDocumentSyncQueue();
+    const syncJob = job();
+
+    await queue.enqueue(syncJob);
+
+    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).rejects.toThrow(
+      "document sync queue limit must be a finite safe-magnitude number",
+    );
+    await expect(queue.dequeueBatch(Number.NaN)).rejects.toThrow(
+      "document sync queue limit must be a finite safe-magnitude number",
+    );
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([syncJob]);
+  });
+
   it("caps oversized dequeue limits", async () => {
     const queue = createInMemoryDocumentSyncQueue();
     for (let index = 0; index < 101; index += 1) {
@@ -170,6 +185,23 @@ describe("DocumentSyncQueue", () => {
     await queue.handleFailedJob({ job: job(), errorMessage: "runner crashed" });
 
     await expect(queue.listDeadLetters({ limit: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow(
+      "document sync queue limit must be a finite safe-magnitude number",
+    );
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toHaveLength(1);
+  });
+
+  it("rejects non-finite in-memory DLQ list limits", async () => {
+    const queue = createInMemoryDocumentSyncQueue({
+      maxAttempts: 1,
+      idGenerator: () => "dlq-1",
+    });
+
+    await queue.handleFailedJob({ job: job(), errorMessage: "runner crashed" });
+
+    await expect(queue.listDeadLetters({ limit: Number.POSITIVE_INFINITY })).rejects.toThrow(
+      "document sync queue limit must be a finite safe-magnitude number",
+    );
+    await expect(queue.listDeadLetters({ limit: Number.NaN })).rejects.toThrow(
       "document sync queue limit must be a finite safe-magnitude number",
     );
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toHaveLength(1);

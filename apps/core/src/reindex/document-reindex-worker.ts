@@ -69,12 +69,8 @@ export function createDocumentReindexWorker(dependencies: DocumentReindexWorkerD
 }
 
 function sanitizeLimit(value: number): number {
-  if (Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+  if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
     throw new Error("document reindex worker batch limit must be a finite safe-magnitude number");
-  }
-
-  if (!Number.isFinite(value)) {
-    return 0;
   }
 
   return Math.min(MAX_DOCUMENT_REINDEX_WORKER_BATCH_LIMIT, Math.max(0, Math.floor(value)));

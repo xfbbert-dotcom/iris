@@ -80,13 +80,15 @@ describe("InMemoryRawEventQueue", () => {
     ]);
   });
 
-  it("treats non-finite dequeue limits as zero", async () => {
+  it("rejects non-finite dequeue limits without consuming events", async () => {
     const queue = new InMemoryRawEventQueue();
     const event = eventFixture();
 
     await queue.enqueue(event);
 
-    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).rejects.toThrow(
+      "raw event queue limit must be a finite safe-magnitude number",
+    );
     await expect(queue.dequeueBatch(1)).resolves.toEqual([event]);
   });
 

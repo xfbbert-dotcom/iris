@@ -32,7 +32,7 @@ describe("DocumentReindexWorker", () => {
     expect(indexer.indexSnapshot).toHaveBeenCalledWith(snapshot({ id: "snapshot-1" }));
   });
 
-  it("sanitizes non-finite batch limits to zero", async () => {
+  it("rejects non-finite batch limits before dequeuing jobs", async () => {
     const queue = queueFixture([]);
     const worker = createDocumentReindexWorker({
       queue,
@@ -41,11 +41,14 @@ describe("DocumentReindexWorker", () => {
       indexer: { indexSnapshot: vi.fn() },
     });
 
-    await expect(worker.processBatch({ limit: Number.POSITIVE_INFINITY })).resolves.toEqual([]);
-    await expect(worker.processBatch({ limit: Number.NaN })).resolves.toEqual([]);
+    await expect(worker.processBatch({ limit: Number.POSITIVE_INFINITY })).rejects.toThrow(
+      "document reindex worker batch limit must be a finite safe-magnitude number",
+    );
+    await expect(worker.processBatch({ limit: Number.NaN })).rejects.toThrow(
+      "document reindex worker batch limit must be a finite safe-magnitude number",
+    );
 
-    expect(queue.dequeueBatch).toHaveBeenNthCalledWith(1, 0);
-    expect(queue.dequeueBatch).toHaveBeenNthCalledWith(2, 0);
+    expect(queue.dequeueBatch).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe batch limits before dequeuing jobs", async () => {

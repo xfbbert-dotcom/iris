@@ -129,7 +129,7 @@ describe("RedisDocumentReindexQueue", () => {
     expect(client.lPop).toHaveBeenCalledTimes(1);
   });
 
-  it("treats non-finite dequeue limits as zero", async () => {
+  it("rejects non-finite dequeue limits before popping Redis jobs", async () => {
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(),
       rPush: vi.fn(),
@@ -141,8 +141,12 @@ describe("RedisDocumentReindexQueue", () => {
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
-    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).resolves.toEqual([]);
-    await expect(queue.dequeueBatch(Number.NaN)).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).rejects.toThrow(
+      "document reindex queue limit must be a finite safe-magnitude number",
+    );
+    await expect(queue.dequeueBatch(Number.NaN)).rejects.toThrow(
+      "document reindex queue limit must be a finite safe-magnitude number",
+    );
     expect(client.lPop).not.toHaveBeenCalled();
   });
 
@@ -514,7 +518,7 @@ describe("RedisDocumentReindexQueue", () => {
     expect(client.lRange).toHaveBeenCalledWith("iris:reindex:documents:dlq", 0, 99);
   });
 
-  it("treats non-finite Redis DLQ list limits as zero", async () => {
+  it("rejects non-finite Redis DLQ list limits before reading Redis", async () => {
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(),
       rPush: vi.fn(),
@@ -526,8 +530,12 @@ describe("RedisDocumentReindexQueue", () => {
     };
     const queue = createRedisDocumentReindexQueue({ client });
 
-    await expect(queue.listDeadLetters({ limit: Number.POSITIVE_INFINITY })).resolves.toEqual([]);
-    await expect(queue.listDeadLetters({ limit: Number.NaN })).resolves.toEqual([]);
+    await expect(queue.listDeadLetters({ limit: Number.POSITIVE_INFINITY })).rejects.toThrow(
+      "document reindex queue limit must be a finite safe-magnitude number",
+    );
+    await expect(queue.listDeadLetters({ limit: Number.NaN })).rejects.toThrow(
+      "document reindex queue limit must be a finite safe-magnitude number",
+    );
     expect(client.lRange).not.toHaveBeenCalled();
   });
 

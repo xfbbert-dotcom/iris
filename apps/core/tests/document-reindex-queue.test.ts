@@ -56,13 +56,15 @@ describe("InMemoryDocumentReindexQueue", () => {
     ]);
   });
 
-  it("treats non-finite dequeue limits as zero", async () => {
+  it("rejects non-finite dequeue limits without consuming jobs", async () => {
     const queue = new InMemoryDocumentReindexQueue();
     const job = jobFixture();
 
     await queue.enqueue(job);
 
-    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).rejects.toThrow(
+      "document reindex queue limit must be a finite safe-magnitude number",
+    );
     await expect(queue.dequeueBatch(1)).resolves.toEqual([job]);
   });
 
@@ -244,7 +246,7 @@ describe("InMemoryDocumentReindexQueue", () => {
     ]);
   });
 
-  it("treats non-finite dead-letter list limits as zero", async () => {
+  it("rejects non-finite dead-letter list limits", async () => {
     const queue = new InMemoryDocumentReindexQueue({
       maxAttempts: 1,
       idGenerator: () => "dlq-1",
@@ -253,7 +255,9 @@ describe("InMemoryDocumentReindexQueue", () => {
 
     await queue.handleFailedJob({ job: jobFixture(), errorMessage: "embedding failed" });
 
-    await expect(queue.listDeadLetters({ limit: Number.POSITIVE_INFINITY })).resolves.toEqual([]);
+    await expect(queue.listDeadLetters({ limit: Number.POSITIVE_INFINITY })).rejects.toThrow(
+      "document reindex queue limit must be a finite safe-magnitude number",
+    );
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toHaveLength(1);
   });
 
