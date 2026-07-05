@@ -1283,6 +1283,34 @@ should remain at the boundary where unknown dependency failures enter the
 document sync state machine. The v1 contract remains that a fetch failure should
 be visible as a failed snapshot whenever snapshot persistence itself is healthy.
 
+### 12.25 Permission Guard Error Audits Need Safe Messages
+
+Pressure:
+
+Answer-time permission checks are fail-closed: if the live guard cannot verify a
+document, Iris excludes the fragment. Operators still need to know whether the
+exclusion was an ordinary denial or an infrastructure/error path. If a
+permission checker throws a non-`Error` value and Iris omits the message, the
+audit log loses useful diagnostics.
+
+Required architectural response:
+
+- Permission guard audit logging must record a safe message for any thrown
+  permission-check failure.
+- Standard `Error` values should keep using their message.
+- Non-standard thrown values may be stringified when safe, but values that
+  cannot be stringified must degrade to `unknown error`.
+- Ordinary `permission_guard_denied` events should remain message-free unless a
+  real error occurred.
+- Audit logging remains best-effort; audit storage failures must not affect
+  fail-closed permission filtering.
+
+Evolution signal:
+
+If Iris later wraps every integration failure in typed errors, this safe-message
+reader can become a legacy compatibility boundary. The v1 contract remains that
+permission guard errors are both safe and diagnosable.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

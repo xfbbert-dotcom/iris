@@ -182,6 +182,31 @@ describe("filterFragmentsByLivePermission", () => {
     expect(event.message).not.toContain("trailing diagnostic detail");
   });
 
+  it("records non-Error permission failures with a safe audit message", async () => {
+    const fragments = [{ id: "frag-1", documentId: "doc-weird", text: "Uncertain content" }];
+    const auditLog = new InMemoryAuditLog();
+
+    const result = await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async () => {
+        throw Object.create(null);
+      },
+      auditLog,
+    });
+
+    expect(result.allowedFragments).toEqual([]);
+    expect(result.deniedDocumentIds).toEqual(["doc-weird"]);
+    expect(auditLog.events).toEqual([
+      {
+        type: "permission_guard_error",
+        documentId: "doc-weird",
+        fragmentIds: ["frag-1"],
+        message: "unknown error",
+        recordedAt: expect.any(Date),
+      },
+    ]);
+  });
+
   it("does not fail permission filtering when audit recording fails", async () => {
     const fragments = [
       { id: "frag-1", documentId: "doc-denied", text: "Denied content A" },
