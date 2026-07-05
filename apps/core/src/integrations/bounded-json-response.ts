@@ -40,6 +40,8 @@ async function readBoundedResponseText(
   maxResponseBytes: number,
   errorMessage: string,
 ): Promise<string | undefined> {
+  rejectOversizedKnownResponse(response, maxResponseBytes, errorMessage);
+
   const body = response.body;
   if (body !== undefined && body !== null) {
     return readBoundedReadableStream(body, maxResponseBytes, errorMessage);
@@ -55,6 +57,27 @@ async function readBoundedResponseText(
   }
 
   return undefined;
+}
+
+function rejectOversizedKnownResponse(
+  response: Response,
+  maxResponseBytes: number,
+  errorMessage: string,
+): void {
+  const contentLength = response.headers?.get("content-length");
+  if (contentLength === undefined || contentLength === null) {
+    return;
+  }
+
+  const trimmed = contentLength.trim();
+  if (!/^\d+$/u.test(trimmed)) {
+    return;
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed > maxResponseBytes) {
+    throw new ResponseSizeError(errorMessage);
+  }
 }
 
 async function readBoundedReadableStream(
