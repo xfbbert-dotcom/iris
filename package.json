@@ -6,6 +6,7 @@
     "apps/core"
   ],
   "scripts": {
+    "readiness": "npm --workspace apps/core run readiness",
     "test": "npm --workspace apps/core test",
     "test:python": "cd workers/ai && python -m pytest",
     "typecheck": "npm --workspace apps/core run typecheck",

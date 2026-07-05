@@ -165,6 +165,14 @@ Mention replies require both internal answer drafting and the `replyWhenMentione
 capability. If Iris is globally disabled, the group is disabled, or `replyWhenMentioned` is false,
 Iris will store allowed message facts but will not answer in Feishu.
 
+Before starting the internal rollout, run the same readiness profile locally:
+
+```powershell
+npm run readiness
+```
+
+The command prints the readiness JSON and exits with code `1` when any blocking check fails.
+
 Run Core:
 
 ```powershell
