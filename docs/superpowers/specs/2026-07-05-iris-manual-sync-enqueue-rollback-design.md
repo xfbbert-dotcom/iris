@@ -16,7 +16,10 @@ wait for a sync that cannot run.
   process them.
 - If enqueue fails after such a reset, Iris attempts to restore the previous sync state.
 - The original queue error remains the surfaced error, even if best-effort restoration fails.
-- Permission-denied, capability-disabled, missing, and already-syncing behavior is unchanged.
+- Ordinary permission-denied, capability-disabled, missing, and already-syncing behavior is
+  unchanged.
+- If a denied or fully disabled source is already stuck in `syncing`, manual sync restores it to
+  `pending` before returning the rejection and does not enqueue work.
 
 ## Non-goals
 
@@ -27,4 +30,5 @@ wait for a sync that cannot run.
 ## Verification
 
 Focused planner tests must prove the queue-failure rollback path, plus the existing manual enqueue
-paths for pending, synced, failed, denied, disabled, missing, and already-syncing sources.
+paths for pending, synced, failed, denied, disabled, missing, and already-syncing sources. They must
+also prove stale `syncing` rejected sources are restored to `pending` without enqueueing a job.

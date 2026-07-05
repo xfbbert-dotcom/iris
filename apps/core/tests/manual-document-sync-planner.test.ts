@@ -192,6 +192,43 @@ describe("ManualDocumentSyncPlanner", () => {
     expect(queue.enqueue).not.toHaveBeenCalled();
   });
 
+  it("restores stale syncing denied sources to pending before rejecting them", async () => {
+    const queue = { enqueue: vi.fn(async () => undefined) };
+    const registry = registryWith(
+      source({ id: "denied", permissionState: "denied", syncState: "syncing" }),
+    );
+    const planner = createManualDocumentSyncPlanner({ registry, queue });
+
+    await expect(planner.enqueueSource({ documentSourceId: "denied" })).resolves.toEqual({
+      status: "rejected",
+      documentSourceId: "denied",
+      reason: "permission_denied",
+    });
+    expect(registry.markSyncState).toHaveBeenCalledWith("denied", "pending");
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("restores stale syncing disabled sources to pending before rejecting them", async () => {
+    const queue = { enqueue: vi.fn(async () => undefined) };
+    const registry = registryWith(
+      source({
+        id: "disabled",
+        syncState: "syncing",
+        canUseForAnswering: false,
+        canUseForKnowledgeDrafts: false,
+      }),
+    );
+    const planner = createManualDocumentSyncPlanner({ registry, queue });
+
+    await expect(planner.enqueueSource({ documentSourceId: "disabled" })).resolves.toEqual({
+      status: "rejected",
+      documentSourceId: "disabled",
+      reason: "capability_disabled",
+    });
+    expect(registry.markSyncState).toHaveBeenCalledWith("disabled", "pending");
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
   it("skips sources that are already syncing", async () => {
     const queue = { enqueue: vi.fn(async () => undefined) };
     const registry = registryWith(source({ id: "source-1", syncState: "syncing" }));

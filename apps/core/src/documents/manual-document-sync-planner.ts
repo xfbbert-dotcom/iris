@@ -45,6 +45,10 @@ export function createManualDocumentSyncPlanner({
       }
 
       if (source.permissionState === "denied") {
+        if (source.syncState === "syncing") {
+          await registry.markSyncState(normalizedDocumentSourceId, "pending");
+        }
+
         return {
           status: "rejected",
           documentSourceId: normalizedDocumentSourceId,
@@ -53,6 +57,10 @@ export function createManualDocumentSyncPlanner({
       }
 
       if (!source.canUseForAnswering && !source.canUseForKnowledgeDrafts) {
+        if (source.syncState === "syncing") {
+          await registry.markSyncState(normalizedDocumentSourceId, "pending");
+        }
+
         return {
           status: "rejected",
           documentSourceId: normalizedDocumentSourceId,
