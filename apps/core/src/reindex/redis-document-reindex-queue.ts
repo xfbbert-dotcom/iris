@@ -69,6 +69,29 @@ end
 return redis.call("RPUSH", KEYS[2], ARGV[2])
 `;
 
+const ACK_RETRY_SCRIPT = `
+if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then
+  redis.call("RPUSH", KEYS[2], ARGV[2])
+else
+  local queued = redis.call("LRANGE", KEYS[2], 0, -1)
+  local updated = 0
+  for index, payload in ipairs(queued) do
+    local ok, decoded = pcall(cjson.decode, payload)
+    if ok and decoded["idempotencyKey"] == ARGV[1] then
+      redis.call("LSET", KEYS[2], index - 1, ARGV[2])
+      updated = 1
+      break
+    end
+  end
+
+  if updated == 0 then
+    redis.call("RPUSH", KEYS[2], ARGV[2])
+  end
+end
+
+return redis.call("LREM", KEYS[3], 1, ARGV[3])
+`;
+
 export type RedisDocumentReindexQueueClient = {
   eval(
     script: string,
@@ -209,8 +232,14 @@ export function createRedisDocumentReindexQueue({
         return { action: "dead_lettered", attempts };
       }
 
-      await upsertRetryingSerializedJob(client, seenKey, queueKey, failedJob);
-      await client.lRem(processingKey, 1, originalPayload);
+      await acknowledgeRetryingSerializedJob(
+        client,
+        seenKey,
+        queueKey,
+        processingKey,
+        failedJob,
+        originalPayload,
+      );
       return { action: "requeued", attempts };
     },
 
@@ -323,6 +352,22 @@ async function upsertRetryingSerializedJob(
   await client.eval(UPSERT_RETRY_SCRIPT, {
     keys: [seenKey, queueKey],
     arguments: [normalizedJob.idempotencyKey, payload],
+  });
+}
+
+async function acknowledgeRetryingSerializedJob(
+  client: RedisDocumentReindexQueueClient,
+  seenKey: string,
+  queueKey: string,
+  processingKey: string,
+  job: DocumentReindexJob,
+  originalPayload: string,
+): Promise<void> {
+  const payload = serializeDocumentReindexJob(job);
+  const normalizedJob = parseDocumentReindexJob(payload);
+  await client.eval(ACK_RETRY_SCRIPT, {
+    keys: [seenKey, queueKey, processingKey],
+    arguments: [normalizedJob.idempotencyKey, payload, originalPayload],
   });
 }
 

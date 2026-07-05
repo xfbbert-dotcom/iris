@@ -1405,6 +1405,36 @@ When Iris moves to a leased queue adapter, processed ACK must remain a single
 adapter-level commit that clears in-flight ownership and idempotency state
 together.
 
+### 12.29 Redis Retry ACK Must Be Atomic
+
+Pressure:
+
+When a worker fails a Redis-backed raw event, document sync job, or reindex
+job below the max-attempt threshold, Iris must requeue the retry payload and
+remove the original processing payload. If retry upsert and processing cleanup
+are split across separate commands, a transient failure after requeue can leave
+the same logical work in both pending and processing. The next recovery pass can
+then duplicate retry work or overwrite fresher retry metadata.
+
+Required architectural response:
+
+- Retriable Redis failure handling for raw events, document sync jobs, and
+  reindex jobs must upsert the retry payload and remove the exact processing
+  payload in one Redis eval/Lua operation.
+- Retry upsert must keep existing duplicate-upgrade semantics: update an
+  already queued duplicate when present, otherwise push the retry payload.
+- DLQ replay keeps using retry/upsert semantics but remains separate from
+  processing ACK because DLQ items are not processing-list claims.
+- Dead-letter transitions remain a separate path until a pressure test proves
+  they need a larger atomic transition.
+- The v1 single-consumer recovery contract remains unchanged.
+
+Evolution signal:
+
+When Iris moves to a leased queue adapter, retry ACK must become one
+adapter-level commit that records the retry attempt and clears in-flight
+ownership together.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

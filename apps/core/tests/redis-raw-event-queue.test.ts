@@ -56,11 +56,12 @@ describe("RedisRawEventQueue", () => {
       keys: ["iris:events:raw:seen", "iris:events:raw:queue"],
       arguments: [eventFixture().idempotencyKey, serializeRawEvent(eventFixture())],
     });
-    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("SADD"), {
-      keys: ["iris:events:raw:seen", "iris:events:raw:queue"],
+    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("LREM"), {
+      keys: ["iris:events:raw:seen", "iris:events:raw:queue", "iris:events:raw:processing"],
       arguments: [
         eventFixture().idempotencyKey,
         serializeRawEvent({ ...eventFixture(), attempts: 1 }),
+        serializeRawEvent(eventFixture()),
       ],
     });
   });
@@ -475,10 +476,15 @@ describe("RedisRawEventQueue", () => {
     await expect(
       queue.handleFailedEvent({ event, errorMessage: "processor failed" }),
     ).resolves.toEqual({ action: "requeued", attempts: 1 });
-    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
-      keys: ["iris:events:raw:seen", "iris:events:raw:queue"],
-      arguments: [event.idempotencyKey, serializeRawEvent({ ...event, attempts: 1 })],
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LREM"), {
+      keys: ["iris:events:raw:seen", "iris:events:raw:queue", "iris:events:raw:processing"],
+      arguments: [
+        event.idempotencyKey,
+        serializeRawEvent({ ...event, attempts: 1 }),
+        serializeRawEvent(event),
+      ],
     });
+    expect(client.lRem).not.toHaveBeenCalled();
     expect(client.rPush).not.toHaveBeenCalled();
   });
 

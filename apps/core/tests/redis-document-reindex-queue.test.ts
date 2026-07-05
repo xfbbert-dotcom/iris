@@ -57,11 +57,16 @@ describe("RedisDocumentReindexQueue", () => {
       keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
       arguments: [jobFixture().idempotencyKey, serializeDocumentReindexJob(jobFixture())],
     });
-    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("SADD"), {
-      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("LREM"), {
+      keys: [
+        "iris:reindex:documents:seen",
+        "iris:reindex:documents:queue",
+        "iris:reindex:documents:processing",
+      ],
       arguments: [
         jobFixture().idempotencyKey,
         serializeDocumentReindexJob(jobFixture({ attempts: 1 })),
+        serializeDocumentReindexJob(jobFixture()),
       ],
     });
   });
@@ -494,13 +499,19 @@ describe("RedisDocumentReindexQueue", () => {
     await expect(
       queue.handleFailedJob({ job, errorMessage: "embedding failed" }),
     ).resolves.toEqual({ action: "requeued", attempts: 1 });
-    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
-      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LREM"), {
+      keys: [
+        "iris:reindex:documents:seen",
+        "iris:reindex:documents:queue",
+        "iris:reindex:documents:processing",
+      ],
       arguments: [
         job.idempotencyKey,
         serializeDocumentReindexJob({ ...job, attempts: 1 }),
+        serializeDocumentReindexJob(job),
       ],
     });
+    expect(client.lRem).not.toHaveBeenCalled();
   });
 
   it("upgrades a pending duplicate when the in-flight job fails", async () => {

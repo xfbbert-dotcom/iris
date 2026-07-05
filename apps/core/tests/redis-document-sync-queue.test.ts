@@ -56,9 +56,17 @@ describe("RedisDocumentSyncQueue", () => {
       keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
       arguments: [job().idempotencyKey, serializeDocumentSyncJob(job())],
     });
-    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("SADD"), {
-      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
-      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 1 }))],
+    expect(client.eval).toHaveBeenNthCalledWith(2, expect.stringContaining("LREM"), {
+      keys: [
+        "iris:documents:sync:seen",
+        "iris:documents:sync:queue",
+        "iris:documents:sync:processing",
+      ],
+      arguments: [
+        job().idempotencyKey,
+        serializeDocumentSyncJob(job({ attempts: 1 })),
+        serializeDocumentSyncJob(job()),
+      ],
     });
   });
 
@@ -507,13 +515,19 @@ describe("RedisDocumentSyncQueue", () => {
     await expect(
       queue.handleFailedJob({ job: syncJob, errorMessage: "runner crashed" }),
     ).resolves.toEqual({ action: "requeued", attempts: 1 });
-    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
-      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LREM"), {
+      keys: [
+        "iris:documents:sync:seen",
+        "iris:documents:sync:queue",
+        "iris:documents:sync:processing",
+      ],
       arguments: [
         syncJob.idempotencyKey,
         serializeDocumentSyncJob({ ...syncJob, attempts: 1 }),
+        serializeDocumentSyncJob(syncJob),
       ],
     });
+    expect(client.lRem).not.toHaveBeenCalled();
   });
 
   it("upgrades a pending duplicate when the in-flight job fails", async () => {
