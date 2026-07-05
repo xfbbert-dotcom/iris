@@ -17,7 +17,7 @@ export type RawEventWorkerResult =
     };
 
 export type RawEventWorkerDependencies = {
-  queue: Pick<RawEventQueue, "dequeueBatch" | "handleFailedEvent">;
+  queue: Pick<RawEventQueue, "dequeueBatch" | "handleProcessedEvent" | "handleFailedEvent">;
   processor: {
     process(event: RawEvent): Promise<void>;
   };
@@ -35,6 +35,7 @@ export function createRawEventWorker(dependencies: RawEventWorkerDependencies) {
       for (const event of events) {
         try {
           await dependencies.processor.process(event);
+          await dependencies.queue.handleProcessedEvent(event);
           results.push({
             status: "processed",
             idempotencyKey: event.idempotencyKey,

@@ -47,7 +47,7 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.getPendingCount()).resolves.toBe(0);
   });
 
-  it("releases dequeued event idempotency keys so later retries can enqueue", async () => {
+  it("keeps dequeued event idempotency keys claimed until processing succeeds", async () => {
     const queue = new InMemoryRawEventQueue();
     const event = eventFixture();
 
@@ -55,9 +55,13 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([event]);
 
     await queue.enqueue({ ...event, receivedAt: new Date("2026-07-02T02:00:00.000Z") });
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([]);
+
+    await queue.handleProcessedEvent(event);
+    await queue.enqueue({ ...event, receivedAt: new Date("2026-07-02T03:00:00.000Z") });
 
     await expect(queue.dequeueBatch(1)).resolves.toEqual([
-      { ...event, receivedAt: new Date("2026-07-02T02:00:00.000Z") },
+      { ...event, receivedAt: new Date("2026-07-02T03:00:00.000Z") },
     ]);
   });
 

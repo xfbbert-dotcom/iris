@@ -54,6 +54,7 @@ export const MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH =
 export interface RawEventQueue {
   enqueue(event: RawEvent): Promise<void>;
   dequeueBatch(limit: number): Promise<RawEvent[]>;
+  handleProcessedEvent(event: RawEvent): Promise<void>;
   handleFailedEvent(input: RawEventFailureInput): Promise<RawEventFailureResult>;
   getPendingCount(): Promise<number>;
   getDeadLetterCount(): Promise<number>;

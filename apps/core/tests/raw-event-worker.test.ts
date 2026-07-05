@@ -6,19 +6,27 @@ import { createRawEventWorker } from "../src/events/raw-event-worker.js";
 describe("RawEventWorker", () => {
   it("processes raw events", async () => {
     const event = eventFixture();
+    const queue = {
+      dequeueBatch: vi.fn(async () => [event]),
+      handleProcessedEvent: vi.fn(async () => undefined),
+      handleFailedEvent: vi.fn(),
+    };
     const worker = createRawEventWorker({
-      queue: { dequeueBatch: vi.fn(async () => [event]), handleFailedEvent: vi.fn() },
+      queue,
       processor: { process: vi.fn(async () => undefined) },
     });
 
     await expect(worker.processBatch({ limit: 10 })).resolves.toEqual([
       { status: "processed", idempotencyKey: event.idempotencyKey, eventType: event.eventType },
     ]);
+    expect(queue.handleProcessedEvent).toHaveBeenCalledWith(event);
+    expect(queue.handleFailedEvent).not.toHaveBeenCalled();
   });
 
   it("rejects non-finite batch limits before dequeuing events", async () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),
+      handleProcessedEvent: vi.fn(),
       handleFailedEvent: vi.fn(),
     };
     const worker = createRawEventWorker({
@@ -39,6 +47,7 @@ describe("RawEventWorker", () => {
   it("rejects unsafe batch limits before dequeuing events", async () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),
+      handleProcessedEvent: vi.fn(),
       handleFailedEvent: vi.fn(),
     };
     const worker = createRawEventWorker({
@@ -55,6 +64,7 @@ describe("RawEventWorker", () => {
   it("caps oversized batch limits before dequeuing events", async () => {
     const queue = {
       dequeueBatch: vi.fn(async () => []),
+      handleProcessedEvent: vi.fn(),
       handleFailedEvent: vi.fn(),
     };
     const worker = createRawEventWorker({
@@ -72,6 +82,7 @@ describe("RawEventWorker", () => {
     const second = eventFixture({ idempotencyKey: "raw-event:feishu:event-2" });
     const queue = {
       dequeueBatch: vi.fn(async () => [first, second]),
+      handleProcessedEvent: vi.fn(async () => undefined),
       handleFailedEvent: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
     };
     const processor = {
@@ -104,6 +115,7 @@ describe("RawEventWorker", () => {
     const second = eventFixture({ idempotencyKey: "raw-event:feishu:event-2" });
     const queue = {
       dequeueBatch: vi.fn(async () => [first, second]),
+      handleProcessedEvent: vi.fn(async () => undefined),
       handleFailedEvent: vi
         .fn()
         .mockRejectedValueOnce(new Error("redis unavailable"))
@@ -140,6 +152,7 @@ describe("RawEventWorker", () => {
     const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
     const queue = {
       dequeueBatch: vi.fn(async () => [event]),
+      handleProcessedEvent: vi.fn(async () => undefined),
       handleFailedEvent: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
     };
     const worker = createRawEventWorker({

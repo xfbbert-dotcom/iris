@@ -30,6 +30,7 @@ export type InMemoryRawEventQueueOptions = {
 
 export class InMemoryRawEventQueue implements RawEventQueue {
   private readonly events: RawEvent[] = [];
+  private readonly inFlightEvents = new Map<string, RawEvent>();
   private readonly deadLetters: DeadLetteredRawEvent[] = [];
   private readonly seenKeys = new Set<string>();
   private readonly maxAttempts: number;
@@ -59,15 +60,22 @@ export class InMemoryRawEventQueue implements RawEventQueue {
     const safeLimit = sanitizeLimit(limit);
     const events = this.events.splice(0, safeLimit);
     for (const event of events) {
-      this.seenKeys.delete(event.idempotencyKey);
+      this.inFlightEvents.set(event.idempotencyKey, cloneEvent(event));
     }
 
     return events.map(cloneEvent);
   }
 
+  async handleProcessedEvent(event: RawEvent): Promise<void> {
+    const processedEvent = cloneEvent(event);
+    this.inFlightEvents.delete(processedEvent.idempotencyKey);
+    this.seenKeys.delete(processedEvent.idempotencyKey);
+  }
+
   async handleFailedEvent(input: RawEventFailureInput): Promise<RawEventFailureResult> {
     const attempts = input.event.attempts + 1;
     const failedEvent = cloneEvent({ ...input.event, attempts });
+    this.inFlightEvents.delete(failedEvent.idempotencyKey);
 
     if (attempts >= this.maxAttempts) {
       this.deadLetters.push({
@@ -76,6 +84,7 @@ export class InMemoryRawEventQueue implements RawEventQueue {
         errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
         failedAt: this.now(),
       });
+      this.seenKeys.delete(failedEvent.idempotencyKey);
       return { action: "dead_lettered", attempts };
     }
 

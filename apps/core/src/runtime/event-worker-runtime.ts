@@ -348,7 +348,12 @@ function createLazyRedisDocumentSyncQueueClient(
   return {
     async eval(script, options) {
       const client = await redisConnection;
-      return client.eval(script, options);
+      const result = await client.eval(script, options);
+      if (result === null) {
+        throw new Error("Redis document sync eval returned null");
+      }
+
+      return result;
     },
     async rPush(key, value) {
       const client = await redisConnection;

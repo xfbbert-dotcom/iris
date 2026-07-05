@@ -16,6 +16,7 @@ import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-mes
 
 const DEFAULT_SEEN_KEY = "iris:events:raw:seen";
 const DEFAULT_QUEUE_KEY = "iris:events:raw:queue";
+const DEFAULT_PROCESSING_KEY = "iris:events:raw:processing";
 const DEFAULT_DEAD_LETTER_KEY = "iris:events:raw:dlq";
 const DEFAULT_MAX_ATTEMPTS = 3;
 const FEISHU_RAW_EVENT_IDEMPOTENCY_KEY_PREFIX = createRawEventIdempotencyKey({
@@ -28,6 +29,26 @@ if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then
   return redis.call("RPUSH", KEYS[2], ARGV[2])
 end
 return 0
+`;
+
+const DEQUEUE_SCRIPT = `
+local payload = redis.call("LPOP", KEYS[1])
+if payload then
+  redis.call("RPUSH", KEYS[2], payload)
+  return payload
+end
+return nil
+`;
+
+const RECOVER_PROCESSING_SCRIPT = `
+local recovered = 0
+local payload = redis.call("RPOP", KEYS[1])
+while payload do
+  redis.call("LPUSH", KEYS[2], payload)
+  recovered = recovered + 1
+  payload = redis.call("RPOP", KEYS[1])
+end
+return recovered
 `;
 
 const UPSERT_RETRY_SCRIPT = `
@@ -51,7 +72,7 @@ export type RedisRawEventQueueClient = {
   eval(
     script: string,
     options: { keys: string[]; arguments: string[] },
-  ): Promise<number | string>;
+  ): Promise<number | string | null>;
   rPush(key: string, value: string): Promise<number>;
   lPop(key: string): Promise<string | null>;
   lLen(key: string): Promise<number>;
@@ -64,6 +85,7 @@ export type RedisRawEventQueueOptions = {
   client: RedisRawEventQueueClient;
   seenKey?: string;
   queueKey?: string;
+  processingKey?: string;
   deadLetterKey?: string;
   maxAttempts?: number;
   now?: () => Date;
@@ -74,6 +96,7 @@ export function createRedisRawEventQueue({
   client,
   seenKey = DEFAULT_SEEN_KEY,
   queueKey = DEFAULT_QUEUE_KEY,
+  processingKey = DEFAULT_PROCESSING_KEY,
   deadLetterKey = DEFAULT_DEAD_LETTER_KEY,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   now = () => new Date(),
@@ -122,15 +145,15 @@ export function createRedisRawEventQueue({
       const safeLimit = sanitizeLimit(limit);
       const events: RawEvent[] = [];
 
+      await recoverProcessingEventsIfPresent(client, processingKey, queueKey);
       for (let index = 0; index < safeLimit; index += 1) {
-        const payload = await client.lPop(queueKey);
+        const payload = await dequeueSerializedRawEvent(client, queueKey, processingKey);
         if (payload === null) {
           break;
         }
 
         try {
           const event = parseRawEvent(payload);
-          await client.sRem(seenKey, event.idempotencyKey);
           events.push(event);
         } catch (error) {
           const idempotencyKey = readQueuedRawEventIdempotencyKey(payload);
@@ -145,6 +168,7 @@ export function createRedisRawEventQueue({
               failedAt: now().toISOString(),
             }),
           );
+          await client.lRem(processingKey, 1, payload);
           if (idempotencyKey !== undefined) {
             await client.sRem(seenKey, idempotencyKey);
           }
@@ -154,9 +178,17 @@ export function createRedisRawEventQueue({
       return events;
     },
 
+    async handleProcessedEvent(event: RawEvent): Promise<void> {
+      const payload = serializeRawEvent(event);
+      const normalizedEvent = parseRawEvent(payload);
+      await client.lRem(processingKey, 1, payload);
+      await client.sRem(seenKey, normalizedEvent.idempotencyKey);
+    },
+
     async handleFailedEvent(input: RawEventFailureInput): Promise<RawEventFailureResult> {
       const attempts = input.event.attempts + 1;
       const failedEvent = { ...input.event, attempts };
+      const originalPayload = serializeRawEvent(input.event);
 
       if (attempts >= safeMaxAttempts) {
         await client.rPush(
@@ -168,10 +200,13 @@ export function createRedisRawEventQueue({
             failedAt: now(),
           }),
         );
+        await client.lRem(processingKey, 1, originalPayload);
+        await client.sRem(seenKey, parseRawEvent(originalPayload).idempotencyKey);
         return { action: "dead_lettered", attempts };
       }
 
       await upsertRetryingSerializedRawEvent(client, seenKey, queueKey, failedEvent);
+      await client.lRem(processingKey, 1, originalPayload);
       return { action: "requeued", attempts };
     },
 
@@ -232,6 +267,35 @@ async function enqueueSerializedRawEvent(
     keys: [seenKey, queueKey],
     arguments: [normalizedEvent.idempotencyKey, payload],
   });
+}
+
+async function recoverProcessingEventsIfPresent(
+  client: RedisRawEventQueueClient,
+  processingKey: string,
+  queueKey: string,
+): Promise<void> {
+  const processingCount = await client.lLen(processingKey);
+  if (typeof processingCount !== "number" || processingCount <= 0) {
+    return;
+  }
+
+  await client.eval(RECOVER_PROCESSING_SCRIPT, {
+    keys: [processingKey, queueKey],
+    arguments: [],
+  });
+}
+
+async function dequeueSerializedRawEvent(
+  client: RedisRawEventQueueClient,
+  queueKey: string,
+  processingKey: string,
+): Promise<string | null> {
+  const result = await client.eval(DEQUEUE_SCRIPT, {
+    keys: [queueKey, processingKey],
+    arguments: [],
+  });
+
+  return typeof result === "string" ? result : null;
 }
 
 async function upsertRetryingSerializedRawEvent(
