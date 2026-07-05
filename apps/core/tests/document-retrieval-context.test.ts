@@ -298,6 +298,47 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.promptContext).not.toContain("Denied two");
   });
 
+  it("does not allow duplicate fragment IDs to leak denied document text", async () => {
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-duplicate",
+          documentSourceId: "source-allowed",
+          chunkIndex: 0,
+          text: "Allowed duplicate text",
+        }),
+        fragment({
+          id: "fragment-duplicate",
+          documentSourceId: "source-denied",
+          chunkIndex: 1,
+          text: "Denied duplicate text",
+        }),
+      ]),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments,
+      canReadDocument: vi.fn(async (documentId: string) => documentId === "source-allowed"),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "duplicate fragment ids",
+      liveChatMessages: [],
+    });
+
+    expect(result.allowedFragments).toEqual([
+      expect.objectContaining({
+        id: "fragment-duplicate",
+        documentSourceId: "source-allowed",
+        text: "Allowed duplicate text",
+      }),
+    ]);
+    expect(result.deniedDocumentIds).toEqual(["source-denied"]);
+    expect(result.promptContext).toContain("Allowed duplicate text");
+    expect(result.promptContext).not.toContain("Denied duplicate text");
+  });
+
   it("filters blank allowed fragments from prompt context and returned metadata", async () => {
     const builder = createDocumentRetrievalContextBuilder({
       embeddingProfileId: "static-dev-6d",

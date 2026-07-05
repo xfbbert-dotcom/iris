@@ -654,11 +654,13 @@ Required architectural response:
 - If real-time permission verification fails or times out for sensitive content, exclude that fragment from the prompt.
 - Record permission-guard denials and timeouts in audit logs.
 - Keep background invalidation jobs, but treat them as cleanup and acceleration rather than final enforcement.
+- Map guard-approved fragments back to retrieved content by both fragment ID and document/source ID. A fragment ID alone is not a sufficient authorization join key.
 
 Implementation status:
 
 - TypeScript Core App now requires a Feishu live permission checker before answer-time `source-policy` retrieval can inject Feishu docx/docs/wiki fragments into prompt context.
 - The checker avoids external calls for unsupported non-Feishu URLs, resolves wiki nodes before document checks, uses bounded request timeouts, and keeps transient Feishu failures distinct from explicit denied/not-found responses.
+- Permission-filtered retrieval now binds allowed fragments to both fragment ID and document source ID, so duplicate or corrupted fragment IDs cannot leak denied document text into prompt context.
 - The current checker is process-local. If latency, rate limiting, or repeated checks become material, the next architecture step is a dedicated Permission Guard Service.
 
 Evolution signal:

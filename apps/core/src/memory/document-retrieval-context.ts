@@ -82,11 +82,11 @@ export function createDocumentRetrievalContextBuilder({
         canReadDocument,
         auditLog,
       });
-      const allowedFragmentIds = new Set(
-        permissionGuardResult.allowedFragments.map((fragment) => fragment.id),
+      const allowedFragmentKeys = new Set(
+        permissionGuardResult.allowedFragments.map(createPermissionGuardFragmentKey),
       );
       const allowedFragments = meaningfulFragments.filter((fragment) =>
-        allowedFragmentIds.has(fragment.id),
+        allowedFragmentKeys.has(createRetrievedFragmentKey(fragment)),
       ).slice(0, fragmentLimit);
 
       return {
@@ -162,4 +162,12 @@ function toPermissionGuardFragment(fragment: RetrievedDocumentFragment): Permiss
     documentId: fragment.documentSourceId,
     text: fragment.text,
   };
+}
+
+function createRetrievedFragmentKey(fragment: RetrievedDocumentFragment): string {
+  return `${fragment.id}\u0000${fragment.documentSourceId}`;
+}
+
+function createPermissionGuardFragmentKey(fragment: PermissionGuardFragment): string {
+  return `${fragment.id}\u0000${fragment.documentId}`;
 }
