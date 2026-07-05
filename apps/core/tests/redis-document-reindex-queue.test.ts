@@ -820,6 +820,78 @@ describe("RedisDocumentReindexQueue", () => {
     });
   });
 
+  it("replays Redis DLQ entries when the seen key is stale", async () => {
+    const deadLetter = {
+      id: "dlq-1",
+      job: {
+        ...jobFixture({ attempts: 3 }),
+        enqueuedAt: "2026-07-02T01:00:00.000Z",
+      },
+      errorMessage: "embedding failed",
+      failedAt: "2026-07-02T01:05:00.000Z",
+    };
+    const payload = JSON.stringify(deadLetter);
+    const state = {
+      seen: new Set([jobFixture().idempotencyKey]),
+      queue: [] as string[],
+      deadLetters: [payload],
+    };
+    const client: RedisDocumentReindexQueueClient = {
+      eval: vi.fn(async (script, options) => {
+        const [idempotencyKey, queuedPayload] = options.arguments;
+        if (!state.seen.has(idempotencyKey)) {
+          state.seen.add(idempotencyKey);
+          state.queue.push(queuedPayload);
+          return state.queue.length;
+        }
+
+        if (script.includes("LRANGE")) {
+          const duplicateIndex = state.queue.findIndex(
+            (item) => parseDocumentReindexJob(item).idempotencyKey === idempotencyKey,
+          );
+          if (duplicateIndex >= 0) {
+            state.queue[duplicateIndex] = queuedPayload;
+            return 1;
+          }
+
+          state.queue.push(queuedPayload);
+          return state.queue.length;
+        }
+
+        return 0;
+      }),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => state.deadLetters),
+      lRem: vi.fn(async (_key, _count, value) => {
+        const index = state.deadLetters.indexOf(value);
+        if (index === -1) {
+          return 0;
+        }
+
+        state.deadLetters.splice(index, 1);
+        return 1;
+      }),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisDocumentReindexQueue({ client });
+
+    await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
+
+    expect(state.queue).toEqual([
+      serializeDocumentReindexJob(jobFixture({ attempts: 0 })),
+    ]);
+    expect(state.deadLetters).toEqual([]);
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LRANGE"), {
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+      arguments: [
+        jobFixture().idempotencyKey,
+        serializeDocumentReindexJob(jobFixture({ attempts: 0 })),
+      ],
+    });
+  });
+
   it("keeps Redis DLQ entries when replay enqueue fails", async () => {
     const deadLetter = {
       id: "dlq-1",

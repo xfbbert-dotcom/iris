@@ -757,6 +757,75 @@ describe("RedisRawEventQueue", () => {
     expect(client.lRem).toHaveBeenCalledWith("iris:events:raw:dlq", 1, payload);
   });
 
+  it("replays Redis raw event DLQ entries when the seen key is stale", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-1",
+      event: {
+        ...eventFixture({ attempts: 3 }),
+        receivedAt: "2026-07-02T01:00:00.000Z",
+      },
+      errorMessage: "processor failed",
+      failedAt: "2026-07-04T01:00:00.000Z",
+    });
+    const state = {
+      seen: new Set([eventFixture().idempotencyKey]),
+      queue: [] as string[],
+      deadLetters: [payload],
+    };
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(async (script, options) => {
+        const [idempotencyKey, queuedPayload] = options.arguments;
+        if (!state.seen.has(idempotencyKey)) {
+          state.seen.add(idempotencyKey);
+          state.queue.push(queuedPayload);
+          return state.queue.length;
+        }
+
+        if (script.includes("LRANGE")) {
+          const duplicateIndex = state.queue.findIndex(
+            (item) => parseRawEvent(item).idempotencyKey === idempotencyKey,
+          );
+          if (duplicateIndex >= 0) {
+            state.queue[duplicateIndex] = queuedPayload;
+            return 1;
+          }
+
+          state.queue.push(queuedPayload);
+          return state.queue.length;
+        }
+
+        return 0;
+      }),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => state.deadLetters),
+      lRem: vi.fn(async (_key, _count, value) => {
+        const index = state.deadLetters.indexOf(value);
+        if (index === -1) {
+          return 0;
+        }
+
+        state.deadLetters.splice(index, 1);
+        return 1;
+      }),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({ client });
+
+    await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
+
+    expect(state.queue).toEqual([serializeRawEvent(eventFixture({ attempts: 0 }))]);
+    expect(state.deadLetters).toEqual([]);
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LRANGE"), {
+      keys: ["iris:events:raw:seen", "iris:events:raw:queue"],
+      arguments: [
+        eventFixture().idempotencyKey,
+        serializeRawEvent(eventFixture({ attempts: 0 })),
+      ],
+    });
+  });
+
   it("keeps Redis raw event DLQ entries when replay enqueue fails", async () => {
     const payload = JSON.stringify({
       id: "dlq-1",

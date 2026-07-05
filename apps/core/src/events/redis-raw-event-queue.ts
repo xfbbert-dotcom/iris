@@ -93,7 +93,7 @@ export function createRedisRawEventQueue({
       return "unsupported_legacy_item";
     }
 
-    await enqueueSerializedRawEvent(client, seenKey, queueKey, {
+    await upsertRetryingSerializedRawEvent(client, seenKey, queueKey, {
       ...found.deadLetter.event,
       attempts: 0,
     });

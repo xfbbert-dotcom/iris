@@ -87,7 +87,7 @@ export function createRedisDocumentSyncQueue({
       return "unsupported_legacy_item";
     }
 
-    await enqueueSerializedJob(client, seenKey, queueKey, {
+    await upsertRetryingSerializedJob(client, seenKey, queueKey, {
       ...found.deadLetter.job,
       attempts: 0,
     });
