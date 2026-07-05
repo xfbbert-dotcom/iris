@@ -50,7 +50,7 @@ Feishu Gateway receives Feishu events, validates signatures, parses group messag
 
 Feishu Gateway translates between Feishu and Iris. It must not make agent decisions by itself.
 
-Feishu Gateway must acknowledge Feishu event callbacks immediately. The gateway should validate only the minimum required request authenticity, enqueue the raw event, perform idempotency recording, and return HTTP 200 within the platform timeout budget. Signal filtering, denoising, classification, memory extraction, and agent decisions must happen asynchronously after the gateway response.
+Feishu Gateway must acknowledge Feishu event callbacks immediately. The gateway should validate only the minimum required request authenticity, derive a bounded idempotency key, schedule raw event persistence, and return HTTP 200 within the platform timeout budget. Signal filtering, denoising, classification, memory extraction, queue persistence, and agent decisions must happen asynchronously after the gateway response.
 
 ### 3.2 Conversation Memory
 
@@ -161,7 +161,7 @@ Iris's data flow has four layers: event, fact, semantic, and action.
 
 Feishu messages, document links, files, mentions, user submissions, wiki updates, and admin changes enter through Feishu Gateway or Admin Console.
 
-Feishu Gateway's event ingestion path must be designed for overload. In high-volume groups, the gateway must avoid heavy signal filtering before acknowledgment. Raw events should be placed into Redis Queue or an equivalent durable queue first, then processed by asynchronous workers with idempotency keys, retry limits, backpressure, and dead-letter handling.
+Feishu Gateway's event ingestion path must be designed for overload. In high-volume groups, the gateway must avoid heavy signal filtering and Redis persistence work before acknowledgment. Raw events should be scheduled into Redis Queue or an equivalent durable queue immediately after acknowledgement, then processed by asynchronous workers with idempotency keys, retry limits, backpressure, and dead-letter handling.
 
 Raw event idempotency keys must be bounded. Platform event IDs can seed stable
 deduplication keys, but oversized external IDs must be ignored in favor of a
@@ -656,8 +656,8 @@ Feishu event callbacks have strict response-time expectations. If high-volume gr
 
 Required architectural response:
 
-- Feishu Gateway must be "ack-first": validate minimally, enqueue raw events, record idempotency keys, and return HTTP 200 quickly.
-- Signal filtering, denoising, categorization, memory extraction, and agent decisions must happen after acknowledgment.
+- Feishu Gateway must be "ack-first": validate minimally, derive bounded idempotency keys, schedule raw event persistence, and return HTTP 200 quickly.
+- Raw queue persistence, signal filtering, denoising, categorization, memory extraction, and agent decisions must happen after acknowledgment.
 - Async workers must support idempotency, retry limits, backpressure, and dead-letter handling.
 - Queue overload must degrade Iris's intelligence gracefully rather than breaking Feishu callback handling.
 

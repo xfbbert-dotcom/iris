@@ -311,6 +311,7 @@ describe("FeishuGateway", () => {
     };
 
     await gateway.handleCallback({ headers: {}, body });
+    await flushDeferredEnqueue();
 
     expect(rawEventQueue.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -343,6 +344,7 @@ describe("FeishuGateway", () => {
     };
 
     await gateway.handleCallback({ headers: {}, body });
+    await flushDeferredEnqueue();
 
     expect(rawEventQueue.enqueue).toHaveBeenCalledWith({
       idempotencyKey: "raw-event:feishu:event-1",
@@ -380,6 +382,36 @@ describe("FeishuGateway", () => {
     ]);
 
     expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(rawEventQueue.enqueue).not.toHaveBeenCalled();
+    await flushDeferredEnqueue();
+    expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("acknowledges raw Feishu events before starting raw queue persistence work", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => undefined),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: {
+        header: {
+          event_id: "event-deferred-queue",
+          event_type: "im.message.receive_v1",
+        },
+      },
+    });
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(rawEventQueue.enqueue).not.toHaveBeenCalled();
+
+    await flushDeferredEnqueue();
+
     expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
   });
 
@@ -407,7 +439,7 @@ describe("FeishuGateway", () => {
         },
       },
     });
-    await Promise.resolve();
+    await flushDeferredEnqueue();
 
     expect(response).toEqual({ statusCode: 200, body: { ok: true } });
     expect(onEnqueueError).toHaveBeenCalledWith(enqueueError);
@@ -439,7 +471,7 @@ describe("FeishuGateway", () => {
         },
       },
     });
-    await Promise.resolve();
+    await flushDeferredEnqueue();
 
     expect(response).toEqual({ statusCode: 200, body: { ok: true } });
     expect(onEnqueueError).toHaveBeenCalledWith(enqueueError);
@@ -457,6 +489,7 @@ describe("FeishuGateway", () => {
       headers: { "x-iris-event-id": "event-raw-primary" },
       body: { event_id: "event-raw-primary" },
     });
+    await flushDeferredEnqueue();
 
     expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
     expect(queue.events).toEqual([]);
@@ -667,6 +700,7 @@ describe("Core App Feishu route", () => {
     });
 
     expect(response.statusCode).toBe(200);
+    await flushDeferredEnqueue();
     expect(rawEventQueue.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
         idempotencyKey: "raw-event:feishu:event-runtime-queue",
@@ -728,4 +762,11 @@ function restoreEnv(name: "FEISHU_VERIFICATION_TOKEN" | "FEISHU_ENCRYPT_KEY", va
   }
 
   process.env[name] = value;
+}
+
+async function flushDeferredEnqueue(): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await Promise.resolve();
 }

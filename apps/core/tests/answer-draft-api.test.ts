@@ -1117,7 +1117,7 @@ describe("GET /internal/status", () => {
         },
       },
     });
-    await Promise.resolve();
+    await flushDeferredEnqueue();
 
     const statusResponse = await app.inject({
       method: "GET",
@@ -1172,7 +1172,7 @@ describe("GET /internal/status", () => {
         },
       },
     });
-    await Promise.resolve();
+    await flushDeferredEnqueue();
 
     const statusResponse = await app.inject({
       method: "GET",
@@ -4696,4 +4696,11 @@ function userSubmittedSource() {
     updatedAt: new Date("2026-07-03T03:10:00.000Z"),
     evidence: [],
   };
+}
+
+async function flushDeferredEnqueue(): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await Promise.resolve();
 }

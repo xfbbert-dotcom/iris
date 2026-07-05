@@ -89,7 +89,7 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
 
       const rawEventQueue = dependencies.rawEventQueue;
       if (rawEventQueue !== undefined) {
-        enqueueWithoutWaiting(
+        enqueueAfterAcknowledgement(
           () =>
             rawEventQueue.enqueue({
               idempotencyKey: createRawEventIdempotencyKey({
@@ -122,6 +122,15 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
       };
     }
   };
+}
+
+function enqueueAfterAcknowledgement(
+  enqueue: () => Promise<void>,
+  onError: EnqueueErrorHandler | undefined,
+): void {
+  setTimeout(() => {
+    enqueueWithoutWaiting(enqueue, onError);
+  }, 0);
 }
 
 function enqueueWithoutWaiting(
