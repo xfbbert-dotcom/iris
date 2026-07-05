@@ -180,6 +180,10 @@ Or validate a private env file directly:
 npm run readiness -- --env-file .env
 ```
 
+The env-file parser supports full-line comments and inline operator notes after unquoted or quoted
+values, for example `PORT=3000 # local dev port`. A `#` inside quoted values is preserved, so quote
+secrets or URLs when the `#` is part of the value.
+
 The command prints the readiness JSON and exits with code `1` when any blocking check fails.
 
 Run Core:
