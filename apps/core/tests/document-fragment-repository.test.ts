@@ -424,6 +424,32 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
+  it("limits vector search to answering-enabled non-denied document sources", async () => {
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("join document_sources ds");
+      expect(normalized).toContain("ds.id = f.document_source_id");
+      expect(normalized).toContain("ds.can_use_for_answering = true");
+      expect(normalized).toContain("ds.permission_state <> 'denied'");
+      expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 3]);
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: 3,
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("caps oversized vector search limits before querying fragments", async () => {
     const query = vi.fn(async (_sql: string, values?: unknown[]) => {
       expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 100]);

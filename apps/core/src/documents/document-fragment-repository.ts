@@ -200,6 +200,10 @@ select
 from document_fragments f
 join latest_snapshots
   on f.document_snapshot_id = latest_snapshots.id
+join document_sources ds
+  on ds.id = f.document_source_id
+  and ds.can_use_for_answering = true
+  and ds.permission_state <> 'denied'
 join ${embeddingTable} e
   on e.document_fragment_id = f.id
 where f.embedding_profile_id = $1
