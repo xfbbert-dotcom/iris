@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx src/app.ts",
     "db:migrate": "tsx src/database/migrate.ts",
-    "readiness": "tsx src/admin/internal-rollout-readiness-cli.ts",
+    "readiness": "tsx -- src/admin/internal-rollout-readiness-cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

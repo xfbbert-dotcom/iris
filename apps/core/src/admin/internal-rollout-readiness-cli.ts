@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -10,6 +11,7 @@ import type { EnvLike } from "../config/env.js";
 export type BuildInternalRolloutReadinessEnvInput = {
   args?: string[];
   env?: EnvLike;
+  fileExists?: (path: string) => boolean;
   readTextFile?: (path: string) => string;
 };
 
@@ -28,6 +30,7 @@ export function getInternalRolloutReadinessExitCode(
 export function buildInternalRolloutReadinessEnv({
   args = [],
   env = process.env,
+  fileExists = existsSync,
   readTextFile = readTextFileSync,
 }: BuildInternalRolloutReadinessEnvInput = {}): EnvLike {
   const envFilePath = readEnvFilePath(args);
@@ -35,9 +38,11 @@ export function buildInternalRolloutReadinessEnv({
     return { ...env };
   }
 
+  const resolvedEnvFilePath = resolveEnvFilePath(envFilePath, env, fileExists);
+
   return {
     ...env,
-    ...parseEnvFileContents(readTextFile(envFilePath)),
+    ...parseEnvFileContents(readTextFile(resolvedEnvFilePath)),
   };
 }
 
@@ -100,6 +105,26 @@ function readEnvFilePath(args: string[]): string | undefined {
     }
 
     throw new Error(`Unsupported readiness argument: ${arg}`);
+  }
+
+  return envFilePath;
+}
+
+function resolveEnvFilePath(
+  envFilePath: string,
+  env: EnvLike,
+  fileExists: (path: string) => boolean,
+): string {
+  if (isAbsolute(envFilePath) || fileExists(envFilePath)) {
+    return envFilePath;
+  }
+
+  const originalNpmCwd = env.INIT_CWD;
+  if (typeof originalNpmCwd === "string" && originalNpmCwd.length > 0) {
+    const originalCwdEnvFilePath = join(originalNpmCwd, envFilePath);
+    if (fileExists(originalCwdEnvFilePath)) {
+      return originalCwdEnvFilePath;
+    }
   }
 
   return envFilePath;

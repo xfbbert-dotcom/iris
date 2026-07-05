@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -80,6 +82,26 @@ EMPTY_VALUE= # empty on purpose
       env: readyRolloutEnv({ PORT: "65536" }),
       readTextFile: (path) => {
         expect(path).toBe(".env.rollout");
+        return "PORT=3000\n";
+      },
+    });
+
+    expect(buildInternalRolloutReadinessReport(env)).toMatchObject({
+      ok: true,
+      status: "ready",
+    });
+  });
+
+  it("loads root-relative env files when invoked through the root npm workspace script", () => {
+    const rootCwd = process.platform === "win32" ? "D:\\work\\AGE-org" : "/work/AGE-org";
+    const expectedEnvFilePath = join(rootCwd, ".env");
+
+    const env = buildInternalRolloutReadinessEnv({
+      args: ["--env-file", ".env"],
+      env: readyRolloutEnv({ INIT_CWD: rootCwd, PORT: "65536" }),
+      fileExists: (path) => path === expectedEnvFilePath,
+      readTextFile: (path) => {
+        expect(path).toBe(expectedEnvFilePath);
         return "PORT=3000\n";
       },
     });
