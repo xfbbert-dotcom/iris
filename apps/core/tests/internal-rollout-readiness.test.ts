@@ -167,6 +167,37 @@ describe("buildInternalRolloutReadinessReport", () => {
       },
     });
   });
+
+  it("rejects angle-bracket placeholders copied from the rollout runbook", () => {
+    const report = buildInternalRolloutReadinessReport(
+      readyRolloutEnv({
+        IRIS_INTERNAL_API_TOKEN: "<operator-shared-secret>",
+        FEISHU_APP_SECRET: "<feishu-app-secret>",
+        IRIS_MODEL_API_KEY: "<model-api-key>",
+        IRIS_EMBEDDING_MODEL: "<embedding-model>",
+      }),
+    );
+
+    expect(report.ok).toBe(false);
+    expect(checksById(report)).toMatchObject({
+      internalApiToken: {
+        status: "fail",
+        detail: "IRIS_INTERNAL_API_TOKEN must be replaced with a real rollout value",
+      },
+      feishuOpenApi: {
+        status: "fail",
+        detail: "FEISHU_APP_SECRET must be replaced with a real rollout value",
+      },
+      answerDraftModel: {
+        status: "fail",
+        detail: "IRIS_MODEL_API_KEY must be replaced with a real rollout value",
+      },
+      documentEmbeddings: {
+        status: "fail",
+        detail: "IRIS_EMBEDDING_MODEL must be replaced with a real rollout value",
+      },
+    });
+  });
 });
 
 function readyRolloutEnv(overrides: EnvLike = {}): EnvLike {

@@ -384,7 +384,11 @@ function findTemplatePlaceholderEnv(env: EnvLike, names: string[]): string | und
 }
 
 function isTemplatePlaceholderValue(value: string): boolean {
-  return value.startsWith("replace-with-") || value.includes("api.example.com");
+  return (
+    value.startsWith("replace-with-") ||
+    value.includes("api.example.com") ||
+    /^<[^<>]+>$/u.test(value)
+  );
 }
 
 function isSingleVisibleAsciiToken(value: string): boolean {
