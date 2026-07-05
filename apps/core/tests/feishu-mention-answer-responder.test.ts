@@ -276,6 +276,45 @@ describe("FeishuMentionAnswerResponder", () => {
     });
   });
 
+  it("replies with a fallback when the model returns a blank answer", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => {
+        throw new Error("model answer draft must not be blank");
+      }),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-blank" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+    const input = {
+      messageId: "om_blank_model_answer",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-blank",
+    });
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "duplicate_message",
+    });
+
+    expect(replier.replyText).toHaveBeenCalledOnce();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_blank_model_answer",
+      text: "我没拿到可用答案，你可以换个说法再问我一次。",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
   it("skips duplicate mentioned messages after a successful reply", async () => {
     const answerDraftOrchestrator = {
       generateDraft: vi.fn(async () => ({

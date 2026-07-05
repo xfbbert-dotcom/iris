@@ -36,6 +36,8 @@ export type FeishuMentionAnswerResponderDependencies = {
 };
 
 const BLANK_MENTION_CLARIFICATION = "我在，直接告诉我你想让我处理什么。";
+const BLANK_MODEL_ANSWER_FALLBACK = "我没拿到可用答案，你可以换个说法再问我一次。";
+const BLANK_MODEL_ANSWER_ERROR_MESSAGE = "model answer draft must not be blank";
 const MAX_MENTION_QUESTION_CHARS = 4000;
 const MAX_RECENT_REPLY_MESSAGE_IDS = 1000;
 const TRUNCATION_MARKER = " ... [truncated]";
@@ -83,21 +85,40 @@ export function createFeishuMentionAnswerResponder({
           return result;
         }
 
-        const answer = await answerDraftOrchestrator.generateDraft({
-          question,
-          chatId: input.chatId,
-          liveChatMessages: [
-            {
-              speaker: normalizeOptionalText(input.senderId) ?? "unknown",
-              text: question,
-            },
-          ],
-        });
+        let answerText: string;
+        try {
+          const answer = await answerDraftOrchestrator.generateDraft({
+            question,
+            chatId: input.chatId,
+            liveChatMessages: [
+              {
+                speaker: normalizeOptionalText(input.senderId) ?? "unknown",
+                text: question,
+              },
+            ],
+          });
+          answerText = answer.answerText;
+        } catch (error) {
+          if (!isBlankModelAnswerError(error)) {
+            throw error;
+          }
+
+          const result = toRepliedResult(
+            await replier.replyText({
+              messageId: input.messageId,
+              text: BLANK_MODEL_ANSWER_FALLBACK,
+              replyInThread: true,
+              uuid: replyUuid,
+            }),
+          );
+          replyDeduper.markHandled(input.messageId);
+          return result;
+        }
 
         const result = toRepliedResult(
           await replier.replyText({
             messageId: input.messageId,
-            text: answer.answerText,
+            text: answerText,
             replyInThread: true,
             uuid: replyUuid,
           }),
@@ -193,6 +214,10 @@ function toRepliedResult(result: { replyMessageId?: string }): FeishuMentionAnsw
     status: "replied",
     ...(result.replyMessageId === undefined ? {} : { replyMessageId: result.replyMessageId }),
   };
+}
+
+function isBlankModelAnswerError(error: unknown): boolean {
+  return error instanceof Error && error.message === BLANK_MODEL_ANSWER_ERROR_MESSAGE;
 }
 
 function normalizeRequiredOpenId(value: string): string {

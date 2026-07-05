@@ -1142,6 +1142,33 @@ document memory recovery can become fully independent downstream tasks. The v1
 behavior should remain: user-visible explicit replies are prioritized, while
 document memory failures stay observable and retryable.
 
+### 12.20 Blank Model Answer User Feedback
+
+Pressure:
+
+The answer draft orchestrator correctly rejects blank model output so internal
+APIs and tests do not treat an empty answer as success. In a group chat, however,
+an explicit @Iris request that produces a blank model answer can otherwise become
+a silent retry loop: the worker retries, the user sees no response, and repeated
+events may consume model budget without improving the conversation.
+
+Required architectural response:
+
+- The orchestrator must continue to reject blank model answer drafts.
+- The Feishu mention responder may catch that specific blank-answer error and
+  send a concise fallback reply to the user.
+- Other model, retrieval, permission, or Feishu reply errors must remain
+  retryable and observable.
+- A successful fallback reply must mark the source `messageId` as handled so
+  Feishu retries do not repeatedly post fallback messages.
+
+Evolution signal:
+
+If Iris later has richer answer-quality classifiers, this fallback can become a
+typed responder policy instead of matching the orchestrator's blank-answer error
+message. The user-visible contract should remain: explicit mentions should get
+clear feedback when Iris cannot produce a usable answer.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
