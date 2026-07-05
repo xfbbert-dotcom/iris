@@ -107,13 +107,9 @@ describe("Feishu auth primitives", () => {
     ).toBe(false);
   });
 
-  it("accepts requests verified by either token or signature", () => {
-    const rawBody = JSON.stringify({ event: { message: "hello" } });
-    const timestamp = "1782864000";
-    const nonce = "nonce-1";
+  it("accepts verification-token-only requests when no encrypt key is configured", () => {
     const verifier = createFeishuRequestVerifier({
-      verificationToken,
-      encryptKey
+      verificationToken
     });
 
     expect(
@@ -123,6 +119,23 @@ describe("Feishu auth primitives", () => {
         rawBody: JSON.stringify({ token: verificationToken })
       })
     ).toBe(true);
+
+    expect(
+      verifier({
+        headers: {},
+        body: { token: "wrong-token" },
+        rawBody: JSON.stringify({ token: "wrong-token" })
+      })
+    ).toBe(false);
+  });
+
+  it("accepts signature-only requests when no verification token is configured", () => {
+    const rawBody = JSON.stringify({ event: { message: "hello" } });
+    const timestamp = "1782864000";
+    const nonce = "nonce-1";
+    const verifier = createFeishuRequestVerifier({
+      encryptKey
+    });
 
     expect(
       verifier({
@@ -147,6 +160,60 @@ describe("Feishu auth primitives", () => {
         rawBody
       })
     ).toBe(false);
+  });
+
+  it("requires both verification token and signature when both are configured", () => {
+    const rawBody = JSON.stringify({ header: { token: verificationToken } });
+    const timestamp = "1782864000";
+    const nonce = "nonce-1";
+    const verifier = createFeishuRequestVerifier({
+      verificationToken,
+      encryptKey
+    });
+
+    expect(
+      verifier({
+        headers: {},
+        body: { header: { token: verificationToken } },
+        rawBody
+      })
+    ).toBe(false);
+
+    expect(
+      verifier({
+        headers: {
+          "x-lark-request-timestamp": timestamp,
+          "x-lark-request-nonce": nonce,
+          "x-lark-signature": sign(timestamp, nonce, rawBody)
+        },
+        body: { header: { token: "wrong-token" } },
+        rawBody
+      })
+    ).toBe(false);
+
+    expect(
+      verifier({
+        headers: {
+          "x-lark-request-timestamp": timestamp,
+          "x-lark-request-nonce": nonce,
+          "x-lark-signature": "bad-signature"
+        },
+        body: { header: { token: verificationToken } },
+        rawBody
+      })
+    ).toBe(false);
+
+    expect(
+      verifier({
+        headers: {
+          "x-lark-request-timestamp": timestamp,
+          "x-lark-request-nonce": nonce,
+          "x-lark-signature": sign(timestamp, nonce, rawBody)
+        },
+        body: { header: { token: verificationToken } },
+        rawBody
+      })
+    ).toBe(true);
   });
 });
 

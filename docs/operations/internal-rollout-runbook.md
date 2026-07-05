@@ -119,7 +119,8 @@ $env:FEISHU_ENCRYPT_KEY="<optional-feishu-encrypt-key>"
 
 For the v1 internal rollout, `FEISHU_VERIFICATION_TOKEN` is required because Iris must read Feishu's
 URL verification `challenge` from the callback body. `FEISHU_ENCRYPT_KEY` can add request signature
-verification, but v1 does not decrypt encrypted Feishu callback payloads.
+verification, but v1 does not decrypt encrypted Feishu callback payloads. If `FEISHU_ENCRYPT_KEY` is
+set, callbacks must pass both the verification-token check and Feishu signature check.
 
 Feishu OpenAPI access for document reads and live permission checks:
 

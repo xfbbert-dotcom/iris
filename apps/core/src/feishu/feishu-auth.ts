@@ -50,22 +50,25 @@ export function verifyFeishuSignature(input: FeishuSignatureInput): boolean {
 
 export function createFeishuRequestVerifier(config: FeishuAuthConfig): FeishuRequestVerifier {
   return (request) => {
-    if (
-      config.verificationToken &&
-      verifyFeishuVerificationToken(request.body, config.verificationToken)
-    ) {
-      return true;
+    const verificationToken = config.verificationToken;
+    const encryptKey = config.encryptKey;
+    if (verificationToken === undefined && encryptKey === undefined) {
+      return false;
     }
 
-    if (config.encryptKey && request.rawBody) {
-      return verifyFeishuSignature({
-        headers: request.headers,
-        rawBody: request.rawBody,
-        encryptKey: config.encryptKey
-      });
-    }
+    const tokenVerified =
+      verificationToken === undefined ||
+      verifyFeishuVerificationToken(request.body, verificationToken);
+    const signatureVerified =
+      encryptKey === undefined ||
+      (request.rawBody !== undefined &&
+        verifyFeishuSignature({
+          headers: request.headers,
+          rawBody: request.rawBody,
+          encryptKey,
+        }));
 
-    return false;
+    return tokenVerified && signatureVerified;
   };
 }
 

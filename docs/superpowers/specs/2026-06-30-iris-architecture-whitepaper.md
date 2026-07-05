@@ -444,7 +444,10 @@ worker-specific status endpoints.
 
 For v1 Feishu callback readiness, `FEISHU_VERIFICATION_TOKEN` is required. `FEISHU_ENCRYPT_KEY` may
 be configured for request signature verification, but it must not be treated as encrypted callback
-payload support until Iris implements encrypted body decryption and challenge extraction.
+payload support until Iris implements encrypted body decryption and challenge extraction. At runtime,
+each configured Feishu callback secret is a required check: token-only deployments require the body
+token, signature-only deployments require the Feishu signature, and deployments with both configured
+require both the token and signature to match.
 
 When Iris is disabled, it should stop processing new messages, stop proactive speech, and stop executing tasks. Admins may still view logs and configuration.
 
