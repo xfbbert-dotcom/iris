@@ -1,4 +1,5 @@
 import { DOCUMENT_SOURCE_URI_MAX_CHARS } from "./document-source-registry.js";
+import { MAX_FEISHU_DOCUMENT_TOKEN_CHARS } from "./feishu-document-body-fetcher.js";
 
 export type FeishuDocumentLink = {
   sourceUri: string;
@@ -89,6 +90,7 @@ function isSupportedDocumentPath(url: URL): boolean {
   return (
     documentToken !== undefined &&
     documentToken.length > 0 &&
+    documentToken.length <= MAX_FEISHU_DOCUMENT_TOKEN_CHARS &&
     (firstPathSegment === "docx" ||
       firstPathSegment === "docs" ||
       firstPathSegment === "wiki")

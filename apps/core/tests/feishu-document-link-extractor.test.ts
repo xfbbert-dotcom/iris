@@ -109,4 +109,15 @@ describe("FeishuDocumentLinkExtractor", () => {
       ),
     ).toEqual([{ sourceUri: "https://docs.feishu.cn/docx/valid" }]);
   });
+
+  it("ignores Feishu document links whose path token is too long to fetch", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+    const oversizedToken = "a".repeat(513);
+
+    expect(
+      extractor.extractLinks(
+        `bad https://docs.feishu.cn/docx/${oversizedToken} good https://docs.feishu.cn/docx/valid`,
+      ),
+    ).toEqual([{ sourceUri: "https://docs.feishu.cn/docx/valid" }]);
+  });
 });
