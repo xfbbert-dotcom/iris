@@ -25,15 +25,21 @@ permissions allow it, but automatic replies stay explicit and opt-in by mention.
 ```text
 Raw Feishu event
 -> FeishuMessageEventProcessor persists message facts
--> FeishuMessageEventProcessor discovers group-visible document links
 -> FeishuMentionAnswerResponder checks mention and runtime gate
 -> AnswerDraftOrchestrator builds safe context and answer text
 -> FeishuMessageReplier replies to the source message
+-> FeishuMessageEventProcessor discovers group-visible document links
 ```
 
 The reply uses a deterministic Feishu `uuid` derived from the source message id. If Feishu retries
 the same event or Iris retries the raw-event worker, Feishu can deduplicate the visible reply for the
 supported dedupe window.
+
+Document discovery and sync planning are not allowed to prevent an explicit @Iris reply attempt.
+After message fact persistence, the processor attempts mention response first, then attempts document
+link discovery. If document discovery fails, the processor rethrows the error after the reply attempt
+so the raw-event worker can retry document memory recovery without making the current user-visible
+reply wait on the document sync queue.
 
 Iris also keeps a bounded in-process mention reply deduper keyed by the source `messageId`. This
 deduper claims a message while a reply is in flight, remembers successful replies and
@@ -99,6 +105,8 @@ Add unit tests for the responder, processor integration, event runtime compositi
 - a retry after a failed reply attempt is allowed;
 - processor passes parsed mentions to the responder without blocking replies when document reading is
   disabled;
+- processor still attempts a mention reply when document discovery or sync planning fails, then
+  propagates the discovery failure for worker retry;
 - event runtime composes the responder only when bot open ID, Feishu OpenAPI config, and answer
   orchestrator are available.
 

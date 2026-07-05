@@ -1112,6 +1112,35 @@ layer must still operate on the final escaped/rendered context representation
 that is sent to the model. Intermediate raw text budgets can help, but cannot be
 the final guard.
 
+### 12.19 Mention Reply And Document Discovery Isolation
+
+Pressure:
+
+A single Feishu message can both mention Iris and contain document links. If
+document discovery, document-source registration, or document-sync planning
+fails before the mention responder runs, Iris can appear silent to the user even
+though the explicit @Iris request could still be answered. This is especially
+painful during a first 20-30 person rollout because a transient sync queue issue
+would look like a broken chat assistant.
+
+Required architectural response:
+
+- After message parsing and fact persistence, explicit mention response attempts
+  must not be blocked by document discovery or document sync planning failures.
+- Document discovery must still run for the same event when possible.
+- If document discovery fails, the processor should surface that failure after
+  the reply attempt so the raw-event worker can retry memory recovery.
+- Runtime gates remain authoritative: disabled incoming events still skip
+  everything, and disabled group-context reading still avoids fact persistence
+  and document discovery while allowing the current explicit mention request.
+
+Evolution signal:
+
+If document discovery gains its own durable event queue, mention responses and
+document memory recovery can become fully independent downstream tasks. The v1
+behavior should remain: user-visible explicit replies are prioritized, while
+document memory failures stay observable and retryable.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

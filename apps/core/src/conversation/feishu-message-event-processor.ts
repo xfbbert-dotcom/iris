@@ -63,20 +63,37 @@ export function createFeishuMessageEventProcessor({
       const { mentions: _mentions, ...messageFact } = parsed;
       await messages.upsertMessage(messageFact);
 
+      let mentionResponseError: unknown;
+      try {
+        await maybeRespondToMention(parsed, mentionAnswerResponder);
+      } catch (error) {
+        mentionResponseError = error;
+      }
+
+      let documentDiscoveryError: unknown;
       if (runtimeController === undefined || runtimeController.canReadDocuments()) {
-        const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
-        if (links.length > 0 && groupVisibleDocumentRegistrar !== undefined) {
-          await groupVisibleDocumentRegistrar.registerDiscoveredLinks({
-            chatId: parsed.chatId,
-            messageId: parsed.providerMessageId,
-            senderId: parsed.senderId,
-            observedAt: parsed.sentAt,
-            links,
-          });
+        try {
+          const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
+          if (links.length > 0 && groupVisibleDocumentRegistrar !== undefined) {
+            await groupVisibleDocumentRegistrar.registerDiscoveredLinks({
+              chatId: parsed.chatId,
+              messageId: parsed.providerMessageId,
+              senderId: parsed.senderId,
+              observedAt: parsed.sentAt,
+              links,
+            });
+          }
+        } catch (error) {
+          documentDiscoveryError = error;
         }
       }
 
-      await maybeRespondToMention(parsed, mentionAnswerResponder);
+      if (mentionResponseError !== undefined) {
+        throw mentionResponseError;
+      }
+      if (documentDiscoveryError !== undefined) {
+        throw documentDiscoveryError;
+      }
     },
   };
 }

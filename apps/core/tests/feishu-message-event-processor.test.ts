@@ -347,6 +347,75 @@ describe("FeishuMessageEventProcessor", () => {
     });
   });
 
+  it("still responds to explicit mentions when document discovery fails", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => [{ sourceUri: "https://docs.feishu.cn/docx/a" }]),
+    };
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => {
+        throw new Error("sync queue unavailable");
+      }),
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async () => ({ status: "replied" as const })),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+      mentionAnswerResponder,
+    });
+
+    await expect(
+      processor.process(
+        rawEventFixture({
+          rawBody: {
+            header: { event_id: "event-1", event_type: "im.message.receive_v1" },
+            event: {
+              sender: {
+                sender_id: {
+                  open_id: "open-1",
+                },
+              },
+              message: {
+                message_id: "message-1",
+                chat_id: "chat-1",
+                message_type: "text",
+                content: JSON.stringify({
+                  text: "@_user_1 please read https://docs.feishu.cn/docx/a",
+                }),
+                mentions: [
+                  {
+                    key: "@_user_1",
+                    id: { open_id: "ou_iris" },
+                    name: "Iris",
+                  },
+                ],
+                create_time: "1782925200000",
+              },
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow("sync queue unavailable");
+
+    expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledWith({
+      messageId: "message-1",
+      chatId: "chat-1",
+      senderId: "open-1",
+      text: "@_user_1 please read https://docs.feishu.cn/docx/a",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+    expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).toHaveBeenCalledOnce();
+  });
+
   it("does not call the mention answer responder for disabled incoming events", async () => {
     const messages = {
       upsertMessage: vi.fn(),
