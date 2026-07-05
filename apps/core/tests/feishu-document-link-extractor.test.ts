@@ -100,6 +100,16 @@ describe("FeishuDocumentLinkExtractor", () => {
     ).toEqual([{ sourceUri: "https://foo.feishu.cn/docx/next" }]);
   });
 
+  it("ignores percent-encoded path separator contaminated document tokens", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks(
+        "doc https://docs.feishu.cn/docx/token%2Ftrailing good https://foo.feishu.cn/wiki/wiki_token",
+      ),
+    ).toEqual([{ sourceUri: "https://foo.feishu.cn/wiki/wiki_token" }]);
+  });
+
   it("drops copied link query strings and fragments before deduplication", () => {
     const extractor = createFeishuDocumentLinkExtractor();
 

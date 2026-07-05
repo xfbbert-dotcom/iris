@@ -8,7 +8,7 @@ absorbing adjacent prose into the document token.
 ## Decision
 
 The shared Feishu document token parser rejects docx/docs/wiki token segments that contain an ASCII
-comma or percent-encoded ASCII comma. Document source registration uses this parser before
+comma or percent-encoded content. Document source registration uses this parser before
 canonicalizing and writing a source, so `https://docs.feishu.cn/docx/token,please` is rejected
 instead of becoming a pending document source.
 
@@ -23,7 +23,8 @@ registered with a token shape that later permission checks or document sync woul
 - Supported Feishu and Lark hosts remain unchanged.
 - Query strings and fragments are still stripped during registration canonicalization.
 - Invalid Feishu tokens fail before registry writes and before sync queue enqueue.
-- Percent-encoding cannot bypass the comma boundary.
+- Percent-encoding cannot bypass the token boundary, including encoded commas and encoded path
+  separators.
 
 ## Out Of Scope
 

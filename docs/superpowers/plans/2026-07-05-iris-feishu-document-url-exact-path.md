@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Reject Feishu docx/docs/wiki source URLs that contain extra path segments after the document token.
+**Goal:** Reject Feishu docx/docs/wiki source URLs that contain extra path segments after the document token or percent-encoded separators inside the token segment.
 
-**Architecture:** The existing `parseFeishuDocxDocumentId()` and `parseFeishuWikiNodeToken()` functions remain the canonical guard. Group chat extraction and internal registration already call this parser, so tightening it protects every entry point consistently.
+**Architecture:** The existing `parseFeishuDocxDocumentId()` and `parseFeishuWikiNodeToken()` functions remain the canonical guard. Group chat extraction and internal registration already call this parser, so tightening it protects every entry point consistently. Token segments reject percent-encoded content because Feishu document tokens are expected as raw path tokens, not encoded subpaths.
 
 **Tech Stack:** TypeScript, Vitest, Fastify core app.
 
@@ -30,6 +30,11 @@ Run: `npm --workspace apps/core run test -- tests/feishu-document-body-fetcher.t
 
 Expected: fails because the parser currently accepts the first token segment and ignores extra path segments.
 
+- [x] **Step 4: Add encoded separator regression tests**
+
+Add parser, extractor, and internal registration assertions for `%2F` and `%5C` inside document token
+segments. Expected: fails until the shared token parser rejects encoded token contamination.
+
 ### Task 2: Tighten Shared Feishu URL Parser
 
 **Files:**
@@ -39,13 +44,18 @@ Expected: fails because the parser currently accepts the first token segment and
 
 In `parseFeishuPathToken()`, reject URLs unless the path has exactly two non-empty segments.
 
-- [x] **Step 2: Run focused tests and confirm green**
+- [x] **Step 2: Reject encoded token contamination**
+
+Reject `%` inside the token segment so percent-encoded commas, slashes, backslashes, and double-encoded
+separator attempts cannot bypass exact path validation.
+
+- [x] **Step 3: Run focused tests and confirm green**
 
 Run: `npm --workspace apps/core run test -- tests/feishu-document-body-fetcher.test.ts tests/feishu-document-link-extractor.test.ts`
 
 Expected: all focused tests pass.
 
-- [x] **Step 3: Run full verification**
+- [x] **Step 4: Run full verification**
 
 Run: `npm run verify`
 
