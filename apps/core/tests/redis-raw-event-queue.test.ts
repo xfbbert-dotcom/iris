@@ -579,6 +579,45 @@ describe("RedisRawEventQueue", () => {
     expect(client.lRange).toHaveBeenCalledWith("iris:events:raw:dlq", 0, 99);
   });
 
+  it("rejects non-finite Redis raw event DLQ list limits before reading Redis", async () => {
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: Number.POSITIVE_INFINITY })).rejects.toThrow(
+      "raw event queue limit must be a finite safe-magnitude number",
+    );
+    await expect(queue.listDeadLetters({ limit: Number.NaN })).rejects.toThrow(
+      "raw event queue limit must be a finite safe-magnitude number",
+    );
+    expect(client.lRange).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsafe Redis raw event DLQ list limits before reading Redis", async () => {
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({ client });
+
+    await expect(
+      queue.listDeadLetters({ limit: Number.MAX_SAFE_INTEGER + 1 }),
+    ).rejects.toThrow("raw event queue limit must be a finite safe-magnitude number");
+    expect(client.lRange).not.toHaveBeenCalled();
+  });
+
   it("lists invalid raw event DLQ payloads as non-replayable diagnostics", async () => {
     const payload = JSON.stringify({
       id: "dlq-invalid",
@@ -604,6 +643,48 @@ describe("RedisRawEventQueue", () => {
         errorMessage: "Invalid raw event JSON",
         failedAt: new Date("2026-07-04T01:02:00.000Z"),
         replayable: false,
+      },
+    ]);
+  });
+
+  it("lists corrupt Redis raw event DLQ payloads as non-replayable diagnostics", async () => {
+    const storedPayload = JSON.stringify({
+      id: "dlq-1",
+      event: {
+        ...eventFixture({ attempts: 3 }),
+        receivedAt: "2026-07-02T01:00:00.000Z",
+      },
+      errorMessage: "processor failed",
+      failedAt: "2026-07-04T01:00:00.000Z",
+    });
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => ["{", storedPayload]),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({
+      client,
+      now: () => new Date("2026-07-04T01:03:00.000Z"),
+    });
+
+    await expect(queue.listDeadLetters({ limit: 2 })).resolves.toEqual([
+      {
+        id: expect.stringMatching(/^legacy:0:/),
+        rawPayload: "{",
+        errorMessage: "Invalid raw event dead letter JSON",
+        failedAt: new Date("2026-07-04T01:03:00.000Z"),
+        replayable: false,
+      },
+      {
+        id: "dlq-1",
+        event: eventFixture({ attempts: 3 }),
+        errorMessage: "processor failed",
+        failedAt: new Date("2026-07-04T01:00:00.000Z"),
+        replayable: true,
       },
     ]);
   });
@@ -722,6 +803,28 @@ describe("RedisRawEventQueue", () => {
     expect(client.lRem).toHaveBeenCalledWith("iris:events:raw:dlq", 1, payload);
   });
 
+  it("deletes malformed Redis raw event DLQ objects with stored ids", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-malformed",
+      rawPayload: 42,
+      errorMessage: "Invalid raw event JSON",
+      failedAt: "2026-07-04T01:02:00.000Z",
+    });
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({ client });
+
+    await expect(queue.deleteDeadLetter("dlq-malformed")).resolves.toBe("deleted");
+    expect(client.lRem).toHaveBeenCalledWith("iris:events:raw:dlq", 1, payload);
+  });
+
   it("batch replays Redis raw event DLQ entries", async () => {
     const payload = JSON.stringify({
       id: "dlq-1",
@@ -752,6 +855,42 @@ describe("RedisRawEventQueue", () => {
     });
     expect(client.eval).toHaveBeenCalledOnce();
     expect(client.lRem).toHaveBeenCalledOnce();
+  });
+
+  it("batch replays Redis raw event DLQ entries without relying on method binding", async () => {
+    const payload = JSON.stringify({
+      id: "dlq-1",
+      event: {
+        ...eventFixture({ attempts: 3 }),
+        receivedAt: "2026-07-02T01:00:00.000Z",
+      },
+      errorMessage: "processor failed",
+      failedAt: "2026-07-04T01:00:00.000Z",
+    });
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => [payload]),
+      lRem: vi.fn(async () => 1),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({ client });
+    const replayDeadLetters = queue.replayDeadLetters;
+
+    await expect(replayDeadLetters({ ids: ["dlq-1"] })).resolves.toEqual({
+      replayedCount: 1,
+      notFoundIds: [],
+      unsupportedLegacyIds: [],
+    });
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
+      keys: ["iris:events:raw:seen", "iris:events:raw:queue"],
+      arguments: [
+        eventFixture().idempotencyKey,
+        serializeRawEvent(eventFixture({ attempts: 0 })),
+      ],
+    });
   });
 });
 
