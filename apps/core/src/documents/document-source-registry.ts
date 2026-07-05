@@ -114,6 +114,7 @@ export function createDocumentSourceRegistry(
   };
   const sourcesById = new Map<string, DocumentSource>();
   const sourcesByUri = new Map<string, DocumentSource>();
+  const knowledgeDraftsPolicyOverriddenById = new Set<string>();
 
   const listSourcesByAnsweringEnabled = (enabled: boolean): DocumentSource[] =>
     cloneSources(
@@ -138,6 +139,7 @@ export function createDocumentSourceRegistry(
         sourcesById,
         sourcesByUri,
         resolvedDependencies,
+        knowledgeDraftsPolicyOverriddenById,
         {
           sourceType: "group_visible_document",
           sourceUri,
@@ -174,6 +176,7 @@ export function createDocumentSourceRegistry(
         sourcesById,
         sourcesByUri,
         resolvedDependencies,
+        knowledgeDraftsPolicyOverriddenById,
         {
           sourceType: "authorized_wiki_document",
           sourceUri,
@@ -210,6 +213,7 @@ export function createDocumentSourceRegistry(
         sourcesById,
         sourcesByUri,
         resolvedDependencies,
+        knowledgeDraftsPolicyOverriddenById,
         {
           sourceType: "user_submitted_document",
           sourceUri,
@@ -263,6 +267,7 @@ export function createDocumentSourceRegistry(
       const source = updateSourceById(sourcesById, sourcesByUri, resolvedDependencies, id, {
         canUseForKnowledgeDrafts: enabled,
       });
+      knowledgeDraftsPolicyOverriddenById.add(source.id);
 
       return cloneSource(source);
     },
@@ -276,6 +281,9 @@ export function createDocumentSourceRegistry(
           ? {}
           : { canUseForKnowledgeDrafts: policy.canUseForKnowledgeDrafts }),
       });
+      if (policy.canUseForKnowledgeDrafts !== undefined) {
+        knowledgeDraftsPolicyOverriddenById.add(source.id);
+      }
 
       return cloneSource(source);
     },
@@ -395,6 +403,7 @@ function registerSource(
   sourcesById: Map<string, DocumentSource>,
   sourcesByUri: Map<string, DocumentSource>,
   dependencies: Required<DocumentSourceRegistryDependencies>,
+  knowledgeDraftsPolicyOverriddenById: Set<string>,
   next: NextDocumentSource,
 ): DocumentSource {
   const now = new Date(dependencies.now());
@@ -437,7 +446,11 @@ function registerSource(
     syncState:
       existing.syncState === "failed" && !hasExistingEvidence ? "pending" : existing.syncState,
     canUseForAnswering: existing.canUseForAnswering,
-    canUseForKnowledgeDrafts: shouldUseKnowledgeDrafts(existing, next),
+    canUseForKnowledgeDrafts: shouldUseKnowledgeDrafts(
+      existing,
+      next,
+      knowledgeDraftsPolicyOverriddenById.has(existing.id),
+    ),
     createdAt: new Date(existing.createdAt),
     updatedAt: now,
     evidence: hasExistingEvidence
@@ -501,9 +514,14 @@ function higherPrioritySourceType(
 function shouldUseKnowledgeDrafts(
   existing: DocumentSource,
   next: NextDocumentSource,
+  knowledgeDraftsPolicyOverridden: boolean,
 ): boolean {
   if (existing.permissionState === "denied") {
     return false;
+  }
+
+  if (knowledgeDraftsPolicyOverridden) {
+    return existing.canUseForKnowledgeDrafts;
   }
 
   if (existing.canUseForKnowledgeDrafts) {

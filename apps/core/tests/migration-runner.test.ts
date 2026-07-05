@@ -200,4 +200,16 @@ describe("defaultMigrationsDir", () => {
       "add constraint document_sources_denied_capabilities_disabled",
     );
   });
+
+  it("includes migration to persist document source policy overrides", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0015_document_source_policy_overrides.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain(
+      "add column knowledge_drafts_policy_overridden boolean not null default false",
+    );
+  });
 });

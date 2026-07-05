@@ -525,6 +525,28 @@ describe("createDocumentSourceRegistry", () => {
     expect(reregistered.canUseForKnowledgeDrafts).toBe(false);
   });
 
+  it("does not re-enable manually disabled user-submitted knowledge drafts when registration upgrades capability", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const source = registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      submittedByUserId: "user-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    registry.setKnowledgeDraftsEnabled(source.id, false);
+    const reregistered = registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/docs/doc-1",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    expect(reregistered.sourceType).toBe("authorized_wiki_document");
+    expect(reregistered.canUseForKnowledgeDrafts).toBe(false);
+  });
+
   it("keeps answering disabled while permission is denied", () => {
     const registry = createDocumentSourceRegistry({
       createId: () => "doc-source-1",

@@ -22,6 +22,7 @@ type TestSourceRow = {
   sync_state: string;
   can_use_for_answering: boolean;
   can_use_for_knowledge_drafts: boolean;
+  knowledge_drafts_policy_overridden: boolean;
   created_at: Date;
   updated_at: Date;
 };
@@ -62,6 +63,7 @@ function makeSourceRow(overrides: Partial<TestSourceRow> = {}): TestSourceRow {
     sync_state: "pending",
     can_use_for_answering: true,
     can_use_for_knowledge_drafts: true,
+    knowledge_drafts_policy_overridden: false,
     created_at: now,
     updated_at: now,
     ...overrides,
@@ -362,6 +364,39 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     );
   });
 
+  it("does not re-enable manually disabled user-submitted knowledge drafts when registration upgrades capability", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "user_submitted_document",
+        can_use_for_knowledge_drafts: false,
+        knowledge_drafts_policy_overridden: true,
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/doc",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when knowledge_drafts_policy_overridden then can_use_for_knowledge_drafts",
+    );
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when source_type = 'user_submitted_document' then $7",
+    );
+  });
+
   it("resets failed sync state to pending when registration adds new evidence", async () => {
     const now = new Date("2026-07-01T04:00:00.000Z");
     const fake = createFakePool({
@@ -533,6 +568,9 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     expect(normalizeSql(update?.sql ?? "")).toContain(
       "can_use_for_knowledge_drafts = case when permission_state = 'denied' then false else $2 end",
     );
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "knowledge_drafts_policy_overridden = true",
+    );
     expect(update?.values).toEqual(["source-1", true, now]);
   });
 
@@ -562,6 +600,9 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     );
     expect(normalizeSql(updates[0]?.sql ?? "")).toContain(
       "can_use_for_knowledge_drafts = case when permission_state = 'denied' then false else coalesce($3::boolean, can_use_for_knowledge_drafts) end",
+    );
+    expect(normalizeSql(updates[0]?.sql ?? "")).toContain(
+      "knowledge_drafts_policy_overridden = case when $3::boolean is null then knowledge_drafts_policy_overridden else true end",
     );
     expect(updates[0]?.values).toEqual(["source-1", false, false, now]);
   });

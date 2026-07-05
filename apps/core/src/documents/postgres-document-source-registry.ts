@@ -58,6 +58,7 @@ type SourceRow = {
   sync_state: DocumentSyncState;
   can_use_for_answering: boolean;
   can_use_for_knowledge_drafts: boolean;
+  knowledge_drafts_policy_overridden: boolean;
   created_at: Date;
   updated_at: Date;
 };
@@ -246,6 +247,7 @@ returning *
 update document_sources
 set
   can_use_for_knowledge_drafts = case when permission_state = 'denied' then false else $2 end,
+  knowledge_drafts_policy_overridden = true,
   updated_at = $3
 where id = $1
 returning *
@@ -266,6 +268,10 @@ set
   can_use_for_knowledge_drafts = case
     when permission_state = 'denied' then false
     else coalesce($3::boolean, can_use_for_knowledge_drafts)
+  end,
+  knowledge_drafts_policy_overridden = case
+    when $3::boolean is null then knowledge_drafts_policy_overridden
+    else true
   end,
   updated_at = $4
 where id = $1
@@ -428,6 +434,7 @@ set
   authorized_space_id = coalesce(authorized_space_id, $6),
   can_use_for_knowledge_drafts = case
     when permission_state = 'denied' then false
+    when knowledge_drafts_policy_overridden then can_use_for_knowledge_drafts
     when can_use_for_knowledge_drafts then true
     when source_type = 'user_submitted_document' then $7
     else false
