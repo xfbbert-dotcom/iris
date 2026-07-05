@@ -119,7 +119,10 @@ function sanitizeLiveChatLimit(value: number | undefined): number | undefined {
 }
 
 function assertSafeMagnitudeLimit(value: number | undefined, fieldName: string): void {
-  if (value !== undefined && Number.isFinite(value) && Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+  if (
+    value !== undefined &&
+    (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER)
+  ) {
     throw new Error(`${fieldName} must be a finite safe-magnitude number`);
   }
 }

@@ -250,6 +250,35 @@ describe("AnswerDraftOrchestrator", () => {
     expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
+  it("rejects non-finite liveChatLimit values before loading stored context", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => []),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await expect(
+      orchestrator.generateDraft({
+        question: "What changed?",
+        chatId: "oc_1",
+        liveChatMessages: [],
+        liveChatLimit: Number.NaN,
+      }),
+    ).rejects.toThrow("liveChatLimit must be a finite safe-magnitude number");
+    expect(liveChatContextProvider.loadRecentMessages).not.toHaveBeenCalled();
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized request live chat arrays before loading stored context", async () => {
     const contextBuilder = {
       buildContext: vi.fn(),
@@ -303,6 +332,35 @@ describe("AnswerDraftOrchestrator", () => {
         chatId: "oc_1",
         liveChatMessages: [],
         fragmentLimit: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("fragmentLimit must be a finite safe-magnitude number");
+    expect(liveChatContextProvider.loadRecentMessages).not.toHaveBeenCalled();
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-finite fragmentLimit values before loading stored context", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(),
+    };
+    const liveChatContextProvider = {
+      loadRecentMessages: vi.fn(async () => []),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      liveChatContextProvider,
+    });
+
+    await expect(
+      orchestrator.generateDraft({
+        question: "What changed?",
+        chatId: "oc_1",
+        liveChatMessages: [],
+        fragmentLimit: Number.POSITIVE_INFINITY,
       }),
     ).rejects.toThrow("fragmentLimit must be a finite safe-magnitude number");
     expect(liveChatContextProvider.loadRecentMessages).not.toHaveBeenCalled();
