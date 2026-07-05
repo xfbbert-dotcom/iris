@@ -109,6 +109,29 @@ end
 return 0
 `;
 
+const REPLAY_DEAD_LETTER_SCRIPT = `
+if redis.call("LREM", KEYS[3], 1, ARGV[3]) <= 0 then
+  return 0
+end
+
+if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then
+  redis.call("RPUSH", KEYS[2], ARGV[2])
+  return 1
+end
+
+local queued = redis.call("LRANGE", KEYS[2], 0, -1)
+for index, payload in ipairs(queued) do
+  local ok, decoded = pcall(cjson.decode, payload)
+  if ok and decoded["idempotencyKey"] == ARGV[1] then
+    redis.call("LSET", KEYS[2], index - 1, ARGV[2])
+    return 1
+  end
+end
+
+redis.call("RPUSH", KEYS[2], ARGV[2])
+return 1
+`;
+
 export type RedisRawEventQueueClient = {
   eval(
     script: string,
@@ -157,12 +180,15 @@ export function createRedisRawEventQueue({
       return "unsupported_legacy_item";
     }
 
-    await upsertRetryingSerializedRawEvent(client, seenKey, queueKey, {
-      ...found.deadLetter.event,
-      attempts: 0,
-    });
-    await client.lRem(deadLetterKey, 1, found.payload);
-    return "replayed";
+    const replayed = await replayDeadLetteredSerializedRawEvent(
+      client,
+      seenKey,
+      queueKey,
+      deadLetterKey,
+      { ...found.deadLetter.event, attempts: 0 },
+      found.payload,
+    );
+    return replayed ? "replayed" : "not_found";
   };
 
   const deleteDeadLetter = async (
@@ -372,6 +398,21 @@ async function upsertRetryingSerializedRawEvent(
     keys: [seenKey, queueKey],
     arguments: [normalizedEvent.idempotencyKey, payload],
   });
+}
+
+async function replayDeadLetteredSerializedRawEvent(
+  client: RedisRawEventQueueClient,
+  seenKey: string,
+  queueKey: string,
+  deadLetterKey: string,
+  event: RawEvent,
+  deadLetterPayload: string,
+): Promise<boolean> {
+  const result = await client.eval(REPLAY_DEAD_LETTER_SCRIPT, {
+    keys: [seenKey, queueKey, deadLetterKey],
+    arguments: [event.idempotencyKey, serializeRawEvent(event), deadLetterPayload],
+  });
+  return result === 1;
 }
 
 async function acknowledgeRetryingSerializedRawEvent(

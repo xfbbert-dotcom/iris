@@ -103,6 +103,29 @@ end
 return 0
 `;
 
+const REPLAY_DEAD_LETTER_SCRIPT = `
+if redis.call("LREM", KEYS[3], 1, ARGV[3]) <= 0 then
+  return 0
+end
+
+if redis.call("SADD", KEYS[1], ARGV[1]) == 1 then
+  redis.call("RPUSH", KEYS[2], ARGV[2])
+  return 1
+end
+
+local queued = redis.call("LRANGE", KEYS[2], 0, -1)
+for index, payload in ipairs(queued) do
+  local ok, decoded = pcall(cjson.decode, payload)
+  if ok and decoded["idempotencyKey"] == ARGV[1] then
+    redis.call("LSET", KEYS[2], index - 1, ARGV[2])
+    return 1
+  end
+end
+
+redis.call("RPUSH", KEYS[2], ARGV[2])
+return 1
+`;
+
 export type RedisDocumentSyncQueueClient = {
   eval(
     script: string,
@@ -151,12 +174,15 @@ export function createRedisDocumentSyncQueue({
       return "unsupported_legacy_item";
     }
 
-    await upsertRetryingSerializedJob(client, seenKey, queueKey, {
-      ...found.deadLetter.job,
-      attempts: 0,
-    });
-    await client.lRem(deadLetterKey, 1, found.payload);
-    return "replayed";
+    const replayed = await replayDeadLetteredSerializedJob(
+      client,
+      seenKey,
+      queueKey,
+      deadLetterKey,
+      { ...found.deadLetter.job, attempts: 0 },
+      found.payload,
+    );
+    return replayed ? "replayed" : "not_found";
   };
 
   const deleteDeadLetter = async (
@@ -368,6 +394,21 @@ async function upsertRetryingSerializedJob(
     keys: [seenKey, queueKey],
     arguments: [normalizedJob.idempotencyKey, payload],
   });
+}
+
+async function replayDeadLetteredSerializedJob(
+  client: RedisDocumentSyncQueueClient,
+  seenKey: string,
+  queueKey: string,
+  deadLetterKey: string,
+  job: DocumentSyncJob,
+  deadLetterPayload: string,
+): Promise<boolean> {
+  const result = await client.eval(REPLAY_DEAD_LETTER_SCRIPT, {
+    keys: [seenKey, queueKey, deadLetterKey],
+    arguments: [job.idempotencyKey, serializeDocumentSyncJob(job), deadLetterPayload],
+  });
+  return result === 1;
 }
 
 async function acknowledgeRetryingSerializedJob(

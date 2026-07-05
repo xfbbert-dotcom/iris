@@ -1498,6 +1498,36 @@ When Iris moves to a leased queue adapter, invalid-payload DLQ ACK must remain
 one adapter-level commit that records the diagnostic failure, clears in-flight
 ownership, and conditionally releases idempotency state.
 
+### 12.32 Redis DLQ Replay Must Be Atomic
+
+Pressure:
+
+Operator DLQ replay moves work out of a dead-letter list and back into the
+pending queue. If replay first enqueues/upserts the work and then removes the
+DLQ entry with a separate command, a transient Redis failure can leave the same
+logical work visible both as queued work and as a still-replayable DLQ entry.
+Operators may then replay it again after the original retry already succeeded.
+
+Required architectural response:
+
+- Redis DLQ replay for raw events, document sync jobs, and reindex jobs must
+  remove the exact DLQ payload and enqueue/upsert the reset retry payload in one
+  Redis eval/Lua operation.
+- Replay must preserve stale-seen-key recovery semantics: if the seen key
+  already exists but no queued duplicate is found, replay still pushes the reset
+  payload so operator recovery cannot silently drop work.
+- Replay must update an existing queued duplicate with the reset payload when
+  one exists, preserving the existing retry/upsert contract.
+- If the exact DLQ payload is already missing, replay must not enqueue and must
+  surface a not-found result.
+- The v1 single-consumer recovery contract remains unchanged.
+
+Evolution signal:
+
+When Iris moves to a leased queue adapter, DLQ replay must remain one
+adapter-level operator action that transfers ownership from DLQ storage back to
+pending work without exposing both states at once.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

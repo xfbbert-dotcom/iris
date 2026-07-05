@@ -938,7 +938,7 @@ describe("RedisDocumentReindexQueue", () => {
     };
     const payload = JSON.stringify(deadLetter);
     const client: RedisDocumentReindexQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn(async () => 1),
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(),
       lLen: vi.fn(),
@@ -949,14 +949,15 @@ describe("RedisDocumentReindexQueue", () => {
     const queue = createRedisDocumentReindexQueue({ client });
 
     await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
-    expect(client.lRem).toHaveBeenCalledWith("iris:reindex:documents:dlq", 1, payload);
-    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
-      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LREM"), {
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue", "iris:reindex:documents:dlq"],
       arguments: [
         jobFixture().idempotencyKey,
         serializeDocumentReindexJob(jobFixture({ attempts: 0 })),
+        payload,
       ],
     });
+    expect(client.lRem).not.toHaveBeenCalled();
   });
 
   it("replays Redis DLQ entries when the seen key is stale", async () => {
@@ -978,6 +979,16 @@ describe("RedisDocumentReindexQueue", () => {
     const client: RedisDocumentReindexQueueClient = {
       eval: vi.fn(async (script, options) => {
         const [idempotencyKey, queuedPayload] = options.arguments;
+        const replayedDeadLetterPayload = options.arguments[2];
+        if (replayedDeadLetterPayload !== undefined) {
+          const index = state.deadLetters.indexOf(replayedDeadLetterPayload);
+          if (index === -1) {
+            return 0;
+          }
+
+          state.deadLetters.splice(index, 1);
+        }
+
         if (!state.seen.has(idempotencyKey)) {
           state.seen.add(idempotencyKey);
           state.queue.push(queuedPayload);
@@ -1023,12 +1034,14 @@ describe("RedisDocumentReindexQueue", () => {
     ]);
     expect(state.deadLetters).toEqual([]);
     expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LRANGE"), {
-      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue", "iris:reindex:documents:dlq"],
       arguments: [
         jobFixture().idempotencyKey,
         serializeDocumentReindexJob(jobFixture({ attempts: 0 })),
+        payload,
       ],
     });
+    expect(client.lRem).not.toHaveBeenCalled();
   });
 
   it("keeps Redis DLQ entries when replay enqueue fails", async () => {
@@ -1058,11 +1071,12 @@ describe("RedisDocumentReindexQueue", () => {
     await expect(queue.replayDeadLetter("dlq-1")).rejects.toThrow(
       "redis enqueue unavailable",
     );
-    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
-      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LREM"), {
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue", "iris:reindex:documents:dlq"],
       arguments: [
         jobFixture().idempotencyKey,
         serializeDocumentReindexJob(jobFixture({ attempts: 0 })),
+        payload,
       ],
     });
     expect(client.lRem).not.toHaveBeenCalled();
@@ -1150,11 +1164,12 @@ describe("RedisDocumentReindexQueue", () => {
       notFoundIds: [],
       unsupportedLegacyIds: [],
     });
-    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
-      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue"],
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LREM"), {
+      keys: ["iris:reindex:documents:seen", "iris:reindex:documents:queue", "iris:reindex:documents:dlq"],
       arguments: [
         jobFixture().idempotencyKey,
         serializeDocumentReindexJob(jobFixture({ attempts: 0 })),
+        payload,
       ],
     });
   });
@@ -1187,7 +1202,7 @@ describe("RedisDocumentReindexQueue", () => {
       unsupportedLegacyIds: [],
     });
     expect(client.eval).toHaveBeenCalledOnce();
-    expect(client.lRem).toHaveBeenCalledOnce();
+    expect(client.lRem).not.toHaveBeenCalled();
   });
 });
 

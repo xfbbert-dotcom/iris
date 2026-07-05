@@ -981,7 +981,7 @@ describe("RedisDocumentSyncQueue", () => {
       failedAt: "2026-07-03T02:00:00.000Z",
     });
     const client: RedisDocumentSyncQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn(async () => 1),
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(),
       lLen: vi.fn(),
@@ -992,14 +992,15 @@ describe("RedisDocumentSyncQueue", () => {
     const queue = createRedisDocumentSyncQueue({ client });
 
     await expect(queue.replayDeadLetter("dlq-1")).resolves.toBe("replayed");
-    expect(client.lRem).toHaveBeenCalledWith("iris:documents:sync:dlq", 1, payload);
-    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
-      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LREM"), {
+      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue", "iris:documents:sync:dlq"],
       arguments: [
         job().idempotencyKey,
         serializeDocumentSyncJob(job({ attempts: 0 })),
+        payload,
       ],
     });
+    expect(client.lRem).not.toHaveBeenCalled();
   });
 
   it("replays Redis DLQ entries when the seen key is stale", async () => {
@@ -1020,6 +1021,16 @@ describe("RedisDocumentSyncQueue", () => {
     const client: RedisDocumentSyncQueueClient = {
       eval: vi.fn(async (script, options) => {
         const [idempotencyKey, queuedPayload] = options.arguments;
+        const replayedDeadLetterPayload = options.arguments[2];
+        if (replayedDeadLetterPayload !== undefined) {
+          const index = state.deadLetters.indexOf(replayedDeadLetterPayload);
+          if (index === -1) {
+            return 0;
+          }
+
+          state.deadLetters.splice(index, 1);
+        }
+
         if (!state.seen.has(idempotencyKey)) {
           state.seen.add(idempotencyKey);
           state.queue.push(queuedPayload);
@@ -1063,9 +1074,10 @@ describe("RedisDocumentSyncQueue", () => {
     expect(state.queue).toEqual([serializeDocumentSyncJob(job({ attempts: 0 }))]);
     expect(state.deadLetters).toEqual([]);
     expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LRANGE"), {
-      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
-      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 0 }))],
+      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue", "iris:documents:sync:dlq"],
+      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 0 })), payload],
     });
+    expect(client.lRem).not.toHaveBeenCalled();
   });
 
   it("keeps Redis DLQ entries when replay enqueue fails", async () => {
@@ -1095,9 +1107,9 @@ describe("RedisDocumentSyncQueue", () => {
     await expect(queue.replayDeadLetter("dlq-1")).rejects.toThrow(
       "redis enqueue unavailable",
     );
-    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
-      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
-      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 0 }))],
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LREM"), {
+      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue", "iris:documents:sync:dlq"],
+      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 0 })), payload],
     });
     expect(client.lRem).not.toHaveBeenCalled();
   });
@@ -1139,7 +1151,7 @@ describe("RedisDocumentSyncQueue", () => {
       failedAt: "2026-07-03T02:00:00.000Z",
     });
     const client: RedisDocumentSyncQueueClient = {
-      eval: vi.fn(),
+      eval: vi.fn(async () => 1),
       rPush: vi.fn(async () => 1),
       lPop: vi.fn(),
       lLen: vi.fn(),
@@ -1185,9 +1197,9 @@ describe("RedisDocumentSyncQueue", () => {
       notFoundIds: [],
       unsupportedLegacyIds: [],
     });
-    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("SADD"), {
-      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue"],
-      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 0 }))],
+    expect(client.eval).toHaveBeenCalledWith(expect.stringContaining("LREM"), {
+      keys: ["iris:documents:sync:seen", "iris:documents:sync:queue", "iris:documents:sync:dlq"],
+      arguments: [job().idempotencyKey, serializeDocumentSyncJob(job({ attempts: 0 })), payload],
     });
   });
 
@@ -1218,7 +1230,7 @@ describe("RedisDocumentSyncQueue", () => {
       unsupportedLegacyIds: [],
     });
     expect(client.eval).toHaveBeenCalledOnce();
-    expect(client.lRem).toHaveBeenCalledOnce();
+    expect(client.lRem).not.toHaveBeenCalled();
   });
 });
 
