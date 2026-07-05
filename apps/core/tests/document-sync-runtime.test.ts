@@ -427,6 +427,16 @@ describe("createDocumentSyncRuntime", () => {
     expect(documentSources.registerUserSubmittedDocument).toHaveBeenCalledTimes(
       userSubmittedRegistrationCount,
     );
+    await expect(
+      runtime?.registerUserSubmittedDocument({
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1,please",
+        submittedByUserId: "ou_1",
+        observedAt: new Date("2026-07-03T03:35:00.000Z"),
+      }),
+    ).rejects.toThrow("unsupported Feishu document source URI");
+    expect(documentSources.registerUserSubmittedDocument).toHaveBeenCalledTimes(
+      userSubmittedRegistrationCount,
+    );
     await expect(runtime?.sources.list({ limit: 1 })).resolves.toEqual([inventorySource]);
     expect(documentSources.listSources).toHaveBeenCalledOnce();
     documentSources.listSources.mockResolvedValueOnce(

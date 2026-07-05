@@ -19,6 +19,7 @@ const DEFAULT_FEISHU_DOCUMENT_MAX_CONTENT_CHARS = 2_000_000;
 const RAW_CONTENT_RESPONSE_OVERHEAD_BYTES = 4096;
 const WIKI_NODE_RESPONSE_MAX_BYTES = 65_536;
 export const MAX_FEISHU_DOCUMENT_TOKEN_CHARS = 512;
+const invalidFeishuDocumentTokenPattern = /,/u;
 
 const supportedSourceTypes = new Set<DocumentSourceType>([
   "group_visible_document",
@@ -295,6 +296,9 @@ function normalizeFeishuDocumentToken(value: unknown): string | undefined {
 
   const token = value.trim();
   if (token.length === 0 || token.length > MAX_FEISHU_DOCUMENT_TOKEN_CHARS) {
+    return undefined;
+  }
+  if (invalidFeishuDocumentTokenPattern.test(token)) {
     return undefined;
   }
 

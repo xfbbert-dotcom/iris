@@ -219,6 +219,7 @@ For v1, in-memory ordering should be deterministic:
 Registration rejects invalid input:
 
 - blank source URI;
+- unsupported or malformed Feishu docx/docs/wiki source URIs before they enter the registry;
 - missing required group/message/user/space fields for the selected registration path;
 - invalid state values.
 

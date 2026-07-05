@@ -391,6 +391,10 @@ Invoke-RestMethod `
   -Body '{"sourceUri":"https://example.feishu.cn/docx/doc_token","title":"User Guide","submittedByUserId":"ou_1"}'
 ```
 
+Use the clean Feishu document URL for manual registration. Iris strips query strings and fragments,
+but rejects obvious pasted-text contamination such as `https://example.feishu.cn/docx/doc_token,please`
+before it can enter the registry or sync queue.
+
 Manually enqueue a known source for sync:
 
 ```powershell
