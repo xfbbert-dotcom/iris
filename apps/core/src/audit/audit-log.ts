@@ -1,5 +1,7 @@
 import { normalizeAuditEventMessage } from "./audit-event-message.js";
 
+const MAX_AUDIT_SUMMARY_LIMIT = 100;
+
 export type PermissionGuardAuditEvent = {
   type: "permission_guard_denied" | "permission_guard_error";
   documentId: string;
@@ -187,5 +189,5 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_AUDIT_SUMMARY_LIMIT, Math.max(0, Math.floor(value)));
 }

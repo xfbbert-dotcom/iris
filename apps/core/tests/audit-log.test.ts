@@ -247,6 +247,27 @@ describe("InMemoryAuditLog", () => {
     expect(auditLog.summarizeRecent({ limit: Number.NaN })).toEqual([]);
   });
 
+  it("caps oversized recent event limits before summarizing", async () => {
+    const auditLog = new InMemoryAuditLog({ maxEvents: 200 });
+
+    for (let index = 0; index < 101; index += 1) {
+      await auditLog.record({
+        type: "permission_guard_denied",
+        documentId: "source-1",
+        fragmentIds: [`fragment-${index}`],
+      });
+    }
+
+    expect(auditLog.summarizeRecent({ limit: 101 })).toEqual([
+      expect.objectContaining({
+        documentId: "source-1",
+        type: "permission_guard_denied",
+        eventCount: 100,
+        affectedFragmentCount: 100,
+      }),
+    ]);
+  });
+
   it("rejects unsafe recent event limits", async () => {
     const auditLog = new InMemoryAuditLog();
 
