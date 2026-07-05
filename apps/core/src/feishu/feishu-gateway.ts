@@ -105,7 +105,7 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
           dependencies.onEnqueueError,
         );
       } else {
-        enqueueWithoutWaiting(
+        enqueueAfterAcknowledgement(
           () =>
             dependencies.queue.enqueueRawFeishuEvent({
               idempotencyKey: resolveIdempotencyKey(request),

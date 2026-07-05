@@ -677,6 +677,7 @@ Required architectural response:
 
 - Feishu Gateway must be "ack-first": validate minimally, derive bounded idempotency keys, schedule raw event persistence, and return HTTP 200 quickly.
 - Raw queue persistence, signal filtering, denoising, categorization, memory extraction, and agent decisions must happen after acknowledgment.
+- Ack-first applies to every queue backend, including the legacy in-memory fallback. A degraded or local queue adapter must not start persistence work before the callback response has been produced.
 - Async workers must support idempotency, retry limits, backpressure, and dead-letter handling.
 - Queue overload must degrade Iris's intelligence gracefully rather than breaking Feishu callback handling.
 

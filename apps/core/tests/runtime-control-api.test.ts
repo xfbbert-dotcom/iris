@@ -91,11 +91,17 @@ describe("runtime control API", () => {
       globalEnabled: true,
     });
 
-    await app.inject({
+    const enabledCallback = await app.inject({
       method: "POST",
       url: "/feishu/events",
       payload: feishuMessagePayload("event-enabled", "chat-a"),
     });
+
+    expect(enabledCallback.statusCode).toBe(200);
+    expect(enabledCallback.json()).toEqual({ ok: true });
+    expect(queue.events).toHaveLength(0);
+
+    await flushDeferredEnqueue();
 
     expect(queue.events).toHaveLength(1);
     expect(queue.events[0]?.idempotencyKey).toBe("event-enabled");
@@ -177,6 +183,7 @@ describe("runtime control API", () => {
       url: "/feishu/events",
       payload: feishuMessagePayload("event-enabled-group", "chat-b"),
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events).toHaveLength(1);
     expect(queue.events[0]?.idempotencyKey).toBe("event-enabled-group");
@@ -198,6 +205,7 @@ describe("runtime control API", () => {
       url: "/feishu/events",
       payload: feishuMessagePayload("event-reenabled-group", "chat-a"),
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events).toHaveLength(2);
     expect(queue.events[1]?.idempotencyKey).toBe("event-reenabled-group");
@@ -636,4 +644,11 @@ function feishuMessagePayload(eventId: string, chatId: string) {
       },
     },
   };
+}
+
+async function flushDeferredEnqueue(): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await Promise.resolve();
 }

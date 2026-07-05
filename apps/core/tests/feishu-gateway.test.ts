@@ -101,7 +101,7 @@ describe("InMemoryEventQueue", () => {
 });
 
 describe("FeishuGateway", () => {
-  it("returns HTTP 200 payload immediately after enqueueing", async () => {
+  it("returns HTTP 200 payload before legacy queue persistence completes", async () => {
     const queue = new InMemoryEventQueue();
     const gateway = createFeishuGateway({ queue });
 
@@ -112,7 +112,30 @@ describe("FeishuGateway", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true });
+    expect(queue.events).toHaveLength(0);
+
+    await flushDeferredEnqueue();
+
     expect(queue.events).toHaveLength(1);
+  });
+
+  it("acknowledges legacy queued events before starting queue persistence work", async () => {
+    const queue = {
+      enqueueRawFeishuEvent: vi.fn(() => new Promise<void>(() => undefined)),
+    };
+    const gateway = createFeishuGateway({ queue });
+
+    const response = await gateway.handleCallback({
+      headers: { "x-iris-event-id": "event-legacy-deferred-queue" },
+      body: { event_id: "event-legacy-deferred-queue", message: { chat_id: "chat-a" } },
+    });
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(queue.enqueueRawFeishuEvent).not.toHaveBeenCalled();
+
+    await flushDeferredEnqueue();
+
+    expect(queue.enqueueRawFeishuEvent).toHaveBeenCalledOnce();
   });
 
   it("does not run signal filtering before acknowledging", async () => {
@@ -194,6 +217,7 @@ describe("FeishuGateway", () => {
       headers: { "x-iris-event-id": " header-event " },
       body: { event_id: "body-event" }
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).toBe("header-event");
   });
@@ -206,6 +230,7 @@ describe("FeishuGateway", () => {
       headers: {},
       body: { event_id: " body-event " }
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).toBe("body-event");
   });
@@ -218,6 +243,7 @@ describe("FeishuGateway", () => {
       headers: {},
       body: { header: { event_id: " header-event " } }
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).toBe("header-event");
   });
@@ -230,6 +256,7 @@ describe("FeishuGateway", () => {
       headers: { "x-iris-event-id": "   " },
       body: { event_id: "body-event" }
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).toBe("body-event");
   });
@@ -242,6 +269,7 @@ describe("FeishuGateway", () => {
       headers: {},
       body: { event_id: "   " }
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).not.toBe("");
     expect(queue.events[0]?.idempotencyKey).not.toBe("   ");
@@ -262,6 +290,7 @@ describe("FeishuGateway", () => {
 
     await gateway.handleCallback({ headers: {}, body });
     await gateway.handleCallback({ headers: {}, body });
+    await flushDeferredEnqueue();
 
     expect(queue.events).toHaveLength(1);
     expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]+$/);
@@ -297,6 +326,7 @@ describe("FeishuGateway", () => {
         },
       },
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events).toHaveLength(1);
     expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]{64}$/);
@@ -310,6 +340,7 @@ describe("FeishuGateway", () => {
       headers: {},
       body: { event_id: "   ", event: { message: { chat_id: "chat-1" } } },
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]{64}$/);
   });
@@ -324,6 +355,8 @@ describe("FeishuGateway", () => {
     });
 
     expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    await flushDeferredEnqueue();
+
     expect(queue.events).toHaveLength(1);
     expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]{64}$/);
   });
@@ -584,6 +617,10 @@ describe("Core App Feishu route", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true });
+    expect(queue.events).toHaveLength(0);
+
+    await flushDeferredEnqueue();
+
     expect(queue.events).toHaveLength(1);
   });
 
@@ -712,6 +749,7 @@ describe("Core App Feishu route", () => {
       url: "/feishu/events",
       payload: { event_id: "raw-body-1" }
     });
+    await flushDeferredEnqueue();
 
     expect(observedRawBody).toBe(JSON.stringify({ event_id: "raw-body-1" }));
   });
@@ -813,6 +851,10 @@ describe("Core App Feishu route", () => {
 
       expect(acceptedResponse.statusCode).toBe(200);
       expect(acceptedResponse.json()).toEqual({ ok: true });
+      expect(queue.events).toHaveLength(0);
+
+      await flushDeferredEnqueue();
+
       expect(queue.events).toHaveLength(1);
     } finally {
       restoreEnv("FEISHU_VERIFICATION_TOKEN", originalVerificationToken);
