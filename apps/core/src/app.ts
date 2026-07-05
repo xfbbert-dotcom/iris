@@ -169,18 +169,31 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       : undefined;
   const answerDraftOrchestrator =
     dependencies.answerDraftOrchestrator ?? answerDraftRuntime?.answerDraftOrchestrator;
-  const reindexWorkerRuntime =
-    (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
-  reindexWorkerRuntime?.start();
-  const eventWorkerRuntime =
-    (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
-      runtimeController,
-      ...(answerDraftOrchestrator === undefined ? {} : { answerDraftOrchestrator }),
+  let reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
+  let eventWorkerRuntime: EventWorkerRuntime | undefined;
+  let documentSyncRuntime: DocumentSyncRuntime | undefined;
+  try {
+    reindexWorkerRuntime =
+      (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
+    reindexWorkerRuntime?.start();
+    eventWorkerRuntime =
+      (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
+        runtimeController,
+        ...(answerDraftOrchestrator === undefined ? {} : { answerDraftOrchestrator }),
+      });
+    eventWorkerRuntime?.start();
+    documentSyncRuntime =
+      (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
+    documentSyncRuntime?.start();
+  } catch (error) {
+    scheduleRuntimeStartupCleanup({
+      answerDraftRuntime,
+      reindexWorkerRuntime,
+      eventWorkerRuntime,
+      documentSyncRuntime,
     });
-  eventWorkerRuntime?.start();
-  const documentSyncRuntime =
-    (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
-  documentSyncRuntime?.start();
+    throw error;
+  }
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
     dependencies.verifyFeishuRequest ??
@@ -1137,6 +1150,25 @@ async function closeRuntimeResources(
   if (firstError !== undefined) {
     throw firstError;
   }
+}
+
+function scheduleRuntimeStartupCleanup({
+  answerDraftRuntime,
+  reindexWorkerRuntime,
+  eventWorkerRuntime,
+  documentSyncRuntime,
+}: {
+  answerDraftRuntime: AnswerDraftRuntime | undefined;
+  reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
+  eventWorkerRuntime: EventWorkerRuntime | undefined;
+  documentSyncRuntime: DocumentSyncRuntime | undefined;
+}): void {
+  void closeRuntimeResources([
+    () => documentSyncRuntime?.close(),
+    () => eventWorkerRuntime?.close(),
+    () => reindexWorkerRuntime?.close(),
+    () => answerDraftRuntime?.close(),
+  ]).catch(() => undefined);
 }
 
 function normalizeHeaders(headers: Record<string, unknown>): Record<string, string | undefined> {

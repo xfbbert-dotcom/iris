@@ -494,6 +494,43 @@ describe("answer draft runtime wiring", () => {
     expect(reindexWorkerRuntime.close).toHaveBeenCalledOnce();
     expect(answerDraftRuntime.close).toHaveBeenCalledOnce();
   });
+
+  it("cleans up runtimes when startup fails", async () => {
+    const startError = new Error("event worker start failed");
+    const answerDraftRuntime = {
+      answerDraftOrchestrator: {
+        generateDraft: vi.fn(async () => ({
+          answerText: "Runtime draft",
+          promptContext: "",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+        })),
+      },
+      close: vi.fn(async () => undefined),
+    };
+    const eventWorkerRuntime = fakeEventRuntime({
+      start: vi.fn(() => {
+        throw startError;
+      }),
+    });
+    const reindexWorkerRuntime = fakeReindexRuntime();
+
+    expect(() =>
+      buildApp({
+        createAnswerDraftRuntime: () => answerDraftRuntime,
+        createEventWorkerRuntime: () => eventWorkerRuntime,
+        createReindexWorkerRuntime: () => reindexWorkerRuntime,
+        createDocumentSyncRuntime: () => undefined,
+      }),
+    ).toThrow("event worker start failed");
+
+    await flushDeferredEnqueue();
+
+    expect(eventWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(reindexWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(answerDraftRuntime.close).toHaveBeenCalledOnce();
+  });
 });
 
 describe("internal API token guard", () => {
