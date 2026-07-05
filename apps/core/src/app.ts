@@ -1075,6 +1075,18 @@ function readInternalApiToken(value: string | undefined): string | undefined {
 
 function isInternalApiRequest(url: string): boolean {
   const path = url.split("?", 1)[0];
+  if (isInternalApiPath(path)) {
+    return true;
+  }
+
+  try {
+    return isInternalApiPath(decodeURIComponent(path));
+  } catch {
+    return false;
+  }
+}
+
+function isInternalApiPath(path: string): boolean {
   return path === "/internal" || path.startsWith("/internal/");
 }
 

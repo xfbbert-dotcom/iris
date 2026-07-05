@@ -585,6 +585,36 @@ describe("internal API token guard", () => {
     });
   });
 
+  it("guards percent-encoded internal route paths", async () => {
+    const app = buildApp({
+      internalApiToken: "operator-secret",
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const encodedLeadingCharacterResponse = await app.inject({
+      method: "GET",
+      url: "/%69nternal/status",
+    });
+    const encodedSeparatorResponse = await app.inject({
+      method: "GET",
+      url: "/internal%2Fstatus",
+    });
+
+    expect(encodedLeadingCharacterResponse.statusCode).toBe(401);
+    expect(encodedLeadingCharacterResponse.json()).toEqual({
+      ok: false,
+      error: "internal_api_unauthorized",
+    });
+    expect(encodedSeparatorResponse.statusCode).toBe(401);
+    expect(encodedSeparatorResponse.json()).toEqual({
+      ok: false,
+      error: "internal_api_unauthorized",
+    });
+  });
+
   it("accepts bearer authorization scheme case-insensitively", async () => {
     const app = buildApp({
       internalApiToken: "operator-secret",

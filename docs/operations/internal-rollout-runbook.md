@@ -47,7 +47,8 @@ underscores.
 
 The token guard applies to the internal request path before any query string. For example,
 `/internal/status?details=1` and `/internal?probe=1` both require the same bearer token when
-`IRIS_INTERNAL_API_TOKEN` is set.
+`IRIS_INTERNAL_API_TOKEN` is set. Encoded internal paths such as `/%69nternal/status` and
+`/internal%2Fstatus` are treated as internal paths too, matching the router's decoded route view.
 
 ## Local Infrastructure
 
