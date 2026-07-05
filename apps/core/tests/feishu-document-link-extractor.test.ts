@@ -67,6 +67,19 @@ describe("FeishuDocumentLinkExtractor", () => {
     ]);
   });
 
+  it("stops document links at ASCII commas even without whitespace", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks(
+        "doc https://docs.feishu.cn/docx/token,please review https://foo.feishu.cn/docx/next",
+      ),
+    ).toEqual([
+      { sourceUri: "https://docs.feishu.cn/docx/token" },
+      { sourceUri: "https://foo.feishu.cn/docx/next" },
+    ]);
+  });
+
   it("drops copied link query strings and fragments before deduplication", () => {
     const extractor = createFeishuDocumentLinkExtractor();
 

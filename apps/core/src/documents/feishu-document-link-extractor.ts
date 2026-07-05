@@ -13,7 +13,7 @@ export const MAX_FEISHU_DOCUMENT_LINKS_PER_MESSAGE = 20;
 
 const fullwidthTrailingPunctuation =
   "\uFF0C\u3002\uFF1B\uFF1A\uFF01\uFF1F\u3001\uFF09\u3011\u300B\u300D\u300F\u3015";
-const urlPattern = new RegExp(`https://[^\\s<>"'${fullwidthTrailingPunctuation}]+`, "gi");
+const urlPattern = new RegExp(`https://[^\\s<>"',${fullwidthTrailingPunctuation}]+`, "gi");
 const trailingPunctuationPattern = new RegExp(
   `[),.;:!?${fullwidthTrailingPunctuation}]+$`,
   "u",
