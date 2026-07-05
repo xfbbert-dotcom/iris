@@ -23,6 +23,7 @@ export type FeishuDocumentPermissionCheckerDependencies = {
 const DEFAULT_FEISHU_DOCUMENT_PERMISSION_TIMEOUT_MS = 5_000;
 const MAX_FEISHU_PERMISSION_RESPONSE_BYTES = 65_536;
 const FEISHU_PERMISSION_DENIED_CODES = new Set([99991663]);
+const invalidFeishuDocumentTokenPattern = /,|%/u;
 
 export function createFeishuDocumentPermissionChecker({
   baseUrl,
@@ -230,7 +231,9 @@ function readWikiDocumentId(responseBody: unknown): string | undefined {
   }
 
   const documentToken = objectToken.trim();
-  return documentToken.length > 0 && documentToken.length <= MAX_FEISHU_DOCUMENT_TOKEN_CHARS
+  return documentToken.length > 0 &&
+    documentToken.length <= MAX_FEISHU_DOCUMENT_TOKEN_CHARS &&
+    !invalidFeishuDocumentTokenPattern.test(documentToken)
     ? documentToken
     : undefined;
 }

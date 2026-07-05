@@ -206,6 +206,30 @@ describe("createFeishuDocumentPermissionChecker", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("returns false for contaminated wiki node document tokens before metadata checks", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          code: 0,
+          data: { node: { obj_type: "docx", obj_token: "doccnWiki%2Fcontaminated" } },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ code: 0, data: { document: { title: "Should not read" } } }),
+      );
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(
+      checker.canReadSource(source({ sourceUri: "https://example.feishu.cn/wiki/wiki-node" })),
+    ).resolves.toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects unsafe timeout values before checking permissions", () => {
     expect(() =>
       createFeishuDocumentPermissionChecker({
