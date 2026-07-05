@@ -46,5 +46,6 @@ Run runtime, document body fetcher, and group link extractor tests.
 
 ### Task 3: Documentation And Full Verification
 
+- [x] Add internal API regression coverage for authorized wiki and user-submitted registration routes.
 - [x] Update the architecture whitepaper, registry design note, and internal rollout runbook.
 - [x] Run `npm run verify`.
