@@ -66,6 +66,26 @@ describe("ManualDocumentSyncPlanner", () => {
     expect(queue.enqueue).toHaveBeenCalledOnce();
   });
 
+  it("restores the previous sync state when enqueueing a reset source fails", async () => {
+    const queue = {
+      enqueue: vi.fn(async () => {
+        throw new Error("redis unavailable");
+      }),
+    };
+    const registry = registryWith(source({ id: "source-1", syncState: "synced" }));
+    const planner = createManualDocumentSyncPlanner({
+      registry,
+      queue,
+      now: () => new Date("2026-07-03T03:00:00.000Z"),
+    });
+
+    await expect(planner.enqueueSource({ documentSourceId: "source-1" })).rejects.toThrow(
+      "redis unavailable",
+    );
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(1, "source-1", "pending");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, "source-1", "synced");
+  });
+
   it("normalizes source ids before lookup and enqueueing", async () => {
     const queue = { enqueue: vi.fn(async () => undefined) };
     const registry = registryWith(source({ id: "source-1" }));

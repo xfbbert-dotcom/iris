@@ -413,6 +413,10 @@ Invoke-RestMethod `
   -Uri http://localhost:3000/internal/document-sync/sources/source_id/enqueue
 ```
 
+If this endpoint returns `document_sync_enqueue_failed`, Iris preserves the source's previous
+`syncState` when possible. Treat the failure as "no manual sync job was created", check Redis/Core
+health, and retry after the queue is healthy.
+
 Disable a source for answer retrieval:
 
 ```powershell

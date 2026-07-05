@@ -162,6 +162,8 @@ Feishu document sync reads are external I/O and must always be bounded by reques
 
 Document sync workers must not treat a stale pre-claim source read as permission to fetch. After a worker marks a source as `syncing`, it must treat the returned source record as authoritative, re-check permission state and usage capabilities, and abandon the fetch if the source has become denied or disabled. When this happens, the worker must restore the source to `pending` so future administrator changes can re-enable sync without leaving the source stuck in an in-flight state.
 
+Manual document sync enqueue is a control-plane recovery action. If Iris has to reset a source from `synced` or `failed` back to `pending` before enqueueing a manual sync job, and the queue enqueue fails, Iris must restore the source's previous sync state before surfacing the queue error. Operator status must not show a source as pending when no corresponding sync job exists.
+
 Constitutional principle:
 
 > Iris reads both chat text and readable document bodies. Every document entering memory must preserve source, permission, version, and visibility scope.

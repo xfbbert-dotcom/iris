@@ -68,23 +68,47 @@ export function createManualDocumentSyncPlanner({
         };
       }
 
-      if (source.syncState !== "pending") {
+      const previousSyncState = source.syncState;
+      if (previousSyncState !== "pending") {
         await registry.markSyncState(normalizedDocumentSourceId, "pending");
       }
 
-      await queue.enqueue({
-        idempotencyKey: createDocumentSyncIdempotencyKey({
+      try {
+        await queue.enqueue({
+          idempotencyKey: createDocumentSyncIdempotencyKey({
+            documentSourceId: normalizedDocumentSourceId,
+          }),
           documentSourceId: normalizedDocumentSourceId,
-        }),
-        documentSourceId: normalizedDocumentSourceId,
-        reason: "manual_source_sync",
-        enqueuedAt: now(),
-        attempts: 0,
-      });
+          reason: "manual_source_sync",
+          enqueuedAt: now(),
+          attempts: 0,
+        });
+      } catch (error) {
+        if (previousSyncState !== "pending") {
+          await restoreSyncStateAfterFailedEnqueue(
+            registry,
+            normalizedDocumentSourceId,
+            previousSyncState,
+          );
+        }
+        throw error;
+      }
 
       return { status: "enqueued", documentSourceId: normalizedDocumentSourceId };
     },
   };
+}
+
+async function restoreSyncStateAfterFailedEnqueue(
+  registry: ManualDocumentSyncPlannerRegistry,
+  documentSourceId: string,
+  syncState: DocumentSyncState,
+): Promise<void> {
+  try {
+    await registry.markSyncState(documentSourceId, syncState);
+  } catch {
+    // Preserve the queue failure that prevented a real sync job from existing.
+  }
 }
 
 function normalizeDocumentSourceId(documentSourceId: string): string {
