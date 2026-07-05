@@ -4,6 +4,8 @@ import {
   type DocumentReindexQueue,
 } from "./document-reindex-queue.js";
 
+const MAX_DOCUMENT_REINDEX_PLAN_LIMIT = 100;
+
 export type PlanDocumentProfileReindexInput = {
   embeddingProfileId: string;
   limit: number;
@@ -80,5 +82,5 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_DOCUMENT_REINDEX_PLAN_LIMIT, Math.max(0, Math.floor(value)));
 }
