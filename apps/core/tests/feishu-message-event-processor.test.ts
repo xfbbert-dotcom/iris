@@ -100,6 +100,68 @@ describe("FeishuMessageEventProcessor", () => {
     });
   });
 
+  it("truncates oversized message text before downstream processing", async () => {
+    const oversizedText = `${"T".repeat(9000)} trailing message detail`;
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn((_text: string) => []),
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(
+        async (_input: {
+          messageId: string;
+          chatId: string;
+          senderId?: string;
+          text?: string;
+          mentions: unknown[];
+        }) => ({ status: "skipped" as const, reason: "not_mentioned" as const }),
+      ),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      documentLinkExtractor,
+      mentionAnswerResponder,
+    });
+
+    await processor.process(
+      rawEventFixture({
+        rawBody: {
+          header: { event_id: "event-1", event_type: "im.message.receive_v1" },
+          event: {
+            sender: {
+              sender_id: {
+                open_id: "open-1",
+              },
+            },
+            message: {
+              message_id: "message-1",
+              chat_id: "chat-1",
+              message_type: "text",
+              content: JSON.stringify({ text: oversizedText }),
+              create_time: "1782925200000",
+            },
+          },
+        },
+      }),
+    );
+
+    const writtenText = messages.upsertMessage.mock.calls[0]?.[0].text;
+    const extractedText = documentLinkExtractor.extractLinks.mock.calls[0]?.[0];
+    const responderText = mentionAnswerResponder.maybeRespond.mock.calls[0]?.[0].text;
+
+    expect(writtenText?.length).toBeLessThanOrEqual(8000);
+    expect(writtenText).toContain("[truncated]");
+    expect(writtenText).not.toContain("trailing message detail");
+    expect(extractedText).toBe(writtenText);
+    expect(responderText).toBe(writtenText);
+  });
+
   it("skips disabled group messages without writing facts or discovering documents", async () => {
     const messages = {
       upsertMessage: vi.fn(),
