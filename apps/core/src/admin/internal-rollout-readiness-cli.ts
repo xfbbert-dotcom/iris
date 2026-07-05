@@ -54,7 +54,7 @@ export function parseEnvFileContents(contents: string): EnvLike {
     const assignment = trimmed.startsWith("export ")
       ? trimmed.slice("export ".length).trimStart()
       : trimmed;
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/u.exec(assignment);
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/u.exec(assignment);
     if (match === null) {
       throw new Error(`Invalid env file line ${index + 1}`);
     }
@@ -129,7 +129,7 @@ function parseEnvFileValue(value: string, lineNumber: number): string {
     return parseQuotedEnvFileValue(trimmed, "'", lineNumber);
   }
 
-  return trimmed;
+  return stripUnquotedEnvFileComment(value).trim();
 }
 
 function parseQuotedEnvFileValue(
@@ -137,11 +137,46 @@ function parseQuotedEnvFileValue(
   quote: "\"" | "'",
   lineNumber: number,
 ): string {
-  if (!value.endsWith(quote) || value.length === 1) {
+  const closingQuoteIndex = findClosingQuoteIndex(value, quote);
+  if (closingQuoteIndex === undefined) {
     throw new Error(`Invalid env file line ${lineNumber}`);
   }
 
-  return value.slice(1, -1);
+  const trailingContent = value.slice(closingQuoteIndex + 1).trim();
+  if (trailingContent.length > 0 && !trailingContent.startsWith("#")) {
+    throw new Error(`Invalid env file line ${lineNumber}`);
+  }
+
+  return value.slice(1, closingQuoteIndex);
+}
+
+function stripUnquotedEnvFileComment(value: string): string {
+  const commentStart = /\s#/u.exec(value);
+  if (commentStart === null) {
+    return value;
+  }
+
+  return value.slice(0, commentStart.index);
+}
+
+function findClosingQuoteIndex(value: string, quote: "\"" | "'"): number | undefined {
+  let isEscaped = false;
+  for (let index = 1; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote === "\"" && isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+    if (quote === "\"" && character === "\\") {
+      isEscaped = true;
+      continue;
+    }
+    if (character === quote) {
+      return index;
+    }
+  }
+
+  return undefined;
 }
 
 function readTextFileSync(path: string): string {

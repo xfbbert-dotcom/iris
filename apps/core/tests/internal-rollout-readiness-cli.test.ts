@@ -50,6 +50,30 @@ EMPTY_VALUE=
     });
   });
 
+  it("allows operator comments after env file values", () => {
+    expect(
+      parseEnvFileContents(`
+PORT=3000 # local dev port
+IRIS_MODEL_NAME="gpt-4.1-mini" # answer model
+IRIS_MODEL_API_KEY='sk-test # not a comment' # secret note
+FEISHU_OPEN_BASE_URL=https://open.feishu.cn#keep-fragment-like-text
+EMPTY_VALUE= # empty on purpose
+      `),
+    ).toEqual({
+      PORT: "3000",
+      IRIS_MODEL_NAME: "gpt-4.1-mini",
+      IRIS_MODEL_API_KEY: "sk-test # not a comment",
+      FEISHU_OPEN_BASE_URL: "https://open.feishu.cn#keep-fragment-like-text",
+      EMPTY_VALUE: "",
+    });
+  });
+
+  it("rejects non-comment trailing content after quoted env file values", () => {
+    expect(() => parseEnvFileContents('PORT="3000" trailing')).toThrow(
+      "Invalid env file line 1",
+    );
+  });
+
   it("loads an explicit env file over the base process environment", () => {
     const env = buildInternalRolloutReadinessEnv({
       args: ["--env-file", ".env.rollout"],
