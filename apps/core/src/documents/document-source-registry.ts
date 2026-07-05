@@ -157,7 +157,7 @@ export function createDocumentSourceRegistry(
             messageId: originMessageId,
             userId: observedByUserId,
             spaceId: undefined,
-            observedAt: new Date(input.observedAt),
+            observedAt: normalizeDocumentSourceDate("observedAt", input.observedAt),
           },
         },
       );
@@ -194,7 +194,7 @@ export function createDocumentSourceRegistry(
             messageId: undefined,
             userId: undefined,
             spaceId: authorizedSpaceId,
-            observedAt: new Date(input.observedAt),
+            observedAt: normalizeDocumentSourceDate("observedAt", input.observedAt),
           },
         },
       );
@@ -231,7 +231,7 @@ export function createDocumentSourceRegistry(
             messageId: undefined,
             userId: submittedByUserId,
             spaceId: undefined,
-            observedAt: new Date(input.observedAt),
+            observedAt: normalizeDocumentSourceDate("observedAt", input.observedAt),
           },
         },
       );
@@ -590,6 +590,15 @@ export function normalizeDocumentSourceOptionalString(
     );
   }
   return normalized.length > 0 ? normalized : undefined;
+}
+
+export function normalizeDocumentSourceDate(fieldName: string, value: Date): Date {
+  const normalized = new Date(value);
+  if (Number.isNaN(normalized.getTime())) {
+    throw new DocumentSourceValidationError(`${fieldName} must be a valid date`);
+  }
+
+  return normalized;
 }
 
 function requireNonBlank(fieldName: string, value: string, maxLength?: number): string {

@@ -6,6 +6,7 @@ import {
   DOCUMENT_SOURCE_URI_MAX_CHARS,
   DocumentSourceValidationError,
   higherPriorityDocumentSourceType,
+  normalizeDocumentSourceDate,
   normalizeDocumentSourceOptionalString,
   normalizeDocumentSourceRequiredString,
   type DocumentPermissionState,
@@ -125,7 +126,7 @@ export function createPostgresDocumentSourceRegistry(
           messageId: originMessageId,
           userId: observedByUserId,
           spaceId: undefined,
-          observedAt: new Date(input.observedAt),
+          observedAt: normalizeDocumentSourceDate("observedAt", input.observedAt),
         },
       });
     },
@@ -158,7 +159,7 @@ export function createPostgresDocumentSourceRegistry(
           messageId: undefined,
           userId: undefined,
           spaceId: authorizedSpaceId,
-          observedAt: new Date(input.observedAt),
+          observedAt: normalizeDocumentSourceDate("observedAt", input.observedAt),
         },
       });
     },
@@ -191,7 +192,7 @@ export function createPostgresDocumentSourceRegistry(
           messageId: undefined,
           userId: submittedByUserId,
           spaceId: undefined,
-          observedAt: new Date(input.observedAt),
+          observedAt: normalizeDocumentSourceDate("observedAt", input.observedAt),
         },
       });
     },

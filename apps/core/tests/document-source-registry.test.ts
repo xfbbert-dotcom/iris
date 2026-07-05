@@ -166,6 +166,23 @@ describe("createDocumentSourceRegistry", () => {
     expect(registry.listSources()).toEqual([]);
   });
 
+  it("rejects invalid evidence timestamps before storing evidence", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+
+    expect(() =>
+      registry.registerGroupVisibleDocument({
+        sourceUri: "https://example.com/docs/doc-1",
+        originGroupId: "group-1",
+        originMessageId: "message-1",
+        observedAt: new Date("invalid"),
+      }),
+    ).toThrow("observedAt must be a valid date");
+    expect(registry.listSources()).toEqual([]);
+  });
+
   it("registers an authorized_wiki_document with defaults and evidence", () => {
     const createdAt = new Date("2026-07-01T04:00:00.000Z");
     const observedAt = new Date("2026-07-01T04:02:00.000Z");

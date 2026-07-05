@@ -130,6 +130,10 @@ Document source types:
 - Authorized knowledge-base document: belongs to an authorized Feishu wiki or knowledge-base space.
 - User-submitted document: manually given to Iris by a user.
 
+Document-source evidence timestamps must be valid before entering either the in-memory v1 registry
+or the Postgres fact layer. Invalid `observedAt` values are rejected before state mutation or
+transaction work so document provenance remains sortable and auditable.
+
 Iris must not use a document link to bypass Feishu permissions. If a document is deleted or its permissions change, Iris's index must be invalidated, refreshed, or downgraded.
 
 When a document source is marked `denied`, Iris must disable every document-content capability for that source, including answer retrieval and knowledge draft generation. Later rediscovery, source-type upgrades, or repeated registration must not silently re-enable denied document usage; only an explicit permission state change and administrator policy update may make the source usable again.

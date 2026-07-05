@@ -248,6 +248,23 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
     expect(fake.release).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid evidence timestamps before opening a transaction", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    expect(() =>
+      registry.registerGroupVisibleDocument({
+        sourceUri: "https://example.com/doc",
+        title: "Group Doc",
+        originGroupId: "group-1",
+        originMessageId: "message-1",
+        observedAt: new Date("invalid"),
+      }),
+    ).toThrow("observedAt must be a valid date");
+    expect(fake.queries).toEqual([]);
+    expect(fake.release).not.toHaveBeenCalled();
+  });
+
   it("merges knowledge draft capability when registration upgrades an existing source", async () => {
     const now = new Date("2026-07-01T04:00:00.000Z");
     const fake = createFakePool({
