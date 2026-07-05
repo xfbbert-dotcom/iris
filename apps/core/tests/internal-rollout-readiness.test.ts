@@ -94,6 +94,7 @@ describe("buildInternalRolloutReadinessReport", () => {
   it("keeps the report structured when configured values are invalid", () => {
     const report = buildInternalRolloutReadinessReport(
       readyRolloutEnv({
+        PORT: "65536",
         DATABASE_URL: "mysql://iris:iris@localhost:3306/iris",
         REDIS_URL: "https://redis.example.com",
         IRIS_INTERNAL_API_TOKEN: "bad token",
@@ -107,6 +108,11 @@ describe("buildInternalRolloutReadinessReport", () => {
       database: {
         status: "fail",
         detail: "DATABASE_URL must be a postgres URL",
+      },
+      serverPort: {
+        status: "fail",
+        detail: "PORT must be between 1 and 65535",
+        envVars: ["PORT"],
       },
       eventWorker: {
         status: "fail",

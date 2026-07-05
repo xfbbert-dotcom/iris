@@ -8,6 +8,7 @@ import {
   readModelProviderConfig,
   readOptionalFeishuBotOpenId,
   readReindexWorkerRuntimeConfig,
+  readServerPort,
   type EnvLike,
 } from "../config/env.js";
 import { readDatabaseConfig } from "../database/database-config.js";
@@ -51,6 +52,15 @@ const checkDefinitions: CheckDefinition[] = [
     evaluate(env) {
       readDatabaseConfig(env);
       return pass("DATABASE_URL is a valid Postgres URL.");
+    },
+  },
+  {
+    id: "serverPort",
+    title: "Core HTTP port",
+    envVars: ["PORT"],
+    evaluate(env) {
+      const port = readServerPort(env);
+      return pass(`Core HTTP port ${port} is valid.`);
     },
   },
   {
