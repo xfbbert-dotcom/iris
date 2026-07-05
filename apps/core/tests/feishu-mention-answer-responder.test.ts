@@ -123,6 +123,42 @@ describe("FeishuMentionAnswerResponder", () => {
     ]);
   });
 
+  it("strips overlapping bot mention keys without leaving partial key text", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async (_input: AnswerDraftInput) => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_message_1",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_10 @_user_1 summarize this",
+      mentions: [
+        { key: "@_user_1", openId: "ou_iris", name: "Iris" },
+        { key: "@_user_10", openId: "ou_iris", name: "Iris" },
+      ],
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      question: "summarize this",
+      chatId: "oc_group_1",
+      liveChatMessages: [{ speaker: "ou_alice", text: "summarize this" }],
+    });
+  });
+
   it("skips mentioned messages when runtime control disables replies", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const replier = { replyText: vi.fn() };

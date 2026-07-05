@@ -106,7 +106,7 @@ function collectBotMentionKeys(
     }
   }
 
-  return [...keys];
+  return [...keys].sort((left, right) => right.length - left.length);
 }
 
 function stripMentionKeys(text: string, mentionKeys: string[]): string {
