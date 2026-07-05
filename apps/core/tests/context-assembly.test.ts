@@ -131,6 +131,23 @@ describe("assemblePromptContext", () => {
     expect(formattedMessage).not.toContain("trailing live context");
   });
 
+  it("bounds escaped live chat message text after XML escaping", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      liveChatMessages: [
+        { speaker: "Alice", text: `${"&".repeat(2500)} trailing live context` }
+      ]
+    });
+    const formattedMessage = context.match(
+      /<message speaker="Alice">(?<text>.*?)<\/message>/s,
+    )?.groups?.text;
+
+    expect(formattedMessage).toBeDefined();
+    expect(formattedMessage!.length).toBeLessThanOrEqual(2000);
+    expect(formattedMessage).toContain("[truncated]");
+    expect(formattedMessage).not.toContain("trailing live context");
+  });
+
   it("truncates oversized live chat speakers before formatting attributes", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],
@@ -181,6 +198,26 @@ describe("assemblePromptContext", () => {
     expect(formattedDocument!.length).toBeLessThanOrEqual(1200);
     expect(formattedDocument).toContain("[truncated]");
     expect(formattedDocument).not.toContain("trailing context");
+  });
+
+  it("bounds escaped background document text after XML escaping", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [
+        {
+          source: "doc-escaped-large",
+          text: `${"&".repeat(1500)} trailing escaped context`
+        }
+      ],
+      liveChatMessages: []
+    });
+    const formattedDocument = context.match(
+      /<document source="doc-escaped-large">(?<text>.*?)<\/document>/s,
+    )?.groups?.text;
+
+    expect(formattedDocument).toBeDefined();
+    expect(formattedDocument!.length).toBeLessThanOrEqual(1200);
+    expect(formattedDocument).toContain("[truncated]");
+    expect(formattedDocument).not.toContain("trailing escaped context");
   });
 
   it("truncates oversized background document sources before formatting attributes", () => {

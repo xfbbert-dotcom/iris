@@ -1084,6 +1084,34 @@ to a shared short-lived idempotency store such as Redis. The behavior must stay
 the same: duplicates should not consume model budget or call reply APIs again,
 while failed attempts remain retryable.
 
+### 12.18 Prompt XML Escaping Expansion
+
+Pressure:
+
+Prompt assembly stores live chat and retrieved documents as XML-like tagged
+context. Even when raw text is capped, XML escaping can expand repeated
+characters such as `&`, `<`, `>`, or quotes. A group message that contains logs,
+code, stack traces, or malformed pasted content can therefore exceed its intended
+prompt budget after formatting and cause the model request to fail.
+
+Required architectural response:
+
+- Prompt item budgets must apply to the escaped XML text that is injected into
+  model context, not only to raw source text before formatting.
+- Background document text and live-chat message text must keep their existing
+  per-item budgets after XML escaping.
+- Truncation markers must remain inside the escaped-output budget so the model
+  can see that evidence was shortened without losing the budget guarantee.
+- Stored conversation messages and document fragments must remain unchanged;
+  this is a prompt assembly boundary, not a persistence mutation.
+
+Evolution signal:
+
+If Iris later moves from character budgets to token budgets, the token-budgeting
+layer must still operate on the final escaped/rendered context representation
+that is sent to the model. Intermediate raw text budgets can help, but cannot be
+the final guard.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
