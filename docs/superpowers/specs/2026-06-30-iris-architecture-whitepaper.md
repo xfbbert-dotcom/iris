@@ -1170,6 +1170,33 @@ typed responder policy instead of matching the orchestrator's blank-answer error
 message. The user-visible contract should remain: explicit mentions should get
 clear feedback when Iris cannot produce a usable answer.
 
+### 12.21 Unreadable Mention Message Feedback
+
+Pressure:
+
+Feishu message events may contain an explicit @Iris mention while the message
+body is unavailable to Iris, for example because the content payload is
+oversized, malformed, or a non-text message type. Treating that situation as an
+ordinary blank question makes the user think they failed to ask clearly, when
+the actual issue is that Iris did not receive readable text.
+
+Required architectural response:
+
+- Mention detection must still run from Feishu mention metadata.
+- If Iris is mentioned but the parsed message text is unavailable, the responder
+  must send a concise unreadable-message clarification instead of invoking the
+  answer draft orchestrator.
+- A successful unreadable-message clarification must mark the source `messageId`
+  as handled, using the same deterministic Feishu reply UUID as normal replies.
+- Feishu reply dispatch failures must remain retryable and observable.
+
+Evolution signal:
+
+When Iris supports image/file/audio understanding, unreadable mention handling
+can become a typed capability policy per message type. The v1 contract should
+remain: explicit mentions get honest feedback about what Iris could and could
+not read.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.

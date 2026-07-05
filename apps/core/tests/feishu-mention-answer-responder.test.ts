@@ -276,6 +276,35 @@ describe("FeishuMentionAnswerResponder", () => {
     });
   });
 
+  it("replies with an unreadable-message clarification when Iris is mentioned without text content", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-unreadable" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_unreadable_mention",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: undefined,
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-unreadable" });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_unreadable_mention",
+      text: "我看到了你的 @Iris，但没读到可处理的文字内容。请用文字重新发给我一次。",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
   it("replies with a fallback when the model returns a blank answer", async () => {
     const answerDraftOrchestrator = {
       generateDraft: vi.fn(async () => {

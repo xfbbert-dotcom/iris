@@ -36,6 +36,8 @@ export type FeishuMentionAnswerResponderDependencies = {
 };
 
 const BLANK_MENTION_CLARIFICATION = "我在，直接告诉我你想让我处理什么。";
+const UNREADABLE_MENTION_CLARIFICATION =
+  "我看到了你的 @Iris，但没读到可处理的文字内容。请用文字重新发给我一次。";
 const BLANK_MODEL_ANSWER_FALLBACK = "我没拿到可用答案，你可以换个说法再问我一次。";
 const BLANK_MODEL_ANSWER_ERROR_MESSAGE = "model answer draft must not be blank";
 const MAX_MENTION_QUESTION_CHARS = 4000;
@@ -70,8 +72,21 @@ export function createFeishuMentionAnswerResponder({
           return { status: "skipped", reason: "runtime_disabled" };
         }
 
-        const question = truncateQuestion(stripMentionKeys(input.text ?? "", botMentionKeys));
         const replyUuid = createReplyUuid(input.messageId);
+        if (input.text === undefined) {
+          const result = toRepliedResult(
+            await replier.replyText({
+              messageId: input.messageId,
+              text: UNREADABLE_MENTION_CLARIFICATION,
+              replyInThread: true,
+              uuid: replyUuid,
+            }),
+          );
+          replyDeduper.markHandled(input.messageId);
+          return result;
+        }
+
+        const question = truncateQuestion(stripMentionKeys(input.text, botMentionKeys));
         if (question.length === 0) {
           const result = toRepliedResult(
             await replier.replyText({
