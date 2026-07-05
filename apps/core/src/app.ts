@@ -144,6 +144,7 @@ const deadLettersPresentReason = "dead_letters_present" as const;
 const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
 const maxInternalStringLength = 512;
 const maxInternalSourceUriLength = 2048;
+const maxReindexDocumentProfileLimit = 100;
 const maxAnswerDraftQuestionLength = 4000;
 const maxAnswerDraftLiveChatMessageInputCount = 50;
 const maxAnswerDraftLiveChatSpeakerLength = 256;
@@ -1257,7 +1258,8 @@ function parseReindexDocumentProfileRequest(
     typeof value.limit !== "number" ||
     !Number.isInteger(value.limit) ||
     !Number.isSafeInteger(value.limit) ||
-    value.limit <= 0
+    value.limit <= 0 ||
+    value.limit > maxReindexDocumentProfileLimit
   ) {
     return undefined;
   }

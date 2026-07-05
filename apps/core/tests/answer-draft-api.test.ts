@@ -1584,6 +1584,27 @@ describe("POST /internal/reindex/document-profile", () => {
     expect(runtime.planner.planDocumentProfileReindex).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized reindex request limits before planning jobs", async () => {
+    const runtime = fakeReindexRuntime();
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/reindex/document-profile",
+      payload: {
+        embeddingProfileId: "openai-compatible:text-embedding-small:1536",
+        limit: 101,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(runtime.planner.planDocumentProfileReindex).not.toHaveBeenCalled();
+  });
+
   it("rejects profile ids that do not match the active runtime profile", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
