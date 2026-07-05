@@ -213,6 +213,30 @@ describe("RedisRawEventQueue", () => {
     expect(client.lPop).not.toHaveBeenCalled();
   });
 
+  it("caps oversized dequeue limits before popping Redis events", async () => {
+    let nextEvent = 0;
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(),
+      lRem: vi.fn(),
+      lPop: vi.fn(async () => {
+        const current = nextEvent;
+        nextEvent += 1;
+        return serializeRawEvent(
+          eventFixture({ idempotencyKey: `raw-event:feishu:event-${current}` }),
+        );
+      }),
+      sRem: vi.fn(async () => 1),
+    };
+    const queue = createRedisRawEventQueue({ client });
+
+    await expect(queue.dequeueBatch(101)).resolves.toHaveLength(100);
+
+    expect(client.lPop).toHaveBeenCalledTimes(100);
+  });
+
   it("rejects unsafe dequeue limits before popping Redis events", async () => {
     const client: RedisRawEventQueueClient = {
       eval: vi.fn(),
@@ -532,6 +556,23 @@ describe("RedisRawEventQueue", () => {
       },
     ]);
     expect(client.lRange).toHaveBeenCalledWith("iris:events:raw:dlq", 0, 19);
+  });
+
+  it("caps oversized Redis raw event DLQ list limits", async () => {
+    const client: RedisRawEventQueueClient = {
+      eval: vi.fn(),
+      rPush: vi.fn(),
+      lPop: vi.fn(),
+      lLen: vi.fn(),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(),
+      sRem: vi.fn(),
+    };
+    const queue = createRedisRawEventQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: 101 })).resolves.toEqual([]);
+
+    expect(client.lRange).toHaveBeenCalledWith("iris:events:raw:dlq", 0, 99);
   });
 
   it("lists invalid raw event DLQ payloads as non-replayable diagnostics", async () => {

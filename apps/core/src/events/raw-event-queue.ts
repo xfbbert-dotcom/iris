@@ -47,6 +47,7 @@ export type CreateRawEventIdempotencyKeyInput = {
 };
 
 export const MAX_RAW_EVENT_ID_LENGTH = 512;
+export const MAX_RAW_EVENT_QUEUE_LIMIT = 100;
 export const MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH =
   "raw-event:feishu:".length + MAX_RAW_EVENT_ID_LENGTH;
 

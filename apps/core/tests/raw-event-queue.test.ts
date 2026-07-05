@@ -90,6 +90,18 @@ describe("InMemoryRawEventQueue", () => {
     await expect(queue.dequeueBatch(1)).resolves.toEqual([event]);
   });
 
+  it("caps oversized dequeue limits", async () => {
+    const queue = new InMemoryRawEventQueue();
+    for (let index = 0; index < 101; index += 1) {
+      await queue.enqueue(eventFixture({ idempotencyKey: `raw-event:feishu:event-${index}` }));
+    }
+
+    await expect(queue.dequeueBatch(101)).resolves.toHaveLength(100);
+    await expect(queue.dequeueBatch(1)).resolves.toEqual([
+      eventFixture({ idempotencyKey: "raw-event:feishu:event-100" }),
+    ]);
+  });
+
   it("rejects unsafe dequeue limits without consuming events", async () => {
     const queue = new InMemoryRawEventQueue();
     const event = eventFixture();
@@ -216,6 +228,28 @@ describe("InMemoryRawEventQueue", () => {
         replayable: true,
       },
     ]);
+  });
+
+  it("caps oversized dead-letter list limits", async () => {
+    const queue = new InMemoryRawEventQueue({
+      maxAttempts: 1,
+      idGenerator: (() => {
+        let nextId = 0;
+        return () => `dlq-${nextId++}`;
+      })(),
+    });
+
+    for (let index = 0; index < 101; index += 1) {
+      await queue.handleFailedEvent({
+        event: eventFixture({ idempotencyKey: `raw-event:feishu:event-${index}` }),
+        errorMessage: "processor failed",
+      });
+    }
+
+    const deadLetters = await queue.listDeadLetters({ limit: 101 });
+
+    expect(deadLetters).toHaveLength(100);
+    expect(deadLetters.at(-1)?.id).toBe("dlq-99");
   });
 
   it("replays dead-lettered raw events with attempts reset", async () => {

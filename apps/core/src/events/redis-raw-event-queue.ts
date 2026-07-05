@@ -9,6 +9,7 @@ import type {
 import {
   MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH,
   MAX_RAW_EVENT_ID_LENGTH,
+  MAX_RAW_EVENT_QUEUE_LIMIT,
 } from "./raw-event-queue.js";
 import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 
@@ -516,7 +517,7 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_RAW_EVENT_QUEUE_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 function defaultIdGenerator(): string {
