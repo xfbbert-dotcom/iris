@@ -57,6 +57,26 @@ Start Postgres and Redis:
 docker compose up -d
 ```
 
+If Docker fails before containers start, separate repository configuration from host runtime setup:
+
+```powershell
+docker compose config
+docker version
+docker desktop status
+wsl --status
+```
+
+- `docker compose config` validates the Compose file without requiring a running daemon.
+- If `docker` is not recognized, install Docker Desktop and reopen the terminal so the CLI is on
+  `PATH`.
+- If Docker Desktop reports `stopped`, start Docker Desktop from Windows and wait for the engine to
+  become ready before retrying `docker compose up -d`.
+- If Docker Desktop is running but `docker version` cannot reach
+  `npipe:////./pipe/docker_engine`, check that the Docker Desktop backend and WSL integration are
+  healthy.
+- If `wsl --status` reports WSL is not installed or unavailable, enable/install WSL and restart
+  Docker Desktop. This is host setup, not an Iris repository failure.
+
 Set the local database URL and run migrations:
 
 ```powershell

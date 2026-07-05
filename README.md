@@ -67,6 +67,18 @@ Start local infrastructure:
 docker compose up -d
 ```
 
+If this fails before containers start, first verify host Docker/WSL readiness:
+
+```powershell
+docker compose config
+docker version
+docker desktop status
+wsl --status
+```
+
+`docker compose config` only validates repo configuration. `docker compose up -d` also needs Docker
+Desktop's engine and WSL integration to be running on the host.
+
 Run database migrations:
 
 ```powershell
