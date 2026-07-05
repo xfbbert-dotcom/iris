@@ -429,6 +429,13 @@ describe("createDocumentSyncRuntime", () => {
     );
     await expect(runtime?.sources.list({ limit: 1 })).resolves.toEqual([inventorySource]);
     expect(documentSources.listSources).toHaveBeenCalledOnce();
+    documentSources.listSources.mockResolvedValueOnce(
+      Array.from({ length: 101 }, (_, index) => ({
+        ...inventorySource,
+        id: `source-${index}`,
+      })),
+    );
+    await expect(runtime?.sources.list({ limit: 101 })).resolves.toHaveLength(100);
     await expect(
       runtime?.sources.list({ limit: Number.POSITIVE_INFINITY }),
     ).resolves.toEqual([]);
@@ -485,6 +492,15 @@ describe("createDocumentSyncRuntime", () => {
     await expect(
       runtime?.sources.listSnapshots({ id: "source-1", limit: 1 }),
     ).resolves.toEqual([snapshot]);
+    snapshots.listSnapshotsForSource.mockResolvedValueOnce(
+      Array.from({ length: 101 }, (_, index) => ({
+        ...snapshot,
+        id: `snapshot-${index}`,
+      })),
+    );
+    await expect(
+      runtime?.sources.listSnapshots({ id: "source-1", limit: 101 }),
+    ).resolves.toHaveLength(100);
     await expect(
       runtime?.sources.listSnapshots({ id: "source-1", limit: Number.POSITIVE_INFINITY }),
     ).resolves.toEqual([]);

@@ -72,6 +72,8 @@ import {
   type RedisDocumentReindexQueueClient,
 } from "../reindex/redis-document-reindex-queue.js";
 
+const MAX_DOCUMENT_SYNC_RUNTIME_LIST_LIMIT = 100;
+
 export type DocumentSyncRuntime = {
   getStatus(): Promise<DocumentSyncRuntimeStatus>;
   sources: {
@@ -507,7 +509,7 @@ function sanitizeLimit(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_DOCUMENT_SYNC_RUNTIME_LIST_LIMIT, Math.max(0, Math.floor(value)));
 }
 
 function normalizeFeishuRegistrationSourceUri(sourceUri: string): string {
