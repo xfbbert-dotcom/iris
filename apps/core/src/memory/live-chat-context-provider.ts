@@ -12,9 +12,14 @@ export function createLiveChatContextProvider({
 }): LiveChatContextProvider {
   return {
     async loadRecentMessages(input) {
+      const outputLimit = sanitizeLimit(input.limit);
+      if (outputLimit <= 0) {
+        return [];
+      }
+
       const messages = await repository.listRecentByChat({
         chatId: input.chatId,
-        limit: sanitizeLimit(input.limit),
+        limit: scanLimitForOutput(outputLimit),
       });
 
       return messages
@@ -24,13 +29,16 @@ export function createLiveChatContextProvider({
         .map((message) => ({
           speaker: message.senderId ?? "unknown",
           text: message.text!.trim(),
-        }));
+        }))
+        .slice(-outputLimit);
     },
   };
 }
 
 const DEFAULT_LIVE_CHAT_LIMIT = 20;
 const MAX_LIVE_CHAT_LIMIT = 20;
+const LIVE_CHAT_SCAN_MULTIPLIER = 3;
+const MAX_LIVE_CHAT_SCAN_LIMIT = 100;
 
 function sanitizeLimit(value: number | undefined): number {
   if (
@@ -44,4 +52,8 @@ function sanitizeLimit(value: number | undefined): number {
   }
 
   return Math.min(MAX_LIVE_CHAT_LIMIT, Math.max(0, Math.floor(value)));
+}
+
+function scanLimitForOutput(outputLimit: number): number {
+  return Math.min(MAX_LIVE_CHAT_SCAN_LIMIT, outputLimit * LIVE_CHAT_SCAN_MULTIPLIER);
 }
