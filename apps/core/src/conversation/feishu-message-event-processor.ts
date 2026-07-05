@@ -23,6 +23,7 @@ type ParsedFeishuMessageEvent = UpsertConversationMessageInput & {
 };
 
 const MAX_FEISHU_IDENTIFIER_CHARS = 512;
+const MAX_FEISHU_MESSAGE_CONTENT_CHARS = 64_000;
 const MAX_FEISHU_MESSAGE_TEXT_CHARS = 8000;
 const TRUNCATION_MARKER = " ... [truncated]";
 
@@ -195,7 +196,7 @@ function readSenderId(sender: unknown): string | undefined {
 }
 
 function readText(messageType: string, content: unknown): string | undefined {
-  if (typeof content !== "string") {
+  if (typeof content !== "string" || content.length > MAX_FEISHU_MESSAGE_CONTENT_CHARS) {
     return undefined;
   }
 

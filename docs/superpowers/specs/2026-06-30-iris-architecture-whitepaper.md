@@ -169,7 +169,7 @@ stable body hash so malformed callbacks cannot create oversized Redis keys.
 
 Raw Feishu event DLQs are operator recovery surfaces. Iris must support bounded listing, explicit replay, and deletion for raw event dead letters. Replay must not remove the DLQ payload until the reset raw event has been accepted back into the queue.
 
-Feishu rich-text message parsing must be bounded. Post-message text extraction should preserve normal readable text and links, but it must cap traversal depth and collected text parts so malformed or unusually large payloads cannot monopolize an event worker.
+Feishu message content parsing must be bounded before and after JSON parsing. The raw `message.content` JSON string must stay within a fixed budget before `JSON.parse`; over-budget content is treated as unreadable text while preserving message metadata. Post-message text extraction should preserve normal readable text and links, but it must cap traversal depth and collected text parts so malformed or unusually large payloads cannot monopolize an event worker.
 
 The consolidated internal status endpoint is the operator's first health surface. Non-empty DLQs for raw events, document sync jobs, or reindex jobs must mark the corresponding component as degraded with an explicit dead-letter reason, even when the worker is still running and the latest batch succeeded.
 

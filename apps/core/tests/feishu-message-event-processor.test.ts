@@ -162,6 +162,73 @@ describe("FeishuMessageEventProcessor", () => {
     expect(responderText).toBe(writtenText);
   });
 
+  it("treats oversized message content payloads as unreadable before downstream processing", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn((_text: string) => []),
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(
+        async (_input: {
+          messageId: string;
+          chatId: string;
+          senderId?: string;
+          text?: string;
+          mentions: unknown[];
+        }) => ({ status: "skipped" as const, reason: "not_mentioned" as const }),
+      ),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      documentLinkExtractor,
+      mentionAnswerResponder,
+    });
+
+    await processor.process(
+      rawEventFixture({
+        rawBody: {
+          header: { event_id: "event-1", event_type: "im.message.receive_v1" },
+          event: {
+            sender: {
+              sender_id: {
+                open_id: "open-1",
+              },
+            },
+            message: {
+              message_id: "message-1",
+              chat_id: "chat-1",
+              message_type: "text",
+              content: JSON.stringify({
+                text: `${"T".repeat(70_000)} https://docs.feishu.cn/docx/oversized`,
+              }),
+              create_time: "1782925200000",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(messages.upsertMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerMessageId: "message-1",
+        text: undefined,
+      }),
+    );
+    expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
+    expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "message-1",
+        text: undefined,
+      }),
+    );
+  });
+
   it("skips disabled group messages without writing facts or discovering documents", async () => {
     const messages = {
       upsertMessage: vi.fn(),
