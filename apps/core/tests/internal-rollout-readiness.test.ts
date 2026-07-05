@@ -137,6 +137,24 @@ describe("buildInternalRolloutReadinessReport", () => {
     });
   });
 
+  it("requires a Feishu verification token for v1 URL verification readiness", () => {
+    const report = buildInternalRolloutReadinessReport(
+      readyRolloutEnv({
+        FEISHU_VERIFICATION_TOKEN: "",
+        FEISHU_ENCRYPT_KEY: "encrypt-key-only",
+      }),
+    );
+
+    expect(report.ok).toBe(false);
+    expect(checksById(report)).toMatchObject({
+      feishuWebhookAuth: {
+        status: "fail",
+        detail:
+          "FEISHU_VERIFICATION_TOKEN is required for v1 Feishu URL verification; FEISHU_ENCRYPT_KEY only adds signature verification.",
+      },
+    });
+  });
+
   it("rejects template placeholder values copied from the rollout env example", () => {
     const report = buildInternalRolloutReadinessReport(
       readyRolloutEnv({

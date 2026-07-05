@@ -69,8 +69,10 @@ const checkDefinitions: CheckDefinition[] = [
     envVars: ["FEISHU_VERIFICATION_TOKEN", "FEISHU_ENCRYPT_KEY"],
     evaluate(env) {
       const auth = readFeishuAuthConfig(env);
-      if (auth.verificationToken === undefined && auth.encryptKey === undefined) {
-        return fail("Set FEISHU_VERIFICATION_TOKEN or FEISHU_ENCRYPT_KEY before exposing callbacks.");
+      if (auth.verificationToken === undefined) {
+        return fail(
+          "FEISHU_VERIFICATION_TOKEN is required for v1 Feishu URL verification; FEISHU_ENCRYPT_KEY only adds signature verification.",
+        );
       }
       const templateFailure = findTemplatePlaceholderEnv(env, [
         "FEISHU_VERIFICATION_TOKEN",
@@ -80,7 +82,7 @@ const checkDefinitions: CheckDefinition[] = [
         return fail(`${templateFailure} must be replaced with a real rollout value`);
       }
 
-      return pass("Feishu callback verification is configured.");
+      return pass("Feishu callback verification token is configured.");
     },
   },
   {

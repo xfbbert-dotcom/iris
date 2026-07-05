@@ -425,6 +425,10 @@ trusted private network. The readiness surface must list the responsible environ
 must not attempt live network calls; live status remains the responsibility of `/internal/status`
 and the worker-specific status endpoints.
 
+For v1 Feishu callback readiness, `FEISHU_VERIFICATION_TOKEN` is required. `FEISHU_ENCRYPT_KEY` may
+be configured for request signature verification, but it must not be treated as encrypted callback
+payload support until Iris implements encrypted body decryption and challenge extraction.
+
 When Iris is disabled, it should stop processing new messages, stop proactive speech, and stop executing tasks. Admins may still view logs and configuration.
 
 Feishu may still deliver events to the system while Iris is disabled. In that state, Iris should acknowledge or safely discard events according to Feishu platform requirements, but must not index message content, update semantic memory, generate replies, or execute actions unless an administrator explicitly re-enables the relevant scope.
