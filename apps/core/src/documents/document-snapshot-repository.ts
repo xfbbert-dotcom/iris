@@ -107,7 +107,7 @@ order by fetched_at desc, id asc
   };
 
   return {
-    insertSucceededSnapshot(input) {
+    async insertSucceededSnapshot(input) {
       return insertSnapshot(dependencies.queryable, {
         id: createId(),
         documentSourceId: input.documentSourceId,
@@ -116,13 +116,13 @@ order by fetched_at desc, id asc
         bodyText: input.bodyText,
         contentHash: input.contentHash ?? hashBody(input.bodyText),
         sourceVersion: input.sourceVersion,
-        fetchedAt: input.fetchedAt,
+        fetchedAt: normalizeSnapshotDate("fetchedAt", input.fetchedAt),
         errorMessage: undefined,
-        createdAt: now(),
+        createdAt: normalizeSnapshotDate("createdAt", now()),
       });
     },
 
-    insertFailedSnapshot(input) {
+    async insertFailedSnapshot(input) {
       return insertSnapshot(dependencies.queryable, {
         id: createId(),
         documentSourceId: input.documentSourceId,
@@ -131,9 +131,9 @@ order by fetched_at desc, id asc
         bodyText: undefined,
         contentHash: undefined,
         sourceVersion: undefined,
-        fetchedAt: input.fetchedAt,
+        fetchedAt: normalizeSnapshotDate("fetchedAt", input.fetchedAt),
         errorMessage: normalizeDocumentSnapshotErrorMessage(input.errorMessage),
-        createdAt: now(),
+        createdAt: normalizeSnapshotDate("createdAt", now()),
       });
     },
 
@@ -218,6 +218,15 @@ function sanitizeLimit(value: number): number {
     MAX_SUCCESSFUL_SNAPSHOTS_MISSING_PROFILE_LIMIT,
     Math.max(0, Math.floor(value)),
   );
+}
+
+function normalizeSnapshotDate(fieldName: string, value: Date): Date {
+  const normalized = new Date(value);
+  if (Number.isNaN(normalized.getTime())) {
+    throw new Error(`${fieldName} must be a valid date`);
+  }
+
+  return normalized;
 }
 
 async function insertSnapshot(

@@ -126,6 +126,25 @@ describe("DocumentSnapshotRepository", () => {
     });
   });
 
+  it("rejects invalid succeeded snapshot fetchedAt values before inserting", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const repository = createDocumentSnapshotRepository({
+      queryable: queryableFrom(query),
+      createId: () => "snapshot-1",
+      now: () => new Date("2026-07-02T01:00:01.000Z"),
+    });
+
+    await expect(
+      repository.insertSucceededSnapshot({
+        documentSourceId: "source-1",
+        sourceUri: "uri",
+        bodyText: "Hello",
+        fetchedAt: new Date("invalid"),
+      }),
+    ).rejects.toThrow("fetchedAt must be a valid date");
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it("inserts failed snapshots with an error message", async () => {
     const fetchedAt = new Date("2026-07-02T01:00:00.000Z");
     const createdAt = new Date("2026-07-02T01:00:01.000Z");
@@ -227,6 +246,25 @@ describe("DocumentSnapshotRepository", () => {
     expect(snapshot.errorMessage?.length).toBeLessThanOrEqual(1000);
     expect(snapshot.errorMessage).toContain("[truncated]");
     expect(snapshot.errorMessage).not.toContain("trailing diagnostic detail");
+  });
+
+  it("rejects invalid failed snapshot fetchedAt values before inserting", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const repository = createDocumentSnapshotRepository({
+      queryable: queryableFrom(query),
+      createId: () => "snapshot-failed",
+      now: () => new Date("2026-07-02T01:00:01.000Z"),
+    });
+
+    await expect(
+      repository.insertFailedSnapshot({
+        documentSourceId: "source-1",
+        sourceUri: "https://example.feishu.cn/docx/A",
+        errorMessage: "Feishu returned 403",
+        fetchedAt: new Date("invalid"),
+      }),
+    ).rejects.toThrow("fetchedAt must be a valid date");
+    expect(query).not.toHaveBeenCalled();
   });
 
   it("lists snapshots for a source and fetches the latest snapshot", async () => {
