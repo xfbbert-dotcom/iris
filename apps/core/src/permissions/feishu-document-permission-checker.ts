@@ -22,6 +22,7 @@ export type FeishuDocumentPermissionCheckerDependencies = {
 
 const DEFAULT_FEISHU_DOCUMENT_PERMISSION_TIMEOUT_MS = 5_000;
 const MAX_FEISHU_PERMISSION_RESPONSE_BYTES = 65_536;
+const FEISHU_PERMISSION_DENIED_CODES = new Set([99991663]);
 
 export function createFeishuDocumentPermissionChecker({
   baseUrl,
@@ -189,7 +190,16 @@ function isSuccessfulFeishuResponse(response: Response, responseBody: unknown): 
     throw new Error("Feishu document permission response did not include code");
   }
 
-  return responseBody.code === 0;
+  if (responseBody.code === 0) {
+    return true;
+  }
+  if (FEISHU_PERMISSION_DENIED_CODES.has(responseBody.code)) {
+    return false;
+  }
+
+  throw new Error(
+    `Feishu document permission request failed: ${readExternalErrorMessage(responseBody)}`,
+  );
 }
 
 function throwIfTransientPermissionFailure(response: Response, responseBody: unknown): void {

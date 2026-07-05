@@ -72,6 +72,34 @@ describe("createFeishuDocumentPermissionChecker", () => {
     ).resolves.toBe(false);
   });
 
+  it("returns false when Feishu returns a known permission-denied code in a successful response", async () => {
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => jsonResponse({ code: 99991663, msg: "permission denied" })),
+    });
+
+    await expect(
+      checker.canReadSource(
+        source({ sourceUri: "https://example.feishu.cn/docx/doccnDeniedCode" }),
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it("throws when successful document metadata responses contain unknown non-zero codes", async () => {
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => jsonResponse({ code: 1900001, msg: "tenant token invalid" })),
+    });
+
+    await expect(
+      checker.canReadSource(
+        source({ sourceUri: "https://example.feishu.cn/docx/doccnUnknownCode" }),
+      ),
+    ).rejects.toThrow("Feishu document permission request failed: tenant token invalid");
+  });
+
   it("throws when Feishu document metadata has a transient server failure", async () => {
     const checker = createFeishuDocumentPermissionChecker({
       baseUrl: "https://open.feishu.cn",
