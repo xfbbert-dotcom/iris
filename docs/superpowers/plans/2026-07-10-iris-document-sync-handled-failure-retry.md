@@ -45,14 +45,14 @@ surfaces without changing persistence or queue schemas.
 - Consumes: `DocumentSyncRunner.syncSourceById()` and `DocumentSyncQueue.handleFailedJob()`.
 - Produces: regression coverage for runner-handled `failed` results.
 
-- [ ] **Step 1: Replace the processed-failure expectation with retry and DLQ cases**
+- [x] **Step 1: Replace the processed-failure expectation with retry and DLQ cases**
 
 Use a table with `{ action: "requeued", attempts: 1 }` and
 `{ action: "dead_lettered", attempts: 3 }`. For each case, return a runner result with
 `status: "failed"` and `errorMessage: "fetch failed"`; expect worker `status: "failed"`, matching
 retry metadata, `handleFailedJob({ job, errorMessage: "fetch failed" })`, and no processed ACK.
 
-- [ ] **Step 2: Run the focused worker test and verify RED**
+- [x] **Step 2: Run the focused worker test and verify RED**
 
 Run:
 
@@ -63,6 +63,10 @@ npm --workspace apps/core test -- tests/document-sync-worker.test.ts --reporter=
 Expected: the new cases fail because the worker returns `processed`, calls `handleProcessedJob`,
 and never calls `handleFailedJob`.
 
+Observed RED: both `requeued` and `dead_lettered` cases received the existing
+`{ status: "processed", syncStatus: "failed" }` result instead of queue failure metadata. The
+other eight worker tests remained green.
+
 ### Task 3: Implement Explicit Result Classification
 
 **Files:**
@@ -72,23 +76,23 @@ and never calls `handleFailedJob`.
 - Consumes: runner `DocumentSyncResult` and existing `handleFailedJobWithRetry()`.
 - Produces: queue failure results for both returned sync failures and thrown processing failures.
 
-- [ ] **Step 1: Separate runner invocation from result finalization**
+- [x] **Step 1: Separate runner invocation from result finalization**
 
 Capture runner throws with the existing worker-failure path. After a successful runner call,
 branch on `result.status` before processed ACK.
 
-- [ ] **Step 2: Route `status: "failed"` through queue failure handling**
+- [x] **Step 2: Route `status: "failed"` through queue failure handling**
 
 Pass the runner's `errorMessage` to `handleFailedJobWithRetry()` and return the existing worker
 failed result shape with `retryAction` and `attempts`. Keep the failure-handler call outside a
 catch region that would submit its own errors a second time.
 
-- [ ] **Step 3: Preserve terminal processed ACK behavior**
+- [x] **Step 3: Preserve terminal processed ACK behavior**
 
 For `synced`, `skipped`, `rejected`, and `not_found`, call `handleProcessedJob()` and return the
 existing processed result unchanged.
 
-- [ ] **Step 4: Run focused tests and type checking and verify GREEN**
+- [x] **Step 4: Run focused tests and type checking and verify GREEN**
 
 Run:
 
@@ -99,9 +103,26 @@ npm run typecheck
 
 Expected: all focused tests and type checking pass.
 
+Observed GREEN: the worker and pipeline files passed all `37/37` focused tests, including both
+handled-failure queue outcomes, and TypeScript type checking completed successfully.
+
 ### Task 4: Verify, Review, And Publish
 
-- [ ] **Step 1: Run `npm run verify`**
-- [ ] **Step 2: Complete independent review and address findings**
+- [x] **Step 1: Run `npm run verify`**
+- [x] **Step 2: Complete independent review and address findings**
 - [ ] **Step 3: Commit and push the implementation**
 - [ ] **Step 4: Watch PR #3 checks and confirm a clean merge state**
+
+Observed full verification: `git diff --check`, TypeScript type checking, all 65 Core test files
+(`1069` passed and `4` skipped), all 7 Python tests, and `docker compose config` completed
+successfully.
+
+The first independent review found no runtime defect but required direct regression coverage for
+the rearranged exception boundaries. Added tests now prove the three-attempt failure-handler cap,
+ACK-error routing, continuation after a handled failed item, and terminal ACK behavior for
+`rejected` and `not_found`. The processed result type also excludes the impossible `failed` sync
+status. Updated focused verification passed `42/42` tests and type checking.
+
+Re-review found no remaining Critical, Important, or Minor issues and assessed the implementation
+as ready to merge. A fresh full verification after all review fixes produced the result recorded
+above.

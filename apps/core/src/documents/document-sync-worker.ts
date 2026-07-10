@@ -11,7 +11,7 @@ export type DocumentSyncWorkerResult =
       status: "processed";
       idempotencyKey: string;
       documentSourceId: string;
-      syncStatus: DocumentSyncResult["status"];
+      syncStatus: Exclude<DocumentSyncResult["status"], "failed">;
     }
   | {
       status: "failed";
@@ -50,30 +50,60 @@ async function processJob(
   runner: Pick<DocumentSyncRunner, "syncSourceById">,
   queue: Pick<DocumentSyncQueue, "handleProcessedJob" | "handleFailedJob">,
 ): Promise<DocumentSyncWorkerResult> {
+  let result: DocumentSyncResult;
   try {
-    const result = await runner.syncSourceById(job.documentSourceId, {
+    result = await runner.syncSourceById(job.documentSourceId, {
       recoverStaleSyncState: true,
     });
-    await queue.handleProcessedJob(job);
-    return {
-      status: "processed",
-      idempotencyKey: job.idempotencyKey,
-      documentSourceId: job.documentSourceId,
-      syncStatus: result.status,
-    };
   } catch (error) {
-    const errorMessage = normalizeWorkerErrorMessage(error);
-    const failureResult = await handleFailedJobWithRetry({ queue, job, errorMessage });
-
-    return {
-      status: "failed",
-      idempotencyKey: job.idempotencyKey,
-      documentSourceId: job.documentSourceId,
-      errorMessage,
-      retryAction: failureResult.action,
-      attempts: failureResult.attempts,
-    };
+    return handleProcessingFailure({
+      queue,
+      job,
+      errorMessage: normalizeWorkerErrorMessage(error),
+    });
   }
+
+  if (result.status === "failed") {
+    return handleProcessingFailure({ queue, job, errorMessage: result.errorMessage });
+  }
+
+  try {
+    await queue.handleProcessedJob(job);
+  } catch (error) {
+    return handleProcessingFailure({
+      queue,
+      job,
+      errorMessage: normalizeWorkerErrorMessage(error),
+    });
+  }
+
+  return {
+    status: "processed",
+    idempotencyKey: job.idempotencyKey,
+    documentSourceId: job.documentSourceId,
+    syncStatus: result.status,
+  };
+}
+
+async function handleProcessingFailure({
+  queue,
+  job,
+  errorMessage,
+}: {
+  queue: Pick<DocumentSyncQueue, "handleFailedJob">;
+  job: DocumentSyncJob;
+  errorMessage: string;
+}): Promise<DocumentSyncWorkerResult> {
+  const failureResult = await handleFailedJobWithRetry({ queue, job, errorMessage });
+
+  return {
+    status: "failed",
+    idempotencyKey: job.idempotencyKey,
+    documentSourceId: job.documentSourceId,
+    errorMessage,
+    retryAction: failureResult.action,
+    attempts: failureResult.attempts,
+  };
 }
 
 async function handleFailedJobWithRetry({

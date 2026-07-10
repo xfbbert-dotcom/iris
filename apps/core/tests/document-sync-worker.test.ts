@@ -44,14 +44,18 @@ describe("DocumentSyncWorker", () => {
     expect(queue.handleFailedJob).not.toHaveBeenCalled();
   });
 
-  it("treats runner-handled failed syncs as processed jobs", async () => {
+  it.each([
+    { action: "requeued" as const, attempts: 1 },
+    { action: "dead_lettered" as const, attempts: 3 },
+  ])("routes runner-handled failed syncs through queue policy ($action)", async (failure) => {
     const job = jobFixture({ documentSourceId: "source-failed" });
+    const queue = {
+      dequeueBatch: vi.fn(async () => [job]),
+      handleProcessedJob: vi.fn(async () => undefined),
+      handleFailedJob: vi.fn(async () => failure),
+    };
     const worker = createDocumentSyncWorker({
-      queue: {
-        dequeueBatch: vi.fn(async () => [job]),
-        handleProcessedJob: vi.fn(async () => undefined),
-        handleFailedJob: vi.fn(),
-      },
+      queue,
       runner: {
         syncSourceById: vi.fn(async () => ({
           status: "failed" as const,
@@ -64,13 +68,173 @@ describe("DocumentSyncWorker", () => {
 
     await expect(worker.processBatch({ limit: 1 })).resolves.toEqual([
       {
-        status: "processed",
+        status: "failed",
         idempotencyKey: job.idempotencyKey,
         documentSourceId: "source-failed",
-        syncStatus: "failed",
+        errorMessage: "fetch failed",
+        retryAction: failure.action,
+        attempts: failure.attempts,
       },
     ]);
+    expect(queue.handleFailedJob).toHaveBeenCalledWith({
+      job,
+      errorMessage: "fetch failed",
+    });
+    expect(queue.handleProcessedJob).not.toHaveBeenCalled();
   });
+
+  it("does not resubmit exhausted failure handling for a runner-handled failure", async () => {
+    const job = jobFixture({ documentSourceId: "source-failed" });
+    const queue = {
+      dequeueBatch: vi.fn(async () => [job]),
+      handleProcessedJob: vi.fn(async () => undefined),
+      handleFailedJob: vi.fn(async () => {
+        throw new Error("redis unavailable");
+      }),
+    };
+    const worker = createDocumentSyncWorker({
+      queue,
+      runner: {
+        syncSourceById: vi.fn(async () => ({
+          status: "failed" as const,
+          source: sourceFixture({ id: "source-failed" }),
+          snapshot: snapshotFixture({ documentSourceId: "source-failed" }),
+          errorMessage: "fetch failed",
+        })),
+      },
+    });
+
+    await expect(worker.processBatch({ limit: 1 })).rejects.toThrow("redis unavailable");
+    expect(queue.handleFailedJob).toHaveBeenCalledTimes(3);
+    expect(queue.handleFailedJob).toHaveBeenCalledWith({
+      job,
+      errorMessage: "fetch failed",
+    });
+    expect(queue.handleProcessedJob).not.toHaveBeenCalled();
+  });
+
+  it("routes processed-job acknowledgement failures through queue policy", async () => {
+    const job = jobFixture({ documentSourceId: "source-synced" });
+    const queue = {
+      dequeueBatch: vi.fn(async () => [job]),
+      handleProcessedJob: vi.fn(async () => {
+        throw new Error("ack failed");
+      }),
+      handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
+    };
+    const worker = createDocumentSyncWorker({
+      queue,
+      runner: {
+        syncSourceById: vi.fn(async () => ({
+          status: "synced" as const,
+          source: sourceFixture({ id: "source-synced" }),
+          snapshot: snapshotFixture({ documentSourceId: "source-synced" }),
+        })),
+      },
+    });
+
+    await expect(worker.processBatch({ limit: 1 })).resolves.toEqual([
+      {
+        status: "failed",
+        idempotencyKey: job.idempotencyKey,
+        documentSourceId: "source-synced",
+        errorMessage: "ack failed",
+        retryAction: "requeued",
+        attempts: 1,
+      },
+    ]);
+    expect(queue.handleProcessedJob).toHaveBeenCalledWith(job);
+    expect(queue.handleFailedJob).toHaveBeenCalledWith({
+      job,
+      errorMessage: "ack failed",
+    });
+  });
+
+  it("continues the batch after queueing a runner-handled failure", async () => {
+    const first = jobFixture({ documentSourceId: "source-failed" });
+    const second = jobFixture({ documentSourceId: "source-synced" });
+    const queue = {
+      dequeueBatch: vi.fn(async () => [first, second]),
+      handleProcessedJob: vi.fn(async () => undefined),
+      handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
+    };
+    const worker = createDocumentSyncWorker({
+      queue,
+      runner: {
+        syncSourceById: vi
+          .fn()
+          .mockResolvedValueOnce({
+            status: "failed",
+            source: sourceFixture({ id: "source-failed" }),
+            snapshot: snapshotFixture({ documentSourceId: "source-failed" }),
+            errorMessage: "fetch failed",
+          })
+          .mockResolvedValueOnce({
+            status: "synced",
+            source: sourceFixture({ id: "source-synced" }),
+            snapshot: snapshotFixture({ documentSourceId: "source-synced" }),
+          }),
+      },
+    });
+
+    await expect(worker.processBatch({ limit: 2 })).resolves.toEqual([
+      {
+        status: "failed",
+        idempotencyKey: first.idempotencyKey,
+        documentSourceId: "source-failed",
+        errorMessage: "fetch failed",
+        retryAction: "requeued",
+        attempts: 1,
+      },
+      {
+        status: "processed",
+        idempotencyKey: second.idempotencyKey,
+        documentSourceId: "source-synced",
+        syncStatus: "synced",
+      },
+    ]);
+    expect(queue.handleFailedJob).toHaveBeenCalledWith({
+      job: first,
+      errorMessage: "fetch failed",
+    });
+    expect(queue.handleProcessedJob).toHaveBeenCalledTimes(1);
+    expect(queue.handleProcessedJob).toHaveBeenCalledWith(second);
+  });
+
+  it.each(["rejected", "not_found"] as const)(
+    "acknowledges terminal %s runner results",
+    async (status) => {
+      const job = jobFixture({ documentSourceId: `source-${status}` });
+      const queue = {
+        dequeueBatch: vi.fn(async () => [job]),
+        handleProcessedJob: vi.fn(async () => undefined),
+        handleFailedJob: vi.fn(),
+      };
+      const result =
+        status === "rejected"
+          ? {
+              status,
+              source: sourceFixture({ id: job.documentSourceId }),
+              reason: "permission_denied" as const,
+            }
+          : { status, sourceId: job.documentSourceId };
+      const worker = createDocumentSyncWorker({
+        queue,
+        runner: { syncSourceById: vi.fn(async () => result) },
+      });
+
+      await expect(worker.processBatch({ limit: 1 })).resolves.toEqual([
+        {
+          status: "processed",
+          idempotencyKey: job.idempotencyKey,
+          documentSourceId: job.documentSourceId,
+          syncStatus: status,
+        },
+      ]);
+      expect(queue.handleProcessedJob).toHaveBeenCalledWith(job);
+      expect(queue.handleFailedJob).not.toHaveBeenCalled();
+    },
+  );
 
   it("records thrown runner errors and continues processing", async () => {
     const first = jobFixture({ documentSourceId: "source-1" });
