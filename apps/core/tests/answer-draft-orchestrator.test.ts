@@ -42,7 +42,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: "What changed?",
+      queryText: expect.stringContaining("What changed?"),
       liveChatMessages: [{ speaker: "Alice", text: "Please answer." }],
       fragmentLimit: 4,
       liveChatLimit: 10,
@@ -127,7 +127,7 @@ describe("AnswerDraftOrchestrator", () => {
       limit: 8,
     });
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: "What changed?",
+      queryText: expect.stringContaining("What changed?"),
       liveChatMessages: [
         { speaker: "ou_a", text: "Stored context" },
         { speaker: "ou_b", text: "Current question context" },
@@ -135,6 +135,36 @@ describe("AnswerDraftOrchestrator", () => {
       fragmentLimit: undefined,
       liveChatLimit: 8,
     });
+  });
+
+  it("includes live chat context in retrieval query text for follow-up questions", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async (_input: { queryText: string }) => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft answer." })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+
+    await orchestrator.generateDraft({
+      question: "What about this?",
+      liveChatMessages: [
+        { speaker: "Alice", text: "Project Alpha launch moved to next Wednesday." },
+        { speaker: "Bob", text: "The risk is that design acceptance is not done." },
+      ],
+    });
+
+    const queryText = contextBuilder.buildContext.mock.calls[0]?.[0].queryText ?? "";
+    expect(queryText).toContain("What about this?");
+    expect(queryText).toContain("Alice: Project Alpha launch moved to next Wednesday.");
+    expect(queryText).toContain("Bob: The risk is that design acceptance is not done.");
+    expect(queryText.length).toBeLessThanOrEqual(4000);
   });
 
   it("caps stored live chat loading and context limits to 20 messages", async () => {
@@ -403,7 +433,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: "What changed?",
+      queryText: expect.stringContaining("What changed?"),
       liveChatMessages: [
         { speaker: "ou_b", text: "Stored context" },
         { speaker: "ou_a", text: "Duplicated context" },
@@ -448,7 +478,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: "What changed?",
+      queryText: expect.stringContaining("What changed?"),
       liveChatMessages: [
         { speaker: "ou_a", text: "Duplicated context" },
         { speaker: "ou_c", text: "Current context" },
@@ -495,7 +525,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: "What changed?",
+      queryText: expect.stringContaining("What changed?"),
       liveChatMessages: [
         ...storedMessages.slice(1),
         { speaker: "ou_a", text: "Repeated current request" },

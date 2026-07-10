@@ -283,6 +283,11 @@ The retrieval order is not the same as prompt assembly order. Agent Orchestrator
 
 Document recall must be budgeted and ranked so large PDFs or technical specifications cannot flood the context window and erase the user's current intent.
 
+Semantic retrieval queries should include both the user's current question and the bounded live-chat
+window that Iris will use as answer context. This lets follow-up questions such as "What about
+this?" retrieve documents using the actual group discussion, while the final prompt still keeps live
+chat anchored after background documents.
+
 Live-chat history loading may scan more raw group events than it injects into the prompt because
 recent Feishu traffic can include images, stickers, blank text, or document-only messages. The
 current v1 Core implementation scans up to three times the requested live-chat output window, capped

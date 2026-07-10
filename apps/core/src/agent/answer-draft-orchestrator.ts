@@ -89,7 +89,7 @@ export function createAnswerDraftOrchestrator({
       );
 
       const context = await contextBuilder.buildContext({
-        queryText: question,
+        queryText: buildRetrievalQueryText(question, liveChatMessages),
         liveChatMessages,
         fragmentLimit: input.fragmentLimit,
         liveChatLimit,
@@ -170,6 +170,52 @@ function selectLiveChatWindow(
   }
 
   return messages.slice(-limit);
+}
+
+function buildRetrievalQueryText(question: string, liveChatMessages: LiveChatMessage[]): string {
+  const separator = "\n\nRecent live chat:\n";
+  if (
+    liveChatMessages.length === 0 ||
+    question.length + separator.length >= MAX_ANSWER_DRAFT_QUESTION_CHARS
+  ) {
+    return question;
+  }
+
+  const liveChatBudget = MAX_ANSWER_DRAFT_QUESTION_CHARS - question.length - separator.length;
+  const liveChatQueryText = buildLiveChatRetrievalText(liveChatMessages, liveChatBudget);
+  if (liveChatQueryText.length === 0) {
+    return question;
+  }
+
+  return `${question}${separator}${liveChatQueryText}`;
+}
+
+function buildLiveChatRetrievalText(
+  liveChatMessages: LiveChatMessage[],
+  maxChars: number,
+): string {
+  const selectedLines: string[] = [];
+  for (let index = liveChatMessages.length - 1; index >= 0; index -= 1) {
+    const message = liveChatMessages[index];
+    if (message === undefined) {
+      continue;
+    }
+
+    const line = `${message.speaker}: ${message.text}`;
+    const candidateLines = [line, ...selectedLines];
+    const candidate = candidateLines.join("\n");
+    if (candidate.length <= maxChars) {
+      selectedLines.unshift(line);
+      continue;
+    }
+
+    if (selectedLines.length === 0 && maxChars > TRUNCATION_MARKER.length) {
+      selectedLines.unshift(truncateWithMarker(line, maxChars));
+    }
+    break;
+  }
+
+  return selectedLines.join("\n");
 }
 
 function toAnswerDraftResult(

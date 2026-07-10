@@ -35,7 +35,7 @@ not include `sourceTypes`.
 
 - [x] Run focused repository and answer runtime tests.
 - [x] Run full verification.
-- [ ] Commit, push, update PR #3, and confirm GitHub Actions checks.
+- [x] Commit, push, update PR #3, and confirm GitHub Actions checks.
 
 Observed: `npm --workspace apps/core test -- tests/document-fragment-repository.test.ts tests/answer-draft-runtime.test.ts --reporter=dot`
 passed with 32 tests / 1 skipped.
@@ -47,3 +47,6 @@ Observed:
 - `npm run test:python` passed with 7 tests.
 - `docker compose config` passed.
 - `git diff --check` passed with Windows line-ending warnings only.
+
+Observed: commit `04eb7e1` was pushed to PR #3. GitHub Actions Core and AI Worker checks passed
+for head `04eb7e140a1cfd8d76b9e783553675b98eabfa27`.
