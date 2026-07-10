@@ -146,6 +146,7 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
 ]);
 const deadLettersPresentReason = "dead_letters_present" as const;
 const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
+const latestBatchFailedReason = "latest_batch_failed" as const;
 const mentionRepliesUnavailableReason = "mention_replies_unavailable" as const;
 const maxInternalStringLength = 512;
 const maxInternalSourceUriLength = DOCUMENT_SOURCE_URI_MAX_CHARS;
@@ -1259,9 +1260,9 @@ async function getEventWorkerStatus(runtime: EventWorkerRuntime | undefined) {
 }
 
 function withEventWorkerHealth(status: Awaited<ReturnType<EventWorkerRuntime["getStatus"]>>) {
-  const deadLetterHealth = withDeadLetterHealth(status, status.deadLetterEventCount);
-  if (!deadLetterHealth.ok) {
-    return deadLetterHealth;
+  const workerHealth = withWorkerHealth(status, status.deadLetterEventCount);
+  if (!workerHealth.ok) {
+    return workerHealth;
   }
 
   if (status.mentionRepliesUnavailableReason !== undefined) {
@@ -1272,7 +1273,7 @@ function withEventWorkerHealth(status: Awaited<ReturnType<EventWorkerRuntime["ge
     };
   }
 
-  return deadLetterHealth;
+  return workerHealth;
 }
 
 async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {
@@ -1282,7 +1283,7 @@ async function getDocumentSyncStatus(runtime: DocumentSyncRuntime | undefined) {
 
   try {
     const status = await runtime.getStatus();
-    return withDeadLetterHealth(status, status.deadLetterJobCount);
+    return withWorkerHealth(status, status.deadLetterJobCount);
   } catch {
     return {
       ok: false,
@@ -1300,7 +1301,7 @@ async function getReindexStatus(runtime: ReindexWorkerRuntime | undefined) {
 
   try {
     const status = await runtime.getStatus();
-    return withDeadLetterHealth(status, status.deadLetterJobCount);
+    return withWorkerHealth(status, status.deadLetterJobCount);
   } catch {
     return {
       ok: false,
@@ -1324,6 +1325,25 @@ function withDeadLetterHealth<Status extends object>(
   }
 
   return { ok: true, ...status };
+}
+
+function withWorkerHealth<Status extends { latestBatch?: { status: string } }>(
+  status: Status,
+  deadLetterCount: number,
+) {
+  const deadLetterHealth = withDeadLetterHealth(status, deadLetterCount);
+  if (!deadLetterHealth.ok) {
+    return deadLetterHealth;
+  }
+  if (status.latestBatch?.status === "failed") {
+    return {
+      ok: false,
+      ...status,
+      degradedReason: latestBatchFailedReason,
+    };
+  }
+
+  return deadLetterHealth;
 }
 
 function parseReindexDocumentProfileRequest(

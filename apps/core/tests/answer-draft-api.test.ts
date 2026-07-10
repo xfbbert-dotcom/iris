@@ -976,6 +976,8 @@ describe("GET /internal/status", () => {
   });
 
   it("marks reindex as degraded in the consolidated status when its DLQ is non-empty", async () => {
+    const startedAt = new Date("2026-07-10T11:00:00.000Z");
+    const finishedAt = new Date("2026-07-10T11:00:01.000Z");
     const reindexWorkerRuntime = fakeReindexRuntime({
       getStatus: vi.fn(async () => ({
         enabled: true as const,
@@ -985,6 +987,16 @@ describe("GET /internal/status", () => {
         batchLimit: 25,
         pendingJobCount: 0,
         deadLetterJobCount: 3,
+        latestBatch: {
+          status: "failed" as const,
+          startedAt,
+          finishedAt,
+          indexedCount: 0 as const,
+          skippedCount: 0 as const,
+          failedCount: 0 as const,
+          failed: true as const,
+          errorMessage: "reindex provider unavailable",
+        },
       })),
     });
     const app = buildApp({
@@ -1010,6 +1022,16 @@ describe("GET /internal/status", () => {
       batchLimit: 25,
       pendingJobCount: 0,
       deadLetterJobCount: 3,
+      latestBatch: {
+        status: "failed",
+        startedAt: "2026-07-10T11:00:00.000Z",
+        finishedAt: "2026-07-10T11:00:01.000Z",
+        indexedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        failed: true,
+        errorMessage: "reindex provider unavailable",
+      },
       degradedReason: "dead_letters_present",
     });
     expect(response.json().summary.primaryAttentionComponent).toEqual({
@@ -1017,6 +1039,239 @@ describe("GET /internal/status", () => {
       status: "degraded",
     });
     expect(response.json().summary.attentionSeverity).toBe("critical");
+  });
+
+  it("marks workers degraded when their latest batch failed", async () => {
+    const startedAt = new Date("2026-07-10T12:00:00.000Z");
+    const finishedAt = new Date("2026-07-10T12:00:01.000Z");
+    const eventWorkerRuntime = fakeEventRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 50,
+        mentionRepliesEnabled: false,
+        mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
+        pendingEventCount: 2,
+        deadLetterEventCount: 0,
+        latestBatch: {
+          status: "failed" as const,
+          startedAt,
+          finishedAt,
+          processedCount: 0 as const,
+          failedCount: 0 as const,
+          failed: true as const,
+          errorMessage: "event redis unavailable",
+        },
+      })),
+    });
+    const documentSyncRuntime = fakeDocumentSyncRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 2000,
+        batchLimit: 10,
+        pendingJobCount: 3,
+        deadLetterJobCount: 0,
+        latestBatch: {
+          status: "failed" as const,
+          startedAt,
+          finishedAt,
+          processedCount: 0 as const,
+          failedCount: 0 as const,
+          failed: true as const,
+          errorMessage: "document database unavailable",
+        },
+      })),
+    });
+    const reindexWorkerRuntime = fakeReindexRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+        intervalMs: 3000,
+        batchLimit: 25,
+        pendingJobCount: 4,
+        deadLetterJobCount: 0,
+        latestBatch: {
+          status: "failed" as const,
+          startedAt,
+          finishedAt,
+          indexedCount: 0 as const,
+          skippedCount: 0 as const,
+          failedCount: 0 as const,
+          failed: true as const,
+          errorMessage: "reindex provider unavailable",
+        },
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => eventWorkerRuntime,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+      createReindexWorkerRuntime: () => reindexWorkerRuntime,
+    });
+
+    const response = await app.inject({ method: "GET", url: "/internal/status" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body).toMatchObject({
+      ok: false,
+      status: "degraded",
+      summary: {
+        degradedComponentCount: 3,
+        degradedComponents: ["eventWorker", "documentSync", "reindex"],
+        primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
+        attentionSeverity: "critical",
+      },
+      components: {
+        eventWorker: {
+          status: "degraded",
+          ok: false,
+          degradedReason: "latest_batch_failed",
+          latestBatch: {
+            status: "failed",
+            errorMessage: "event redis unavailable",
+          },
+        },
+        documentSync: {
+          status: "degraded",
+          ok: false,
+          degradedReason: "latest_batch_failed",
+          latestBatch: {
+            status: "failed",
+            errorMessage: "document database unavailable",
+          },
+        },
+        reindex: {
+          status: "degraded",
+          ok: false,
+          degradedReason: "latest_batch_failed",
+          latestBatch: {
+            status: "failed",
+            errorMessage: "reindex provider unavailable",
+          },
+        },
+      },
+    });
+    expect(body.components.eventWorker.latestBatch).toEqual({
+      status: "failed",
+      startedAt: "2026-07-10T12:00:00.000Z",
+      finishedAt: "2026-07-10T12:00:01.000Z",
+      processedCount: 0,
+      failedCount: 0,
+      failed: true,
+      errorMessage: "event redis unavailable",
+    });
+    expect(body.components.documentSync.latestBatch).toEqual({
+      status: "failed",
+      startedAt: "2026-07-10T12:00:00.000Z",
+      finishedAt: "2026-07-10T12:00:01.000Z",
+      processedCount: 0,
+      failedCount: 0,
+      failed: true,
+      errorMessage: "document database unavailable",
+    });
+    expect(body.components.reindex.latestBatch).toEqual({
+      status: "failed",
+      startedAt: "2026-07-10T12:00:00.000Z",
+      finishedAt: "2026-07-10T12:00:01.000Z",
+      indexedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      failed: true,
+      errorMessage: "reindex provider unavailable",
+    });
+  });
+
+  it("restores worker health after a successful batch and keeps missing batches healthy", async () => {
+    const startedAt = new Date("2026-07-10T13:00:00.000Z");
+    const finishedAt = new Date("2026-07-10T13:00:01.000Z");
+    let statusReadCount = 0;
+    const eventWorkerRuntime = fakeEventRuntime({
+      getStatus: vi.fn(async () => {
+        statusReadCount += 1;
+        const status = {
+          enabled: true as const,
+          running: true,
+          intervalMs: 1000,
+          batchLimit: 50,
+          mentionRepliesEnabled: true,
+          pendingEventCount: 0,
+          deadLetterEventCount: 0,
+        };
+        if (statusReadCount === 1) {
+          return {
+            ...status,
+            latestBatch: {
+              status: "failed" as const,
+              startedAt,
+              finishedAt,
+              processedCount: 0 as const,
+              failedCount: 0 as const,
+              failed: true as const,
+              errorMessage: "redis unavailable",
+            },
+          };
+        }
+        if (statusReadCount === 2) {
+          return {
+            ...status,
+            latestBatch: {
+              status: "succeeded" as const,
+              startedAt,
+              finishedAt,
+              processedCount: 1,
+              failedCount: 0,
+              failed: false as const,
+            },
+          };
+        }
+
+        return status;
+      }),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => eventWorkerRuntime,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const failedResponse = await app.inject({ method: "GET", url: "/internal/status" });
+    const recoveredResponse = await app.inject({ method: "GET", url: "/internal/status" });
+    const noBatchResponse = await app.inject({ method: "GET", url: "/internal/status" });
+    const failedBody = failedResponse.json();
+    const recoveredBody = recoveredResponse.json();
+    const noBatchBody = noBatchResponse.json();
+
+    expect(failedBody.components.eventWorker).toMatchObject({
+      status: "degraded",
+      ok: false,
+      degradedReason: "latest_batch_failed",
+    });
+    expect(recoveredBody.ok).toBe(true);
+    expect(recoveredBody.components.eventWorker).toMatchObject({
+      status: "healthy",
+      ok: true,
+      latestBatch: {
+        status: "succeeded",
+        startedAt: "2026-07-10T13:00:00.000Z",
+        finishedAt: "2026-07-10T13:00:01.000Z",
+        processedCount: 1,
+        failedCount: 0,
+        failed: false,
+      },
+    });
+    expect(recoveredBody.components.eventWorker).not.toHaveProperty("degradedReason");
+    expect(noBatchBody.ok).toBe(true);
+    expect(noBatchBody.components.eventWorker).toMatchObject({
+      status: "healthy",
+      ok: true,
+    });
+    expect(noBatchBody.components.eventWorker).not.toHaveProperty("latestBatch");
+    expect(noBatchBody.components.eventWorker).not.toHaveProperty("degradedReason");
   });
 
   it("marks event worker as degraded when mention replies are unavailable", async () => {
