@@ -1694,6 +1694,38 @@ Before horizontal document-sync workers are supported, replace worker-scoped
 recovery authority with per-consumer processing ownership plus a source-state
 lease or transactional outbox.
 
+### 12.37 Persisted Document Fetch Failures Must Enter Queue Retry Policy
+
+Pressure:
+
+The document sync runner records a failed snapshot and marks the source
+`failed` when Feishu or network I/O fails. If the worker treats that handled
+result as successfully processed, it acknowledges the queue item immediately.
+The existing retry limit and dead-letter policy never runs, so a transient
+timeout can leave a document permanently unavailable until manual intervention.
+
+Required architectural response:
+
+- Worker success and queue success are different from persistence success. A
+  runner result with `status: "failed"` must not be acknowledged as processed.
+- The worker must pass the runner's bounded `errorMessage` to the existing
+  queue `handleFailedJob` policy, returning its `requeued` or `dead_lettered`
+  action and attempt count.
+- `synced`, `skipped`, `rejected`, and `not_found` remain terminal processed
+  results and keep their existing ACK behavior.
+- A retried job re-enters the normal runner claim, policy-check, fetch,
+  snapshot, state, and reindex pipeline. Failed snapshots remain durable
+  evidence of each unsuccessful fetch.
+- No separate failed-source scheduler, new queue, or new persistence schema is
+  introduced for v1.
+
+Evolution signal:
+
+If operators need different retry behavior for permanent authorization errors,
+HTTP status classes, or provider rate limits, add a typed failure taxonomy and
+backoff metadata without weakening the default rule that transient fetch
+failures are never silently acknowledged.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
