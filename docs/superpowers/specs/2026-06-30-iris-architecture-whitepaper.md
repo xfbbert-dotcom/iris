@@ -476,6 +476,11 @@ guard. The `Bearer` scheme may be matched case-insensitively for HTTP client com
 token value itself must remain an exact shared-secret match. This is a rollout control, not the final
 admin identity model.
 
+The direct Core server entry point must fail safe when that shared token is absent. Credential-free
+local development may continue, but the process must bind only to `127.0.0.1`; listening on all host
+interfaces (`0.0.0.0`) requires a valid `IRIS_INTERNAL_API_TOKEN`. This listener rule complements the
+request guard and prevents an omitted token from silently exposing operator APIs to the host network.
+
 Internal rollout readiness is a configuration contract, not a runtime-health substitute. Iris must
 provide a shared readiness profile for the first 20-30 person rollout through both a local CLI and
 an internal operator endpoint. The profile must fail blocked configurations that would prevent the
