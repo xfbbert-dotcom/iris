@@ -48,7 +48,10 @@ export interface DocumentSyncPlanner {
 }
 
 export interface DocumentSyncRunner {
-  syncSourceById(sourceId: string): Promise<DocumentSyncResult>;
+  syncSourceById(
+    sourceId: string,
+    options?: { recoverStaleSyncState?: boolean },
+  ): Promise<DocumentSyncResult>;
 }
 
 export type DocumentSyncResult =
@@ -99,7 +102,7 @@ export function createDocumentSyncRunner({
   now?: () => Date;
 }): DocumentSyncRunner {
   return {
-    async syncSourceById(sourceId) {
+    async syncSourceById(sourceId, options = {}) {
       const source = await registry.findSourceById(sourceId);
 
       if (source === undefined) {
@@ -116,11 +119,12 @@ export function createDocumentSyncRunner({
         return { status: "rejected", source, reason: initialRejectionReason };
       }
 
-      if (source.syncState === "syncing") {
+      const recoverStaleSyncState = options.recoverStaleSyncState === true;
+      if (source.syncState === "syncing" && !recoverStaleSyncState) {
         return { status: "skipped", source, reason: "already_syncing" };
       }
 
-      if (source.syncState === "synced") {
+      if (source.syncState === "synced" && !recoverStaleSyncState) {
         return { status: "skipped", source, reason: "already_synced" };
       }
 

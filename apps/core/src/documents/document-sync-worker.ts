@@ -51,7 +51,9 @@ async function processJob(
   queue: Pick<DocumentSyncQueue, "handleProcessedJob" | "handleFailedJob">,
 ): Promise<DocumentSyncWorkerResult> {
   try {
-    const result = await runner.syncSourceById(job.documentSourceId);
+    const result = await runner.syncSourceById(job.documentSourceId, {
+      recoverStaleSyncState: true,
+    });
     await queue.handleProcessedJob(job);
     return {
       status: "processed",

@@ -37,7 +37,9 @@ describe("DocumentSyncWorker", () => {
       },
     ] satisfies DocumentSyncWorkerResult[]);
     expect(queue.dequeueBatch).toHaveBeenCalledWith(10);
-    expect(runner.syncSourceById).toHaveBeenCalledWith("source-1");
+    expect(runner.syncSourceById).toHaveBeenCalledWith("source-1", {
+      recoverStaleSyncState: true,
+    });
     expect(queue.handleProcessedJob).toHaveBeenCalledWith(job);
     expect(queue.handleFailedJob).not.toHaveBeenCalled();
   });

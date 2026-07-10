@@ -787,7 +787,9 @@ describe("createDocumentSyncRunner", () => {
     };
     const { runner, fetcher, snapshots } = runnerWith({ registry });
 
-    await expect(runner.syncSourceById(deniedSyncing.id)).resolves.toEqual({
+    await expect(
+      runner.syncSourceById(deniedSyncing.id, { recoverStaleSyncState: true }),
+    ).resolves.toEqual({
       status: "rejected",
       source: restoredDenied,
       reason: "permission_denied",
@@ -824,7 +826,9 @@ describe("createDocumentSyncRunner", () => {
     };
     const { runner, fetcher, snapshots } = runnerWith({ registry });
 
-    await expect(runner.syncSourceById(disabledSyncing.id)).resolves.toEqual({
+    await expect(
+      runner.syncSourceById(disabledSyncing.id, { recoverStaleSyncState: true }),
+    ).resolves.toEqual({
       status: "rejected",
       source: restoredDisabled,
       reason: "capability_disabled",
@@ -845,6 +849,7 @@ describe("createDocumentSyncRunner", () => {
       source: syncingSource,
       reason: "already_syncing",
     });
+    expect(registry.markSyncState).not.toHaveBeenCalled();
     expect(fetcher.fetch).not.toHaveBeenCalled();
   });
 
@@ -858,8 +863,85 @@ describe("createDocumentSyncRunner", () => {
       source: syncedSource,
       reason: "already_synced",
     });
+    expect(registry.markSyncState).not.toHaveBeenCalled();
     expect(fetcher.fetch).not.toHaveBeenCalled();
   });
+
+  it.each(["syncing", "synced"] as const)(
+    "recovers an eligible %s source when queue ownership is explicit",
+    async (staleSyncState) => {
+      const staleSource = source({
+        id: `stale-${staleSyncState}`,
+        syncState: staleSyncState,
+      });
+      const claimedSource = source({ id: staleSource.id, syncState: "syncing" });
+      const completedSource = source({ id: staleSource.id, syncState: "synced" });
+      const succeededSnapshot = snapshot({
+        id: `snapshot-${staleSyncState}`,
+        documentSourceId: staleSource.id,
+        sourceUri: staleSource.sourceUri,
+      });
+      const calls: string[] = [];
+      const registry = {
+        findSourceById: vi.fn(async () => {
+          calls.push("find");
+          return staleSource;
+        }),
+        markSyncState: vi.fn(async (_id: string, syncState: DocumentSource["syncState"]) => {
+          calls.push(`mark:${syncState}`);
+          return syncState === "syncing" ? claimedSource : completedSource;
+        }),
+      };
+      const fetcher = {
+        fetch: vi.fn(async () => {
+          calls.push("fetch");
+          return {
+            bodyText: "Recovered document body",
+            fetchedAt,
+          };
+        }),
+      };
+      const snapshots = {
+        insertSucceededSnapshot: vi.fn(async () => {
+          calls.push("snapshot:succeeded");
+          return succeededSnapshot;
+        }),
+        insertFailedSnapshot: vi.fn(),
+      };
+      const syncedSnapshotReindexer = {
+        enqueueSyncedSnapshotReindex: vi.fn(async () => {
+          calls.push("reindex");
+        }),
+      };
+      const runner = createDocumentSyncRunner({
+        registry,
+        snapshots,
+        fetcher,
+        syncedSnapshotReindexer,
+      });
+
+      await expect(
+        runner.syncSourceById(staleSource.id, { recoverStaleSyncState: true }),
+      ).resolves.toEqual({
+        status: "synced",
+        source: staleSource,
+        snapshot: succeededSnapshot,
+      });
+
+      expect(calls).toEqual([
+        "find",
+        "mark:syncing",
+        "fetch",
+        "snapshot:succeeded",
+        "mark:synced",
+        "reindex",
+      ]);
+      expect(fetcher.fetch).toHaveBeenCalledWith(claimedSource);
+      expect(syncedSnapshotReindexer.enqueueSyncedSnapshotReindex).toHaveBeenCalledWith({
+        documentSnapshotId: succeededSnapshot.id,
+      });
+    },
+  );
 
   it("rejects sources with both usage capabilities disabled", async () => {
     const disabledSource = source({
@@ -916,7 +998,9 @@ describe("createDocumentSyncRunner", () => {
     });
 
     await expect(
-      runner.syncSourceById("source-loses-permission-during-claim"),
+      runner.syncSourceById("source-loses-permission-during-claim", {
+        recoverStaleSyncState: true,
+      }),
     ).resolves.toEqual({
       status: "rejected",
       source: restoredDenied,
@@ -966,7 +1050,11 @@ describe("createDocumentSyncRunner", () => {
       now: () => failedAt,
     });
 
-    await expect(runner.syncSourceById("source-disabled-during-claim")).resolves.toEqual({
+    await expect(
+      runner.syncSourceById("source-disabled-during-claim", {
+        recoverStaleSyncState: true,
+      }),
+    ).resolves.toEqual({
       status: "rejected",
       source: restoredDisabled,
       reason: "capability_disabled",

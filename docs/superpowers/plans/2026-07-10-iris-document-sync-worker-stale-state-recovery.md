@@ -40,11 +40,11 @@ single-consumer v1 constraint.
 - Modify: `apps/core/tests/document-sync-pipeline.test.ts`
 - Modify: `apps/core/tests/document-sync-worker.test.ts`
 
-- [ ] **Step 1: Prove default runner calls still skip syncing and synced sources**
-- [ ] **Step 2: Prove recovery authority completes syncing and synced sources**
-- [ ] **Step 3: Prove worker calls the runner with recovery authority**
-- [ ] **Step 4: Preserve denied and disabled source rejection**
-- [ ] **Step 5: Run focused tests and verify RED**
+- [x] **Step 1: Prove default runner calls still skip syncing and synced sources**
+- [x] **Step 2: Prove recovery authority completes syncing and synced sources**
+- [x] **Step 3: Prove worker calls the runner with recovery authority**
+- [x] **Step 4: Preserve denied and disabled source rejection**
+- [x] **Step 5: Run focused tests and verify RED**
 
 Run:
 
@@ -52,20 +52,36 @@ Run:
 npm --workspace apps/core test -- tests/document-sync-pipeline.test.ts tests/document-sync-worker.test.ts --reporter=dot
 ```
 
+Observed RED: both stale-state cases returned their existing skip results and the worker called the
+runner without recovery authority. Three targeted assertions failed while all unrelated focused
+tests remained green.
+
 ### Task 3: Implement Worker-Owned Recovery
 
 **Files:**
 - Modify: `apps/core/src/documents/document-sync-pipeline.ts`
 - Modify: `apps/core/src/documents/document-sync-worker.ts`
 
-- [ ] **Step 1: Add the optional runner recovery input with a false default**
-- [ ] **Step 2: Reclaim eligible syncing and synced sources only when recovery is enabled**
-- [ ] **Step 3: Have the queue worker pass recovery authority**
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 1: Add the optional runner recovery input with a false default**
+- [x] **Step 2: Reclaim eligible syncing and synced sources only when recovery is enabled**
+- [x] **Step 3: Have the queue worker pass recovery authority**
+- [x] **Step 4: Run focused tests and verify GREEN**
+
+Observed GREEN: the focused pipeline and worker files passed all 36 tests; TypeScript type checking
+also passed.
 
 ### Task 4: Verify, Review, and Publish
 
-- [ ] **Step 1: Run `npm run verify`**
-- [ ] **Step 2: Complete independent review and address findings**
+- [x] **Step 1: Run `npm run verify`**
+- [x] **Step 2: Complete independent review and address findings**
 - [ ] **Step 3: Commit and push the branch**
 - [ ] **Step 4: Watch PR #3 checks and confirm a clean merge state**
+
+Observed full verification: `git diff --check`, TypeScript type checking, all 65 Core test files
+(`1063` passed and `4` skipped), all 7 Python tests, and `docker compose config` completed
+successfully.
+
+Independent review found no Critical or Important issues and assessed the change as ready to
+merge. Its only Minor suggestion was adopted: the default `syncing` and `synced` skip tests now
+also prove that the runner does not mutate source state. Focused tests passed `36/36`, followed by
+the same successful full verification result.
