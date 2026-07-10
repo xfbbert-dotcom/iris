@@ -42,18 +42,23 @@ user-submitted sources under their existing company-level policies.
 - Modify: `apps/core/tests/document-retrieval-context.test.ts`
 - Modify: `apps/core/tests/document-fragment-repository.test.ts`
 
-- [ ] **Step 1: Add runtime tests for exact same-group evidence and cross-group denial**
-- [ ] **Step 2: Add a source-policy test that excludes group-visible source types without `chatId`**
-- [ ] **Step 3: Add a context-builder test that forwards the current group to fragment search**
-- [ ] **Step 4: Add repository SQL tests for origin/evidence filtering and dynamic parameters**
-- [ ] **Step 5: Extend Postgres integration coverage for matching and nonmatching groups**
-- [ ] **Step 6: Run focused tests and verify RED for the missing scope behavior**
+- [x] **Step 1: Add runtime tests for exact same-group evidence and cross-group denial**
+- [x] **Step 2: Add a source-policy test that excludes group-visible source types without `chatId`**
+- [x] **Step 3: Add a context-builder test that forwards the current group to fragment search**
+- [x] **Step 4: Add repository SQL tests for origin/evidence filtering and dynamic parameters**
+- [x] **Step 5: Extend Postgres integration coverage for matching and nonmatching groups**
+- [x] **Step 6: Run focused tests and verify RED for the missing scope behavior**
 
 Run:
 
 ```powershell
 npm --workspace apps/core test -- tests/answer-draft-runtime.test.ts tests/document-retrieval-context.test.ts tests/document-fragment-repository.test.ts --reporter=dot
 ```
+
+Observed RED: five targeted assertions failed because the cross-group fragment reached prompt
+assembly, group-visible source types remained enabled without `chatId`, the context builder omitted
+group scope, and both SQL group predicates were absent. A separate explicit-scope validation test
+failed because blank `groupId` was accepted.
 
 ### Task 3: Implement SQL and Policy Defense in Depth
 
@@ -62,22 +67,29 @@ npm --workspace apps/core test -- tests/answer-draft-runtime.test.ts tests/docum
 - Modify: `apps/core/src/memory/document-retrieval-context.ts`
 - Modify: `apps/core/src/documents/document-fragment-repository.ts`
 
-- [ ] **Step 1: Normalize and pass current-group scope per source-policy answer request**
-- [ ] **Step 2: Exclude group-visible source types when source-policy lacks group scope**
-- [ ] **Step 3: Require exact same-group source evidence in the TypeScript policy guard**
-- [ ] **Step 4: Add optional repository `groupId` filtering before vector ranking**
-- [ ] **Step 5: Preserve `allow-indexed`, wiki, and user-submitted behavior**
-- [ ] **Step 6: Run focused tests and verify GREEN**
+- [x] **Step 1: Normalize and pass current-group scope per source-policy answer request**
+- [x] **Step 2: Exclude group-visible source types when source-policy lacks group scope**
+- [x] **Step 3: Require exact same-group source evidence in the TypeScript policy guard**
+- [x] **Step 4: Add optional repository `groupId` filtering before vector ranking**
+- [x] **Step 5: Preserve `allow-indexed`, wiki, and user-submitted behavior**
+- [x] **Step 6: Run focused tests and verify GREEN**
+
+Observed GREEN: all three focused files passed with 55 tests passed and one local Postgres test
+skipped because the local Linux container engine is unavailable.
 
 ### Task 4: Verify, Review, and Publish
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 ```powershell
 npm run verify
 ```
 
-- [ ] **Step 2: Review the diff against the whitepaper and security invariants**
-- [ ] **Step 3: Address review findings and rerun affected tests**
+Observed: type checking passed; 65 Core test files passed with 1059 tests passed and 4 skipped;
+7 Python tests passed; Docker Compose configuration validation passed. GitHub Actions runs the
+Postgres/pgvector integration assertions skipped by the local environment.
+
+- [x] **Step 2: Review the diff against the whitepaper and security invariants**
+- [x] **Step 3: Address review findings and rerun affected tests**
 - [ ] **Step 4: Commit and push the branch**
 - [ ] **Step 5: Watch PR #3 checks and confirm a clean merge state**

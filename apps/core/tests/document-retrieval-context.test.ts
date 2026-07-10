@@ -97,6 +97,23 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.promptContext).toContain('<message speaker="Bob">Use live chat.</message>');
   });
 
+  it("forwards current group scope to fragment search", async () => {
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments,
+      groupId: "chat-current",
+      canReadDocument: vi.fn(),
+    });
+
+    await builder.buildContext({ queryText: "current group", liveChatMessages: [] });
+
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith(
+      expect.objectContaining({ groupId: "chat-current" }),
+    );
+  });
+
   it("skips embedding, search, and permission checks when fragmentLimit is 0", async () => {
     const embedder = { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) };
     const fragments = { searchSimilarFragments: vi.fn(async () => []) };

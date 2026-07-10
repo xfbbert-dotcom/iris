@@ -148,6 +148,62 @@ describe("createAnswerDraftRuntime", () => {
     );
   });
 
+  it("preserves unrestricted indexed documents with runtime controls in allow-indexed mode", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-other-group",
+          documentSourceId: "source-other-group",
+          text: "Development indexed text",
+        }),
+      ]),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: enabledEnv(),
+      runtimeController: {
+        canReadDocuments: vi.fn(() => true),
+        canRetrieveKnowledgeBase: vi.fn(() => true),
+        canProcessGroupMessage: vi.fn(() => false),
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createLiveChatContextProvider: vi.fn(() => ({
+          loadRecentMessages: vi.fn(async () => []),
+        })),
+        createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What can Iris use?",
+      chatId: "chat-current",
+      liveChatMessages: [],
+    });
+
+    expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-other-group"]);
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceTypes: [
+          "group_visible_document",
+          "authorized_wiki_document",
+          "user_submitted_document",
+        ],
+      }),
+    );
+    expect(fragments.searchSimilarFragments).not.toHaveBeenCalledWith(
+      expect.objectContaining({ groupId: expect.anything() }),
+    );
+  });
+
   it("does not load stored live chat context when group context reading is disabled", async () => {
     const model = {
       generateAnswerDraft: vi.fn(async (_input: GenerateAnswerDraftInput) => ({
@@ -236,14 +292,27 @@ describe("createAnswerDraftRuntime", () => {
       ]),
     };
     const sources: Record<string, DocumentSource | undefined> = {
-      "source-allowed": source({ id: "source-allowed", permissionState: "readable" }),
+      "source-allowed": source({
+        id: "source-allowed",
+        sourceType: "user_submitted_document",
+        permissionState: "readable",
+      }),
       "source-disabled": source({
         id: "source-disabled",
+        sourceType: "user_submitted_document",
         permissionState: "readable",
         canUseForAnswering: false,
       }),
-      "source-denied": source({ id: "source-denied", permissionState: "denied" }),
-      "source-stale": source({ id: "source-stale", permissionState: "stale" }),
+      "source-denied": source({
+        id: "source-denied",
+        sourceType: "user_submitted_document",
+        permissionState: "denied",
+      }),
+      "source-stale": source({
+        id: "source-stale",
+        sourceType: "user_submitted_document",
+        permissionState: "stale",
+      }),
     };
     const sourceRegistry = {
       findSourceById: vi.fn(async (id: string) => {
@@ -472,7 +541,7 @@ describe("createAnswerDraftRuntime", () => {
     expect(runtimeController.canRetrieveKnowledgeBase).toHaveBeenCalled();
   });
 
-  it("excludes group-visible answer fragments whose source groups are disabled", async () => {
+  it("allows group-visible answer fragments only when evidence matches the current group", async () => {
     const model = {
       generateAnswerDraft: vi.fn(async (_input: GenerateAnswerDraftInput) => ({
         answerText: "Runtime draft",
@@ -481,14 +550,14 @@ describe("createAnswerDraftRuntime", () => {
     const fragments = {
       searchSimilarFragments: vi.fn(async () => [
         fragment({
-          id: "fragment-disabled-group",
-          documentSourceId: "source-disabled-group",
-          text: "Disabled group document text",
+          id: "fragment-other-group",
+          documentSourceId: "source-other-group",
+          text: "Other group document text",
         }),
         fragment({
-          id: "fragment-enabled-group",
-          documentSourceId: "source-enabled-group",
-          text: "Enabled group document text",
+          id: "fragment-current-group",
+          documentSourceId: "source-current-group",
+          text: "Current group document text",
         }),
         fragment({
           id: "fragment-user",
@@ -498,17 +567,26 @@ describe("createAnswerDraftRuntime", () => {
       ]),
     };
     const sources: Record<string, DocumentSource | undefined> = {
-      "source-disabled-group": source({
-        id: "source-disabled-group",
+      "source-other-group": source({
+        id: "source-other-group",
         sourceType: "group_visible_document",
-        originGroupId: "chat-disabled",
+        originGroupId: "chat-other",
         permissionState: "readable",
       }),
-      "source-enabled-group": source({
-        id: "source-enabled-group",
+      "source-current-group": source({
+        id: "source-current-group",
         sourceType: "group_visible_document",
-        originGroupId: "chat-enabled",
+        originGroupId: "chat-other",
         permissionState: "readable",
+        evidence: [
+          {
+            kind: "group_message",
+            sourceUri: "https://example.com/doc",
+            groupId: "chat-current",
+            messageId: "message-current",
+            observedAt: new Date("2026-07-01T01:00:00.000Z"),
+          },
+        ],
       }),
       "source-user": source({
         id: "source-user",
@@ -522,7 +600,7 @@ describe("createAnswerDraftRuntime", () => {
     const runtimeController = {
       canReadDocuments: vi.fn(() => true),
       canRetrieveKnowledgeBase: vi.fn(() => true),
-      canProcessGroupMessage: vi.fn((groupId: string) => groupId !== "chat-disabled"),
+      canProcessGroupMessage: vi.fn(() => true),
     };
     const runtime = createAnswerDraftRuntime({
       env: {
@@ -534,6 +612,9 @@ describe("createAnswerDraftRuntime", () => {
         createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
         createDocumentFragmentRepository: vi.fn(() => fragments),
         createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createLiveChatContextProvider: vi.fn(() => ({
+          loadRecentMessages: vi.fn(async () => []),
+        })),
         createModelProvider: vi.fn(() => model),
         createEmbeddingProfileRepository: vi.fn(() => ({
           getStaticDevelopmentProfile: vi.fn(async () => profile()),
@@ -545,21 +626,78 @@ describe("createAnswerDraftRuntime", () => {
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
       question: "What can Iris use?",
+      chatId: "chat-current",
       liveChatMessages: [],
     });
 
     const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
-    expect(promptContext).not.toContain("Disabled group document text");
-    expect(promptContext).toContain("Enabled group document text");
+    expect(promptContext).not.toContain("Other group document text");
+    expect(promptContext).toContain("Current group document text");
     expect(promptContext).toContain("User submitted text");
     expect(result?.allowedFragments.map((item) => item.id)).toEqual([
-      "fragment-enabled-group",
+      "fragment-current-group",
       "fragment-user",
     ]);
-    expect(result?.deniedDocumentIds).toEqual(["source-disabled-group"]);
-    expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-disabled");
-    expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-enabled");
+    expect(result?.deniedDocumentIds).toEqual(["source-other-group"]);
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith(
+      expect.objectContaining({ groupId: "chat-current" }),
+    );
+    expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-current");
+    expect(runtimeController.canProcessGroupMessage).not.toHaveBeenCalledWith("chat-other");
   });
+
+  it.each([
+    { label: "missing", chatId: undefined },
+    { label: "blank", chatId: "   " },
+    { label: "oversized", chatId: "g".repeat(513) },
+  ])(
+    "excludes group-visible source types when source-policy group scope is $label",
+    async ({ chatId }) => {
+      const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+      const runtime = createAnswerDraftRuntime({
+        env: {
+          ...enabledEnv(),
+          IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+        },
+        runtimeController: {
+          canReadDocuments: vi.fn(() => true),
+          canRetrieveKnowledgeBase: vi.fn(() => true),
+          canProcessGroupMessage: vi.fn(() => true),
+        },
+        dependencies: {
+          createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+          createDocumentFragmentRepository: vi.fn(() => fragments),
+          createDocumentSourceRegistry: vi.fn(() => ({ findSourceById: vi.fn() })),
+          createLiveChatContextProvider: vi.fn(() => ({
+            loadRecentMessages: vi.fn(async () => []),
+          })),
+          createModelProvider: vi.fn(() => ({
+            generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+          })),
+          createEmbeddingProfileRepository: vi.fn(() => ({
+            getStaticDevelopmentProfile: vi.fn(async () => profile()),
+            findOrCreateProfile: vi.fn(),
+            getProfileById: vi.fn(),
+          })),
+        },
+      });
+
+      await runtime?.answerDraftOrchestrator.generateDraft({
+        question: "What can Iris use?",
+        ...(chatId === undefined ? {} : { chatId }),
+        liveChatMessages: [],
+      });
+
+      expect(fragments.searchSimilarFragments).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceTypes: ["authorized_wiki_document", "user_submitted_document"],
+        }),
+      );
+      expect(fragments.searchSimilarFragments).not.toHaveBeenCalledWith(
+        expect.objectContaining({ groupId: expect.anything() }),
+      );
+    },
+  );
 
   it("excludes group-visible answer fragments without source group evidence", async () => {
     const model = {
@@ -613,6 +751,9 @@ describe("createAnswerDraftRuntime", () => {
         createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
         createDocumentFragmentRepository: vi.fn(() => fragments),
         createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createLiveChatContextProvider: vi.fn(() => ({
+          loadRecentMessages: vi.fn(async () => []),
+        })),
         createModelProvider: vi.fn(() => model),
         createEmbeddingProfileRepository: vi.fn(() => ({
           getStaticDevelopmentProfile: vi.fn(async () => profile()),
@@ -624,6 +765,7 @@ describe("createAnswerDraftRuntime", () => {
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
       question: "What can Iris use?",
+      chatId: "chat-current",
       liveChatMessages: [],
     });
 

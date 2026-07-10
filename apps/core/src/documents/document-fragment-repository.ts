@@ -4,6 +4,7 @@ import type { DocumentChunk } from "./document-chunker.js";
 import type { DocumentSourceType } from "./document-source-registry.js";
 
 const MAX_FRAGMENT_SEARCH_LIMIT = 100;
+const MAX_GROUP_ID_CHARS = 512;
 
 export type Queryable = {
   query: <T = unknown>(sql: string, values?: unknown[]) => Promise<{ rows: T[] }>;
@@ -54,6 +55,7 @@ export type SearchSimilarFragmentsInput = {
   embedding: number[];
   limit: number;
   sourceTypes?: DocumentSourceType[];
+  groupId?: string;
 };
 
 export type DocumentFragmentRepositoryDependencies = {
@@ -186,16 +188,33 @@ order by chunk_index asc, id asc
       if (sourceTypes !== undefined && sourceTypes.length === 0) {
         return [];
       }
+      const groupId = sanitizeGroupId(input.groupId);
 
       const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
       const embeddingTable = resolveEmbeddingTable(profile.dimensions);
       validateVectorDimension(input.embedding, profile.dimensions);
-      const sourceTypeClause =
-        sourceTypes === undefined ? "" : "  and ds.source_type = any($4::text[])\n";
-      const values =
-        sourceTypes === undefined
-          ? [input.embeddingProfileId, serializeVector(input.embedding), limit]
-          : [input.embeddingProfileId, serializeVector(input.embedding), limit, sourceTypes];
+      const values: unknown[] = [input.embeddingProfileId, serializeVector(input.embedding), limit];
+      let sourceTypeClause = "";
+      if (sourceTypes !== undefined) {
+        values.push(sourceTypes);
+        sourceTypeClause = `  and ds.source_type = any($${values.length}::text[])\n`;
+      }
+      let groupScopeClause = "";
+      if (groupId !== undefined) {
+        values.push(groupId);
+        const groupIdParameter = `$${values.length}`;
+        groupScopeClause = `  and (
+    ds.source_type <> 'group_visible_document'
+    or ds.origin_group_id = ${groupIdParameter}
+    or exists (
+      select 1
+      from document_source_evidence evidence
+      where evidence.document_source_id = ds.id
+        and evidence.group_id = ${groupIdParameter}
+    )
+  )
+`;
+      }
 
       const result = await dependencies.queryable.query<RetrievedDocumentFragmentRow>(
         `
@@ -216,7 +235,7 @@ join document_sources ds
   on ds.id = f.document_source_id
   and ds.can_use_for_answering = true
   and ds.permission_state in ('unknown', 'readable')
-${sourceTypeClause}join ${embeddingTable} e
+${sourceTypeClause}${groupScopeClause}join ${embeddingTable} e
   on e.document_fragment_id = f.id
 where f.embedding_profile_id = $1
   and e.embedding_profile_id = $1
@@ -311,6 +330,22 @@ function sanitizeSourceTypes(
   }
 
   return [...new Set(sourceTypes)];
+}
+
+function sanitizeGroupId(groupId: string | undefined): string | undefined {
+  if (groupId === undefined) {
+    return undefined;
+  }
+
+  const normalized = groupId.trim();
+  if (normalized.length === 0) {
+    throw new Error("groupId must not be blank");
+  }
+  if (normalized.length > MAX_GROUP_ID_CHARS) {
+    throw new Error(`groupId must be at most ${MAX_GROUP_ID_CHARS} characters`);
+  }
+
+  return normalized;
 }
 
 async function insertFragment(

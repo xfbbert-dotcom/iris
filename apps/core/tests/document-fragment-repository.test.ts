@@ -478,6 +478,95 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
+  it("limits group-visible vector candidates to the current origin or evidence group", async () => {
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("ds.source_type <> 'group_visible_document'");
+      expect(normalized).toContain("ds.origin_group_id = $5");
+      expect(normalized).toContain("from document_source_evidence evidence");
+      expect(normalized).toContain("evidence.document_source_id = ds.id");
+      expect(normalized).toContain("evidence.group_id = $5");
+      expect(values).toEqual([
+        "static-dev-6d",
+        "[1,2,3,4,5,6]",
+        3,
+        ["group_visible_document", "authorized_wiki_document"],
+        "chat-current",
+      ]);
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: 3,
+        sourceTypes: ["group_visible_document", "authorized_wiki_document"],
+        groupId: "chat-current",
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("uses the next dynamic parameter for current-group scope without source types", async () => {
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("ds.origin_group_id = $4");
+      expect(normalized).toContain("evidence.group_id = $4");
+      expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 3, "chat-current"]);
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: 3,
+        groupId: "chat-current",
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("rejects blank or oversized explicit current-group scope before querying", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const getProfileById = vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 }));
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: { getProfileById },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: 3,
+        groupId: "   ",
+      }),
+    ).rejects.toThrow("groupId must not be blank");
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 2, 3, 4, 5, 6],
+        limit: 3,
+        groupId: "g".repeat(513),
+      }),
+    ).rejects.toThrow("groupId must be at most 512 characters");
+
+    expect(getProfileById).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it("caps oversized vector search limits before querying fragments", async () => {
     const query = vi.fn(async (_sql: string, values?: unknown[]) => {
       expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 100]);
@@ -618,6 +707,8 @@ runIfDatabase("DocumentFragmentRepository with Postgres", () => {
   const embeddingProfileId = `openai-compatible:test-fragment-${randomUUID()}:6`;
   const embeddingModel = `test-fragment-${randomUUID()}`;
   const sourceUri = `https://example.com/postgres-fragments/${sourceId}`;
+  const originGroupId = `fragment-origin-group-${randomUUID()}`;
+  const evidenceGroupId = `fragment-evidence-group-${randomUUID()}`;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: readDatabaseConfig().databaseUrl });
@@ -654,12 +745,35 @@ insert into document_sources (
   sync_state,
   can_use_for_answering,
   can_use_for_knowledge_drafts,
+  origin_group_id,
   created_at,
   updated_at
 )
-values ($1, 'group_visible_document', $2, 'readable', 'synced', true, true, $3, $3)
+values ($1, 'group_visible_document', $2, 'readable', 'synced', true, true, $3, $4, $4)
 `,
-      [sourceId, sourceUri, new Date("2026-07-02T01:00:00.000Z")],
+      [sourceId, sourceUri, originGroupId, new Date("2026-07-02T01:00:00.000Z")],
+    );
+
+    await pool.query(
+      `
+insert into document_source_evidence (
+  document_source_id,
+  kind,
+  source_uri,
+  group_id,
+  message_id,
+  observed_at,
+  created_at
+)
+values ($1, 'group_message', $2, $3, $4, $5, $5)
+`,
+      [
+        sourceId,
+        sourceUri,
+        evidenceGroupId,
+        `fragment-message-${randomUUID()}`,
+        new Date("2026-07-02T01:00:00.000Z"),
+      ],
     );
 
     await pool.query(
@@ -738,6 +852,33 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
         text: "Alpha body",
       }),
     ]);
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId,
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 3,
+        groupId: originGroupId,
+      }),
+    ).resolves.toHaveLength(1);
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId,
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 3,
+        groupId: evidenceGroupId,
+      }),
+    ).resolves.toHaveLength(1);
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId,
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 3,
+        groupId: `fragment-unrelated-group-${randomUUID()}`,
+      }),
+    ).resolves.toEqual([]);
 
     await pool.query(
       "update document_sources set permission_state = 'stale' where id = $1",

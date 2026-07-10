@@ -42,6 +42,7 @@ export function createDocumentRetrievalContextBuilder({
   embedder,
   fragments,
   sourceTypes,
+  groupId,
   canReadDocument,
   auditLog,
 }: {
@@ -49,6 +50,7 @@ export function createDocumentRetrievalContextBuilder({
   embedder: QueryEmbeddingProvider;
   fragments: Pick<DocumentFragmentRepository, "searchSimilarFragments">;
   sourceTypes?: DocumentSourceType[];
+  groupId?: string;
   canReadDocument: (documentId: string) => Promise<boolean>;
   auditLog?: AuditLog;
 }): DocumentRetrievalContextBuilder {
@@ -76,6 +78,7 @@ export function createDocumentRetrievalContextBuilder({
         embedding: queryEmbedding,
         limit: candidateFragmentLimit,
         ...(sourceTypes === undefined ? {} : { sourceTypes }),
+        ...(groupId === undefined ? {} : { groupId }),
       });
       const meaningfulFragments = retrievedFragments.filter((fragment) =>
         fragment.text.trim().length > 0,

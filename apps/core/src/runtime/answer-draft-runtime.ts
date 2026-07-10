@@ -104,6 +104,8 @@ type RuntimeEmbedding = {
   embedder: EmbeddingProvider;
 };
 
+const MAX_CURRENT_GROUP_ID_CHARS = 512;
+
 export function createAnswerDraftRuntime({
   env = process.env,
   dependencies = {},
@@ -182,16 +184,26 @@ export function createAnswerDraftRuntime({
         throw error;
       });
       const runtimeEmbedding = await runtimeEmbeddingPromise;
+      const currentGroupId =
+        runtimeConfig.permissionMode === "source-policy"
+          ? normalizeCurrentGroupId(input.chatId)
+          : undefined;
       const contextBuilder = createDocumentRetrievalContextBuilder({
         embeddingProfileId: runtimeEmbedding.profile.id,
         embedder: runtimeEmbedding.embedder,
         fragments,
-        sourceTypes: selectAnswerSourceTypes(runtimeController),
+        sourceTypes: selectAnswerSourceTypes({
+          permissionMode: runtimeConfig.permissionMode,
+          runtimeController,
+          currentGroupId,
+        }),
+        ...(currentGroupId === undefined ? {} : { groupId: currentGroupId }),
         canReadDocument: createCanReadDocument({
           permissionMode: runtimeConfig.permissionMode,
           sourceRegistry,
           runtimeController,
           livePermissionChecker,
+          currentGroupId,
         }),
         auditLog: dependencies.auditLog,
       });
@@ -238,11 +250,13 @@ function createCanReadDocument({
   sourceRegistry,
   runtimeController,
   livePermissionChecker,
+  currentGroupId,
 }: {
   permissionMode: AnswerDraftPermissionMode;
   sourceRegistry?: Pick<AsyncDocumentSourceRegistry, "findSourceById">;
   runtimeController?: RuntimeRetrievalGate;
   livePermissionChecker?: Pick<FeishuDocumentPermissionChecker, "canReadSource">;
+  currentGroupId?: string;
 }): (documentSourceId: string) => Promise<boolean> {
   if (permissionMode === "allow-indexed") {
     return async () => true;
@@ -254,6 +268,7 @@ function createCanReadDocument({
       sourceRegistry,
       runtimeController,
       livePermissionChecker,
+      currentGroupId,
     );
 }
 
@@ -262,6 +277,7 @@ async function canReadBySourcePolicy(
   sourceRegistry: Pick<AsyncDocumentSourceRegistry, "findSourceById"> | undefined,
   runtimeController: RuntimeRetrievalGate | undefined,
   livePermissionChecker: Pick<FeishuDocumentPermissionChecker, "canReadSource"> | undefined,
+  currentGroupId: string | undefined,
 ): Promise<boolean> {
   if (sourceRegistry === undefined) {
     return false;
@@ -275,7 +291,7 @@ async function canReadBySourcePolicy(
   const locallyAllowed =
     source.canUseForAnswering &&
     (source.permissionState === "unknown" || source.permissionState === "readable") &&
-    canUseSourceByRuntimeCapabilities(source, runtimeController);
+    canUseSourceByRuntimeCapabilities(source, runtimeController, currentGroupId);
   if (!locallyAllowed) {
     return false;
   }
@@ -331,32 +347,40 @@ function createOptionalLivePermissionChecker({
 function canUseSourceByRuntimeCapabilities(
   source: DocumentSource,
   runtimeController: RuntimeRetrievalGate | undefined,
+  currentGroupId: string | undefined,
 ): boolean {
-  if (runtimeController === undefined) {
-    return true;
-  }
   if (source.sourceType === "group_visible_document") {
-    return canUseGroupVisibleSource(source, runtimeController);
+    return canUseGroupVisibleSource(source, runtimeController, currentGroupId);
   }
   if (source.sourceType === "authorized_wiki_document") {
-    return runtimeController.canRetrieveKnowledgeBase();
+    return runtimeController?.canRetrieveKnowledgeBase() ?? true;
   }
 
   return true;
 }
 
-function selectAnswerSourceTypes(
-  runtimeController: RuntimeRetrievalGate | undefined,
-): DocumentSourceType[] | undefined {
-  if (runtimeController === undefined) {
+function selectAnswerSourceTypes({
+  permissionMode,
+  runtimeController,
+  currentGroupId,
+}: {
+  permissionMode: AnswerDraftPermissionMode;
+  runtimeController: RuntimeRetrievalGate | undefined;
+  currentGroupId: string | undefined;
+}): DocumentSourceType[] | undefined {
+  if (runtimeController === undefined && permissionMode === "allow-indexed") {
     return undefined;
   }
 
   const sourceTypes: DocumentSourceType[] = [];
-  if (runtimeController.canReadDocuments()) {
+  const canReadDocuments = runtimeController?.canReadDocuments() ?? true;
+  if (
+    canReadDocuments &&
+    (permissionMode === "allow-indexed" || currentGroupId !== undefined)
+  ) {
     sourceTypes.push("group_visible_document");
   }
-  if (runtimeController.canRetrieveKnowledgeBase()) {
+  if (runtimeController?.canRetrieveKnowledgeBase() ?? true) {
     sourceTypes.push("authorized_wiki_document");
   }
   sourceTypes.push("user_submitted_document");
@@ -364,21 +388,24 @@ function selectAnswerSourceTypes(
   return sourceTypes;
 }
 
-function canUseGroupVisibleSource(source: DocumentSource, runtimeController: RuntimeRetrievalGate): boolean {
-  if (!runtimeController.canReadDocuments()) {
+function canUseGroupVisibleSource(
+  source: DocumentSource,
+  runtimeController: RuntimeRetrievalGate | undefined,
+  currentGroupId: string | undefined,
+): boolean {
+  if (currentGroupId === undefined) {
     return false;
   }
-
-  if (runtimeController.canProcessGroupMessage === undefined) {
-    return true;
+  if (runtimeController !== undefined && !runtimeController.canReadDocuments()) {
+    return false;
   }
 
   const sourceGroupIds = collectSourceGroupIds(source);
-  if (sourceGroupIds.length === 0) {
+  if (!sourceGroupIds.includes(currentGroupId)) {
     return false;
   }
 
-  return sourceGroupIds.some((groupId) => runtimeController.canProcessGroupMessage?.(groupId) === true);
+  return runtimeController?.canProcessGroupMessage?.(currentGroupId) ?? true;
 }
 
 function collectSourceGroupIds(source: DocumentSource): string[] {
@@ -396,6 +423,19 @@ function addGroupId(groupIds: Set<string>, groupId: string | undefined): void {
   if (normalized !== undefined && normalized.length > 0) {
     groupIds.add(normalized);
   }
+}
+
+function normalizeCurrentGroupId(groupId: string | undefined): string | undefined {
+  const normalized = groupId?.trim();
+  if (
+    normalized === undefined ||
+    normalized.length === 0 ||
+    normalized.length > MAX_CURRENT_GROUP_ID_CHARS
+  ) {
+    return undefined;
+  }
+
+  return normalized;
 }
 
 async function resolveRuntimeEmbedding({
