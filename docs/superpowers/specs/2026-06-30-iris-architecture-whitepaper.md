@@ -469,9 +469,12 @@ orchestrator is missing, the consolidated `eventWorker` component must be degrad
 Consolidated worker health must also reflect the latest polling result. If the event, document-sync,
 or reindex runtime reports `latestBatch.status = "failed"`, its `/internal/status` component must be
 degraded with `degradedReason: "latest_batch_failed"` while preserving the bounded batch error
-snapshot. A later successful batch replaces the snapshot and may restore health. Worker health
-evidence precedence is non-empty DLQ, failed latest batch, then event mention-reply unavailability.
-Worker-specific status endpoints keep their existing status-read semantics.
+snapshot. If a completed batch reports `failedCount > 0`, the component must instead degrade with
+`degradedReason: "latest_batch_items_failed"` so handled retries are visible before they reach DLQ.
+A later completed batch with `failedCount = 0` replaces the snapshot and may restore health. Worker
+health evidence precedence is non-empty DLQ, failed latest batch, latest completed batch with item
+failures, then event mention-reply unavailability. Worker-specific status endpoints keep their
+existing status-read semantics.
 
 Internal operator APIs must have an explicit protection boundary. During the early internal rollout,
 Core may use a shared `IRIS_INTERNAL_API_TOKEN` Bearer guard for `/internal/*` routes while Feishu
@@ -1634,6 +1637,34 @@ Evolution signal:
 If Iris introduces schema-versioned event envelopes, the envelope schema becomes
 the single source of truth for evidence-key budgets. Downstream repositories
 should import or derive those budgets instead of copying numeric limits.
+
+### 12.35 Completed Worker Batches Can Still Contain Failed Items
+
+Pressure:
+
+Worker loops use a successful batch status to mean polling and per-item failure
+handling completed without throwing. That does not mean every item succeeded.
+An event, document sync, or reindex job can fail and be requeued while the batch
+reports `status = "succeeded"` with `failedCount > 0`. If consolidated health
+ignores that count, repeated failures remain invisible until dead-lettering.
+
+Required architectural response:
+
+- Consolidated worker health must degrade completed batches whose
+  `failedCount` is positive with `latest_batch_items_failed`.
+- The completed batch snapshot and failed count must remain visible for
+  diagnosis.
+- Non-empty DLQs and whole-batch failures keep higher precedence; event mention
+  reply unavailability keeps lower precedence.
+- A later completed batch with zero failed items may restore health.
+- Worker-specific status endpoints, queue retry behavior, and DLQ policy remain
+  unchanged.
+
+Evolution signal:
+
+If transient failure noise becomes operationally expensive, Iris may add
+persistent consecutive-failure counters or time-window thresholds. That policy
+must not hide the raw latest-batch failed count from operators.
 
 Constitutional principle:
 
