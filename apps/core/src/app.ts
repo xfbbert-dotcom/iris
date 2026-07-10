@@ -1091,6 +1091,12 @@ function readInternalApiToken(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+export function resolveServerListenHost(
+  internalApiToken: string | undefined,
+): "127.0.0.1" | "0.0.0.0" {
+  return readInternalApiToken(internalApiToken) === undefined ? "127.0.0.1" : "0.0.0.0";
+}
+
 function isInternalApiRequest(url: string): boolean {
   const path = pathBeforeQuery(url);
   if (isInternalApiPath(path)) {
@@ -1894,6 +1900,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const app = buildApp();
-  await app.listen({ port: readServerPort(), host: "0.0.0.0" });
+  const internalApiToken = process.env.IRIS_INTERNAL_API_TOKEN;
+  const host = resolveServerListenHost(internalApiToken);
+  const app = buildApp({ internalApiToken });
+  await app.listen({ port: readServerPort(), host });
 }

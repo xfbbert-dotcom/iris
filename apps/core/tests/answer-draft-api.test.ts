@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
-import { buildApp, type BuildAppDependencies } from "../src/app.js";
+import {
+  buildApp,
+  resolveServerListenHost,
+  type BuildAppDependencies,
+} from "../src/app.js";
 import type { RawEvent } from "../src/events/raw-event-queue.js";
 import type { DocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
@@ -534,6 +538,15 @@ describe("answer draft runtime wiring", () => {
 });
 
 describe("internal API token guard", () => {
+  it("selects a safe server listen host from the configured token", () => {
+    expect(resolveServerListenHost(undefined)).toBe("127.0.0.1");
+    expect(resolveServerListenHost("   ")).toBe("127.0.0.1");
+    expect(resolveServerListenHost("operator-secret")).toBe("0.0.0.0");
+    expect(() => resolveServerListenHost("operator secret")).toThrow(
+      "IRIS_INTERNAL_API_TOKEN must be a single bearer token",
+    );
+  });
+
   it("requires the configured bearer token for internal routes only", async () => {
     const app = buildApp({
       internalApiToken: "operator-secret",
