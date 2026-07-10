@@ -2,6 +2,7 @@ import type {
   ConversationMessage,
   ConversationMessageRepository,
 } from "./conversation-message-repository.js";
+import { MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH } from "../events/raw-event-queue.js";
 
 export type Queryable = {
   query<T = unknown>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
@@ -42,7 +43,7 @@ export function createPostgresConversationMessageRepository({
           ? null
           : requireBoundedIdentifier("senderId", input.senderId);
       const messageType = requireBoundedIdentifier("messageType", input.messageType);
-      const rawEventIdempotencyKey = requireBoundedIdentifier(
+      const rawEventIdempotencyKey = requireBoundedRawEventIdempotencyKey(
         "rawEventIdempotencyKey",
         input.rawEventIdempotencyKey,
       );
@@ -108,14 +109,20 @@ export function createPostgresConversationMessageRepository({
 }
 
 function requireBoundedIdentifier(fieldName: string, value: string): string {
+  return requireBoundedString(fieldName, value, MAX_CONVERSATION_MESSAGE_ID_CHARS);
+}
+
+function requireBoundedRawEventIdempotencyKey(fieldName: string, value: string): string {
+  return requireBoundedString(fieldName, value, MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH);
+}
+
+function requireBoundedString(fieldName: string, value: string, maxChars: number): string {
   if (value.trim().length === 0) {
     throw new Error(`${fieldName} must not be blank`);
   }
 
-  if (value.length > MAX_CONVERSATION_MESSAGE_ID_CHARS) {
-    throw new Error(
-      `${fieldName} must be at most ${MAX_CONVERSATION_MESSAGE_ID_CHARS} characters`,
-    );
+  if (value.length > maxChars) {
+    throw new Error(`${fieldName} must be at most ${maxChars} characters`);
   }
 
   return value;

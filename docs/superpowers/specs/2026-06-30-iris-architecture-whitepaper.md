@@ -1560,6 +1560,37 @@ reindex workers must become profile-scoped or queue namespaces must carry
 profile ownership explicitly. Until then, one worker may only mutate fragments
 for its configured active profile.
 
+### 12.34 Fact-Layer Evidence Fields Must Preserve Upstream Queue Budgets
+
+Pressure:
+
+Raw Feishu event idempotency keys are bounded by the event layer, not by each
+downstream fact table. A valid queue payload can contain
+`raw-event:feishu:` plus the maximum supported Feishu event identifier. If a
+conversation, document, audit, or action repository uses a smaller local string
+budget for that evidence field, Iris can accept work into the raw queue and then
+retry or dead-letter it forever when writing facts.
+
+Required architectural response:
+
+- Fact-layer fields that store upstream evidence identifiers must inherit the
+  upstream contract for that identifier.
+- Conversation message storage must accept the full raw-event idempotency-key
+  budget defined by the raw event queue.
+- Narrower limits may still apply to independent domain identifiers such as
+  provider message IDs, chat IDs, user IDs, and message types.
+- Validation errors should occur at the original boundary where an identifier
+  first becomes invalid, not after Iris has already accepted the event into a
+  durable queue.
+- Tests for downstream repositories must include the maximum valid upstream
+  evidence key and the first invalid key above that budget.
+
+Evolution signal:
+
+If Iris introduces schema-versioned event envelopes, the envelope schema becomes
+the single source of truth for evidence-key budgets. Downstream repositories
+should import or derive those budgets instead of copying numeric limits.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
