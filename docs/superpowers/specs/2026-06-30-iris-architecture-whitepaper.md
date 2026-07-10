@@ -1666,6 +1666,34 @@ If transient failure noise becomes operationally expensive, Iris may add
 persistent consecutive-failure counters or time-window thresholds. That policy
 must not hide the raw latest-batch failed count from operators.
 
+### 12.36 Document Sync Recovery Must Reclaim Stale Source State
+
+Pressure:
+
+Redis can recover a document-sync job from its processing list after a worker
+crash, but the source's Postgres `syncState` survives independently. If the
+source remains `syncing`, or was marked `synced` before reindex enqueue and queue
+ACK completed, a recovered job that returns `already_syncing` or
+`already_synced` will be acknowledged without completing the missing work.
+
+Required architectural response:
+
+- Direct document-sync runner calls keep conservative `already_syncing` and
+  `already_synced` skip behavior.
+- A queue worker may explicitly reclaim eligible stale `syncing` or `synced`
+  state because the v1 rollout permits only one active document-sync consumer.
+- Recovery must re-run source policy checks and the normal fetch, snapshot,
+  state, and reindex-enqueue pipeline.
+- Permission-denied and fully disabled sources remain rejected; recovery
+  authority never bypasses policy.
+- Queue retry, ACK, and DLQ contracts remain unchanged.
+
+Evolution signal:
+
+Before horizontal document-sync workers are supported, replace worker-scoped
+recovery authority with per-consumer processing ownership plus a source-state
+lease or transactional outbox.
+
 Constitutional principle:
 
 > Every architecture pressure test must identify the failure mode, the required v1 guardrail, and the future split point. Iris should evolve by hardening proven weak points, not by adding complexity before pressure appears.
