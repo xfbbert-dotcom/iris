@@ -1045,26 +1045,35 @@ one inferred from untrusted data alone.
 Pressure:
 
 Group-visible documents are authorized through the groups where Iris observed
-them. If a group-visible source loses its origin group and evidence group IDs
-because of corrupted data, a partial migration, or a bad manual repair, Iris can
-no longer prove which enabled group made the document visible. Letting that
-document enter answer context would weaken group-level runtime controls.
+them. If answer retrieval accepts evidence from any enabled group, a question in
+group A can retrieve a document observed only in group B. Missing origin or
+evidence group IDs create the same inability to prove current-group visibility.
+Letting either case enter answer context would weaken the group boundary and can
+also let out-of-scope fragments crowd safe candidates out of bounded vector
+search results.
 
 Required architectural response:
 
-- Answer-time source-policy retrieval must require at least one nonblank source
-  group ID for group-visible documents when group-level runtime gating is
-  available.
-- If no group evidence exists, the source must be treated as denied for prompt
-  assembly.
+- Answer-time `source-policy` retrieval must carry the current nonblank group ID.
+- A group-visible source is eligible only when its origin group ID or explicit
+  evidence group ID exactly equals the current group. Evidence from another
+  enabled group is not authorization.
+- The exact-group predicate must be applied before vector ranking and repeated
+  by the TypeScript source-policy guard before prompt assembly.
+- If current-group scope or matching source evidence is missing, the
+  group-visible source must be treated as denied.
+- Existing document-reading and current-group runtime gates must still pass.
 - User-submitted and authorized wiki documents keep their own source-type
   policies and are not affected by this group evidence requirement.
+- Development-only `allow-indexed` behavior may remain unrestricted, but rollout
+  readiness must continue to reject it for production.
 
 Evolution signal:
 
 If Iris later introduces explicit cross-group document grants, those grants
-should be represented as first-class evidence rather than inferred from a
-group-visible source with missing group IDs.
+should be represented as first-class evidence and enforced in both SQL candidate
+selection and the TypeScript policy guard. A grant must never be inferred from a
+different enabled group or from missing group IDs.
 
 ### 12.16 Document Source Policy Partial Update
 
