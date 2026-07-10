@@ -24,7 +24,8 @@ The list contains stable component keys from the `components` object, in the sam
 ## Semantics
 
 - Healthy snapshots return an empty list.
-- Degraded snapshots include every component where `ok` is `false`.
+- Degraded snapshots include every component whose derived component `status` is `"degraded"` or
+  `"stopped"`.
 - The list length must match `degradedComponentCount`.
 
 ## Quality Bar

@@ -43,9 +43,9 @@ describe("buildInternalStatusSnapshot", () => {
       componentOrder: ["audit", "answerDraft", "eventWorker", "documentSync", "reindex"],
       summary: {
         componentCount: 5,
-        healthyComponentCount: 4,
-        degradedComponentCount: 1,
-        degradedComponents: ["eventWorker"],
+        healthyComponentCount: 2,
+        degradedComponentCount: 2,
+        degradedComponents: ["eventWorker", "reindex"],
         enabledComponentCount: 4,
         disabledComponentCount: 1,
         disabledComponents: ["answerDraft"],
@@ -147,6 +147,23 @@ describe("buildInternalStatusSnapshot", () => {
       status: "stopped",
     });
     expect(snapshot.summary.attentionSeverity).toBe("warning");
+  });
+
+  it("summarizes component health from derived component statuses", () => {
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-03T08:08:00.000Z"),
+      components: {
+        reindex: {
+          ok: true,
+          enabled: true,
+          running: false,
+        },
+      },
+    });
+
+    expect(snapshot.summary.healthyComponentCount).toBe(0);
+    expect(snapshot.summary.degradedComponentCount).toBe(1);
+    expect(snapshot.summary.degradedComponents).toEqual(["reindex"]);
   });
 
   it("does not share nested component values with the returned snapshot", () => {

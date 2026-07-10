@@ -499,6 +499,8 @@ Recovery rule:
 - Delete obsolete or legacy diagnostic entries when replay is not possible.
 - Re-check `/internal/status` after recovery; DLQ backlog should clear and the component should no
   longer be degraded for dead-letter reasons.
+- If a component is listed with `status: "stopped"`, treat it as an enabled worker that is not
+  running. It appears in `degradedComponents` until the worker is started or intentionally disabled.
 
 ## Verification Before Internal Use
 

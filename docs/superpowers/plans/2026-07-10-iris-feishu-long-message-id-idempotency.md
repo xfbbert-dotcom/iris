@@ -44,4 +44,7 @@ Observed:
 - `docker compose config` passed.
 - `git diff --check` passed with Windows line-ending warnings only.
 
-- [ ] Commit, push, update PR #3, and confirm GitHub Actions checks.
+- [x] Commit, push, update PR #3, and confirm GitHub Actions checks.
+
+Observed: commit `087f859` was pushed to PR #3. GitHub Actions Core and AI Worker checks passed
+for head `087f8593d7b8082a50227ee20ebd58781ef0e4f5`.

@@ -25,8 +25,10 @@ The summary is derived from the same component objects used to compute top-level
 ## Semantics
 
 - `componentCount`: number of reported components.
-- `healthyComponentCount`: components with `ok: true`.
-- `degradedComponentCount`: components with `ok: false`.
+- `healthyComponentCount`: components whose derived component `status` is `"healthy"`.
+- `degradedComponentCount`: components whose derived component `status` is `"degraded"` or
+  `"stopped"`. Intentionally disabled components are counted separately by the disabled-component
+  summary.
 
 ## Quality Bar
 

@@ -844,9 +844,9 @@ describe("GET /internal/status", () => {
       ],
       summary: {
         componentCount: 7,
-        healthyComponentCount: 5,
-        degradedComponentCount: 2,
-        degradedComponents: ["eventWorker", "documentSync"],
+        healthyComponentCount: 3,
+        degradedComponentCount: 3,
+        degradedComponents: ["eventWorker", "documentSync", "reindex"],
         enabledComponentCount: 6,
         disabledComponentCount: 1,
         disabledComponents: ["answerDraft"],
@@ -1075,7 +1075,7 @@ describe("GET /internal/status", () => {
     expect(response.json().status).toBe("degraded");
     expect(response.json().summary).toEqual({
       componentCount: 7,
-      healthyComponentCount: 5,
+      healthyComponentCount: 3,
       degradedComponentCount: 2,
       degradedComponents: ["eventWorker", "documentSync"],
       enabledComponentCount: 5,

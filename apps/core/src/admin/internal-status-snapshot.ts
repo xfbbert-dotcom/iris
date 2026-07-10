@@ -5,15 +5,18 @@ export function buildInternalStatusSnapshot<
   ComponentMap extends Record<string, { ok: boolean; enabled: boolean; running?: unknown }>,
 >(input: { components: ComponentMap; generatedAt: Date }) {
   const components = addComponentStatuses(input.components);
+  const componentEntries = Object.entries(components);
   const componentStatuses = Object.values(components);
-  const healthyComponentCount = componentStatuses.filter((component) => component.ok).length;
+  const healthyComponentCount = componentStatuses.filter(
+    (component) => component.status === "healthy",
+  ).length;
   const degradedComponents = Object.entries(components)
-    .filter(([, component]) => !component.ok)
+    .filter(([, component]) => isDegradedSummaryStatus(component.status))
     .map(([name]) => name);
   const disabledComponents = Object.entries(components)
     .filter(([, component]) => !component.enabled)
     .map(([name]) => name);
-  const enabledRuntimeComponents = Object.entries(components).filter(
+  const enabledRuntimeComponents = componentEntries.filter(
     ([, component]) => component.enabled && hasRunningStatus(component),
   );
   const stoppedEnabledRuntimeComponents = enabledRuntimeComponents
@@ -25,9 +28,7 @@ export function buildInternalStatusSnapshot<
   const requiresOperatorAttention = attentionComponentCount > 0;
   const primaryAttentionComponent = attentionComponents[0] ?? null;
   const attentionSeverity = getAttentionSeverity(primaryAttentionComponent);
-  const ok =
-    healthyComponentCount === componentStatuses.length &&
-    stoppedEnabledRuntimeComponents.length === 0;
+  const ok = degradedComponents.length === 0;
 
   return {
     ok,
@@ -38,7 +39,7 @@ export function buildInternalStatusSnapshot<
     summary: {
       componentCount: componentStatuses.length,
       healthyComponentCount,
-      degradedComponentCount: componentStatuses.length - healthyComponentCount,
+      degradedComponentCount: degradedComponents.length,
       degradedComponents,
       enabledComponentCount: componentStatuses.length - disabledComponents.length,
       disabledComponentCount: disabledComponents.length,
@@ -169,6 +170,10 @@ function getAttentionSeverity(
   }
 
   return "info";
+}
+
+function isDegradedSummaryStatus(status: InternalComponentStatus): boolean {
+  return status === "degraded" || status === "stopped";
 }
 
 function hasRunningStatus(

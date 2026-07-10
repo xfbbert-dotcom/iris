@@ -201,6 +201,10 @@ The consolidated internal status endpoint is the operator's first health surface
 
 Enabled runtime components that report `running: false` must make the consolidated top-level status non-healthy, even when their component-level `ok` field is otherwise true. A stopped enabled worker means Iris is configured to perform that job but is not actually doing it. Intentionally disabled components remain visible as disabled/info attention items rather than being treated as runtime failures.
 
+Internal status summary counts must be derived from component `status` values. Components with
+`status: "stopped"` are not healthy: they must be included in `degradedComponents` and counted by
+`degradedComponentCount`, while disabled components remain in their separate disabled summary.
+
 Every event must preserve:
 
 - source group;
