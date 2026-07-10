@@ -91,5 +91,9 @@ Postgres/pgvector integration assertions skipped by the local environment.
 
 - [x] **Step 2: Review the diff against the whitepaper and security invariants**
 - [x] **Step 3: Address review findings and rerun affected tests**
-- [ ] **Step 4: Commit and push the branch**
-- [ ] **Step 5: Watch PR #3 checks and confirm a clean merge state**
+- [x] **Step 4: Commit and push the branch**
+- [x] **Step 5: Watch PR #3 checks and confirm a clean merge state**
+
+Observed: commits `96fdda3` and `0909e13` were pushed to
+`codex/iris-document-source-registry`. PR #3 reported `CLEAN`; Core CI passed in 1m22s and AI
+Worker CI passed in 10s, including the Postgres/pgvector integration coverage unavailable locally.
