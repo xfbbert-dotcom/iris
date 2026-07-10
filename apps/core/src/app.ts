@@ -41,7 +41,10 @@ import {
   createDocumentSyncRuntime,
   type DocumentSyncRuntime
 } from "./runtime/document-sync-runtime.js";
-import type { DocumentSourceType } from "./documents/document-source-registry.js";
+import {
+  DOCUMENT_SOURCE_URI_MAX_CHARS,
+  type DocumentSourceType,
+} from "./documents/document-source-registry.js";
 import type { DocumentSnapshot } from "./documents/document-snapshot-repository.js";
 import {
   normalizeFeishuDocumentSourceUri,
@@ -145,7 +148,8 @@ const deadLettersPresentReason = "dead_letters_present" as const;
 const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
 const mentionRepliesUnavailableReason = "mention_replies_unavailable" as const;
 const maxInternalStringLength = 512;
-const maxInternalSourceUriLength = 2048;
+const maxInternalSourceUriLength = DOCUMENT_SOURCE_URI_MAX_CHARS;
+const maxInternalRawSourceUriLength = 8192;
 const maxReindexDocumentProfileLimit = 100;
 const maxAnswerDraftQuestionLength = 4000;
 const maxAnswerDraftLiveChatMessageInputCount = 50;
@@ -1759,7 +1763,7 @@ function parseRegisterAuthorizedWikiDocumentRequest(
 
   const rawSourceUri = readNonBlankBoundedString(
     value.sourceUri,
-    maxInternalSourceUriLength,
+    maxInternalRawSourceUriLength,
   );
   const sourceUri =
     rawSourceUri === undefined ? undefined : normalizeSupportedFeishuDocumentSourceUri(rawSourceUri);
@@ -1789,7 +1793,7 @@ function parseRegisterUserSubmittedDocumentRequest(
 
   const rawSourceUri = readNonBlankBoundedString(
     value.sourceUri,
-    maxInternalSourceUriLength,
+    maxInternalRawSourceUriLength,
   );
   const sourceUri =
     rawSourceUri === undefined ? undefined : normalizeSupportedFeishuDocumentSourceUri(rawSourceUri);
@@ -1824,7 +1828,12 @@ function readNonBlankBoundedString(value: unknown, maxLength: number): string | 
 }
 
 function normalizeSupportedFeishuDocumentSourceUri(sourceUri: string): string | undefined {
-  return normalizeFeishuDocumentSourceUri(sourceUri);
+  const normalized = normalizeFeishuDocumentSourceUri(sourceUri);
+  if (normalized === undefined || normalized.length > maxInternalSourceUriLength) {
+    return undefined;
+  }
+
+  return normalized;
 }
 
 function parseLiveChatMessage(value: unknown): LiveChatMessage | undefined {

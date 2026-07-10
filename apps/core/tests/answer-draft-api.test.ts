@@ -4327,6 +4327,38 @@ describe("authorized wiki document registration API", () => {
     });
   });
 
+  it("accepts copied authorized wiki document URLs with long disposable query strings", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      registerAuthorizedWikiDocument: vi.fn(async () => ({
+        source: authorizedWikiSource(),
+        enqueue: {
+          status: "enqueued" as const,
+          documentSourceId: "source-1",
+        },
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/authorized-wiki-documents",
+      payload: {
+        sourceUri: `https://docs.feishu.cn/docx/doc_token_1?from=${"x".repeat(3000)}#heading`,
+        authorizedSpaceId: "space-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runtime.registerAuthorizedWikiDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/doc_token_1",
+      authorizedSpaceId: "space-1",
+      observedAt: expect.any(Date),
+    });
+  });
+
   it("rejects invalid authorized wiki document requests", async () => {
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
@@ -4598,6 +4630,40 @@ describe("user submitted document registration API", () => {
       url: "/internal/document-sync/user-submitted-documents",
       payload: {
         sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1/?open=1#top",
+        submittedByUserId: "ou_1",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runtime.registerUserSubmittedDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+      submittedByUserId: "ou_1",
+      observedAt: expect.any(Date),
+    });
+  });
+
+  it("accepts copied user submitted document URLs with long disposable query strings", async () => {
+    const runtime = fakeDocumentSyncRuntime({
+      registerUserSubmittedDocument: vi.fn(async () => ({
+        source: userSubmittedSource(),
+        enqueue: {
+          status: "enqueued" as const,
+          documentSourceId: "user-source-1",
+        },
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/user-submitted-documents",
+      payload: {
+        sourceUri: `https://docs.feishu.cn/docx/user_doc_token_1?open=${"x".repeat(
+          3000,
+        )}#top`,
         submittedByUserId: "ou_1",
       },
     });
