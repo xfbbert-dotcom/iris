@@ -110,8 +110,8 @@ handled-failure queue outcomes, and TypeScript type checking completed successfu
 
 - [x] **Step 1: Run `npm run verify`**
 - [x] **Step 2: Complete independent review and address findings**
-- [ ] **Step 3: Commit and push the implementation**
-- [ ] **Step 4: Watch PR #3 checks and confirm a clean merge state**
+- [x] **Step 3: Commit and push the implementation**
+- [x] **Step 4: Watch PR #3 checks and confirm a clean merge state**
 
 Observed full verification: `git diff --check`, TypeScript type checking, all 65 Core test files
 (`1069` passed and `4` skipped), all 7 Python tests, and `docker compose config` completed
@@ -126,3 +126,7 @@ status. Updated focused verification passed `42/42` tests and type checking.
 Re-review found no remaining Critical, Important, or Minor issues and assessed the implementation
 as ready to merge. A fresh full verification after all review fixes produced the result recorded
 above.
+
+Published as design commit `9999fa1` and implementation commit `547e974` on
+`codex/iris-document-source-registry`. PR #3 passed AI Worker in 19 seconds and Core in 1 minute
+32 seconds, with no failed or pending checks; GitHub reported merge state `CLEAN`.
