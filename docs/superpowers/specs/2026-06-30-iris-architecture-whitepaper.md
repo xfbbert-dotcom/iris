@@ -156,6 +156,12 @@ Current implementation: answer-time `source-policy` retrieval first checks the l
 
 Runtime retrieval controls must be pushed down before vector search. When group document reading or knowledge-base retrieval is disabled, Iris must constrain semantic search to the remaining allowed document source types instead of fetching disabled categories and filtering them only after retrieval. User-submitted documents remain allowed unless a future dedicated user-document capability disables them.
 
+Local document permission eligibility must also be pushed down before vector ranking. Semantic
+search may rank only answering-enabled sources in `unknown` or `readable` permission state;
+`stale` and `denied` sources must not consume the bounded candidate window. Local source policy and
+the real-time Feishu permission guard still run after retrieval and remain the final authorization
+boundary before document content enters the model.
+
 Feishu document source URIs must pass the same token parser whether they arrive from group chat discovery, authorized wiki registration, or user-submitted registration. Query strings, fragments, and trailing path slashes may be stripped during canonicalization, but chat punctuation, adjacent prose, or percent-encoded token contamination must not be accepted as part of a document token. If a submitted Feishu docx/docs/wiki URI contains an ASCII comma or any percent-encoded sequence inside the token segment, Iris rejects it before registration, permission checks, sync, or retrieval.
 
 Manual and authorized document registration distinguish raw copied URLs from canonical source URIs. The API boundary may accept a longer raw Feishu URL so disposable query strings and fragments can be stripped, but the normalized canonical `sourceUri` must still fit the document-source storage budget before it reaches runtime registration or persistence. Raw input leniency must never expand the long-lived fact-layer URI contract.

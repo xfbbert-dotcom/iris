@@ -424,13 +424,13 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
-  it("limits vector search to answering-enabled non-denied document sources", async () => {
+  it("limits vector search to answering-enabled locally eligible document sources", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       const normalized = normalizeSql(sql);
       expect(normalized).toContain("join document_sources ds");
       expect(normalized).toContain("ds.id = f.document_source_id");
       expect(normalized).toContain("ds.can_use_for_answering = true");
-      expect(normalized).toContain("ds.permission_state <> 'denied'");
+      expect(normalized).toContain("ds.permission_state in ('unknown', 'readable')");
       expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 3]);
       return { rows: [] };
     });
@@ -615,6 +615,8 @@ runIfDatabase("DocumentFragmentRepository with Postgres", () => {
   let pool: pg.Pool | undefined;
   const sourceId = `fragment-source-${randomUUID()}`;
   const snapshotId = `fragment-snapshot-${randomUUID()}`;
+  const embeddingProfileId = `openai-compatible:test-fragment-${randomUUID()}:6`;
+  const embeddingModel = `test-fragment-${randomUUID()}`;
   const sourceUri = `https://example.com/postgres-fragments/${sourceId}`;
 
   beforeAll(async () => {
@@ -625,6 +627,22 @@ runIfDatabase("DocumentFragmentRepository with Postgres", () => {
     } finally {
       client.release();
     }
+
+    await pool.query(
+      `
+insert into embedding_profiles (
+  id,
+  provider,
+  model,
+  dimensions,
+  display_name,
+  status,
+  created_at
+)
+values ($1, 'openai-compatible', $2, 6, 'Document fragment integration test', 'active', $3)
+`,
+      [embeddingProfileId, embeddingModel, new Date("2026-07-02T01:00:00.000Z")],
+    );
 
     await pool.query(
       `
@@ -671,6 +689,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
 
     try {
       await pool.query("delete from document_sources where id = $1", [sourceId]);
+      await pool.query("delete from embedding_profiles where id = $1", [embeddingProfileId]);
     } finally {
       await pool.end();
     }
@@ -684,7 +703,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
     const repository = createDocumentFragmentRepository({
       queryable: pool,
       embeddingProfiles: {
-        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+        getProfileById: vi.fn(async () => ({ id: embeddingProfileId, dimensions: 6 })),
       },
     });
 
@@ -692,7 +711,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
       documentSourceId: sourceId,
       documentSnapshotId: snapshotId,
       sourceUri,
-      embeddingProfileId: "static-dev-6d",
+      embeddingProfileId,
       chunks: [{ chunkIndex: 0, text: "Alpha body" }],
       embeddings: [[1, 0, 0, 0, 0, 0]],
     });
@@ -703,8 +722,34 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
         documentSnapshotId: snapshotId,
         text: "Alpha body",
         embedding: [],
-        embeddingProfileId: "static-dev-6d",
+        embeddingProfileId,
       }),
     ]);
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId,
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 3,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        documentSourceId: sourceId,
+        text: "Alpha body",
+      }),
+    ]);
+
+    await pool.query(
+      "update document_sources set permission_state = 'stale' where id = $1",
+      [sourceId],
+    );
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId,
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 3,
+      }),
+    ).resolves.toEqual([]);
   });
 });
