@@ -1093,8 +1093,11 @@ function readInternalApiToken(value: string | undefined): string | undefined {
 
 export function resolveServerListenHost(
   internalApiToken: string | undefined,
+  feishuVerificationToken: string | undefined,
 ): "127.0.0.1" | "0.0.0.0" {
-  return readInternalApiToken(internalApiToken) === undefined ? "127.0.0.1" : "0.0.0.0";
+  const hasInternalApiToken = readInternalApiToken(internalApiToken) !== undefined;
+  const hasFeishuVerificationToken = (feishuVerificationToken?.trim().length ?? 0) > 0;
+  return hasInternalApiToken && hasFeishuVerificationToken ? "0.0.0.0" : "127.0.0.1";
 }
 
 function isInternalApiRequest(url: string): boolean {
@@ -1901,7 +1904,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const internalApiToken = process.env.IRIS_INTERNAL_API_TOKEN;
-  const host = resolveServerListenHost(internalApiToken);
+  const feishuAuthConfig = readFeishuAuthConfig();
+  const host = resolveServerListenHost(internalApiToken, feishuAuthConfig.verificationToken);
   const app = buildApp({ internalApiToken });
   await app.listen({ port: readServerPort(), host });
 }

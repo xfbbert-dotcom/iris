@@ -2,6 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Superseded listener condition:** This plan records the first internal-token-only hardening step.
+> The current non-loopback requirement is defined by
+> `2026-07-10-iris-server-listen-security-boundaries.md` and requires both
+> `IRIS_INTERNAL_API_TOKEN` and `FEISHU_VERIFICATION_TOKEN`.
+
 **Goal:** Keep credential-free local Core startup on loopback while requiring a valid internal API token before the process listens on every host interface.
 
 **Architecture:** Add one exported startup host resolver beside the existing token parser in `app.ts`. The direct executable entry point passes `IRIS_INTERNAL_API_TOKEN` through that resolver and uses the result in Fastify listen options; request-route behavior remains unchanged.

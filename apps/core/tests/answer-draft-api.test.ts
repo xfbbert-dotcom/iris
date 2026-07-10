@@ -7,6 +7,7 @@ import {
   resolveServerListenHost,
   type BuildAppDependencies,
 } from "../src/app.js";
+import { readFeishuAuthConfig } from "../src/config/env.js";
 import type { RawEvent } from "../src/events/raw-event-queue.js";
 import type { DocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
@@ -539,10 +540,20 @@ describe("answer draft runtime wiring", () => {
 
 describe("internal API token guard", () => {
   it("selects a safe server listen host from the configured token", () => {
-    expect(resolveServerListenHost(undefined)).toBe("127.0.0.1");
-    expect(resolveServerListenHost("   ")).toBe("127.0.0.1");
-    expect(resolveServerListenHost("operator-secret")).toBe("0.0.0.0");
-    expect(() => resolveServerListenHost("operator secret")).toThrow(
+    const encryptKeyOnlyAuth = readFeishuAuthConfig({
+      FEISHU_ENCRYPT_KEY: "encrypt-key-only",
+    });
+
+    expect(resolveServerListenHost(undefined, undefined)).toBe("127.0.0.1");
+    expect(resolveServerListenHost("   ", "feishu-secret")).toBe("127.0.0.1");
+    expect(resolveServerListenHost("operator-secret", undefined)).toBe("127.0.0.1");
+    expect(
+      resolveServerListenHost("operator-secret", encryptKeyOnlyAuth.verificationToken),
+    ).toBe("127.0.0.1");
+    expect(resolveServerListenHost(undefined, "feishu-secret")).toBe("127.0.0.1");
+    expect(resolveServerListenHost("operator-secret", "   ")).toBe("127.0.0.1");
+    expect(resolveServerListenHost("operator-secret", "feishu-secret")).toBe("0.0.0.0");
+    expect(() => resolveServerListenHost("operator secret", "feishu-secret")).toThrow(
       "IRIS_INTERNAL_API_TOKEN must be a single bearer token",
     );
   });
