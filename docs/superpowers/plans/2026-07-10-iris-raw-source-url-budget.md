@@ -42,4 +42,7 @@ Observed:
 - `docker compose config` passed.
 - `git diff --check` passed with Windows line-ending warnings only.
 
-- [ ] Commit, push, update PR #3, and confirm GitHub Actions checks.
+- [x] Commit, push, update PR #3, and confirm GitHub Actions checks.
+
+Observed: committed `734f200`, pushed to `codex/iris-document-source-registry`, updated PR #3,
+and confirmed GitHub Actions Core and AI Worker checks passed.
