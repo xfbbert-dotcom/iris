@@ -27,13 +27,14 @@ Use approach 2. The direct Core server entry point resolves its listen host from
 internal API token used by the request guard:
 
 - missing or blank token: listen on `127.0.0.1`;
-- valid token: listen on `0.0.0.0`;
+- valid internal token plus a non-blank `FEISHU_VERIFICATION_TOKEN`: listen on `0.0.0.0`;
 - malformed configured token: reject startup through the existing token validator.
 
 `buildApp()` remains embeddable and keeps its existing optional-token behavior. `/health` and
 `/feishu/events` remain outside the internal bearer guard. Deployments that need container, private
-network, or public callback ingress must configure a valid token, which rollout readiness already
-requires.
+network, or public callback ingress must configure both v1 ingress credentials, which rollout
+readiness already requires. The Feishu callback requirement is detailed in
+`2026-07-10-iris-server-listen-security-boundaries-design.md`.
 
 ## Verification
 

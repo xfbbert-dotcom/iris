@@ -10,10 +10,10 @@ added, expose Core only inside a trusted network, VPN, or private tunnel control
 `IRIS_INTERNAL_API_TOKEN` is required before the internal rollout readiness profile can pass; do
 not invite the first group while operator APIs are missing a bearer-token guard.
 
-When the token is missing or blank, the direct Core development server listens only on
-`127.0.0.1`. A valid token is required before Core listens on `0.0.0.0` for container, private-network,
-or callback ingress. This is a startup safety fallback, not a replacement for the trusted network
-boundary.
+When either `IRIS_INTERNAL_API_TOKEN` or `FEISHU_VERIFICATION_TOKEN` is missing or blank, the direct
+Core development server listens only on `127.0.0.1`. Both v1 tokens are required before Core listens
+on `0.0.0.0` for container, private-network, or callback ingress. `FEISHU_ENCRYPT_KEY` alone is not
+sufficient. This is a startup safety fallback, not a replacement for the trusted network boundary.
 
 Never expose these endpoints directly to the public internet:
 

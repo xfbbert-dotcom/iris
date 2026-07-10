@@ -478,8 +478,10 @@ admin identity model.
 
 The direct Core server entry point must fail safe when that shared token is absent. Credential-free
 local development may continue, but the process must bind only to `127.0.0.1`; listening on all host
-interfaces (`0.0.0.0`) requires a valid `IRIS_INTERNAL_API_TOKEN`. This listener rule complements the
-request guard and prevents an omitted token from silently exposing operator APIs to the host network.
+interfaces (`0.0.0.0`) requires both a valid `IRIS_INTERNAL_API_TOKEN` and a non-blank
+`FEISHU_VERIFICATION_TOKEN`. This listener rule complements both request guards and prevents an
+omitted credential from silently exposing operator APIs or an unauthenticated Feishu callback to the
+host network. `FEISHU_ENCRYPT_KEY` alone does not satisfy this v1 listener prerequisite.
 
 Internal rollout readiness is a configuration contract, not a runtime-health substitute. Iris must
 provide a shared readiness profile for the first 20-30 person rollout through both a local CLI and
