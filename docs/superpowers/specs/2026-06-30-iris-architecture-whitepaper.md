@@ -466,6 +466,13 @@ orchestrator is missing, the consolidated `eventWorker` component must be degrad
 `degradedReason: "mention_replies_unavailable"`. Non-empty raw-event DLQs still take precedence as
 `degradedReason: "dead_letters_present"`.
 
+Consolidated worker health must also reflect the latest polling result. If the event, document-sync,
+or reindex runtime reports `latestBatch.status = "failed"`, its `/internal/status` component must be
+degraded with `degradedReason: "latest_batch_failed"` while preserving the bounded batch error
+snapshot. A later successful batch replaces the snapshot and may restore health. Worker health
+evidence precedence is non-empty DLQ, failed latest batch, then event mention-reply unavailability.
+Worker-specific status endpoints keep their existing status-read semantics.
+
 Internal operator APIs must have an explicit protection boundary. During the early internal rollout,
 Core may use a shared `IRIS_INTERNAL_API_TOKEN` Bearer guard for `/internal/*` routes while Feishu
 callback and health endpoints remain separately governed. The guard must match the request path
