@@ -74,8 +74,8 @@ also passed.
 
 - [x] **Step 1: Run `npm run verify`**
 - [x] **Step 2: Complete independent review and address findings**
-- [ ] **Step 3: Commit and push the branch**
-- [ ] **Step 4: Watch PR #3 checks and confirm a clean merge state**
+- [x] **Step 3: Commit and push the branch**
+- [x] **Step 4: Watch PR #3 checks and confirm a clean merge state**
 
 Observed full verification: `git diff --check`, TypeScript type checking, all 65 Core test files
 (`1063` passed and `4` skipped), all 7 Python tests, and `docker compose config` completed
@@ -85,3 +85,7 @@ Independent review found no Critical or Important issues and assessed the change
 merge. Its only Minor suggestion was adopted: the default `syncing` and `synced` skip tests now
 also prove that the runner does not mutate source state. Focused tests passed `36/36`, followed by
 the same successful full verification result.
+
+Published as design commit `185cca2` and implementation commit `679db2f` on
+`codex/iris-document-source-registry`. PR #3 then passed both required checks: AI Worker in 15
+seconds and Core in 1 minute 15 seconds, with no failed or pending checks.
