@@ -521,6 +521,12 @@ remain available even if the audit sink is unavailable.
 
 App shutdown is also a runtime-control boundary. If one composed runtime fails during close, Iris must still attempt to close the remaining runtimes before surfacing the shutdown error, so worker loops and external clients do not leak because an earlier cleanup step failed.
 
+Server startup must provide the same resource guarantee. The executable entry point must validate
+synchronous listener configuration before composing runtimes. If HTTP listener startup fails after
+composition, Iris must close the app through the normal all-runtime shutdown path before surfacing
+the startup failure. If startup and cleanup both fail, diagnostics must preserve both errors rather
+than hiding either the listener failure or the incomplete cleanup.
+
 Group management should show:
 
 - groups where Iris is installed;
