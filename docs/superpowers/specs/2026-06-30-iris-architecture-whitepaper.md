@@ -185,11 +185,13 @@ Raw event idempotency keys must be bounded. Platform event IDs seed the primary
 deduplication keys. When a Feishu message callback lacks a usable event ID, the
 message ID becomes the secondary deduplication key so platform retries with
 slightly different wrapper metadata do not duplicate the same message event. If
-neither ID is usable, Iris falls back to a canonical body hash. Oversized
-external IDs must be ignored so malformed callbacks cannot create oversized Redis
-keys. The fallback hash sorts JSON object keys recursively before SHA-256 hashing
-so semantically identical callbacks do not duplicate merely because object key
-order changed.
+the `message:` prefix would make an otherwise usable message ID exceed the raw
+event ID budget, Iris must hash the message ID itself into a compact
+`message-hash:<sha256>` key rather than falling back to a body hash. If neither
+event ID nor message ID is usable, Iris falls back to a canonical body hash.
+Oversized external IDs must never create oversized Redis keys. The fallback hash
+sorts JSON object keys recursively before SHA-256 hashing so semantically
+identical callbacks do not duplicate merely because object key order changed.
 
 Raw Feishu event DLQs are operator recovery surfaces. Iris must support bounded listing, explicit replay, and deletion for raw event dead letters. Replay must not remove the DLQ payload until the reset raw event has been accepted back into the queue.
 

@@ -191,22 +191,40 @@ function resolveMessageEventId(body: Record<string, unknown>): string | undefine
   if (isRecord(event)) {
     const message = event.message;
     if (isRecord(message)) {
-      const messageId = normalizeIdempotencyKey(message.message_id);
+      const messageId = normalizeMessageEventId(message.message_id);
       if (messageId !== undefined) {
-        return normalizeIdempotencyKey(`message:${messageId}`);
+        return messageId;
       }
     }
   }
 
   const message = body.message;
   if (isRecord(message)) {
-    const messageId = normalizeIdempotencyKey(message.message_id);
+    const messageId = normalizeMessageEventId(message.message_id);
     if (messageId !== undefined) {
-      return normalizeIdempotencyKey(`message:${messageId}`);
+      return messageId;
     }
   }
 
   return undefined;
+}
+
+function normalizeMessageEventId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  const prefixed = `message:${trimmed}`;
+  if (prefixed.length <= MAX_RAW_EVENT_ID_LENGTH) {
+    return prefixed;
+  }
+
+  return `message-hash:${createHash("sha256").update(trimmed).digest("hex")}`;
 }
 
 function resolveEventType(body: unknown): string {

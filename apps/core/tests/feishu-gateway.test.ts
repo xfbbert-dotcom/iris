@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
+import type { RawEvent } from "../src/events/raw-event-queue.js";
 import { createFeishuGateway } from "../src/feishu/feishu-gateway.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
 import { isolateEnvVar } from "./test-env.js";
@@ -331,6 +332,49 @@ describe("FeishuGateway", () => {
 
     expect(queue.events).toHaveLength(1);
     expect(queue.events[0]?.idempotencyKey).toBe("message:message-retry-1");
+  });
+
+  it("uses a stable compact message key when the message id is too long to prefix", async () => {
+    const queue = new InMemoryEventQueue();
+    const enqueue = vi.fn(async (_event: RawEvent) => undefined);
+    const rawEventQueue = { enqueue };
+    const gateway = createFeishuGateway({ queue, rawEventQueue });
+    const longMessageId = "m".repeat(512);
+
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        retry_count: 0,
+        event: {
+          message: {
+            message_id: longMessageId,
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        retry_count: 1,
+        event: {
+          message: {
+            message_id: longMessageId,
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+    await flushDeferredEnqueue();
+
+    const firstKey = enqueue.mock.calls[0]?.[0].idempotencyKey;
+    const secondKey = enqueue.mock.calls[1]?.[0].idempotencyKey;
+    expect(firstKey).toBe(secondKey);
+    expect(firstKey).toMatch(/^raw-event:feishu:message-hash:[a-f0-9]{64}$/u);
   });
 
   it("deduplicates fallback body hashes independent of JSON object key order", async () => {
