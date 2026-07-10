@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { DocumentChunk } from "./document-chunker.js";
+import type { DocumentSourceType } from "./document-source-registry.js";
 
 const MAX_FRAGMENT_SEARCH_LIMIT = 100;
 
@@ -52,6 +53,7 @@ export type SearchSimilarFragmentsInput = {
   embeddingProfileId: string;
   embedding: number[];
   limit: number;
+  sourceTypes?: DocumentSourceType[];
 };
 
 export type DocumentFragmentRepositoryDependencies = {
@@ -180,10 +182,20 @@ order by chunk_index asc, id asc
       if (limit === 0) {
         return [];
       }
+      const sourceTypes = sanitizeSourceTypes(input.sourceTypes);
+      if (sourceTypes !== undefined && sourceTypes.length === 0) {
+        return [];
+      }
 
       const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
       const embeddingTable = resolveEmbeddingTable(profile.dimensions);
       validateVectorDimension(input.embedding, profile.dimensions);
+      const sourceTypeClause =
+        sourceTypes === undefined ? "" : "  and ds.source_type = any($4::text[])\n";
+      const values =
+        sourceTypes === undefined
+          ? [input.embeddingProfileId, serializeVector(input.embedding), limit]
+          : [input.embeddingProfileId, serializeVector(input.embedding), limit, sourceTypes];
 
       const result = await dependencies.queryable.query<RetrievedDocumentFragmentRow>(
         `
@@ -204,14 +216,14 @@ join document_sources ds
   on ds.id = f.document_source_id
   and ds.can_use_for_answering = true
   and ds.permission_state <> 'denied'
-join ${embeddingTable} e
+${sourceTypeClause}join ${embeddingTable} e
   on e.document_fragment_id = f.id
 where f.embedding_profile_id = $1
   and e.embedding_profile_id = $1
 order by e.embedding <=> $2::vector asc, f.document_source_id asc, f.chunk_index asc, f.id asc
 limit $3
 `,
-        [input.embeddingProfileId, serializeVector(input.embedding), limit],
+        values,
       );
 
       return result.rows.map(mapRetrievedFragmentRow);
@@ -289,6 +301,16 @@ function sanitizeLimit(value: number): number {
   }
 
   return Math.min(MAX_FRAGMENT_SEARCH_LIMIT, Math.max(0, Math.floor(value)));
+}
+
+function sanitizeSourceTypes(
+  sourceTypes: DocumentSourceType[] | undefined,
+): DocumentSourceType[] | undefined {
+  if (sourceTypes === undefined) {
+    return undefined;
+  }
+
+  return [...new Set(sourceTypes)];
 }
 
 async function insertFragment(

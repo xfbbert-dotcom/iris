@@ -463,6 +463,11 @@ describe("createAnswerDraftRuntime", () => {
     expect(promptContext).toContain("User submitted text");
     expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-user"]);
     expect(result?.deniedDocumentIds.sort()).toEqual(["source-group", "source-wiki"]);
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceTypes: ["user_submitted_document"],
+      }),
+    );
     expect(runtimeController.canReadDocuments).toHaveBeenCalled();
     expect(runtimeController.canRetrieveKnowledgeBase).toHaveBeenCalled();
   });

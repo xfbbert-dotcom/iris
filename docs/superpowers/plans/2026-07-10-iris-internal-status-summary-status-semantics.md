@@ -32,7 +32,7 @@ failed because `healthyComponentCount` was `1` instead of `0`.
 
 - [x] Run focused status tests.
 - [x] Run full verification.
-- [ ] Commit, push, update PR #3, and confirm GitHub Actions checks.
+- [x] Commit, push, update PR #3, and confirm GitHub Actions checks.
 
 Observed: `npm --workspace apps/core test -- tests/internal-status-snapshot.test.ts tests/answer-draft-api.test.ts tests/runtime-control-api.test.ts --reporter=dot`
 passed with 175 tests.
@@ -44,3 +44,6 @@ Observed:
 - `npm run test:python` passed with 7 tests.
 - `docker compose config` passed.
 - `git diff --check` passed with Windows line-ending warnings only.
+
+Observed: commit `287b3bc` was pushed to PR #3. GitHub Actions Core and AI Worker checks passed
+for head `287b3bc0f4d0f42a57b68caa1f20a4bad758e3ee`.

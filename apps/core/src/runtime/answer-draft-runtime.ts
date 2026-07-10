@@ -26,7 +26,7 @@ import {
   createPostgresDocumentSourceRegistry,
   type AsyncDocumentSourceRegistry,
 } from "../documents/postgres-document-source-registry.js";
-import type { DocumentSource } from "../documents/document-source-registry.js";
+import type { DocumentSource, DocumentSourceType } from "../documents/document-source-registry.js";
 import {
   parseFeishuDocxDocumentId,
   parseFeishuWikiNodeToken,
@@ -186,6 +186,7 @@ export function createAnswerDraftRuntime({
         embeddingProfileId: runtimeEmbedding.profile.id,
         embedder: runtimeEmbedding.embedder,
         fragments,
+        sourceTypes: selectAnswerSourceTypes(runtimeController),
         canReadDocument: createCanReadDocument({
           permissionMode: runtimeConfig.permissionMode,
           sourceRegistry,
@@ -342,6 +343,25 @@ function canUseSourceByRuntimeCapabilities(
   }
 
   return true;
+}
+
+function selectAnswerSourceTypes(
+  runtimeController: RuntimeRetrievalGate | undefined,
+): DocumentSourceType[] | undefined {
+  if (runtimeController === undefined) {
+    return undefined;
+  }
+
+  const sourceTypes: DocumentSourceType[] = [];
+  if (runtimeController.canReadDocuments()) {
+    sourceTypes.push("group_visible_document");
+  }
+  if (runtimeController.canRetrieveKnowledgeBase()) {
+    sourceTypes.push("authorized_wiki_document");
+  }
+  sourceTypes.push("user_submitted_document");
+
+  return sourceTypes;
 }
 
 function canUseGroupVisibleSource(source: DocumentSource, runtimeController: RuntimeRetrievalGate): boolean {

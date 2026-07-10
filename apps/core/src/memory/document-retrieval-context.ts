@@ -2,6 +2,7 @@ import type {
   DocumentFragmentRepository,
   RetrievedDocumentFragment,
 } from "../documents/document-fragment-repository.js";
+import type { DocumentSourceType } from "../documents/document-source-registry.js";
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 import type { AuditLog } from "../audit/audit-log.js";
 import {
@@ -40,12 +41,14 @@ export function createDocumentRetrievalContextBuilder({
   embeddingProfileId,
   embedder,
   fragments,
+  sourceTypes,
   canReadDocument,
   auditLog,
 }: {
   embeddingProfileId: string;
   embedder: QueryEmbeddingProvider;
   fragments: Pick<DocumentFragmentRepository, "searchSimilarFragments">;
+  sourceTypes?: DocumentSourceType[];
   canReadDocument: (documentId: string) => Promise<boolean>;
   auditLog?: AuditLog;
 }): DocumentRetrievalContextBuilder {
@@ -72,6 +75,7 @@ export function createDocumentRetrievalContextBuilder({
         embeddingProfileId,
         embedding: queryEmbedding,
         limit: candidateFragmentLimit,
+        ...(sourceTypes === undefined ? {} : { sourceTypes }),
       });
       const meaningfulFragments = retrievedFragments.filter((fragment) =>
         fragment.text.trim().length > 0,
