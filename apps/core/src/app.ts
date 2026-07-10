@@ -147,6 +147,7 @@ const runtimeCapabilityNames = new Set<RuntimeCapabilityName>([
 const deadLettersPresentReason = "dead_letters_present" as const;
 const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
 const latestBatchFailedReason = "latest_batch_failed" as const;
+const latestBatchItemsFailedReason = "latest_batch_items_failed" as const;
 const mentionRepliesUnavailableReason = "mention_replies_unavailable" as const;
 const maxInternalStringLength = 512;
 const maxInternalSourceUriLength = DOCUMENT_SOURCE_URI_MAX_CHARS;
@@ -1327,7 +1328,9 @@ function withDeadLetterHealth<Status extends object>(
   return { ok: true, ...status };
 }
 
-function withWorkerHealth<Status extends { latestBatch?: { status: string } }>(
+function withWorkerHealth<
+  Status extends { latestBatch?: { status: string; failedCount: number } },
+>(
   status: Status,
   deadLetterCount: number,
 ) {
@@ -1340,6 +1343,16 @@ function withWorkerHealth<Status extends { latestBatch?: { status: string } }>(
       ok: false,
       ...status,
       degradedReason: latestBatchFailedReason,
+    };
+  }
+  if (
+    status.latestBatch?.status === "succeeded" &&
+    status.latestBatch.failedCount > 0
+  ) {
+    return {
+      ok: false,
+      ...status,
+      degradedReason: latestBatchItemsFailedReason,
     };
   }
 

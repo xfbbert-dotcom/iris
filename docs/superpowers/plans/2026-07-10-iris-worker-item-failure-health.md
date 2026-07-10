@@ -39,11 +39,11 @@ retry behavior, snapshot shapes, and worker-specific status endpoint semantics.
 **Files:**
 - Modify: `apps/core/tests/answer-draft-api.test.ts`
 
-- [ ] **Step 1: Cover all three workers with successful batches whose `failedCount` is positive**
-- [ ] **Step 2: Assert consolidated summary and `latest_batch_items_failed` reasons**
-- [ ] **Step 3: Assert DLQ and whole-batch failure precedence**
-- [ ] **Step 4: Assert recovery after a later zero-failure batch**
-- [ ] **Step 5: Run the focused test and verify RED**
+- [x] **Step 1: Cover all three workers with successful batches whose `failedCount` is positive**
+- [x] **Step 2: Assert consolidated summary and `latest_batch_items_failed` reasons**
+- [x] **Step 3: Assert DLQ and whole-batch failure precedence**
+- [x] **Step 4: Assert recovery after a later zero-failure batch**
+- [x] **Step 5: Run the focused test and verify RED**
 
 Run:
 
@@ -51,19 +51,30 @@ Run:
 npm --workspace apps/core test -- tests/answer-draft-api.test.ts -t "latest completed batch contains failed items" --reporter=dot
 ```
 
+Observed RED: document-sync and reindex remained healthy, while the event worker used the lower
+priority `mention_replies_unavailable` reason. The recovery test also showed that a completed batch
+with `failedCount = 1` stayed healthy.
+
 ### Task 3: Implement Shared Item-Failure Mapping
 
 **Files:**
 - Modify: `apps/core/src/app.ts`
 
-- [ ] **Step 1: Add the stable `latest_batch_items_failed` reason**
-- [ ] **Step 2: Extend `withWorkerHealth` after whole-batch failure handling**
-- [ ] **Step 3: Keep existing fields and precedence unchanged**
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 1: Add the stable `latest_batch_items_failed` reason**
+- [x] **Step 2: Extend `withWorkerHealth` after whole-batch failure handling**
+- [x] **Step 3: Keep existing fields and precedence unchanged**
+- [x] **Step 4: Run focused tests and verify GREEN**
+
+Observed GREEN: `answer-draft-api.test.ts` passed all 161 tests.
 
 ### Task 4: Verify, Review, and Publish
 
-- [ ] **Step 1: Run `npm run verify`**
-- [ ] **Step 2: Complete independent review and address findings**
+- [x] **Step 1: Run `npm run verify`**
+- [x] **Step 2: Complete independent review and address findings**
 - [ ] **Step 3: Commit and push the branch**
 - [ ] **Step 4: Watch PR #3 checks and confirm a clean merge state**
+
+Observed: 65 Core test files passed with 1061 tests passed and 4 local Postgres tests skipped;
+7 Python tests passed; TypeScript type checking and Docker Compose validation passed. Independent
+review found no blocking issues. Its defensive `status === "succeeded"` recommendation was applied,
+then focused and full verification passed again; re-review found no remaining issues.

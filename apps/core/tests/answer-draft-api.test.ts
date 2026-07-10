@@ -1185,6 +1185,190 @@ describe("GET /internal/status", () => {
     });
   });
 
+  it("marks workers degraded when their latest completed batch contains failed items", async () => {
+    const startedAt = new Date("2026-07-10T14:00:00.000Z");
+    const finishedAt = new Date("2026-07-10T14:00:01.000Z");
+    const eventWorkerRuntime = fakeEventRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 50,
+        mentionRepliesEnabled: false,
+        mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
+        pendingEventCount: 2,
+        deadLetterEventCount: 0,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt,
+          finishedAt,
+          processedCount: 2,
+          failedCount: 1,
+          failed: false as const,
+        },
+      })),
+    });
+    const documentSyncRuntime = fakeDocumentSyncRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        intervalMs: 2000,
+        batchLimit: 10,
+        pendingJobCount: 3,
+        deadLetterJobCount: 0,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt,
+          finishedAt,
+          processedCount: 1,
+          failedCount: 1,
+          failed: false as const,
+        },
+      })),
+    });
+    const reindexWorkerRuntime = fakeReindexRuntime({
+      getStatus: vi.fn(async () => ({
+        enabled: true as const,
+        running: true,
+        activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+        intervalMs: 3000,
+        batchLimit: 25,
+        pendingJobCount: 4,
+        deadLetterJobCount: 0,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt,
+          finishedAt,
+          indexedCount: 1,
+          skippedCount: 1,
+          failedCount: 1,
+          failed: false as const,
+        },
+      })),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => eventWorkerRuntime,
+      createDocumentSyncRuntime: () => documentSyncRuntime,
+      createReindexWorkerRuntime: () => reindexWorkerRuntime,
+    });
+
+    const response = await app.inject({ method: "GET", url: "/internal/status" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body).toMatchObject({
+      ok: false,
+      status: "degraded",
+      summary: {
+        degradedComponentCount: 3,
+        degradedComponents: ["eventWorker", "documentSync", "reindex"],
+        primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
+        attentionSeverity: "critical",
+      },
+      components: {
+        eventWorker: {
+          status: "degraded",
+          ok: false,
+          degradedReason: "latest_batch_items_failed",
+        },
+        documentSync: {
+          status: "degraded",
+          ok: false,
+          degradedReason: "latest_batch_items_failed",
+        },
+        reindex: {
+          status: "degraded",
+          ok: false,
+          degradedReason: "latest_batch_items_failed",
+        },
+      },
+    });
+    expect(body.components.eventWorker.latestBatch).toMatchObject({
+      status: "succeeded",
+      processedCount: 2,
+      failedCount: 1,
+      failed: false,
+    });
+    expect(body.components.documentSync.latestBatch).toMatchObject({
+      status: "succeeded",
+      processedCount: 1,
+      failedCount: 1,
+      failed: false,
+    });
+    expect(body.components.reindex.latestBatch).toMatchObject({
+      status: "succeeded",
+      indexedCount: 1,
+      skippedCount: 1,
+      failedCount: 1,
+      failed: false,
+    });
+  });
+
+  it("prioritizes dead letters and recovers after completed batch item failures", async () => {
+    const startedAt = new Date("2026-07-10T15:00:00.000Z");
+    const finishedAt = new Date("2026-07-10T15:00:01.000Z");
+    let statusReadCount = 0;
+    const eventWorkerRuntime = fakeEventRuntime({
+      getStatus: vi.fn(async () => {
+        statusReadCount += 1;
+        const failedCount = statusReadCount < 3 ? 1 : 0;
+        return {
+          enabled: true as const,
+          running: true,
+          intervalMs: 1000,
+          batchLimit: 50,
+          mentionRepliesEnabled: true,
+          pendingEventCount: 0,
+          deadLetterEventCount: statusReadCount === 1 ? 1 : 0,
+          latestBatch: {
+            status: "succeeded" as const,
+            startedAt,
+            finishedAt,
+            processedCount: 1,
+            failedCount,
+            failed: false as const,
+          },
+        };
+      }),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => eventWorkerRuntime,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const deadLetterResponse = await app.inject({ method: "GET", url: "/internal/status" });
+    const itemFailureResponse = await app.inject({ method: "GET", url: "/internal/status" });
+    const recoveredResponse = await app.inject({ method: "GET", url: "/internal/status" });
+
+    expect(deadLetterResponse.json().components.eventWorker).toMatchObject({
+      status: "degraded",
+      ok: false,
+      degradedReason: "dead_letters_present",
+      latestBatch: { status: "succeeded", failedCount: 1 },
+    });
+    expect(itemFailureResponse.json().components.eventWorker).toMatchObject({
+      status: "degraded",
+      ok: false,
+      degradedReason: "latest_batch_items_failed",
+      latestBatch: { status: "succeeded", failedCount: 1 },
+    });
+    expect(recoveredResponse.json()).toMatchObject({
+      ok: true,
+      status: "healthy",
+      components: {
+        eventWorker: {
+          status: "healthy",
+          ok: true,
+          latestBatch: { status: "succeeded", failedCount: 0 },
+        },
+      },
+    });
+    expect(recoveredResponse.json().components.eventWorker).not.toHaveProperty("degradedReason");
+  });
+
   it("restores worker health after a successful batch and keeps missing batches healthy", async () => {
     const startedAt = new Date("2026-07-10T13:00:00.000Z");
     const finishedAt = new Date("2026-07-10T13:00:01.000Z");
