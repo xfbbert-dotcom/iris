@@ -94,6 +94,274 @@ The token guard applies to the internal request path before any query string. Fo
 `IRIS_INTERNAL_API_TOKEN` is set. Encoded internal paths such as `/%69nternal/status` and
 `/internal%2Fstatus` are treated as internal paths too, matching the router's decoded route view.
 
+## Single-VPS Pilot Deployment
+
+The approved pilot target is one Ubuntu 24.04 LTS VPS. Install Docker Engine and the Compose plugin
+from Docker's official Ubuntu repository, then verify `docker version` and `docker compose version`.
+Do not use the convenience install script for this persistent host.
+
+Docker-published ports can bypass UFW rules. Use the cloud provider's network firewall or security
+group as the primary ingress boundary:
+
+- allow TCP `22` only from operator IP addresses;
+- allow public TCP `80` and `443` for Caddy and Feishu;
+- deny every other inbound port;
+- never add public rules for `3000`, `5432`, or `6379`.
+
+The pilot Compose file additionally publishes Core only on `127.0.0.1:3000` and publishes no
+Postgres or Redis ports. Do not disable Docker's own firewall management; doing so breaks normal
+bridge isolation. See the official [Docker Ubuntu installation](https://docs.docker.com/engine/install/ubuntu/)
+and [Docker firewall guidance](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
+
+Redis emits a reliability warning when Linux memory overcommit is disabled. Configure it once on the
+VPS:
+
+```bash
+echo 'vm.overcommit_memory = 1' | sudo tee /etc/sysctl.d/99-iris-redis.conf
+sudo sysctl --system
+```
+
+### DNS And Checkout
+
+Create an `A` record for the pilot hostname pointing to the VPS public IPv4 address. If IPv6 is not
+configured and reachable, do not publish an `AAAA` record. Wait until the record resolves to the VPS
+before starting Caddy.
+
+Deploy an explicit commit instead of a moving branch:
+
+```bash
+sudo install -d -o "$USER" -g "$USER" /opt/iris
+git clone https://github.com/xfbbert-dotcom/iris.git /opt/iris/repository
+cd /opt/iris/repository
+git fetch origin
+git checkout --detach APPROVED_COMMIT_SHA
+```
+
+Record `APPROVED_COMMIT_SHA` in the private deployment log. Do not deploy an unreviewed worktree or
+an uncommitted local directory.
+
+### Private Environment
+
+Create the private environment file and make it readable only by the operator account:
+
+```bash
+cd /opt/iris/repository
+cp .env.pilot.example .env.pilot
+chmod 600 .env.pilot
+```
+
+Replace every `replace-with-*` value. `POSTGRES_PASSWORD` must be URL-safe and must match the password
+inside `DATABASE_URL`. Set `IRIS_IMAGE_TAG` to the checked-out `APPROVED_COMMIT_SHA`; never reuse a
+moving tag such as `pilot` or `latest`. `IRIS_PUBLIC_HOSTNAME` is the DNS name only, without a path.
+Generate the internal bearer token with a single header-safe value:
+
+```bash
+openssl rand -hex 32
+```
+
+Keep Feishu, model, embedding, database, and internal API secrets only in `.env.pilot` or a private
+secret store. Never paste the resulting file into an issue, PR, chat, or shell history.
+
+### Preflight And Startup
+
+Validate Compose before contacting any service:
+
+```bash
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  config --quiet
+```
+
+Build the image and run readiness inside the same production image that will start Core. Readiness
+does not make external network calls:
+
+```bash
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  build core
+
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  run --rm --no-deps core \
+  node apps/core/dist/admin/internal-rollout-readiness-cli.js
+```
+
+Do not continue unless readiness prints `"status":"ready"` with zero failed checks. Start the
+single-consumer stack:
+
+```bash
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  up --detach --wait --wait-timeout 120
+
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  ps
+```
+
+Required state:
+
+- `postgres` and `redis` are healthy;
+- `migrate` exited with code `0`;
+- `core` is healthy;
+- `caddy` is running;
+- only ports `80`, `443`, and loopback `127.0.0.1:3000` are published.
+
+Do not use `docker compose up --scale core=...` and do not run a second Core process. The pilot queue
+recovery contract is single-consumer; exactly one `core` container is an explicit launch invariant.
+
+If startup fails, inspect bounded logs before retrying:
+
+```bash
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  logs --no-color --tail 300
+```
+
+### Public And Private Boundary Checks
+
+From a machine outside the VPS, verify the public surface:
+
+```bash
+curl --fail --silent --show-error https://iris.example.com/health
+curl --silent --output /dev/null --write-out '%{http_code}\n' \
+  https://iris.example.com/internal/status
+```
+
+Replace `iris.example.com` with `IRIS_PUBLIC_HOSTNAME`. Health must return `200`; the public internal
+status request must return `404` from Caddy.
+
+Open the private operator tunnel from the operator machine:
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 operator@iris.example.com
+```
+
+In another local terminal, verify both application authentication outcomes:
+
+```bash
+curl --silent --output /dev/null --write-out '%{http_code}\n' \
+  http://127.0.0.1:3000/internal/status
+
+curl --fail --silent --show-error \
+  --header "Authorization: Bearer $IRIS_INTERNAL_API_TOKEN" \
+  http://127.0.0.1:3000/internal/status
+```
+
+The first request must return `401`; the authorized request must return `200` and show all enabled
+workers running with empty DLQs. Configure the Feishu event callback only after these checks pass:
+
+```text
+https://iris.example.com/feishu/events
+```
+
+### Encrypted Backup
+
+Install `age`, create an offline identity on an operator-controlled machine, and store only its public
+recipient on the VPS. Never place the private age identity on the VPS. Install the reviewed backup
+script and recipient with root-only permissions:
+
+```bash
+sudo apt-get update && sudo apt-get install -y age
+sudo install -d -m 700 /etc/iris
+printf '%s\n' 'AGE_PUBLIC_RECIPIENT' | sudo tee /etc/iris/backup-recipient > /dev/null
+sudo chmod 600 /etc/iris/backup-recipient
+sudo install -m 700 deploy/pilot/backup.sh /usr/local/sbin/iris-backup
+```
+
+Replace `AGE_PUBLIC_RECIPIENT` with the single `age1...` recipient. Create a manual backup before
+inviting pilot users:
+
+```bash
+sudo /usr/local/sbin/iris-backup
+```
+
+The script uses `set -Eeuo pipefail`, writes to an owner-only temporary file, and renames it only
+after both `pg_dump` and `age` succeed. It prints the final encrypted path and retains seven daily
+files locally.
+
+Copy the encrypted file off the VPS, decrypt it on the operator-controlled machine, and run
+`pg_restore --list` against the decrypted custom-format dump. A file that has not been decrypted and
+listed successfully is not a verified backup.
+
+```bash
+age --decrypt \
+  --identity ~/.config/age/iris-backup-key.txt \
+  iris-20260711T120000Z.dump.age \
+  | pg_restore --list > /dev/null
+```
+
+After the first manual verification and off-host copy are working, schedule the installed script
+from root's crontab:
+
+```cron
+15 2 * * * /usr/local/sbin/iris-backup >> /var/log/iris-backup.log 2>&1
+```
+
+The scheduled command creates an encrypted local backup; a separate operator-controlled copy job
+must move it off the VPS. Alert if either the backup or off-host copy fails.
+
+### Restore Drill
+
+Disable the Feishu callback before starting a restore so the platform does not accumulate callback
+retries while Caddy is intentionally stopped.
+
+Decrypt the selected backup on the operator-controlled machine and stream the custom-format dump over
+SSH to the reviewed restore script on the VPS. The required confirmation flag is deliberately
+explicit. The script stops Caddy and Core, drops and recreates the target database, restores with
+`--exit-on-error --single-transaction`, reruns migrations and readiness, then starts the services
+only after every prior step succeeds.
+
+Run from the operator-controlled machine:
+
+```bash
+age --decrypt \
+  --identity ~/.config/age/iris-backup-key.txt \
+  iris-20260711T120000Z.dump.age \
+  | ssh operator@iris.example.com \
+    "cd /opt/iris/repository && \
+      ./deploy/pilot/restore-from-stdin.sh --confirm-replace-database"
+```
+
+If restore, migration, readiness, or startup fails, the script exits non-zero and leaves Core and
+Caddy stopped. Investigate before any manual restart. After success, repeat private status, DLQ, and
+Feishu smoke checks.
+
+Do not practice restore against the only live database. Perform the first restore drill on a fresh
+temporary Postgres volume or a separate VPS before inviting the full 20-30 person company.
+
+### Emergency Stop And Rollback
+
+The authoritative pilot stop is operational, not the in-memory runtime switch:
+
+```bash
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  stop caddy core
+```
+
+Disable the Feishu callback or bot before restarting an unsafe build. Preserve logs and volumes:
+
+```bash
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  logs --no-color > "iris-rollback-$(date -u +%Y%m%dT%H%M%SZ).log"
+```
+
+Checkout the previous approved commit, set `IRIS_IMAGE_TAG` to that commit SHA, validate Compose,
+build that exact Core image, run readiness through the `core` service, and start the stack. Never
+retag a failed image as the rollback release. If the failed release applied a migration that is not
+backward compatible, restore the verified pre-release database backup before starting the previous
+image.
+
 ## Local Infrastructure
 
 Start Postgres and Redis:
