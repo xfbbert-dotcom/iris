@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS build
+FROM node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf AS build
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ COPY apps/core/tsconfig.json apps/core/tsconfig.json
 COPY apps/core/tsconfig.build.json apps/core/tsconfig.build.json
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app

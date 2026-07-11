@@ -62,16 +62,19 @@ The Core image uses a multi-stage Node 22 build:
 Compose startup order is condition-based:
 
 ```text
-Postgres healthy + Redis healthy
--> migrate exits successfully
--> Core starts and becomes healthy
--> Caddy serves public callback traffic
+Postgres healthy -> migrate exits successfully --\
+                                               +-> Core healthy -> Caddy public
+Redis healthy --------------------------------/
 ```
 
 A migration failure prevents Core startup. A listener or runtime startup failure exits the Core
 container, whose restart policy retries after the failure is visible in container logs. The
 deployment keeps exactly one Core replica because the current Redis processing recovery contract is
 single-consumer.
+
+The migration job intentionally depends only on Postgres and receives only `DATABASE_URL`; it does
+not need Redis, Feishu, model, embedding, or operator credentials. Third-party images are pinned by
+digest, while the locally built Core image is tagged with the approved source commit.
 
 ## Configuration And Secrets
 

@@ -1,0 +1,49 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import test from "node:test";
+
+const compose = loadPilotCompose();
+
+test("pins every third-party pilot image to an immutable digest", () => {
+  for (const serviceName of ["postgres", "redis", "caddy"]) {
+    assert.match(
+      compose.services[serviceName].image,
+      /@sha256:[a-f0-9]{64}$/u,
+      `${serviceName} image must be digest-pinned`,
+    );
+  }
+});
+
+test("gives the migration job database credentials only", () => {
+  assert.deepEqual(Object.keys(compose.services.migrate.environment).sort(), ["DATABASE_URL"]);
+});
+
+test("gates the edge on authenticated runtime readiness", () => {
+  const healthCommand = compose.services.core.healthcheck.test.join(" ");
+  assert.match(healthCommand, /\/internal\/status/u);
+  assert.match(healthCommand, /IRIS_INTERNAL_API_TOKEN/u);
+  assert.doesNotMatch(healthCommand, /\/health/u);
+  assert.equal(compose.services.caddy.depends_on.core.condition, "service_healthy");
+});
+
+function loadPilotCompose() {
+  const result = spawnSync(
+    process.platform === "win32" ? "docker.exe" : "docker",
+    [
+      "compose",
+      "--env-file",
+      "deploy/pilot/ci.env",
+      "--file",
+      "deploy/pilot/docker-compose.yml",
+      "config",
+      "--format",
+      "json",
+    ],
+    { encoding: "utf8" },
+  );
+
+  if (result.status !== 0) {
+    throw new Error(`Unable to render pilot Compose config: ${result.stderr || result.stdout}`);
+  }
+  return JSON.parse(result.stdout);
+}
