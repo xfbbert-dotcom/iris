@@ -1,0 +1,495 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
+import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-mention-answer-responder.js";
+import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
+
+type ReplyTextInput = Parameters<FeishuMessageReplier["replyText"]>[0];
+
+describe("FeishuMentionAnswerResponder", () => {
+  it("drafts an answer and replies when the configured Iris bot is mentioned", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const replyInputs: ReplyTextInput[] = [];
+    const replier = {
+      replyText: vi.fn(async (input: ReplyTextInput) => {
+        replyInputs.push(input);
+        return { replyMessageId: "reply-1" };
+      }),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_message_1",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 帮我总结一下",
+        mentions: [
+          {
+            key: "@_user_1",
+            openId: "ou_iris",
+            name: "Iris",
+          },
+        ],
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-1" });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      question: "帮我总结一下",
+      chatId: "oc_group_1",
+      liveChatMessages: [{ speaker: "ou_alice", text: "帮我总结一下" }],
+    });
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_message_1",
+      text: "Iris answer.",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+    const replyInput = replyInputs[0];
+    expect(replyInput).toBeDefined();
+    expect(replyInput?.uuid?.length).toBe(50);
+  });
+
+  it("skips messages that mention another user but not Iris", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const replier = { replyText: vi.fn() };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_message_1",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 帮我看下",
+        mentions: [{ key: "@_user_1", openId: "ou_bob", name: "Bob" }],
+      }),
+    ).resolves.toEqual({ status: "skipped", reason: "not_mentioned" });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("truncates oversized mentioned questions before drafting an answer", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async (_input: AnswerDraftInput) => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_message_1",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: `@_user_1 ${"Q".repeat(5000)} trailing detail`,
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    const request = answerDraftOrchestrator.generateDraft.mock.calls[0]?.[0];
+    expect(request).toBeDefined();
+    expect(request?.question.length).toBeLessThanOrEqual(4000);
+    expect(request?.question).toContain("[truncated]");
+    expect(request?.question).not.toContain("trailing detail");
+    expect(request?.liveChatMessages).toEqual([
+      { speaker: "ou_alice", text: request?.question },
+    ]);
+  });
+
+  it("strips overlapping bot mention keys without leaving partial key text", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async (_input: AnswerDraftInput) => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_message_1",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_10 @_user_1 summarize this",
+      mentions: [
+        { key: "@_user_1", openId: "ou_iris", name: "Iris" },
+        { key: "@_user_10", openId: "ou_iris", name: "Iris" },
+      ],
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      question: "summarize this",
+      chatId: "oc_group_1",
+      liveChatMessages: [{ speaker: "ou_alice", text: "summarize this" }],
+    });
+  });
+
+  it("skips mentioned messages when runtime control disables replies", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const replier = { replyText: vi.fn() };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => false),
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_message_1",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 帮我看下",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "skipped", reason: "runtime_disabled" });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("does not answer an old duplicate mention after replies are re-enabled", async () => {
+    let repliesEnabled = false;
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => repliesEnabled),
+    });
+    const input = {
+      messageId: "om_disabled_then_retried",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "runtime_disabled",
+    });
+    repliesEnabled = true;
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "duplicate_message",
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("skips messages sent by the Iris bot itself", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const replier = { replyText: vi.fn() };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_message_1",
+        chatId: "oc_group_1",
+        senderId: "ou_iris",
+        text: "@_user_1 loop",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "skipped", reason: "self_message" });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("replies with a clarification when Iris is mentioned without a question", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_message_1",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1   ",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-1" });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_message_1",
+      text: "我在，直接告诉我你想让我处理什么。",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
+  it("replies with an unreadable-message clarification when Iris is mentioned without text content", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-unreadable" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_unreadable_mention",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: undefined,
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-unreadable" });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_unreadable_mention",
+      text: "我看到了你的 @Iris，但没读到可处理的文字内容。请用文字重新发给我一次。",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
+  it("replies with a fallback when the model returns a blank answer", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => {
+        throw new Error("model answer draft must not be blank");
+      }),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-blank" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+    const input = {
+      messageId: "om_blank_model_answer",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-blank",
+    });
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "duplicate_message",
+    });
+
+    expect(replier.replyText).toHaveBeenCalledOnce();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_blank_model_answer",
+      text: "我没拿到可用答案，你可以换个说法再问我一次。",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
+  it("skips duplicate mentioned messages after a successful reply", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+    const input = {
+      messageId: "om_duplicate_message",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-1",
+    });
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "duplicate_message",
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledTimes(1);
+    expect(replier.replyText).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips duplicate mentioned messages while the first reply is in flight", async () => {
+    let resolveFirstDraft:
+      | ((value: {
+          answerText: string;
+          promptContext: string;
+          allowedFragments: never[];
+          deniedDocumentIds: never[];
+          retrievedFragmentCount: number;
+        }) => void)
+      | undefined;
+    let draftCallCount = 0;
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => {
+        draftCallCount += 1;
+        if (draftCallCount === 1) {
+          return await new Promise<{
+            answerText: string;
+            promptContext: string;
+            allowedFragments: never[];
+            deniedDocumentIds: never[];
+            retrievedFragmentCount: number;
+          }>((resolve) => {
+            resolveFirstDraft = resolve;
+          });
+        }
+
+        return {
+          answerText: "Duplicate answer.",
+          promptContext: "<live_chat_context></live_chat_context>",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+        };
+      }),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+    const input = {
+      messageId: "om_in_flight_duplicate",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    const firstReply = responder.maybeRespond(input);
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "duplicate_message",
+    });
+
+    resolveFirstDraft?.({
+      answerText: "Iris answer.",
+      promptContext: "<live_chat_context></live_chat_context>",
+      allowedFragments: [],
+      deniedDocumentIds: [],
+      retrievedFragmentCount: 0,
+    });
+    await expect(firstReply).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-1",
+    });
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledTimes(1);
+    expect(replier.replyText).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a retried mentioned message after the first reply attempt fails", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+      })),
+    };
+    const replier = {
+      replyText: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Feishu reply failed"))
+        .mockResolvedValueOnce({ replyMessageId: "reply-2" }),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+    const input = {
+      messageId: "om_retry_after_failure",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    await expect(responder.maybeRespond(input)).rejects.toThrow("Feishu reply failed");
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-2",
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledTimes(2);
+    expect(replier.replyText).toHaveBeenCalledTimes(2);
+  });
+});

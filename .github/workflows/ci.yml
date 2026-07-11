@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  core:
+    name: Core
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+        env:
+          POSTGRES_USER: iris
+          POSTGRES_PASSWORD: iris
+          POSTGRES_DB: iris
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U iris -d iris"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Core production artifacts
+        run: npm run build
+
+      - name: Test core
+        run: npm test
+
+      - name: Test pilot deployment contracts
+        run: npm run test:pilot
+
+      - name: Test Postgres integrations
+        env:
+          DATABASE_URL: postgres://iris:iris@localhost:5432/iris
+        run: |
+          npm --workspace apps/core test -- postgres-document-source-registry.test.ts
+          npm --workspace apps/core test -- document-snapshot-repository.test.ts
+          npm --workspace apps/core test -- document-fragment-repository.test.ts
+
+      - name: Validate Docker Compose
+        run: docker compose config
+
+      - name: Validate pilot readiness
+        run: npm run readiness -- --env-file deploy/pilot/ci.env
+
+      - name: Validate pilot Compose
+        run: npm run pilot:config
+
+      - name: Start pilot stack
+        run: docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml up --build --detach
+
+      - name: Verify pilot database role boundaries
+        run: |
+          docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml exec -T postgres sh -eu -c '
+            non_superusers="$(psql --username "$POSTGRES_USER" --dbname postgres --tuples-only --no-align --command "
+              SELECT count(*) FROM pg_roles
+              WHERE rolname IN ('\''$IRIS_MIGRATOR_USER'\'', '\''$IRIS_APP_USER'\'') AND rolsuper
+            ")"
+            test "$non_superusers" = "0"
+            PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
+              --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
+              --command "SELECT count(*) FROM document_sources" > /dev/null
+            if PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
+              --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
+              --command "CREATE TABLE iris_forbidden_app_ddl(id integer)" > /dev/null 2>&1; then
+              echo "application role unexpectedly has DDL permission" >&2
+              exit 1
+            fi
+          '
+
+      - name: Smoke pilot boundaries
+        run: npm run pilot:smoke
+
+      - name: Drill paired pilot backup and restore
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes age
+          age-keygen --output "$RUNNER_TEMP/iris-backup-key.txt"
+          age-keygen -y "$RUNNER_TEMP/iris-backup-key.txt" \
+            > "$RUNNER_TEMP/iris-backup-recipient"
+          export IRIS_REPOSITORY_DIR="$GITHUB_WORKSPACE"
+          export IRIS_ENV_FILE="$GITHUB_WORKSPACE/deploy/pilot/ci.env"
+          export IRIS_COMPOSE_FILE="$GITHUB_WORKSPACE/deploy/pilot/docker-compose.yml"
+          export IRIS_BACKUP_DIR="$RUNNER_TEMP/iris-backups"
+          export IRIS_BACKUP_RECIPIENT_FILE="$RUNNER_TEMP/iris-backup-recipient"
+          ./deploy/pilot/backup.sh
+          backup_file="$(find "$IRIS_BACKUP_DIR" -type f -name 'iris-*.bundle.tar.age' -print -quit)"
+          test -n "$backup_file"
+          age --decrypt --identity "$RUNNER_TEMP/iris-backup-key.txt" "$backup_file" \
+            | ./deploy/pilot/restore-from-stdin.sh --confirm-replace-database
+          npm run pilot:smoke
+
+      - name: Reject callbacks while Redis ingress is unavailable
+        run: |
+          compose=(docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml)
+          callback_payload='{"type":"url_verification","challenge":"redis-outage","token":"ci-verification-token"}'
+          "${compose[@]}" stop redis
+          callback_status=200
+          for _ in $(seq 1 15); do
+            callback_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --header 'content-type: application/json' --data "$callback_payload" \
+              http://127.0.0.1/feishu/events)"
+            if [[ "$callback_status" == 503 ]]; then break; fi
+            sleep 1
+          done
+          test "$callback_status" = 503
+          "${compose[@]}" up --detach --wait --wait-timeout 120 redis
+          "${compose[@]}" restart core
+          callback_status=503
+          for _ in $(seq 1 30); do
+            callback_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --header 'content-type: application/json' --data "$callback_payload" \
+              http://127.0.0.1/feishu/events)"
+            if [[ "$callback_status" == 200 ]]; then break; fi
+            sleep 1
+          done
+          test "$callback_status" = 200
+          npm run pilot:smoke
+
+      - name: Show pilot logs on failure
+        if: failure()
+        run: docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml logs --no-color --tail 300
+
+      - name: Stop pilot stack
+        if: always()
+        run: docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml down --volumes --remove-orphans
+
+  ai-worker:
+    name: AI Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        working-directory: workers/ai
+        run: python -m pip install -e ".[dev]"
+
+      - name: Test AI worker
+        working-directory: workers/ai
+        run: python -m pytest

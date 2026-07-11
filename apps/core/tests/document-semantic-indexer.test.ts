@@ -1,0 +1,198 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { createDocumentChunker } from "../src/documents/document-chunker.js";
+import {
+  createDocumentSemanticIndexer,
+  type EmbeddingProvider,
+} from "../src/documents/document-semantic-indexer.js";
+import type { DocumentSnapshot } from "../src/documents/document-snapshot-repository.js";
+
+function snapshot(overrides: Partial<DocumentSnapshot> = {}): DocumentSnapshot {
+  return {
+    id: "snapshot-1",
+    documentSourceId: "source-1",
+    sourceUri: "https://example.com/doc",
+    fetchStatus: "succeeded",
+    bodyText: "Alpha\n\nBeta",
+    fetchedAt: new Date("2026-07-02T01:00:00.000Z"),
+    createdAt: new Date("2026-07-02T01:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+describe("DocumentSemanticIndexer", () => {
+  it("chunks, embeds, and replaces fragments for a successful snapshot", async () => {
+    const embedder: EmbeddingProvider = {
+      embedTexts: vi.fn(async (texts: string[]) =>
+        texts.map((text) => [text.length, 0, 0, 0, 0, 0]),
+      ),
+    };
+    const fragments = {
+      replaceFragmentsForSnapshot: vi.fn(async () => []),
+    };
+    const indexer = createDocumentSemanticIndexer({
+      chunker: createDocumentChunker({ maxChunkChars: 80, minChunkChars: 20 }),
+      embedder,
+      fragments,
+      embeddingProfileId: "static-dev-6d",
+    });
+
+    const result = await indexer.indexSnapshot(snapshot());
+
+    expect(embedder.embedTexts).toHaveBeenCalledWith(["Alpha\n\nBeta"]);
+    expect(fragments.replaceFragmentsForSnapshot).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
+      documentSnapshotId: "snapshot-1",
+      sourceUri: "https://example.com/doc",
+      embeddingProfileId: "static-dev-6d",
+      chunks: [{ chunkIndex: 0, text: "Alpha\n\nBeta" }],
+      embeddings: [[11, 0, 0, 0, 0, 0]],
+    });
+    expect(result).toEqual({ status: "indexed", snapshotId: "snapshot-1", fragmentCount: 1 });
+  });
+
+  it("embeds document chunks in bounded batches", async () => {
+    const embedder: EmbeddingProvider = {
+      embedTexts: vi.fn(async (texts: string[]) =>
+        texts.map((text) => [text.charCodeAt(0), 0, 0, 0, 0, 0]),
+      ),
+    };
+    const fragments = {
+      replaceFragmentsForSnapshot: vi.fn(async () => []),
+    };
+    const indexer = createDocumentSemanticIndexer({
+      chunker: createDocumentChunker({ maxChunkChars: 3, minChunkChars: 1 }),
+      embedder,
+      fragments,
+      embeddingProfileId: "static-dev-6d",
+      embeddingBatchSize: 2,
+    });
+
+    const result = await indexer.indexSnapshot(snapshot({ bodyText: "abcdefghi" }));
+
+    expect(embedder.embedTexts).toHaveBeenNthCalledWith(1, ["abc", "def"]);
+    expect(embedder.embedTexts).toHaveBeenNthCalledWith(2, ["ghi"]);
+    expect(fragments.replaceFragmentsForSnapshot).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
+      documentSnapshotId: "snapshot-1",
+      sourceUri: "https://example.com/doc",
+      embeddingProfileId: "static-dev-6d",
+      chunks: [
+        { chunkIndex: 0, text: "abc" },
+        { chunkIndex: 1, text: "def" },
+        { chunkIndex: 2, text: "ghi" },
+      ],
+      embeddings: [
+        [97, 0, 0, 0, 0, 0],
+        [100, 0, 0, 0, 0, 0],
+        [103, 0, 0, 0, 0, 0],
+      ],
+    });
+    expect(result).toEqual({ status: "indexed", snapshotId: "snapshot-1", fragmentCount: 3 });
+  });
+
+  it("skips failed snapshots without embedding", async () => {
+    const embedder = { embedTexts: vi.fn() };
+    const fragments = { replaceFragmentsForSnapshot: vi.fn() };
+    const indexer = createDocumentSemanticIndexer({
+      chunker: createDocumentChunker(),
+      embedder,
+      fragments,
+      embeddingProfileId: "static-dev-6d",
+    });
+
+    await expect(indexer.indexSnapshot(snapshot({ fetchStatus: "failed", bodyText: undefined }))).resolves.toEqual({
+      status: "skipped",
+      snapshotId: "snapshot-1",
+      reason: "snapshot_not_successful",
+    });
+    expect(embedder.embedTexts).not.toHaveBeenCalled();
+    expect(fragments.replaceFragmentsForSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("skips blank body text", async () => {
+    const indexer = createDocumentSemanticIndexer({
+      chunker: createDocumentChunker(),
+      embedder: { embedTexts: vi.fn() },
+      fragments: { replaceFragmentsForSnapshot: vi.fn() },
+      embeddingProfileId: "static-dev-6d",
+    });
+
+    await expect(indexer.indexSnapshot(snapshot({ bodyText: " \n " }))).resolves.toEqual({
+      status: "skipped",
+      snapshotId: "snapshot-1",
+      reason: "empty_body",
+    });
+  });
+
+  it("rejects mismatched embedding counts", async () => {
+    const indexer = createDocumentSemanticIndexer({
+      chunker: createDocumentChunker({ maxChunkChars: 5, minChunkChars: 1 }),
+      embedder: { embedTexts: vi.fn(async () => [[1, 2, 3, 4, 5, 6]]) },
+      fragments: { replaceFragmentsForSnapshot: vi.fn() },
+      embeddingProfileId: "static-dev-6d",
+    });
+
+    await expect(indexer.indexSnapshot(snapshot({ bodyText: "abcdefghijkl" }))).rejects.toThrow(
+      "embedding count mismatch",
+    );
+  });
+
+  it("rejects mismatched embedding counts within a batch before replacing fragments", async () => {
+    const fragments = { replaceFragmentsForSnapshot: vi.fn() };
+    const indexer = createDocumentSemanticIndexer({
+      chunker: createDocumentChunker({ maxChunkChars: 3, minChunkChars: 1 }),
+      embedder: {
+        embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]),
+      },
+      fragments,
+      embeddingProfileId: "static-dev-6d",
+      embeddingBatchSize: 2,
+    });
+
+    await expect(indexer.indexSnapshot(snapshot({ bodyText: "abcdef" }))).rejects.toThrow(
+      "embedding count mismatch",
+    );
+    expect(fragments.replaceFragmentsForSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid embedding batch sizes", () => {
+    expect(() =>
+      createDocumentSemanticIndexer({
+        chunker: createDocumentChunker(),
+        embedder: { embedTexts: vi.fn() },
+        fragments: { replaceFragmentsForSnapshot: vi.fn() },
+        embeddingProfileId: "static-dev-6d",
+        embeddingBatchSize: 0,
+      }),
+    ).toThrow("embeddingBatchSize must be a positive safe integer");
+  });
+
+  it("rejects invalid vectors", async () => {
+    const indexer = createDocumentSemanticIndexer({
+      chunker: createDocumentChunker(),
+      embedder: { embedTexts: vi.fn(async () => [[Number.NaN, 0, 0, 0, 0, 0]]) },
+      fragments: { replaceFragmentsForSnapshot: vi.fn() },
+      embeddingProfileId: "static-dev-6d",
+    });
+
+    await expect(indexer.indexSnapshot(snapshot())).rejects.toThrow(
+      "embedding vector contains invalid value",
+    );
+  });
+
+  it("rejects empty embedding vectors before replacing fragments", async () => {
+    const fragments = { replaceFragmentsForSnapshot: vi.fn() };
+    const indexer = createDocumentSemanticIndexer({
+      chunker: createDocumentChunker(),
+      embedder: { embedTexts: vi.fn(async () => [[]]) },
+      fragments,
+      embeddingProfileId: "static-dev-6d",
+    });
+
+    await expect(indexer.indexSnapshot(snapshot())).rejects.toThrow(
+      "embedding vector must not be empty",
+    );
+    expect(fragments.replaceFragmentsForSnapshot).not.toHaveBeenCalled();
+  });
+});

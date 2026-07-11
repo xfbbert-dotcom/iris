@@ -50,22 +50,25 @@ export function verifyFeishuSignature(input: FeishuSignatureInput): boolean {
 
 export function createFeishuRequestVerifier(config: FeishuAuthConfig): FeishuRequestVerifier {
   return (request) => {
-    if (
-      config.verificationToken &&
-      verifyFeishuVerificationToken(request.body, config.verificationToken)
-    ) {
-      return true;
+    const verificationToken = config.verificationToken;
+    const encryptKey = config.encryptKey;
+    if (verificationToken === undefined && encryptKey === undefined) {
+      return false;
     }
 
-    if (config.encryptKey && request.rawBody) {
-      return verifyFeishuSignature({
-        headers: request.headers,
-        rawBody: request.rawBody,
-        encryptKey: config.encryptKey
-      });
-    }
+    const tokenVerified =
+      verificationToken === undefined ||
+      verifyFeishuVerificationToken(request.body, verificationToken);
+    const signatureVerified =
+      encryptKey === undefined ||
+      (request.rawBody !== undefined &&
+        verifyFeishuSignature({
+          headers: request.headers,
+          rawBody: request.rawBody,
+          encryptKey,
+        }));
 
-    return false;
+    return tokenVerified && signatureVerified;
   };
 }
 
@@ -82,7 +85,14 @@ function resolveVerificationToken(body: unknown): string | undefined {
 }
 
 function getHeader(headers: Record<string, string | undefined>, name: string): string | undefined {
-  return headers[name] ?? headers[name.toLowerCase()];
+  const normalizedName = name.toLowerCase();
+  for (const [headerName, value] of Object.entries(headers)) {
+    if (headerName.toLowerCase() === normalizedName) {
+      return value;
+    }
+  }
+
+  return undefined;
 }
 
 function safeEqual(actual: string, expected: string): boolean {

@@ -54,7 +54,30 @@ describe("normalizeFeishuEvent", () => {
 
     expect(result).toMatchObject({
       kind: "group_message",
-      documentLinks: [docxLink, wikiLink, fileLink, docsLink]
+      documentLinks: [docxLink, wikiLink, docsLink]
+    });
+  });
+
+  it("normalizes copied document links before exposing metadata", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-normalized-links",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-normalized-links",
+          chat_id: "chat-a",
+          create_time: "1710000000000",
+          message_type: "text",
+          content: JSON.stringify({
+            text: "Docs https://docs.feishu.cn/docx/ABC123?from=copy#heading and again https://docs.feishu.cn/docx/ABC123."
+          })
+        }
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "group_message",
+      documentLinks: ["https://docs.feishu.cn/docx/ABC123"]
     });
   });
 
@@ -136,6 +159,52 @@ describe("normalizeFeishuEvent", () => {
     });
   });
 
+  it("returns unsupported when text content is oversized", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-oversized-content",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-oversized-content",
+          chat_id: "chat-a",
+          create_time: "1710000000000",
+          message_type: "text",
+          content: JSON.stringify({
+            text: `${"T".repeat(70_000)} https://docs.feishu.cn/docx/oversized`
+          })
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-oversized-content",
+      reason: "missing_required_fields"
+    });
+  });
+
+  it("returns unsupported when required identifiers are oversized", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-oversized-id",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "m".repeat(513),
+          chat_id: "chat-a",
+          create_time: "1710000000000",
+          message_type: "text",
+          content: "{\"text\":\"hello iris\"}"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-oversized-id",
+      reason: "missing_required_fields"
+    });
+  });
+
   it("returns unsupported when create_time is not a valid timestamp", () => {
     const result = normalizeFeishuEvent({
       event_id: "event-invalid-time",
@@ -154,6 +223,50 @@ describe("normalizeFeishuEvent", () => {
     expect(result).toEqual({
       kind: "unsupported",
       eventId: "event-invalid-time",
+      reason: "missing_required_fields"
+    });
+  });
+
+  it("returns unsupported when create_time is not a decimal millisecond string", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-non-decimal-time",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-non-decimal-time",
+          chat_id: "chat-a",
+          create_time: "1e3",
+          message_type: "text",
+          content: "{\"text\":\"hello iris\"}"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-non-decimal-time",
+      reason: "missing_required_fields"
+    });
+  });
+
+  it("returns unsupported when create_time is zero", () => {
+    const result = normalizeFeishuEvent({
+      event_id: "event-zero-time",
+      event: {
+        sender: { sender_id: { open_id: "user-a" } },
+        message: {
+          message_id: "msg-zero-time",
+          chat_id: "chat-a",
+          create_time: "0",
+          message_type: "text",
+          content: "{\"text\":\"hello iris\"}"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "unsupported",
+      eventId: "event-zero-time",
       reason: "missing_required_fields"
     });
   });

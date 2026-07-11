@@ -1,0 +1,34 @@
+# Iris Document Registration API URL Gate Design
+
+## Context
+
+Group chat document discovery already filters Feishu links before registering document sources. The internal registration APIs for authorized wiki documents and user-submitted documents only checked that `sourceUri` was non-blank, so unsupported links could be registered and queued even though the current Feishu body fetcher could not read them.
+
+For the first 20-30 person rollout, registration should fail early when Iris cannot read the document.
+
+## Decision
+
+The internal document registration APIs must validate `sourceUri` with the same Feishu parsing helpers used by the body fetcher. A source URI is accepted only when it resolves to a Feishu `docx`, `docs`, or `wiki` token that the fetcher can later read. URLs with embedded username/password credentials must be rejected through the same invalid-request path.
+
+Accepted source URIs are normalized before they reach the document sync runtime by removing URL
+query strings, fragments, and trailing path slashes. This keeps manual registration aligned with
+group-chat link discovery and prevents copied links from creating duplicate document sources for
+the same document token.
+
+The document sync runtime applies the same normalization and validation before writing to the
+registry. This keeps future internal callers from bypassing the HTTP API boundary and registering
+duplicate copied URLs.
+
+## Scope
+
+This only gates the current Feishu-backed document registration APIs. Future support for uploaded files, PDFs, or external URLs should add explicit fetchers and registration paths rather than weakening this gate.
+
+## Quality Bar
+
+- Unsupported authorized wiki document URLs return `400 invalid_request`.
+- Unsupported user-submitted document URLs return `400 invalid_request`.
+- URLs with embedded username/password credentials return `400 invalid_request`.
+- Copied links with query strings, fragments, or trailing slashes call the runtime with a canonical
+  `sourceUri`.
+- Direct document sync runtime registration also writes canonical path-only `sourceUri` values.
+- Valid existing docx/wiki registration flows continue to call the runtime unchanged.

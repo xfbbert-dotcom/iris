@@ -1,4 +1,9 @@
 .superpowers/
 node_modules/
+apps/core/dist/
 __pycache__/
 *.py[cod]
+.env
+.env.*
+!.env.example
+!.env.pilot.example

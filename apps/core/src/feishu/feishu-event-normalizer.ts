@@ -1,3 +1,5 @@
+import { createFeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
+
 export type IrisNormalizedEvent = IrisGroupMessageEvent | IrisUnsupportedEvent;
 
 export type IrisGroupMessageEvent = {
@@ -18,8 +20,12 @@ export type IrisUnsupportedEvent = {
   reason: "missing_message" | "missing_required_fields" | "unsupported_message_type";
 };
 
+const feishuDocumentLinkExtractor = createFeishuDocumentLinkExtractor();
+const MAX_FEISHU_IDENTIFIER_CHARS = 512;
+const MAX_FEISHU_MESSAGE_CONTENT_CHARS = 64_000;
+
 export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
-  const eventId = readString(payload, "event_id") ?? "unknown";
+  const eventId = readBoundedString(payload, "event_id") ?? "unknown";
   const event = readObject(payload, "event");
   const message = readObject(event, "message");
 
@@ -33,12 +39,12 @@ export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
 
   const sender = readObject(event, "sender");
   const senderId = readObject(sender, "sender_id");
-  const senderOpenId = readString(senderId, "open_id");
-  const messageId = readString(message, "message_id");
-  const chatId = readString(message, "chat_id");
+  const senderOpenId = readBoundedString(senderId, "open_id");
+  const messageId = readBoundedString(message, "message_id");
+  const chatId = readBoundedString(message, "chat_id");
   const createTime = readString(message, "create_time");
   const messageType = readString(message, "message_type");
-  const content = readString(message, "content");
+  const content = readBoundedString(message, "content", MAX_FEISHU_MESSAGE_CONTENT_CHARS);
 
   if (
     messageId === undefined ||
@@ -63,9 +69,16 @@ export function normalizeFeishuEvent(payload: unknown): IrisNormalizedEvent {
     };
   }
 
-  const timestampMs = Number(createTime);
+  const timestampMs = readFeishuTimestampMillis(createTime);
+  if (timestampMs === undefined) {
+    return {
+      kind: "unsupported",
+      eventId,
+      reason: "missing_required_fields"
+    };
+  }
   const timestamp = new Date(timestampMs);
-  if (!Number.isFinite(timestampMs) || !Number.isFinite(timestamp.getTime())) {
+  if (!Number.isFinite(timestamp.getTime())) {
     return {
       kind: "unsupported",
       eventId,
@@ -98,31 +111,22 @@ function parseTextContent(content: string): string {
   }
 }
 
+function readFeishuTimestampMillis(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!/^\d+$/u.test(trimmed)) {
+    return undefined;
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
 function extractFeishuDocumentLinks(text: string): string[] {
-  const candidates = text.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
-  return candidates.map(trimTrailingPunctuation).filter(isFeishuDocumentLink);
-}
-
-function trimTrailingPunctuation(value: string): string {
-  return value.replace(/[),.;:!?]+$/u, "");
-}
-
-function isFeishuDocumentLink(candidate: string): boolean {
-  let url: URL;
-
-  try {
-    url = new URL(candidate);
-  } catch {
-    return false;
-  }
-
-  const hostname = url.hostname.toLowerCase();
-  if (hostname !== "feishu.cn" && !hostname.endsWith(".feishu.cn")) {
-    return false;
-  }
-
-  const firstPathSegment = url.pathname.split("/").filter(Boolean)[0];
-  return firstPathSegment === "docx" || firstPathSegment === "wiki" || firstPathSegment === "file" || firstPathSegment === "docs";
+  return feishuDocumentLinkExtractor.extractLinks(text).map((link) => link.sourceUri);
 }
 
 function readObject(source: unknown, key: string): Record<string, unknown> | undefined {
@@ -133,6 +137,19 @@ function readObject(source: unknown, key: string): Record<string, unknown> | und
 function readString(source: unknown, key: string): string | undefined {
   const value = readValue(source, key);
   return typeof value === "string" ? value : undefined;
+}
+
+function readBoundedString(
+  source: unknown,
+  key: string,
+  maxChars = MAX_FEISHU_IDENTIFIER_CHARS,
+): string | undefined {
+  const value = readString(source, key);
+  if (value === undefined || value.length > maxChars) {
+    return undefined;
+  }
+
+  return value;
 }
 
 function readValue(source: unknown, key: string): unknown {

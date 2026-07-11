@@ -1,0 +1,94 @@
+import type { RawEvent, RawEventFailureResult, RawEventQueue } from "./raw-event-queue.js";
+import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
+
+export type RawEventWorkerResult =
+  | {
+      status: "processed";
+      idempotencyKey: string;
+      eventType: string;
+    }
+  | {
+      status: "failed";
+      idempotencyKey: string;
+      eventType: string;
+      errorMessage: string;
+      retryAction: "requeued" | "dead_lettered";
+      attempts: number;
+    };
+
+export type RawEventWorkerDependencies = {
+  queue: Pick<RawEventQueue, "dequeueBatch" | "handleProcessedEvent" | "handleFailedEvent">;
+  processor: {
+    process(event: RawEvent): Promise<void>;
+  };
+};
+
+const MAX_RAW_EVENT_WORKER_BATCH_LIMIT = 100;
+const MAX_FAILURE_HANDLER_ATTEMPTS = 3;
+
+export function createRawEventWorker(dependencies: RawEventWorkerDependencies) {
+  return {
+    async processBatch({ limit }: { limit: number }): Promise<RawEventWorkerResult[]> {
+      const events = await dependencies.queue.dequeueBatch(sanitizeLimit(limit));
+      const results: RawEventWorkerResult[] = [];
+
+      for (const event of events) {
+        try {
+          await dependencies.processor.process(event);
+          await dependencies.queue.handleProcessedEvent(event);
+          results.push({
+            status: "processed",
+            idempotencyKey: event.idempotencyKey,
+            eventType: event.eventType,
+          });
+        } catch (error) {
+          const errorMessage = normalizeWorkerErrorMessage(error);
+          const retryResult = await handleFailedEventWithRetry({
+            queue: dependencies.queue,
+            event,
+            errorMessage,
+          });
+          results.push({
+            status: "failed",
+            idempotencyKey: event.idempotencyKey,
+            eventType: event.eventType,
+            errorMessage,
+            retryAction: retryResult.action,
+            attempts: retryResult.attempts,
+          });
+        }
+      }
+
+      return results;
+    },
+  };
+}
+
+async function handleFailedEventWithRetry({
+  queue,
+  event,
+  errorMessage,
+}: {
+  queue: Pick<RawEventQueue, "handleFailedEvent">;
+  event: RawEvent;
+  errorMessage: string;
+}): Promise<RawEventFailureResult> {
+  let latestError: unknown;
+  for (let attempt = 1; attempt <= MAX_FAILURE_HANDLER_ATTEMPTS; attempt += 1) {
+    try {
+      return await queue.handleFailedEvent({ event, errorMessage });
+    } catch (error) {
+      latestError = error;
+    }
+  }
+
+  throw latestError;
+}
+
+function sanitizeLimit(value: number): number {
+  if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+    throw new Error("raw event worker batch limit must be a finite safe-magnitude number");
+  }
+
+  return Math.min(MAX_RAW_EVENT_WORKER_BATCH_LIMIT, Math.max(0, Math.floor(value)));
+}

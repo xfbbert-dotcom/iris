@@ -1,0 +1,790 @@
+import { randomUUID } from "node:crypto";
+
+import pg from "pg";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
+import { createPostgresDocumentSourceRegistry } from "../src/documents/postgres-document-source-registry.js";
+
+const databaseUrl = process.env.DATABASE_URL;
+const runIfDatabase = databaseUrl ? describe : describe.skip;
+
+type TestSourceRow = {
+  id: string;
+  source_type: string;
+  source_uri: string;
+  title: string | null;
+  origin_group_id: string | null;
+  origin_message_id: string | null;
+  submitted_by_user_id: string | null;
+  authorized_space_id: string | null;
+  permission_state: string;
+  sync_state: string;
+  can_use_for_answering: boolean;
+  can_use_for_knowledge_drafts: boolean;
+  knowledge_drafts_policy_overridden: boolean;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type TestEvidenceRow = {
+  document_source_id: string;
+  kind: string;
+  source_uri: string;
+  group_id: string | null;
+  message_id: string | null;
+  user_id: string | null;
+  space_id: string | null;
+  observed_at: Date;
+};
+
+type RecordedQuery = {
+  sql: string;
+  values?: unknown[];
+};
+
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function makeSourceRow(overrides: Partial<TestSourceRow> = {}): TestSourceRow {
+  const now = new Date("2026-07-01T04:00:00.000Z");
+
+  return {
+    id: "source-1",
+    source_type: "group_visible_document",
+    source_uri: "https://example.com/doc",
+    title: "Group Doc",
+    origin_group_id: "group-1",
+    origin_message_id: "message-1",
+    submitted_by_user_id: null,
+    authorized_space_id: null,
+    permission_state: "unknown",
+    sync_state: "pending",
+    can_use_for_answering: true,
+    can_use_for_knowledge_drafts: true,
+    knowledge_drafts_policy_overridden: false,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+function makeEvidenceRow(
+  overrides: Partial<TestEvidenceRow> = {},
+): TestEvidenceRow {
+  return {
+    document_source_id: "source-1",
+    kind: "group_message",
+    source_uri: "https://example.com/doc",
+    group_id: "group-1",
+    message_id: "message-1",
+    user_id: null,
+    space_id: null,
+    observed_at: new Date("2026-07-01T04:01:00.000Z"),
+    ...overrides,
+  };
+}
+
+function createFakePool(options: {
+  sourceRow?: TestSourceRow;
+  evidenceRows?: TestEvidenceRow[];
+  failOnSql?: (normalizedSql: string) => Error | undefined;
+} = {}) {
+  const sourceRow = options.sourceRow ?? makeSourceRow();
+  const evidenceRows = options.evidenceRows ?? [makeEvidenceRow()];
+  const queries: RecordedQuery[] = [];
+  const release = vi.fn();
+  const query = vi.fn(async (sql: string, values?: unknown[]) => {
+    queries.push({ sql, values });
+    const normalized = normalizeSql(sql);
+    const error = options.failOnSql?.(normalized);
+
+    if (error !== undefined) {
+      throw error;
+    }
+
+    if (
+      normalized === "begin" ||
+      normalized === "commit" ||
+      normalized === "rollback" ||
+      normalized.startsWith("insert into document_sources") ||
+      normalized.startsWith("insert into document_source_evidence") ||
+      (normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *"))
+    ) {
+      return { rows: [] };
+    }
+
+    if (normalized === "select * from document_sources where source_uri = $1 for update") {
+      return { rows: [sourceRow] };
+    }
+
+    if (
+      normalized.startsWith("update document_sources") &&
+      normalized.includes("returning *")
+    ) {
+      return { rows: [sourceRow] };
+    }
+
+    if (normalized.startsWith("select * from document_sources")) {
+      return { rows: [sourceRow] };
+    }
+
+    if (normalized.startsWith("select document_source_id, kind, source_uri")) {
+      return { rows: evidenceRows };
+    }
+
+    return { rows: [] };
+  });
+  const client = { query, release };
+  const pool = { connect: vi.fn(async () => client), query };
+
+  return {
+    pool: pool as unknown as pg.Pool,
+    queries,
+    release,
+  };
+}
+
+function classifyQuery(sql: string): string {
+  const normalized = normalizeSql(sql);
+
+  if (normalized === "begin" || normalized === "commit" || normalized === "rollback") {
+    return normalized;
+  }
+  if (normalized.startsWith("insert into document_sources")) {
+    return "insert source";
+  }
+  if (normalized === "select * from document_sources where source_uri = $1 for update") {
+    return "select source for update";
+  }
+  if (normalized.startsWith("update document_sources")) {
+    return "update source";
+  }
+  if (normalized.startsWith("insert into document_source_evidence")) {
+    return "insert evidence";
+  }
+  if (normalized.startsWith("select * from document_sources")) {
+    return "select source";
+  }
+  if (normalized.startsWith("select document_source_id, kind, source_uri")) {
+    return "select evidence";
+  }
+
+  return normalized;
+}
+
+describe("createPostgresDocumentSourceRegistry without a database", () => {
+  it("registerGroupVisibleDocument uses a transaction and releases the client", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      createId: () => "source-1",
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      title: "Group Doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    expect(fake.queries.map((query) => classifyQuery(query.sql))).toEqual([
+      "begin",
+      "insert source",
+      "select source for update",
+      "update source",
+      "insert evidence",
+      "select source",
+      "select evidence",
+      "commit",
+    ]);
+    expect(fake.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the explicit evidence dedupe conflict target", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      title: "Group Doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedByUserId: "user-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const evidenceInsert = fake.queries.find((query) =>
+      normalizeSql(query.sql).startsWith("insert into document_source_evidence"),
+    );
+
+    expect(evidenceInsert).toBeDefined();
+    expect(normalizeSql(evidenceInsert?.sql ?? "")).toContain(
+      "on conflict ( kind, source_uri, (coalesce(group_id, '')), (coalesce(message_id, '')), (coalesce(user_id, '')), (coalesce(space_id, '')) ) do nothing",
+    );
+    expect(normalizeSql(evidenceInsert?.sql ?? "")).not.toContain(
+      "on conflict do nothing",
+    );
+    expect(evidenceInsert?.values?.[5]).toBe("user-1");
+  });
+
+  it("rejects oversized registration strings before opening a transaction", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    expect(() =>
+      registry.registerGroupVisibleDocument({
+        sourceUri: "x".repeat(2049),
+        title: "Group Doc",
+        originGroupId: "group-1",
+        originMessageId: "message-1",
+        observedAt: new Date("2026-07-01T04:01:00.000Z"),
+      }),
+    ).toThrow("sourceUri must be at most 2048 characters");
+    expect(fake.queries).toEqual([]);
+    expect(fake.release).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid evidence timestamps before opening a transaction", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    expect(() =>
+      registry.registerGroupVisibleDocument({
+        sourceUri: "https://example.com/doc",
+        title: "Group Doc",
+        originGroupId: "group-1",
+        originMessageId: "message-1",
+        observedAt: new Date("invalid"),
+      }),
+    ).toThrow("observedAt must be a valid date");
+    expect(fake.queries).toEqual([]);
+    expect(fake.release).not.toHaveBeenCalled();
+  });
+
+  it("merges knowledge draft capability when registration upgrades an existing source", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "user_submitted_document",
+        authorized_space_id: null,
+        can_use_for_knowledge_drafts: false,
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/doc",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when source_type = 'user_submitted_document' then $7",
+    );
+    expect(update?.values).toEqual([
+      "authorized_wiki_document",
+      null,
+      null,
+      null,
+      null,
+      "space-1",
+      true,
+      now,
+      "source-1",
+      "admin_authorization",
+      "https://example.com/doc",
+      null,
+      null,
+      null,
+      "space-1",
+    ]);
+  });
+
+  it("does not silently re-enable manually disabled knowledge drafts for knowledge-capable sources", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "group_visible_document",
+        can_use_for_knowledge_drafts: false,
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      originGroupId: "group-2",
+      originMessageId: "message-2",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when source_type = 'user_submitted_document' then $7",
+    );
+    expect(normalizeSql(update?.sql ?? "")).not.toContain(
+      "can_use_for_knowledge_drafts = can_use_for_knowledge_drafts or $7",
+    );
+  });
+
+  it("does not re-enable knowledge drafts for denied sources when registration upgrades capability", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "user_submitted_document",
+        permission_state: "denied",
+        can_use_for_knowledge_drafts: false,
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/doc",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when permission_state = 'denied' then false",
+    );
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when source_type = 'user_submitted_document' then $7",
+    );
+  });
+
+  it("does not re-enable manually disabled user-submitted knowledge drafts when registration upgrades capability", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "user_submitted_document",
+        can_use_for_knowledge_drafts: false,
+        knowledge_drafts_policy_overridden: true,
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerAuthorizedWikiDocument({
+      sourceUri: "https://example.com/doc",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when knowledge_drafts_policy_overridden then can_use_for_knowledge_drafts",
+    );
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "when source_type = 'user_submitted_document' then $7",
+    );
+  });
+
+  it("resets failed sync state to pending when registration adds new evidence", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        sync_state: "failed",
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      originGroupId: "group-1",
+      originMessageId: "message-2",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "sync_state = case when sync_state = 'failed' and not exists",
+    );
+  });
+
+  it("checks existing evidence before resetting failed sync state", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        sync_state: "failed",
+      }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "coalesce(evidence.message_id, '') = coalesce($13, '')",
+    );
+    expect(update?.values?.slice(9, 15)).toEqual([
+      "group_message",
+      "https://example.com/doc",
+      "group-1",
+      "message-1",
+      null,
+      null,
+    ]);
+  });
+
+  it("does not unconditionally refresh updated_at for idempotent duplicate evidence retries", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain("updated_at = case when");
+    expect(normalizeSql(update?.sql ?? "")).not.toContain("updated_at = $8");
+  });
+
+  it("rolls back and releases the client when registration fails", async () => {
+    const fake = createFakePool({
+      failOnSql: (sql) =>
+        sql.startsWith("insert into document_source_evidence")
+          ? new Error("evidence insert failed")
+          : undefined,
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await expect(
+      registry.registerGroupVisibleDocument({
+        sourceUri: "https://example.com/doc",
+        title: "Group Doc",
+        originGroupId: "group-1",
+        originMessageId: "message-1",
+        observedAt: new Date("2026-07-01T04:01:00.000Z"),
+      }),
+    ).rejects.toThrow("evidence insert failed");
+
+    expect(fake.queries.map((query) => classifyQuery(query.sql))).toEqual([
+      "begin",
+      "insert source",
+      "select source for update",
+      "update source",
+      "insert evidence",
+      "rollback",
+    ]);
+    expect(fake.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("setAnsweringEnabled preserves denied sources and passes enabled as $2", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.setAnsweringEnabled("source-1", true);
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "can_use_for_answering = case when permission_state = 'denied' then false else $2 end",
+    );
+    expect(update?.values).toEqual(["source-1", true, now]);
+  });
+
+  it("markPermissionState disables answering and knowledge drafts when denied", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.markPermissionState("source-1", "denied");
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "can_use_for_answering = case when $2 = 'denied' then false else can_use_for_answering end",
+    );
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "can_use_for_knowledge_drafts = case when $2 = 'denied' then false else can_use_for_knowledge_drafts end",
+    );
+    expect(update?.values).toEqual(["source-1", "denied", now]);
+  });
+
+  it("setKnowledgeDraftsEnabled preserves denied sources and passes enabled as $2", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.setKnowledgeDraftsEnabled("source-1", true);
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        normalized.includes("returning *")
+      );
+    });
+
+    expect(update).toBeDefined();
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "can_use_for_knowledge_drafts = case when permission_state = 'denied' then false else $2 end",
+    );
+    expect(normalizeSql(update?.sql ?? "")).toContain(
+      "knowledge_drafts_policy_overridden = true",
+    );
+    expect(update?.values).toEqual(["source-1", true, now]);
+  });
+
+  it("updatePolicy changes answering and knowledge draft policy in one statement", async () => {
+    const now = new Date("2026-07-01T04:00:00.000Z");
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool, {
+      now: () => now,
+    });
+
+    await registry.updatePolicy("source-1", {
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+
+    const updates = fake.queries.filter((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        normalized.includes("returning *")
+      );
+    });
+
+    expect(updates).toHaveLength(1);
+    expect(normalizeSql(updates[0]?.sql ?? "")).toContain(
+      "can_use_for_answering = case when permission_state = 'denied' then false else coalesce($2::boolean, can_use_for_answering) end",
+    );
+    expect(normalizeSql(updates[0]?.sql ?? "")).toContain(
+      "can_use_for_knowledge_drafts = case when permission_state = 'denied' then false else coalesce($3::boolean, can_use_for_knowledge_drafts) end",
+    );
+    expect(normalizeSql(updates[0]?.sql ?? "")).toContain(
+      "knowledge_drafts_policy_overridden = case when $3::boolean is null then knowledge_drafts_policy_overridden else true end",
+    );
+    expect(updates[0]?.values).toEqual(["source-1", false, false, now]);
+  });
+
+  it("filters sources by answering enabled state", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({ can_use_for_answering: false }),
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await expect(registry.listSourcesByAnsweringEnabled(false)).resolves.toHaveLength(1);
+
+    const sourceSelect = fake.queries.find((query) =>
+      normalizeSql(query.sql).startsWith("select * from document_sources"),
+    );
+    expect(sourceSelect).toBeDefined();
+    expect(normalizeSql(sourceSelect?.sql ?? "")).toContain("can_use_for_answering = $1");
+    expect(sourceSelect?.values).toEqual([false]);
+  });
+
+  it("normalizes filter identifiers before querying sources", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await expect(registry.listSourcesByGroupId(" group-1 ")).resolves.toHaveLength(1);
+    await expect(registry.listSourcesByAuthorizedSpaceId(" space-1 ")).resolves.toHaveLength(1);
+    await expect(registry.listSourcesBySubmittingUserId(" user-1 ")).resolves.toHaveLength(1);
+
+    const sourceSelects = fake.queries.filter((query) =>
+      normalizeSql(query.sql).startsWith("select * from document_sources"),
+    );
+
+    expect(sourceSelects.map((query) => query.values)).toEqual([
+      ["group-1"],
+      ["space-1"],
+      ["user-1"],
+    ]);
+  });
+
+  it("keeps answering filter shortcuts independent from method binding", async () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+    const listUsableForAnswering = registry.listSourcesUsableForAnswering;
+
+    await expect(listUsableForAnswering()).resolves.toHaveLength(1);
+
+    const sourceSelect = fake.queries.find((query) =>
+      normalizeSql(query.sql).startsWith("select * from document_sources"),
+    );
+    expect(sourceSelect).toBeDefined();
+    expect(sourceSelect?.values).toEqual([true]);
+  });
+});
+
+runIfDatabase("createPostgresDocumentSourceRegistry", () => {
+  let pool: pg.Pool;
+  const runId = randomUUID();
+  const testSourcePrefix = `https://example.com/postgres-registry/${runId}/`;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+
+    try {
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+    } finally {
+      client.release();
+    }
+  });
+
+  afterEach(async () => {
+    await pool.query("delete from document_sources where source_uri like $1", [
+      `${testSourcePrefix}%`,
+    ]);
+  });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("persists group visible sources and deduplicates retried message evidence", async () => {
+    const registry = createPostgresDocumentSourceRegistry(pool, {
+      createId: () => `${runId}-group-source`,
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const sourceUri = `${testSourcePrefix}group-doc`;
+
+    const first = await registry.registerGroupVisibleDocument({
+      sourceUri,
+      title: "First Title",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+    const retried = await registry.registerGroupVisibleDocument({
+      sourceUri,
+      title: "Retried Title",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    expect(retried.id).toBe(first.id);
+    expect(retried.title).toBe("First Title");
+    expect(retried.evidence).toHaveLength(1);
+    expect(retried.evidence[0]).toMatchObject({
+      kind: "group_message",
+      sourceUri,
+      groupId: "group-1",
+      messageId: "message-1",
+    });
+    expect(retried.evidence[0]?.observedAt).toEqual(new Date("2026-07-01T04:01:00.000Z"));
+  });
+
+  it("keeps existing source id and disabled answering across registry instances", async () => {
+    const sourceUri = `${testSourcePrefix}wiki-doc`;
+    const firstRegistry = createPostgresDocumentSourceRegistry(pool, {
+      createId: () => `${runId}-wiki-source`,
+      now: () => new Date("2026-07-01T04:00:00.000Z"),
+    });
+    const secondRegistry = createPostgresDocumentSourceRegistry(pool, {
+      createId: () => `${runId}-unused-wiki-source`,
+      now: () => new Date("2026-07-01T04:05:00.000Z"),
+    });
+
+    const first = await firstRegistry.registerAuthorizedWikiDocument({
+      sourceUri,
+      title: "Wiki Space",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:01:00.000Z"),
+    });
+    await firstRegistry.setAnsweringEnabled(first.id, false);
+
+    const reregistered = await secondRegistry.registerAuthorizedWikiDocument({
+      sourceUri,
+      title: "Wiki Space Again",
+      authorizedSpaceId: "space-1",
+      observedAt: new Date("2026-07-01T04:02:00.000Z"),
+    });
+
+    expect(reregistered.id).toBe(first.id);
+    expect(reregistered.canUseForAnswering).toBe(false);
+  });
+});

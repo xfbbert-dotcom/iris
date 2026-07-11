@@ -1,0 +1,1117 @@
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  createDocumentSyncPlanner,
+  createDocumentSyncRunner,
+} from "../src/documents/document-sync-pipeline.js";
+import type { DocumentSnapshot } from "../src/documents/document-snapshot-repository.js";
+import type { DocumentSource } from "../src/documents/document-source-registry.js";
+
+function source(overrides: Partial<DocumentSource> = {}): DocumentSource {
+  const createdAt = new Date("2026-07-02T04:00:00.000Z");
+
+  return {
+    id: "doc-source-1",
+    sourceType: "group_visible_document",
+    sourceUri: "https://example.com/docs/doc-1",
+    title: "Launch Notes",
+    originGroupId: "group-1",
+    originMessageId: "message-1",
+    submittedByUserId: undefined,
+    authorizedSpaceId: undefined,
+    permissionState: "unknown",
+    syncState: "pending",
+    canUseForAnswering: true,
+    canUseForKnowledgeDrafts: true,
+    createdAt,
+    updatedAt: createdAt,
+    evidence: [
+      {
+        kind: "group_message",
+        sourceUri: "https://example.com/docs/doc-1",
+        groupId: "group-1",
+        messageId: "message-1",
+        userId: undefined,
+        spaceId: undefined,
+        observedAt: new Date("2026-07-02T04:01:00.000Z"),
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function snapshot(overrides: Partial<DocumentSnapshot> = {}): DocumentSnapshot {
+  const fetchedAt = new Date("2026-07-02T05:00:00.000Z");
+  const createdAt = new Date("2026-07-02T05:02:00.000Z");
+
+  return {
+    id: "snapshot-1",
+    documentSourceId: "doc-source-1",
+    sourceUri: "https://example.com/docs/doc-1",
+    fetchStatus: "succeeded",
+    bodyText: "Document body",
+    contentHash: "content-hash-1",
+    sourceVersion: "version-1",
+    fetchedAt,
+    createdAt,
+    ...overrides,
+  };
+}
+
+describe("createDocumentSyncPlanner", () => {
+  it("selects pending eligible sources", async () => {
+    const pendingEligible = source({ id: "pending-eligible" });
+    const alreadySyncing = source({ id: "syncing", syncState: "syncing" });
+    const alreadySynced = source({ id: "synced", syncState: "synced" });
+    const failed = source({ id: "failed", syncState: "failed" });
+    const planner = createDocumentSyncPlanner({
+      registry: {
+        listSources: async () => [
+          pendingEligible,
+          alreadySyncing,
+          alreadySynced,
+          failed,
+        ],
+      },
+    });
+
+    await expect(planner.listSyncCandidates()).resolves.toEqual([pendingEligible]);
+  });
+
+  it("excludes sources with denied permission", async () => {
+    const denied = source({ id: "denied", permissionState: "denied" });
+    const readable = source({ id: "readable", permissionState: "readable" });
+    const planner = createDocumentSyncPlanner({
+      registry: {
+        listSources: async () => [denied, readable],
+      },
+    });
+
+    await expect(planner.listSyncCandidates()).resolves.toEqual([readable]);
+  });
+
+  it("excludes sources disabled for answering and knowledge drafts", async () => {
+    const disabled = source({
+      id: "disabled",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const draftsOnly = source({
+      id: "drafts-only",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: true,
+    });
+    const answeringOnly = source({
+      id: "answering-only",
+      canUseForAnswering: true,
+      canUseForKnowledgeDrafts: false,
+    });
+    const planner = createDocumentSyncPlanner({
+      registry: {
+        listSources: async () => [disabled, draftsOnly, answeringOnly],
+      },
+    });
+
+    await expect(planner.listSyncCandidates()).resolves.toEqual([
+      draftsOnly,
+      answeringOnly,
+    ]);
+  });
+});
+
+describe("createDocumentSyncRunner", () => {
+  const fetchedAt = new Date("2026-07-02T05:00:00.000Z");
+  const failedAt = new Date("2026-07-02T05:01:00.000Z");
+
+  it("syncs a pending source and records a succeeded snapshot", async () => {
+    const candidate = source({ id: "source-to-sync" });
+    const calls: string[] = [];
+    const fetchResult = {
+      bodyText: "Document body",
+      sourceVersion: "version-1",
+      fetchedAt,
+    };
+    const succeededSnapshot = snapshot({
+      id: "snapshot-success",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchedAt,
+    });
+    const registry = {
+      findSourceById: vi.fn(async (id: string) => {
+        calls.push(`find:${id}`);
+        return candidate;
+      }),
+      markSyncState: vi.fn(async (id: string, syncState: string) => {
+        calls.push(`mark:${id}:${syncState}`);
+        return source({ id, syncState: syncState as DocumentSource["syncState"] });
+      }),
+    };
+    const fetcher = {
+      fetch: vi.fn(async (documentSource: DocumentSource) => {
+        calls.push(`fetch:${documentSource.id}`);
+        return fetchResult;
+      }),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(async (input: unknown) => {
+        calls.push("snapshot:succeeded");
+        return succeededSnapshot;
+      }),
+      insertFailedSnapshot: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => failedAt,
+    });
+
+    const result = await runner.syncSourceById("source-to-sync");
+
+    expect(calls).toEqual([
+      "find:source-to-sync",
+      "mark:source-to-sync:syncing",
+      "fetch:source-to-sync",
+      "snapshot:succeeded",
+      "mark:source-to-sync:synced",
+    ]);
+    expect(fetcher.fetch).toHaveBeenCalledWith(
+      source({ id: "source-to-sync", syncState: "syncing" }),
+    );
+    expect(snapshots.insertSucceededSnapshot).toHaveBeenCalledWith({
+      documentSourceId: "source-to-sync",
+      sourceUri: candidate.sourceUri,
+      bodyText: "Document body",
+      sourceVersion: "version-1",
+      fetchedAt,
+    });
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: "synced",
+      source: candidate,
+      snapshot: succeededSnapshot,
+    });
+  });
+
+  it("enqueues reindex after a successful sync snapshot is marked synced", async () => {
+    const candidate = source({ id: "source-to-reindex" });
+    const calls: string[] = [];
+    const succeededSnapshot = snapshot({
+      id: "snapshot-to-reindex",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchedAt,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) => {
+        calls.push(`mark:${syncState}`);
+        return source({ id, syncState: syncState as DocumentSource["syncState"] });
+      }),
+    };
+    const syncedSnapshotReindexer = {
+      enqueueSyncedSnapshotReindex: vi.fn(async (input: unknown) => {
+        calls.push("reindex");
+      }),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots: {
+        insertSucceededSnapshot: vi.fn(async () => {
+          calls.push("snapshot:succeeded");
+          return succeededSnapshot;
+        }),
+        insertFailedSnapshot: vi.fn(),
+      },
+      fetcher: {
+        fetch: vi.fn(async () => ({
+          bodyText: "Document body",
+          fetchedAt,
+        })),
+      },
+      syncedSnapshotReindexer,
+    });
+
+    await expect(runner.syncSourceById("source-to-reindex")).resolves.toMatchObject({
+      status: "synced",
+      snapshot: succeededSnapshot,
+    });
+    expect(calls).toEqual(["mark:syncing", "snapshot:succeeded", "mark:synced", "reindex"]);
+    expect(syncedSnapshotReindexer.enqueueSyncedSnapshotReindex).toHaveBeenCalledWith({
+      documentSnapshotId: "snapshot-to-reindex",
+    });
+  });
+
+  it("uses the claimed source for external fetches and succeeded snapshots", async () => {
+    const candidate = source({
+      id: "source-claim-refresh",
+      sourceUri: "https://example.com/docs/stale-doc",
+    });
+    const claimedSource = source({
+      id: candidate.id,
+      sourceUri: "https://example.com/docs/claimed-doc",
+      syncState: "syncing",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) =>
+        syncState === "syncing"
+          ? claimedSource
+          : source({ ...claimedSource, id, syncState: syncState as DocumentSource["syncState"] }),
+      ),
+    };
+    const fetcher = {
+      fetch: vi.fn(async () => ({
+        bodyText: "Document body",
+        sourceVersion: "version-claimed",
+        fetchedAt,
+      })),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(async () =>
+        snapshot({
+          id: "snapshot-claimed",
+          documentSourceId: claimedSource.id,
+          sourceUri: claimedSource.sourceUri,
+          fetchedAt,
+        }),
+      ),
+      insertFailedSnapshot: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => failedAt,
+    });
+
+    await expect(runner.syncSourceById(candidate.id)).resolves.toMatchObject({
+      status: "synced",
+    });
+    expect(fetcher.fetch).toHaveBeenCalledWith(claimedSource);
+    expect(snapshots.insertSucceededSnapshot).toHaveBeenCalledWith({
+      documentSourceId: claimedSource.id,
+      sourceUri: claimedSource.sourceUri,
+      bodyText: "Document body",
+      sourceVersion: "version-claimed",
+      fetchedAt,
+    });
+  });
+
+  it("marks a successfully fetched source pending again when reindex enqueue fails", async () => {
+    const candidate = source({ id: "source-with-reindex-failure" });
+    const calls: string[] = [];
+    const succeededSnapshot = snapshot({
+      id: "snapshot-with-reindex-failure",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchedAt,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) => {
+        calls.push(`mark:${syncState}`);
+        return source({ id, syncState: syncState as DocumentSource["syncState"] });
+      }),
+    };
+    const syncedSnapshotReindexer = {
+      enqueueSyncedSnapshotReindex: vi.fn(async () => {
+        calls.push("reindex");
+        throw new Error("reindex queue unavailable");
+      }),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots: {
+        insertSucceededSnapshot: vi.fn(async () => {
+          calls.push("snapshot:succeeded");
+          return succeededSnapshot;
+        }),
+        insertFailedSnapshot: vi.fn(),
+      },
+      fetcher: {
+        fetch: vi.fn(async () => ({
+          bodyText: "Document body",
+          fetchedAt,
+        })),
+      },
+      syncedSnapshotReindexer,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-reindex-failure"),
+    ).rejects.toThrow("reindex queue unavailable");
+    expect(calls).toEqual([
+      "mark:syncing",
+      "snapshot:succeeded",
+      "mark:synced",
+      "reindex",
+      "mark:pending",
+    ]);
+  });
+
+  it("does not enqueue reindex after a failed sync snapshot", async () => {
+    const candidate = source({ id: "source-with-fetch-failure" });
+    const syncedSnapshotReindexer = {
+      enqueueSyncedSnapshotReindex: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry: {
+        findSourceById: vi.fn(async () => candidate),
+        markSyncState: vi.fn(async (id: string, syncState: string) =>
+          source({ id, syncState: syncState as DocumentSource["syncState"] }),
+        ),
+      },
+      snapshots: {
+        insertSucceededSnapshot: vi.fn(),
+        insertFailedSnapshot: vi.fn(async () =>
+          snapshot({
+            id: "snapshot-failed-no-reindex",
+            documentSourceId: candidate.id,
+            sourceUri: candidate.sourceUri,
+            fetchStatus: "failed",
+            bodyText: undefined,
+            fetchedAt: failedAt,
+          }),
+        ),
+      },
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw new Error("network unavailable");
+        }),
+      },
+      now: () => failedAt,
+      syncedSnapshotReindexer,
+    });
+
+    await expect(runner.syncSourceById("source-with-fetch-failure")).resolves.toMatchObject({
+      status: "failed",
+    });
+    expect(syncedSnapshotReindexer.enqueueSyncedSnapshotReindex).not.toHaveBeenCalled();
+  });
+
+  it("records a failed snapshot and marks failed when fetching throws", async () => {
+    const candidate = source({ id: "source-to-fail" });
+    const calls: string[] = [];
+    const failedSnapshot = snapshot({
+      id: "snapshot-failed",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchStatus: "failed",
+      bodyText: undefined,
+      contentHash: undefined,
+      sourceVersion: undefined,
+      fetchedAt: failedAt,
+      errorMessage: "network unavailable",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) => {
+        calls.push(`mark:${id}:${syncState}`);
+        return source({ id, syncState: syncState as DocumentSource["syncState"] });
+      }),
+    };
+    const fetcher = {
+      fetch: vi.fn(async () => {
+        calls.push("fetch");
+        throw new Error("network unavailable");
+      }),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(),
+      insertFailedSnapshot: vi.fn(async (input: unknown) => {
+        calls.push("snapshot:failed");
+        return failedSnapshot;
+      }),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => failedAt,
+    });
+
+    const result = await runner.syncSourceById("source-to-fail");
+
+    expect(calls).toEqual([
+      "mark:source-to-fail:syncing",
+      "fetch",
+      "snapshot:failed",
+      "mark:source-to-fail:failed",
+    ]);
+    expect(snapshots.insertSucceededSnapshot).not.toHaveBeenCalled();
+    expect(snapshots.insertFailedSnapshot).toHaveBeenCalledWith({
+      documentSourceId: "source-to-fail",
+      sourceUri: candidate.sourceUri,
+      errorMessage: "network unavailable",
+      fetchedAt: failedAt,
+    });
+    expect(result).toEqual({
+      status: "failed",
+      source: candidate,
+      snapshot: failedSnapshot,
+      errorMessage: "network unavailable",
+    });
+  });
+
+  it("bounds failed snapshot error messages before storing and returning them", async () => {
+    const candidate = source({ id: "source-with-oversized-fetch-failure" });
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) =>
+        source({ id, syncState: syncState as DocumentSource["syncState"] }),
+      ),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(),
+      insertFailedSnapshot: vi.fn(async (input: { errorMessage: string }) =>
+        snapshot({
+          id: "snapshot-bounded-failure",
+          documentSourceId: candidate.id,
+          sourceUri: candidate.sourceUri,
+          fetchStatus: "failed",
+          bodyText: undefined,
+          contentHash: undefined,
+          sourceVersion: undefined,
+          fetchedAt: failedAt,
+          errorMessage: input.errorMessage,
+        }),
+      ),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw new Error(oversizedMessage);
+        }),
+      },
+      now: () => failedAt,
+    });
+
+    const result = await runner.syncSourceById("source-with-oversized-fetch-failure");
+
+    expect(snapshots.insertFailedSnapshot).toHaveBeenCalledWith({
+      documentSourceId: "source-with-oversized-fetch-failure",
+      sourceUri: candidate.sourceUri,
+      errorMessage: expect.stringContaining("[truncated]"),
+      fetchedAt: failedAt,
+    });
+    if (result.status !== "failed") {
+      throw new Error("expected failed sync result");
+    }
+    expect(result.errorMessage.length).toBeLessThanOrEqual(1000);
+    expect(result.errorMessage).toContain("[truncated]");
+    expect(result.errorMessage).not.toContain("trailing diagnostic detail");
+    expect(result.snapshot.errorMessage).toBe(result.errorMessage);
+  });
+
+  it("stringifies non-Error fetch failures before recording them", async () => {
+    const candidate = source({ id: "source-to-string-fail" });
+    const failedSnapshot = snapshot({
+      id: "snapshot-string-failed",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchStatus: "failed",
+      bodyText: undefined,
+      contentHash: undefined,
+      sourceVersion: undefined,
+      fetchedAt: failedAt,
+      errorMessage: "temporary outage",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) =>
+        source({ id, syncState: syncState as DocumentSource["syncState"] }),
+      ),
+    };
+    const fetcher = {
+      fetch: vi.fn(async () => {
+        throw "temporary outage";
+      }),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(),
+      insertFailedSnapshot: vi.fn(async () => failedSnapshot),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => failedAt,
+    });
+
+    await expect(runner.syncSourceById("source-to-string-fail")).resolves.toEqual({
+      status: "failed",
+      source: candidate,
+      snapshot: failedSnapshot,
+      errorMessage: "temporary outage",
+    });
+    expect(snapshots.insertFailedSnapshot).toHaveBeenCalledWith({
+      documentSourceId: "source-to-string-fail",
+      sourceUri: candidate.sourceUri,
+      errorMessage: "temporary outage",
+      fetchedAt: failedAt,
+    });
+  });
+
+  it("records unknown error when a fetch failure cannot be stringified", async () => {
+    const candidate = source({ id: "source-with-unstringifiable-fetch-failure" });
+    const failedSnapshot = snapshot({
+      id: "snapshot-unstringifiable-failed",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchStatus: "failed",
+      bodyText: undefined,
+      contentHash: undefined,
+      sourceVersion: undefined,
+      fetchedAt: failedAt,
+      errorMessage: "unknown error",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) =>
+        source({ id, syncState: syncState as DocumentSource["syncState"] }),
+      ),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(),
+      insertFailedSnapshot: vi.fn(async () => failedSnapshot),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw Object.create(null);
+        }),
+      },
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-unstringifiable-fetch-failure"),
+    ).resolves.toEqual({
+      status: "failed",
+      source: candidate,
+      snapshot: failedSnapshot,
+      errorMessage: "unknown error",
+    });
+    expect(snapshots.insertFailedSnapshot).toHaveBeenCalledWith({
+      documentSourceId: "source-with-unstringifiable-fetch-failure",
+      sourceUri: candidate.sourceUri,
+      errorMessage: "unknown error",
+      fetchedAt: failedAt,
+    });
+  });
+
+  it("rejects when recording a succeeded snapshot fails without recording a failed snapshot", async () => {
+    const candidate = source({ id: "source-with-snapshot-write-failure" });
+    const registry = registryReturning(candidate);
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(async () => {
+        throw new Error("snapshot write failed");
+      }),
+      insertFailedSnapshot: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher: {
+        fetch: vi.fn(async () => ({
+          bodyText: "Document body",
+          fetchedAt,
+        })),
+      },
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-snapshot-write-failure"),
+    ).rejects.toThrow("snapshot write failed");
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+    expect(registry.markSyncState).toHaveBeenCalledTimes(2);
+    expect(registry.markSyncState).toHaveBeenCalledWith(candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenLastCalledWith(candidate.id, "pending");
+  });
+
+  it("rejects when marking synced fails without recording a failed snapshot", async () => {
+    const candidate = source({ id: "source-with-mark-synced-failure" });
+    const succeededSnapshot = snapshot({
+      id: "snapshot-before-mark-failure",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchedAt,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) => {
+        if (syncState === "synced") {
+          throw new Error("mark synced failed");
+        }
+
+        return source({ id, syncState: syncState as DocumentSource["syncState"] });
+      }),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(async () => succeededSnapshot),
+      insertFailedSnapshot: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher: {
+        fetch: vi.fn(async () => ({
+          bodyText: "Document body",
+          fetchedAt,
+        })),
+      },
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-mark-synced-failure"),
+    ).rejects.toThrow("mark synced failed");
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+    expect(registry.markSyncState).toHaveBeenCalledTimes(3);
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "synced");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(3, candidate.id, "pending");
+  });
+
+  it("marks a source pending again when recording a failed snapshot fails", async () => {
+    const candidate = source({ id: "source-with-failed-snapshot-write-failure" });
+    const registry = registryReturning(candidate);
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(),
+      insertFailedSnapshot: vi.fn(async () => {
+        throw new Error("failed snapshot write failed");
+      }),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw new Error("network unavailable");
+        }),
+      },
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-failed-snapshot-write-failure"),
+    ).rejects.toThrow("failed snapshot write failed");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(1, candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "pending");
+  });
+
+  it("marks a source pending again when marking failed fails", async () => {
+    const candidate = source({ id: "source-with-mark-failed-failure" });
+    const failedSnapshot = snapshot({
+      id: "snapshot-before-mark-failed-failure",
+      documentSourceId: candidate.id,
+      sourceUri: candidate.sourceUri,
+      fetchStatus: "failed",
+      bodyText: undefined,
+      fetchedAt: failedAt,
+      errorMessage: "network unavailable",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (id: string, syncState: string) => {
+        if (syncState === "failed") {
+          throw new Error("mark failed failed");
+        }
+
+        return source({ id, syncState: syncState as DocumentSource["syncState"] });
+      }),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots: {
+        insertSucceededSnapshot: vi.fn(),
+        insertFailedSnapshot: vi.fn(async () => failedSnapshot),
+      },
+      fetcher: {
+        fetch: vi.fn(async () => {
+          throw new Error("network unavailable");
+        }),
+      },
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-with-mark-failed-failure"),
+    ).rejects.toThrow("mark failed failed");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(1, candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "failed");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(3, candidate.id, "pending");
+  });
+
+  it("rejects denied sources without fetching or marking sync state", async () => {
+    const deniedSource = source({ permissionState: "denied" });
+    const registry = registryReturning(deniedSource);
+    const { runner, fetcher } = runnerWith({ registry });
+
+    await expect(runner.syncSourceById("doc-source-1")).resolves.toEqual({
+      status: "rejected",
+      source: deniedSource,
+      reason: "permission_denied",
+    });
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(registry.markSyncState).not.toHaveBeenCalled();
+  });
+
+  it("restores stale syncing denied sources to pending before rejecting them", async () => {
+    const deniedSyncing = source({
+      id: "source-denied-while-syncing",
+      permissionState: "denied",
+      syncState: "syncing",
+    });
+    const restoredDenied = source({
+      id: deniedSyncing.id,
+      permissionState: "denied",
+      syncState: "pending",
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => deniedSyncing),
+      markSyncState: vi.fn(async (_id: string, syncState: string) =>
+        source({
+          id: deniedSyncing.id,
+          permissionState: "denied",
+          syncState: syncState as DocumentSource["syncState"],
+        }),
+      ),
+    };
+    const { runner, fetcher, snapshots } = runnerWith({ registry });
+
+    await expect(
+      runner.syncSourceById(deniedSyncing.id, { recoverStaleSyncState: true }),
+    ).resolves.toEqual({
+      status: "rejected",
+      source: restoredDenied,
+      reason: "permission_denied",
+    });
+    expect(registry.markSyncState).toHaveBeenCalledWith(deniedSyncing.id, "pending");
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(snapshots.insertSucceededSnapshot).not.toHaveBeenCalled();
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("restores stale syncing disabled sources to pending before rejecting them", async () => {
+    const disabledSyncing = source({
+      id: "source-disabled-while-syncing",
+      syncState: "syncing",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const restoredDisabled = source({
+      id: disabledSyncing.id,
+      syncState: "pending",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => disabledSyncing),
+      markSyncState: vi.fn(async (_id: string, syncState: string) =>
+        source({
+          id: disabledSyncing.id,
+          syncState: syncState as DocumentSource["syncState"],
+          canUseForAnswering: false,
+          canUseForKnowledgeDrafts: false,
+        }),
+      ),
+    };
+    const { runner, fetcher, snapshots } = runnerWith({ registry });
+
+    await expect(
+      runner.syncSourceById(disabledSyncing.id, { recoverStaleSyncState: true }),
+    ).resolves.toEqual({
+      status: "rejected",
+      source: restoredDisabled,
+      reason: "capability_disabled",
+    });
+    expect(registry.markSyncState).toHaveBeenCalledWith(disabledSyncing.id, "pending");
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(snapshots.insertSucceededSnapshot).not.toHaveBeenCalled();
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("skips sources that are already syncing without fetching", async () => {
+    const syncingSource = source({ syncState: "syncing" });
+    const registry = registryReturning(syncingSource);
+    const { runner, fetcher } = runnerWith({ registry });
+
+    await expect(runner.syncSourceById("doc-source-1")).resolves.toEqual({
+      status: "skipped",
+      source: syncingSource,
+      reason: "already_syncing",
+    });
+    expect(registry.markSyncState).not.toHaveBeenCalled();
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+  });
+
+  it("skips sources that are already synced without fetching", async () => {
+    const syncedSource = source({ syncState: "synced" });
+    const registry = registryReturning(syncedSource);
+    const { runner, fetcher } = runnerWith({ registry });
+
+    await expect(runner.syncSourceById("doc-source-1")).resolves.toEqual({
+      status: "skipped",
+      source: syncedSource,
+      reason: "already_synced",
+    });
+    expect(registry.markSyncState).not.toHaveBeenCalled();
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["syncing", "synced"] as const)(
+    "recovers an eligible %s source when queue ownership is explicit",
+    async (staleSyncState) => {
+      const staleSource = source({
+        id: `stale-${staleSyncState}`,
+        syncState: staleSyncState,
+      });
+      const claimedSource = source({ id: staleSource.id, syncState: "syncing" });
+      const completedSource = source({ id: staleSource.id, syncState: "synced" });
+      const succeededSnapshot = snapshot({
+        id: `snapshot-${staleSyncState}`,
+        documentSourceId: staleSource.id,
+        sourceUri: staleSource.sourceUri,
+      });
+      const calls: string[] = [];
+      const registry = {
+        findSourceById: vi.fn(async () => {
+          calls.push("find");
+          return staleSource;
+        }),
+        markSyncState: vi.fn(async (_id: string, syncState: DocumentSource["syncState"]) => {
+          calls.push(`mark:${syncState}`);
+          return syncState === "syncing" ? claimedSource : completedSource;
+        }),
+      };
+      const fetcher = {
+        fetch: vi.fn(async () => {
+          calls.push("fetch");
+          return {
+            bodyText: "Recovered document body",
+            fetchedAt,
+          };
+        }),
+      };
+      const snapshots = {
+        insertSucceededSnapshot: vi.fn(async () => {
+          calls.push("snapshot:succeeded");
+          return succeededSnapshot;
+        }),
+        insertFailedSnapshot: vi.fn(),
+      };
+      const syncedSnapshotReindexer = {
+        enqueueSyncedSnapshotReindex: vi.fn(async () => {
+          calls.push("reindex");
+        }),
+      };
+      const runner = createDocumentSyncRunner({
+        registry,
+        snapshots,
+        fetcher,
+        syncedSnapshotReindexer,
+      });
+
+      await expect(
+        runner.syncSourceById(staleSource.id, { recoverStaleSyncState: true }),
+      ).resolves.toEqual({
+        status: "synced",
+        source: staleSource,
+        snapshot: succeededSnapshot,
+      });
+
+      expect(calls).toEqual([
+        "find",
+        "mark:syncing",
+        "fetch",
+        "snapshot:succeeded",
+        "mark:synced",
+        "reindex",
+      ]);
+      expect(fetcher.fetch).toHaveBeenCalledWith(claimedSource);
+      expect(syncedSnapshotReindexer.enqueueSyncedSnapshotReindex).toHaveBeenCalledWith({
+        documentSnapshotId: succeededSnapshot.id,
+      });
+    },
+  );
+
+  it("rejects sources with both usage capabilities disabled", async () => {
+    const disabledSource = source({
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const registry = registryReturning(disabledSource);
+    const { runner, fetcher } = runnerWith({ registry });
+
+    await expect(runner.syncSourceById("doc-source-1")).resolves.toEqual({
+      status: "rejected",
+      source: disabledSource,
+      reason: "capability_disabled",
+    });
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(registry.markSyncState).not.toHaveBeenCalled();
+  });
+
+  it("abandons sync when a source loses permission while being claimed", async () => {
+    const candidate = source({ id: "source-loses-permission-during-claim" });
+    const claimedDenied = source({
+      id: candidate.id,
+      permissionState: "denied",
+      syncState: "syncing",
+      canUseForAnswering: false,
+    });
+    const restoredDenied = source({
+      id: candidate.id,
+      permissionState: "denied",
+      syncState: "pending",
+      canUseForAnswering: false,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (_id: string, syncState: string) =>
+        syncState === "syncing" ? claimedDenied : restoredDenied,
+      ),
+    };
+    const fetcher = {
+      fetch: vi.fn(async () => ({
+        bodyText: "Document body",
+        fetchedAt,
+      })),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(async () => snapshot()),
+      insertFailedSnapshot: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-loses-permission-during-claim", {
+        recoverStaleSyncState: true,
+      }),
+    ).resolves.toEqual({
+      status: "rejected",
+      source: restoredDenied,
+      reason: "permission_denied",
+    });
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(snapshots.insertSucceededSnapshot).not.toHaveBeenCalled();
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(1, candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "pending");
+  });
+
+  it("abandons sync when source usage is disabled while being claimed", async () => {
+    const candidate = source({ id: "source-disabled-during-claim" });
+    const claimedDisabled = source({
+      id: candidate.id,
+      syncState: "syncing",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const restoredDisabled = source({
+      id: candidate.id,
+      syncState: "pending",
+      canUseForAnswering: false,
+      canUseForKnowledgeDrafts: false,
+    });
+    const registry = {
+      findSourceById: vi.fn(async () => candidate),
+      markSyncState: vi.fn(async (_id: string, syncState: string) =>
+        syncState === "syncing" ? claimedDisabled : restoredDisabled,
+      ),
+    };
+    const fetcher = {
+      fetch: vi.fn(async () => ({
+        bodyText: "Document body",
+        fetchedAt,
+      })),
+    };
+    const snapshots = {
+      insertSucceededSnapshot: vi.fn(async () => snapshot()),
+      insertFailedSnapshot: vi.fn(),
+    };
+    const runner = createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => failedAt,
+    });
+
+    await expect(
+      runner.syncSourceById("source-disabled-during-claim", {
+        recoverStaleSyncState: true,
+      }),
+    ).resolves.toEqual({
+      status: "rejected",
+      source: restoredDisabled,
+      reason: "capability_disabled",
+    });
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(snapshots.insertSucceededSnapshot).not.toHaveBeenCalled();
+    expect(snapshots.insertFailedSnapshot).not.toHaveBeenCalled();
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(1, candidate.id, "syncing");
+    expect(registry.markSyncState).toHaveBeenNthCalledWith(2, candidate.id, "pending");
+  });
+
+  it("returns not_found when the source does not exist", async () => {
+    const registry = registryReturning(undefined);
+    const { runner, fetcher } = runnerWith({ registry });
+
+    await expect(runner.syncSourceById("missing-source")).resolves.toEqual({
+      status: "not_found",
+      sourceId: "missing-source",
+    });
+    expect(fetcher.fetch).not.toHaveBeenCalled();
+    expect(registry.markSyncState).not.toHaveBeenCalled();
+  });
+});
+
+function registryReturning(documentSource: DocumentSource | undefined) {
+  return {
+    findSourceById: vi.fn(async () => documentSource),
+    markSyncState: vi.fn(async (id: string, syncState: DocumentSource["syncState"]) =>
+      source({ ...(documentSource ?? {}), id, syncState }),
+    ),
+  };
+}
+
+function runnerWith({
+  registry,
+}: {
+  registry: ReturnType<typeof registryReturning>;
+}) {
+  const fetcher = {
+    fetch: vi.fn(async () => ({
+      bodyText: "Document body",
+      fetchedAt: new Date("2026-07-02T05:00:00.000Z"),
+    })),
+  };
+  const snapshots = {
+    insertSucceededSnapshot: vi.fn(),
+    insertFailedSnapshot: vi.fn(),
+  };
+
+  return {
+    runner: createDocumentSyncRunner({
+      registry,
+      snapshots,
+      fetcher,
+      now: () => new Date("2026-07-02T05:01:00.000Z"),
+    }),
+    fetcher,
+    snapshots,
+  };
+}

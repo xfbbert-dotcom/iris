@@ -1,7 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
+import type { RawEvent } from "../src/events/raw-event-queue.js";
 import { createFeishuGateway } from "../src/feishu/feishu-gateway.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
+import { isolateEnvVar } from "./test-env.js";
+
+let restoreTestEnv: () => void = () => undefined;
+
+beforeEach(() => {
+  const restoreInternalApiToken = isolateEnvVar("IRIS_INTERNAL_API_TOKEN");
+  const restoreFeishuVerificationToken = isolateEnvVar("FEISHU_VERIFICATION_TOKEN");
+  const restoreFeishuEncryptKey = isolateEnvVar("FEISHU_ENCRYPT_KEY");
+
+  restoreTestEnv = () => {
+    restoreFeishuEncryptKey();
+    restoreFeishuVerificationToken();
+    restoreInternalApiToken();
+  };
+});
+
+afterEach(() => {
+  restoreTestEnv();
+});
 
 describe("InMemoryEventQueue", () => {
   it("stores raw Feishu events with idempotency keys", async () => {
@@ -35,10 +55,54 @@ describe("InMemoryEventQueue", () => {
 
     expect(queue.events).toHaveLength(1);
   });
+
+  it("insulates stored events from caller mutations", async () => {
+    const queue = new InMemoryEventQueue();
+    const event = {
+      idempotencyKey: "event-1",
+      receivedAt: new Date("2026-06-30T00:00:00.000Z"),
+      body: { event_id: "event-1", nested: { value: "original" } }
+    };
+
+    await queue.enqueueRawFeishuEvent(event);
+    event.receivedAt.setUTCFullYear(2030);
+    event.body.event_id = "event-mutated";
+    event.body.nested.value = "mutated";
+
+    expect(queue.events).toEqual([
+      {
+        idempotencyKey: "event-1",
+        receivedAt: new Date("2026-06-30T00:00:00.000Z"),
+        body: { event_id: "event-1", nested: { value: "original" } }
+      }
+    ]);
+  });
+
+  it("insulates stored events from returned event mutations", async () => {
+    const queue = new InMemoryEventQueue();
+    await queue.enqueueRawFeishuEvent({
+      idempotencyKey: "event-1",
+      receivedAt: new Date("2026-06-30T00:00:00.000Z"),
+      body: { event_id: "event-1", nested: { value: "original" } }
+    });
+
+    const [stored] = queue.events;
+    stored.receivedAt.setUTCFullYear(2030);
+    (stored.body as { event_id: string; nested: { value: string } }).event_id = "event-mutated";
+    (stored.body as { event_id: string; nested: { value: string } }).nested.value = "mutated";
+
+    expect(queue.events).toEqual([
+      {
+        idempotencyKey: "event-1",
+        receivedAt: new Date("2026-06-30T00:00:00.000Z"),
+        body: { event_id: "event-1", nested: { value: "original" } }
+      }
+    ]);
+  });
 });
 
 describe("FeishuGateway", () => {
-  it("returns HTTP 200 payload immediately after enqueueing", async () => {
+  it("returns HTTP 200 payload before legacy queue persistence completes", async () => {
     const queue = new InMemoryEventQueue();
     const gateway = createFeishuGateway({ queue });
 
@@ -49,7 +113,30 @@ describe("FeishuGateway", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true });
+    expect(queue.events).toHaveLength(0);
+
+    await flushDeferredEnqueue();
+
     expect(queue.events).toHaveLength(1);
+  });
+
+  it("acknowledges legacy queued events before starting queue persistence work", async () => {
+    const queue = {
+      enqueueRawFeishuEvent: vi.fn(() => new Promise<void>(() => undefined)),
+    };
+    const gateway = createFeishuGateway({ queue });
+
+    const response = await gateway.handleCallback({
+      headers: { "x-iris-event-id": "event-legacy-deferred-queue" },
+      body: { event_id: "event-legacy-deferred-queue", message: { chat_id: "chat-a" } },
+    });
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(queue.enqueueRawFeishuEvent).not.toHaveBeenCalled();
+
+    await flushDeferredEnqueue();
+
+    expect(queue.enqueueRawFeishuEvent).toHaveBeenCalledOnce();
   });
 
   it("does not run signal filtering before acknowledging", async () => {
@@ -131,6 +218,7 @@ describe("FeishuGateway", () => {
       headers: { "x-iris-event-id": " header-event " },
       body: { event_id: "body-event" }
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).toBe("header-event");
   });
@@ -143,8 +231,22 @@ describe("FeishuGateway", () => {
       headers: {},
       body: { event_id: " body-event " }
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).toBe("body-event");
+  });
+
+  it("uses header event_id for the legacy queue when top-level event_id is missing", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: { header: { event_id: " header-event " } }
+    });
+    await flushDeferredEnqueue();
+
+    expect(queue.events[0]?.idempotencyKey).toBe("header-event");
   });
 
   it("ignores a whitespace header and uses body event_id", async () => {
@@ -155,6 +257,7 @@ describe("FeishuGateway", () => {
       headers: { "x-iris-event-id": "   " },
       body: { event_id: "body-event" }
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).toBe("body-event");
   });
@@ -167,13 +270,554 @@ describe("FeishuGateway", () => {
       headers: {},
       body: { event_id: "   " }
     });
+    await flushDeferredEnqueue();
 
     expect(queue.events[0]?.idempotencyKey).not.toBe("");
     expect(queue.events[0]?.idempotencyKey).not.toBe("   ");
   });
+
+  it("deduplicates legacy queue retries without explicit event ids by message id", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+    const body = {
+      event: {
+        message: {
+          message_id: "message-1",
+          chat_id: "chat-1",
+          content: "{\"text\":\"hello\"}"
+        }
+      }
+    };
+
+    await gateway.handleCallback({ headers: {}, body });
+    await gateway.handleCallback({ headers: {}, body });
+    await flushDeferredEnqueue();
+
+    expect(queue.events).toHaveLength(1);
+    expect(queue.events[0]?.idempotencyKey).toBe("message:message-1");
+  });
+
+  it("deduplicates message retries by message id when Feishu event ids are missing", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        event: {
+          message: {
+            message_id: "message-retry-1",
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        retry_count: 1,
+        event: {
+          message: {
+            message_id: "message-retry-1",
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+    await flushDeferredEnqueue();
+
+    expect(queue.events).toHaveLength(1);
+    expect(queue.events[0]?.idempotencyKey).toBe("message:message-retry-1");
+  });
+
+  it("uses a stable compact message key when the message id is too long to prefix", async () => {
+    const queue = new InMemoryEventQueue();
+    const enqueue = vi.fn(async (_event: RawEvent) => undefined);
+    const rawEventQueue = { enqueue };
+    const gateway = createFeishuGateway({ queue, rawEventQueue });
+    const longMessageId = "m".repeat(512);
+
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        retry_count: 0,
+        event: {
+          message: {
+            message_id: longMessageId,
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        retry_count: 1,
+        event: {
+          message: {
+            message_id: longMessageId,
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+    await flushDeferredEnqueue();
+
+    const firstKey = enqueue.mock.calls[0]?.[0].idempotencyKey;
+    const secondKey = enqueue.mock.calls[1]?.[0].idempotencyKey;
+    expect(firstKey).toBe(secondKey);
+    expect(firstKey).toMatch(/^raw-event:feishu:message-hash:[a-f0-9]{64}$/u);
+  });
+
+  it("deduplicates fallback body hashes independent of JSON object key order", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        event: {
+          message: {
+            chat_id: "chat-1",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+        schema: "2.0",
+      },
+    });
+    await gateway.handleCallback({
+      headers: {},
+      body: {
+        schema: "2.0",
+        event: {
+          message: {
+            content: "{\"text\":\"hello\"}",
+            chat_id: "chat-1",
+          },
+        },
+      },
+    });
+    await flushDeferredEnqueue();
+
+    expect(queue.events).toHaveLength(1);
+    expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]{64}$/);
+  });
+
+  it("uses a SHA-256 digest for fallback body idempotency keys", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: { event_id: "   ", event: { message: { chat_id: "chat-1" } } },
+    });
+    await flushDeferredEnqueue();
+
+    expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]{64}$/);
+  });
+
+  it("falls back to a generated key when the body cannot be JSON serialized", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({ queue });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: 1n,
+    });
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    await flushDeferredEnqueue();
+
+    expect(queue.events).toHaveLength(1);
+    expect(queue.events[0]?.idempotencyKey).toMatch(/^body-[a-f0-9]{64}$/);
+  });
+
+  it("uses message ids when Feishu event ids are oversized", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const gateway = createFeishuGateway({ queue, rawEventQueue });
+    const body = {
+      header: {
+        event_id: "a".repeat(513),
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
+          message_id: "message-1",
+          chat_id: "chat-1",
+        },
+      },
+    };
+
+    await gateway.handleCallback({ headers: {}, body });
+    await flushDeferredEnqueue();
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "raw-event:feishu:message:message-1",
+      }),
+    );
+  });
+
+  it("falls back to a body hash when Feishu event and message ids are unavailable", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const gateway = createFeishuGateway({ queue, rawEventQueue });
+    const body = {
+      header: {
+        event_id: "a".repeat(513),
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
+          chat_id: "chat-1",
+        },
+      },
+    };
+
+    await gateway.handleCallback({ headers: {}, body });
+    await flushDeferredEnqueue();
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: expect.stringMatching(/^raw-event:feishu:body-[a-f0-9]+$/),
+      }),
+    );
+  });
+
+  it("enqueues raw Feishu events for async processing", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+      now: () => new Date("2026-07-02T01:00:00.000Z"),
+    });
+    const body = {
+      header: {
+        event_id: "event-1",
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
+          message_id: "message-1",
+          chat_id: "chat-1",
+          message_type: "text",
+          content: "{\"text\":\"hello\"}",
+        },
+      },
+    };
+
+    await gateway.handleCallback({ headers: {}, body });
+    await flushDeferredEnqueue();
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledWith({
+      idempotencyKey: "raw-event:feishu:event-1",
+      provider: "feishu",
+      eventType: "im.message.receive_v1",
+      rawBody: body,
+      receivedAt: new Date("2026-07-02T01:00:00.000Z"),
+      attempts: 0,
+    });
+  });
+
+  it("acknowledges raw Feishu events without waiting for queue persistence", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = {
+      enqueue: vi.fn(() => new Promise<void>(() => undefined)),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+    });
+
+    const response = await Promise.race([
+      gateway.handleCallback({
+        headers: {},
+        body: {
+          header: {
+            event_id: "event-slow-queue",
+            event_type: "im.message.receive_v1",
+          },
+        },
+      }),
+      new Promise<"timed-out">((resolve) => {
+        setTimeout(() => resolve("timed-out"), 0);
+      }),
+    ]);
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(rawEventQueue.enqueue).not.toHaveBeenCalled();
+    await flushDeferredEnqueue();
+    expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("acknowledges raw Feishu events before starting raw queue persistence work", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => undefined),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: {
+        header: {
+          event_id: "event-deferred-queue",
+          event_type: "im.message.receive_v1",
+        },
+      },
+    });
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(rawEventQueue.enqueue).not.toHaveBeenCalled();
+
+    await flushDeferredEnqueue();
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("drains acknowledged deferred enqueues before closing", async () => {
+    let resolveEnqueue: () => void = () => undefined;
+    const rawEventQueue = {
+      enqueue: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveEnqueue = resolve;
+          }),
+      ),
+    };
+    const gateway = createFeishuGateway({
+      queue: new InMemoryEventQueue(),
+      rawEventQueue,
+    });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: { header: { event_id: "event-drain", event_type: "im.message.receive_v1" } },
+    });
+    let closed = false;
+    const closePromise = gateway.close().then(() => {
+      closed = true;
+    });
+    await flushDeferredEnqueue();
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
+    expect(closed).toBe(false);
+
+    resolveEnqueue();
+    await closePromise;
+    expect(closed).toBe(true);
+  });
+
+  it("reports ingress ready only when the durable raw queue responds", async () => {
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => undefined),
+      getPendingCount: vi.fn(async () => 0),
+    };
+    const gateway = createFeishuGateway({
+      queue: new InMemoryEventQueue(),
+      rawEventQueue,
+    });
+
+    await expect(gateway.isIngressReady()).resolves.toBe(true);
+    rawEventQueue.getPendingCount.mockRejectedValueOnce(new Error("redis unavailable"));
+    await expect(gateway.isIngressReady()).resolves.toBe(false);
+  });
+
+  it("reports raw queue persistence errors without failing Feishu acknowledgement", async () => {
+    const queue = new InMemoryEventQueue();
+    const enqueueError = new Error("redis unavailable");
+    const onEnqueueError = vi.fn();
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => {
+        throw enqueueError;
+      }),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+      onEnqueueError,
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: {
+        header: {
+          event_id: "event-rejected-queue",
+          event_type: "im.message.receive_v1",
+        },
+      },
+    });
+    await flushDeferredEnqueue();
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(onEnqueueError).toHaveBeenCalledWith(enqueueError);
+  });
+
+  it("isolates enqueue error observers from Feishu acknowledgement handling", async () => {
+    const queue = new InMemoryEventQueue();
+    const enqueueError = new Error("redis unavailable");
+    const onEnqueueError = vi.fn(() => {
+      throw new Error("observer failed");
+    });
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => {
+        throw enqueueError;
+      }),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+      onEnqueueError,
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: {
+        header: {
+          event_id: "event-observer-failure",
+          event_type: "im.message.receive_v1",
+        },
+      },
+    });
+    await flushDeferredEnqueue();
+
+    expect(response).toEqual({ statusCode: 200, body: { ok: true } });
+    expect(onEnqueueError).toHaveBeenCalledWith(enqueueError);
+  });
+
+  it("uses the legacy event queue only when no raw event queue is available", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+    });
+
+    await gateway.handleCallback({
+      headers: { "x-iris-event-id": "event-raw-primary" },
+      body: { event_id: "event-raw-primary" },
+    });
+    await flushDeferredEnqueue();
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
+    expect(queue.events).toEqual([]);
+  });
+
+  it("acknowledges disabled group events without queueing them", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const runtimeController = {
+      canProcessIncomingEvent: vi.fn(() => false),
+    };
+    const gateway = createFeishuGateway({
+      queue,
+      rawEventQueue,
+      runtimeController,
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: {
+        header: {
+          event_id: "event-disabled-group",
+          event_type: "im.message.receive_v1",
+        },
+        event: {
+          message: {
+            message_id: "message-disabled",
+            chat_id: "chat-disabled",
+            message_type: "text",
+            content: "{\"text\":\"hello\"}",
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(runtimeController.canProcessIncomingEvent).toHaveBeenCalledWith({
+      groupId: "chat-disabled",
+    });
+    expect(rawEventQueue.enqueue).not.toHaveBeenCalled();
+    expect(queue.events).toEqual([]);
+  });
 });
 
 describe("Core App Feishu route", () => {
+  it("exposes ingress readiness from the durable raw queue only", async () => {
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => undefined),
+      getPendingCount: vi.fn(async () => 0),
+    };
+    const app = buildApp({
+      rawEventQueue,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const readyResponse = await app.inject({
+      method: "GET",
+      url: "/internal/ingress-readiness",
+    });
+    rawEventQueue.getPendingCount.mockRejectedValueOnce(new Error("redis unavailable"));
+    const unavailableResponse = await app.inject({
+      method: "GET",
+      url: "/internal/ingress-readiness",
+    });
+
+    expect(readyResponse.statusCode).toBe(200);
+    expect(readyResponse.json()).toEqual({ ok: true, status: "ready" });
+    expect(unavailableResponse.statusCode).toBe(503);
+    expect(unavailableResponse.json()).toEqual({
+      ok: false,
+      error: "ingress_queue_unavailable",
+    });
+  });
+
+  it("limits the dedicated ingress health token to the readiness route", async () => {
+    const app = buildApp({
+      internalApiToken: "operator-token",
+      ingressHealthToken: "ingress-health-token",
+      rawEventQueue: {
+        enqueue: vi.fn(async () => undefined),
+        getPendingCount: vi.fn(async () => 0),
+      },
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const readinessResponse = await app.inject({
+      method: "GET",
+      url: "/internal/ingress-readiness",
+      headers: { authorization: "Bearer ingress-health-token" },
+    });
+    const statusResponse = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: { authorization: "Bearer ingress-health-token" },
+    });
+
+    expect(readinessResponse.statusCode).toBe(200);
+    expect(statusResponse.statusCode).toBe(401);
+  });
+
   it("returns 200 from the Feishu callback route", async () => {
     const queue = new InMemoryEventQueue();
     const app = buildApp({ queue });
@@ -187,6 +831,10 @@ describe("Core App Feishu route", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true });
+    expect(queue.events).toHaveLength(0);
+
+    await flushDeferredEnqueue();
+
     expect(queue.events).toHaveLength(1);
   });
 
@@ -268,6 +916,37 @@ describe("Core App Feishu route", () => {
     expect(queue.events).toHaveLength(0);
   });
 
+  it("returns 413 and skips Feishu handling when JSON is oversized", async () => {
+    const queue = new InMemoryEventQueue();
+    let verifierCalled = false;
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: () => {
+        verifierCalled = true;
+        return true;
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      headers: { "content-type": "application/json" },
+      payload: {
+        event_id: "oversized-json",
+        event: {
+          message: {
+            chat_id: "chat-a",
+            content: "x".repeat(300_000)
+          }
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(verifierCalled).toBe(false);
+    expect(queue.events).toHaveLength(0);
+  });
+
   it("passes the raw JSON body to the Feishu verifier", async () => {
     const queue = new InMemoryEventQueue();
     let observedRawBody: string | undefined;
@@ -284,8 +963,70 @@ describe("Core App Feishu route", () => {
       url: "/feishu/events",
       payload: { event_id: "raw-body-1" }
     });
+    await flushDeferredEnqueue();
 
     expect(observedRawBody).toBe(JSON.stringify({ event_id: "raw-body-1" }));
+  });
+
+  it("uses the event worker raw queue for Feishu callbacks by default", async () => {
+    const queue = new InMemoryEventQueue();
+    const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
+    const app = buildApp({
+      queue,
+      createEventWorkerRuntime: () => ({
+        rawEventQueue,
+        deadLetters: {
+          list: vi.fn(async () => []),
+          replay: vi.fn(async () => "not_found" as const),
+          delete: vi.fn(async () => "not_found" as const),
+          replayBatch: vi.fn(async () => ({
+            replayedCount: 0,
+            notFoundIds: [],
+            unsupportedLegacyIds: [],
+          })),
+        },
+        start: vi.fn(),
+        close: vi.fn(async () => undefined),
+        getStatus: vi.fn(async () => ({
+          enabled: true as const,
+          running: false,
+          intervalMs: 1000,
+          batchLimit: 10,
+          mentionRepliesEnabled: false,
+          pendingEventCount: 0,
+          deadLetterEventCount: 0,
+        })),
+      }),
+    });
+    const payload = {
+      header: {
+        event_id: "event-runtime-queue",
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
+          message_id: "message-1",
+          chat_id: "chat-1",
+        },
+      },
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    await flushDeferredEnqueue();
+    expect(rawEventQueue.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "raw-event:feishu:event-runtime-queue",
+        provider: "feishu",
+        eventType: "im.message.receive_v1",
+        rawBody: payload,
+      }),
+    );
   });
 
   it("uses Feishu auth config from the environment when no verifier is injected", async () => {
@@ -324,6 +1065,10 @@ describe("Core App Feishu route", () => {
 
       expect(acceptedResponse.statusCode).toBe(200);
       expect(acceptedResponse.json()).toEqual({ ok: true });
+      expect(queue.events).toHaveLength(0);
+
+      await flushDeferredEnqueue();
+
       expect(queue.events).toHaveLength(1);
     } finally {
       restoreEnv("FEISHU_VERIFICATION_TOKEN", originalVerificationToken);
@@ -339,4 +1084,11 @@ function restoreEnv(name: "FEISHU_VERIFICATION_TOKEN" | "FEISHU_ENCRYPT_KEY", va
   }
 
   process.env[name] = value;
+}
+
+async function flushDeferredEnqueue(): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await Promise.resolve();
 }

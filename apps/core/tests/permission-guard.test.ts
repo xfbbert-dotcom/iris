@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { InMemoryAuditLog } from "../src/audit/audit-log.js";
+import { InMemoryAuditLog, type AuditEvent } from "../src/audit/audit-log.js";
 import { filterFragmentsByLivePermission } from "../src/permissions/permission-guard.js";
 
 describe("filterFragmentsByLivePermission", () => {
@@ -50,6 +50,37 @@ describe("filterFragmentsByLivePermission", () => {
     expect(result.deniedDocumentIds).toEqual([]);
   });
 
+  it("checks distinct document permissions concurrently while preserving output order", async () => {
+    const fragments = [
+      { id: "frag-1", documentId: "doc-slow-allowed", text: "Allowed content" },
+      { id: "frag-2", documentId: "doc-slow-denied", text: "Denied content" },
+      { id: "frag-3", documentId: "doc-fast-allowed", text: "More allowed content" },
+    ];
+    const resolvers = new Map<string, (allowed: boolean) => void>();
+    const canReadDocument = vi.fn(
+      async (documentId: string) =>
+        new Promise<boolean>((resolve) => {
+          resolvers.set(documentId, resolve);
+        }),
+    );
+
+    const pending = filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument,
+    });
+    await Promise.resolve();
+
+    expect(canReadDocument).toHaveBeenCalledTimes(3);
+    resolvers.get("doc-slow-denied")?.(false);
+    resolvers.get("doc-fast-allowed")?.(true);
+    resolvers.get("doc-slow-allowed")?.(true);
+
+    await expect(pending).resolves.toEqual({
+      allowedFragments: [fragments[0], fragments[2]],
+      deniedDocumentIds: ["doc-slow-denied"],
+    });
+  });
+
   it("checks duplicate denied document IDs once, excludes all denied fragments, and reports the document once", async () => {
     const fragments = [
       { id: "frag-1", documentId: "doc-denied", text: "Denied content A" },
@@ -87,7 +118,8 @@ describe("filterFragmentsByLivePermission", () => {
       {
         type: "permission_guard_denied",
         documentId: "doc-denied",
-        fragmentIds: ["frag-1", "frag-2"]
+        fragmentIds: ["frag-1", "frag-2"],
+        recordedAt: expect.any(Date),
       }
     ]);
   });
@@ -114,8 +146,90 @@ describe("filterFragmentsByLivePermission", () => {
         type: "permission_guard_error",
         documentId: "doc-timeout",
         fragmentIds: ["frag-1", "frag-2"],
-        message: "Feishu permission timeout"
+        message: "Feishu permission timeout",
+        recordedAt: expect.any(Date),
       }
     ]);
+  });
+
+  it("bounds permission guard audit error messages before recording them", async () => {
+    const fragments = [{ id: "frag-1", documentId: "doc-timeout", text: "Uncertain content" }];
+    const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
+    const record = vi.fn(async (_event: AuditEvent) => undefined);
+    const auditLog = {
+      record,
+    };
+
+    await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async () => {
+        throw new Error(oversizedMessage);
+      },
+      auditLog,
+    });
+
+    expect(auditLog.record).toHaveBeenCalledWith({
+      type: "permission_guard_error",
+      documentId: "doc-timeout",
+      fragmentIds: ["frag-1"],
+      message: expect.stringContaining("[truncated]"),
+    });
+    const event = record.mock.calls[0]?.[0];
+    if (event === undefined) {
+      throw new Error("expected audit event");
+    }
+    expect(event.message?.length).toBeLessThanOrEqual(1000);
+    expect(event.message).not.toContain("trailing diagnostic detail");
+  });
+
+  it("records non-Error permission failures with a safe audit message", async () => {
+    const fragments = [{ id: "frag-1", documentId: "doc-weird", text: "Uncertain content" }];
+    const auditLog = new InMemoryAuditLog();
+
+    const result = await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async () => {
+        throw Object.create(null);
+      },
+      auditLog,
+    });
+
+    expect(result.allowedFragments).toEqual([]);
+    expect(result.deniedDocumentIds).toEqual(["doc-weird"]);
+    expect(auditLog.events).toEqual([
+      {
+        type: "permission_guard_error",
+        documentId: "doc-weird",
+        fragmentIds: ["frag-1"],
+        message: "unknown error",
+        recordedAt: expect.any(Date),
+      },
+    ]);
+  });
+
+  it("does not fail permission filtering when audit recording fails", async () => {
+    const fragments = [
+      { id: "frag-1", documentId: "doc-denied", text: "Denied content A" },
+      { id: "frag-2", documentId: "doc-allowed", text: "Allowed content B" }
+    ];
+    const auditLog = {
+      record: vi.fn(async () => {
+        throw new Error("audit store unavailable");
+      })
+    };
+
+    const result = await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async (documentId) => documentId === "doc-allowed",
+      auditLog
+    });
+
+    expect(result.allowedFragments).toEqual([fragments[1]]);
+    expect(result.deniedDocumentIds).toEqual(["doc-denied"]);
+    expect(auditLog.record).toHaveBeenCalledWith({
+      type: "permission_guard_denied",
+      documentId: "doc-denied",
+      fragmentIds: ["frag-1"]
+    });
   });
 });

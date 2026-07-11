@@ -1,0 +1,173 @@
+import { readPositiveSafeInteger } from "../config/numeric-guards.js";
+import { readBoundedJsonResponse } from "../integrations/bounded-json-response.js";
+import { readExternalErrorMessage } from "../integrations/external-error-message.js";
+
+export type FeishuTenantAccessTokenProvider = {
+  getTenantAccessToken(): Promise<string>;
+};
+
+export type FeishuTenantAccessTokenProviderDependencies = {
+  baseUrl: string;
+  appId: string;
+  appSecret: string;
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+  now?: () => Date;
+};
+
+type CachedToken = {
+  token: string;
+  expiresAtMs: number;
+};
+
+const tokenRefreshSkewMs = 60_000;
+const defaultTokenRequestTimeoutMs = 10_000;
+const maxTokenResponseBytes = 65_536;
+
+export function createFeishuTenantAccessTokenProvider({
+  baseUrl,
+  appId,
+  appSecret,
+  fetch = globalThis.fetch,
+  timeoutMs = defaultTokenRequestTimeoutMs,
+  now = () => new Date(),
+}: FeishuTenantAccessTokenProviderDependencies): FeishuTenantAccessTokenProvider {
+  const safeTimeoutMs = readPositiveSafeInteger(
+    timeoutMs,
+    "Feishu tenant access token timeoutMs",
+  );
+  let cachedToken: CachedToken | undefined;
+  let inFlightTokenRequest: Promise<string> | undefined;
+
+  return {
+    async getTenantAccessToken() {
+      const nowMs = now().getTime();
+      if (cachedToken !== undefined && cachedToken.expiresAtMs > nowMs) {
+        return cachedToken.token;
+      }
+      if (inFlightTokenRequest !== undefined) {
+        return inFlightTokenRequest;
+      }
+
+      inFlightTokenRequest = refreshTenantAccessToken({
+        baseUrl,
+        appId,
+        appSecret,
+        fetch,
+        timeoutMs: safeTimeoutMs,
+        cacheToken(token, expiresInSeconds) {
+          cachedToken = {
+            token,
+            expiresAtMs: nowMs + Math.max(0, expiresInSeconds * 1000 - tokenRefreshSkewMs),
+          };
+        },
+      });
+      try {
+        return await inFlightTokenRequest;
+      } finally {
+        inFlightTokenRequest = undefined;
+      }
+    },
+  };
+}
+
+async function refreshTenantAccessToken({
+  baseUrl,
+  appId,
+  appSecret,
+  fetch,
+  timeoutMs,
+  cacheToken,
+}: {
+  baseUrl: string;
+  appId: string;
+  appSecret: string;
+  fetch: typeof globalThis.fetch;
+  timeoutMs: number;
+  cacheToken(token: string, expiresInSeconds: number): void;
+}): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(
+      `${trimTrailingSlash(baseUrl)}/open-apis/auth/v3/tenant_access_token/internal`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+        signal: controller.signal,
+      },
+    );
+    const responseBody = await readBoundedJsonResponse({
+      response,
+      invalidJsonErrorMessage: "Feishu tenant access token response was not valid JSON",
+      maxResponseBytes: maxTokenResponseBytes,
+      responseSizeErrorMessage: `Feishu tenant access token response exceeds ${maxTokenResponseBytes} bytes`,
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Feishu tenant access token HTTP request failed with status ${
+          response.status
+        }: ${readExternalErrorMessage(responseBody)}`,
+      );
+    }
+
+    const token = readTenantAccessToken(responseBody);
+    const expiresInSeconds = readExpireSeconds(responseBody);
+    cacheToken(token, expiresInSeconds);
+
+    return token;
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error("Feishu tenant access token request timed out");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function readTenantAccessToken(responseBody: unknown): string {
+  if (!isRecord(responseBody)) {
+    throw new Error("Feishu tenant access token response did not include tenant_access_token");
+  }
+
+  const code = responseBody.code;
+  if (typeof code !== "number") {
+    throw new Error("Feishu tenant access token response did not include code");
+  }
+  if (code !== 0) {
+    throw new Error(
+      `Feishu tenant access token request failed: ${readExternalErrorMessage(responseBody)}`,
+    );
+  }
+
+  const token = responseBody.tenant_access_token;
+  if (typeof token !== "string" || token.trim().length === 0) {
+    throw new Error("Feishu tenant access token response did not include tenant_access_token");
+  }
+
+  return token.trim();
+}
+
+function readExpireSeconds(responseBody: unknown): number {
+  if (!isRecord(responseBody) || typeof responseBody.expire !== "number") {
+    return 0;
+  }
+
+  return Number.isFinite(responseBody.expire) ? responseBody.expire : 0;
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/u, "");
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
