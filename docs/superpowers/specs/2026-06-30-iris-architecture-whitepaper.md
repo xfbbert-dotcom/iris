@@ -688,6 +688,27 @@ Constitutional principle:
 
 > New requirements cannot only ask "can we build this?" They must ask whether the requirement changes Iris's visibility, action power, knowledge authority, memory boundary, or deployment boundary. If it does, update architecture before writing code.
 
+### 11.1 Internal Rollout Stop Rule
+
+Hardening must not become an open-ended substitute for real use. Iris enters a 3-5 person,
+single-group pilot as soon as the rollout readiness profile passes, the primary Feishu smoke path
+passes, and no known P0 or P1 issue remains. After that gate, P2 and P3 findings go to the
+post-launch backlog and do not delay pilot feedback. The pilot expands to the first 20-30 users only
+after its observed failures and user feedback contain no unresolved P0 or P1 issue.
+
+- P0 blocks rollout: unauthorized data exposure, callback authentication bypass, secret exposure,
+  irreversible data loss, or uncontrolled external action.
+- P1 blocks rollout: the core callback, @Iris reply, group-document read, authorized knowledge-base
+  retrieval, permission guard, emergency stop, or retry/recovery path is unusable or repeatedly
+  produces duplicate user-visible effects.
+- P2 and P3 do not block the pilot: operator convenience gaps, non-critical observability polish,
+  scale work beyond the single-consumer 20-30 person deployment, and hardening without evidence of
+  impact on the pilot path.
+
+Once the gate is green, the next engineering action is pilot deployment and observation, not another
+general audit. New hardening work should be driven by a failed gate, a pilot incident, or repeated
+user friction. This rule preserves core quality while ensuring quality is tested against real work.
+
 ## 12. Architecture Pressure Tests And Evolution Simulations
 
 Iris architecture decisions must be tested against real collaboration pressure, not only ideal flows.

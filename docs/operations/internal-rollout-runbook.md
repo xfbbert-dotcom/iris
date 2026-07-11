@@ -3,6 +3,44 @@
 This runbook is for the first 20-30 person company rollout. The goal is to keep Iris usable and
 recoverable before a full admin UI exists.
 
+## Pilot-First Rollout Gate
+
+Do not wait for exhaustive hardening before anyone uses Iris. Roll out in two stages:
+
+1. Start with one Feishu group and 3-5 cooperative users.
+2. Expand to the full 20-30 person company only after the pilot has no unresolved P0 or P1 issue.
+
+Only these severities may block the pilot:
+
+- **P0:** unauthorized data exposure, callback authentication bypass, secret exposure, irreversible
+  data loss, or uncontrolled external action.
+- **P1:** Iris cannot reliably receive callbacks, answer an explicit mention, read a group-visible
+  document, retrieve an authorized knowledge-base document, enforce the live permission guard,
+  stop in an emergency, or recover queued work without repeated user-visible effects.
+- **P2/P3:** operator convenience, non-critical status polish, future horizontal scale, and
+  speculative hardening. Record these for post-launch work; do not delay the single-group pilot.
+
+The pilot gate is green only when all of the following are true:
+
+- `npm run readiness` reports `status: "ready"` or an explicitly accepted non-security warning;
+- database migrations have completed and `GET /internal/status` reports all enabled workers running;
+- GitHub Core and AI Worker checks pass for the deployed commit;
+- one real Feishu group completes the callback, mention reply, group-document, authorized-wiki,
+  live-permission-denial, global-disable, and queue-recovery smoke checks;
+- an operator knows the rollback action: stop Core and disable or remove the Feishu callback/bot.
+
+Once this gate passes, deploy the pilot. Do not start another general hardening audit unless the gate
+fails, the pilot exposes a P0/P1 issue, or the same user friction repeats.
+
+### Runtime-Control Limitation During The Pilot
+
+The current runtime-control state is in memory. A Core restart restores default switches, including
+global enablement. For the 3-5 person pilot, treat stopping the Core service (and, if necessary,
+disabling the Feishu callback or bot) as the authoritative emergency stop; do not rely on an
+in-memory disabled state surviving a restart. Durable Postgres-backed runtime control is a P1 item
+before expanding to the full 20-30 person rollout, but it does not delay the supervised single-group
+pilot.
+
 ## Security Boundary
 
 The `/internal/*` endpoints are operator APIs, not public APIs. Until an authentication layer is
