@@ -4,8 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "start": "node dist/app.js",
     "dev": "tsx src/app.ts",
     "db:migrate": "tsx src/database/migrate.ts",
+    "db:migrate:prod": "node dist/database/migrate.js",
     "readiness": "tsx -- src/admin/internal-rollout-readiness-cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

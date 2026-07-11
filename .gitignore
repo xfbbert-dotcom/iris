@@ -1,5 +1,6 @@
 .superpowers/
 node_modules/
+apps/core/dist/
 __pycache__/
 *.py[cod]
 .env
