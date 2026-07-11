@@ -47,7 +47,7 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /previous_database/u);
   assert.match(script, /redis_previous/u);
   assert.match(script, /grant-app-access\.sql/u);
-  assert.match(script, /UPDATE document_sources/u);
+  assert.match(script, /iris_restore_permission_probe/u);
   assert.match(script, /iris_forbidden_app_ddl/u);
   assert.match(script, /stop caddy core/u);
   assert.match(script, /createdb/u);
@@ -60,6 +60,8 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /up --detach --wait/u);
   const swapSql = readFileSync("deploy/pilot/swap-databases.sql", "utf8");
   assert.match(swapSql, /ALTER DATABASE %I RENAME TO %I/u);
+  const grantSql = readFileSync("deploy/pilot/grant-app-access.sql", "utf8");
+  assert.match(grantSql, /ALTER DEFAULT PRIVILEGES/u);
   assert.ok(
     script.indexOf("--dbname \"$IRIS_RESTORE_DATABASE\"") <
       script.indexOf("stop caddy core"),

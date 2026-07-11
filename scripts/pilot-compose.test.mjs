@@ -46,9 +46,14 @@ test("gates the edge on authenticated runtime readiness", () => {
   assert.doesNotMatch(healthCommand, /\/internal\/status/u);
   assert.equal(compose.services.caddy.depends_on.core.condition, "service_healthy");
   assert.equal(
-    compose.services.caddy.environment.IRIS_INTERNAL_API_TOKEN,
+    compose.services.caddy.environment.IRIS_INGRESS_HEALTH_TOKEN,
+    compose.services.core.environment.IRIS_INGRESS_HEALTH_TOKEN,
+  );
+  assert.notEqual(
+    compose.services.caddy.environment.IRIS_INGRESS_HEALTH_TOKEN,
     compose.services.core.environment.IRIS_INTERNAL_API_TOKEN,
   );
+  assert.equal(compose.services.caddy.environment.IRIS_INTERNAL_API_TOKEN, undefined);
 });
 
 function loadPilotCompose() {

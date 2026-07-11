@@ -789,6 +789,35 @@ describe("Core App Feishu route", () => {
     });
   });
 
+  it("limits the dedicated ingress health token to the readiness route", async () => {
+    const app = buildApp({
+      internalApiToken: "operator-token",
+      ingressHealthToken: "ingress-health-token",
+      rawEventQueue: {
+        enqueue: vi.fn(async () => undefined),
+        getPendingCount: vi.fn(async () => 0),
+      },
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const readinessResponse = await app.inject({
+      method: "GET",
+      url: "/internal/ingress-readiness",
+      headers: { authorization: "Bearer ingress-health-token" },
+    });
+    const statusResponse = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: { authorization: "Bearer ingress-health-token" },
+    });
+
+    expect(readinessResponse.statusCode).toBe(200);
+    expect(statusResponse.statusCode).toBe(401);
+  });
+
   it("returns 200 from the Feishu callback route", async () => {
     const queue = new InMemoryEventQueue();
     const app = buildApp({ queue });

@@ -77,7 +77,8 @@ durable Redis raw-event queue required after callback acknowledgement. DLQs, his
 failures, and optional downstream workers remain visible in `/internal/status` but do not prevent
 Caddy from serving an otherwise healthy callback ingress.
 
-Caddy actively checks that same authenticated ingress probe every two seconds. If Redis becomes
+Caddy actively checks that same authenticated ingress probe every two seconds using a dedicated
+health-only bearer that cannot authorize other internal routes. If Redis becomes
 unavailable after startup, Caddy stops forwarding `/feishu/events` and returns a retryable `503`
 instead of allowing Core to acknowledge an event it cannot persist. Normal healthy callbacks keep
 the ack-first path and never wait for queue persistence inline. For the supervised pilot, Redis

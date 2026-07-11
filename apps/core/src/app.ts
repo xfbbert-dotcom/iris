@@ -75,6 +75,7 @@ export type BuildAppDependencies = {
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
   runtimeController?: RuntimeController;
   internalApiToken?: string;
+  ingressHealthToken?: string;
   readinessEnv?: EnvLike;
 };
 
@@ -170,6 +171,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const internalApiToken =
     readInternalApiToken(dependencies.internalApiToken) ??
     readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
+  const ingressHealthToken = readBearerToken(
+    dependencies.ingressHealthToken ?? process.env.IRIS_INGRESS_HEALTH_TOKEN,
+    "IRIS_INGRESS_HEALTH_TOKEN",
+  );
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const auditLog = dependencies.auditLog ?? new InMemoryAuditLog();
   const now = dependencies.now ?? (() => new Date());
@@ -247,11 +252,22 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   app.addHook("onRequest", async (request, reply) => {
-    if (internalApiToken === undefined || !isInternalApiRequest(request.url)) {
+    if (!isInternalApiRequest(request.url)) {
       return;
     }
 
-    if (!isInternalApiAuthorized(request.headers.authorization, internalApiToken)) {
+    if (internalApiToken === undefined && ingressHealthToken === undefined) {
+      return;
+    }
+
+    const operatorAuthorized =
+      internalApiToken !== undefined &&
+      isInternalApiAuthorized(request.headers.authorization, internalApiToken);
+    const ingressHealthAuthorized =
+      isExactApiRequest(request.url, "/internal/ingress-readiness") &&
+      ingressHealthToken !== undefined &&
+      isInternalApiAuthorized(request.headers.authorization, ingressHealthToken);
+    if (!operatorAuthorized && !ingressHealthAuthorized) {
       return reply.code(401).send({
         ok: false,
         error: "internal_api_unauthorized",
@@ -1096,12 +1112,16 @@ function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
 }
 
 function readInternalApiToken(value: string | undefined): string | undefined {
+  return readBearerToken(value, "IRIS_INTERNAL_API_TOKEN");
+}
+
+function readBearerToken(value: string | undefined, name: string): string | undefined {
   const trimmed = value?.trim();
   if (trimmed === undefined || trimmed === "") {
     return undefined;
   }
   if (!isSingleBearerToken(trimmed)) {
-    throw new Error("IRIS_INTERNAL_API_TOKEN must be a single bearer token");
+    throw new Error(`${name} must be a single bearer token`);
   }
 
   return trimmed;
@@ -1124,6 +1144,18 @@ function isInternalApiRequest(url: string): boolean {
 
   try {
     return isInternalApiPath(pathBeforeQuery(decodeURIComponent(path)));
+  } catch {
+    return false;
+  }
+}
+
+function isExactApiRequest(url: string, expectedPath: string): boolean {
+  const path = pathBeforeQuery(url);
+  if (path === expectedPath) {
+    return true;
+  }
+  try {
+    return pathBeforeQuery(decodeURIComponent(path)) === expectedPath;
   } catch {
     return false;
   }

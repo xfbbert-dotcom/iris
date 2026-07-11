@@ -89,11 +89,17 @@ staging_database_active=true
 "${compose[@]}" exec -T -e IRIS_RESTORE_DATABASE="$staging_database" postgres sh -eu -c '
   psql --username "$POSTGRES_USER" --dbname "$IRIS_RESTORE_DATABASE" \
     --set ON_ERROR_STOP=on --set "app_user=$IRIS_APP_USER" \
+    --set "migrator_user=$IRIS_MIGRATOR_USER" \
     --file /opt/iris/grant-app-access.sql
+  PGPASSWORD="$IRIS_MIGRATOR_PASSWORD" psql --host 127.0.0.1 \
+    --username "$IRIS_MIGRATOR_USER" --dbname "$IRIS_RESTORE_DATABASE" \
+    --set ON_ERROR_STOP=on \
+    --command "CREATE TABLE iris_restore_permission_probe(id integer primary key)" \
+    > /dev/null
   PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 \
     --username "$IRIS_APP_USER" --dbname "$IRIS_RESTORE_DATABASE" \
     --set ON_ERROR_STOP=on \
-    --command "SELECT count(*) FROM document_sources; UPDATE document_sources SET updated_at = updated_at WHERE false" \
+    --command "INSERT INTO iris_restore_permission_probe(id) VALUES (1); UPDATE iris_restore_permission_probe SET id = id; DELETE FROM iris_restore_permission_probe" \
     > /dev/null
   if PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 \
     --username "$IRIS_APP_USER" --dbname "$IRIS_RESTORE_DATABASE" \
@@ -102,6 +108,10 @@ staging_database_active=true
     echo "application role unexpectedly has DDL permission on the staging database" >&2
     exit 1
   fi
+  PGPASSWORD="$IRIS_MIGRATOR_PASSWORD" psql --host 127.0.0.1 \
+    --username "$IRIS_MIGRATOR_USER" --dbname "$IRIS_RESTORE_DATABASE" \
+    --set ON_ERROR_STOP=on --command "DROP TABLE iris_restore_permission_probe" \
+    > /dev/null
 '
 
 echo "Staging restore and migrations passed; stopping Iris for database swap" >&2

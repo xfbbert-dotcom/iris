@@ -167,10 +167,12 @@ Replace every `replace-with-*` value. Generate distinct URL-safe passwords for t
 with their respective credentials. Core receives only the app URL; the one-shot migration job
 receives only the migrator URL; the admin credential remains inside the Postgres container. Set
 `IRIS_IMAGE_TAG` to the checked-out `APPROVED_COMMIT_SHA`; never reuse a moving tag such as `pilot`
-or `latest`. `IRIS_PUBLIC_HOSTNAME` is the DNS name only, without a path. Generate the internal
-bearer token with a single header-safe value:
+or `latest`. `IRIS_PUBLIC_HOSTNAME` is the DNS name only, without a path. Generate two distinct
+header-safe tokens: the operator bearer for all internal APIs and the health-only bearer Caddy uses
+only for ingress readiness:
 
 ```bash
+openssl rand -hex 32
 openssl rand -hex 32
 ```
 
@@ -306,7 +308,8 @@ sudo apt-get update && sudo apt-get install -y age
 sudo install -d -m 700 /etc/iris
 printf '%s\n' 'AGE_PUBLIC_RECIPIENT' | sudo tee /etc/iris/backup-recipient > /dev/null
 sudo chmod 644 /etc/iris/backup-recipient
-sudo install -m 700 deploy/pilot/backup.sh /usr/local/sbin/iris-backup
+sudo install -o "$USER" -g "$USER" -m 700 \
+  deploy/pilot/backup.sh /usr/local/sbin/iris-backup
 ```
 
 Replace `AGE_PUBLIC_RECIPIENT` with the single `age1...` recipient. Create a manual backup before
