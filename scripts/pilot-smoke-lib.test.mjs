@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assertHealthyInternalStatus } from "./pilot-smoke-lib.mjs";
+import {
+  assertFastFeishuAcknowledgement,
+  assertHealthyInternalStatus,
+} from "./pilot-smoke-lib.mjs";
 
 test("accepts a fully healthy internal status snapshot", () => {
   assert.doesNotThrow(() =>
@@ -48,4 +51,28 @@ test("rejects a status snapshot with a stopped enabled runtime", () => {
 
 test("rejects a malformed status snapshot", () => {
   assert.throws(() => assertHealthyInternalStatus({ ok: true }), /healthy internal status/u);
+});
+
+test("accepts a successful Feishu acknowledgement inside the deadline", () => {
+  assert.doesNotThrow(() =>
+    assertFastFeishuAcknowledgement({
+      status: 200,
+      body: { ok: true },
+      elapsedMs: 100,
+      deadlineMs: 2_500,
+    }),
+  );
+});
+
+test("rejects a Feishu acknowledgement that misses the deadline", () => {
+  assert.throws(
+    () =>
+      assertFastFeishuAcknowledgement({
+        status: 200,
+        body: { ok: true },
+        elapsedMs: 2_501,
+        deadlineMs: 2_500,
+      }),
+    /Feishu callback acknowledgement/u,
+  );
 });

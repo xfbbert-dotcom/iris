@@ -48,6 +48,9 @@ jobs:
       - name: Test core
         run: npm test
 
+      - name: Test pilot deployment contracts
+        run: npm run test:pilot
+
       - name: Test Postgres integrations
         env:
           DATABASE_URL: postgres://iris:iris@localhost:5432/iris

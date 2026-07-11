@@ -1,8 +1,12 @@
-import { assertHealthyInternalStatus } from "./pilot-smoke-lib.mjs";
+import {
+  assertFastFeishuAcknowledgement,
+  assertHealthyInternalStatus,
+} from "./pilot-smoke-lib.mjs";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 1_000;
 const REQUEST_TIMEOUT_MS = 5_000;
+const FEISHU_ACK_DEADLINE_MS = 2_500;
 
 const timeoutMs = readPositiveInteger(process.argv[2], DEFAULT_TIMEOUT_MS);
 const publicBaseUrl = normalizeBaseUrl(
@@ -13,6 +17,8 @@ const coreBaseUrl = normalizeBaseUrl(
 );
 const internalApiToken =
   process.env.IRIS_PILOT_INTERNAL_API_TOKEN ?? "ci-internal-token";
+const feishuVerificationToken =
+  process.env.IRIS_PILOT_FEISHU_VERIFICATION_TOKEN ?? "ci-verification-token";
 
 try {
   await waitForStatus(`${publicBaseUrl}/health`, 200, timeoutMs);
@@ -38,6 +44,32 @@ try {
     throw new Error("Expected Iris ingress readiness to be ready");
   }
 
+  const callbackStartedAt = Date.now();
+  const callbackResponse = await requestJson(`${publicBaseUrl}/feishu/events`, {
+    token: feishuVerificationToken,
+    header: {
+      event_id: "pilot-smoke-event",
+      event_type: "im.message.receive_v1",
+      token: feishuVerificationToken,
+    },
+    event: {
+      message: {
+        message_id: "pilot-smoke-message",
+        chat_id: "pilot-smoke-chat",
+        message_type: "text",
+        content: JSON.stringify({ text: "pilot smoke" }),
+      },
+    },
+  });
+  const callbackElapsedMs = Date.now() - callbackStartedAt;
+  assertFastFeishuAcknowledgement({
+    status: callbackResponse.status,
+    body: await callbackResponse.json(),
+    elapsedMs: callbackElapsedMs,
+    deadlineMs: FEISHU_ACK_DEADLINE_MS,
+  });
+  await waitForPendingEvent(coreBaseUrl, internalApiToken, timeoutMs);
+
   console.log(
     JSON.stringify({
       ok: true,
@@ -51,6 +83,9 @@ try {
         privateInternalStatusWithToken: 200,
         privateInternalStatusHealth: "healthy",
         privateIngressReadiness: "ready",
+        feishuCallback: 200,
+        feishuCallbackAckUnderMs: FEISHU_ACK_DEADLINE_MS,
+        durableRawEventQueue: "persisted",
       },
     }),
   );
@@ -98,6 +133,33 @@ function request(url, headers = undefined) {
     redirect: "manual",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
+}
+
+function requestJson(url, body) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    redirect: "manual",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+}
+
+async function waitForPendingEvent(baseUrl, token, deadlineMs) {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    const response = await request(`${baseUrl}/internal/status`, {
+      authorization: `Bearer ${token}`,
+    });
+    if (response.ok) {
+      const body = await response.json();
+      if (body.components?.eventWorker?.pendingEventCount >= 1) {
+        return;
+      }
+    }
+    await delay(POLL_INTERVAL_MS);
+  }
+  throw new Error("Timed out waiting for the Feishu callback to persist in the raw event queue");
 }
 
 function normalizeBaseUrl(value) {

@@ -11,6 +11,18 @@ export function assertHealthyInternalStatus(snapshot) {
   }
 }
 
+export function assertFastFeishuAcknowledgement({ status, body, elapsedMs, deadlineMs }) {
+  if (
+    status !== 200 ||
+    !isRecord(body) ||
+    body.ok !== true ||
+    !Number.isFinite(elapsedMs) ||
+    elapsedMs > deadlineMs
+  ) {
+    throw new Error(`Expected Feishu callback acknowledgement within ${deadlineMs}ms`);
+  }
+}
+
 function isRecord(value) {
   return typeof value === "object" && value !== null;
 }
