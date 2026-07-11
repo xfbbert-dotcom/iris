@@ -106,6 +106,23 @@ describe("FeishuGateway", () => {
     expect(queue.events).toHaveLength(0);
   });
 
+  it("returns a URL verification challenge after verifier approval without enqueueing", async () => {
+    const queue = new InMemoryEventQueue();
+    const gateway = createFeishuGateway({
+      queue,
+      verifyRequest: () => true
+    });
+
+    const response = await gateway.handleCallback({
+      headers: {},
+      body: { type: "url_verification", challenge: "challenge-a", token: "token-a" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ challenge: "challenge-a" });
+    expect(queue.events).toHaveLength(0);
+  });
+
   it("uses the header key before body event_id", async () => {
     const queue = new InMemoryEventQueue();
     const gateway = createFeishuGateway({ queue });
@@ -191,4 +208,135 @@ describe("Core App Feishu route", () => {
     expect(response.json()).toEqual({ ok: false });
     expect(queue.events).toHaveLength(0);
   });
+
+  it("returns the Feishu URL verification challenge without enqueueing", async () => {
+    const queue = new InMemoryEventQueue();
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: () => true
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload: { type: "url_verification", challenge: "challenge-a", token: "token-a" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ challenge: "challenge-a" });
+    expect(queue.events).toHaveLength(0);
+  });
+
+  it("rejects URL verification before challenge handling when the Feishu verifier rejects", async () => {
+    const queue = new InMemoryEventQueue();
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: () => false
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload: { type: "url_verification", challenge: "challenge-a", token: "token-a" }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ ok: false });
+    expect(queue.events).toHaveLength(0);
+  });
+
+  it("returns 400 and skips Feishu handling when JSON is malformed", async () => {
+    const queue = new InMemoryEventQueue();
+    let verifierCalled = false;
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: () => {
+        verifierCalled = true;
+        return true;
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      headers: { "content-type": "application/json" },
+      payload: "{\"event_id\":"
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(verifierCalled).toBe(false);
+    expect(queue.events).toHaveLength(0);
+  });
+
+  it("passes the raw JSON body to the Feishu verifier", async () => {
+    const queue = new InMemoryEventQueue();
+    let observedRawBody: string | undefined;
+    const app = buildApp({
+      queue,
+      verifyFeishuRequest: (request) => {
+        observedRawBody = request.rawBody;
+        return true;
+      }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload: { event_id: "raw-body-1" }
+    });
+
+    expect(observedRawBody).toBe(JSON.stringify({ event_id: "raw-body-1" }));
+  });
+
+  it("uses Feishu auth config from the environment when no verifier is injected", async () => {
+    const originalVerificationToken = process.env.FEISHU_VERIFICATION_TOKEN;
+    const originalEncryptKey = process.env.FEISHU_ENCRYPT_KEY;
+    process.env.FEISHU_VERIFICATION_TOKEN = "token-a";
+    delete process.env.FEISHU_ENCRYPT_KEY;
+
+    try {
+      const queue = new InMemoryEventQueue();
+      const app = buildApp({ queue });
+
+      const rejectedResponse = await app.inject({
+        method: "POST",
+        url: "/feishu/events",
+        headers: { "x-iris-event-id": "event-route-env-invalid" },
+        payload: {
+          event_id: "event-route-env-invalid",
+          header: { token: "wrong-token" }
+        }
+      });
+
+      expect(rejectedResponse.statusCode).toBe(401);
+      expect(rejectedResponse.json()).toEqual({ ok: false });
+      expect(queue.events).toHaveLength(0);
+
+      const acceptedResponse = await app.inject({
+        method: "POST",
+        url: "/feishu/events",
+        headers: { "x-iris-event-id": "event-route-env-valid" },
+        payload: {
+          event_id: "event-route-env-valid",
+          header: { token: "token-a" }
+        }
+      });
+
+      expect(acceptedResponse.statusCode).toBe(200);
+      expect(acceptedResponse.json()).toEqual({ ok: true });
+      expect(queue.events).toHaveLength(1);
+    } finally {
+      restoreEnv("FEISHU_VERIFICATION_TOKEN", originalVerificationToken);
+      restoreEnv("FEISHU_ENCRYPT_KEY", originalEncryptKey);
+    }
+  });
 });
+
+function restoreEnv(name: "FEISHU_VERIFICATION_TOKEN" | "FEISHU_ENCRYPT_KEY", value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+
+  process.env[name] = value;
+}

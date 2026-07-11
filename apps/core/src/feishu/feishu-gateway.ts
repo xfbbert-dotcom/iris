@@ -4,12 +4,17 @@ import type { EventQueue } from "../queues/event-queue.js";
 export type FeishuCallbackRequest = {
   headers: Record<string, string | undefined>;
   body: unknown;
+  rawBody?: string;
 };
 
 export type FeishuCallbackResponse =
   | {
       statusCode: 200;
       body: { ok: true };
+    }
+  | {
+      statusCode: 200;
+      body: { challenge: string };
     }
   | {
       statusCode: 401;
@@ -48,6 +53,13 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
         }
       }
 
+      if (isFeishuUrlVerificationPayload(request.body)) {
+        return {
+          statusCode: 200,
+          body: { challenge: request.body.challenge }
+        };
+      }
+
       const idempotencyKey = resolveIdempotencyKey(request);
 
       await dependencies.queue.enqueueRawFeishuEvent({
@@ -62,6 +74,12 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
       };
     }
   };
+}
+
+function isFeishuUrlVerificationPayload(
+  body: unknown
+): body is { type: "url_verification"; challenge: string } {
+  return isRecord(body) && body.type === "url_verification" && typeof body.challenge === "string";
 }
 
 function resolveIdempotencyKey(request: FeishuCallbackRequest): string {
