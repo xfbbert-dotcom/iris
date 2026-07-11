@@ -50,6 +50,7 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /createdb/u);
   assert.match(script, /--exit-on-error/u);
   assert.match(script, /--single-transaction/u);
+  assert.match(script, /--no-comments/u);
   assert.match(script, /stop redis/u);
   assert.match(script, /appendonlydir/u);
   assert.match(script, /run --rm .* migrate/u);

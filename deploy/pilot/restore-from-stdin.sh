@@ -68,6 +68,7 @@ staging_database_active=true
     --exit-on-error \
     --single-transaction \
     --no-owner \
+    --no-comments \
     --no-privileges
 ' < "$restore_dir/postgres.dump"
 
