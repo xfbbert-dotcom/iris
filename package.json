@@ -9,10 +9,11 @@
     "build": "npm --workspace apps/core run build",
     "pilot:config": "docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml config",
     "pilot:smoke": "node scripts/pilot-smoke.mjs",
+    "test:pilot": "node --test scripts/pilot-smoke-lib.test.mjs",
     "readiness": "npm --workspace apps/core run readiness --",
     "test": "npm --workspace apps/core test",
     "test:python": "cd workers/ai && python -m pytest",
     "typecheck": "npm --workspace apps/core run typecheck",
-    "verify": "git diff --check && npm run typecheck && npm run build && npm test && npm run test:python && docker compose config && npm run readiness -- --env-file deploy/pilot/ci.env && npm run pilot:config"
+    "verify": "git diff --check && npm run typecheck && npm run build && npm test && npm run test:python && npm run test:pilot && docker compose config && npm run readiness -- --env-file deploy/pilot/ci.env && npm run pilot:config"
   }
 }

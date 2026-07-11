@@ -1,3 +1,5 @@
+import { assertHealthyInternalStatus } from "./pilot-smoke-lib.mjs";
+
 const DEFAULT_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 1_000;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -15,10 +17,15 @@ const internalApiToken =
 try {
   await waitForStatus(`${publicBaseUrl}/health`, 200, timeoutMs);
   await expectStatus(`${publicBaseUrl}/internal/status`, 404);
+  await expectStatus(`${publicBaseUrl}/internal/readiness`, 404);
   await expectStatus(`${coreBaseUrl}/internal/status`, 401);
-  await expectStatus(`${coreBaseUrl}/internal/status`, 200, {
+  await expectStatus(`${coreBaseUrl}/internal/status`, 401, {
+    authorization: "Bearer wrong-token",
+  });
+  const internalStatusResponse = await expectStatus(`${coreBaseUrl}/internal/status`, 200, {
     authorization: `Bearer ${internalApiToken}`,
   });
+  assertHealthyInternalStatus(await internalStatusResponse.json());
 
   console.log(
     JSON.stringify({
@@ -26,8 +33,11 @@ try {
       checks: {
         publicHealth: 200,
         publicInternalStatus: 404,
+        publicInternalReadiness: 404,
         privateInternalStatusWithoutToken: 401,
+        privateInternalStatusWithWrongToken: 401,
         privateInternalStatusWithToken: 200,
+        privateInternalStatusHealth: "healthy",
       },
     }),
   );
@@ -66,6 +76,7 @@ async function expectStatus(url, expectedStatus, headers = undefined) {
       `Expected ${url} to return ${expectedStatus}, received ${response.status}`,
     );
   }
+  return response;
 }
 
 function request(url, headers = undefined) {
