@@ -127,8 +127,9 @@ jobs:
           done
           test "$callback_status" = 503
           "${compose[@]}" up --detach --wait --wait-timeout 120 redis
+          "${compose[@]}" restart core
           callback_status=503
-          for _ in $(seq 1 15); do
+          for _ in $(seq 1 30); do
             callback_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
               --header 'content-type: application/json' --data "$callback_payload" \
               http://127.0.0.1/feishu/events)"

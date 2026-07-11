@@ -80,7 +80,9 @@ Caddy from serving an otherwise healthy callback ingress.
 Caddy actively checks that same authenticated ingress probe every two seconds. If Redis becomes
 unavailable after startup, Caddy stops forwarding `/feishu/events` and returns a retryable `503`
 instead of allowing Core to acknowledge an event it cannot persist. Normal healthy callbacks keep
-the ack-first path and never wait for queue persistence inline.
+the ack-first path and never wait for queue persistence inline. For the supervised pilot, Redis
+recovery includes restarting the single Core container; Caddy resumes forwarding only after the
+fresh Core process passes ingress readiness.
 
 The migration job intentionally depends only on Postgres and receives only the dedicated migrator
 database URL; it does not need Redis, Feishu, model, embedding, or operator credentials. Core uses a

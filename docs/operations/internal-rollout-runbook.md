@@ -283,8 +283,17 @@ https://iris.example.com/feishu/events
 ```
 
 Caddy rechecks ingress readiness every two seconds. During a Redis outage it returns `503` on the
-callback path so Feishu retries; once Redis is ready again, forwarding resumes automatically. A
-healthy callback still follows the fast ack-first path.
+callback path so Feishu retries. After Redis is healthy, restart the single Core container; Caddy
+keeps returning `503` until Core ingress readiness passes, then resumes forwarding automatically:
+
+```bash
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  restart core
+```
+
+A healthy callback still follows the fast ack-first path.
 
 ### Encrypted Backup
 
