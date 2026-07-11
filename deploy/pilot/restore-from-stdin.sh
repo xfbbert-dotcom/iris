@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+umask 077
+
 if [[ "${1:-}" != "--confirm-replace-database" || "$#" -ne 1 ]]; then
   echo "usage: restore-from-stdin.sh --confirm-replace-database < backup.dump" >&2
   exit 2
@@ -16,6 +18,17 @@ test -r "$compose_file"
 
 cd "$repository_dir"
 compose=(docker compose --env-file "$environment_file" --file "$compose_file")
+
+temporary_dump="$(mktemp "${TMPDIR:-/tmp}/iris-restore.XXXXXX.dump")"
+cleanup() {
+  rm -f -- "$temporary_dump"
+}
+trap cleanup EXIT
+
+cat > "$temporary_dump"
+test -s "$temporary_dump"
+"${compose[@]}" exec -T postgres sh -eu -c 'exec pg_restore --list' \
+  < "$temporary_dump" > /dev/null
 
 echo "Stopping Iris traffic before replacing the pilot database" >&2
 "${compose[@]}" stop caddy core
@@ -33,7 +46,7 @@ echo "Stopping Iris traffic before replacing the pilot database" >&2
     --single-transaction \
     --no-owner \
     --no-privileges
-'
+' < "$temporary_dump"
 
 "${compose[@]}" run --rm migrate
 "${compose[@]}" run --rm --no-deps core \

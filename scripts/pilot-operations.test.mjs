@@ -26,6 +26,8 @@ test("backup is encrypted, atomic, and cannot mask pipeline failure", () => {
 test("restore requires confirmation and fails closed through transactional restore", () => {
   const script = readFileSync(restorePath, "utf8");
   assert.match(script, /--confirm-replace-database/u);
+  assert.match(script, /mktemp/u);
+  assert.match(script, /pg_restore --list/u);
   assert.match(script, /stop caddy core/u);
   assert.match(script, /dropdb/u);
   assert.match(script, /createdb/u);
@@ -33,6 +35,10 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /--single-transaction/u);
   assert.match(script, /run --rm migrate/u);
   assert.match(script, /up --detach --wait/u);
+  assert.ok(
+    script.indexOf("pg_restore --list") < script.indexOf("dropdb"),
+    "restore input must be validated before the database is replaced",
+  );
 });
 
 function bashPath() {

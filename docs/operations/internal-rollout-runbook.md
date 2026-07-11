@@ -316,7 +316,9 @@ Decrypt the selected backup on the operator-controlled machine and stream the cu
 SSH to the reviewed restore script on the VPS. The required confirmation flag is deliberately
 explicit. The script stops Caddy and Core, drops and recreates the target database, restores with
 `--exit-on-error --single-transaction`, reruns migrations and readiness, then starts the services
-only after every prior step succeeds.
+only after every prior step succeeds. Before stopping traffic or replacing the database, it stores
+the stream in a mode-`600` temporary file and verifies the custom dump with `pg_restore --list`; an
+invalid or empty stream leaves the live database untouched.
 
 Run from the operator-controlled machine:
 
