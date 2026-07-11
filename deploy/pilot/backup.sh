@@ -43,7 +43,7 @@ cd "$repository_dir"
 compose=(docker compose --env-file "$environment_file" --file "$compose_file")
 
 "${compose[@]}" exec -T postgres sh -eu -c \
-  'exec pg_dump --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --format custom' \
+  'PGPASSWORD="$IRIS_MIGRATOR_PASSWORD" exec pg_dump --host 127.0.0.1 --username "$IRIS_MIGRATOR_USER" --dbname "$POSTGRES_DB" --format custom' \
   | age --recipient "$recipient" --output "$temporary_file"
 
 test -s "$temporary_file"

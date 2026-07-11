@@ -5,12 +5,21 @@ import test from "node:test";
 
 const backupPath = "deploy/pilot/backup.sh";
 const restorePath = "deploy/pilot/restore-from-stdin.sh";
+const postgresInitPath = "deploy/pilot/postgres-init.sh";
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
-  for (const scriptPath of [backupPath, restorePath]) {
+  for (const scriptPath of [backupPath, restorePath, postgresInitPath]) {
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   }
+});
+
+test("Postgres initialization separates admin, migrator, and app roles", () => {
+  const script = readFileSync(postgresInitPath, "utf8");
+  assert.match(script, /IRIS_MIGRATOR_USER/u);
+  assert.match(script, /IRIS_APP_USER/u);
+  assert.match(script, /ALTER DEFAULT PRIVILEGES/u);
+  assert.match(script, /CREATE EXTENSION IF NOT EXISTS vector/u);
 });
 
 test("backup is encrypted, atomic, and cannot mask pipeline failure", () => {

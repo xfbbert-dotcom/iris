@@ -77,9 +77,11 @@ durable Redis raw-event queue required after callback acknowledgement. DLQs, his
 failures, and optional downstream workers remain visible in `/internal/status` but do not prevent
 Caddy from serving an otherwise healthy callback ingress.
 
-The migration job intentionally depends only on Postgres and receives only `DATABASE_URL`; it does
-not need Redis, Feishu, model, embedding, or operator credentials. Third-party images are pinned by
-digest, while the locally built Core image is tagged with the approved source commit.
+The migration job intentionally depends only on Postgres and receives only the dedicated migrator
+database URL; it does not need Redis, Feishu, model, embedding, or operator credentials. Core uses a
+separate application role limited to runtime DML, while the Postgres bootstrap administrator stays
+inside the database container. Third-party images are pinned by digest, while the locally built Core
+image is tagged with the approved source commit.
 
 ## Configuration And Secrets
 
@@ -89,7 +91,7 @@ stored on the VPS with owner-only permissions.
 The pilot environment must provide:
 
 - public hostname and Caddy email;
-- Postgres database name, user, and URL-safe password;
+- distinct Postgres bootstrap, migrator, and application roles with URL-safe passwords;
 - all variables already required by `npm run readiness`;
 - Feishu verification token, app credentials, and Iris bot open ID;
 - model and embedding provider credentials;

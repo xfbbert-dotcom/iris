@@ -16,6 +16,22 @@ test("pins every third-party pilot image to an immutable digest", () => {
 
 test("gives the migration job database credentials only", () => {
   assert.deepEqual(Object.keys(compose.services.migrate.environment).sort(), ["DATABASE_URL"]);
+  const appDatabase = new URL(compose.services.core.environment.DATABASE_URL);
+  const migrationDatabase = new URL(compose.services.migrate.environment.DATABASE_URL);
+  assert.notEqual(appDatabase.username, migrationDatabase.username);
+  assert.notEqual(appDatabase.password, migrationDatabase.password);
+  assert.notEqual(appDatabase.username, compose.services.postgres.environment.POSTGRES_USER);
+});
+
+test("initializes dedicated migrator and application database roles", () => {
+  assert.ok(compose.services.postgres.environment.IRIS_MIGRATOR_USER);
+  assert.ok(compose.services.postgres.environment.IRIS_MIGRATOR_PASSWORD);
+  assert.ok(compose.services.postgres.environment.IRIS_APP_USER);
+  assert.ok(compose.services.postgres.environment.IRIS_APP_PASSWORD);
+  const initMount = compose.services.postgres.volumes.find(
+    (volume) => volume.target === "/docker-entrypoint-initdb.d/10-iris-roles.sh",
+  );
+  assert.equal(initMount?.read_only, true);
 });
 
 test("gates the edge on authenticated runtime readiness", () => {

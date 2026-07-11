@@ -41,13 +41,16 @@ test -s "$temporary_dump"
   < "$temporary_dump" > /dev/null
 
 "${compose[@]}" exec -T -e IRIS_RESTORE_DATABASE="$staging_database" postgres sh -eu -c '
-  createdb --username "$POSTGRES_USER" --owner "$POSTGRES_USER" "$IRIS_RESTORE_DATABASE"
+  createdb --username "$POSTGRES_USER" --owner "$IRIS_MIGRATOR_USER" "$IRIS_RESTORE_DATABASE"
+  psql --username "$POSTGRES_USER" --dbname "$IRIS_RESTORE_DATABASE" \
+    --set ON_ERROR_STOP=on --command "CREATE EXTENSION IF NOT EXISTS vector"
 '
 staging_database_active=true
 
 "${compose[@]}" exec -T -e IRIS_RESTORE_DATABASE="$staging_database" postgres sh -eu -c '
-  exec pg_restore \
-    --username "$POSTGRES_USER" \
+  PGPASSWORD="$IRIS_MIGRATOR_PASSWORD" exec pg_restore \
+    --host 127.0.0.1 \
+    --username "$IRIS_MIGRATOR_USER" \
     --dbname "$IRIS_RESTORE_DATABASE" \
     --exit-on-error \
     --single-transaction \

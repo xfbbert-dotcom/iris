@@ -162,10 +162,13 @@ cp .env.pilot.example .env.pilot
 chmod 600 .env.pilot
 ```
 
-Replace every `replace-with-*` value. `POSTGRES_PASSWORD` must be URL-safe and must match the password
-inside `DATABASE_URL`. Set `IRIS_IMAGE_TAG` to the checked-out `APPROVED_COMMIT_SHA`; never reuse a
-moving tag such as `pilot` or `latest`. `IRIS_PUBLIC_HOSTNAME` is the DNS name only, without a path.
-Generate the internal bearer token with a single header-safe value:
+Replace every `replace-with-*` value. Generate distinct URL-safe passwords for the Postgres admin,
+`iris_migrator`, and `iris_app` roles, then keep `DATABASE_MIGRATION_URL` and `DATABASE_URL` aligned
+with their respective credentials. Core receives only the app URL; the one-shot migration job
+receives only the migrator URL; the admin credential remains inside the Postgres container. Set
+`IRIS_IMAGE_TAG` to the checked-out `APPROVED_COMMIT_SHA`; never reuse a moving tag such as `pilot`
+or `latest`. `IRIS_PUBLIC_HOSTNAME` is the DNS name only, without a path. Generate the internal
+bearer token with a single header-safe value:
 
 ```bash
 openssl rand -hex 32
