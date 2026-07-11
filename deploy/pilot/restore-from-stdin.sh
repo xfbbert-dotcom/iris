@@ -11,14 +11,22 @@ fi
 repository_dir="${IRIS_REPOSITORY_DIR:-/opt/iris/repository}"
 environment_file="${IRIS_ENV_FILE:-$repository_dir/.env.pilot}"
 compose_file="${IRIS_COMPOSE_FILE:-$repository_dir/deploy/pilot/docker-compose.yml}"
+backup_dir="${IRIS_BACKUP_DIR:-$repository_dir/backups}"
 
 command -v docker >/dev/null
 command -v tar >/dev/null
+command -v flock >/dev/null
 test -r "$environment_file"
 test -r "$compose_file"
 
 cd "$repository_dir"
 compose=(docker compose --env-file "$environment_file" --file "$compose_file")
+install -d -m 700 "$backup_dir"
+exec 9> "$backup_dir/.backup.lock"
+if ! flock -n 9; then
+  echo "an Iris backup or restore is already running" >&2
+  exit 1
+fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 staging_database="iris_restore_${timestamp}_$$"
@@ -78,11 +86,28 @@ staging_database_active=true
   exec node apps/core/dist/database/migrate.js
 '
 
+"${compose[@]}" exec -T -e IRIS_RESTORE_DATABASE="$staging_database" postgres sh -eu -c '
+  psql --username "$POSTGRES_USER" --dbname "$IRIS_RESTORE_DATABASE" \
+    --set ON_ERROR_STOP=on --set "app_user=$IRIS_APP_USER" \
+    --file /opt/iris/grant-app-access.sql
+  PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 \
+    --username "$IRIS_APP_USER" --dbname "$IRIS_RESTORE_DATABASE" \
+    --set ON_ERROR_STOP=on \
+    --command "SELECT count(*) FROM document_sources; UPDATE document_sources SET updated_at = updated_at WHERE false" \
+    > /dev/null
+  if PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 \
+    --username "$IRIS_APP_USER" --dbname "$IRIS_RESTORE_DATABASE" \
+    --set ON_ERROR_STOP=on --command "CREATE TABLE iris_forbidden_app_ddl(id integer)" \
+    > /dev/null 2>&1; then
+    echo "application role unexpectedly has DDL permission on the staging database" >&2
+    exit 1
+  fi
+'
+
 echo "Staging restore and migrations passed; stopping Iris for database swap" >&2
 "${compose[@]}" stop caddy core
 
-install -d -m 700 "$repository_dir/backups"
-previous_redis_file="$repository_dir/backups/redis_previous_${timestamp}_$$.rdb"
+previous_redis_file="$backup_dir/redis_previous_${timestamp}_$$.rdb"
 "${compose[@]}" exec -T redis redis-cli SAVE > /dev/null
 "${compose[@]}" cp redis:/data/dump.rdb "$previous_redis_file"
 chmod 600 "$previous_redis_file"

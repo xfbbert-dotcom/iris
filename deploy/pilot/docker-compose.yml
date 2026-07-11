@@ -72,6 +72,7 @@ services:
     volumes:
       - iris_postgres_data:/var/lib/postgresql/data
       - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-iris-roles.sh:ro
+      - ./grant-app-access.sql:/opt/iris/grant-app-access.sql:ro
       - ./swap-databases.sql:/opt/iris/swap-databases.sql:ro
     restart: unless-stopped
     logging: *bounded-logging
@@ -151,6 +152,7 @@ services:
     environment:
       CADDY_EMAIL: ${CADDY_EMAIL:?CADDY_EMAIL is required}
       IRIS_PUBLIC_HOSTNAME: ${IRIS_PUBLIC_HOSTNAME:?IRIS_PUBLIC_HOSTNAME is required}
+      IRIS_INTERNAL_API_TOKEN: ${IRIS_INTERNAL_API_TOKEN:?IRIS_INTERNAL_API_TOKEN is required}
     depends_on:
       core:
         condition: service_healthy

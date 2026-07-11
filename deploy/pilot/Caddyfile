@@ -7,7 +7,13 @@
 
   @feishu path /feishu/events
   handle @feishu {
-    reverse_proxy core:3000
+    reverse_proxy core:3000 {
+      health_uri /internal/ingress-readiness
+      health_headers Authorization "Bearer {$IRIS_INTERNAL_API_TOKEN}"
+      health_interval 2s
+      health_timeout 2s
+      health_status 2xx
+    }
   }
 
   @health path /health

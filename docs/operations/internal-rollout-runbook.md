@@ -282,6 +282,10 @@ the Feishu event callback only after these checks pass:
 https://iris.example.com/feishu/events
 ```
 
+Caddy rechecks ingress readiness every two seconds. During a Redis outage it returns `503` on the
+callback path so Feishu retries; once Redis is ready again, forwarding resumes automatically. A
+healthy callback still follows the fast ack-first path.
+
 ### Encrypted Backup
 
 Install `age`, create an offline identity on an operator-controlled machine, and store only its public
@@ -292,7 +296,7 @@ script and recipient with root-only permissions:
 sudo apt-get update && sudo apt-get install -y age
 sudo install -d -m 700 /etc/iris
 printf '%s\n' 'AGE_PUBLIC_RECIPIENT' | sudo tee /etc/iris/backup-recipient > /dev/null
-sudo chmod 600 /etc/iris/backup-recipient
+sudo chmod 644 /etc/iris/backup-recipient
 sudo install -m 700 deploy/pilot/backup.sh /usr/local/sbin/iris-backup
 ```
 
@@ -300,7 +304,7 @@ Replace `AGE_PUBLIC_RECIPIENT` with the single `age1...` recipient. Create a man
 inviting pilot users:
 
 ```bash
-sudo /usr/local/sbin/iris-backup
+/usr/local/sbin/iris-backup
 ```
 
 The script uses `set -Eeuo pipefail`, refuses concurrent runs with `flock`, and briefly stops Caddy
@@ -328,10 +332,11 @@ rm -rf "$VERIFY_DIR"
 ```
 
 After the first manual verification and off-host copy are working, schedule the installed script
-from root's crontab:
+from the dedicated operator account's crontab. Backup and restore share the same `flock` lock and
+the same operator-owned backup directory:
 
 ```cron
-15 2 * * * /usr/local/sbin/iris-backup >> /var/log/iris-backup.log 2>&1
+15 2 * * * /usr/local/sbin/iris-backup >> /opt/iris/backup.log 2>&1
 ```
 
 The scheduled command creates an encrypted local backup; a separate operator-controlled copy job

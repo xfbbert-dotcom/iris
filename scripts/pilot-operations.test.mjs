@@ -46,6 +46,9 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /staging_database/u);
   assert.match(script, /previous_database/u);
   assert.match(script, /redis_previous/u);
+  assert.match(script, /grant-app-access\.sql/u);
+  assert.match(script, /UPDATE document_sources/u);
+  assert.match(script, /iris_forbidden_app_ddl/u);
   assert.match(script, /stop caddy core/u);
   assert.match(script, /createdb/u);
   assert.match(script, /--exit-on-error/u);

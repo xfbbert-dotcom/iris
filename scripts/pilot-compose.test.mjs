@@ -32,6 +32,10 @@ test("initializes dedicated migrator and application database roles", () => {
     (volume) => volume.target === "/docker-entrypoint-initdb.d/10-iris-roles.sh",
   );
   assert.equal(initMount?.read_only, true);
+  const grantMount = compose.services.postgres.volumes.find(
+    (volume) => volume.target === "/opt/iris/grant-app-access.sql",
+  );
+  assert.equal(grantMount?.read_only, true);
 });
 
 test("gates the edge on authenticated runtime readiness", () => {
@@ -41,6 +45,10 @@ test("gates the edge on authenticated runtime readiness", () => {
   assert.doesNotMatch(healthCommand, /\/health/u);
   assert.doesNotMatch(healthCommand, /\/internal\/status/u);
   assert.equal(compose.services.caddy.depends_on.core.condition, "service_healthy");
+  assert.equal(
+    compose.services.caddy.environment.IRIS_INTERNAL_API_TOKEN,
+    compose.services.core.environment.IRIS_INTERNAL_API_TOKEN,
+  );
 });
 
 function loadPilotCompose() {

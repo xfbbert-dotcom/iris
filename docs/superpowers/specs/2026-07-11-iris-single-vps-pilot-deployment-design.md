@@ -77,6 +77,11 @@ durable Redis raw-event queue required after callback acknowledgement. DLQs, his
 failures, and optional downstream workers remain visible in `/internal/status` but do not prevent
 Caddy from serving an otherwise healthy callback ingress.
 
+Caddy actively checks that same authenticated ingress probe every two seconds. If Redis becomes
+unavailable after startup, Caddy stops forwarding `/feishu/events` and returns a retryable `503`
+instead of allowing Core to acknowledge an event it cannot persist. Normal healthy callbacks keep
+the ack-first path and never wait for queue persistence inline.
+
 The migration job intentionally depends only on Postgres and receives only the dedicated migrator
 database URL; it does not need Redis, Feishu, model, embedding, or operator credentials. Core uses a
 separate application role limited to runtime DML, while the Postgres bootstrap administrator stays
