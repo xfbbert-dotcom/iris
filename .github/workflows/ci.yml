@@ -41,6 +41,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Build Core production artifacts
+        run: npm run build
+
       - name: Test core
         run: npm test
 
@@ -54,6 +57,26 @@ jobs:
 
       - name: Validate Docker Compose
         run: docker compose config
+
+      - name: Validate pilot readiness
+        run: npm run readiness -- --env-file deploy/pilot/ci.env
+
+      - name: Validate pilot Compose
+        run: npm run pilot:config
+
+      - name: Start pilot stack
+        run: docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml up --build --detach
+
+      - name: Smoke pilot boundaries
+        run: npm run pilot:smoke
+
+      - name: Show pilot logs on failure
+        if: failure()
+        run: docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml logs --no-color
+
+      - name: Stop pilot stack
+        if: always()
+        run: docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml down --volumes --remove-orphans
 
   ai-worker:
     name: AI Worker
