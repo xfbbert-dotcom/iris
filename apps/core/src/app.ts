@@ -60,7 +60,8 @@ type EventWorkerRuntimeFactoryInput = {
 
 export type BuildAppDependencies = {
   queue?: EventQueue;
-  rawEventQueue?: Pick<RawEventQueue, "enqueue">;
+  rawEventQueue?: Pick<RawEventQueue, "enqueue"> &
+    Partial<Pick<RawEventQueue, "getPendingCount">>;
   verifyFeishuRequest?: (request: FeishuCallbackRequest) => Promise<boolean> | boolean;
   onFeishuGatewayEnqueueError?: (error: unknown) => void;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
@@ -1060,8 +1061,16 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
   app.get("/health", async () => ({ ok: true, service: "iris-core" }));
 
+  app.get("/internal/ingress-readiness", async (_request, reply) => {
+    if (!(await gateway.isIngressReady())) {
+      return reply.code(503).send({ ok: false, error: "ingress_queue_unavailable" });
+    }
+    return { ok: true, status: "ready" };
+  });
+
   app.addHook("onClose", async () => {
     await closeRuntimeResources([
+      () => gateway.close(),
       () => documentSyncRuntime?.close(),
       () => eventWorkerRuntime?.close(),
       () => reindexWorkerRuntime?.close(),

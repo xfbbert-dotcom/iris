@@ -36,7 +36,8 @@ type RuntimeGate = {
 
 export type FeishuGatewayDependencies = {
   queue: EventQueue;
-  rawEventQueue?: Pick<RawEventQueue, "enqueue">;
+  rawEventQueue?: Pick<RawEventQueue, "enqueue"> &
+    Partial<Pick<RawEventQueue, "getPendingCount">>;
   signalFilter?: SignalFilter;
   verifyRequest?: RequestVerifier;
   onEnqueueError?: EnqueueErrorHandler;
@@ -46,6 +47,13 @@ export type FeishuGatewayDependencies = {
 
 export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
   const now = dependencies.now ?? (() => new Date());
+  const pendingEnqueues = new Set<Promise<void>>();
+
+  function scheduleEnqueue(enqueue: () => Promise<void>): void {
+    const pending = enqueueAfterAcknowledgement(enqueue, dependencies.onEnqueueError);
+    pendingEnqueues.add(pending);
+    void pending.then(() => pendingEnqueues.delete(pending));
+  }
 
   return {
     async handleCallback(request: FeishuCallbackRequest): Promise<FeishuCallbackResponse> {
@@ -89,7 +97,7 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
 
       const rawEventQueue = dependencies.rawEventQueue;
       if (rawEventQueue !== undefined) {
-        enqueueAfterAcknowledgement(
+        scheduleEnqueue(
           () =>
             rawEventQueue.enqueue({
               idempotencyKey: createRawEventIdempotencyKey({
@@ -102,17 +110,15 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
               receivedAt,
               attempts: 0,
             }),
-          dependencies.onEnqueueError,
         );
       } else {
-        enqueueAfterAcknowledgement(
+        scheduleEnqueue(
           () =>
             dependencies.queue.enqueueRawFeishuEvent({
               idempotencyKey: resolveIdempotencyKey(request),
               receivedAt,
               body: request.body
             }),
-          dependencies.onEnqueueError,
         );
       }
 
@@ -120,27 +126,45 @@ export function createFeishuGateway(dependencies: FeishuGatewayDependencies) {
         statusCode: 200,
         body: { ok: true }
       };
-    }
+    },
+    async isIngressReady(): Promise<boolean> {
+      const rawEventQueue = dependencies.rawEventQueue;
+      if (rawEventQueue?.getPendingCount === undefined) {
+        return false;
+      }
+
+      try {
+        await rawEventQueue.getPendingCount();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async close(): Promise<void> {
+      while (pendingEnqueues.size > 0) {
+        await Promise.all([...pendingEnqueues]);
+      }
+    },
   };
 }
 
 function enqueueAfterAcknowledgement(
   enqueue: () => Promise<void>,
   onError: EnqueueErrorHandler | undefined,
-): void {
-  setTimeout(() => {
-    enqueueWithoutWaiting(enqueue, onError);
-  }, 0);
+): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      void enqueueWithoutWaiting(enqueue, onError).then(resolve);
+    }, 0);
+  });
 }
 
-function enqueueWithoutWaiting(
+async function enqueueWithoutWaiting(
   enqueue: () => Promise<void>,
   onError: EnqueueErrorHandler | undefined,
-): void {
+): Promise<void> {
   try {
-    void enqueue().catch((error: unknown) => {
-      reportEnqueueError(onError, error);
-    });
+    await enqueue();
   } catch (error) {
     reportEnqueueError(onError, error);
   }

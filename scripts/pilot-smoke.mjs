@@ -18,7 +18,9 @@ try {
   await waitForStatus(`${publicBaseUrl}/health`, 200, timeoutMs);
   await expectStatus(`${publicBaseUrl}/internal/status`, 404);
   await expectStatus(`${publicBaseUrl}/internal/readiness`, 404);
+  await expectStatus(`${publicBaseUrl}/internal/ingress-readiness`, 404);
   await expectStatus(`${coreBaseUrl}/internal/status`, 401);
+  await expectStatus(`${coreBaseUrl}/internal/ingress-readiness`, 401);
   await expectStatus(`${coreBaseUrl}/internal/status`, 401, {
     authorization: "Bearer wrong-token",
   });
@@ -26,6 +28,15 @@ try {
     authorization: `Bearer ${internalApiToken}`,
   });
   assertHealthyInternalStatus(await internalStatusResponse.json());
+  const ingressReadinessResponse = await expectStatus(
+    `${coreBaseUrl}/internal/ingress-readiness`,
+    200,
+    { authorization: `Bearer ${internalApiToken}` },
+  );
+  const ingressReadiness = await ingressReadinessResponse.json();
+  if (ingressReadiness.ok !== true || ingressReadiness.status !== "ready") {
+    throw new Error("Expected Iris ingress readiness to be ready");
+  }
 
   console.log(
     JSON.stringify({
@@ -34,10 +45,12 @@ try {
         publicHealth: 200,
         publicInternalStatus: 404,
         publicInternalReadiness: 404,
+        publicIngressReadiness: 404,
         privateInternalStatusWithoutToken: 401,
         privateInternalStatusWithWrongToken: 401,
         privateInternalStatusWithToken: 200,
         privateInternalStatusHealth: "healthy",
+        privateIngressReadiness: "ready",
       },
     }),
   );

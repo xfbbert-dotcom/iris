@@ -64,13 +64,18 @@ Compose startup order is condition-based:
 ```text
 Postgres healthy -> migrate exits successfully --\
                                                +-> Core healthy -> Caddy public
-Redis healthy --------------------------------/
+Redis ingress queue ready ---------------------/
 ```
 
 A migration failure prevents Core startup. A listener or runtime startup failure exits the Core
 container, whose restart policy retries after the failure is visible in container logs. The
 deployment keeps exactly one Core replica because the current Redis processing recovery contract is
 single-consumer.
+
+Core container health uses the authenticated `/internal/ingress-readiness` probe. It checks the
+durable Redis raw-event queue required after callback acknowledgement. DLQs, historical batch
+failures, and optional downstream workers remain visible in `/internal/status` but do not prevent
+Caddy from serving an otherwise healthy callback ingress.
 
 The migration job intentionally depends only on Postgres and receives only `DATABASE_URL`; it does
 not need Redis, Feishu, model, embedding, or operator credentials. Third-party images are pinned by
@@ -119,7 +124,10 @@ Automated deployment verification must prove:
 - Core container health reaches healthy;
 - public `/health` returns `200`;
 - public `/internal/status` returns `404` at Caddy;
-- loopback `/internal/status` returns `401` without a bearer token and `200` with it.
+- public `/internal/ingress-readiness` returns `404` at Caddy;
+- loopback internal routes return `401` without a bearer token;
+- authorized loopback `/internal/ingress-readiness` returns `200` with `status: "ready"`;
+- authorized loopback `/internal/status` returns `200` for operator diagnostics.
 
 The real Feishu pilot smoke test then proves:
 

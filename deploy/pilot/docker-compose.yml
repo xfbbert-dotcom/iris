@@ -119,16 +119,14 @@ services:
         - node
         - -e
         - >-
-          fetch('http://127.0.0.1:3000/internal/status', {
+          fetch('http://127.0.0.1:3000/internal/ingress-readiness', {
             headers: { authorization: 'Bearer ' + process.env.IRIS_INTERNAL_API_TOKEN }
           })
           .then(async (response) => {
             if (!response.ok) throw new Error(String(response.status));
             const body = await response.json();
-            if (body.ok !== true || body.status !== 'healthy' ||
-                body.summary?.degradedComponentCount !== 0 ||
-                body.summary?.stoppedEnabledRuntimeComponentCount !== 0) {
-              throw new Error('Iris runtime is not ready');
+            if (body.ok !== true || body.status !== 'ready') {
+              throw new Error('Iris ingress is not ready');
             }
           })
           .catch((error) => { console.error(error); process.exit(1); })

@@ -252,10 +252,16 @@ curl --silent --output /dev/null --write-out '%{http_code}\n' \
 curl --fail --silent --show-error \
   --header "Authorization: Bearer $IRIS_INTERNAL_API_TOKEN" \
   http://127.0.0.1:3000/internal/status
+
+curl --fail --silent --show-error \
+  --header "Authorization: Bearer $IRIS_INTERNAL_API_TOKEN" \
+  http://127.0.0.1:3000/internal/ingress-readiness
 ```
 
 The first request must return `401`; the authorized request must return `200` and show all enabled
-workers running with empty DLQs. Configure the Feishu event callback only after these checks pass:
+workers running with empty DLQs. Ingress readiness must separately return `status: "ready"`; DLQ or
+historical batch state remains an operator signal and does not control Caddy availability. Configure
+the Feishu event callback only after these checks pass:
 
 ```text
 https://iris.example.com/feishu/events

@@ -20,9 +20,10 @@ test("gives the migration job database credentials only", () => {
 
 test("gates the edge on authenticated runtime readiness", () => {
   const healthCommand = compose.services.core.healthcheck.test.join(" ");
-  assert.match(healthCommand, /\/internal\/status/u);
+  assert.match(healthCommand, /\/internal\/ingress-readiness/u);
   assert.match(healthCommand, /IRIS_INTERNAL_API_TOKEN/u);
   assert.doesNotMatch(healthCommand, /\/health/u);
+  assert.doesNotMatch(healthCommand, /\/internal\/status/u);
   assert.equal(compose.services.caddy.depends_on.core.condition, "service_healthy");
 });
 

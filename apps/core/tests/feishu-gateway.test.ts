@@ -588,6 +588,54 @@ describe("FeishuGateway", () => {
     expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
   });
 
+  it("drains acknowledged deferred enqueues before closing", async () => {
+    let resolveEnqueue: () => void = () => undefined;
+    const rawEventQueue = {
+      enqueue: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveEnqueue = resolve;
+          }),
+      ),
+    };
+    const gateway = createFeishuGateway({
+      queue: new InMemoryEventQueue(),
+      rawEventQueue,
+    });
+
+    await gateway.handleCallback({
+      headers: {},
+      body: { header: { event_id: "event-drain", event_type: "im.message.receive_v1" } },
+    });
+    let closed = false;
+    const closePromise = gateway.close().then(() => {
+      closed = true;
+    });
+    await flushDeferredEnqueue();
+
+    expect(rawEventQueue.enqueue).toHaveBeenCalledOnce();
+    expect(closed).toBe(false);
+
+    resolveEnqueue();
+    await closePromise;
+    expect(closed).toBe(true);
+  });
+
+  it("reports ingress ready only when the durable raw queue responds", async () => {
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => undefined),
+      getPendingCount: vi.fn(async () => 0),
+    };
+    const gateway = createFeishuGateway({
+      queue: new InMemoryEventQueue(),
+      rawEventQueue,
+    });
+
+    await expect(gateway.isIngressReady()).resolves.toBe(true);
+    rawEventQueue.getPendingCount.mockRejectedValueOnce(new Error("redis unavailable"));
+    await expect(gateway.isIngressReady()).resolves.toBe(false);
+  });
+
   it("reports raw queue persistence errors without failing Feishu acknowledgement", async () => {
     const queue = new InMemoryEventQueue();
     const enqueueError = new Error("redis unavailable");
@@ -709,6 +757,38 @@ describe("FeishuGateway", () => {
 });
 
 describe("Core App Feishu route", () => {
+  it("exposes ingress readiness from the durable raw queue only", async () => {
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => undefined),
+      getPendingCount: vi.fn(async () => 0),
+    };
+    const app = buildApp({
+      rawEventQueue,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const readyResponse = await app.inject({
+      method: "GET",
+      url: "/internal/ingress-readiness",
+    });
+    rawEventQueue.getPendingCount.mockRejectedValueOnce(new Error("redis unavailable"));
+    const unavailableResponse = await app.inject({
+      method: "GET",
+      url: "/internal/ingress-readiness",
+    });
+
+    expect(readyResponse.statusCode).toBe(200);
+    expect(readyResponse.json()).toEqual({ ok: true, status: "ready" });
+    expect(unavailableResponse.statusCode).toBe(503);
+    expect(unavailableResponse.json()).toEqual({
+      ok: false,
+      error: "ingress_queue_unavailable",
+    });
+  });
+
   it("returns 200 from the Feishu callback route", async () => {
     const queue = new InMemoryEventQueue();
     const app = buildApp({ queue });

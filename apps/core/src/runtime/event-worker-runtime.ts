@@ -59,7 +59,8 @@ import { closeRuntimeResources } from "./runtime-close.js";
 import { observeStartupPromise } from "./startup-promise.js";
 
 export type EventWorkerRuntime = {
-  rawEventQueue?: Pick<RawEventQueue, "enqueue">;
+  rawEventQueue?: Pick<RawEventQueue, "enqueue"> &
+    Partial<Pick<RawEventQueue, "getPendingCount">>;
   deadLetters: {
     list(input: { limit: number }): Promise<RawEventDeadLetter[]>;
     replay(id: string): Promise<"replayed" | "not_found" | "unsupported_legacy_item">;
