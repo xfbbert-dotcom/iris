@@ -1,0 +1,161 @@
+name: iris-pilot
+
+x-core-image: &core-image
+  image: iris-core:${IRIS_IMAGE_TAG:-pilot}
+  build:
+    context: ../..
+    dockerfile: deploy/pilot/Dockerfile
+    target: runtime
+
+x-core-environment: &core-environment
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+  PORT: "3000"
+  IRIS_INTERNAL_API_TOKEN: ${IRIS_INTERNAL_API_TOKEN:?IRIS_INTERNAL_API_TOKEN is required}
+  FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:?FEISHU_VERIFICATION_TOKEN is required}
+  FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
+  FEISHU_APP_ID: ${FEISHU_APP_ID:?FEISHU_APP_ID is required}
+  FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?FEISHU_APP_SECRET is required}
+  FEISHU_OPEN_BASE_URL: ${FEISHU_OPEN_BASE_URL:-https://open.feishu.cn}
+  IRIS_FEISHU_BOT_OPEN_ID: ${IRIS_FEISHU_BOT_OPEN_ID:?IRIS_FEISHU_BOT_OPEN_ID is required}
+  IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS: ${IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS:-10000}
+  IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS: ${IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS:-2000000}
+  IRIS_EVENT_WORKER_ENABLED: ${IRIS_EVENT_WORKER_ENABLED:-true}
+  IRIS_EVENT_WORKER_INTERVAL_MS: ${IRIS_EVENT_WORKER_INTERVAL_MS:-1000}
+  IRIS_EVENT_WORKER_BATCH_LIMIT: ${IRIS_EVENT_WORKER_BATCH_LIMIT:-50}
+  IRIS_DOCUMENT_SYNC_WORKER_ENABLED: ${IRIS_DOCUMENT_SYNC_WORKER_ENABLED:-true}
+  IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS: ${IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS:-1000}
+  IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT: ${IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT:-10}
+  IRIS_REINDEX_WORKER_ENABLED: ${IRIS_REINDEX_WORKER_ENABLED:-true}
+  IRIS_REINDEX_WORKER_INTERVAL_MS: ${IRIS_REINDEX_WORKER_INTERVAL_MS:-1000}
+  IRIS_REINDEX_WORKER_BATCH_LIMIT: ${IRIS_REINDEX_WORKER_BATCH_LIMIT:-25}
+  IRIS_MODEL_PROVIDER: ${IRIS_MODEL_PROVIDER:-openai-compatible}
+  IRIS_MODEL_BASE_URL: ${IRIS_MODEL_BASE_URL:?IRIS_MODEL_BASE_URL is required}
+  IRIS_MODEL_API_KEY: ${IRIS_MODEL_API_KEY:?IRIS_MODEL_API_KEY is required}
+  IRIS_MODEL_NAME: ${IRIS_MODEL_NAME:?IRIS_MODEL_NAME is required}
+  IRIS_MODEL_TIMEOUT_MS: ${IRIS_MODEL_TIMEOUT_MS:-30000}
+  IRIS_EMBEDDING_PROVIDER: ${IRIS_EMBEDDING_PROVIDER:-openai-compatible}
+  IRIS_EMBEDDING_BASE_URL: ${IRIS_EMBEDDING_BASE_URL:?IRIS_EMBEDDING_BASE_URL is required}
+  IRIS_EMBEDDING_API_KEY: ${IRIS_EMBEDDING_API_KEY:?IRIS_EMBEDDING_API_KEY is required}
+  IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
+  IRIS_EMBEDDING_DIMENSIONS: ${IRIS_EMBEDDING_DIMENSIONS:?IRIS_EMBEDDING_DIMENSIONS is required}
+  IRIS_EMBEDDING_TIMEOUT_MS: ${IRIS_EMBEDDING_TIMEOUT_MS:-30000}
+  IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS: ${IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS:-true}
+  IRIS_INTERNAL_DRAFT_PERMISSION_MODE: ${IRIS_INTERNAL_DRAFT_PERMISSION_MODE:-source-policy}
+
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    volumes:
+      - iris_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    logging: *bounded-logging
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    volumes:
+      - iris_redis_data:/data
+    restart: unless-stopped
+    logging: *bounded-logging
+    networks:
+      - backend
+
+  migrate:
+    <<: *core-image
+    command: ["node", "apps/core/dist/database/migrate.js"]
+    environment: *core-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    logging: *bounded-logging
+    networks:
+      - backend
+
+  core:
+    <<: *core-image
+    environment: *core-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${IRIS_CORE_LOOPBACK_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/health')
+          .then((response) => { if (!response.ok) throw new Error(String(response.status)); })
+          .catch((error) => { console.error(error); process.exit(1); })
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *bounded-logging
+    networks:
+      - backend
+      - edge
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      CADDY_EMAIL: ${CADDY_EMAIL:?CADDY_EMAIL is required}
+      IRIS_PUBLIC_HOSTNAME: ${IRIS_PUBLIC_HOSTNAME:?IRIS_PUBLIC_HOSTNAME is required}
+    depends_on:
+      core:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - iris_caddy_data:/data
+      - iris_caddy_config:/config
+    restart: unless-stopped
+    logging: *bounded-logging
+    networks:
+      - edge
+
+networks:
+  backend:
+    internal: true
+  edge:
+
+volumes:
+  iris_postgres_data:
+  iris_redis_data:
+  iris_caddy_data:
+  iris_caddy_config:

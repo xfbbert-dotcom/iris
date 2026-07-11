@@ -1,0 +1,21 @@
+{
+  email {$CADDY_EMAIL}
+}
+
+{$IRIS_PUBLIC_HOSTNAME} {
+  encode zstd gzip
+
+  @feishu path /feishu/events
+  handle @feishu {
+    reverse_proxy core:3000
+  }
+
+  @health path /health
+  handle @health {
+    reverse_proxy core:3000
+  }
+
+  handle {
+    respond 404
+  }
+}

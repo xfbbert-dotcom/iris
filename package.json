@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "build": "npm --workspace apps/core run build",
+    "pilot:config": "docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml config",
     "readiness": "npm --workspace apps/core run readiness --",
     "test": "npm --workspace apps/core test",
     "test:python": "cd workers/ai && python -m pytest",
