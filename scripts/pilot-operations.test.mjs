@@ -28,16 +28,25 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /--confirm-replace-database/u);
   assert.match(script, /mktemp/u);
   assert.match(script, /pg_restore --list/u);
+  assert.match(script, /staging_database/u);
+  assert.match(script, /previous_database/u);
   assert.match(script, /stop caddy core/u);
-  assert.match(script, /dropdb/u);
   assert.match(script, /createdb/u);
   assert.match(script, /--exit-on-error/u);
   assert.match(script, /--single-transaction/u);
-  assert.match(script, /run --rm migrate/u);
+  assert.match(script, /run --rm .* migrate/u);
   assert.match(script, /up --detach --wait/u);
+  const swapSql = readFileSync("deploy/pilot/swap-databases.sql", "utf8");
+  assert.match(swapSql, /ALTER DATABASE %I RENAME TO %I/u);
   assert.ok(
-    script.indexOf("pg_restore --list") < script.indexOf("dropdb"),
-    "restore input must be validated before the database is replaced",
+    script.indexOf("--dbname \"$IRIS_RESTORE_DATABASE\"") <
+      script.indexOf("stop caddy core"),
+    "the staging database must be fully restored before traffic stops",
+  );
+  assert.ok(
+    script.indexOf("exec node apps/core/dist/database/migrate.js") <
+      script.indexOf("stop caddy core"),
+    "the staging database must be migrated before traffic stops",
   );
 });
 

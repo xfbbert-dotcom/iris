@@ -314,11 +314,12 @@ retries while Caddy is intentionally stopped.
 
 Decrypt the selected backup on the operator-controlled machine and stream the custom-format dump over
 SSH to the reviewed restore script on the VPS. The required confirmation flag is deliberately
-explicit. The script stops Caddy and Core, drops and recreates the target database, restores with
-`--exit-on-error --single-transaction`, reruns migrations and readiness, then starts the services
-only after every prior step succeeds. Before stopping traffic or replacing the database, it stores
-the stream in a mode-`600` temporary file and verifies the custom dump with `pg_restore --list`; an
-invalid or empty stream leaves the live database untouched.
+explicit. The script first restores the complete archive into a new staging database with
+`--exit-on-error --single-transaction` and runs all migrations there while the current database
+remains online. Only after those steps succeed does it stop Caddy and Core, rename the current
+database to a timestamped `iris_previous_*` name, promote the staging database, and restart Iris.
+The old database is retained for explicit post-restore acceptance and rollback; the script never
+deletes it automatically.
 
 Run from the operator-controlled machine:
 
@@ -331,9 +332,11 @@ age --decrypt \
       ./deploy/pilot/restore-from-stdin.sh --confirm-replace-database"
 ```
 
-If restore, migration, readiness, or startup fails, the script exits non-zero and leaves Core and
-Caddy stopped. Investigate before any manual restart. After success, repeat private status, DLQ, and
-Feishu smoke checks.
+If staging restore or migration fails, the script removes only the staging database and leaves live
+traffic untouched. If swap, readiness, or startup fails, it exits non-zero with Caddy and Core
+stopped and preserves the previous database. Investigate before any manual restart. After success,
+repeat private status, DLQ, database, and Feishu smoke checks; delete `iris_previous_*` only after
+the acceptance window closes.
 
 Do not practice restore against the only live database. Perform the first restore drill on a fresh
 temporary Postgres volume or a separate VPS before inviting the full 20-30 person company.

@@ -67,6 +67,7 @@ services:
       start_period: 5s
     volumes:
       - iris_postgres_data:/var/lib/postgresql/data
+      - ./swap-databases.sql:/opt/iris/swap-databases.sql:ro
     restart: unless-stopped
     logging: *bounded-logging
     networks:
