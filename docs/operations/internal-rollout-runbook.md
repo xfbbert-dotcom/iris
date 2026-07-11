@@ -113,6 +113,18 @@ Postgres or Redis ports. Do not disable Docker's own firewall management; doing 
 bridge isolation. See the official [Docker Ubuntu installation](https://docs.docker.com/engine/install/ubuntu/)
 and [Docker firewall guidance](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
 
+Create a dedicated operator account and either prefix every Docker command with `sudo`, or grant
+that account Docker socket access before continuing:
+
+```bash
+sudo usermod --append --groups docker "$USER"
+newgrp docker
+docker info
+```
+
+Membership in the `docker` group is effectively root access. Grant it only to the dedicated Iris
+operator, require SSH keys, and do not share that account.
+
 Redis emits a reliability warning when Linux memory overcommit is disabled. Configure it once on the
 VPS:
 
@@ -288,9 +300,9 @@ inviting pilot users:
 sudo /usr/local/sbin/iris-backup
 ```
 
-The script uses `set -Eeuo pipefail`, writes to an owner-only temporary file, and renames it only
-after both `pg_dump` and `age` succeed. It prints the final encrypted path and retains seven daily
-files locally.
+The script uses `set -Eeuo pipefail`, refuses concurrent runs with `flock`, writes to a unique
+owner-only temporary file, and renames it only after both `pg_dump` and `age` succeed. It prints the
+final encrypted path and removes encrypted files older than seven 24-hour periods.
 
 Copy the encrypted file off the VPS, decrypt it on the operator-controlled machine, and run
 `pg_restore --list` against the decrypted custom-format dump. A file that has not been decrypted and

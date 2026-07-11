@@ -11,6 +11,8 @@ recipient_file="${IRIS_BACKUP_RECIPIENT_FILE:-/etc/iris/backup-recipient}"
 
 command -v docker >/dev/null
 command -v age >/dev/null
+command -v flock >/dev/null
+command -v mktemp >/dev/null
 test -r "$environment_file"
 test -r "$compose_file"
 test -r "$recipient_file"
@@ -22,9 +24,15 @@ if [[ ! "$recipient" =~ ^age1[0-9a-z]+$ ]]; then
 fi
 
 install -d -m 700 "$backup_dir"
+exec 9> "$backup_dir/.backup.lock"
+if ! flock -n 9; then
+  echo "another Iris backup is already running" >&2
+  exit 1
+fi
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_file="$backup_dir/iris-$timestamp.dump.age"
-temporary_file="$backup_dir/.iris-$timestamp.dump.age.tmp"
+temporary_file="$(mktemp "$backup_dir/.iris-$timestamp.XXXXXX.dump.age.tmp")"
 
 cleanup() {
   rm -f -- "$temporary_file"

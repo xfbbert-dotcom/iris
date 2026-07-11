@@ -17,6 +17,8 @@ test("backup is encrypted, atomic, and cannot mask pipeline failure", () => {
   const script = readFileSync(backupPath, "utf8");
   assert.match(script, /set -Eeuo pipefail/u);
   assert.match(script, /IRIS_BACKUP_RECIPIENT_FILE/u);
+  assert.match(script, /flock -n/u);
+  assert.match(script, /mktemp/u);
   assert.match(script, /pg_dump/u);
   assert.match(script, /age --recipient/u);
   assert.match(script, /\.tmp/u);
