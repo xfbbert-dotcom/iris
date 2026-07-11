@@ -71,8 +71,46 @@ jobs:
       - name: Start pilot stack
         run: docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml up --build --detach
 
+      - name: Verify pilot database role boundaries
+        run: |
+          docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml exec -T postgres sh -eu -c '
+            non_superusers="$(psql --username "$POSTGRES_USER" --dbname postgres --tuples-only --no-align --command "
+              SELECT count(*) FROM pg_roles
+              WHERE rolname IN ('\''$IRIS_MIGRATOR_USER'\'', '\''$IRIS_APP_USER'\'') AND rolsuper
+            ")"
+            test "$non_superusers" = "0"
+            PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
+              --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
+              --command "SELECT count(*) FROM document_sources" > /dev/null
+            if PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
+              --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
+              --command "CREATE TABLE iris_forbidden_app_ddl(id integer)" > /dev/null 2>&1; then
+              echo "application role unexpectedly has DDL permission" >&2
+              exit 1
+            fi
+          '
+
       - name: Smoke pilot boundaries
         run: npm run pilot:smoke
+
+      - name: Drill paired pilot backup and restore
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes age
+          age-keygen --output "$RUNNER_TEMP/iris-backup-key.txt"
+          age-keygen -y "$RUNNER_TEMP/iris-backup-key.txt" \
+            > "$RUNNER_TEMP/iris-backup-recipient"
+          export IRIS_REPOSITORY_DIR="$GITHUB_WORKSPACE"
+          export IRIS_ENV_FILE="$GITHUB_WORKSPACE/deploy/pilot/ci.env"
+          export IRIS_COMPOSE_FILE="$GITHUB_WORKSPACE/deploy/pilot/docker-compose.yml"
+          export IRIS_BACKUP_DIR="$RUNNER_TEMP/iris-backups"
+          export IRIS_BACKUP_RECIPIENT_FILE="$RUNNER_TEMP/iris-backup-recipient"
+          ./deploy/pilot/backup.sh
+          backup_file="$(find "$IRIS_BACKUP_DIR" -type f -name 'iris-*.bundle.tar.age' -print -quit)"
+          test -n "$backup_file"
+          age --decrypt --identity "$RUNNER_TEMP/iris-backup-key.txt" "$backup_file" \
+            | ./deploy/pilot/restore-from-stdin.sh --confirm-replace-database
+          npm run pilot:smoke
 
       - name: Show pilot logs on failure
         if: failure()
