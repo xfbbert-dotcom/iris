@@ -751,6 +751,28 @@ describe("internal API token guard", () => {
       ).toThrow("IRIS_INTERNAL_API_TOKEN must be a single bearer token");
     }
   });
+
+  it("rejects an invalid configured token before creating runtime resources", () => {
+    const createAnswerDraftRuntime = vi.fn(() => undefined);
+    const createEventWorkerRuntime = vi.fn(() => undefined);
+    const createDocumentSyncRuntime = vi.fn(() => undefined);
+    const createReindexWorkerRuntime = vi.fn(() => undefined);
+
+    expect(() =>
+      buildApp({
+        internalApiToken: "operator secret",
+        createAnswerDraftRuntime,
+        createEventWorkerRuntime,
+        createDocumentSyncRuntime,
+        createReindexWorkerRuntime,
+      }),
+    ).toThrow("IRIS_INTERNAL_API_TOKEN must be a single bearer token");
+
+    expect(createAnswerDraftRuntime).not.toHaveBeenCalled();
+    expect(createEventWorkerRuntime).not.toHaveBeenCalled();
+    expect(createDocumentSyncRuntime).not.toHaveBeenCalled();
+    expect(createReindexWorkerRuntime).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /internal/audit/status", () => {

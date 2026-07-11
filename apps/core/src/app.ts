@@ -76,6 +76,10 @@ export type BuildAppDependencies = {
   readinessEnv?: EnvLike;
 };
 
+export type StartServerOptions = {
+  appDependencies?: Omit<BuildAppDependencies, "internalApiToken" | "readinessEnv">;
+};
+
 type ParsedJsonBody = {
   parsedBody: unknown;
   rawBody: string;
@@ -161,6 +165,9 @@ const maxJsonBodyBytes = 256 * 1024;
 const internalTruncationMarker = " ... [truncated]";
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
+  const internalApiToken =
+    readInternalApiToken(dependencies.internalApiToken) ??
+    readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const auditLog = dependencies.auditLog ?? new InMemoryAuditLog();
   const now = dependencies.now ?? (() => new Date());
@@ -209,9 +216,6 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const feishuGatewayStatus: FeishuGatewayStatusState = {
     enqueueFailureCount: 0,
   };
-  const internalApiToken =
-    readInternalApiToken(dependencies.internalApiToken) ??
-    readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
   const gateway = createFeishuGateway({
     queue,
     rawEventQueue: dependencies.rawEventQueue ?? eventWorkerRuntime?.rawEventQueue,
@@ -1935,10 +1939,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export async function startServer({
+  appDependencies = {},
+}: StartServerOptions = {}) {
   const internalApiToken = process.env.IRIS_INTERNAL_API_TOKEN;
   const feishuAuthConfig = readFeishuAuthConfig();
-  const host = resolveServerListenHost(internalApiToken, feishuAuthConfig.verificationToken);
-  const app = buildApp({ internalApiToken });
-  await app.listen({ port: readServerPort(), host });
+  const host = resolveServerListenHost(
+    internalApiToken,
+    feishuAuthConfig.verificationToken,
+  );
+  const port = readServerPort();
+  const app = buildApp({ ...appDependencies, internalApiToken });
+
+  try {
+    await app.listen({ port, host });
+  } catch (startupError) {
+    try {
+      await app.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [startupError, cleanupError],
+        "Iris server startup failed and runtime cleanup failed",
+      );
+    }
+    throw startupError;
+  }
+  return app;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await startServer();
 }
