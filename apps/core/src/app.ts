@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { installGracefulShutdown } from "./runtime/graceful-shutdown.js";
 import {
   InMemoryAuditLog,
   type AuditEvent,
@@ -1968,5 +1969,6 @@ export async function startServer({
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await startServer();
+  const app = await startServer();
+  installGracefulShutdown(app);
 }
