@@ -303,19 +303,28 @@ inviting pilot users:
 sudo /usr/local/sbin/iris-backup
 ```
 
-The script uses `set -Eeuo pipefail`, refuses concurrent runs with `flock`, writes to a unique
-owner-only temporary file, and renames it only after both `pg_dump` and `age` succeed. It prints the
-final encrypted path and removes encrypted files older than seven 24-hour periods.
+The script uses `set -Eeuo pipefail`, refuses concurrent runs with `flock`, and briefly stops Caddy
+and Core after graceful ingress drain. It captures PostgreSQL and Redis while both are quiescent,
+immediately restarts Iris, then encrypts the paired snapshot as one bundle. It writes to a unique
+owner-only temporary file and publishes it only after snapshot and encryption succeed. Files older
+than seven 24-hour periods are removed.
 
-Copy the encrypted file off the VPS, decrypt it on the operator-controlled machine, and run
-`pg_restore --list` against the decrypted custom-format dump. A file that has not been decrypted and
-listed successfully is not a verified backup.
+Copy the encrypted file off the VPS, decrypt it on the operator-controlled machine, inspect the
+bundle, and validate both payloads. A bundle whose Postgres archive and Redis RDB have not both been
+validated is not a verified backup.
 
 ```bash
+VERIFY_DIR="$(mktemp -d)"
 age --decrypt \
   --identity ~/.config/age/iris-backup-key.txt \
-  iris-20260711T120000Z.dump.age \
-  | pg_restore --list > /dev/null
+  iris-20260711T120000Z.bundle.tar.age \
+  | tar --extract --directory "$VERIFY_DIR"
+pg_restore --list "$VERIFY_DIR/postgres.dump" > /dev/null
+docker run --rm \
+  --volume "$VERIFY_DIR:/verify:ro" \
+  redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99 \
+  redis-check-rdb /verify/redis.rdb
+rm -rf "$VERIFY_DIR"
 ```
 
 After the first manual verification and off-host copy are working, schedule the installed script
@@ -333,21 +342,21 @@ must move it off the VPS. Alert if either the backup or off-host copy fails.
 Disable the Feishu callback before starting a restore so the platform does not accumulate callback
 retries while Caddy is intentionally stopped.
 
-Decrypt the selected backup on the operator-controlled machine and stream the custom-format dump over
-SSH to the reviewed restore script on the VPS. The required confirmation flag is deliberately
+Decrypt the selected paired bundle on the operator-controlled machine and stream it over SSH to the
+reviewed restore script on the VPS. The required confirmation flag is deliberately
 explicit. The script first restores the complete archive into a new staging database with
 `--exit-on-error --single-transaction` and runs all migrations there while the current database
 remains online. Only after those steps succeed does it stop Caddy and Core, rename the current
-database to a timestamped `iris_previous_*` name, promote the staging database, and restart Iris.
-The old database is retained for explicit post-restore acceptance and rollback; the script never
-deletes it automatically.
+database to a timestamped `iris_previous_*` name, promote the staging database, replace Redis with
+the paired RDB, and restart Iris. The old database and pre-swap Redis RDB are retained for explicit
+post-restore acceptance and rollback; the script never deletes them automatically.
 
 Run from the operator-controlled machine:
 
 ```bash
 age --decrypt \
   --identity ~/.config/age/iris-backup-key.txt \
-  iris-20260711T120000Z.dump.age \
+  iris-20260711T120000Z.bundle.tar.age \
   | ssh operator@iris.example.com \
     "cd /opt/iris/repository && \
       ./deploy/pilot/restore-from-stdin.sh --confirm-replace-database"
@@ -355,9 +364,9 @@ age --decrypt \
 
 If staging restore or migration fails, the script removes only the staging database and leaves live
 traffic untouched. If swap, readiness, or startup fails, it exits non-zero with Caddy and Core
-stopped and preserves the previous database. Investigate before any manual restart. After success,
-repeat private status, DLQ, database, and Feishu smoke checks; delete `iris_previous_*` only after
-the acceptance window closes.
+stopped and preserves the previous database plus Redis RDB. Investigate before any manual restart.
+After success, repeat private status, DLQ, database, and Feishu smoke checks; delete the retained
+pair only after the acceptance window closes.
 
 Do not practice restore against the only live database. Perform the first restore drill on a fresh
 temporary Postgres volume or a separate VPS before inviting the full 20-30 person company.

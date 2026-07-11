@@ -29,6 +29,10 @@ test("backup is encrypted, atomic, and cannot mask pipeline failure", () => {
   assert.match(script, /flock -n/u);
   assert.match(script, /mktemp/u);
   assert.match(script, /pg_dump/u);
+  assert.match(script, /stop caddy core/u);
+  assert.match(script, /redis-cli SAVE/u);
+  assert.match(script, /redis\.rdb/u);
+  assert.match(script, /tar --create/u);
   assert.match(script, /age --recipient/u);
   assert.match(script, /\.tmp/u);
   assert.match(script, /mv -- "\$temporary_file" "\$backup_file"/u);
@@ -41,10 +45,13 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /pg_restore --list/u);
   assert.match(script, /staging_database/u);
   assert.match(script, /previous_database/u);
+  assert.match(script, /redis_previous/u);
   assert.match(script, /stop caddy core/u);
   assert.match(script, /createdb/u);
   assert.match(script, /--exit-on-error/u);
   assert.match(script, /--single-transaction/u);
+  assert.match(script, /stop redis/u);
+  assert.match(script, /appendonlydir/u);
   assert.match(script, /run --rm .* migrate/u);
   assert.match(script, /up --detach --wait/u);
   const swapSql = readFileSync("deploy/pilot/swap-databases.sql", "utf8");

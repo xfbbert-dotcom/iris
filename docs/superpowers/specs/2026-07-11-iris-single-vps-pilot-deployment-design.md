@@ -107,10 +107,15 @@ not intentionally memory-only across a clean restart.
 
 Before inviting pilot users:
 
-- create and verify one encrypted `pg_dump` backup;
-- schedule daily encrypted Postgres backups with seven-day retention;
+- create and verify one encrypted paired Postgres/Redis backup;
+- schedule daily encrypted paired backups with seven-day age retention;
 - record the restore command in the private operator notes;
 - confirm the document/event/reindex DLQs are empty.
+
+The paired snapshot briefly stops Caddy and Core after graceful ingress drain, captures PostgreSQL
+and Redis while queues are quiescent, then immediately restarts service before encryption. Disaster
+recovery has an explicit RPO of the last successful off-host daily bundle (up to 24 hours);
+operators must reconcile Feishu messages newer than that snapshot after a total VPS loss.
 
 Runtime-control switches are still in memory. During the single-group pilot, the authoritative
 emergency stop is to stop `core` and, if required, disable the Feishu callback or bot. Durable
