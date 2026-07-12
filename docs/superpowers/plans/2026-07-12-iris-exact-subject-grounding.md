@@ -107,8 +107,10 @@ Restore knowledge-base access and prove the authorized question returns `IRIS_WI
 again and prove Iris does not return either marker. Restore access, re-sync, and only then re-enable
 the global runtime.
 
-Blocked on the external Gemini provider returning HTTP `429`. Keep Iris globally disabled and do
-not repeat model probes aggressively. Resume this gate after quota or billing access recovers.
+Blocked on the external Gemini provider returning HTTP `429`. Provider diagnostics identify the
+exhausted quota as `GenerateRequestsPerDayPerProjectPerModel-FreeTier`: 20 daily requests for
+`gemini-3.5-flash`. Keep Iris globally disabled and do not repeat model probes aggressively. Resume
+this gate after paid billing is enabled or the daily quota resets.
 
 ### Operational evidence collected while replies remain disabled
 
