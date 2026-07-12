@@ -137,6 +137,33 @@ describe("OpenAICompatibleModelProvider", () => {
     expect(systemMessage).not.toContain("Answer only from the provided safe context");
   });
 
+  it("requires exact-subject grounding instead of related-subject substitution", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({ choices: [{ message: { content: "The requested fact is unavailable." } }] }),
+    );
+    const provider = createOpenAICompatibleModelProvider({ config: config(), fetch });
+
+    await provider.generateAnswerDraft({
+      question: "What is the knowledge-base acceptance number?",
+      promptContext:
+        '<background_documents><document source="group-doc">Group-document acceptance number: GROUP-1</document></background_documents>',
+    });
+
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemMessage =
+      body.messages.find((message) => message.role === "system")?.content ?? "";
+
+    expect(systemMessage).toContain(
+      "Match company facts to the exact subject and exact attribute",
+    );
+    expect(systemMessage).toContain("Do not substitute a fact about a different");
+    expect(systemMessage).toContain("state that the requested fact is unavailable");
+    expect(systemMessage).toContain("do not return the related value");
+  });
+
   it("asks the model to answer in the user language", async () => {
     const fetch = vi.fn(async () =>
       jsonResponse({
