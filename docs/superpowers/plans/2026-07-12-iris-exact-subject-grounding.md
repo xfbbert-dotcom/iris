@@ -61,7 +61,7 @@ Add one sentence to `ANSWER_DRAFT_SYSTEM_PROMPT`:
 
 Run the same focused command. Expected: all provider tests pass.
 
-- [ ] **Step 5: Commit the focused fix**
+- [x] **Step 5: Commit the focused fix**
 
 ```bash
 git add apps/core/tests/openai-compatible-model-provider.test.ts apps/core/src/model/openai-compatible-model-provider.ts docs/superpowers/specs/2026-07-12-iris-exact-subject-grounding-design.md docs/superpowers/plans/2026-07-12-iris-exact-subject-grounding.md
@@ -77,7 +77,7 @@ git commit -m "fix: prevent related-subject evidence substitution"
 - Consumes: the commit-pinned pilot image and current rollback-safe deployment procedure.
 - Produces: a disabled production runtime running the verified exact-subject policy.
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run `npm run verify`. Expected: TypeScript, Core, Python worker, deployment tests, Compose config,
 and readiness all pass.
