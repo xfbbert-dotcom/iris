@@ -140,16 +140,20 @@ Expected: TypeScript, Core, Python, deployment, Compose, and readiness checks al
 Verified after review corrections with 68 Core test files (1095 passed, 4 skipped), 7 Python tests, 16 pilot tests, and
 13/13 rollout-readiness checks passing.
 
-- [ ] **Step 2: Build the exact commit image**
+- [x] **Step 2: Build the exact commit image**
 
 Build and run readiness using the commit SHA; do not use moving image tags.
 
-- [ ] **Step 3: Recreate Core with Caddy stopped**
+- [x] **Step 3: Recreate Core with Caddy stopped**
 
 Set `IRIS_RUNTIME_GLOBAL_ENABLED=false`, recreate Core, and verify the first runtime-control status is
 globally disabled without an operator mutation.
 
-- [ ] **Step 4: Repeat private safety checks**
+- [x] **Step 4: Repeat private safety checks**
 
 Require empty event/document/reindex queues and DLQs, healthy workers, protected internal APIs, and
 the exact Feishu denial audit type before restoring any public ingress.
+
+Deployed `2f28683f0a96af8351a122070e9394fbe89fe758` with Caddy stopped. Core initialized disabled on
+both recreation and a subsequent restart; all worker queues and DLQs were empty, and the revoked
+Wiki source emitted `permission_guard_denied` rather than `permission_guard_error`.
