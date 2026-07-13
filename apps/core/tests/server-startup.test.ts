@@ -12,6 +12,7 @@ import {
 import { RuntimeController } from "../src/admin/runtime-controller.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
+import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
 import { isolateEnvVar } from "./test-env.js";
 
@@ -220,6 +221,90 @@ describe("Core server startup", () => {
     expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
   });
 
+  it("awaits ordered worker cleanup before runtime-control close when composition fails", async () => {
+    const closeOrder: string[] = [];
+    const buildError = new Error("document runtime composition failed");
+    const eventCloseError = new Error("event runtime cleanup failed");
+    const reindexCloseError = new Error("reindex runtime cleanup failed");
+    const runtimeCloseError = new Error("runtime-control cleanup failed");
+    let signalEventCloseStarted!: () => void;
+    const eventCloseStarted = new Promise<void>((resolve) => {
+      signalEventCloseStarted = resolve;
+    });
+    let rejectEventClose!: () => void;
+    const eventWorkerRuntime = fakeEventWorkerRuntime({
+      close: vi.fn(() => {
+        closeOrder.push("event");
+        signalEventCloseStarted();
+        return new Promise<void>((_resolve, reject) => {
+          rejectEventClose = () => reject(eventCloseError);
+        });
+      }),
+    });
+    const reindexWorkerRuntime = fakeReindexWorkerRuntime({
+      close: vi.fn(async () => {
+        closeOrder.push("reindex");
+        throw reindexCloseError;
+      }),
+    });
+    const answerDraftRuntime = {
+      answerDraftOrchestrator: {
+        generateDraft: vi.fn(async () => ({
+          answerText: "Runtime draft",
+          promptContext: "",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+        })),
+      },
+      close: vi.fn(async () => {
+        closeOrder.push("answer");
+      }),
+    };
+    const runtimeControlRuntime = fakeRuntimeControlRuntime({
+      closeError: runtimeCloseError,
+      onClose: () => closeOrder.push("runtime-control"),
+    });
+
+    const startupOutcome = startServer({
+      createRuntimeControlRuntime: async () => runtimeControlRuntime,
+      appDependencies: {
+        createAnswerDraftRuntime: () => answerDraftRuntime,
+        createReindexWorkerRuntime: () => reindexWorkerRuntime,
+        createEventWorkerRuntime: () => eventWorkerRuntime,
+        createDocumentSyncRuntime: () => {
+          throw buildError;
+        },
+      },
+    }).then(
+      () => ({ error: undefined as unknown }),
+      (error: unknown) => ({ error }),
+    );
+
+    await eventCloseStarted;
+    const runtimeCloseCountBeforeWorkerCleanup = vi.mocked(
+      runtimeControlRuntime.close,
+    ).mock.calls.length;
+    rejectEventClose();
+    const { error: startupError } = await startupOutcome;
+
+    expect(runtimeCloseCountBeforeWorkerCleanup).toBe(0);
+    expect(closeOrder).toEqual(["event", "reindex", "answer", "runtime-control"]);
+    expect(startupError).toBeInstanceOf(AggregateError);
+    expect((startupError as AggregateError).errors).toEqual([
+      buildError,
+      eventCloseError,
+      reindexCloseError,
+      runtimeCloseError,
+    ]);
+    expect(reindexWorkerRuntime.start).toHaveBeenCalledOnce();
+    expect(eventWorkerRuntime.start).toHaveBeenCalledOnce();
+    expect(eventWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(reindexWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(answerDraftRuntime.close).toHaveBeenCalledOnce();
+    expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
+  });
+
   it("closes composed runtime resources when the listener cannot bind", async () => {
     const occupied = await occupyLoopbackPort();
     occupiedServer = occupied.server;
@@ -244,14 +329,22 @@ describe("Core server startup", () => {
     expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
   });
 
-  it("preserves listener and runtime-control cleanup failures in causal order", async () => {
+  it("preserves every listener cleanup failure in flat causal order", async () => {
     const occupied = await occupyLoopbackPort();
     occupiedServer = occupied.server;
     process.env.PORT = String(occupied.port);
-    const cleanupError = new Error("runtime-control cleanup failed");
-    const eventWorkerRuntime = fakeEventWorkerRuntime();
+    const eventCleanupError = new Error("event runtime cleanup failed");
+    const runtimeCleanupError = new Error("runtime-control cleanup failed");
+    const closeOrder: string[] = [];
+    const eventWorkerRuntime = fakeEventWorkerRuntime({
+      close: vi.fn(async () => {
+        closeOrder.push("event");
+        throw eventCleanupError;
+      }),
+    });
     const runtimeControlRuntime = fakeRuntimeControlRuntime({
-      closeError: cleanupError,
+      closeError: runtimeCleanupError,
+      onClose: () => closeOrder.push("runtime-control"),
     });
 
     let startupError: unknown;
@@ -271,9 +364,11 @@ describe("Core server startup", () => {
 
     expect(startupError).toBeInstanceOf(AggregateError);
     const errors = (startupError as AggregateError).errors;
-    expect(errors).toHaveLength(2);
+    expect(errors).toHaveLength(3);
     expect(errors[0]).toMatchObject({ code: "EADDRINUSE" });
-    expect(errors[1]).toBe(cleanupError);
+    expect(errors[1]).toBe(eventCleanupError);
+    expect(errors[2]).toBe(runtimeCleanupError);
+    expect(closeOrder).toEqual(["event", "runtime-control"]);
     expect(eventWorkerRuntime.close).toHaveBeenCalledOnce();
     expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
   });
@@ -313,7 +408,9 @@ async function closeServer(server: Server | undefined): Promise<void> {
   });
 }
 
-function fakeEventWorkerRuntime(): EventWorkerRuntime {
+function fakeEventWorkerRuntime(
+  overrides: Partial<EventWorkerRuntime> = {},
+): EventWorkerRuntime {
   return {
     deadLetters: {
       list: vi.fn(async () => []),
@@ -336,13 +433,52 @@ function fakeEventWorkerRuntime(): EventWorkerRuntime {
     })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeReindexWorkerRuntime(
+  overrides: Partial<ReindexWorkerRuntime> = {},
+): ReindexWorkerRuntime {
+  return {
+    activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+    planner: {
+      planDocumentProfileReindex: vi.fn(async () => ({
+        enqueuedCount: 0,
+        skippedCount: 0,
+      })),
+    },
+    deadLetters: {
+      list: vi.fn(async () => []),
+      replay: vi.fn(async () => "not_found" as const),
+      delete: vi.fn(async () => "not_found" as const),
+      replayBatch: vi.fn(async () => ({
+        replayedCount: 0,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      })),
+    },
+    getStatus: vi.fn(async () => ({
+      enabled: true as const,
+      running: true,
+      activeEmbeddingProfileId: "openai-compatible:text-embedding-small:1536",
+      intervalMs: 100,
+      batchLimit: 10,
+      pendingJobCount: 0,
+      deadLetterJobCount: 0,
+    })),
+    start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
   };
 }
 
 function fakeRuntimeControlRuntime({
   closeError,
+  onClose,
 }: {
   closeError?: Error;
+  onClose?: () => void;
 } = {}): RuntimeControlRuntime & { close: ReturnType<typeof vi.fn> } {
   const controller = new RuntimeController(
     createDefaultRuntimeConfig({ IRIS_RUNTIME_GLOBAL_ENABLED: "false" }),
@@ -352,6 +488,7 @@ function fakeRuntimeControlRuntime({
   return {
     runtimeControl: { controller, service },
     close: vi.fn(async () => {
+      onClose?.();
       if (closeError !== undefined) {
         throw closeError;
       }

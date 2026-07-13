@@ -92,6 +92,7 @@ export type BuildAppDependencies = {
   runtimeController?: RuntimeController;
   runtimeControl?: RuntimeControlDependency;
   closeRuntimeControl?: () => Promise<void>;
+  onRuntimeStartupCleanup?: (cleanup: Promise<void>) => void;
   internalApiToken?: string;
   ingressHealthToken?: string;
   readinessEnv?: EnvLike;
@@ -105,6 +106,7 @@ export type StartServerOptions = {
     | "runtimeController"
     | "runtimeControl"
     | "closeRuntimeControl"
+    | "onRuntimeStartupCleanup"
   >;
   createRuntimeControlRuntime?: () => Promise<RuntimeControlRuntime>;
 };
@@ -243,12 +245,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
     documentSyncRuntime?.start();
   } catch (error) {
-    scheduleRuntimeStartupCleanup({
+    const cleanup = scheduleRuntimeStartupCleanup({
       answerDraftRuntime,
       reindexWorkerRuntime,
       eventWorkerRuntime,
       documentSyncRuntime,
     });
+    dependencies.onRuntimeStartupCleanup?.(cleanup);
     throw error;
   }
   const feishuAuthConfig = readFeishuAuthConfig();
@@ -1331,18 +1334,21 @@ function safeTokenEqual(presentedToken: string, configuredToken: string): boolea
 async function closeRuntimeResources(
   closeOperations: Array<() => Promise<void> | undefined>,
 ): Promise<void> {
-  let firstError: unknown;
+  const errors: unknown[] = [];
 
   for (const close of closeOperations) {
     try {
       await close();
     } catch (error) {
-      firstError ??= error;
+      errors.push(error);
     }
   }
 
-  if (firstError !== undefined) {
-    throw firstError;
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Iris runtime resource cleanup failed");
   }
 }
 
@@ -1356,13 +1362,34 @@ function scheduleRuntimeStartupCleanup({
   reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
   eventWorkerRuntime: EventWorkerRuntime | undefined;
   documentSyncRuntime: DocumentSyncRuntime | undefined;
-}): void {
-  void closeRuntimeResources([
+}): Promise<void> {
+  const cleanup = closeRuntimeResources([
     () => documentSyncRuntime?.close(),
     () => eventWorkerRuntime?.close(),
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
-  ]).catch(() => undefined);
+  ]);
+  void cleanup.catch(() => undefined);
+  return cleanup;
+}
+
+function flattenAggregateErrors(error: unknown): unknown[] {
+  if (!(error instanceof AggregateError)) {
+    return [error];
+  }
+
+  return error.errors.flatMap((nestedError) => flattenAggregateErrors(nestedError));
+}
+
+function startupCleanupError(
+  startupError: unknown,
+  cleanupError: unknown,
+  message: string,
+): AggregateError {
+  return new AggregateError(
+    [startupError, ...flattenAggregateErrors(cleanupError)],
+    message,
+  );
 }
 
 function normalizeHeaders(headers: Record<string, unknown>): Record<string, string | undefined> {
@@ -2225,8 +2252,10 @@ export async function startServer({
     runtimeController: _ignoredRuntimeController,
     runtimeControl: _ignoredRuntimeControl,
     closeRuntimeControl: _ignoredCloseRuntimeControl,
+    onRuntimeStartupCleanup: _ignoredRuntimeStartupCleanup,
     ...productionAppDependencies
   } = appDependencies as BuildAppDependencies;
+  let runtimeStartupCleanup: Promise<void> | undefined;
   let app;
   try {
     app = buildApp({
@@ -2234,13 +2263,20 @@ export async function startServer({
       internalApiToken,
       runtimeControl: runtimeControlRuntime.runtimeControl,
       closeRuntimeControl: () => runtimeControlRuntime.close(),
+      onRuntimeStartupCleanup: (cleanup) => {
+        runtimeStartupCleanup = cleanup;
+      },
     });
   } catch (startupError) {
     try {
-      await runtimeControlRuntime.close();
+      await closeRuntimeResources([
+        () => runtimeStartupCleanup,
+        () => runtimeControlRuntime.close(),
+      ]);
     } catch (cleanupError) {
-      throw new AggregateError(
-        [startupError, cleanupError],
+      throw startupCleanupError(
+        startupError,
+        cleanupError,
         "Iris server composition failed and runtime-control cleanup failed",
       );
     }
@@ -2253,8 +2289,9 @@ export async function startServer({
     try {
       await app.close();
     } catch (cleanupError) {
-      throw new AggregateError(
-        [startupError, cleanupError],
+      throw startupCleanupError(
+        startupError,
+        cleanupError,
         "Iris server startup failed and runtime cleanup failed",
       );
     }
