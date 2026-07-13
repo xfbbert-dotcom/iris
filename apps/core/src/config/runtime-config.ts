@@ -39,7 +39,7 @@ export function createDefaultRuntimeConfig(env: RuntimeConfigEnv = process.env):
 }
 
 function readOptionalBoolean(name: string, value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined || value.trim().length === 0) {
+  if (value === undefined) {
     return fallback;
   }
 

@@ -208,13 +208,29 @@ docker compose \
 ```
 
 Do not continue unless readiness prints `"status":"ready"` with zero failed checks. Start the
-single-consumer stack:
+single-consumer data services and Core while keeping public Caddy stopped:
 
 ```bash
 docker compose \
   --env-file .env.pilot \
   --file deploy/pilot/docker-compose.yml \
-  up --detach --wait --wait-timeout 120
+  up --detach --wait --wait-timeout 120 postgres redis migrate core
+
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  exec --no-TTY core node --input-type=module --eval '
+    const response = await fetch("http://127.0.0.1:3000/internal/runtime-control/status", {
+      headers: { authorization: `Bearer ${process.env.IRIS_INTERNAL_API_TOKEN}` },
+    });
+    const body = await response.json();
+    if (!response.ok || body.globalEnabled !== false) process.exit(1);
+  '
+
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  up --detach caddy
 
 docker compose \
   --env-file .env.pilot \
@@ -222,7 +238,7 @@ docker compose \
   ps
 ```
 
-Required state:
+The runtime-control probe must exit `0` before Caddy starts. Required state after Caddy starts:
 
 - `postgres` and `redis` are healthy;
 - `migrate` exited with code `0`;

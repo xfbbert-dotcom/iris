@@ -7,7 +7,7 @@ export function readExternalErrorMessage(responseBody: unknown): string {
     return "unknown error";
   }
 
-  return truncateExternalErrorMessage(message);
+  return truncateExternalErrorMessage(redactExternalErrorSecrets(message));
 }
 
 function readMessageCandidate(responseBody: unknown): string | undefined {
@@ -29,15 +29,35 @@ function readRecordMessageCandidate(responseBody: unknown): string | undefined {
     return undefined;
   }
 
-  if (isRecord(responseBody.error) && typeof responseBody.error.message === "string") {
-    return responseBody.error.message;
+  if (isRecord(responseBody.error)) {
+    const nestedMessage = readNonBlankString(responseBody.error.message);
+    if (nestedMessage !== undefined) {
+      return nestedMessage;
+    }
   }
 
-  if (typeof responseBody.msg === "string") {
-    return responseBody.msg;
+  const feishuMessage = readNonBlankString(responseBody.msg);
+  if (feishuMessage !== undefined) {
+    return feishuMessage;
   }
 
-  return typeof responseBody.message === "string" ? responseBody.message : undefined;
+  return readNonBlankString(responseBody.message);
+}
+
+function readNonBlankString(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+  return value;
+}
+
+function redactExternalErrorSecrets(message: string): string {
+  return message
+    .replace(/\b(Bearer)\s+[^\s,;]+/giu, "$1 [redacted]")
+    .replace(
+      /\b(api[-_ ]?key|access[-_ ]?token|secret)\s*([:=])\s*[^\s,;]+/giu,
+      "$1$2[redacted]",
+    );
 }
 
 function truncateExternalErrorMessage(message: string): string {

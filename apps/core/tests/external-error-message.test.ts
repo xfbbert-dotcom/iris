@@ -19,6 +19,25 @@ describe("readExternalErrorMessage", () => {
         { error: { message: " daily request quota exhausted " } },
       ]),
     ).toBe("daily request quota exhausted");
+    expect(
+      readExternalErrorMessage([
+        { error: { message: "   " }, msg: " same-entry quota exhausted " },
+      ]),
+    ).toBe("same-entry quota exhausted");
+  });
+
+  it("redacts credentials before returning provider-controlled messages", () => {
+    const message = readExternalErrorMessage({
+      error: {
+        message:
+          "request failed with Authorization: Bearer sk-live-secret and api_key=gemini-secret",
+      },
+    });
+
+    expect(message).toContain("Bearer [redacted]");
+    expect(message).toContain("api_key=[redacted]");
+    expect(message).not.toContain("sk-live-secret");
+    expect(message).not.toContain("gemini-secret");
   });
 
   it("falls back when no useful message is present", () => {

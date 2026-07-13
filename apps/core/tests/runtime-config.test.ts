@@ -23,6 +23,8 @@ describe("createDefaultRuntimeConfig", () => {
     expect(() =>
       createDefaultRuntimeConfig({ IRIS_RUNTIME_GLOBAL_ENABLED: "sometimes" }),
     ).toThrow("IRIS_RUNTIME_GLOBAL_ENABLED must be true or false");
+    expect(() => createDefaultRuntimeConfig({ IRIS_RUNTIME_GLOBAL_ENABLED: "   " })).toThrow(
+      "IRIS_RUNTIME_GLOBAL_ENABLED must be true or false",
+    );
   });
 });
-

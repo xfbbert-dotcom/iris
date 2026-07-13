@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
+import { createDefaultRuntimeConfig as createRuntimeConfigFromEnv } from "../src/config/runtime-config.js";
 import { RuntimeController } from "../src/admin/runtime-controller.js";
+
+function createDefaultRuntimeConfig() {
+  return createRuntimeConfigFromEnv({});
+}
 
 describe("RuntimeController", () => {
   it("disables all processing when Iris is globally disabled", () => {

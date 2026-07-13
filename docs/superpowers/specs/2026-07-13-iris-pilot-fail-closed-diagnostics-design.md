@@ -26,10 +26,10 @@ policy changes, and new admin UI work are out of scope.
 
 ## Runtime Startup Contract
 
-`createDefaultRuntimeConfig()` keeps its development-compatible default of globally enabled when
-`IRIS_RUNTIME_GLOBAL_ENABLED` is absent. The value accepts only exact boolean strings after
-trimming and case normalization. Invalid configured values fail startup instead of silently
-enabling Iris.
+`createDefaultRuntimeConfig()` keeps its development-compatible default of globally enabled only
+when `IRIS_RUNTIME_GLOBAL_ENABLED` is absent. The value accepts only exact boolean strings after
+trimming and case normalization. Empty, whitespace-only, and other invalid configured values fail
+startup instead of silently enabling Iris.
 
 The production pilot Compose file passes `IRIS_RUNTIME_GLOBAL_ENABLED` with a default of `false`.
 Consequently, a backup restart, container recreation, host reboot, or crash recovery returns Iris
@@ -44,8 +44,10 @@ bounded JSON response is a top-level array, it checks entries in order and retur
 message under the same precedence and 512-character bound. Empty, malformed, or nested-array-only
 responses still return `unknown error`.
 
-No retry or model-selection behavior changes. The existing provider exception will now include the
-Gemini quota reason instead of `unknown error`.
+Before returning a provider-controlled message, Iris redacts bearer credentials and common API key,
+access token, and secret assignments, then applies the existing 512-character bound. No retry or
+model-selection behavior changes. The existing provider exception will now include the Gemini quota
+reason instead of `unknown error`.
 
 ## Feishu Permission Contract
 
@@ -67,4 +69,3 @@ does not broaden document access.
 - Full repository verification must pass before a commit-pinned image is built.
 - Deployment must start with Caddy stopped, prove runtime state is disabled after Core recreation,
   and only restore Caddy after the remaining live gates pass.
-
