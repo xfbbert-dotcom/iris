@@ -268,6 +268,54 @@ describe("createRuntimeControlService emergency disable", () => {
       revision: 3,
     });
   });
+
+  it.each([
+    { label: "conflicts", disableResult: "conflict" as const },
+    { label: "fails", disableError: new Error("postgres unavailable") },
+  ])("does not let a pending enable reopen live after a later disable $label", async ({
+    disableResult,
+    disableError,
+  }) => {
+    const enablePending = deferred<DurableRuntimeControlSnapshot | "conflict">();
+    const { controller, service, repository } = fixture({ liveEnabled: false });
+    vi.mocked(repository.replaceSnapshot)
+      .mockImplementationOnce(() => enablePending.promise)
+      .mockImplementationOnce(() => {
+        if (disableError !== undefined) {
+          return Promise.reject(disableError);
+        }
+        return Promise.resolve(disableResult ?? "conflict");
+      });
+
+    const enable = service.setGlobal({ enabled: true });
+    const disable = service.setGlobal({ enabled: false });
+
+    await expect(disable).resolves.toMatchObject({
+      kind: "disable_not_persisted",
+      status: { globalEnabled: false, revision: 3 },
+    });
+
+    enablePending.resolve(durableSnapshot({
+      revision: 4,
+      desiredGlobalEnabled: true,
+      updatedBy: undefined,
+    }));
+    await expect(enable).resolves.toMatchObject({
+      kind: "success",
+      status: {
+        globalEnabled: false,
+        desiredGlobalEnabled: true,
+        activationRequired: true,
+        revision: 4,
+      },
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      globalEnabled: false,
+      desiredGlobalEnabled: true,
+      activationRequired: true,
+      revision: 4,
+    });
+  });
 });
 
 describe("createRuntimeControlService status", () => {
@@ -320,6 +368,37 @@ describe("createRuntimeControlService status", () => {
     expect(repository.getSnapshot).toHaveBeenCalledTimes(1);
     expect(controller.getSnapshot()).toEqual(validated);
   });
+
+  it("does not roll back a newer mutation when an older status read resolves", async () => {
+    const statusPending = deferred<DurableRuntimeControlSnapshot>();
+    const { controller, service, repository } = fixture();
+    vi.mocked(repository.getSnapshot).mockImplementationOnce(() => statusPending.promise);
+    vi.mocked(repository.replaceSnapshot).mockResolvedValueOnce(durableSnapshot({
+      revision: 4,
+      disabledGroupIds: ["chat-disabled", "chat-new"],
+      updatedBy: undefined,
+    }));
+
+    const status = service.getStatus();
+    await expect(
+      service.setGroup({ groupId: "chat-new", enabled: false }),
+    ).resolves.toMatchObject({
+      kind: "success",
+      status: { revision: 4, disabledGroupIds: ["chat-disabled", "chat-new"] },
+    });
+
+    statusPending.resolve(durableSnapshot({ revision: 3 }));
+    await expect(status).resolves.toMatchObject({
+      revision: 4,
+      disabledGroupIds: ["chat-disabled", "chat-new"],
+      persistence: { storage: "postgres", ok: true },
+    });
+    expect(repository.getSnapshot).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot()).toMatchObject({
+      revision: 4,
+      disabledGroupIds: ["chat-disabled", "chat-new"],
+    });
+  });
 });
 
 describe("runtime control service compare-and-swap coordination", () => {
@@ -347,6 +426,42 @@ describe("runtime control service compare-and-swap coordination", () => {
     expect(controller.getSnapshot()).toMatchObject({
       revision: 4,
       disabledGroupIds: ["chat-a", "chat-disabled"],
+    });
+  });
+
+  it("does not apply or activate a stale enable result superseded by a newer refresh", async () => {
+    const enablePending = deferred<DurableRuntimeControlSnapshot | "conflict">();
+    const { controller, service, repository } = fixture({ liveEnabled: false });
+    vi.mocked(repository.replaceSnapshot).mockImplementationOnce(
+      () => enablePending.promise,
+    );
+    vi.mocked(repository.getSnapshot).mockResolvedValueOnce(durableSnapshot({
+      revision: 5,
+      disabledGroupIds: ["chat-disabled", "chat-new"],
+      updatedBy: undefined,
+    }));
+
+    const enable = service.setGlobal({ enabled: true });
+    await expect(service.getStatus()).resolves.toMatchObject({ revision: 5 });
+
+    enablePending.resolve(durableSnapshot({
+      revision: 4,
+      desiredGlobalEnabled: true,
+      disabledGroupIds: ["stale-policy"],
+      updatedBy: undefined,
+    }));
+    await expect(enable).resolves.toMatchObject({
+      kind: "success",
+      status: {
+        globalEnabled: false,
+        revision: 5,
+        disabledGroupIds: ["chat-disabled", "chat-new"],
+      },
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      globalEnabled: false,
+      revision: 5,
+      disabledGroupIds: ["chat-disabled", "chat-new"],
     });
   });
 });
@@ -413,30 +528,106 @@ describe("createInMemoryRuntimeControlService", () => {
     });
   });
 
-  it("rejects invalid operator metadata without mutating live state", async () => {
+  it("rejects invalid operator metadata without mutating live state", () => {
     const controller = new RuntimeController(createDefaultRuntimeConfig({}));
     controller.replaceDurablePolicy(durableSnapshot());
     const service = createInMemoryRuntimeControlService(controller, () => new Date());
     const before = controller.getSnapshot();
 
-    await expect(
-      service.setGlobal({ enabled: true, updatedBy: "x".repeat(257) }),
-    ).resolves.toEqual({ kind: "persistence_failed" });
+    expectRuntimeControlInputError(
+      () => service.setGlobal({ enabled: true, updatedBy: "x".repeat(257) }),
+      "updatedBy",
+    );
     expect(controller.getSnapshot()).toEqual(before);
   });
 });
 
 describe("runtime control service input boundaries", () => {
-  it("rejects a blank group id before repository access", async () => {
+  it.each([
+    { label: "blank", groupId: "   " },
+    { label: "null", groupId: null },
+    { label: "non-string", groupId: 42 },
+  ])("rejects a $label group id before repository access", ({ groupId }) => {
     const { controller, service, repository } = fixture();
     const before = controller.getSnapshot();
 
-    await expect(
-      service.setGroup({ groupId: "   ", enabled: false }),
-    ).resolves.toEqual({ kind: "persistence_failed" });
+    expectRuntimeControlInputError(
+      () => service.setGroup({ groupId: groupId as string, enabled: false }),
+      "groupId",
+    );
 
     expect(repository.replaceSnapshot).not.toHaveBeenCalled();
     expect(controller.getSnapshot()).toEqual(before);
+  });
+
+  it.each([
+    { label: "unknown key", updates: { unknownCapability: true } },
+    { label: "non-boolean value", updates: { proactiveSpeech: "false" } },
+    { label: "null", updates: null },
+    { label: "array", updates: [] },
+    { label: "non-object", updates: "proactiveSpeech" },
+  ])("rejects capability partial with $label before repository access", ({ updates }) => {
+    const { controller, service, repository } = fixture();
+    const before = controller.getSnapshot();
+
+    expectRuntimeControlInputError(
+      () => service.setCapabilities({ updates: updates as never }),
+      "capabilities",
+    );
+
+    expect(repository.replaceSnapshot).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toEqual(before);
+  });
+
+  it.each([
+    { label: "blank", updatedBy: "   " },
+    { label: "oversized", updatedBy: "x".repeat(257) },
+    { label: "non-string", updatedBy: 42 },
+  ])("rejects $label updatedBy before repository access", ({ updatedBy }) => {
+    const { controller, service, repository } = fixture();
+    const before = controller.getSnapshot();
+
+    expectRuntimeControlInputError(
+      () => service.setGroup({
+        groupId: "chat-new",
+        enabled: false,
+        updatedBy: updatedBy as string,
+      }),
+      "updatedBy",
+    );
+
+    expect(repository.replaceSnapshot).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toEqual(before);
+  });
+
+  it("normalizes group ID and updatedBy before repository access", async () => {
+    const { service, repository } = fixture();
+
+    await service.setGroup({
+      groupId: " chat-new ",
+      enabled: false,
+      updatedBy: " operator ",
+    });
+
+    expect(repository.replaceSnapshot).toHaveBeenCalledWith({
+      expectedRevision: 3,
+      next: expect.objectContaining({
+        disabledGroupIds: ["chat-disabled", "chat-new"],
+        updatedBy: "operator",
+      }),
+    });
+  });
+
+  it("keeps an emergency disable live when updatedBy validation rejects", () => {
+    const { controller, service, repository } = fixture({ liveEnabled: true });
+
+    expectRuntimeControlInputError(
+      () => service.setGlobal({ enabled: false, updatedBy: "   " }),
+      "updatedBy",
+    );
+
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(repository.replaceSnapshot).not.toHaveBeenCalled();
   });
 });
 
@@ -532,6 +723,25 @@ function durableSnapshot(
 
 function defaultCapabilities() {
   return createDefaultRuntimeConfig({}).capabilities;
+}
+
+function expectRuntimeControlInputError(
+  action: () => unknown,
+  field: "groupId" | "updatedBy" | "capabilities",
+): void {
+  let thrown: unknown;
+  try {
+    action();
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(thrown).toMatchObject({
+    name: "RuntimeControlInputError",
+    message: `invalid runtime control input: ${field}`,
+    code: "invalid_runtime_control_input",
+    field,
+  });
 }
 
 function deferred<T>(): {

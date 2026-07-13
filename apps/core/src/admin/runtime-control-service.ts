@@ -1,11 +1,14 @@
 import type { IrisCapability } from "../config/runtime-config.js";
 import {
   normalizeRuntimeControlStateReplacement,
+  runtimeCapabilityNames,
+  runtimeControlUpdatedByMaxChars,
   type DurableRuntimeControlSnapshot,
   type RuntimeControlStateRepository,
 } from "./runtime-control-state-repository.js";
 import type {
   RuntimeController,
+  RuntimeCapabilityName,
   RuntimeControllerSnapshot,
 } from "./runtime-controller.js";
 
@@ -24,6 +27,17 @@ export type RuntimeControlMutationResult =
   | { kind: "conflict" }
   | { kind: "persistence_failed" }
   | { kind: "disable_not_persisted"; status: RuntimeControlStatus };
+
+export type RuntimeControlInputField = "groupId" | "updatedBy" | "capabilities";
+
+export class RuntimeControlInputError extends Error {
+  readonly code = "invalid_runtime_control_input" as const;
+
+  constructor(readonly field: RuntimeControlInputField) {
+    super(`invalid runtime control input: ${field}`);
+    this.name = "RuntimeControlInputError";
+  }
+}
 
 export interface RuntimeControlService {
   getStatus(): Promise<RuntimeControlStatus>;
@@ -72,11 +86,16 @@ function createService({
   repository: RuntimeControlStateRepository;
   storage: RuntimeControlPersistence["storage"];
 }): RuntimeControlService {
+  let globalOperationGeneration = 0;
+
   async function persist(
     buildNext: (
       current: RuntimeControllerSnapshot,
     ) => Omit<DurableRuntimeControlSnapshot, "revision" | "updatedAt">,
-    afterPersist?: () => void,
+    afterPersist?: (result: {
+      persisted: DurableRuntimeControlSnapshot;
+      installed: boolean;
+    }) => void,
     memoryFirstDisable = false,
   ): Promise<RuntimeControlMutationResult> {
     const current = controller.getSnapshot();
@@ -92,8 +111,8 @@ function createService({
           : { kind: "conflict" };
       }
 
-      controller.replaceDurablePolicy(persisted);
-      afterPersist?.();
+      const installed = installDurableSnapshotIfNewer(controller, persisted);
+      afterPersist?.({ persisted, installed });
       return {
         kind: "success",
         durable: true,
@@ -110,7 +129,7 @@ function createService({
     async getStatus() {
       try {
         const persisted = await repository.getSnapshot();
-        controller.replaceDurablePolicy(persisted);
+        installDurableSnapshotIfNewer(controller, persisted);
         return statusFromController(controller, storage, true);
       } catch {
         return statusFromController(controller, storage, false);
@@ -118,24 +137,35 @@ function createService({
     },
 
     setGlobal(input) {
+      const operationGeneration = ++globalOperationGeneration;
       if (!input.enabled) {
         controller.disableGlobal();
       }
+      const updatedBy = normalizeUpdatedBy(input.updatedBy);
+
       return persist(
         (current) => nextSnapshot(current, {
           desiredGlobalEnabled: input.enabled,
-          updatedBy: input.updatedBy,
+          updatedBy,
         }),
-        input.enabled ? () => controller.enableGlobal() : undefined,
+        input.enabled
+          ? ({ persisted, installed }) => {
+              if (
+                installed &&
+                operationGeneration === globalOperationGeneration &&
+                controller.getSnapshot().revision === persisted.revision
+              ) {
+                controller.enableGlobal();
+              }
+            }
+          : undefined,
         !input.enabled,
       );
     },
 
     setGroup(input) {
-      const groupId = input.groupId.trim();
-      if (groupId.length === 0) {
-        return Promise.resolve({ kind: "persistence_failed" });
-      }
+      const groupId = normalizeGroupId(input.groupId);
+      const updatedBy = normalizeUpdatedBy(input.updatedBy);
       return persist((current) => {
         const disabledGroupIds = new Set(current.disabledGroupIds);
         if (input.enabled) {
@@ -146,18 +176,97 @@ function createService({
 
         return nextSnapshot(current, {
           disabledGroupIds: [...disabledGroupIds].sort(),
-          updatedBy: input.updatedBy,
+          updatedBy,
         });
       });
     },
 
     setCapabilities(input) {
+      const updates = normalizeCapabilityUpdates(input.updates);
+      const updatedBy = normalizeUpdatedBy(input.updatedBy);
       return persist((current) => nextSnapshot(current, {
-        capabilities: { ...current.capabilities, ...input.updates },
-        updatedBy: input.updatedBy,
+        capabilities: { ...current.capabilities, ...updates },
+        updatedBy,
       }));
     },
   };
+}
+
+function installDurableSnapshotIfNewer(
+  controller: RuntimeController,
+  snapshot: DurableRuntimeControlSnapshot,
+): boolean {
+  // Equal revisions are skipped: accepting different data for the revision already
+  // installed would violate the repository's immutable-revision invariant.
+  if (snapshot.revision <= controller.getSnapshot().revision) {
+    return false;
+  }
+
+  controller.replaceDurablePolicy(snapshot);
+  return true;
+}
+
+function normalizeGroupId(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new RuntimeControlInputError("groupId");
+  }
+
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new RuntimeControlInputError("groupId");
+  }
+  return normalized;
+}
+
+function normalizeUpdatedBy(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new RuntimeControlInputError("updatedBy");
+  }
+
+  const normalized = value.trim();
+  if (
+    normalized.length === 0 ||
+    normalized.length > runtimeControlUpdatedByMaxChars
+  ) {
+    throw new RuntimeControlInputError("updatedBy");
+  }
+  return normalized;
+}
+
+function normalizeCapabilityUpdates(value: unknown): Partial<IrisCapability> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    throw new RuntimeControlInputError("capabilities");
+  }
+
+  const normalized: Partial<IrisCapability> = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (
+      typeof key !== "string" ||
+      !runtimeCapabilityNames.includes(key as RuntimeCapabilityName)
+    ) {
+      throw new RuntimeControlInputError("capabilities");
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !("value" in descriptor) ||
+      typeof descriptor.value !== "boolean"
+    ) {
+      throw new RuntimeControlInputError("capabilities");
+    }
+    normalized[key as RuntimeCapabilityName] = descriptor.value;
+  }
+  return normalized;
 }
 
 function nextSnapshot(
