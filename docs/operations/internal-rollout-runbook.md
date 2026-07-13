@@ -337,10 +337,18 @@ inviting pilot users:
 ```
 
 The script uses `set -Eeuo pipefail`, refuses concurrent runs with `flock`, and briefly stops Caddy
-and Core after graceful ingress drain. It captures PostgreSQL and Redis while both are quiescent,
-immediately restarts Iris, then encrypts the paired snapshot as one bundle. It writes to a unique
-owner-only temporary file and publishes it only after snapshot and encryption succeed. Files older
-than seven 24-hour periods are removed.
+and Core after graceful ingress drain. Before the stop it captures the in-memory global runtime
+state through the authenticated container-local API and records whether Caddy is running. It
+captures PostgreSQL and Redis while both are quiescent, starts Core alone in its configured
+fail-closed state, then encrypts the paired snapshot as one bundle. It writes to a unique owner-only
+temporary file and publishes it only after snapshot and encryption succeed. Only after atomic
+publication does a successful planned backup restore a previously enabled global state and restart
+Caddy when Caddy was running before maintenance. Files older than seven 24-hour periods are removed.
+
+If any maintenance step fails, cleanup keeps Caddy stopped and restarts only a verified disabled
+Core; it never re-enables Iris from the `EXIT` trap. Host restarts, crashes, and container recreation
+also remain fail-closed and still require an explicit operator enable. This planned-backup behavior
+does not make runtime-control state durable, and group or capability overrides are not restored.
 
 Copy the encrypted file off the VPS, decrypt it on the operator-controlled machine, inspect the
 bundle, and validate both payloads. A bundle whose Postgres archive and Redis RDB have not both been

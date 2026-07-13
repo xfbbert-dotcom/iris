@@ -38,6 +38,51 @@ test("backup is encrypted, atomic, and cannot mask pipeline failure", () => {
   assert.match(script, /mv -- "\$temporary_file" "\$backup_file"/u);
 });
 
+test("planned backup restores runtime and ingress state only after publication", () => {
+  const script = readFileSync(backupPath, "utf8");
+  const captureRuntime = 'runtime_was_enabled="$(read_runtime_enabled)"';
+  const stopServices = '"${compose[@]}" stop caddy core';
+  const publishBackup = 'mv -- "$temporary_file" "$backup_file"';
+  const restoreRuntime = "restore_runtime_state";
+  const restoreCaddy = 'if [[ "$caddy_was_running" == true ]]';
+
+  assert.match(script, /\/internal\/runtime-control\/status/u);
+  assert.match(script, /\/internal\/runtime-control\/global/u);
+  assert.match(script, /IRIS_INTERNAL_API_TOKEN/u);
+  assert.match(script, /runtime_was_enabled="\$\(read_runtime_enabled\)"/u);
+  assert.match(script, /caddy_was_running=false/u);
+  assert.match(script, /start_core_disabled/u);
+  assert.match(script, /expected runtime state/u);
+  assert.match(script, /if \[\[ "\$runtime_was_enabled" == true \]\]/u);
+  assert.match(script, /if \[\[ "\$caddy_was_running" == true \]\]/u);
+
+  assert.ok(
+    script.indexOf(captureRuntime) < script.indexOf(stopServices),
+    "runtime state must be captured before Core stops",
+  );
+  assert.ok(
+    script.indexOf(publishBackup) < script.lastIndexOf(restoreRuntime),
+    "runtime state must be restored only after atomic backup publication",
+  );
+  assert.ok(
+    script.indexOf(publishBackup) < script.lastIndexOf(restoreCaddy),
+    "Caddy must be restored only after atomic backup publication",
+  );
+});
+
+test("backup failure cleanup keeps Iris disabled and Caddy stopped", () => {
+  const script = readFileSync(backupPath, "utf8");
+  const cleanupStart = script.indexOf("cleanup() {");
+  const cleanupEnd = script.indexOf("trap cleanup EXIT");
+  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart);
+
+  const cleanup = script.slice(cleanupStart, cleanupEnd);
+  assert.match(cleanup, /stop caddy/u);
+  assert.match(cleanup, /start_core_disabled/u);
+  assert.doesNotMatch(cleanup, /restore_runtime_state/u);
+  assert.doesNotMatch(cleanup, /up .*caddy/u);
+});
+
 test("restore requires confirmation and fails closed through transactional restore", () => {
   const script = readFileSync(restorePath, "utf8");
   assert.match(script, /--confirm-replace-database/u);
