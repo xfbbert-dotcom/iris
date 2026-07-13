@@ -72,6 +72,38 @@ describe("createFeishuDocumentPermissionChecker", () => {
     ).resolves.toBe(false);
   });
 
+  it("returns false when Feishu denies a revoked wiki node with code 131006", async () => {
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () =>
+        jsonResponse(
+          {
+            code: 131006,
+            msg: "permission denied: node permission denied, tenant needs read permission.",
+          },
+          400,
+        ),
+      ),
+    });
+
+    await expect(
+      checker.canReadSource(source({ sourceUri: "https://example.feishu.cn/wiki/wikcnRevoked" })),
+    ).resolves.toBe(false);
+  });
+
+  it("throws when Feishu returns an unknown HTTP 400 response", async () => {
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => jsonResponse({ code: 1900001, msg: "bad request" }, 400)),
+    });
+
+    await expect(
+      checker.canReadSource(source({ sourceUri: "https://example.feishu.cn/wiki/wikcnUnknown" })),
+    ).rejects.toThrow("Feishu document permission request failed with status 400: bad request");
+  });
+
   it("returns false when Feishu returns a known permission-denied code in a successful response", async () => {
     const checker = createFeishuDocumentPermissionChecker({
       baseUrl: "https://open.feishu.cn",

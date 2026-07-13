@@ -22,7 +22,7 @@ export type FeishuDocumentPermissionCheckerDependencies = {
 
 const DEFAULT_FEISHU_DOCUMENT_PERMISSION_TIMEOUT_MS = 5_000;
 const MAX_FEISHU_PERMISSION_RESPONSE_BYTES = 65_536;
-const FEISHU_PERMISSION_DENIED_CODES = new Set([99991663]);
+const FEISHU_PERMISSION_DENIED_CODES = new Set([131006, 99991663]);
 const invalidFeishuDocumentTokenPattern = /,|%/u;
 
 export function createFeishuDocumentPermissionChecker({
@@ -204,7 +204,12 @@ function isSuccessfulFeishuResponse(response: Response, responseBody: unknown): 
 }
 
 function throwIfTransientPermissionFailure(response: Response, responseBody: unknown): void {
-  if (response.ok || response.status === 403 || response.status === 404) {
+  if (
+    response.ok ||
+    response.status === 403 ||
+    response.status === 404 ||
+    (response.status === 400 && isKnownPermissionDeniedBody(responseBody))
+  ) {
     return;
   }
 
@@ -212,6 +217,14 @@ function throwIfTransientPermissionFailure(response: Response, responseBody: unk
     `Feishu document permission request failed with status ${response.status}: ${readExternalErrorMessage(
       responseBody,
     )}`,
+  );
+}
+
+function isKnownPermissionDeniedBody(responseBody: unknown): boolean {
+  return (
+    isRecord(responseBody) &&
+    typeof responseBody.code === "number" &&
+    FEISHU_PERMISSION_DENIED_CODES.has(responseBody.code)
   );
 }
 
