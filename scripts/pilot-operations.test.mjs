@@ -14,6 +14,14 @@ test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined 
   }
 });
 
+test("pilot shell scripts use LF endings for direct Linux execution", () => {
+  for (const scriptPath of [backupPath, restorePath, postgresInitPath]) {
+    const script = readFileSync(scriptPath, "utf8");
+    assert.equal(script.includes("\r"), false, `${scriptPath} contains a CR byte`);
+    assert.ok(script.startsWith("#!/usr/bin/env bash\n"), `${scriptPath} has an invalid shebang`);
+  }
+});
+
 test("Postgres initialization separates admin, migrator, and app roles", () => {
   const script = readFileSync(postgresInitPath, "utf8");
   assert.match(script, /IRIS_MIGRATOR_USER/u);
