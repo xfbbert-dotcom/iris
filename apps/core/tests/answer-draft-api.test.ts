@@ -934,6 +934,8 @@ describe("GET /internal/status", () => {
           ok: true,
           enabled: true,
           globalEnabled: true,
+          desiredGlobalEnabled: true,
+          activationRequired: false,
           disabledGroupIds: [],
           disabledGroupCount: 0,
           capabilities: {
@@ -945,6 +947,12 @@ describe("GET /internal/status", () => {
             generateKnowledgeDrafts: true,
             writeKnowledgeBase: false,
             callExternalTools: false,
+          },
+          revision: 0,
+          updatedAt: expect.any(String),
+          persistence: {
+            storage: "in_memory",
+            ok: true,
           },
         },
         answerDraft: {

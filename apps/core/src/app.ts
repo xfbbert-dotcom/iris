@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyReply } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { installGracefulShutdown } from "./runtime/graceful-shutdown.js";
@@ -18,6 +18,12 @@ import {
   RuntimeController,
   type RuntimeCapabilityName
 } from "./admin/runtime-controller.js";
+import {
+  createInMemoryRuntimeControlService,
+  RuntimeControlInputError,
+  type RuntimeControlMutationResult,
+  type RuntimeControlService,
+} from "./admin/runtime-control-service.js";
 import { normalizeInternalStatusErrorMessage } from "./admin/internal-status-error-message.js";
 import { createDefaultRuntimeConfig } from "./config/runtime-config.js";
 import { createFeishuRequestVerifier } from "./feishu/feishu-auth.js";
@@ -74,6 +80,7 @@ export type BuildAppDependencies = {
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
   runtimeController?: RuntimeController;
+  runtimeControlService?: RuntimeControlService;
   internalApiToken?: string;
   ingressHealthToken?: string;
   readinessEnv?: EnvLike;
@@ -180,6 +187,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const now = dependencies.now ?? (() => new Date());
   const runtimeController =
     dependencies.runtimeController ?? new RuntimeController(createDefaultRuntimeConfig());
+  const runtimeControlService =
+    dependencies.runtimeControlService ??
+    createInMemoryRuntimeControlService(runtimeController, now);
   const answerDraftRuntime =
     dependencies.answerDraftOrchestrator === undefined
       ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
@@ -323,7 +333,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   }));
 
   app.get("/internal/status", async () => {
-    const runtimeControlSnapshot = runtimeController.getSnapshot();
+    const runtimeControlStatus = await runtimeControlService.getStatus();
     const components = {
       audit: {
         ok: true,
@@ -332,12 +342,23 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         retention: auditLog.retention,
       },
       runtimeControl: {
-        ok: true,
-        enabled: runtimeControlSnapshot.globalEnabled,
-        globalEnabled: runtimeControlSnapshot.globalEnabled,
-        disabledGroupIds: runtimeControlSnapshot.disabledGroupIds,
-        disabledGroupCount: runtimeControlSnapshot.disabledGroupIds.length,
-        capabilities: runtimeControlSnapshot.capabilities,
+        ok: runtimeControlStatus.persistence.ok,
+        enabled: runtimeControlStatus.globalEnabled,
+        globalEnabled: runtimeControlStatus.globalEnabled,
+        desiredGlobalEnabled: runtimeControlStatus.desiredGlobalEnabled,
+        activationRequired: runtimeControlStatus.activationRequired,
+        disabledGroupIds: runtimeControlStatus.disabledGroupIds,
+        disabledGroupCount: runtimeControlStatus.disabledGroupIds.length,
+        capabilities: runtimeControlStatus.capabilities,
+        revision: runtimeControlStatus.revision,
+        updatedAt: runtimeControlStatus.updatedAt,
+        ...(runtimeControlStatus.updatedBy === undefined
+          ? {}
+          : { updatedBy: runtimeControlStatus.updatedBy }),
+        persistence: runtimeControlStatus.persistence,
+        ...(runtimeControlStatus.persistence.ok
+          ? {}
+          : { degradedReason: "runtime_control_persistence_failed" as const }),
       },
       answerDraft: {
         ok: true,
@@ -358,7 +379,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
   app.get("/internal/runtime-control/status", async () => ({
     ok: true,
-    ...runtimeController.getSnapshot(),
+    ...await runtimeControlService.getStatus(),
   }));
 
   app.post("/internal/runtime-control/global", async (request, reply) => {
@@ -370,23 +391,30 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
     const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
     const previousSnapshot = runtimeController.getSnapshot();
-    if (parsedRequest.enabled) {
-      runtimeController.enableGlobal();
-    } else {
-      runtimeController.disableGlobal();
+    let result: RuntimeControlMutationResult;
+    try {
+      result = await runtimeControlService.setGlobal({
+        enabled: parsedRequest.enabled,
+        ...(operatorHint === undefined ? {} : { updatedBy: operatorHint }),
+      });
+    } catch (error) {
+      if (error instanceof RuntimeControlInputError) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      throw error;
     }
-    await recordRuntimeControlAuditEvent({
-      auditLog,
-      scope: "global",
-      enabled: parsedRequest.enabled,
-      previousEnabled: previousSnapshot.globalEnabled,
-      operatorHint,
-    });
 
-    return {
-      ok: true,
-      ...runtimeController.getSnapshot(),
-    };
+    if (result.kind === "success" || result.kind === "disable_not_persisted") {
+      await recordRuntimeControlAuditEvent({
+        auditLog,
+        scope: "global",
+        enabled: result.status.globalEnabled,
+        previousEnabled: previousSnapshot.globalEnabled,
+        operatorHint,
+      });
+    }
+
+    return sendRuntimeControlMutationResult(reply, result);
   });
 
   app.post("/internal/runtime-control/groups/:groupId", async (request, reply) => {
@@ -399,24 +427,32 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
     const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
     const previousSnapshot = runtimeController.getSnapshot();
-    if (parsedRequest.enabled) {
-      runtimeController.enableGroup(groupId);
-    } else {
-      runtimeController.disableGroup(groupId);
+    let result: RuntimeControlMutationResult;
+    try {
+      result = await runtimeControlService.setGroup({
+        groupId,
+        enabled: parsedRequest.enabled,
+        ...(operatorHint === undefined ? {} : { updatedBy: operatorHint }),
+      });
+    } catch (error) {
+      if (error instanceof RuntimeControlInputError) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      throw error;
     }
-    await recordRuntimeControlAuditEvent({
-      auditLog,
-      scope: "group",
-      targetId: groupId,
-      enabled: parsedRequest.enabled,
-      previousEnabled: !previousSnapshot.disabledGroupIds.includes(groupId),
-      operatorHint,
-    });
 
-    return {
-      ok: true,
-      ...runtimeController.getSnapshot(),
-    };
+    if (result.kind === "success") {
+      await recordRuntimeControlAuditEvent({
+        auditLog,
+        scope: "group",
+        targetId: groupId,
+        enabled: !result.status.disabledGroupIds.includes(groupId),
+        previousEnabled: !previousSnapshot.disabledGroupIds.includes(groupId),
+        operatorHint,
+      });
+    }
+
+    return sendRuntimeControlMutationResult(reply, result);
   });
 
   app.patch("/internal/runtime-control/capabilities", async (request, reply) => {
@@ -428,24 +464,33 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
     const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
     const previousSnapshot = runtimeController.getSnapshot();
-    for (const [capability, enabled] of Object.entries(parsedRequest) as Array<
-      [RuntimeCapabilityName, boolean]
-    >) {
-      runtimeController.setCapability(capability, enabled);
-      await recordRuntimeControlAuditEvent({
-        auditLog,
-        scope: "capability",
-        targetId: capability,
-        enabled,
-        previousEnabled: previousSnapshot.capabilities[capability],
-        operatorHint,
+    let result: RuntimeControlMutationResult;
+    try {
+      result = await runtimeControlService.setCapabilities({
+        updates: parsedRequest,
+        ...(operatorHint === undefined ? {} : { updatedBy: operatorHint }),
       });
+    } catch (error) {
+      if (error instanceof RuntimeControlInputError) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      throw error;
     }
 
-    return {
-      ok: true,
-      ...runtimeController.getSnapshot(),
-    };
+    if (result.kind === "success") {
+      for (const capability of Object.keys(parsedRequest) as RuntimeCapabilityName[]) {
+        await recordRuntimeControlAuditEvent({
+          auditLog,
+          scope: "capability",
+          targetId: capability,
+          enabled: result.status.capabilities[capability],
+          previousEnabled: previousSnapshot.capabilities[capability],
+          operatorHint,
+        });
+      }
+    }
+
+    return sendRuntimeControlMutationResult(reply, result);
   });
 
   app.get("/internal/audit/events", async (request, reply) => {
@@ -1554,6 +1599,31 @@ function parseAuditEventType(value: unknown): AuditEvent["type"] | false | undef
     type === "runtime_control_updated"
     ? type
     : false;
+}
+
+function sendRuntimeControlMutationResult(
+  reply: FastifyReply,
+  result: RuntimeControlMutationResult,
+) {
+  if (result.kind === "success") {
+    return reply.send({ ok: true, durable: true, ...result.status });
+  }
+  if (result.kind === "conflict") {
+    return reply.code(409).send({ ok: false, error: "runtime_control_conflict" });
+  }
+  if (result.kind === "persistence_failed") {
+    return reply.code(503).send({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+  }
+
+  return reply.code(503).send({
+    ok: false,
+    error: "runtime_control_disable_not_persisted",
+    globalEnabled: false,
+    durable: false,
+  });
 }
 
 async function recordRuntimeControlAuditEvent(input: {
