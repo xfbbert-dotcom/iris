@@ -1,6 +1,7 @@
 import {
   assertFastFeishuAcknowledgement,
   assertHealthyInternalStatus,
+  assertRuntimeGloballyDisabled,
 } from "./pilot-smoke-lib.mjs";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -20,6 +21,9 @@ const internalApiToken =
 const feishuVerificationToken =
   process.env.IRIS_PILOT_FEISHU_VERIFICATION_TOKEN ?? "ci-verification-token";
 
+let runtimeEnabledBySmoke = false;
+let completedChecks;
+
 try {
   await waitForStatus(`${publicBaseUrl}/health`, 200, timeoutMs);
   await expectStatus(`${publicBaseUrl}/internal/status`, 404);
@@ -33,7 +37,9 @@ try {
   const internalStatusResponse = await expectStatus(`${coreBaseUrl}/internal/status`, 200, {
     authorization: `Bearer ${internalApiToken}`,
   });
-  assertHealthyInternalStatus(await internalStatusResponse.json());
+  const internalStatus = await internalStatusResponse.json();
+  assertHealthyInternalStatus(internalStatus);
+  assertRuntimeGloballyDisabled(internalStatus);
   const ingressReadinessResponse = await expectStatus(
     `${coreBaseUrl}/internal/ingress-readiness`,
     200,
@@ -43,6 +49,9 @@ try {
   if (ingressReadiness.ok !== true || ingressReadiness.status !== "ready") {
     throw new Error("Expected Iris ingress readiness to be ready");
   }
+
+  await setGlobalRuntime(true);
+  runtimeEnabledBySmoke = true;
 
   const callbackStartedAt = Date.now();
   const callbackResponse = await requestJson(`${publicBaseUrl}/feishu/events`, {
@@ -70,28 +79,43 @@ try {
   });
   await waitForPendingEvent(coreBaseUrl, internalApiToken, timeoutMs);
 
-  console.log(
-    JSON.stringify({
-      ok: true,
-      checks: {
-        publicHealth: 200,
-        publicInternalStatus: 404,
-        publicInternalReadiness: 404,
-        publicIngressReadiness: 404,
-        privateInternalStatusWithoutToken: 401,
-        privateInternalStatusWithWrongToken: 401,
-        privateInternalStatusWithToken: 200,
-        privateInternalStatusHealth: "healthy",
-        privateIngressReadiness: "ready",
-        feishuCallback: 200,
-        feishuCallbackAckUnderMs: FEISHU_ACK_DEADLINE_MS,
-        durableRawEventQueue: "persisted",
-      },
-    }),
-  );
+  completedChecks = {
+    publicHealth: 200,
+    publicInternalStatus: 404,
+    publicInternalReadiness: 404,
+    publicIngressReadiness: 404,
+    privateInternalStatusWithoutToken: 401,
+    privateInternalStatusWithWrongToken: 401,
+    privateInternalStatusWithToken: 200,
+    privateInternalStatusHealth: "healthy",
+    privateIngressReadiness: "ready",
+    runtimeStartup: "disabled",
+    runtimeEnablement: "explicit",
+    feishuCallback: 200,
+    feishuCallbackAckUnderMs: FEISHU_ACK_DEADLINE_MS,
+    durableRawEventQueue: "persisted",
+  };
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
+} finally {
+  if (runtimeEnabledBySmoke) {
+    try {
+      await setGlobalRuntime(false);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  }
+}
+
+if (process.exitCode !== 1 && completedChecks !== undefined) {
+  console.log(
+    JSON.stringify({
+      ok: true,
+      checks: { ...completedChecks, runtimeRestored: "disabled" },
+    }),
+  );
 }
 
 async function waitForStatus(url, expectedStatus, deadlineMs) {
@@ -143,6 +167,24 @@ function requestJson(url, body) {
     redirect: "manual",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
+}
+
+async function setGlobalRuntime(enabled) {
+  const response = await fetch(`${coreBaseUrl}/internal/runtime-control/global`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${internalApiToken}`,
+      "content-type": "application/json",
+      "x-iris-operator": "pilot-smoke",
+    },
+    body: JSON.stringify({ enabled }),
+    redirect: "manual",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const body = await response.json();
+  if (response.status !== 200 || body.globalEnabled !== enabled) {
+    throw new Error(`Unable to set pilot runtime global enablement to ${enabled}`);
+  }
 }
 
 async function waitForPendingEvent(baseUrl, token, deadlineMs) {

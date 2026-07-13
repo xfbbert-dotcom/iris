@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   assertFastFeishuAcknowledgement,
   assertHealthyInternalStatus,
+  assertRuntimeGloballyDisabled,
 } from "./pilot-smoke-lib.mjs";
 
 test("accepts a fully healthy internal status snapshot", () => {
@@ -51,6 +52,21 @@ test("rejects a status snapshot with a stopped enabled runtime", () => {
 
 test("rejects a malformed status snapshot", () => {
   assert.throws(() => assertHealthyInternalStatus({ ok: true }), /healthy internal status/u);
+});
+
+test("requires the pilot runtime to start globally disabled", () => {
+  assert.doesNotThrow(() =>
+    assertRuntimeGloballyDisabled({
+      components: { runtimeControl: { globalEnabled: false } },
+    }),
+  );
+  assert.throws(
+    () =>
+      assertRuntimeGloballyDisabled({
+        components: { runtimeControl: { globalEnabled: true } },
+      }),
+    /globally disabled/u,
+  );
 });
 
 test("accepts a successful Feishu acknowledgement inside the deadline", () => {

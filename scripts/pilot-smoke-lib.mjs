@@ -11,6 +11,12 @@ export function assertHealthyInternalStatus(snapshot) {
   }
 }
 
+export function assertRuntimeGloballyDisabled(snapshot) {
+  if (snapshot?.components?.runtimeControl?.globalEnabled !== false) {
+    throw new Error("Expected the pilot runtime to start globally disabled");
+  }
+}
+
 export function assertFastFeishuAcknowledgement({ status, body, elapsedMs, deadlineMs }) {
   if (
     status !== 200 ||
