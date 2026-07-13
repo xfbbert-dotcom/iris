@@ -42,6 +42,12 @@ from a stale response. POST global false when Core is reachable, stop Caddy, ver
 report the exact failed gate. Do not start Caddy or retry global enablement until the failed gate has
 been repaired and every authenticated check has been rerun.
 
+`IRIS_BACKUP_COMMAND_TIMEOUT_SECONDS` defaults to `30` and accepts decimal integers from `1` through
+`300`. `IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS` defaults to `2` and accepts decimal integers from
+`0` through `10`; cleanup makes exactly three Caddy stop attempts before a bounded kill and final
+stopped-state check. The inner HTTP deadline remains independently bounded by
+`IRIS_BACKUP_HTTP_TIMEOUT_MS`.
+
 ## Rollback
 
 Keep Caddy stopped and Iris disabled throughout rollback. Restore the paired Postgres and Redis

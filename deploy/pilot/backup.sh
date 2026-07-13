@@ -8,23 +8,58 @@ environment_file="${IRIS_ENV_FILE:-$repository_dir/.env.pilot}"
 compose_file="${IRIS_COMPOSE_FILE:-$repository_dir/deploy/pilot/docker-compose.yml}"
 backup_dir="${IRIS_BACKUP_DIR:-$repository_dir/backups}"
 recipient_file="${IRIS_BACKUP_RECIPIENT_FILE:-/etc/iris/backup-recipient}"
-cleanup_retry_delay_seconds="${IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS:-2}"
-http_timeout_ms="${IRIS_BACKUP_HTTP_TIMEOUT_MS:-10000}"
+cleanup_retry_delay_seconds_raw="${IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS:-2}"
+command_timeout_seconds_raw="${IRIS_BACKUP_COMMAND_TIMEOUT_SECONDS:-30}"
+http_timeout_ms_raw="${IRIS_BACKUP_HTTP_TIMEOUT_MS:-10000}"
+cleanup_retry_count=3
+command_kill_after_seconds=2
 
-for command_name in docker age flock mktemp tar; do
+normalize_decimal() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  while [[ ${#value} -gt 1 && "${value:0:1}" == 0 ]]; do
+    value="${value#0}"
+  done
+  printf '%s' "$value"
+}
+
+decimal_between() {
+  local value="$1"
+  local minimum="$2"
+  local maximum="$3"
+  if ((${#value} < ${#minimum} || ${#value} > ${#maximum})); then
+    return 1
+  fi
+  if ((${#value} == ${#minimum})) && [[ "$value" < "$minimum" ]]; then
+    return 1
+  fi
+  if ((${#value} == ${#maximum})) && [[ "$value" > "$maximum" ]]; then
+    return 1
+  fi
+}
+
+if ! cleanup_retry_delay_seconds="$(normalize_decimal "$cleanup_retry_delay_seconds_raw")" ||
+  ! decimal_between "$cleanup_retry_delay_seconds" 0 10; then
+  echo "IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS must be an integer between 0 and 10" >&2
+  exit 1
+fi
+if ! command_timeout_seconds="$(normalize_decimal "$command_timeout_seconds_raw")" ||
+  ! decimal_between "$command_timeout_seconds" 1 300; then
+  echo "IRIS_BACKUP_COMMAND_TIMEOUT_SECONDS must be an integer between 1 and 300" >&2
+  exit 1
+fi
+if ! http_timeout_ms="$(normalize_decimal "$http_timeout_ms_raw")" ||
+  ! decimal_between "$http_timeout_ms" 100 60000; then
+  echo "IRIS_BACKUP_HTTP_TIMEOUT_MS must be an integer between 100 and 60000" >&2
+  exit 1
+fi
+
+for command_name in docker age flock mktemp tar timeout; do
   command -v "$command_name" >/dev/null
 done
 test -r "$environment_file"
 test -r "$compose_file"
 test -r "$recipient_file"
-if [[ ! "$cleanup_retry_delay_seconds" =~ ^[0-9]+$ ]]; then
-  echo "IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS must be a non-negative integer" >&2
-  exit 1
-fi
-if [[ ! "$http_timeout_ms" =~ ^[0-9]+$ ]] || ((http_timeout_ms < 100 || http_timeout_ms > 60000)); then
-  echo "IRIS_BACKUP_HTTP_TIMEOUT_MS must be an integer between 100 and 60000" >&2
-  exit 1
-fi
 
 recipient="$(tr -d '[:space:]' < "$recipient_file")"
 if [[ ! "$recipient" =~ ^age1[0-9a-z]+$ ]]; then
@@ -57,8 +92,24 @@ runtime_enable_attempted=false
 cd "$repository_dir"
 compose=(docker compose --env-file "$environment_file" --file "$compose_file")
 
+run_compose() {
+  local operation="${1:-command}"
+  local command_status
+
+  if timeout --foreground --kill-after="${command_kill_after_seconds}s" \
+    "${command_timeout_seconds}s" "${compose[@]}" "$@"; then
+    return 0
+  else
+    command_status=$?
+  fi
+  if [[ "$command_status" == 124 || "$command_status" == 137 ]]; then
+    echo "docker compose $operation timed out after ${command_timeout_seconds}s" >&2
+  fi
+  return "$command_status"
+}
+
 read_runtime_status() {
-  "${compose[@]}" exec -T core node --input-type=module --eval '
+  run_compose exec -T core node --input-type=module --eval '
     const timeoutMs = Number(process.argv[1]);
     const token = process.env.IRIS_INTERNAL_API_TOKEN?.trim();
     if (!token) throw new Error("IRIS_INTERNAL_API_TOKEN is unavailable inside Core");
@@ -66,7 +117,9 @@ read_runtime_status() {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) throw new Error(`runtime status request failed with HTTP ${response.status}`);
+    if (response.status !== 200) {
+      throw new Error(`runtime status request failed with HTTP ${response.status}`);
+    }
     const body = await response.json();
     if (
       typeof body.globalEnabled !== "boolean" ||
@@ -112,13 +165,42 @@ assert_runtime_state() {
   fi
 }
 
+assert_runtime_disabled_durable() {
+  local status
+  local global_enabled
+  local desired_global_enabled
+  local revision
+  local persistence_storage
+  local persistence_ok
+  local activation_required
+
+  status="$(read_runtime_status)" || return 1
+  IFS=$'\t' read -r \
+    global_enabled \
+    desired_global_enabled \
+    revision \
+    persistence_storage \
+    persistence_ok \
+    activation_required <<< "$status"
+  if [[
+    "$global_enabled" != false ||
+    "$desired_global_enabled" != false ||
+    "$activation_required" != false ||
+    "$persistence_storage" != postgres ||
+    "$persistence_ok" != true
+  ]]; then
+    echo "runtime status did not prove durable disabled runtime state: globalEnabled=$global_enabled desiredGlobalEnabled=$desired_global_enabled activationRequired=$activation_required persistence.storage=$persistence_storage persistence.ok=$persistence_ok" >&2
+    return 1
+  fi
+}
+
 read_service_running() {
   local target_service="$1"
   local running_services
   local service_name
   local is_running=false
 
-  if ! running_services="$("${compose[@]}" ps --status running --services)"; then
+  if ! running_services="$(run_compose ps --status running --services)"; then
     return 1
   fi
   while IFS= read -r service_name; do
@@ -131,7 +213,7 @@ read_service_running() {
 
 set_runtime_enabled() {
   local expected="$1"
-  "${compose[@]}" exec -T core node --input-type=module --eval '
+  run_compose exec -T core node --input-type=module --eval '
     const expectedText = process.argv[1];
     const timeoutMs = Number(process.argv[2]);
     if (expectedText !== "true" && expectedText !== "false") {
@@ -150,7 +232,9 @@ set_runtime_enabled() {
       body: JSON.stringify({ enabled: expected }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) throw new Error(`runtime update request failed with HTTP ${response.status}`);
+    if (response.status !== 200) {
+      throw new Error(`runtime update request failed with HTTP ${response.status}`);
+    }
     const body = await response.json();
     if (body.globalEnabled !== expected || body.durable !== true) {
       throw new Error(`expected durable runtime state ${expectedText} after update`);
@@ -159,7 +243,7 @@ set_runtime_enabled() {
 }
 
 assert_runtime_activation_ready() {
-  "${compose[@]}" exec -T core node --input-type=module --eval '
+  run_compose exec -T core node --input-type=module --eval '
     const timeoutMs = Number(process.argv[1]);
     const token = process.env.IRIS_INTERNAL_API_TOKEN?.trim();
     if (!token) throw new Error("IRIS_INTERNAL_API_TOKEN is unavailable inside Core");
@@ -167,7 +251,9 @@ assert_runtime_activation_ready() {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) throw new Error(`internal status request failed with HTTP ${response.status}`);
+    if (response.status !== 200) {
+      throw new Error(`internal status request failed with HTTP ${response.status}`);
+    }
     const body = await response.json();
     if (
       body.ok !== true ||
@@ -208,8 +294,8 @@ assert_runtime_activation_ready() {
 }
 
 start_core_disabled() {
-  "${compose[@]}" stop core >/dev/null
-  "${compose[@]}" up --detach --wait --wait-timeout 120 core
+  run_compose stop core >/dev/null
+  run_compose up --detach --wait --wait-timeout 120 core
   assert_runtime_state false
 }
 
@@ -217,35 +303,52 @@ stop_caddy_verified() {
   local attempt
   local caddy_running
 
-  for attempt in 1 2 3; do
-    "${compose[@]}" stop caddy >/dev/null 2>&1 || true
+  for ((attempt = 1; attempt <= cleanup_retry_count; attempt += 1)); do
+    if ! run_compose stop caddy >/dev/null; then
+      echo "Caddy stop attempt $attempt failed during fail-closed cleanup" >&2
+    fi
     if caddy_running="$(read_service_running caddy)" && [[ "$caddy_running" == false ]]; then
       return 0
     fi
-    if ((attempt < 3)); then
+    if ((attempt < cleanup_retry_count)); then
       sleep "$cleanup_retry_delay_seconds"
     fi
   done
 
-  "${compose[@]}" kill caddy >/dev/null 2>&1 || true
+  if ! run_compose kill caddy >/dev/null; then
+    echo "Caddy kill failed during fail-closed cleanup" >&2
+  fi
   caddy_running="$(read_service_running caddy)" || return 1
   [[ "$caddy_running" == false ]]
 }
 
 recover_failed_maintenance() {
   local caddy_closed=true
-  local core_disabled=true
+  local durable_disable_proven=true
   local caddy_running
 
-  set_runtime_enabled false >/dev/null 2>&1 || true
-  stop_caddy_verified || caddy_closed=false
-  start_core_disabled >/dev/null 2>&1 || core_disabled=false
-  assert_runtime_state false >/dev/null 2>&1 || core_disabled=false
+  if ! set_runtime_enabled false; then
+    echo "FAIL-CLOSED durable disable mutation failed" >&2
+    durable_disable_proven=false
+  fi
+  if ! stop_caddy_verified; then
+    echo "FAIL-CLOSED Caddy stop verification failed" >&2
+    caddy_closed=false
+  fi
+  if ! start_core_disabled; then
+    echo "FAIL-CLOSED Core restart in disabled mode failed" >&2
+    durable_disable_proven=false
+  fi
+  if ! assert_runtime_disabled_durable; then
+    echo "FAIL-CLOSED durable disabled status verification failed" >&2
+    durable_disable_proven=false
+  fi
   if ! caddy_running="$(read_service_running caddy)" || [[ "$caddy_running" != false ]]; then
+    echo "FAIL-CLOSED final Caddy stopped-state verification failed" >&2
     caddy_closed=false
   fi
 
-  if [[ "$caddy_closed" != true || "$core_disabled" != true ]]; then
+  if [[ "$caddy_closed" != true || "$durable_disable_proven" != true ]]; then
     return 1
   fi
 }
@@ -302,13 +405,13 @@ set_runtime_enabled false
 assert_runtime_state false
 stop_caddy_verified
 assert_runtime_activation_ready
-"${compose[@]}" stop core
+run_compose stop core
 
-"${compose[@]}" exec -T postgres sh -eu -c \
+run_compose exec -T postgres sh -eu -c \
   'PGPASSWORD="$IRIS_MIGRATOR_PASSWORD" exec pg_dump --host 127.0.0.1 --username "$IRIS_MIGRATOR_USER" --dbname "$POSTGRES_DB" --format custom' \
   > "$snapshot_dir/postgres.dump"
-"${compose[@]}" exec -T redis redis-cli SAVE > /dev/null
-"${compose[@]}" cp redis:/data/dump.rdb "$snapshot_dir/redis.rdb"
+run_compose exec -T redis redis-cli SAVE > /dev/null
+run_compose cp redis:/data/dump.rdb "$snapshot_dir/redis.rdb"
 printf 'created_at=%s\nformat=iris-pilot-paired-v1\nruntime_global_enabled=%s\nruntime_desired_global_enabled=%s\nruntime_revision=%s\nruntime_persistence_storage=%s\nruntime_persistence_ok=%s\n' \
   "$timestamp" \
   "$runtime_was_enabled" \
@@ -331,7 +434,7 @@ mv -- "$temporary_file" "$backup_file"
 assert_runtime_activation_ready
 restore_runtime_state
 if [[ "$caddy_was_running" == true ]]; then
-  "${compose[@]}" up --detach --wait --wait-timeout 120 caddy
+  run_compose up --detach --wait --wait-timeout 120 caddy
 fi
 
 find "$backup_dir" -type f -name 'iris-*.bundle.tar.age' -mtime +7 -delete

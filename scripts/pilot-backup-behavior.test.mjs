@@ -251,11 +251,155 @@ test(
   },
 );
 
+for (const [networkMode, cleanupError] of [
+  ["cleanup-disable-503", /runtime update request failed with HTTP 503/u],
+  ["cleanup-disable-not-durable", /expected durable runtime state false after update/u],
+  ["cleanup-disable-transport", /cleanup disable transport disconnected/u],
+  ["cleanup-disable-malformed", /SyntaxError|JSON/u],
+]) {
+  test(
+    `primary backup failure preserves ${networkMode} cleanup evidence`,
+    { skip: gitBash === undefined },
+    () => {
+      const result = runBackup({
+        runtimeEnabled: true,
+        caddyRunning: true,
+        failurePoint: "snapshot",
+        networkMode,
+      });
+      try {
+        assert.notEqual(result.status, 0);
+        assert.equal(result.error, undefined, "cleanup must finish before the harness timeout");
+        assert.match(result.stderr, /injected primary failure at snapshot/u);
+        assert.match(result.stderr, cleanupError);
+        assert.match(result.stderr, /durable disable mutation failed/u);
+        assert.match(result.stderr, /FAIL-CLOSED RECOVERY INCOMPLETE/u);
+        assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
+      } finally {
+        result.cleanup();
+      }
+    },
+  );
+}
+
+test(
+  "primary failure reports durable cleanup failure when desired intent returns after restart",
+  { skip: gitBash === undefined },
+  () => {
+    const result = runBackup({
+      runtimeEnabled: true,
+      caddyRunning: true,
+      failurePoint: "snapshot",
+      networkMode: "cleanup-desired-true-after-restart",
+    });
+    try {
+      assert.notEqual(result.status, 0);
+      assert.equal(result.error, undefined, "cleanup must finish before the harness timeout");
+      assert.match(result.stderr, /injected primary failure at snapshot/u);
+      assert.match(result.stderr, /durable disabled runtime state/u);
+      assert.match(result.stderr, /desiredGlobalEnabled=true/u);
+      assert.match(result.stderr, /FAIL-CLOSED RECOVERY INCOMPLETE/u);
+      assert.equal(result.runtimeEnabled, false);
+      assert.equal(result.caddyRunning, false);
+    } finally {
+      result.cleanup();
+    }
+  },
+);
+
+test(
+  "leading-zero HTTP timeouts are normalized as decimal before bounds checks",
+  { skip: gitBash === undefined },
+  () => {
+    const accepted = runBackup({
+      runtimeEnabled: false,
+      caddyRunning: false,
+      httpTimeoutMs: "000100",
+    });
+    try {
+      assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
+    } finally {
+      accepted.cleanup();
+    }
+
+    const rejected = runBackup({
+      runtimeEnabled: false,
+      caddyRunning: false,
+      httpTimeoutMs: "0100000",
+    });
+    try {
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /integer between 100 and 60000/u);
+      assert.equal(rejected.log, "");
+    } finally {
+      rejected.cleanup();
+    }
+  },
+);
+
+for (const timeoutCase of [
+  { name: "signed HTTP timeout", httpTimeoutMs: "+100" },
+  { name: "whitespace HTTP timeout", httpTimeoutMs: " 100" },
+  { name: "non-digit HTTP timeout", httpTimeoutMs: "100ms" },
+  { name: "signed command timeout", commandTimeoutSeconds: "+1" },
+  { name: "excessive cleanup retry delay", cleanupRetryDelaySeconds: "11" },
+]) {
+  test(
+    `rejects ${timeoutCase.name} before maintenance`,
+    { skip: gitBash === undefined },
+    () => {
+      const result = runBackup({
+        runtimeEnabled: false,
+        caddyRunning: false,
+        ...timeoutCase,
+      });
+      try {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /must be an integer between/u);
+        assert.equal(result.log, "");
+      } finally {
+        result.cleanup();
+      }
+    },
+  );
+}
+
+for (const hangCase of [
+  { name: "status exec", hangPoint: "status-command", failurePoint: "" },
+  { name: "cleanup exec", hangPoint: "cleanup-exec", failurePoint: "snapshot" },
+  { name: "cleanup stop", hangPoint: "cleanup-stop", failurePoint: "capture" },
+]) {
+  test(
+    `outer command deadline bounds a fake Docker ${hangCase.name} hang`,
+    { skip: gitBash === undefined },
+    () => {
+      const result = runBackup({
+        runtimeEnabled: true,
+        caddyRunning: true,
+        ...hangCase,
+      });
+      try {
+        assert.notEqual(result.status, 0);
+        assert.equal(result.error, undefined, "the script must beat the harness watchdog");
+        assert.ok(result.elapsedMs < 12_000, `${hangCase.name} took ${result.elapsedMs}ms`);
+        assert.match(result.stderr, /docker compose .* timed out after 1s/u);
+        assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
+      } finally {
+        result.cleanup();
+      }
+    },
+  );
+}
+
 function runBackup({
   runtimeEnabled,
   desiredGlobalEnabled = runtimeEnabled,
   caddyRunning,
+  cleanupRetryDelaySeconds = "0",
+  commandTimeoutSeconds = "1",
   failurePoint = "",
+  hangPoint = "",
+  httpTimeoutMs = "100",
   networkMode = "",
   persistenceOk = true,
   workersHealthy = true,
@@ -311,12 +455,14 @@ function runBackup({
     IRIS_BACKUP_RECIPIENT_FILE: toBashPath(resolve(root, "recipient")),
     IRIS_TEST_STATE_DIR: toBashPath(stateDir),
     IRIS_TEST_FAIL_POINT: failurePoint,
+    IRIS_TEST_HANG_POINT: hangPoint,
     IRIS_TEST_NETWORK_MODE: networkMode,
     IRIS_TEST_NODE_PATH: toBashPath(process.execPath),
     IRIS_TEST_FETCH_MOCK: pathToFileURL(fetchMockPath).href,
     IRIS_INTERNAL_API_TOKEN: "test-internal-token",
-    IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS: "0",
-    IRIS_BACKUP_HTTP_TIMEOUT_MS: "100",
+    IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS: cleanupRetryDelaySeconds,
+    IRIS_BACKUP_COMMAND_TIMEOUT_SECONDS: commandTimeoutSeconds,
+    IRIS_BACKUP_HTTP_TIMEOUT_MS: httpTimeoutMs,
     BASH_ENV: toBashPath(resolve(root, "bash-env")),
   });
 
@@ -326,7 +472,9 @@ function runBackup({
     encoding: "utf8",
     env: environment,
     timeout:
-      networkMode === "status-timeout"
+      hangPoint !== ""
+        ? 15_000
+        : networkMode === "status-timeout"
         ? 8_000
         : networkMode === "enable-committed-response-timeout"
           ? 12_000
@@ -379,6 +527,8 @@ set -Eeuo pipefail
 
 state_dir="$IRIS_TEST_STATE_DIR"
 fail_point="\${IRIS_TEST_FAIL_POINT:-}"
+hang_point="\${IRIS_TEST_HANG_POINT:-}"
+network_mode="\${IRIS_TEST_NETWORK_MODE:-}"
 log_file="$state_dir/operations.log"
 
 log() {
@@ -391,9 +541,15 @@ fail_once() {
   if [[ "$fail_point" == "$point" && ! -e "$marker" ]]; then
     : > "$marker"
     log "fail $point"
+    printf 'injected primary failure at %s\n' "$point" >&2
     return 0
   fi
   return 1
+}
+
+hang_forever() {
+  log "hang $1"
+  while :; do :; done
 }
 
 [[ "$1" == compose ]]
@@ -423,6 +579,9 @@ case "$operation" in
           log "stop-core"
           ;;
         caddy)
+          if [[ "$hang_point" == cleanup-stop && -e "$state_dir/failed-$fail_point" ]]; then
+            hang_forever cleanup-stop
+          fi
           if [[ -e "$state_dir/caddy-started" ]]; then
             if [[ "$fail_point" == cleanup && ! -e "$state_dir/failed-cleanup-stop" ]]; then
               : > "$state_dir/failed-cleanup-stop"
@@ -446,6 +605,10 @@ case "$operation" in
       if fail_once restart; then exit 42; fi
       printf 'true' > "$state_dir/core"
       printf 'false' > "$state_dir/runtime"
+      if [[ "$network_mode" == cleanup-desired-true-after-restart && -e "$state_dir/failed-snapshot" ]]; then
+        printf 'true' > "$state_dir/desired-runtime"
+        log "restore-desired-runtime true"
+      fi
       log "start-core-disabled"
     elif [[ "$service" == caddy ]]; then
       printf 'true' > "$state_dir/caddy"
@@ -480,6 +643,21 @@ case "$operation" in
       core)
         [[ "\${1:-}" == node ]] || { echo "unexpected Core exec" >&2; exit 64; }
         shift
+        arguments="$*"
+        if [[ "$hang_point" == status-command && "$arguments" == *runtime-control/status* && ! -e "$state_dir/hung-status-command" ]]; then
+          : > "$state_dir/hung-status-command"
+          hang_forever status-command
+        fi
+        if [[ "$hang_point" == cleanup-exec && "$arguments" == *runtime-control/global* ]]; then
+          count_file="$state_dir/global-exec-count"
+          count=0
+          [[ -e "$count_file" ]] && count="$(cat "$count_file")"
+          count=$((count + 1))
+          printf '%s' "$count" > "$count_file"
+          if ((count >= 2)); then
+            hang_forever cleanup-exec
+          fi
+        fi
         "$IRIS_TEST_NODE_PATH" --import "$IRIS_TEST_FETCH_MOCK" "$@"
         ;;
       postgres)
@@ -652,11 +830,31 @@ globalThis.fetch = async (input, init = {}) => {
 
   if (url.pathname === "/internal/runtime-control/global") {
     const enabled = JSON.parse(init.body).enabled;
+    let disableCount = 0;
+    if (!enabled) {
+      const countPath = resolve(stateDir, "disable-count");
+      disableCount = existsSync(countPath) ? Number(readFileSync(countPath, "utf8")) + 1 : 1;
+      writeFileSync(countPath, String(disableCount));
+      if (disableCount >= 2 && networkMode === "cleanup-disable-503") {
+        return json({ globalEnabled: true, durable: false }, 503);
+      }
+    }
     if (enabled && failOnce("restore")) return json({ error: "restore_failed" }, 503);
     writeState("runtime", enabled);
     writeState("desired-runtime", enabled);
     writeState("revision", Number(readState("revision")) + 1);
     log("set-runtime " + enabled);
+    if (!enabled && disableCount >= 2) {
+      if (networkMode === "cleanup-disable-transport") {
+        throw new Error("cleanup disable transport disconnected");
+      }
+      if (networkMode === "cleanup-disable-malformed") {
+        return new Response("{", { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (networkMode === "cleanup-disable-not-durable") {
+        return json({ globalEnabled: false, durable: false });
+      }
+    }
     if (enabled && networkMode === "enable-committed-response-timeout") {
       return abortingResponse(init.signal);
     }

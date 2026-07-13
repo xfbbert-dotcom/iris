@@ -126,11 +126,35 @@ test("backup bounds every embedded HTTP request with a validated operator timeou
   );
 });
 
+test("backup validates decimal deadlines and bounds every Compose command", () => {
+  const script = readFileSync(backupPath, "utf8");
+  assert.match(script, /IRIS_BACKUP_COMMAND_TIMEOUT_SECONDS/u);
+  assert.match(script, /normalize_decimal/u);
+  assert.match(script, /IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS must be an integer between 0 and 10/u);
+  assert.match(script, /cleanup_retry_count=3/u);
+  assert.match(script, /timeout --foreground --kill-after=/u);
+  assert.match(script, /docker compose .* timed out after/u);
+  assert.doesNotMatch(script, /\$\(\(http_timeout_ms/u);
+});
+
+test("fail-closed cleanup requires durable disabled intent after restart", () => {
+  const script = readFileSync(backupPath, "utf8");
+  const recoveryStart = script.indexOf("recover_failed_maintenance() {");
+  const recoveryEnd = script.indexOf("restore_runtime_state() {", recoveryStart);
+  const recovery = script.slice(recoveryStart, recoveryEnd);
+  assert.match(recovery, /set_runtime_enabled false/u);
+  assert.doesNotMatch(recovery, /set_runtime_enabled false[^\n]*2>&1/u);
+  assert.match(recovery, /assert_runtime_disabled_durable/u);
+  assert.match(script, /"\$global_enabled" != false/u);
+  assert.match(script, /"\$desired_global_enabled" != false/u);
+  assert.match(script, /"\$activation_required" != false/u);
+});
+
 test("backup verifies explicit restoration before starting Caddy", () => {
   const script = readFileSync(backupPath, "utf8");
   const publishIndex = script.indexOf('mv -- "$temporary_file" "$backup_file"');
   const restorationIndex = script.lastIndexOf("restore_runtime_state");
-  const caddyStartIndex = script.lastIndexOf('"${compose[@]}" up --detach --wait --wait-timeout 120 caddy');
+  const caddyStartIndex = script.lastIndexOf("run_compose up --detach --wait --wait-timeout 120 caddy");
   assert.ok(publishIndex < restorationIndex, "restoration must follow publication");
   assert.ok(restorationIndex < caddyStartIndex, "Caddy must start after verified restoration");
 
@@ -181,6 +205,13 @@ test("pilot runbook defines fail-closed restart, reactivation, and rollback orde
     /restoring the Postgres snapshot\s+restores durable intent but never live activation/iu,
   );
   assert.match(readme, /backup, migration, or status.*Iris disabled and Caddy stopped/isu);
+});
+
+test("pilot runbook documents bounded backup cleanup controls", () => {
+  const readme = readFileSync(pilotReadmePath, "utf8");
+  assert.match(readme, /IRIS_BACKUP_COMMAND_TIMEOUT_SECONDS.*30.*1.*300/isu);
+  assert.match(readme, /IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS.*2.*0.*10/isu);
+  assert.match(readme, /exactly three Caddy stop attempts/iu);
 });
 
 test("pilot rollback documents decrypted stdin restore and Caddy-last reactivation", () => {
