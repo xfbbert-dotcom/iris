@@ -49,6 +49,7 @@ export class RuntimeControlInputError extends Error {
 }
 
 export interface RuntimeControlService {
+  readonly persistenceStorage: RuntimeControlPersistence["storage"];
   getStatus(): Promise<RuntimeControlStatus>;
   setGlobal(input: {
     enabled: boolean;
@@ -132,6 +133,7 @@ function createService({
   }
 
   return {
+    persistenceStorage: storage,
     async getStatus() {
       try {
         const persisted = await repository.getSnapshot();

@@ -106,11 +106,11 @@ function getInternalComponentStatus(component: {
   enabled: boolean;
   running?: unknown;
 }): InternalComponentStatus {
-  if (!component.enabled) {
-    return "disabled";
-  }
   if (!component.ok) {
     return "degraded";
+  }
+  if (!component.enabled) {
+    return "disabled";
   }
   if (hasRunningStatus(component) && !component.running) {
     return "stopped";

@@ -149,6 +149,43 @@ describe("buildInternalStatusSnapshot", () => {
     expect(snapshot.summary.attentionSeverity).toBe("warning");
   });
 
+  it("marks a disabled unhealthy component degraded before considering disabled state", () => {
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-03T08:07:30.000Z"),
+      components: {
+        runtimeControl: {
+          ok: false,
+          enabled: false,
+          globalEnabled: false,
+          degradedReason: "runtime_control_persistence_failed",
+        },
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      ok: false,
+      status: "degraded",
+      summary: {
+        degradedComponents: ["runtimeControl"],
+        disabledComponents: ["runtimeControl"],
+        primaryAttentionComponent: {
+          name: "runtimeControl",
+          status: "degraded",
+        },
+        attentionSeverity: "critical",
+      },
+      components: {
+        runtimeControl: {
+          status: "degraded",
+          ok: false,
+          enabled: false,
+          globalEnabled: false,
+          degradedReason: "runtime_control_persistence_failed",
+        },
+      },
+    });
+  });
+
   it("summarizes component health from derived component statuses", () => {
     const snapshot = buildInternalStatusSnapshot({
       generatedAt: new Date("2026-07-03T08:08:00.000Z"),

@@ -417,6 +417,12 @@ describe("createRuntimeControlService emergency disable", () => {
 });
 
 describe("createRuntimeControlService status", () => {
+  it("exposes postgres as its synchronous storage authority", () => {
+    const { service } = fixture();
+
+    expect(service.persistenceStorage).toBe("postgres");
+  });
+
   it("reads once and refreshes durable proof without changing the live gate", async () => {
     const refreshed = durableSnapshot({
       revision: 8,
@@ -688,6 +694,13 @@ describe("runtime control service compare-and-swap coordination", () => {
 });
 
 describe("createInMemoryRuntimeControlService", () => {
+  it("exposes in_memory as its synchronous storage authority", () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig({}));
+    const service = createInMemoryRuntimeControlService(controller, () => new Date());
+
+    expect(service.persistenceStorage).toBe("in_memory");
+  });
+
   it("advances revision for reactivation even when durable desired is already true", async () => {
     const config = createDefaultRuntimeConfig({});
     config.globalEnabled = false;

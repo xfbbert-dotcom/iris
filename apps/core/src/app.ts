@@ -22,7 +22,6 @@ import {
   createInMemoryRuntimeControlService,
   RuntimeControlInputError,
   type RuntimeControlMutationResult,
-  type RuntimeControlPersistence,
   type RuntimeControlService,
   type RuntimeControlStatus,
 } from "./admin/runtime-control-service.js";
@@ -69,7 +68,6 @@ type EventWorkerRuntimeFactoryInput = {
 export type RuntimeControlDependency = {
   controller: RuntimeController;
   service: RuntimeControlService;
-  persistenceStorage: RuntimeControlPersistence["storage"];
 };
 
 export type BuildAppDependencies = {
@@ -206,8 +204,6 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const runtimeControlService =
     dependencies.runtimeControl?.service ??
     createInMemoryRuntimeControlService(runtimeController, now);
-  const runtimeControlPersistenceStorage =
-    dependencies.runtimeControl?.persistenceStorage ?? "in_memory";
   const answerDraftRuntime =
     dependencies.answerDraftOrchestrator === undefined
       ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
@@ -354,7 +350,6 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     const runtimeControlStatus = await readRuntimeControlStatus({
       controller: runtimeController,
       service: runtimeControlService,
-      storage: runtimeControlPersistenceStorage,
     });
     const components = {
       audit: {
@@ -365,7 +360,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       },
       runtimeControl: {
         ok: runtimeControlStatus.persistence.ok,
-        enabled: true,
+        enabled: runtimeControlStatus.globalEnabled,
         globalEnabled: runtimeControlStatus.globalEnabled,
         desiredGlobalEnabled: runtimeControlStatus.desiredGlobalEnabled,
         activationRequired: runtimeControlStatus.activationRequired,
@@ -403,7 +398,6 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     ...await readRuntimeControlStatus({
       controller: runtimeController,
       service: runtimeControlService,
-      storage: runtimeControlPersistenceStorage,
     }),
     ok: true,
   }));
@@ -431,6 +425,24 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         return reply.code(400).send({ ok: false, error: "invalid_request" });
       }
       return sendRuntimeControlPersistenceFailure(reply);
+    }
+
+    if (
+      result.kind === "success" &&
+      result.status.persistence.storage !== runtimeControlService.persistenceStorage
+    ) {
+      if (parsedRequest.enabled) {
+        return sendRuntimeControlPersistenceFailure(reply);
+      }
+      runtimeController.disableGlobal();
+      result = {
+        kind: "disable_not_persisted",
+        previousSnapshot: result.previousSnapshot,
+        status: createDegradedRuntimeControlStatus(
+          runtimeController,
+          runtimeControlService,
+        ),
+      };
     }
 
     if (result.kind === "success" || result.kind === "disable_not_persisted") {
@@ -473,6 +485,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return sendRuntimeControlPersistenceFailure(reply);
     }
 
+    if (
+      result.kind === "success" &&
+      result.status.persistence.storage !== runtimeControlService.persistenceStorage
+    ) {
+      return sendRuntimeControlPersistenceFailure(reply);
+    }
+
     if (result.kind === "success") {
       await recordRuntimeControlAuditEvent({
         auditLog,
@@ -509,6 +528,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       if (error instanceof RuntimeControlInputError) {
         return reply.code(400).send({ ok: false, error: "invalid_request" });
       }
+      return sendRuntimeControlPersistenceFailure(reply);
+    }
+
+    if (
+      result.kind === "success" &&
+      result.status.persistence.storage !== runtimeControlService.persistenceStorage
+    ) {
       return sendRuntimeControlPersistenceFailure(reply);
     }
 
@@ -1674,20 +1700,29 @@ function sendRuntimeControlPersistenceFailure(reply: FastifyReply) {
 async function readRuntimeControlStatus(input: {
   controller: RuntimeController;
   service: RuntimeControlService;
-  storage: RuntimeControlPersistence["storage"];
 }): Promise<RuntimeControlStatus> {
   try {
-    return await input.service.getStatus();
+    const status = await input.service.getStatus();
+    return status.persistence.storage === input.service.persistenceStorage
+      ? status
+      : createDegradedRuntimeControlStatus(input.controller, input.service);
   } catch {
-    return {
-      ...input.controller.getSnapshot(),
-      persistence: {
-        storage: input.storage,
-        ok: false,
-        error: "runtime_control_persistence_failed",
-      },
-    };
+    return createDegradedRuntimeControlStatus(input.controller, input.service);
   }
+}
+
+function createDegradedRuntimeControlStatus(
+  controller: RuntimeController,
+  service: RuntimeControlService,
+): RuntimeControlStatus {
+  return {
+    ...controller.getSnapshot(),
+    persistence: {
+      storage: service.persistenceStorage,
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    },
+  };
 }
 
 async function recordRuntimeControlAuditEvent(input: {

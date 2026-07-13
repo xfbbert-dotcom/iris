@@ -136,7 +136,7 @@ describe("runtime control API", () => {
     expect(response.json().components.runtimeControl).toEqual({
       status: "degraded",
       ok: false,
-      enabled: true,
+      enabled: false,
       globalEnabled: false,
       desiredGlobalEnabled: false,
       activationRequired: false,
@@ -253,9 +253,67 @@ describe("runtime control API", () => {
       components: {
         runtimeControl: {
           status: "degraded",
-          enabled: true,
+          enabled: false,
           globalEnabled: false,
           degradedReason: "runtime_control_persistence_failed",
+        },
+      },
+    });
+    expect(dedicated.body).not.toContain(secret);
+    expect(aggregate.body).not.toContain(secret);
+    expect(getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("sanitizes status storage mismatch using the service storage authority", async () => {
+    const secret = "postgres://reader:storage-secret@db.internal/iris";
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    controller.disableGlobal();
+    const getStatus = vi.fn(async () => runtimeControlStatus({
+      persistence: {
+        storage: secret as never,
+        ok: true,
+      },
+    }));
+    const app = buildApp({
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ getStatus }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const dedicated = await app.inject({
+      method: "GET",
+      url: "/internal/runtime-control/status",
+    });
+    const aggregate = await app.inject({ method: "GET", url: "/internal/status" });
+
+    expect(dedicated.statusCode).toBe(200);
+    expect(dedicated.json()).toMatchObject({
+      ok: true,
+      globalEnabled: false,
+      persistence: {
+        storage: "postgres",
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      },
+    });
+    expect(aggregate.statusCode).toBe(200);
+    expect(aggregate.json()).toMatchObject({
+      ok: false,
+      components: {
+        runtimeControl: {
+          status: "degraded",
+          enabled: false,
+          globalEnabled: false,
+          persistence: {
+            storage: "postgres",
+            ok: false,
+            error: "runtime_control_persistence_failed",
+          },
         },
       },
     });
@@ -502,6 +560,106 @@ describe("runtime control API", () => {
     expect(auditLog.events).toEqual([]);
   });
 
+  it("does not expose ordinary success when status storage mismatches the service", async () => {
+    const secret = "postgres://writer:storage-secret@db.internal/iris";
+    const auditLog = new InMemoryAuditLog();
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    const setGroup = vi.fn(async () => ({
+      kind: "success" as const,
+      durable: true as const,
+      previousSnapshot: runtimeControllerSnapshot(),
+      status: runtimeControlStatus({
+        disabledGroupIds: ["chat-a"],
+        persistence: {
+          storage: secret as never,
+          ok: true,
+        },
+      }),
+    }));
+    const app = buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGroup }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/groups/chat-a",
+      payload: { enabled: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+    expect(response.body).not.toContain(secret);
+    expect(auditLog.events).toEqual([]);
+  });
+
+  it("keeps emergency disable fail-closed when success storage mismatches", async () => {
+    const secret = "postgres://writer:disable-secret@db.internal/iris";
+    const auditLog = new InMemoryAuditLog();
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    const previousSnapshot = controller.getSnapshot();
+    const setGlobal = vi.fn(async () => {
+      controller.disableGlobal();
+      return {
+        kind: "success" as const,
+        durable: true as const,
+        previousSnapshot,
+        status: runtimeControlStatus({
+          globalEnabled: false,
+          desiredGlobalEnabled: false,
+          persistence: {
+            storage: secret as never,
+            ok: true,
+          },
+        }),
+      };
+    });
+    const app = buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_disable_not_persisted",
+      globalEnabled: false,
+      durable: false,
+    });
+    expect(response.body).not.toContain(secret);
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+    });
+  });
+
   it("uses the mutation before-state and requested value for concurrent audit data", async () => {
     const auditLog = new InMemoryAuditLog();
     const controller = new RuntimeController(createDefaultRuntimeConfig());
@@ -675,9 +833,9 @@ describe("runtime control API", () => {
 
     expect(status.statusCode).toBe(200);
     expect(status.json().components.runtimeControl).toEqual({
-      status: "healthy",
+      status: "disabled",
       ok: true,
-      enabled: true,
+      enabled: false,
       globalEnabled: false,
       desiredGlobalEnabled: false,
       activationRequired: false,
@@ -700,9 +858,10 @@ describe("runtime control API", () => {
         ok: true,
       },
     });
-    expect(status.json().summary.attentionComponents).not.toContainEqual(
-      expect.objectContaining({ name: "runtimeControl" }),
-    );
+    expect(status.json().summary.attentionComponents).toContainEqual({
+      name: "runtimeControl",
+      status: "disabled",
+    });
   });
 
   it("disables and re-enables Feishu event ingestion for one group", async () => {
@@ -1319,6 +1478,7 @@ function createRuntimeControlServiceStub(
   const status = runtimeControlStatus();
   const previousSnapshot = runtimeControllerSnapshot();
   return {
+    persistenceStorage: "postgres" as const,
     getStatus: vi.fn(async () => status),
     setGlobal: vi.fn(async () => ({
       kind: "success" as const,
@@ -1399,6 +1559,5 @@ function pairedRuntimeControl(
   return {
     controller,
     service,
-    persistenceStorage: "postgres" as const,
   };
 }
