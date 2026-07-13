@@ -227,7 +227,18 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("disabled_group_ids text[] not null");
     expect(normalized).toContain("capabilities jsonb not null");
     expect(normalized).toContain("values (1, 0, false, array[]::text[]");
-    expect(normalized).toContain("\"writeknowledgebase\":false");
-    expect(normalized).toContain("\"callexternaltools\":false");
+
+    const capabilitiesJson = migration.match(/'({[^']+})'::jsonb/)?.[1];
+    expect(capabilitiesJson).toBeDefined();
+    expect(JSON.parse(capabilitiesJson!)).toEqual({
+      readGroupContext: true,
+      replyWhenMentioned: true,
+      readGroupDocuments: true,
+      retrieveKnowledgeBase: true,
+      proactiveSpeech: true,
+      generateKnowledgeDrafts: true,
+      writeKnowledgeBase: false,
+      callExternalTools: false,
+    });
   });
 });
