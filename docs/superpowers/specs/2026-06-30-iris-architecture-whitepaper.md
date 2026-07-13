@@ -515,6 +515,39 @@ When Iris is disabled, it should stop processing new messages, stop proactive sp
 
 Feishu may still deliver events to the system while Iris is disabled. In that state, Iris should acknowledge or safely discard events according to Feishu platform requirements, but must not index message content, update semantic memory, generate replies, or execute actions unless an administrator explicitly re-enables the relevant scope.
 
+### 8.1 Durable Runtime Control
+
+Before Iris expands from the supervised single-group pilot to the first 20-30 users, runtime-control
+policy must be durable in Postgres. The v1 durable form is one versioned company snapshot containing
+the requested global state, disabled group IDs, and capability switches. The snapshot is an atomic
+policy document, not a replacement for the audit log.
+
+Persisted intent and live activation are deliberately separate:
+
+- disabled groups and capability switches are restored from the validated Postgres snapshot;
+- the requested global state is retained for operator visibility;
+- every unplanned Core startup begins with live `globalEnabled: false`, even when the persisted
+  requested state is enabled;
+- an operator may restore live activation only after readiness and worker health pass;
+- a missing, unavailable, malformed, or unsupported snapshot must never fall back to broader
+  permissions or an enabled runtime.
+
+Mutations that can increase Iris's authority must commit the next version to Postgres before they
+change the live controller. Concurrent mutations use optimistic revision checks so one operator
+cannot silently overwrite another. Emergency global disable is the exception: it must take effect in
+memory immediately even when persistence is unavailable, and the API must clearly report whether
+that disabled state was durably recorded. Other mutations remain unchanged when persistence fails.
+
+Migration defaults must be conservative: requested global activation is disabled, knowledge-base
+writing and external tool calls remain disabled, and no migration may infer permission from
+previously observed data. The single-company snapshot may later gain a tenant key during
+multi-company productization without changing the runtime-control domain boundary.
+
+Constitutional principle:
+
+> Durable configuration preserves operator intent, but it never grants permission to auto-resume
+> after an unplanned restart. Persistence failure may reduce Iris's authority; it must never expand it.
+
 Runtime-control mutations must be auditable. During the early internal rollout this can use the
 same bounded in-memory audit log as permission diagnostics, but emergency enable/disable paths must
 remain available even if the audit sink is unavailable.
