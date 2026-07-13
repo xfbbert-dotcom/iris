@@ -50,6 +50,10 @@ import {
   type DocumentSyncRuntime
 } from "./runtime/document-sync-runtime.js";
 import {
+  createRuntimeControlRuntime as createDefaultRuntimeControlRuntime,
+  type RuntimeControlRuntime,
+} from "./runtime/runtime-control-runtime.js";
+import {
   DOCUMENT_SOURCE_URI_MAX_CHARS,
   type DocumentSourceType,
 } from "./documents/document-source-registry.js";
@@ -87,13 +91,22 @@ export type BuildAppDependencies = {
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
   runtimeController?: RuntimeController;
   runtimeControl?: RuntimeControlDependency;
+  closeRuntimeControl?: () => Promise<void>;
   internalApiToken?: string;
   ingressHealthToken?: string;
   readinessEnv?: EnvLike;
 };
 
 export type StartServerOptions = {
-  appDependencies?: Omit<BuildAppDependencies, "internalApiToken" | "readinessEnv">;
+  appDependencies?: Omit<
+    BuildAppDependencies,
+    | "internalApiToken"
+    | "readinessEnv"
+    | "runtimeController"
+    | "runtimeControl"
+    | "closeRuntimeControl"
+  >;
+  createRuntimeControlRuntime?: () => Promise<RuntimeControlRuntime>;
 };
 
 type ParsedJsonBody = {
@@ -1210,6 +1223,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => eventWorkerRuntime?.close(),
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
+      () => dependencies.closeRuntimeControl?.(),
     ]);
   });
 
@@ -2192,15 +2206,46 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export async function startServer({
   appDependencies = {},
+  createRuntimeControlRuntime = createDefaultRuntimeControlRuntime,
 }: StartServerOptions = {}) {
-  const internalApiToken = process.env.IRIS_INTERNAL_API_TOKEN;
+  const internalApiToken = readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
   const feishuAuthConfig = readFeishuAuthConfig();
   const host = resolveServerListenHost(
     internalApiToken,
     feishuAuthConfig.verificationToken,
   );
   const port = readServerPort();
-  const app = buildApp({ ...appDependencies, internalApiToken });
+  readBearerToken(
+    appDependencies.ingressHealthToken ?? process.env.IRIS_INGRESS_HEALTH_TOKEN,
+    "IRIS_INGRESS_HEALTH_TOKEN",
+  );
+
+  const runtimeControlRuntime = await createRuntimeControlRuntime();
+  const {
+    runtimeController: _ignoredRuntimeController,
+    runtimeControl: _ignoredRuntimeControl,
+    closeRuntimeControl: _ignoredCloseRuntimeControl,
+    ...productionAppDependencies
+  } = appDependencies as BuildAppDependencies;
+  let app;
+  try {
+    app = buildApp({
+      ...productionAppDependencies,
+      internalApiToken,
+      runtimeControl: runtimeControlRuntime.runtimeControl,
+      closeRuntimeControl: () => runtimeControlRuntime.close(),
+    });
+  } catch (startupError) {
+    try {
+      await runtimeControlRuntime.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [startupError, cleanupError],
+        "Iris server composition failed and runtime-control cleanup failed",
+      );
+    }
+    throw startupError;
+  }
 
   try {
     await app.listen({ port, host });

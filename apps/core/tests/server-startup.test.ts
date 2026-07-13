@@ -2,24 +2,36 @@ import { createServer, type Server } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { startServer } from "../src/app.js";
+import {
+  startServer,
+  type BuildAppDependencies,
+} from "../src/app.js";
+import {
+  createInMemoryRuntimeControlService,
+} from "../src/admin/runtime-control-service.js";
+import { RuntimeController } from "../src/admin/runtime-controller.js";
+import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
+import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
 import { isolateEnvVar } from "./test-env.js";
 
 let restorePort: () => void = () => undefined;
 let restoreInternalApiToken: () => void = () => undefined;
 let restoreFeishuVerificationToken: () => void = () => undefined;
+let restoreIngressHealthToken: () => void = () => undefined;
 let occupiedServer: Server | undefined;
 
 beforeEach(() => {
   restorePort = isolateEnvVar("PORT");
   restoreInternalApiToken = isolateEnvVar("IRIS_INTERNAL_API_TOKEN");
   restoreFeishuVerificationToken = isolateEnvVar("FEISHU_VERIFICATION_TOKEN");
+  restoreIngressHealthToken = isolateEnvVar("IRIS_INGRESS_HEALTH_TOKEN");
 });
 
 afterEach(async () => {
   await closeServer(occupiedServer);
   occupiedServer = undefined;
+  restoreIngressHealthToken();
   restoreFeishuVerificationToken();
   restoreInternalApiToken();
   restorePort();
@@ -34,9 +46,11 @@ describe("Core server startup", () => {
     const createEventWorkerRuntime = vi.fn(() => undefined);
     const createDocumentSyncRuntime = vi.fn(() => undefined);
     const createReindexWorkerRuntime = vi.fn(() => undefined);
+    const createRuntimeControlRuntime = vi.fn(async () => fakeRuntimeControlRuntime());
 
     await expect(
       startServer({
+        createRuntimeControlRuntime,
         appDependencies: {
           createAnswerDraftRuntime,
           createEventWorkerRuntime,
@@ -50,6 +64,48 @@ describe("Core server startup", () => {
     expect(createEventWorkerRuntime).not.toHaveBeenCalled();
     expect(createDocumentSyncRuntime).not.toHaveBeenCalled();
     expect(createReindexWorkerRuntime).not.toHaveBeenCalled();
+    expect(createRuntimeControlRuntime).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["IRIS_INTERNAL_API_TOKEN", "operator secret"],
+    ["IRIS_INGRESS_HEALTH_TOKEN", "ingress secret"],
+  ])("rejects invalid %s auth before creating database resources", async (name, value) => {
+    process.env[name] = value;
+    const createRuntimeControlRuntime = vi.fn(async () => fakeRuntimeControlRuntime());
+
+    await expect(startServer({ createRuntimeControlRuntime })).rejects.toThrow(
+      `${name} must be a single bearer token`,
+    );
+
+    expect(createRuntimeControlRuntime).not.toHaveBeenCalled();
+  });
+
+  it("does not build workers or listen when durable runtime state fails to load", async () => {
+    const durableStateError = new Error("postgres unavailable");
+    const createRuntimeControlRuntime = vi.fn(async () => {
+      throw durableStateError;
+    });
+    const createAnswerDraftRuntime = vi.fn(() => undefined);
+    const createEventWorkerRuntime = vi.fn(() => undefined);
+    const createDocumentSyncRuntime = vi.fn(() => undefined);
+    const createReindexWorkerRuntime = vi.fn(() => undefined);
+
+    await expect(startServer({
+      createRuntimeControlRuntime,
+      appDependencies: {
+        createAnswerDraftRuntime,
+        createEventWorkerRuntime,
+        createDocumentSyncRuntime,
+        createReindexWorkerRuntime,
+      },
+    })).rejects.toBe(durableStateError);
+
+    expect(createRuntimeControlRuntime).toHaveBeenCalledOnce();
+    expect(createAnswerDraftRuntime).not.toHaveBeenCalled();
+    expect(createEventWorkerRuntime).not.toHaveBeenCalled();
+    expect(createDocumentSyncRuntime).not.toHaveBeenCalled();
+    expect(createReindexWorkerRuntime).not.toHaveBeenCalled();
   });
 
   it("returns a listening app that closes runtime resources normally", async () => {
@@ -58,8 +114,10 @@ describe("Core server startup", () => {
     await closeServer(reservation.server);
     process.env.PORT = String(port);
     const eventWorkerRuntime = fakeEventWorkerRuntime();
+    const runtimeControlRuntime = fakeRuntimeControlRuntime();
 
     const app = await startServer({
+      createRuntimeControlRuntime: async () => runtimeControlRuntime,
       appDependencies: {
         createAnswerDraftRuntime: () => undefined,
         createEventWorkerRuntime: () => eventWorkerRuntime,
@@ -77,6 +135,89 @@ describe("Core server startup", () => {
 
     expect(app.server.listening).toBe(false);
     expect(eventWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
+    expect(vi.mocked(eventWorkerRuntime.close).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runtimeControlRuntime.close).mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("always injects the factory's matching runtime-control pair", async () => {
+    const reservation = await occupyLoopbackPort();
+    const port = reservation.port;
+    await closeServer(reservation.server);
+    process.env.PORT = String(port);
+    const runtimeControlRuntime = fakeRuntimeControlRuntime();
+    const expectedController = runtimeControlRuntime.runtimeControl.controller;
+    const productionGetStatus = vi.spyOn(
+      runtimeControlRuntime.runtimeControl.service,
+      "getStatus",
+    );
+    const bypassRuntime = fakeRuntimeControlRuntime();
+    const bypassGetStatus = vi.spyOn(bypassRuntime.runtimeControl.service, "getStatus");
+    const bypassClose = vi.fn(async () => undefined);
+    const createEventWorkerRuntime = vi.fn(() => undefined);
+
+    const app = await startServer({
+      createRuntimeControlRuntime: async () => runtimeControlRuntime,
+      appDependencies: {
+        createAnswerDraftRuntime: () => undefined,
+        createEventWorkerRuntime,
+        createDocumentSyncRuntime: () => undefined,
+        createReindexWorkerRuntime: () => undefined,
+        runtimeController: bypassRuntime.runtimeControl.controller,
+        runtimeControl: bypassRuntime.runtimeControl,
+        closeRuntimeControl: bypassClose,
+      } as BuildAppDependencies,
+    });
+
+    try {
+      expect(createEventWorkerRuntime).toHaveBeenCalledWith({
+        runtimeController: expectedController,
+      });
+      const status = await app.inject({ method: "GET", url: "/internal/status" });
+      expect(status.statusCode).toBe(200);
+      expect(productionGetStatus).toHaveBeenCalledOnce();
+      expect(bypassGetStatus).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+
+    expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
+    expect(bypassClose).not.toHaveBeenCalled();
+  });
+
+  it("closes runtime-control once when buildApp throws", async () => {
+    const buildError = new Error("answer runtime composition failed");
+    const runtimeCleanupError = new Error("runtime-control cleanup failed");
+    const runtimeControlRuntime = fakeRuntimeControlRuntime({
+      closeError: runtimeCleanupError,
+    });
+    const createEventWorkerRuntime = vi.fn(() => undefined);
+
+    let startupError: unknown;
+    try {
+      await startServer({
+        createRuntimeControlRuntime: async () => runtimeControlRuntime,
+        appDependencies: {
+          createAnswerDraftRuntime: () => {
+            throw buildError;
+          },
+          createEventWorkerRuntime,
+          createDocumentSyncRuntime: () => undefined,
+          createReindexWorkerRuntime: () => undefined,
+        },
+      });
+    } catch (error) {
+      startupError = error;
+    }
+
+    expect(startupError).toBeInstanceOf(AggregateError);
+    expect((startupError as AggregateError).errors).toEqual([
+      buildError,
+      runtimeCleanupError,
+    ]);
+    expect(createEventWorkerRuntime).not.toHaveBeenCalled();
+    expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
   });
 
   it("closes composed runtime resources when the listener cannot bind", async () => {
@@ -84,9 +225,11 @@ describe("Core server startup", () => {
     occupiedServer = occupied.server;
     process.env.PORT = String(occupied.port);
     const eventWorkerRuntime = fakeEventWorkerRuntime();
+    const runtimeControlRuntime = fakeRuntimeControlRuntime();
 
     await expect(
       startServer({
+        createRuntimeControlRuntime: async () => runtimeControlRuntime,
         appDependencies: {
           createAnswerDraftRuntime: () => undefined,
           createEventWorkerRuntime: () => eventWorkerRuntime,
@@ -98,21 +241,23 @@ describe("Core server startup", () => {
 
     expect(eventWorkerRuntime.start).toHaveBeenCalledOnce();
     expect(eventWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
   });
 
-  it("preserves both listener and cleanup failures", async () => {
+  it("preserves listener and runtime-control cleanup failures in causal order", async () => {
     const occupied = await occupyLoopbackPort();
     occupiedServer = occupied.server;
     process.env.PORT = String(occupied.port);
-    const cleanupError = new Error("event runtime cleanup failed");
+    const cleanupError = new Error("runtime-control cleanup failed");
     const eventWorkerRuntime = fakeEventWorkerRuntime();
-    eventWorkerRuntime.close = vi.fn(async () => {
-      throw cleanupError;
+    const runtimeControlRuntime = fakeRuntimeControlRuntime({
+      closeError: cleanupError,
     });
 
     let startupError: unknown;
     try {
       await startServer({
+        createRuntimeControlRuntime: async () => runtimeControlRuntime,
         appDependencies: {
           createAnswerDraftRuntime: () => undefined,
           createEventWorkerRuntime: () => eventWorkerRuntime,
@@ -130,6 +275,7 @@ describe("Core server startup", () => {
     expect(errors[0]).toMatchObject({ code: "EADDRINUSE" });
     expect(errors[1]).toBe(cleanupError);
     expect(eventWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
   });
 });
 
@@ -190,5 +336,25 @@ function fakeEventWorkerRuntime(): EventWorkerRuntime {
     })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),
+  };
+}
+
+function fakeRuntimeControlRuntime({
+  closeError,
+}: {
+  closeError?: Error;
+} = {}): RuntimeControlRuntime & { close: ReturnType<typeof vi.fn> } {
+  const controller = new RuntimeController(
+    createDefaultRuntimeConfig({ IRIS_RUNTIME_GLOBAL_ENABLED: "false" }),
+  );
+  const service = createInMemoryRuntimeControlService(controller, () => new Date());
+
+  return {
+    runtimeControl: { controller, service },
+    close: vi.fn(async () => {
+      if (closeError !== undefined) {
+        throw closeError;
+      }
+    }),
   };
 }
