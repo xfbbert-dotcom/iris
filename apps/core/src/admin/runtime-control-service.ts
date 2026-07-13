@@ -23,10 +23,19 @@ export type RuntimeControlStatus = RuntimeControllerSnapshot & {
 };
 
 export type RuntimeControlMutationResult =
-  | { kind: "success"; durable: true; status: RuntimeControlStatus }
+  | {
+      kind: "success";
+      durable: true;
+      previousSnapshot: RuntimeControllerSnapshot;
+      status: RuntimeControlStatus;
+    }
   | { kind: "conflict" }
   | { kind: "persistence_failed" }
-  | { kind: "disable_not_persisted"; status: RuntimeControlStatus };
+  | {
+      kind: "disable_not_persisted";
+      previousSnapshot: RuntimeControllerSnapshot;
+      status: RuntimeControlStatus;
+    };
 
 export type RuntimeControlInputField = "groupId" | "updatedBy" | "capabilities";
 
@@ -89,22 +98,21 @@ function createService({
   let disableIntentGeneration = 0;
 
   async function persist(
+    previousSnapshot: RuntimeControllerSnapshot,
     buildNext: (
       current: RuntimeControllerSnapshot,
     ) => Omit<DurableRuntimeControlSnapshot, "revision" | "updatedAt">,
     afterPersist?: (persisted: DurableRuntimeControlSnapshot) => void,
     memoryFirstDisable = false,
   ): Promise<RuntimeControlMutationResult> {
-    const current = controller.getSnapshot();
-
     try {
       const persisted = await repository.replaceSnapshot({
-        expectedRevision: current.revision,
-        next: buildNext(current),
+        expectedRevision: previousSnapshot.revision,
+        next: buildNext(previousSnapshot),
       });
       if (persisted === "conflict") {
         return memoryFirstDisable
-          ? disableNotPersisted(controller, storage)
+          ? disableNotPersisted(controller, storage, previousSnapshot)
           : { kind: "conflict" };
       }
 
@@ -113,11 +121,12 @@ function createService({
       return {
         kind: "success",
         durable: true,
+        previousSnapshot: cloneRuntimeControllerSnapshot(previousSnapshot),
         status: statusFromController(controller, storage, true),
       };
     } catch {
       return memoryFirstDisable
-        ? disableNotPersisted(controller, storage)
+        ? disableNotPersisted(controller, storage, previousSnapshot)
         : { kind: "persistence_failed" };
     }
   }
@@ -136,9 +145,11 @@ function createService({
     setGlobal(input) {
       if (!input.enabled) {
         ++disableIntentGeneration;
+        const previousSnapshot = controller.getSnapshot();
         controller.disableGlobal();
         const updatedBy = normalizeUpdatedBy(input.updatedBy);
         return persist(
+          previousSnapshot,
           (current) => nextSnapshot(current, {
             desiredGlobalEnabled: false,
             updatedBy,
@@ -150,8 +161,10 @@ function createService({
 
       const updatedBy = normalizeUpdatedBy(input.updatedBy);
       const observedDisableIntentGeneration = disableIntentGeneration;
+      const previousSnapshot = controller.getSnapshot();
 
       return persist(
+        previousSnapshot,
         (current) => nextSnapshot(current, {
           desiredGlobalEnabled: true,
           updatedBy,
@@ -172,7 +185,8 @@ function createService({
     setGroup(input) {
       const groupId = normalizeGroupId(input.groupId);
       const updatedBy = normalizeUpdatedBy(input.updatedBy);
-      return persist((current) => {
+      const previousSnapshot = controller.getSnapshot();
+      return persist(previousSnapshot, (current) => {
         const disabledGroupIds = new Set(current.disabledGroupIds);
         if (input.enabled) {
           disabledGroupIds.delete(groupId);
@@ -190,7 +204,8 @@ function createService({
     setCapabilities(input) {
       const updates = normalizeCapabilityUpdates(input.updates);
       const updatedBy = normalizeUpdatedBy(input.updatedBy);
-      return persist((current) => nextSnapshot(current, {
+      const previousSnapshot = controller.getSnapshot();
+      return persist(previousSnapshot, (current) => nextSnapshot(current, {
         capabilities: { ...current.capabilities, ...updates },
         updatedBy,
       }));
@@ -310,10 +325,27 @@ function statusFromController(
 function disableNotPersisted(
   controller: RuntimeController,
   storage: RuntimeControlPersistence["storage"],
+  previousSnapshot: RuntimeControllerSnapshot,
 ): RuntimeControlMutationResult {
   return {
     kind: "disable_not_persisted",
+    previousSnapshot: cloneRuntimeControllerSnapshot(previousSnapshot),
     status: statusFromController(controller, storage, false),
+  };
+}
+
+function cloneRuntimeControllerSnapshot(
+  snapshot: RuntimeControllerSnapshot,
+): RuntimeControllerSnapshot {
+  return {
+    globalEnabled: snapshot.globalEnabled,
+    desiredGlobalEnabled: snapshot.desiredGlobalEnabled,
+    activationRequired: snapshot.activationRequired,
+    disabledGroupIds: [...snapshot.disabledGroupIds],
+    capabilities: { ...snapshot.capabilities },
+    revision: snapshot.revision,
+    updatedAt: new Date(snapshot.updatedAt),
+    ...(snapshot.updatedBy === undefined ? {} : { updatedBy: snapshot.updatedBy }),
   };
 }
 

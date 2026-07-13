@@ -13,12 +13,49 @@ import { RuntimeController } from "../src/admin/runtime-controller.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 
 describe("createRuntimeControlService ordinary mutations", () => {
+  it("returns a defensively cloned snapshot from immediately before the CAS", async () => {
+    const pending = deferred<DurableRuntimeControlSnapshot | "conflict">();
+    const { controller, service } = fixture({ replaceResult: pending.promise });
+    const before = controller.getSnapshot();
+
+    const mutation = service.setCapabilities({
+      updates: { proactiveSpeech: false },
+      updatedBy: "operator",
+    });
+    pending.resolve(durableSnapshot({
+      revision: 4,
+      capabilities: { ...defaultCapabilities(), proactiveSpeech: false },
+      updatedBy: "operator",
+    }));
+
+    const result = await mutation;
+    expect(result).toMatchObject({
+      kind: "success",
+      previousSnapshot: before,
+    });
+    if (result.kind !== "success") {
+      throw new Error("expected successful mutation");
+    }
+
+    result.previousSnapshot.disabledGroupIds.push("mutated");
+    result.previousSnapshot.capabilities.callExternalTools = true;
+    result.previousSnapshot.updatedAt.setUTCFullYear(2000);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      disabledGroupIds: ["chat-disabled"],
+      capabilities: { callExternalTools: false, proactiveSpeech: false },
+      revision: 4,
+      updatedAt: new Date("2026-07-13T00:00:00.000Z"),
+    });
+  });
+
   it("persists global enable before opening the live gate", async () => {
     const pending = deferred<DurableRuntimeControlSnapshot | "conflict">();
     const { controller, service, repository } = fixture({
       liveEnabled: false,
       replaceResult: pending.promise,
     });
+    const previousSnapshot = controller.getSnapshot();
 
     const mutation = service.setGlobal({ enabled: true, updatedBy: "alice" });
 
@@ -48,6 +85,7 @@ describe("createRuntimeControlService ordinary mutations", () => {
     await expect(mutation).resolves.toEqual({
       kind: "success",
       durable: true,
+      previousSnapshot,
       status: {
         globalEnabled: true,
         desiredGlobalEnabled: true,
@@ -192,6 +230,36 @@ describe("createRuntimeControlService ordinary mutations", () => {
 });
 
 describe("createRuntimeControlService emergency disable", () => {
+  it("reports a cloned before-state captured before the emergency live close", async () => {
+    const { controller, service } = fixture({
+      liveEnabled: true,
+      replaceError: new Error("postgres unavailable"),
+    });
+    const before = controller.getSnapshot();
+
+    const result = await service.setGlobal({ enabled: false });
+
+    expect(result).toMatchObject({
+      kind: "disable_not_persisted",
+      previousSnapshot: before,
+      status: { globalEnabled: false },
+    });
+    if (result.kind !== "disable_not_persisted") {
+      throw new Error("expected fail-closed disable result");
+    }
+
+    result.previousSnapshot.disabledGroupIds.push("mutated");
+    result.previousSnapshot.capabilities.callExternalTools = true;
+    result.previousSnapshot.updatedAt.setUTCFullYear(2000);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      globalEnabled: false,
+      disabledGroupIds: ["chat-disabled"],
+      capabilities: { callExternalTools: false },
+      updatedAt: new Date("2026-07-13T00:00:00.000Z"),
+    });
+  });
+
   it("closes the live gate before attempting persistence", async () => {
     const pending = deferred<DurableRuntimeControlSnapshot | "conflict">();
     const { controller, service, repository } = fixture({
@@ -247,9 +315,11 @@ describe("createRuntimeControlService emergency disable", () => {
       replaceResult,
       replaceError,
     });
+    const previousSnapshot = controller.getSnapshot();
 
     await expect(service.setGlobal({ enabled: false })).resolves.toEqual({
       kind: "disable_not_persisted",
+      previousSnapshot,
       status: {
         ...controller.getSnapshot(),
         globalEnabled: false,
