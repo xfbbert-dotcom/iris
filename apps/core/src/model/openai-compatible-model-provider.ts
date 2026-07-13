@@ -3,6 +3,7 @@ import type { ModelProviderConfig } from "../config/env.js";
 import { readPositiveSafeInteger } from "../config/numeric-guards.js";
 import { readBoundedJsonResponse } from "../integrations/bounded-json-response.js";
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
+import { ModelProviderHttpError } from "./model-provider-error.js";
 
 const MAX_MODEL_QUESTION_CHARS = 4000;
 const MAX_MODEL_PROMPT_CONTEXT_CHARS = 80_000;
@@ -74,14 +75,15 @@ export function createOpenAICompatibleModelProvider({
           }),
           signal: controller.signal,
         });
-        const responseBody = await readJsonResponse(response);
-
         if (!response.ok) {
-          throw new Error(
+          const responseBody = await readOptionalErrorResponse(response);
+          throw new ModelProviderHttpError(
+            response.status,
             `model provider request failed with status ${response.status}: ${readExternalErrorMessage(responseBody)}`,
           );
         }
 
+        const responseBody = await readJsonResponse(response);
         const answerText = readAnswerContent(responseBody).trim();
         if (answerText.length === 0) {
           throw new Error("model provider response did not include answer content");
@@ -117,6 +119,17 @@ async function readJsonResponse(response: Response): Promise<unknown> {
     maxResponseBytes: MAX_MODEL_RESPONSE_BYTES,
     responseSizeErrorMessage: `model provider response exceeds ${MAX_MODEL_RESPONSE_BYTES} bytes`,
   });
+}
+
+async function readOptionalErrorResponse(response: Response): Promise<unknown> {
+  try {
+    return await readJsonResponse(response);
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+    return undefined;
+  }
 }
 
 function readAnswerContent(responseBody: unknown): string {

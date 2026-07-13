@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
 import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-mention-answer-responder.js";
 import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
+import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
 
 type ReplyTextInput = Parameters<FeishuMessageReplier["replyText"]>[0];
 
@@ -342,6 +343,153 @@ describe("FeishuMentionAnswerResponder", () => {
       replyInThread: true,
       uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
     });
+  });
+
+  it("replies once with a recoverable message when the model reaches its capacity limit", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => {
+        throw new ModelProviderHttpError(
+          429,
+          "model provider request failed with status 429: private provider quota detail",
+        );
+      }),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-capacity" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+    const input = {
+      messageId: "om_model_capacity",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-capacity",
+    });
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "duplicate_message",
+    });
+
+    expect(replier.replyText).toHaveBeenCalledOnce();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_model_capacity",
+      text: "模型服务暂时达到使用上限，我现在无法可靠回答。恢复后，请再 @我一次。",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
+  it("keeps non-capacity model HTTP failures on the retry path", async () => {
+    const providerError = new ModelProviderHttpError(
+      503,
+      "model provider request failed with status 503: unavailable",
+    );
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => {
+        throw providerError;
+      }),
+    };
+    const replier = { replyText: vi.fn() };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    const input = {
+      messageId: "om_model_unavailable",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    await expect(responder.maybeRespond(input)).rejects.toBe(providerError);
+    await expect(responder.maybeRespond(input)).rejects.toBe(providerError);
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledTimes(2);
+    expect(replier.replyText).not.toHaveBeenCalled();
+  });
+
+  it("allows the same mention to retry after sending the capacity fallback fails", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => {
+        throw new ModelProviderHttpError(429, "model capacity reached");
+      }),
+    };
+    const replier = {
+      replyText: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Feishu fallback reply failed"))
+        .mockResolvedValueOnce({ replyMessageId: "reply-capacity-retry" }),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+    const input = {
+      messageId: "om_model_capacity_reply_retry",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    };
+
+    await expect(responder.maybeRespond(input)).rejects.toThrow(
+      "Feishu fallback reply failed",
+    );
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-capacity-retry",
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledTimes(2);
+    expect(replier.replyText).toHaveBeenCalledTimes(2);
+    expect(replier.replyText).toHaveBeenLastCalledWith({
+      messageId: "om_model_capacity_reply_retry",
+      text: "模型服务暂时达到使用上限，我现在无法可靠回答。恢复后，请再 @我一次。",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
+  it("does not classify generic errors by matching 429 in their text", async () => {
+    const genericError = new Error("model provider request failed with status 429");
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => {
+        throw genericError;
+      }),
+    };
+    const replier = { replyText: vi.fn() };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_generic_429_text",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 summarize",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).rejects.toBe(genericError);
+
+    expect(replier.replyText).not.toHaveBeenCalled();
   });
 
   it("skips duplicate mentioned messages after a successful reply", async () => {

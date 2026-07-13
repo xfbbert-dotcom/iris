@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
 import { createOpenAICompatibleModelProvider } from "../src/model/openai-compatible-model-provider.js";
 
 describe("OpenAICompatibleModelProvider", () => {
@@ -295,11 +296,75 @@ describe("OpenAICompatibleModelProvider", () => {
       ),
     });
 
+    const error = await provider
+      .generateAnswerDraft({ question: "Q", promptContext: "C" })
+      .catch((caughtError: unknown) => caughtError);
+
+    expect(error).toBeInstanceOf(ModelProviderHttpError);
+    expect(error).toMatchObject({
+      name: "ModelProviderHttpError",
+      statusCode: 429,
+      message:
+        "model provider request failed with status 429: daily request quota exhausted for gemini-3.5-flash",
+    });
+  });
+
+  it("preserves the HTTP status when a provider error body is not valid JSON", async () => {
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      fetch: vi.fn(async () =>
+        new Response("temporary quota page", {
+          status: 429,
+          headers: { "content-type": "text/plain" },
+        }),
+      ),
+    });
+
+    const error = await provider
+      .generateAnswerDraft({ question: "Q", promptContext: "C" })
+      .catch((caughtError: unknown) => caughtError);
+
+    expect(error).toBeInstanceOf(ModelProviderHttpError);
+    expect(error).toMatchObject({
+      statusCode: 429,
+      message: "model provider request failed with status 429: unknown error",
+    });
+  });
+
+  it("preserves the HTTP status when a provider error body exceeds the response limit", async () => {
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      fetch: vi.fn(async () =>
+        new Response(JSON.stringify({ error: { message: "quota reached" } }), {
+          status: 429,
+          headers: {
+            "content-length": "262145",
+            "content-type": "application/json",
+          },
+        }),
+      ),
+    });
+
+    const error = await provider
+      .generateAnswerDraft({ question: "Q", promptContext: "C" })
+      .catch((caughtError: unknown) => caughtError);
+
+    expect(error).toBeInstanceOf(ModelProviderHttpError);
+    expect(error).toMatchObject({
+      statusCode: 429,
+      message: "model provider request failed with status 429: unknown error",
+    });
+  });
+
+  it("treats aborted provider error body reads as request timeouts", async () => {
+    const provider = createOpenAICompatibleModelProvider({
+      config: { ...config(), timeoutMs: 1 },
+      fetch: vi.fn(async () => abortingJsonResponse(429)),
+    });
+
     await expect(
       provider.generateAnswerDraft({ question: "Q", promptContext: "C" }),
-    ).rejects.toThrow(
-      "model provider request failed with status 429: daily request quota exhausted for gemini-3.5-flash",
-    );
+    ).rejects.toThrow("model provider request timed out");
   });
 
   it("throws on malformed responses", async () => {
@@ -448,10 +513,10 @@ function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
   });
 }
 
-function abortingJsonResponse(): Response {
+function abortingJsonResponse(status = 200): Response {
   return {
-    ok: true,
-    status: 200,
+    ok: status >= 200 && status < 300,
+    status,
     json: async () => {
       const error = new Error("aborted");
       error.name = "AbortError";

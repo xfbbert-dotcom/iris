@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
 import type { FeishuMessageReplier } from "../feishu/feishu-message-replier.js";
+import { isModelProviderCapacityError } from "../model/model-provider-error.js";
 
 export type FeishuMessageMention = {
   key: string;
@@ -39,6 +40,8 @@ const BLANK_MENTION_CLARIFICATION = "我在，直接告诉我你想让我处理�
 const UNREADABLE_MENTION_CLARIFICATION =
   "我看到了你的 @Iris，但没读到可处理的文字内容。请用文字重新发给我一次。";
 const BLANK_MODEL_ANSWER_FALLBACK = "我没拿到可用答案，你可以换个说法再问我一次。";
+const MODEL_CAPACITY_FALLBACK =
+  "模型服务暂时达到使用上限，我现在无法可靠回答。恢复后，请再 @我一次。";
 const BLANK_MODEL_ANSWER_ERROR_MESSAGE = "model answer draft must not be blank";
 const MAX_MENTION_QUESTION_CHARS = 4000;
 const MAX_RECENT_REPLY_MESSAGE_IDS = 1000;
@@ -114,14 +117,19 @@ export function createFeishuMentionAnswerResponder({
           });
           answerText = answer.answerText;
         } catch (error) {
-          if (!isBlankModelAnswerError(error)) {
+          const fallbackText = isBlankModelAnswerError(error)
+            ? BLANK_MODEL_ANSWER_FALLBACK
+            : isModelProviderCapacityError(error)
+              ? MODEL_CAPACITY_FALLBACK
+              : undefined;
+          if (fallbackText === undefined) {
             throw error;
           }
 
           const result = toRepliedResult(
             await replier.replyText({
               messageId: input.messageId,
-              text: BLANK_MODEL_ANSWER_FALLBACK,
+              text: fallbackText,
               replyInThread: true,
               uuid: replyUuid,
             }),
