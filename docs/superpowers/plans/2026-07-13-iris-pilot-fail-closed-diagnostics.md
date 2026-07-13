@@ -32,28 +32,28 @@
 - Consumes: `createDefaultRuntimeConfig(env?)` and pilot Compose environment interpolation.
 - Produces: `IRIS_RUNTIME_GLOBAL_ENABLED` startup configuration with a pilot default of `false`.
 
-- [ ] **Step 1: Write failing runtime and Compose tests**
+- [x] **Step 1: Write failing runtime and Compose tests**
 
 Require absent configuration to preserve the development default, explicit `false` to disable,
 explicit `true` to enable, invalid values to throw, and rendered pilot Compose to pass `false`.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run `npm test --workspace apps/core -- runtime-config.test.ts` and
 `node --test scripts/pilot-compose.test.mjs`. Expected: failures because the environment setting is
 not implemented or passed.
 
-- [ ] **Step 3: Implement the minimal startup parser and pilot configuration**
+- [x] **Step 3: Implement the minimal startup parser and pilot configuration**
 
 Read the optional environment value in `createDefaultRuntimeConfig`, fail on invalid values, pass it
 through Compose, document it in the example environment, and update the restart limitation in the
 runbook.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run the same commands. Expected: all focused tests pass.
 
-- [ ] **Step 5: Commit the startup correction**
+- [x] **Step 5: Commit the startup correction**
 
 Commit with message `fix: make pilot runtime startup fail closed`.
 
@@ -68,26 +68,26 @@ Commit with message `fix: make pilot runtime startup fail closed`.
 - Consumes: bounded JSON response values passed to `readExternalErrorMessage()`.
 - Produces: the first useful message from a top-level provider response array.
 
-- [ ] **Step 1: Write failing array-wrapped error tests**
+- [x] **Step 1: Write failing array-wrapped error tests**
 
 Use the observed Gemini shape `[{ error: { message: "quota exhausted" } }]` and require both the
 shared reader and model provider exception to retain the message.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run `npm test --workspace apps/core -- external-error-message.test.ts openai-compatible-model-provider.test.ts`.
 Expected: the new assertions receive `unknown error`.
 
-- [ ] **Step 3: Implement first-useful-entry array parsing**
+- [x] **Step 3: Implement first-useful-entry array parsing**
 
 Inspect top-level array entries in order, reuse the existing record precedence, and preserve the
 existing truncation bound.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run the same focused command. Expected: all tests pass.
 
-- [ ] **Step 5: Commit the provider diagnostic correction**
+- [x] **Step 5: Commit the provider diagnostic correction**
 
 Commit with message `fix: preserve array-wrapped provider errors`.
 
@@ -101,26 +101,26 @@ Commit with message `fix: preserve array-wrapped provider errors`.
 - Consumes: Feishu Wiki HTTP status and bounded JSON body.
 - Produces: `false` for HTTP 400/code `131006`; errors remain thrown for unknown HTTP 400 bodies.
 
-- [ ] **Step 1: Write the failing known-denial test**
+- [x] **Step 1: Write the failing known-denial test**
 
 Require HTTP 400 with `{ code: 131006, msg: "permission denied" }` to resolve `false`, and retain an
 unknown HTTP 400 case that rejects.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run `npm test --workspace apps/core -- feishu-document-permission-checker.test.ts`. Expected: the
 known-denial case throws before returning `false`.
 
-- [ ] **Step 3: Implement the exact denial-code classification**
+- [x] **Step 3: Implement the exact denial-code classification**
 
 Add `131006` to the known denial codes and allow known denial bodies through the HTTP-status gate so
 the existing success classifier returns `false`.
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run the same focused command. Expected: all tests pass.
 
-- [ ] **Step 5: Commit the permission diagnostic correction**
+- [x] **Step 5: Commit the permission diagnostic correction**
 
 Commit with message `fix: classify revoked Feishu wiki access`.
 
@@ -133,9 +133,12 @@ Commit with message `fix: classify revoked Feishu wiki access`.
 - Consumes: the three reviewed commits and private pilot environment.
 - Produces: a commit-pinned Core image whose startup runtime state is disabled.
 
-- [ ] **Step 1: Run `npm run verify`**
+- [x] **Step 1: Run `npm run verify`**
 
 Expected: TypeScript, Core, Python, deployment, Compose, and readiness checks all pass.
+
+Verified with 68 Core test files (1094 passed, 4 skipped), 7 Python tests, 15 pilot tests, and
+13/13 rollout-readiness checks passing.
 
 - [ ] **Step 2: Build the exact commit image**
 
@@ -150,4 +153,3 @@ globally disabled without an operator mutation.
 
 Require empty event/document/reindex queues and DLQs, healthy workers, protected internal APIs, and
 the exact Feishu denial audit type before restoring any public ingress.
-
