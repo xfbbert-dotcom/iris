@@ -1,12 +1,70 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultRuntimeConfig as createRuntimeConfigFromEnv } from "../src/config/runtime-config.js";
 import { RuntimeController } from "../src/admin/runtime-controller.js";
+import type { DurableRuntimeControlSnapshot } from "../src/admin/runtime-control-state-repository.js";
 
 function createDefaultRuntimeConfig() {
   return createRuntimeConfigFromEnv({});
 }
 
+function durableSnapshot(
+  overrides: Partial<DurableRuntimeControlSnapshot> = {},
+): DurableRuntimeControlSnapshot {
+  return {
+    revision: 7,
+    desiredGlobalEnabled: true,
+    disabledGroupIds: ["chat-a"],
+    capabilities: {
+      ...createDefaultRuntimeConfig().capabilities,
+      readGroupContext: false,
+    },
+    updatedAt: new Date("2026-07-13T00:00:00.000Z"),
+    updatedBy: "operator-1",
+    ...overrides,
+  };
+}
+
 describe("RuntimeController", () => {
+  it("restores durable policy without opening the live global gate", () => {
+    const controller = new RuntimeController({
+      ...createDefaultRuntimeConfig(),
+      globalEnabled: false,
+    });
+
+    controller.replaceDurablePolicy(durableSnapshot({ desiredGlobalEnabled: true }));
+
+    expect(controller.getSnapshot()).toMatchObject({
+      globalEnabled: false,
+      desiredGlobalEnabled: true,
+      activationRequired: true,
+      disabledGroupIds: ["chat-a"],
+      revision: 7,
+    });
+    expect(controller.canProcessGroupMessage("chat-b")).toBe(false);
+  });
+
+  it("clones durable policy inputs and returned snapshots", () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    const durablePolicy = durableSnapshot();
+
+    controller.replaceDurablePolicy(durablePolicy);
+
+    durablePolicy.disabledGroupIds.push("chat-mutated");
+    durablePolicy.capabilities.readGroupContext = true;
+    durablePolicy.updatedAt.setUTCFullYear(2000);
+
+    const snapshot = controller.getSnapshot();
+    snapshot.disabledGroupIds.push("chat-snapshot-mutated");
+    snapshot.capabilities.readGroupContext = true;
+    snapshot.updatedAt.setUTCFullYear(2001);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      disabledGroupIds: ["chat-a"],
+      capabilities: { readGroupContext: false },
+      updatedAt: new Date("2026-07-13T00:00:00.000Z"),
+    });
+  });
+
   it("disables all processing when Iris is globally disabled", () => {
     const controller = new RuntimeController(createDefaultRuntimeConfig());
 
