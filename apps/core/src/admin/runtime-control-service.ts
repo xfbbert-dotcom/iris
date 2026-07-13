@@ -86,16 +86,13 @@ function createService({
   repository: RuntimeControlStateRepository;
   storage: RuntimeControlPersistence["storage"];
 }): RuntimeControlService {
-  let globalOperationGeneration = 0;
+  let disableIntentGeneration = 0;
 
   async function persist(
     buildNext: (
       current: RuntimeControllerSnapshot,
     ) => Omit<DurableRuntimeControlSnapshot, "revision" | "updatedAt">,
-    afterPersist?: (result: {
-      persisted: DurableRuntimeControlSnapshot;
-      installed: boolean;
-    }) => void,
+    afterPersist?: (persisted: DurableRuntimeControlSnapshot) => void,
     memoryFirstDisable = false,
   ): Promise<RuntimeControlMutationResult> {
     const current = controller.getSnapshot();
@@ -111,8 +108,8 @@ function createService({
           : { kind: "conflict" };
       }
 
-      const installed = installDurableSnapshotIfNewer(controller, persisted);
-      afterPersist?.({ persisted, installed });
+      installDurableSnapshotIfNewer(controller, persisted);
+      afterPersist?.(persisted);
       return {
         kind: "success",
         durable: true,
@@ -137,29 +134,38 @@ function createService({
     },
 
     setGlobal(input) {
-      const operationGeneration = ++globalOperationGeneration;
       if (!input.enabled) {
+        ++disableIntentGeneration;
         controller.disableGlobal();
+        const updatedBy = normalizeUpdatedBy(input.updatedBy);
+        return persist(
+          (current) => nextSnapshot(current, {
+            desiredGlobalEnabled: false,
+            updatedBy,
+          }),
+          undefined,
+          true,
+        );
       }
+
       const updatedBy = normalizeUpdatedBy(input.updatedBy);
+      const observedDisableIntentGeneration = disableIntentGeneration;
 
       return persist(
         (current) => nextSnapshot(current, {
-          desiredGlobalEnabled: input.enabled,
+          desiredGlobalEnabled: true,
           updatedBy,
         }),
-        input.enabled
-          ? ({ persisted, installed }) => {
-              if (
-                installed &&
-                operationGeneration === globalOperationGeneration &&
-                controller.getSnapshot().revision === persisted.revision
-              ) {
-                controller.enableGlobal();
-              }
-            }
-          : undefined,
-        !input.enabled,
+        (persisted) => {
+          const current = controller.getSnapshot();
+          if (
+            observedDisableIntentGeneration === disableIntentGeneration &&
+            current.revision >= persisted.revision &&
+            current.desiredGlobalEnabled
+          ) {
+            controller.enableGlobal();
+          }
+        },
       );
     },
 

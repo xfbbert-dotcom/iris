@@ -316,6 +316,34 @@ describe("createRuntimeControlService emergency disable", () => {
       revision: 4,
     });
   });
+
+  it("keeps a pending enable suppressed after an invalid later disable", async () => {
+    const enablePending = deferred<DurableRuntimeControlSnapshot | "conflict">();
+    const { controller, service, repository } = fixture({ liveEnabled: false });
+    vi.mocked(repository.replaceSnapshot).mockImplementationOnce(
+      () => enablePending.promise,
+    );
+
+    const enable = service.setGlobal({ enabled: true });
+    expectRuntimeControlInputError(
+      () => service.setGlobal({ enabled: false, updatedBy: "   " }),
+      "updatedBy",
+    );
+
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(repository.replaceSnapshot).toHaveBeenCalledTimes(1);
+
+    enablePending.resolve(durableSnapshot({
+      revision: 4,
+      desiredGlobalEnabled: true,
+      updatedBy: undefined,
+    }));
+    await expect(enable).resolves.toMatchObject({
+      kind: "success",
+      status: { globalEnabled: false, revision: 4 },
+    });
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+  });
 });
 
 describe("createRuntimeControlService status", () => {
@@ -437,6 +465,7 @@ describe("runtime control service compare-and-swap coordination", () => {
     );
     vi.mocked(repository.getSnapshot).mockResolvedValueOnce(durableSnapshot({
       revision: 5,
+      desiredGlobalEnabled: false,
       disabledGroupIds: ["chat-disabled", "chat-new"],
       updatedBy: undefined,
     }));
@@ -460,10 +489,132 @@ describe("runtime control service compare-and-swap coordination", () => {
     });
     expect(controller.getSnapshot()).toMatchObject({
       globalEnabled: false,
+      desiredGlobalEnabled: false,
       revision: 5,
       disabledGroupIds: ["chat-disabled", "chat-new"],
     });
   });
+
+  it("opens live when status already installed the enable result revision", async () => {
+    const enablePending = deferred<DurableRuntimeControlSnapshot | "conflict">();
+    const persisted = durableSnapshot({
+      revision: 4,
+      desiredGlobalEnabled: true,
+      updatedBy: undefined,
+    });
+    const { controller, service, repository } = fixture({ liveEnabled: false });
+    vi.mocked(repository.replaceSnapshot).mockImplementationOnce(
+      () => enablePending.promise,
+    );
+    vi.mocked(repository.getSnapshot).mockResolvedValueOnce(
+      cloneDurableSnapshot(persisted),
+    );
+
+    const enable = service.setGlobal({ enabled: true });
+    await expect(service.getStatus()).resolves.toMatchObject({
+      globalEnabled: false,
+      desiredGlobalEnabled: true,
+      revision: 4,
+    });
+
+    enablePending.resolve(cloneDurableSnapshot(persisted));
+    await expect(enable).resolves.toMatchObject({
+      kind: "success",
+      status: {
+        globalEnabled: true,
+        desiredGlobalEnabled: true,
+        revision: 4,
+      },
+    });
+    expect(controller.getSnapshot().globalEnabled).toBe(true);
+  });
+
+  it("lets the winning concurrent same-intent enable open live", async () => {
+    const winnerPending = deferred<DurableRuntimeControlSnapshot | "conflict">();
+    const { controller, service, repository } = fixture({ liveEnabled: false });
+    vi.mocked(repository.replaceSnapshot)
+      .mockImplementationOnce(() => winnerPending.promise)
+      .mockResolvedValueOnce("conflict");
+
+    const winner = service.setGlobal({ enabled: true });
+    const loser = service.setGlobal({ enabled: true });
+
+    await expect(loser).resolves.toEqual({ kind: "conflict" });
+    winnerPending.resolve(durableSnapshot({
+      revision: 4,
+      desiredGlobalEnabled: true,
+      updatedBy: undefined,
+    }));
+
+    await expect(winner).resolves.toMatchObject({
+      kind: "success",
+      status: { globalEnabled: true, revision: 4 },
+    });
+    expect(controller.getSnapshot().globalEnabled).toBe(true);
+  });
+
+  it("does not let an invalid enable block a pending valid enable", async () => {
+    const validPending = deferred<DurableRuntimeControlSnapshot | "conflict">();
+    const { controller, service, repository } = fixture({ liveEnabled: false });
+    vi.mocked(repository.replaceSnapshot).mockImplementationOnce(
+      () => validPending.promise,
+    );
+
+    const validEnable = service.setGlobal({ enabled: true });
+    expectRuntimeControlInputError(
+      () => service.setGlobal({ enabled: true, updatedBy: "   " }),
+      "updatedBy",
+    );
+    expect(repository.replaceSnapshot).toHaveBeenCalledTimes(1);
+
+    validPending.resolve(durableSnapshot({
+      revision: 4,
+      desiredGlobalEnabled: true,
+      updatedBy: undefined,
+    }));
+    await expect(validEnable).resolves.toMatchObject({
+      kind: "success",
+      status: { globalEnabled: true, revision: 4 },
+    });
+    expect(controller.getSnapshot().globalEnabled).toBe(true);
+  });
+
+  it.each([
+    { desiredGlobalEnabled: true, expectedLive: true },
+    { desiredGlobalEnabled: false, expectedLive: false },
+  ])(
+    "uses newer desired=$desiredGlobalEnabled policy when delayed enable completes",
+    async ({ desiredGlobalEnabled, expectedLive }) => {
+      const enablePending = deferred<DurableRuntimeControlSnapshot | "conflict">();
+      const { controller, service, repository } = fixture({ liveEnabled: false });
+      vi.mocked(repository.replaceSnapshot).mockImplementationOnce(
+        () => enablePending.promise,
+      );
+      vi.mocked(repository.getSnapshot).mockResolvedValueOnce(durableSnapshot({
+        revision: 5,
+        desiredGlobalEnabled,
+        updatedBy: undefined,
+      }));
+
+      const enable = service.setGlobal({ enabled: true });
+      await service.getStatus();
+      enablePending.resolve(durableSnapshot({
+        revision: 4,
+        desiredGlobalEnabled: true,
+        updatedBy: undefined,
+      }));
+
+      await expect(enable).resolves.toMatchObject({
+        kind: "success",
+        status: {
+          globalEnabled: expectedLive,
+          desiredGlobalEnabled,
+          revision: 5,
+        },
+      });
+      expect(controller.getSnapshot().globalEnabled).toBe(expectedLive);
+    },
+  );
 });
 
 describe("createInMemoryRuntimeControlService", () => {
