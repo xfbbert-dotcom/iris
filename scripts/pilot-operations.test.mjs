@@ -77,8 +77,7 @@ test("backup failure cleanup keeps Iris disabled and Caddy stopped", () => {
   assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart);
 
   const cleanup = script.slice(cleanupStart, cleanupEnd);
-  assert.match(cleanup, /stop caddy/u);
-  assert.match(cleanup, /start_core_disabled/u);
+  assert.match(cleanup, /recover_failed_maintenance/u);
   assert.doesNotMatch(cleanup, /restore_runtime_state/u);
   assert.doesNotMatch(cleanup, /up .*caddy/u);
 });

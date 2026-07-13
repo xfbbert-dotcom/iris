@@ -28,9 +28,12 @@ The ordered success path is:
 6. Restore `globalEnabled: true` only when it was true before the backup, and verify the mutation.
 7. Restart Caddy only when it was running before the backup.
 
-The failure path never restores an enabled runtime and never opens Caddy. Cleanup may start Core by
-itself so operators retain an internal recovery surface, but Core must remain at its configured
-fail-closed startup value.
+The failure path never restores an enabled runtime and never opens Caddy. Cleanup first attempts an
+explicit API disable while Core may still be reachable, retries and verifies the Caddy stop, then
+restarts Core by itself so operators retain an internal recovery surface. Core must report its
+configured fail-closed startup value before cleanup is considered verified. If Docker prevents the
+final state from being proven, the script emits a `FAIL-CLOSED RECOVERY INCOMPLETE` incident message
+instead of silently treating cleanup as successful.
 
 ## Security Boundaries
 
@@ -45,10 +48,13 @@ fail-closed startup value.
 
 ## Testing
 
-Repository operation tests assert the ordering and fail-closed cleanup contract. Production rollout
-uses two controlled drills: first with Iris disabled and Caddy stopped, then with Iris enabled but
-Caddy still stopped. The second drill verifies state restoration without exposing a public callback;
-the operator disables Iris again after the assertion while the Gemini quota gate remains pending.
+Repository operation tests assert the ordering and fail-closed cleanup contract. Executable behavior
+tests run the production Bash script against fake Compose, age, Postgres, and Redis boundaries and
+inject failures into state capture, snapshotting, Core restart, encryption, publication, runtime
+restoration, Caddy startup, and cleanup. Production rollout uses two controlled drills: first with
+Iris disabled and Caddy stopped, then with Iris enabled but Caddy still stopped. The second drill
+verifies state restoration without exposing a public callback; the operator disables Iris again
+after the assertion while the Gemini quota gate remains pending.
 
 ## Out Of Scope
 
@@ -56,4 +62,3 @@ the operator disables Iris again after the assertion while the Gemini quota gate
 - Persisting group or capability overrides.
 - Re-enabling Caddy after a failed backup.
 - Changing backup contents, encryption, retention, or restore semantics.
-

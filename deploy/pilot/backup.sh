@@ -8,6 +8,7 @@ environment_file="${IRIS_ENV_FILE:-$repository_dir/.env.pilot}"
 compose_file="${IRIS_COMPOSE_FILE:-$repository_dir/deploy/pilot/docker-compose.yml}"
 backup_dir="${IRIS_BACKUP_DIR:-$repository_dir/backups}"
 recipient_file="${IRIS_BACKUP_RECIPIENT_FILE:-/etc/iris/backup-recipient}"
+cleanup_retry_delay_seconds="${IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS:-2}"
 
 for command_name in docker age flock mktemp tar; do
   command -v "$command_name" >/dev/null
@@ -15,6 +16,10 @@ done
 test -r "$environment_file"
 test -r "$compose_file"
 test -r "$recipient_file"
+if [[ ! "$cleanup_retry_delay_seconds" =~ ^[0-9]+$ ]]; then
+  echo "IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS must be a non-negative integer" >&2
+  exit 1
+fi
 
 recipient="$(tr -d '[:space:]' < "$recipient_file")"
 if [[ ! "$recipient" =~ ^age1[0-9a-z]+$ ]]; then
@@ -67,6 +72,21 @@ assert_runtime_state() {
   fi
 }
 
+read_service_running() {
+  local target_service="$1"
+  local running_services
+  local service_name
+  local is_running=false
+
+  running_services="$("${compose[@]}" ps --status running --services)"
+  while IFS= read -r service_name; do
+    if [[ "$service_name" == "$target_service" ]]; then
+      is_running=true
+    fi
+  done <<< "$running_services"
+  printf '%s' "$is_running"
+}
+
 set_runtime_enabled() {
   local expected="$1"
   "${compose[@]}" exec -T core node --input-type=module --eval '
@@ -100,6 +120,43 @@ start_core_disabled() {
   assert_runtime_state false
 }
 
+stop_caddy_verified() {
+  local attempt
+  local caddy_running
+
+  for attempt in 1 2 3; do
+    "${compose[@]}" stop caddy >/dev/null 2>&1 || true
+    if caddy_running="$(read_service_running caddy)" && [[ "$caddy_running" == false ]]; then
+      return 0
+    fi
+    if ((attempt < 3)); then
+      sleep "$cleanup_retry_delay_seconds"
+    fi
+  done
+
+  "${compose[@]}" kill caddy >/dev/null 2>&1 || true
+  caddy_running="$(read_service_running caddy)" || return 1
+  [[ "$caddy_running" == false ]]
+}
+
+recover_failed_maintenance() {
+  local caddy_closed=true
+  local core_disabled=true
+  local caddy_running
+
+  set_runtime_enabled false >/dev/null 2>&1 || true
+  stop_caddy_verified || caddy_closed=false
+  start_core_disabled >/dev/null 2>&1 || core_disabled=false
+  assert_runtime_state false >/dev/null 2>&1 || core_disabled=false
+  if ! caddy_running="$(read_service_running caddy)" || [[ "$caddy_running" != false ]]; then
+    caddy_closed=false
+  fi
+
+  if [[ "$caddy_closed" != true || "$core_disabled" != true ]]; then
+    return 1
+  fi
+}
+
 restore_runtime_state() {
   if [[ "$runtime_was_enabled" == true ]]; then
     set_runtime_enabled true
@@ -114,30 +171,24 @@ cleanup() {
   rm -f -- "$temporary_file"
   if [[ "$maintenance_started" == true && "$maintenance_complete" != true ]]; then
     echo "Backup failed; keeping Iris disabled and Caddy stopped" >&2
-    "${compose[@]}" stop caddy >/dev/null 2>&1 || true
-    if ! start_core_disabled >/dev/null 2>&1; then
-      echo "Backup recovery could not verify a healthy disabled Core" >&2
+    if ! recover_failed_maintenance; then
+      echo "FAIL-CLOSED RECOVERY INCOMPLETE: verify Core is disabled and Caddy is stopped" >&2
     fi
   fi
   return "$exit_status"
 }
 trap cleanup EXIT
 
+maintenance_started=true
 runtime_was_enabled="$(read_runtime_enabled)"
 if [[ "$runtime_was_enabled" != true && "$runtime_was_enabled" != false ]]; then
   echo "Core returned an invalid global runtime state" >&2
   exit 1
 fi
 
-running_services="$("${compose[@]}" ps --status running --services)"
-while IFS= read -r service_name; do
-  if [[ "$service_name" == caddy ]]; then
-    caddy_was_running=true
-  fi
-done <<< "$running_services"
+caddy_was_running="$(read_service_running caddy)"
 
 echo "Stopping Iris briefly for a consistent Postgres and Redis snapshot" >&2
-maintenance_started=true
 "${compose[@]}" stop caddy core
 
 "${compose[@]}" exec -T postgres sh -eu -c \
