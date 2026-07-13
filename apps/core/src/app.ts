@@ -431,18 +431,15 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       result.kind === "success" &&
       result.status.persistence.storage !== runtimeControlService.persistenceStorage
     ) {
-      if (parsedRequest.enabled) {
-        return sendRuntimeControlPersistenceFailure(reply);
-      }
-      runtimeController.disableGlobal();
-      result = {
-        kind: "disable_not_persisted",
-        previousSnapshot: result.previousSnapshot,
-        status: createDegradedRuntimeControlStatus(
-          runtimeController,
-          runtimeControlService,
-        ),
-      };
+      return sendFailClosedRuntimeControlStorageMismatch({
+        auditLog,
+        controller: runtimeController,
+        operatorHint,
+        reply,
+        response: parsedRequest.enabled
+          ? "persistence_failed"
+          : "disable_not_persisted",
+      });
     }
 
     if (result.kind === "success" || result.kind === "disable_not_persisted") {
@@ -489,7 +486,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       result.kind === "success" &&
       result.status.persistence.storage !== runtimeControlService.persistenceStorage
     ) {
-      return sendRuntimeControlPersistenceFailure(reply);
+      return sendFailClosedRuntimeControlStorageMismatch({
+        auditLog,
+        controller: runtimeController,
+        operatorHint,
+        reply,
+        response: "persistence_failed",
+      });
     }
 
     if (result.kind === "success") {
@@ -535,7 +538,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       result.kind === "success" &&
       result.status.persistence.storage !== runtimeControlService.persistenceStorage
     ) {
-      return sendRuntimeControlPersistenceFailure(reply);
+      return sendFailClosedRuntimeControlStorageMismatch({
+        auditLog,
+        controller: runtimeController,
+        operatorHint,
+        reply,
+        response: "persistence_failed",
+      });
     }
 
     if (result.kind === "success") {
@@ -1682,6 +1691,10 @@ function sendRuntimeControlMutationResult(
     });
   }
 
+  return sendRuntimeControlDisableNotPersisted(reply);
+}
+
+function sendRuntimeControlDisableNotPersisted(reply: FastifyReply) {
   return reply.code(503).send({
     ok: false,
     error: "runtime_control_disable_not_persisted",
@@ -1695,6 +1708,28 @@ function sendRuntimeControlPersistenceFailure(reply: FastifyReply) {
     ok: false,
     error: "runtime_control_persistence_failed",
   });
+}
+
+async function sendFailClosedRuntimeControlStorageMismatch(input: {
+  auditLog: InMemoryAuditLog;
+  controller: RuntimeController;
+  operatorHint?: string;
+  reply: FastifyReply;
+  response: "persistence_failed" | "disable_not_persisted";
+}) {
+  const previousEnabled = input.controller.getSnapshot().globalEnabled;
+  input.controller.disableGlobal();
+  await recordRuntimeControlAuditEvent({
+    auditLog: input.auditLog,
+    scope: "global",
+    enabled: false,
+    previousEnabled,
+    operatorHint: input.operatorHint,
+  });
+
+  return input.response === "disable_not_persisted"
+    ? sendRuntimeControlDisableNotPersisted(input.reply)
+    : sendRuntimeControlPersistenceFailure(input.reply);
 }
 
 async function readRuntimeControlStatus(input: {

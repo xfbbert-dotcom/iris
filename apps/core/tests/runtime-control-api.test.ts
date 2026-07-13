@@ -560,22 +560,85 @@ describe("runtime control API", () => {
     expect(auditLog.events).toEqual([]);
   });
 
-  it("does not expose ordinary success when status storage mismatches the service", async () => {
+  it("fails closed and audits only the emergency stop for global enable storage mismatch", async () => {
+    const secret = "postgres://writer:global-secret@db.internal/iris";
+    const auditLog = new InMemoryAuditLog();
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    controller.disableGlobal();
+    const previousSnapshot = controller.getSnapshot();
+    const setGlobal = vi.fn(async () => {
+      controller.enableGlobal();
+      return {
+        kind: "success" as const,
+        durable: true as const,
+        previousSnapshot,
+        status: runtimeControlStatus({
+          globalEnabled: true,
+          persistence: {
+            storage: secret as never,
+            ok: true,
+          },
+        }),
+      };
+    });
+    const app = buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      headers: { "x-iris-operator": " alice@example.com " },
+      payload: { enabled: true },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+    expect(response.body).not.toContain(secret);
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+      operatorHint: "alice@example.com",
+    });
+  });
+
+  it("fails closed and audits only the emergency stop for group storage mismatch", async () => {
     const secret = "postgres://writer:storage-secret@db.internal/iris";
     const auditLog = new InMemoryAuditLog();
     const controller = new RuntimeController(createDefaultRuntimeConfig());
-    const setGroup = vi.fn(async () => ({
-      kind: "success" as const,
-      durable: true as const,
-      previousSnapshot: runtimeControllerSnapshot(),
-      status: runtimeControlStatus({
-        disabledGroupIds: ["chat-a"],
-        persistence: {
-          storage: secret as never,
-          ok: true,
-        },
-      }),
-    }));
+    controller.disableGlobal();
+    const previousSnapshot = controller.getSnapshot();
+    const setGroup = vi.fn(async () => {
+      controller.enableGlobal();
+      return {
+        kind: "success" as const,
+        durable: true as const,
+        previousSnapshot,
+        status: runtimeControlStatus({
+          globalEnabled: true,
+          disabledGroupIds: ["chat-a"],
+          persistence: {
+            storage: secret as never,
+            ok: true,
+          },
+        }),
+      };
+    });
     const app = buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
@@ -591,6 +654,7 @@ describe("runtime control API", () => {
     const response = await app.inject({
       method: "POST",
       url: "/internal/runtime-control/groups/chat-a",
+      headers: { "x-iris-operator": " bob@example.com " },
       payload: { enabled: false },
     });
 
@@ -600,7 +664,76 @@ describe("runtime control API", () => {
       error: "runtime_control_persistence_failed",
     });
     expect(response.body).not.toContain(secret);
-    expect(auditLog.events).toEqual([]);
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+      operatorHint: "bob@example.com",
+    });
+  });
+
+  it("fails closed and audits only the emergency stop for capability storage mismatch", async () => {
+    const secret = "postgres://writer:capability-secret@db.internal/iris";
+    const auditLog = new InMemoryAuditLog();
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    controller.disableGlobal();
+    const previousSnapshot = controller.getSnapshot();
+    const setCapabilities = vi.fn(async () => {
+      controller.enableGlobal();
+      return {
+        kind: "success" as const,
+        durable: true as const,
+        previousSnapshot,
+        status: runtimeControlStatus({
+          globalEnabled: true,
+          capabilities: {
+            ...runtimeControlStatus().capabilities,
+            proactiveSpeech: false,
+          },
+          persistence: {
+            storage: secret as never,
+            ok: true,
+          },
+        }),
+      };
+    });
+    const app = buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setCapabilities }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      headers: { "x-iris-operator": " carol@example.com " },
+      payload: { proactiveSpeech: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+    expect(response.body).not.toContain(secret);
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+      operatorHint: "carol@example.com",
+    });
   });
 
   it("keeps emergency disable fail-closed when success storage mismatches", async () => {
@@ -656,7 +789,7 @@ describe("runtime control API", () => {
       type: "runtime_control_updated",
       runtimeControlScope: "global",
       enabled: false,
-      previousEnabled: true,
+      previousEnabled: false,
     });
   });
 
