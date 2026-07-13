@@ -64,6 +64,7 @@ for (const failurePoint of [
   "restore",
   "caddy",
   "cleanup",
+  "rm-cleanup",
 ]) {
   test(
     `backup failure at ${failurePoint} leaves runtime disabled and Caddy stopped`,
@@ -84,6 +85,25 @@ for (const failurePoint of [
     },
   );
 }
+
+test(
+  "failed Caddy state verification is reported as incomplete recovery",
+  { skip: gitBash === undefined },
+  () => {
+    const result = runBackup({
+      runtimeEnabled: true,
+      caddyRunning: true,
+      failurePoint: "ps",
+    });
+    try {
+      assert.notEqual(result.status, 0);
+      assert.equal(result.runtimeEnabled, false);
+      assert.match(result.stderr, /FAIL-CLOSED RECOVERY INCOMPLETE/u);
+    } finally {
+      result.cleanup();
+    }
+  },
+);
 
 test(
   "persistent cleanup failure is reported as incomplete fail-closed recovery",
@@ -127,7 +147,10 @@ function runBackup({ runtimeEnabled, caddyRunning, failurePoint = "" }) {
       'chmod() { return 0; }\n' +
       'mv() { printf \'publish\\n\' >> "$IRIS_TEST_STATE_DIR/operations.log"; ' +
       'if [[ "$IRIS_TEST_FAIL_POINT" == publish ]]; then return 42; fi; ' +
-      'command /usr/bin/mv "$@"; }\n',
+      'command /usr/bin/mv "$@"; }\n' +
+      'rm() { if [[ "$IRIS_TEST_FAIL_POINT" == rm-cleanup ]]; then ' +
+      'printf \'fail rm\\n\' >> "$IRIS_TEST_STATE_DIR/operations.log"; return 42; fi; ' +
+      'command /usr/bin/rm "$@"; }\n',
   );
 
   writeExecutable(resolve(fakeBin, "docker"), fakeDockerScript);
@@ -226,6 +249,10 @@ operation="$1"
 shift
 case "$operation" in
   ps)
+    if [[ "$fail_point" == ps ]]; then
+      log "fail ps"
+      exit 42
+    fi
     [[ "$(cat "$state_dir/core")" == true ]] && printf 'core\n'
     [[ "$(cat "$state_dir/caddy")" == true ]] && printf 'caddy\n'
     true
@@ -268,7 +295,7 @@ case "$operation" in
       : > "$state_dir/caddy-started"
       log "start-caddy"
       if fail_once caddy; then exit 42; fi
-      if [[ "$fail_point" == cleanup || "$fail_point" == cleanup-persistent ]]; then
+      if [[ "$fail_point" == cleanup || "$fail_point" == cleanup-persistent || "$fail_point" == rm-cleanup ]]; then
         log "fail caddy"
         exit 42
       fi

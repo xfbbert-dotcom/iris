@@ -78,7 +78,9 @@ read_service_running() {
   local service_name
   local is_running=false
 
-  running_services="$("${compose[@]}" ps --status running --services)"
+  if ! running_services="$("${compose[@]}" ps --status running --services)"; then
+    return 1
+  fi
   while IFS= read -r service_name; do
     if [[ "$service_name" == "$target_service" ]]; then
       is_running=true
@@ -167,14 +169,14 @@ restore_runtime_state() {
 cleanup() {
   local exit_status=$?
   trap - EXIT
-  rm -rf -- "$snapshot_dir"
-  rm -f -- "$temporary_file"
   if [[ "$maintenance_started" == true && "$maintenance_complete" != true ]]; then
     echo "Backup failed; keeping Iris disabled and Caddy stopped" >&2
     if ! recover_failed_maintenance; then
       echo "FAIL-CLOSED RECOVERY INCOMPLETE: verify Core is disabled and Caddy is stopped" >&2
     fi
   fi
+  rm -rf -- "$snapshot_dir" || echo "Warning: could not remove backup snapshot directory" >&2
+  rm -f -- "$temporary_file" || echo "Warning: could not remove temporary backup file" >&2
   return "$exit_status"
 }
 trap cleanup EXIT
