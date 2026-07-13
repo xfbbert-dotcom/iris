@@ -132,7 +132,8 @@ test("backup validates decimal deadlines and bounds every Compose command", () =
   assert.match(script, /normalize_decimal/u);
   assert.match(script, /IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS must be an integer between 0 and 10/u);
   assert.match(script, /cleanup_retry_count=3/u);
-  assert.match(script, /timeout --foreground --kill-after=/u);
+  assert.match(script, /timeout --kill-after=/u);
+  assert.doesNotMatch(script, /timeout[^\n]*--foreground/u);
   assert.match(script, /docker compose .* timed out after/u);
   assert.doesNotMatch(script, /\$\(\(http_timeout_ms/u);
 });

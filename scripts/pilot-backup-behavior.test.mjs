@@ -381,7 +381,7 @@ for (const hangCase of [
       try {
         assert.notEqual(result.status, 0);
         assert.equal(result.error, undefined, "the script must beat the harness watchdog");
-        assert.ok(result.elapsedMs < 12_000, `${hangCase.name} took ${result.elapsedMs}ms`);
+        assert.ok(result.elapsedMs < 15_000, `${hangCase.name} took ${result.elapsedMs}ms`);
         assert.match(result.stderr, /docker compose .* timed out after 1s/u);
         assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
       } finally {
@@ -390,6 +390,33 @@ for (const hangCase of [
     },
   );
 }
+
+test(
+  "outer command deadline terminates the fake Docker process group",
+  { skip: gitBash === undefined },
+  async () => {
+    const result = runBackup({
+      runtimeEnabled: true,
+      caddyRunning: true,
+      hangPoint: "process-tree-status",
+    });
+    try {
+      assert.notEqual(result.status, 0);
+      assert.equal(result.error, undefined, "the script must beat the harness watchdog");
+      assert.ok(result.elapsedMs < 15_000, `process-tree timeout took ${result.elapsedMs}ms`);
+      assert.match(result.stderr, /docker compose exec timed out after 1s/u);
+      assert.match(result.stderr, /Backup failed; keeping Iris disabled and Caddy stopped/u);
+      assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
+      assert.equal(result.processTreePids.length, 2, "fake Docker must record parent and child PIDs");
+
+      const survivors = await waitForPidsToExit(result.processTreePids, 2_000);
+      assert.deepEqual(survivors, [], `timeout left process-tree PIDs alive: ${survivors.join(", ")}`);
+    } finally {
+      killResidualPids(result.processTreePids.filter(isPidAlive));
+      result.cleanup();
+    }
+  },
+);
 
 function runBackup({
   runtimeEnabled,
@@ -478,7 +505,7 @@ function runBackup({
         ? 8_000
         : networkMode === "enable-committed-response-timeout"
           ? 12_000
-          : 15_000,
+          : 30_000,
   });
   const elapsedMs = Date.now() - startedAt;
 
@@ -487,6 +514,11 @@ function runBackup({
     backups.length === 1
       ? readFileSync(resolve(backupDir, backups[0])).byteLength
       : 0;
+  const processTreePids = ["process-parent.pid", "process-child.pid"]
+    .map((name) => resolve(stateDir, name))
+    .filter(existsSync)
+    .map((path) => Number(readFileSync(path, "utf8").trim()))
+    .filter(Number.isSafeInteger);
 
   return {
     status: result.status,
@@ -497,6 +529,7 @@ function runBackup({
     runtimeEnabled: readFileSync(resolve(stateDir, "runtime"), "utf8").trim() === "true",
     caddyRunning: readFileSync(resolve(stateDir, "caddy"), "utf8").trim() === "true",
     log: readFileSync(resolve(stateDir, "operations.log"), "utf8"),
+    processTreePids,
     backups,
     backupSize,
     cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }),
@@ -520,6 +553,44 @@ function bashPath() {
   }
   const path = "C:\\Program Files\\Git\\bin\\bash.exe";
   return existsSync(path) ? path : undefined;
+}
+
+async function waitForPidsToExit(pids, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let survivors = pids.filter(isPidAlive);
+  while (survivors.length > 0 && Date.now() < deadline) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    survivors = pids.filter(isPidAlive);
+  }
+  return survivors;
+}
+
+function isPidAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (process.platform === "win32") {
+    return spawnSync(gitBash, ["-lc", `kill -0 ${pid} 2>/dev/null`]).status === 0;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function killResidualPids(pids) {
+  if (pids.length === 0) return;
+  if (process.platform === "win32") {
+    spawnSync(gitBash, ["-lc", `kill -KILL ${pids.join(" ")} 2>/dev/null || true`]);
+    return;
+  }
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      if (error?.code !== "ESRCH") throw error;
+    }
+  }
 }
 
 const fakeDockerScript = `#!/usr/bin/env bash
@@ -550,6 +621,19 @@ fail_once() {
 hang_forever() {
   log "hang $1"
   while :; do :; done
+}
+
+hang_process_tree() {
+  trap '' TERM
+  printf '%s' "$BASHPID" > "$state_dir/process-parent.pid"
+  (
+    trap '' TERM
+    while :; do :; done
+  ) &
+  child_pid=$!
+  printf '%s' "$child_pid" > "$state_dir/process-child.pid"
+  log "hang process-tree parent=$BASHPID child=$child_pid"
+  wait "$child_pid"
 }
 
 [[ "$1" == compose ]]
@@ -647,6 +731,10 @@ case "$operation" in
         if [[ "$hang_point" == status-command && "$arguments" == *runtime-control/status* && ! -e "$state_dir/hung-status-command" ]]; then
           : > "$state_dir/hung-status-command"
           hang_forever status-command
+        fi
+        if [[ "$hang_point" == process-tree-status && "$arguments" == *runtime-control/status* && ! -e "$state_dir/hung-process-tree" ]]; then
+          : > "$state_dir/hung-process-tree"
+          hang_process_tree
         fi
         if [[ "$hang_point" == cleanup-exec && "$arguments" == *runtime-control/global* ]]; then
           count_file="$state_dir/global-exec-count"

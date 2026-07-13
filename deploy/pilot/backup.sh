@@ -96,7 +96,7 @@ run_compose() {
   local operation="${1:-command}"
   local command_status
 
-  if timeout --foreground --kill-after="${command_kill_after_seconds}s" \
+  if timeout --kill-after="${command_kill_after_seconds}s" \
     "${command_timeout_seconds}s" "${compose[@]}" "$@"; then
     return 0
   else
