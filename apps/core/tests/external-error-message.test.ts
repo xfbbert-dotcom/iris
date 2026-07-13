@@ -12,10 +12,20 @@ describe("readExternalErrorMessage", () => {
     expect(readExternalErrorMessage({ message: " unavailable " })).toBe("unavailable");
   });
 
+  it("reads the first useful message from an array-wrapped provider error", () => {
+    expect(
+      readExternalErrorMessage([
+        { error: { message: "   " } },
+        { error: { message: " daily request quota exhausted " } },
+      ]),
+    ).toBe("daily request quota exhausted");
+  });
+
   it("falls back when no useful message is present", () => {
     expect(readExternalErrorMessage({ error: { message: "   " } })).toBe("unknown error");
     expect(readExternalErrorMessage({})).toBe("unknown error");
     expect(readExternalErrorMessage(undefined)).toBe("unknown error");
+    expect(readExternalErrorMessage([[], null, {}])).toBe("unknown error");
   });
 
   it("truncates oversized external error messages", () => {

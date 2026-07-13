@@ -11,7 +11,21 @@ export function readExternalErrorMessage(responseBody: unknown): string {
 }
 
 function readMessageCandidate(responseBody: unknown): string | undefined {
-  if (!isRecord(responseBody)) {
+  if (Array.isArray(responseBody)) {
+    for (const entry of responseBody) {
+      const message = readRecordMessageCandidate(entry)?.trim();
+      if (message !== undefined && message.length > 0) {
+        return message;
+      }
+    }
+    return undefined;
+  }
+
+  return readRecordMessageCandidate(responseBody);
+}
+
+function readRecordMessageCandidate(responseBody: unknown): string | undefined {
+  if (!isRecord(responseBody) || Array.isArray(responseBody)) {
     return undefined;
   }
 

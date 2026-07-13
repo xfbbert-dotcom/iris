@@ -284,6 +284,24 @@ describe("OpenAICompatibleModelProvider", () => {
     ).rejects.toThrow("model provider request failed with status 401: bad key");
   });
 
+  it("preserves Gemini quota details from array-wrapped errors", async () => {
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      fetch: vi.fn(async () =>
+        jsonResponse(
+          [{ error: { message: "daily request quota exhausted for gemini-3.5-flash" } }],
+          { status: 429 },
+        ),
+      ),
+    });
+
+    await expect(
+      provider.generateAnswerDraft({ question: "Q", promptContext: "C" }),
+    ).rejects.toThrow(
+      "model provider request failed with status 429: daily request quota exhausted for gemini-3.5-flash",
+    );
+  });
+
   it("throws on malformed responses", async () => {
     const provider = createOpenAICompatibleModelProvider({
       config: config(),
