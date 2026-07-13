@@ -9,6 +9,7 @@ compose_file="${IRIS_COMPOSE_FILE:-$repository_dir/deploy/pilot/docker-compose.y
 backup_dir="${IRIS_BACKUP_DIR:-$repository_dir/backups}"
 recipient_file="${IRIS_BACKUP_RECIPIENT_FILE:-/etc/iris/backup-recipient}"
 cleanup_retry_delay_seconds="${IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS:-2}"
+http_timeout_ms="${IRIS_BACKUP_HTTP_TIMEOUT_MS:-10000}"
 
 for command_name in docker age flock mktemp tar; do
   command -v "$command_name" >/dev/null
@@ -18,6 +19,10 @@ test -r "$compose_file"
 test -r "$recipient_file"
 if [[ ! "$cleanup_retry_delay_seconds" =~ ^[0-9]+$ ]]; then
   echo "IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS must be a non-negative integer" >&2
+  exit 1
+fi
+if [[ ! "$http_timeout_ms" =~ ^[0-9]+$ ]] || ((http_timeout_ms < 100 || http_timeout_ms > 60000)); then
+  echo "IRIS_BACKUP_HTTP_TIMEOUT_MS must be an integer between 100 and 60000" >&2
   exit 1
 fi
 
@@ -47,16 +52,19 @@ runtime_revision=
 runtime_persistence_storage=
 runtime_persistence_ok=
 runtime_activation_required=
+runtime_enable_attempted=false
 
 cd "$repository_dir"
 compose=(docker compose --env-file "$environment_file" --file "$compose_file")
 
 read_runtime_status() {
   "${compose[@]}" exec -T core node --input-type=module --eval '
+    const timeoutMs = Number(process.argv[1]);
     const token = process.env.IRIS_INTERNAL_API_TOKEN?.trim();
     if (!token) throw new Error("IRIS_INTERNAL_API_TOKEN is unavailable inside Core");
     const response = await fetch("http://127.0.0.1:3000/internal/runtime-control/status", {
       headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) throw new Error(`runtime status request failed with HTTP ${response.status}`);
     const body = await response.json();
@@ -83,7 +91,7 @@ read_runtime_status() {
       body.persistence.ok,
       body.activationRequired,
     ].join("\t"));
-  '
+  ' "$http_timeout_ms"
 }
 
 read_runtime_enabled() {
@@ -125,6 +133,7 @@ set_runtime_enabled() {
   local expected="$1"
   "${compose[@]}" exec -T core node --input-type=module --eval '
     const expectedText = process.argv[1];
+    const timeoutMs = Number(process.argv[2]);
     if (expectedText !== "true" && expectedText !== "false") {
       throw new Error("runtime target must be true or false");
     }
@@ -139,21 +148,24 @@ set_runtime_enabled() {
         "x-iris-operator": "planned-backup",
       },
       body: JSON.stringify({ enabled: expected }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) throw new Error(`runtime update request failed with HTTP ${response.status}`);
     const body = await response.json();
     if (body.globalEnabled !== expected || body.durable !== true) {
       throw new Error(`expected durable runtime state ${expectedText} after update`);
     }
-  ' "$expected"
+  ' "$expected" "$http_timeout_ms"
 }
 
 assert_runtime_activation_ready() {
   "${compose[@]}" exec -T core node --input-type=module --eval '
+    const timeoutMs = Number(process.argv[1]);
     const token = process.env.IRIS_INTERNAL_API_TOKEN?.trim();
     if (!token) throw new Error("IRIS_INTERNAL_API_TOKEN is unavailable inside Core");
     const response = await fetch("http://127.0.0.1:3000/internal/status", {
       headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) throw new Error(`internal status request failed with HTTP ${response.status}`);
     const body = await response.json();
@@ -163,7 +175,7 @@ assert_runtime_activation_ready() {
       body.summary?.degradedComponentCount !== 0 ||
       body.summary?.stoppedEnabledRuntimeComponentCount !== 0
     ) {
-      throw new Error("internal status did not prove healthy pilot services");
+      throw new Error("internal status did not prove healthy pilot services and healthy workers");
     }
     const runtime = body.components?.runtimeControl;
     if (
@@ -192,7 +204,7 @@ assert_runtime_activation_ready() {
     )) {
       throw new Error("internal status did not prove healthy workers and queues with zero DLQs");
     }
-  '
+  ' "$http_timeout_ms"
 }
 
 start_core_disabled() {
@@ -241,6 +253,7 @@ recover_failed_maintenance() {
 restore_runtime_state() {
   if [[ "$runtime_was_enabled" == true ]]; then
     assert_runtime_activation_ready
+    runtime_enable_attempted=true
     set_runtime_enabled true
     assert_runtime_state true
   fi
@@ -316,10 +329,10 @@ chmod 600 "$temporary_file"
 mv -- "$temporary_file" "$backup_file"
 
 assert_runtime_activation_ready
+restore_runtime_state
 if [[ "$caddy_was_running" == true ]]; then
   "${compose[@]}" up --detach --wait --wait-timeout 120 caddy
 fi
-restore_runtime_state
 
 find "$backup_dir" -type f -name 'iris-*.bundle.tar.age' -mtime +7 -delete
 maintenance_complete=true

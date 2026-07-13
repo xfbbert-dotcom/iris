@@ -114,6 +114,33 @@ test("planned backup gates explicit restoration on durable status, healthy worke
   assert.ok(postRestartGate < restoreRuntime, "post-restart gates must pass before restoration");
 });
 
+test("backup bounds every embedded HTTP request with a validated operator timeout", () => {
+  const script = readFileSync(backupPath, "utf8");
+  assert.match(script, /IRIS_BACKUP_HTTP_TIMEOUT_MS/u);
+  assert.match(script, /10000/u);
+  assert.match(script, /must be an integer between 100 and 60000/u);
+  assert.equal(
+    script.match(/AbortSignal\.timeout\(timeoutMs\)/gu)?.length,
+    3,
+    "status, mutation, and aggregate status fetches must all be bounded",
+  );
+});
+
+test("backup verifies explicit restoration before starting Caddy", () => {
+  const script = readFileSync(backupPath, "utf8");
+  const publishIndex = script.indexOf('mv -- "$temporary_file" "$backup_file"');
+  const restorationIndex = script.lastIndexOf("restore_runtime_state");
+  const caddyStartIndex = script.lastIndexOf('"${compose[@]}" up --detach --wait --wait-timeout 120 caddy');
+  assert.ok(publishIndex < restorationIndex, "restoration must follow publication");
+  assert.ok(restorationIndex < caddyStartIndex, "Caddy must start after verified restoration");
+
+  const restoreStart = script.indexOf("restore_runtime_state() {");
+  const restoreEnd = script.indexOf("cleanup() {", restoreStart);
+  const restore = script.slice(restoreStart, restoreEnd);
+  assert.match(restore, /runtime_enable_attempted=true[\s\S]*set_runtime_enabled true/u);
+  assert.match(restore, /set_runtime_enabled true[\s\S]*assert_runtime_state true/u);
+});
+
 test("backup failure cleanup keeps Iris disabled and Caddy stopped", () => {
   const script = readFileSync(backupPath, "utf8");
   const cleanupStart = script.indexOf("cleanup() {");
@@ -135,8 +162,9 @@ test("pilot runbook defines fail-closed restart, reactivation, and rollback orde
     "Create the paired Postgres backup",
     "Deploy migration and Core while Caddy remains stopped",
     "persistence.ok=true, globalEnabled=false",
-    "Start Caddy only after authenticated internal gates pass",
+    "Recheck that all workers are healthy and running and every queue and DLQ count is `0`",
     "Explicitly POST global true",
+    "Start Caddy only after authenticated internal gates pass",
     "Run real Feishu acceptance",
   ];
   let previousIndex = -1;
@@ -153,6 +181,23 @@ test("pilot runbook defines fail-closed restart, reactivation, and rollback orde
     /restoring the Postgres snapshot\s+restores durable intent but never live activation/iu,
   );
   assert.match(readme, /backup, migration, or status.*Iris disabled and Caddy stopped/isu);
+});
+
+test("pilot rollback documents decrypted stdin restore and Caddy-last reactivation", () => {
+  const readme = readFileSync(pilotReadmePath, "utf8");
+  const rollback = readme.slice(readme.indexOf("## Rollback"));
+  assert.match(rollback, /IRIS_BACKUP_IDENTITY_FILE/u);
+  assert.match(
+    rollback,
+    /age --decrypt --identity "\$IRIS_BACKUP_IDENTITY_FILE" "\$backup_file"\s*\\\s*\| \.\/deploy\/pilot\/restore-from-stdin\.sh --confirm-replace-database/u,
+  );
+  const pipelineIndex = rollback.indexOf("age --decrypt");
+  const localhostGateIndex = rollback.indexOf("authenticated localhost gates");
+  const enableIndex = rollback.indexOf("Explicitly POST global true");
+  const caddyIndex = rollback.indexOf("Start Caddy last");
+  assert.ok(pipelineIndex < localhostGateIndex);
+  assert.ok(localhostGateIndex < enableIndex);
+  assert.ok(enableIndex < caddyIndex);
 });
 
 test("restore requires confirmation and fails closed through transactional restore", () => {
@@ -175,6 +220,9 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /appendonlydir/u);
   assert.match(script, /run --rm .* migrate/u);
   assert.match(script, /up --detach --wait/u);
+  const postSwap = script.slice(script.indexOf('"${compose[@]}" stop caddy core'));
+  assert.match(postSwap, /up --detach --wait --wait-timeout 120 core/u);
+  assert.doesNotMatch(postSwap, /up --detach[^\n]*caddy/u);
   const swapSql = readFileSync("deploy/pilot/swap-databases.sql", "utf8");
   assert.match(swapSql, /ALTER DATABASE %I RENAME TO %I/u);
   const grantSql = readFileSync("deploy/pilot/grant-app-access.sql", "utf8");

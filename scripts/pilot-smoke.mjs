@@ -21,8 +21,10 @@ const internalApiToken =
 const feishuVerificationToken =
   process.env.IRIS_PILOT_FEISHU_VERIFICATION_TOKEN ?? "ci-verification-token";
 
-let runtimeEnabledBySmoke = false;
+let runtimeEnableAttempted = false;
 let completedChecks;
+let primaryError;
+let cleanupError;
 
 try {
   await waitForStatus(`${publicBaseUrl}/health`, 200, timeoutMs);
@@ -49,8 +51,8 @@ try {
     throw new Error("Expected Iris ingress readiness to be ready");
   }
 
+  runtimeEnableAttempted = true;
   await setGlobalRuntime(true);
-  runtimeEnabledBySmoke = true;
 
   const callbackStartedAt = Date.now();
   const callbackResponse = await requestJson(`${publicBaseUrl}/feishu/events`, {
@@ -95,26 +97,49 @@ try {
     durableRawEventQueue: "persisted",
   };
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+  primaryError = error;
 } finally {
-  if (runtimeEnabledBySmoke) {
+  if (runtimeEnableAttempted) {
     try {
       await setGlobalRuntime(false);
     } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exitCode = 1;
+      cleanupError = error;
     }
   }
 }
 
-if (process.exitCode !== 1 && completedChecks !== undefined) {
+const failure = combineErrors(primaryError, cleanupError);
+if (failure !== undefined) {
+  console.error(formatError(failure));
+  process.exitCode = 1;
+} else if (completedChecks !== undefined) {
   console.log(
     JSON.stringify({
       ok: true,
       checks: { ...completedChecks, runtimeRestored: "disabled" },
     }),
   );
+}
+
+function combineErrors(primary, cleanup) {
+  if (primary !== undefined && cleanup !== undefined) {
+    return new AggregateError(
+      [primary, cleanup],
+      "Pilot smoke failed and compensating disable also failed",
+      { cause: primary },
+    );
+  }
+  return primary ?? cleanup;
+}
+
+function formatError(error) {
+  if (error instanceof AggregateError) {
+    return [
+      `${error.name}: ${error.message}`,
+      ...error.errors.map((nestedError) => formatError(nestedError)),
+    ].join("\n");
+  }
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
 async function waitForStatus(url, expectedStatus, deadlineMs) {

@@ -19,11 +19,14 @@ Run the sequence in this exact order:
    the operation here.
 6. After Core starts, require `persistence.storage=postgres`, `persistence.ok=true, globalEnabled=false`,
    a non-negative durable revision, and `activationRequired` equal to `desiredGlobalEnabled`.
+   Recheck that all workers are healthy and running and every queue and DLQ count is `0`.
    `desiredGlobalEnabled=true` is durable intent and never permission to auto-enable the live gate.
-7. Start Caddy only after authenticated internal gates pass, including healthy workers and zero
-   queue and DLQ counts. Confirm public `/health` succeeds and public `/internal/*` remains `404`.
-8. Explicitly POST global true with the operator header. Require HTTP `200`, `globalEnabled=true`,
-   and `durable=true`; a response without durable proof is a failed activation.
+7. Explicitly POST global true with the operator header while Caddy remains stopped. Require HTTP
+   `200`, `globalEnabled=true`, and `durable=true`; a timeout, transport failure, malformed response,
+   or response without durable proof is a failed activation and requires a verified compensating
+   disable.
+8. Start Caddy only after authenticated internal gates pass and the explicit durable enable is
+   verified. Confirm public `/health` succeeds and public `/internal/*` remains `404`.
 9. Run real Feishu acceptance, including the permission guard, then recheck workers and require all
    event, document-sync, and reindex pending and DLQ counts to equal `0`.
 
@@ -42,11 +45,24 @@ been repaired and every authenticated check has been rerun.
 ## Rollback
 
 Keep Caddy stopped and Iris disabled throughout rollback. Restore the paired Postgres and Redis
-backup with `restore-from-stdin.sh --confirm-replace-database`, and restore the matching reviewed
-Core image when the older image cannot read the migrated database. Restoring the Postgres snapshot
-restores durable intent but never live activation. A restored or restarted Core must report live
+backup by setting the operator-held age identity path and piping the decrypted archive directly to
+the restore helper:
+
+```bash
+: "${IRIS_BACKUP_IDENTITY_FILE:?set this to the operator-held age identity file}"
+: "${backup_file:?set this to the encrypted paired backup path}"
+age --decrypt --identity "$IRIS_BACKUP_IDENTITY_FILE" "$backup_file" \
+  | ./deploy/pilot/restore-from-stdin.sh --confirm-replace-database
+```
+
+The helper starts Core but never Caddy. Restore the matching reviewed Core image when the older
+image cannot read the migrated database.
+
+Restoring the Postgres snapshot restores durable intent but never live activation.
+Restoring durable intent never opens the live gate. A restored or restarted Core must report live
 `globalEnabled=false`, even when `desiredGlobalEnabled=true` and `activationRequired=true`.
 
-Repeat the full authenticated health, persistence, worker, queue, and DLQ gates before starting
-Caddy. Explicit reactivation still requires a fresh POST global true response with HTTP `200` and
-`durable=true`, followed by real Feishu acceptance and another zero-count check.
+Repeat the full authenticated localhost gates for health, persistence, workers, queues, and DLQs.
+Explicitly POST global true only after those gates pass, and require a fresh HTTP `200` response
+with `globalEnabled=true` and `durable=true`. Start Caddy last, then run real Feishu acceptance and
+another zero-count check.

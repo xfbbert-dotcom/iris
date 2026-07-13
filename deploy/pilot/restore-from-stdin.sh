@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 
 if [[ "${1:-}" != "--confirm-replace-database" || "$#" -ne 1 ]]; then
-  echo "usage: restore-from-stdin.sh --confirm-replace-database < backup.dump" >&2
+  echo "usage: age --decrypt ... | restore-from-stdin.sh --confirm-replace-database" >&2
   exit 2
 fi
 
@@ -146,8 +146,8 @@ staging_database_active=false
 
 "${compose[@]}" run --rm --no-deps core \
   node apps/core/dist/admin/internal-rollout-readiness-cli.js
-"${compose[@]}" up --detach --wait --wait-timeout 120 core caddy
+"${compose[@]}" up --detach --wait --wait-timeout 120 core
 
-echo "Restore completed; previous database retained as $previous_database" >&2
+echo "Restore completed with Caddy stopped and live activation disabled; previous database retained as $previous_database" >&2
 echo "Previous Redis retained as $previous_redis_file" >&2
-echo "Repeat private status, DLQ, database, and Feishu smoke checks before deleting either" >&2
+echo "Run authenticated localhost gates before explicit durable activation, then start Caddy last" >&2

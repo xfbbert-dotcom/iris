@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 const backupPath = resolve("deploy/pilot/backup.sh");
@@ -176,11 +177,86 @@ test(
   },
 );
 
+for (const [networkMode, expectedError] of [
+  ["malformed-json", /SyntaxError|JSON/u],
+  ["missing-durable", /expected durable runtime state false/u],
+  ["wrong-storage", /healthy Postgres persistence/u],
+]) {
+  test(
+    `${networkMode} Core response is parsed and fails closed`,
+    { skip: gitBash === undefined },
+    () => {
+      const result = runBackup({
+        runtimeEnabled: true,
+        caddyRunning: true,
+        networkMode,
+      });
+      try {
+        assert.notEqual(result.status, 0);
+        assert.equal(result.error, undefined, "the backup must exit without harness termination");
+        assert.equal(result.runtimeEnabled, false, result.stderr || result.stdout);
+        assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
+        assert.match(result.stderr, expectedError);
+      } finally {
+        result.cleanup();
+      }
+    },
+  );
+}
+
+test(
+  "status timeout exits on the script deadline and fails closed",
+  { skip: gitBash === undefined },
+  () => {
+    const result = runBackup({
+      runtimeEnabled: true,
+      caddyRunning: true,
+      networkMode: "status-timeout",
+    });
+    try {
+      assert.notEqual(result.status, 0);
+      assert.equal(result.error, undefined, "the backup must exit before the harness timeout");
+      assert.ok(result.elapsedMs < 5_000, `status timeout took ${result.elapsedMs}ms`);
+      assert.doesNotMatch(result.log, /mock transport watchdog/u);
+      assert.equal(result.runtimeEnabled, false, result.stderr || result.stdout);
+      assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
+    } finally {
+      result.cleanup();
+    }
+  },
+);
+
+test(
+  "enable committed before response timeout is compensated before Caddy can start",
+  { skip: gitBash === undefined },
+  () => {
+    const result = runBackup({
+      runtimeEnabled: true,
+      caddyRunning: true,
+      networkMode: "enable-committed-response-timeout",
+    });
+    try {
+      assert.notEqual(result.status, 0);
+      assert.equal(result.error, undefined, "the backup must exit before the harness timeout");
+      assert.ok(result.elapsedMs < 12_000, `ambiguous enable took ${result.elapsedMs}ms`);
+      assert.match(result.log, /set-runtime true/u);
+      assert.match(result.log, /set-runtime false/u);
+      assert.doesNotMatch(result.log, /mock transport watchdog/u);
+      assert.equal(result.runtimeEnabled, false, result.stderr || result.stdout);
+      assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
+      assert.doesNotMatch(result.log, /start-caddy/u);
+    } finally {
+      result.cleanup();
+    }
+  },
+);
+
 function runBackup({
   runtimeEnabled,
   desiredGlobalEnabled = runtimeEnabled,
   caddyRunning,
   failurePoint = "",
+  networkMode = "",
   persistenceOk = true,
   workersHealthy = true,
   queuesEmpty = true,
@@ -205,6 +281,8 @@ function runBackup({
   writeFileSync(resolve(stateDir, "core"), "true");
   writeFileSync(resolve(stateDir, "caddy"), String(caddyRunning));
   writeFileSync(resolve(stateDir, "operations.log"), "");
+  const fetchMockPath = resolve(root, "mock-fetch.mjs");
+  writeFileSync(fetchMockPath, backupFetchPreload);
   writeFileSync(
     resolve(root, "bash-env"),
     'install() { local destination="${!#}"; mkdir -p "$destination"; }\n' +
@@ -233,15 +311,28 @@ function runBackup({
     IRIS_BACKUP_RECIPIENT_FILE: toBashPath(resolve(root, "recipient")),
     IRIS_TEST_STATE_DIR: toBashPath(stateDir),
     IRIS_TEST_FAIL_POINT: failurePoint,
+    IRIS_TEST_NETWORK_MODE: networkMode,
+    IRIS_TEST_NODE_PATH: toBashPath(process.execPath),
+    IRIS_TEST_FETCH_MOCK: pathToFileURL(fetchMockPath).href,
+    IRIS_INTERNAL_API_TOKEN: "test-internal-token",
     IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS: "0",
+    IRIS_BACKUP_HTTP_TIMEOUT_MS: "100",
     BASH_ENV: toBashPath(resolve(root, "bash-env")),
   });
 
+  const startedAt = Date.now();
   const result = spawnSync(gitBash, [toBashPath(backupPath)], {
     cwd: root,
     encoding: "utf8",
     env: environment,
+    timeout:
+      networkMode === "status-timeout"
+        ? 8_000
+        : networkMode === "enable-committed-response-timeout"
+          ? 12_000
+          : 15_000,
   });
+  const elapsedMs = Date.now() - startedAt;
 
   const backups = readdirSync(backupDir).filter((name) => name.endsWith(".bundle.tar.age"));
   const backupSize =
@@ -251,6 +342,8 @@ function runBackup({
 
   return {
     status: result.status,
+    error: result.error,
+    elapsedMs,
     stderr: result.stderr,
     stdout: result.stdout,
     runtimeEnabled: readFileSync(resolve(stateDir, "runtime"), "utf8").trim() === "true",
@@ -258,7 +351,7 @@ function runBackup({
     log: readFileSync(resolve(stateDir, "operations.log"), "utf8"),
     backups,
     backupSize,
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }),
   };
 }
 
@@ -385,56 +478,9 @@ case "$operation" in
     shift
     case "$service" in
       core)
-        arguments="$*"
-        if [[ "$arguments" == *runtime-control/status* ]]; then
-          if fail_once capture; then exit 42; fi
-          runtime="$(cat "$state_dir/runtime")"
-          desired="$(cat "$state_dir/desired-runtime")"
-          revision="$(cat "$state_dir/revision")"
-          persistence_ok="$(cat "$state_dir/persistence-ok")"
-          if [[ "$persistence_ok" != true ]]; then
-            echo "runtime status did not prove healthy Postgres persistence" >&2
-            exit 42
-          fi
-          activation_required=false
-          if [[ "$runtime" == false && "$desired" == true ]]; then
-            activation_required=true
-          fi
-          printf '%s\t%s\t%s\tpostgres\t%s\t%s\n' \
-            "$runtime" "$desired" "$revision" "$persistence_ok" "$activation_required"
-          log "read-runtime $runtime desired=$desired revision=$revision persistence=$persistence_ok"
-        elif [[ "$arguments" == *internal/status* ]]; then
-          if fail_once status; then exit 42; fi
-          workers_healthy="$(cat "$state_dir/workers-healthy")"
-          queues_empty="$(cat "$state_dir/queues-empty")"
-          log "read-activation-gates workers=$workers_healthy queues=$queues_empty"
-          if [[ "$workers_healthy" != true ]]; then
-            echo "internal status did not prove healthy workers" >&2
-            exit 42
-          fi
-          if [[ "$queues_empty" != true ]]; then
-            echo "internal status did not prove queues with zero DLQs" >&2
-            exit 42
-          fi
-        elif [[ "$arguments" == *runtime-control/global* ]]; then
-          expected="\${!#}"
-          if [[ "$expected" == true ]]; then
-            if fail_once restore; then exit 42; fi
-            printf 'true' > "$state_dir/runtime"
-            printf 'true' > "$state_dir/desired-runtime"
-            log "set-runtime true"
-          elif [[ "$expected" == false ]]; then
-            printf 'false' > "$state_dir/runtime"
-            printf 'false' > "$state_dir/desired-runtime"
-            log "set-runtime false"
-          else
-            echo "missing runtime target" >&2
-            exit 64
-          fi
-        else
-          echo "unexpected Core exec" >&2
-          exit 64
-        fi
+        [[ "\${1:-}" == node ]] || { echo "unexpected Core exec" >&2; exit 64; }
+        shift
+        "$IRIS_TEST_NODE_PATH" --import "$IRIS_TEST_FETCH_MOCK" "$@"
         ;;
       postgres)
         if fail_once snapshot; then exit 42; fi
@@ -482,4 +528,143 @@ if [[ "$IRIS_TEST_FAIL_POINT" == encrypt ]]; then
 fi
 cat > "$output"
 printf 'encrypt\n' >> "$IRIS_TEST_STATE_DIR/operations.log"
+`;
+
+const backupFetchPreload = `
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { resolve } from "node:path";
+
+const stateDir = process.env.IRIS_TEST_STATE_DIR;
+const failPoint = process.env.IRIS_TEST_FAIL_POINT ?? "";
+const networkMode = process.env.IRIS_TEST_NETWORK_MODE ?? "";
+const readState = (name) => readFileSync(resolve(stateDir, name), "utf8").trim();
+const writeState = (name, value) => writeFileSync(resolve(stateDir, name), String(value));
+const log = (message) => appendFileSync(resolve(stateDir, "operations.log"), message + "\\n");
+const json = (body, status = 200) => new Response(JSON.stringify(body), {
+  status,
+  headers: { "content-type": "application/json" },
+});
+
+function failOnce(point) {
+  const marker = resolve(stateDir, "failed-" + point);
+  if (failPoint !== point || existsSync(marker)) return false;
+  writeFileSync(marker, "");
+  log("fail " + point);
+  return true;
+}
+
+function once(name) {
+  const marker = resolve(stateDir, "once-" + name);
+  if (existsSync(marker)) return false;
+  writeFileSync(marker, "");
+  return true;
+}
+
+function abortingResponse(signal) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const keepAlive = setInterval(() => {}, 1_000);
+    const watchdog = setTimeout(() => {
+      clearInterval(keepAlive);
+      log("mock transport watchdog");
+      rejectPromise(new Error("mock transport watchdog expired"));
+    }, 1_500);
+    const reject = () => {
+      clearInterval(keepAlive);
+      clearTimeout(watchdog);
+      rejectPromise(signal?.reason ?? new Error("request aborted"));
+    };
+    if (signal?.aborted) return reject();
+    signal?.addEventListener("abort", reject, { once: true });
+  });
+}
+
+function runtimeStatusBody() {
+  const globalEnabled = readState("runtime") === "true";
+  const desiredGlobalEnabled = readState("desired-runtime") === "true";
+  return {
+    ok: true,
+    globalEnabled,
+    desiredGlobalEnabled,
+    activationRequired: !globalEnabled && desiredGlobalEnabled,
+    revision: Number(readState("revision")),
+    persistence: {
+      storage: networkMode === "wrong-storage" ? "in_memory" : "postgres",
+      ok: readState("persistence-ok") === "true",
+    },
+  };
+}
+
+globalThis.fetch = async (input, init = {}) => {
+  const url = new URL(typeof input === "string" ? input : input.url);
+  if (url.pathname === "/internal/runtime-control/status") {
+    if (networkMode === "status-timeout" && once("network-status-timeout")) {
+      return abortingResponse(init.signal);
+    }
+    if (failOnce("capture")) return json({ error: "status_failed" }, 503);
+    if (networkMode === "malformed-json") {
+      return new Response("{", { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const body = runtimeStatusBody();
+    log(
+      "read-runtime " + body.globalEnabled +
+      " desired=" + body.desiredGlobalEnabled +
+      " revision=" + body.revision +
+      " storage=" + body.persistence.storage +
+      " persistence=" + body.persistence.ok,
+    );
+    return json(body);
+  }
+
+  if (url.pathname === "/internal/status") {
+    if (failOnce("status")) return json({ error: "status_failed" }, 503);
+    const workersHealthy = readState("workers-healthy") === "true";
+    const queuesEmpty = readState("queues-empty") === "true";
+    const runtime = runtimeStatusBody();
+    log("read-activation-gates workers=" + workersHealthy + " queues=" + queuesEmpty);
+    const worker = (eventWorker = false) => ({
+      ok: workersHealthy,
+      enabled: true,
+      running: workersHealthy,
+      ...(eventWorker
+        ? { pendingEventCount: queuesEmpty ? 0 : 1, deadLetterEventCount: 0 }
+        : { pendingJobCount: queuesEmpty ? 0 : 1, deadLetterJobCount: 0 }),
+    });
+    return json({
+      ok: workersHealthy,
+      status: workersHealthy ? "healthy" : "degraded",
+      summary: {
+        degradedComponentCount: workersHealthy ? 0 : 1,
+        stoppedEnabledRuntimeComponentCount: workersHealthy ? 0 : 1,
+      },
+      components: {
+        runtimeControl: { ...runtime, enabled: runtime.globalEnabled },
+        eventWorker: worker(true),
+        documentSync: worker(),
+        reindex: worker(),
+      },
+    });
+  }
+
+  if (url.pathname === "/internal/runtime-control/global") {
+    const enabled = JSON.parse(init.body).enabled;
+    if (enabled && failOnce("restore")) return json({ error: "restore_failed" }, 503);
+    writeState("runtime", enabled);
+    writeState("desired-runtime", enabled);
+    writeState("revision", Number(readState("revision")) + 1);
+    log("set-runtime " + enabled);
+    if (enabled && networkMode === "enable-committed-response-timeout") {
+      return abortingResponse(init.signal);
+    }
+    const body = { globalEnabled: enabled };
+    if (networkMode !== "missing-durable") body.durable = true;
+    return json(body);
+  }
+
+  throw new Error("Unexpected backup URL: " + url);
+};
 `;
