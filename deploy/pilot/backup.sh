@@ -42,11 +42,16 @@ maintenance_started=false
 maintenance_complete=false
 caddy_was_running=false
 runtime_was_enabled=
+runtime_desired_enabled=
+runtime_revision=
+runtime_persistence_storage=
+runtime_persistence_ok=
+runtime_activation_required=
 
 cd "$repository_dir"
 compose=(docker compose --env-file "$environment_file" --file "$compose_file")
 
-read_runtime_enabled() {
+read_runtime_status() {
   "${compose[@]}" exec -T core node --input-type=module --eval '
     const token = process.env.IRIS_INTERNAL_API_TOKEN?.trim();
     if (!token) throw new Error("IRIS_INTERNAL_API_TOKEN is unavailable inside Core");
@@ -55,11 +60,38 @@ read_runtime_enabled() {
     });
     if (!response.ok) throw new Error(`runtime status request failed with HTTP ${response.status}`);
     const body = await response.json();
-    if (typeof body.globalEnabled !== "boolean") {
-      throw new Error("runtime status did not contain a boolean globalEnabled value");
+    if (
+      typeof body.globalEnabled !== "boolean" ||
+      typeof body.desiredGlobalEnabled !== "boolean" ||
+      typeof body.activationRequired !== "boolean" ||
+      !Number.isSafeInteger(body.revision) ||
+      body.revision < 0
+    ) {
+      throw new Error("runtime status did not contain valid live and durable state");
     }
-    process.stdout.write(String(body.globalEnabled));
+    if (body.activationRequired !== (!body.globalEnabled && body.desiredGlobalEnabled)) {
+      throw new Error("runtime status contained inconsistent activation state");
+    }
+    if (body.persistence?.storage !== "postgres" || body.persistence.ok !== true) {
+      throw new Error("runtime status did not prove healthy Postgres persistence");
+    }
+    process.stdout.write([
+      body.globalEnabled,
+      body.desiredGlobalEnabled,
+      body.revision,
+      body.persistence.storage,
+      body.persistence.ok,
+      body.activationRequired,
+    ].join("\t"));
   '
+}
+
+read_runtime_enabled() {
+  local status
+  local global_enabled
+  status="$(read_runtime_status)"
+  IFS=$'\t' read -r global_enabled _ <<< "$status"
+  printf '%s' "$global_enabled"
 }
 
 assert_runtime_state() {
@@ -110,10 +142,57 @@ set_runtime_enabled() {
     });
     if (!response.ok) throw new Error(`runtime update request failed with HTTP ${response.status}`);
     const body = await response.json();
-    if (body.globalEnabled !== expected) {
-      throw new Error(`expected runtime state ${expectedText} after update`);
+    if (body.globalEnabled !== expected || body.durable !== true) {
+      throw new Error(`expected durable runtime state ${expectedText} after update`);
     }
   ' "$expected"
+}
+
+assert_runtime_activation_ready() {
+  "${compose[@]}" exec -T core node --input-type=module --eval '
+    const token = process.env.IRIS_INTERNAL_API_TOKEN?.trim();
+    if (!token) throw new Error("IRIS_INTERNAL_API_TOKEN is unavailable inside Core");
+    const response = await fetch("http://127.0.0.1:3000/internal/status", {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) throw new Error(`internal status request failed with HTTP ${response.status}`);
+    const body = await response.json();
+    if (
+      body.ok !== true ||
+      body.status !== "healthy" ||
+      body.summary?.degradedComponentCount !== 0 ||
+      body.summary?.stoppedEnabledRuntimeComponentCount !== 0
+    ) {
+      throw new Error("internal status did not prove healthy pilot services");
+    }
+    const runtime = body.components?.runtimeControl;
+    if (
+      runtime?.globalEnabled !== false ||
+      typeof runtime.desiredGlobalEnabled !== "boolean" ||
+      runtime.activationRequired !== runtime.desiredGlobalEnabled ||
+      !Number.isSafeInteger(runtime.revision) ||
+      runtime.revision < 0
+    ) {
+      throw new Error("runtime status did not prove a disabled live gate after restart");
+    }
+    if (runtime.persistence?.storage !== "postgres" || runtime.persistence.ok !== true) {
+      throw new Error("runtime status did not prove healthy Postgres persistence");
+    }
+    const workers = [
+      [body.components?.eventWorker, "pendingEventCount", "deadLetterEventCount"],
+      [body.components?.documentSync, "pendingJobCount", "deadLetterJobCount"],
+      [body.components?.reindex, "pendingJobCount", "deadLetterJobCount"],
+    ];
+    if (workers.some(([worker, pendingName, deadLetterName]) =>
+      worker?.ok !== true ||
+      worker.enabled !== true ||
+      worker.running !== true ||
+      worker[pendingName] !== 0 ||
+      worker[deadLetterName] !== 0
+    )) {
+      throw new Error("internal status did not prove healthy workers and queues with zero DLQs");
+    }
+  '
 }
 
 start_core_disabled() {
@@ -161,6 +240,7 @@ recover_failed_maintenance() {
 
 restore_runtime_state() {
   if [[ "$runtime_was_enabled" == true ]]; then
+    assert_runtime_activation_ready
     set_runtime_enabled true
     assert_runtime_state true
   fi
@@ -182,23 +262,47 @@ cleanup() {
 trap cleanup EXIT
 
 maintenance_started=true
-runtime_was_enabled="$(read_runtime_enabled)"
-if [[ "$runtime_was_enabled" != true && "$runtime_was_enabled" != false ]]; then
-  echo "Core returned an invalid global runtime state" >&2
+runtime_status="$(read_runtime_status)"
+IFS=$'\t' read -r \
+  runtime_was_enabled \
+  runtime_desired_enabled \
+  runtime_revision \
+  runtime_persistence_storage \
+  runtime_persistence_ok \
+  runtime_activation_required <<< "$runtime_status"
+if [[
+  "$runtime_was_enabled" != true && "$runtime_was_enabled" != false ||
+  "$runtime_desired_enabled" != true && "$runtime_desired_enabled" != false ||
+  ! "$runtime_revision" =~ ^[0-9]+$ ||
+  "$runtime_persistence_storage" != postgres ||
+  "$runtime_persistence_ok" != true ||
+  "$runtime_activation_required" != true && "$runtime_activation_required" != false
+]]; then
+  echo "Core returned invalid live or durable runtime state" >&2
   exit 1
 fi
 
 caddy_was_running="$(read_service_running caddy)"
 
 echo "Stopping Iris briefly for a consistent Postgres and Redis snapshot" >&2
-"${compose[@]}" stop caddy core
+set_runtime_enabled false
+assert_runtime_state false
+stop_caddy_verified
+assert_runtime_activation_ready
+"${compose[@]}" stop core
 
 "${compose[@]}" exec -T postgres sh -eu -c \
   'PGPASSWORD="$IRIS_MIGRATOR_PASSWORD" exec pg_dump --host 127.0.0.1 --username "$IRIS_MIGRATOR_USER" --dbname "$POSTGRES_DB" --format custom' \
   > "$snapshot_dir/postgres.dump"
 "${compose[@]}" exec -T redis redis-cli SAVE > /dev/null
 "${compose[@]}" cp redis:/data/dump.rdb "$snapshot_dir/redis.rdb"
-printf 'created_at=%s\nformat=iris-pilot-paired-v1\n' "$timestamp" \
+printf 'created_at=%s\nformat=iris-pilot-paired-v1\nruntime_global_enabled=%s\nruntime_desired_global_enabled=%s\nruntime_revision=%s\nruntime_persistence_storage=%s\nruntime_persistence_ok=%s\n' \
+  "$timestamp" \
+  "$runtime_was_enabled" \
+  "$runtime_desired_enabled" \
+  "$runtime_revision" \
+  "$runtime_persistence_storage" \
+  "$runtime_persistence_ok" \
   > "$snapshot_dir/manifest.txt"
 
 start_core_disabled
@@ -211,10 +315,11 @@ test -s "$temporary_file"
 chmod 600 "$temporary_file"
 mv -- "$temporary_file" "$backup_file"
 
-restore_runtime_state
+assert_runtime_activation_ready
 if [[ "$caddy_was_running" == true ]]; then
   "${compose[@]}" up --detach --wait --wait-timeout 120 caddy
 fi
+restore_runtime_state
 
 find "$backup_dir" -type f -name 'iris-*.bundle.tar.age' -mtime +7 -delete
 maintenance_complete=true

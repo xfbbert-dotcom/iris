@@ -2,10 +2,52 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assertDurableRuntimeMutation,
   assertFastFeishuAcknowledgement,
   assertHealthyInternalStatus,
+  assertPilotActivationReady,
   assertRuntimeGloballyDisabled,
 } from "./pilot-smoke-lib.mjs";
+
+const activationReadyStatus = {
+  ok: true,
+  status: "healthy",
+  summary: {
+    degradedComponentCount: 0,
+    stoppedEnabledRuntimeComponentCount: 0,
+  },
+  components: {
+    runtimeControl: {
+      ok: true,
+      globalEnabled: false,
+      desiredGlobalEnabled: true,
+      activationRequired: true,
+      revision: 7,
+      persistence: { storage: "postgres", ok: true },
+    },
+    eventWorker: {
+      ok: true,
+      enabled: true,
+      running: true,
+      pendingEventCount: 0,
+      deadLetterEventCount: 0,
+    },
+    documentSync: {
+      ok: true,
+      enabled: true,
+      running: true,
+      pendingJobCount: 0,
+      deadLetterJobCount: 0,
+    },
+    reindex: {
+      ok: true,
+      enabled: true,
+      running: true,
+      pendingJobCount: 0,
+      deadLetterJobCount: 0,
+    },
+  },
+};
 
 test("accepts a fully healthy internal status snapshot", () => {
   assert.doesNotThrow(() =>
@@ -66,6 +108,112 @@ test("requires the pilot runtime to start globally disabled", () => {
         components: { runtimeControl: { globalEnabled: true } },
       }),
     /globally disabled/u,
+  );
+});
+
+test("accepts durable desired enablement only while the restarted live gate remains disabled", () => {
+  assert.doesNotThrow(() => assertPilotActivationReady(activationReadyStatus));
+});
+
+test("rejects a live gate that reopened from durable desired enablement", () => {
+  assert.throws(
+    () =>
+      assertPilotActivationReady({
+        ...activationReadyStatus,
+        components: {
+          ...activationReadyStatus.components,
+          runtimeControl: {
+            ...activationReadyStatus.components.runtimeControl,
+            globalEnabled: true,
+            activationRequired: false,
+          },
+        },
+      }),
+    /globally disabled/u,
+  );
+});
+
+for (const persistence of [
+  { storage: "in_memory", ok: true },
+  { storage: "postgres", ok: false },
+]) {
+  test(`rejects activation without healthy Postgres persistence: ${JSON.stringify(persistence)}`, () => {
+    assert.throws(
+      () =>
+        assertPilotActivationReady({
+          ...activationReadyStatus,
+          components: {
+            ...activationReadyStatus.components,
+            runtimeControl: {
+              ...activationReadyStatus.components.runtimeControl,
+              persistence,
+            },
+          },
+        }),
+      /Postgres runtime-control persistence/u,
+    );
+  });
+}
+
+for (const [componentName, countName] of [
+  ["eventWorker", "pendingEventCount"],
+  ["eventWorker", "deadLetterEventCount"],
+  ["documentSync", "pendingJobCount"],
+  ["documentSync", "deadLetterJobCount"],
+  ["reindex", "pendingJobCount"],
+  ["reindex", "deadLetterJobCount"],
+]) {
+  test(`rejects activation when ${componentName}.${countName} is nonzero`, () => {
+    assert.throws(
+      () =>
+        assertPilotActivationReady({
+          ...activationReadyStatus,
+          components: {
+            ...activationReadyStatus.components,
+            [componentName]: {
+              ...activationReadyStatus.components[componentName],
+              [countName]: 1,
+            },
+          },
+        }),
+      /workers and queues/u,
+    );
+  });
+}
+
+test("rejects activation when a required worker is stopped", () => {
+  assert.throws(
+    () =>
+      assertPilotActivationReady({
+        ...activationReadyStatus,
+        components: {
+          ...activationReadyStatus.components,
+          documentSync: {
+            ...activationReadyStatus.components.documentSync,
+            running: false,
+          },
+        },
+      }),
+    /workers and queues/u,
+  );
+});
+
+test("accepts only a durable successful runtime mutation", () => {
+  assert.doesNotThrow(() =>
+    assertDurableRuntimeMutation({
+      responseStatus: 200,
+      body: { globalEnabled: true, durable: true },
+      enabled: true,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertDurableRuntimeMutation({
+        responseStatus: 200,
+        body: { globalEnabled: true },
+        enabled: true,
+      }),
+    /durable runtime mutation/u,
   );
 });
 

@@ -55,10 +55,61 @@ test(
   },
 );
 
+test(
+  "durable desired enablement never reopens a live gate that was disabled before maintenance",
+  { skip: gitBash === undefined },
+  () => {
+    const result = runBackup({
+      runtimeEnabled: false,
+      desiredGlobalEnabled: true,
+      caddyRunning: true,
+    });
+    try {
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.runtimeEnabled, false);
+      assert.equal(result.caddyRunning, true);
+      assert.doesNotMatch(result.log, /set-runtime true/u);
+    } finally {
+      result.cleanup();
+    }
+  },
+);
+
+for (const gateFailure of [
+  {
+    name: "runtime persistence",
+    persistenceOk: false,
+    error: /healthy Postgres persistence/u,
+  },
+  { name: "worker health", workersHealthy: false, error: /healthy workers/u },
+  { name: "pending queue", queuesEmpty: false, error: /zero DLQs/u },
+]) {
+  test(
+    `failed ${gateFailure.name} gate leaves runtime disabled and Caddy stopped`,
+    { skip: gitBash === undefined },
+    () => {
+      const result = runBackup({
+        runtimeEnabled: true,
+        caddyRunning: true,
+        ...gateFailure,
+      });
+      try {
+        assert.notEqual(result.status, 0);
+        assert.equal(result.runtimeEnabled, false, result.stderr || result.stdout);
+        assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
+        assert.match(result.stderr, gateFailure.error);
+      } finally {
+        result.cleanup();
+      }
+    },
+  );
+}
+
 for (const failurePoint of [
   "capture",
   "snapshot",
   "restart",
+  "status",
   "encrypt",
   "publish",
   "restore",
@@ -125,7 +176,15 @@ test(
   },
 );
 
-function runBackup({ runtimeEnabled, caddyRunning, failurePoint = "" }) {
+function runBackup({
+  runtimeEnabled,
+  desiredGlobalEnabled = runtimeEnabled,
+  caddyRunning,
+  failurePoint = "",
+  persistenceOk = true,
+  workersHealthy = true,
+  queuesEmpty = true,
+}) {
   const root = mkdtempSync(resolve(".tmp-iris-backup-test-"));
   const fakeBin = resolve(root, "bin");
   const stateDir = resolve(root, "state");
@@ -138,6 +197,11 @@ function runBackup({ runtimeEnabled, caddyRunning, failurePoint = "" }) {
   writeFileSync(resolve(root, "compose.yml"), "services: {}\n");
   writeFileSync(resolve(root, "recipient"), `age1${"q".repeat(58)}\n`);
   writeFileSync(resolve(stateDir, "runtime"), String(runtimeEnabled));
+  writeFileSync(resolve(stateDir, "desired-runtime"), String(desiredGlobalEnabled));
+  writeFileSync(resolve(stateDir, "revision"), "7");
+  writeFileSync(resolve(stateDir, "persistence-ok"), String(persistenceOk));
+  writeFileSync(resolve(stateDir, "workers-healthy"), String(workersHealthy));
+  writeFileSync(resolve(stateDir, "queues-empty"), String(queuesEmpty));
   writeFileSync(resolve(stateDir, "core"), "true");
   writeFileSync(resolve(stateDir, "caddy"), String(caddyRunning));
   writeFileSync(resolve(stateDir, "operations.log"), "");
@@ -324,16 +388,44 @@ case "$operation" in
         arguments="$*"
         if [[ "$arguments" == *runtime-control/status* ]]; then
           if fail_once capture; then exit 42; fi
-          cat "$state_dir/runtime"
-          log "read-runtime $(cat "$state_dir/runtime")"
+          runtime="$(cat "$state_dir/runtime")"
+          desired="$(cat "$state_dir/desired-runtime")"
+          revision="$(cat "$state_dir/revision")"
+          persistence_ok="$(cat "$state_dir/persistence-ok")"
+          if [[ "$persistence_ok" != true ]]; then
+            echo "runtime status did not prove healthy Postgres persistence" >&2
+            exit 42
+          fi
+          activation_required=false
+          if [[ "$runtime" == false && "$desired" == true ]]; then
+            activation_required=true
+          fi
+          printf '%s\t%s\t%s\tpostgres\t%s\t%s\n' \
+            "$runtime" "$desired" "$revision" "$persistence_ok" "$activation_required"
+          log "read-runtime $runtime desired=$desired revision=$revision persistence=$persistence_ok"
+        elif [[ "$arguments" == *internal/status* ]]; then
+          if fail_once status; then exit 42; fi
+          workers_healthy="$(cat "$state_dir/workers-healthy")"
+          queues_empty="$(cat "$state_dir/queues-empty")"
+          log "read-activation-gates workers=$workers_healthy queues=$queues_empty"
+          if [[ "$workers_healthy" != true ]]; then
+            echo "internal status did not prove healthy workers" >&2
+            exit 42
+          fi
+          if [[ "$queues_empty" != true ]]; then
+            echo "internal status did not prove queues with zero DLQs" >&2
+            exit 42
+          fi
         elif [[ "$arguments" == *runtime-control/global* ]]; then
           expected="\${!#}"
           if [[ "$expected" == true ]]; then
             if fail_once restore; then exit 42; fi
             printf 'true' > "$state_dir/runtime"
+            printf 'true' > "$state_dir/desired-runtime"
             log "set-runtime true"
           elif [[ "$expected" == false ]]; then
             printf 'false' > "$state_dir/runtime"
+            printf 'false' > "$state_dir/desired-runtime"
             log "set-runtime false"
           else
             echo "missing runtime target" >&2

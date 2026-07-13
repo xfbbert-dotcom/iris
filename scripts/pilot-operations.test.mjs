@@ -6,6 +6,7 @@ import test from "node:test";
 const backupPath = "deploy/pilot/backup.sh";
 const restorePath = "deploy/pilot/restore-from-stdin.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
+const pilotReadmePath = "deploy/pilot/README.md";
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
   for (const scriptPath of [backupPath, restorePath, postgresInitPath]) {
@@ -37,7 +38,8 @@ test("backup is encrypted, atomic, and cannot mask pipeline failure", () => {
   assert.match(script, /flock -n/u);
   assert.match(script, /mktemp/u);
   assert.match(script, /pg_dump/u);
-  assert.match(script, /stop caddy core/u);
+  assert.match(script, /stop_caddy_verified/u);
+  assert.match(script, /stop core/u);
   assert.match(script, /redis-cli SAVE/u);
   assert.match(script, /redis\.rdb/u);
   assert.match(script, /tar --create/u);
@@ -48,8 +50,9 @@ test("backup is encrypted, atomic, and cannot mask pipeline failure", () => {
 
 test("planned backup restores runtime and ingress state only after publication", () => {
   const script = readFileSync(backupPath, "utf8");
-  const captureRuntime = 'runtime_was_enabled="$(read_runtime_enabled)"';
-  const stopServices = '"${compose[@]}" stop caddy core';
+  const captureRuntime = 'runtime_status="$(read_runtime_status)"';
+  const disableRuntime = "set_runtime_enabled false";
+  const stopCaddy = "stop_caddy_verified";
   const publishBackup = 'mv -- "$temporary_file" "$backup_file"';
   const restoreRuntime = "restore_runtime_state";
   const restoreCaddy = 'if [[ "$caddy_was_running" == true ]]';
@@ -57,16 +60,33 @@ test("planned backup restores runtime and ingress state only after publication",
   assert.match(script, /\/internal\/runtime-control\/status/u);
   assert.match(script, /\/internal\/runtime-control\/global/u);
   assert.match(script, /IRIS_INTERNAL_API_TOKEN/u);
-  assert.match(script, /runtime_was_enabled="\$\(read_runtime_enabled\)"/u);
+  assert.match(script, /runtime_status="\$\(read_runtime_status\)"/u);
+  assert.match(script, /runtime_revision/u);
+  assert.match(script, /runtime_persistence_storage/u);
+  assert.match(script, /runtime_persistence_ok/u);
+  assert.match(script, /runtime_global_enabled=%s/u);
+  assert.match(script, /runtime_revision=%s/u);
   assert.match(script, /caddy_was_running=false/u);
   assert.match(script, /start_core_disabled/u);
   assert.match(script, /expected runtime state/u);
   assert.match(script, /if \[\[ "\$runtime_was_enabled" == true \]\]/u);
   assert.match(script, /if \[\[ "\$caddy_was_running" == true \]\]/u);
+  assert.match(script, /body\.durable !== true/u);
 
+  const restoreStart = script.indexOf("restore_runtime_state() {");
+  const restoreEnd = script.indexOf("cleanup() {", restoreStart);
+  const restore = script.slice(restoreStart, restoreEnd);
+  assert.doesNotMatch(restore, /desiredGlobalEnabled|runtime_desired/u);
+
+  const captureRuntimeIndex = script.lastIndexOf(captureRuntime);
+  const disableRuntimeIndex = script.lastIndexOf(`\n${disableRuntime}\n`);
   assert.ok(
-    script.indexOf(captureRuntime) < script.indexOf(stopServices),
+    captureRuntimeIndex < disableRuntimeIndex,
     "runtime state must be captured before Core stops",
+  );
+  assert.ok(
+    disableRuntimeIndex < script.indexOf(stopCaddy, disableRuntimeIndex),
+    "live runtime must be disabled before Caddy stops",
   );
   assert.ok(
     script.indexOf(publishBackup) < script.lastIndexOf(restoreRuntime),
@@ -76,6 +96,22 @@ test("planned backup restores runtime and ingress state only after publication",
     script.indexOf(publishBackup) < script.lastIndexOf(restoreCaddy),
     "Caddy must be restored only after atomic backup publication",
   );
+});
+
+test("planned backup gates explicit restoration on durable status, healthy workers, and empty queues", () => {
+  const script = readFileSync(backupPath, "utf8");
+  assert.match(script, /persistence\?\.storage !== "postgres"/u);
+  assert.match(script, /persistence\.ok !== true/u);
+  assert.match(script, /pendingEventCount/u);
+  assert.match(script, /deadLetterEventCount/u);
+  assert.match(script, /pendingJobCount/u);
+  assert.match(script, /deadLetterJobCount/u);
+
+  const publishBackup = script.indexOf('mv -- "$temporary_file" "$backup_file"');
+  const postRestartGate = script.indexOf("assert_runtime_activation_ready", publishBackup);
+  const restoreRuntime = script.lastIndexOf("restore_runtime_state");
+  assert.ok(postRestartGate > publishBackup, "post-restart gates must run after backup publication");
+  assert.ok(postRestartGate < restoreRuntime, "post-restart gates must pass before restoration");
 });
 
 test("backup failure cleanup keeps Iris disabled and Caddy stopped", () => {
@@ -88,6 +124,35 @@ test("backup failure cleanup keeps Iris disabled and Caddy stopped", () => {
   assert.match(cleanup, /recover_failed_maintenance/u);
   assert.doesNotMatch(cleanup, /restore_runtime_state/u);
   assert.doesNotMatch(cleanup, /up .*caddy/u);
+});
+
+test("pilot runbook defines fail-closed restart, reactivation, and rollback ordering", () => {
+  const readme = readFileSync(pilotReadmePath, "utf8");
+  const orderedMarkers = [
+    "POST global false",
+    "Stop Caddy",
+    "Verify workers, queues, and DLQs",
+    "Create the paired Postgres backup",
+    "Deploy migration and Core while Caddy remains stopped",
+    "persistence.ok=true, globalEnabled=false",
+    "Start Caddy only after authenticated internal gates pass",
+    "Explicitly POST global true",
+    "Run real Feishu acceptance",
+  ];
+  let previousIndex = -1;
+  for (const marker of orderedMarkers) {
+    const markerIndex = readme.indexOf(marker);
+    assert.ok(markerIndex > previousIndex, `${marker} must appear in restart order`);
+    previousIndex = markerIndex;
+  }
+
+  assert.match(readme, /durable=true/u);
+  assert.match(readme, /desiredGlobalEnabled=true.*never.*auto-enable/isu);
+  assert.match(
+    readme,
+    /restoring the Postgres snapshot\s+restores durable intent but never live activation/iu,
+  );
+  assert.match(readme, /backup, migration, or status.*Iris disabled and Caddy stopped/isu);
 });
 
 test("restore requires confirmation and fails closed through transactional restore", () => {

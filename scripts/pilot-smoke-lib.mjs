@@ -17,6 +17,66 @@ export function assertRuntimeGloballyDisabled(snapshot) {
   }
 }
 
+export function assertPilotActivationReady(snapshot) {
+  assertHealthyInternalStatus(snapshot);
+  assertRuntimeGloballyDisabled(snapshot);
+
+  const runtimeControl = snapshot?.components?.runtimeControl;
+  if (
+    !isRecord(runtimeControl) ||
+    !Number.isSafeInteger(runtimeControl.revision) ||
+    runtimeControl.revision < 0 ||
+    typeof runtimeControl.desiredGlobalEnabled !== "boolean" ||
+    runtimeControl.activationRequired !== runtimeControl.desiredGlobalEnabled
+  ) {
+    throw new Error("Expected consistent durable runtime-control state after restart");
+  }
+  if (
+    runtimeControl.persistence?.storage !== "postgres" ||
+    runtimeControl.persistence.ok !== true
+  ) {
+    throw new Error("Expected healthy Postgres runtime-control persistence before activation");
+  }
+
+  const workers = [
+    {
+      status: snapshot?.components?.eventWorker,
+      countNames: ["pendingEventCount", "deadLetterEventCount"],
+    },
+    {
+      status: snapshot?.components?.documentSync,
+      countNames: ["pendingJobCount", "deadLetterJobCount"],
+    },
+    {
+      status: snapshot?.components?.reindex,
+      countNames: ["pendingJobCount", "deadLetterJobCount"],
+    },
+  ];
+  if (
+    workers.some(
+      ({ status, countNames }) =>
+        !isRecord(status) ||
+        status.ok !== true ||
+        status.enabled !== true ||
+        status.running !== true ||
+        countNames.some((countName) => status[countName] !== 0),
+    )
+  ) {
+    throw new Error("Expected healthy pilot workers and queues with zero pending and DLQ counts");
+  }
+}
+
+export function assertDurableRuntimeMutation({ responseStatus, body, enabled }) {
+  if (
+    responseStatus !== 200 ||
+    !isRecord(body) ||
+    body.globalEnabled !== enabled ||
+    body.durable !== true
+  ) {
+    throw new Error(`Expected a durable runtime mutation for global enablement ${enabled}`);
+  }
+}
+
 export function assertFastFeishuAcknowledgement({ status, body, elapsedMs, deadlineMs }) {
   if (
     status !== 200 ||

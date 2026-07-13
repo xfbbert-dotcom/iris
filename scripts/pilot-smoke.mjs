@@ -1,7 +1,7 @@
 import {
+  assertDurableRuntimeMutation,
   assertFastFeishuAcknowledgement,
-  assertHealthyInternalStatus,
-  assertRuntimeGloballyDisabled,
+  assertPilotActivationReady,
 } from "./pilot-smoke-lib.mjs";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -38,8 +38,7 @@ try {
     authorization: `Bearer ${internalApiToken}`,
   });
   const internalStatus = await internalStatusResponse.json();
-  assertHealthyInternalStatus(internalStatus);
-  assertRuntimeGloballyDisabled(internalStatus);
+  assertPilotActivationReady(internalStatus);
   const ingressReadinessResponse = await expectStatus(
     `${coreBaseUrl}/internal/ingress-readiness`,
     200,
@@ -182,9 +181,7 @@ async function setGlobalRuntime(enabled) {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const body = await response.json();
-  if (response.status !== 200 || body.globalEnabled !== enabled) {
-    throw new Error(`Unable to set pilot runtime global enablement to ${enabled}`);
-  }
+  assertDurableRuntimeMutation({ responseStatus: response.status, body, enabled });
 }
 
 async function waitForPendingEvent(baseUrl, token, deadlineMs) {
