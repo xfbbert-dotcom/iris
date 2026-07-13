@@ -137,7 +137,7 @@ Commit with message `fix: classify revoked Feishu wiki access`.
 
 Expected: TypeScript, Core, Python, deployment, Compose, and readiness checks all pass.
 
-Verified with 68 Core test files (1094 passed, 4 skipped), 7 Python tests, 15 pilot tests, and
+Verified after review corrections with 68 Core test files (1095 passed, 4 skipped), 7 Python tests, 15 pilot tests, and
 13/13 rollout-readiness checks passing.
 
 - [ ] **Step 2: Build the exact commit image**
