@@ -34,12 +34,13 @@ fails, the pilot exposes a P0/P1 issue, or the same user friction repeats.
 
 ### Runtime-Control Limitation During The Pilot
 
-The current runtime-control state is in memory. A Core restart restores default switches, including
-global enablement. For the 3-5 person pilot, treat stopping the Core service (and, if necessary,
-disabling the Feishu callback or bot) as the authoritative emergency stop; do not rely on an
-in-memory disabled state surviving a restart. Durable Postgres-backed runtime control is a P1 item
-before expanding to the full 20-30 person rollout, but it does not delay the supervised single-group
-pilot.
+The current runtime-control state is in memory. The pilot Compose configuration sets
+`IRIS_RUNTIME_GLOBAL_ENABLED=false`, so a Core restart fails closed and requires an operator to
+enable Iris explicitly after checking health. Per-group and capability mutations still return to
+their defaults after restart. For the 3-5 person pilot, treat stopping the Core service (and, if
+necessary, disabling the Feishu callback or bot) as the authoritative emergency stop. Durable
+Postgres-backed runtime control is a P1 item before expanding to the full 20-30 person rollout, but
+it does not delay the supervised single-group pilot.
 
 ## Security Boundary
 

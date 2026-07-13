@@ -56,6 +56,10 @@ test("gates the edge on authenticated runtime readiness", () => {
   assert.equal(compose.services.caddy.environment.IRIS_INTERNAL_API_TOKEN, undefined);
 });
 
+test("starts the pilot runtime globally disabled", () => {
+  assert.equal(compose.services.core.environment.IRIS_RUNTIME_GLOBAL_ENABLED, "false");
+});
+
 function loadPilotCompose() {
   const result = spawnSync(
     process.platform === "win32" ? "docker.exe" : "docker",
