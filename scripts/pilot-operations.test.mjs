@@ -7,6 +7,7 @@ const backupPath = "deploy/pilot/backup.sh";
 const restorePath = "deploy/pilot/restore-from-stdin.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
+const ciWorkflowPath = ".github/workflows/ci.yml";
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
   for (const scriptPath of [backupPath, restorePath, postgresInitPath]) {
@@ -232,6 +233,17 @@ test("pilot rollback documents decrypted stdin restore and Caddy-last reactivati
   assert.ok(enableIndex < caddyIndex);
 });
 
+test("CI runs the private-first post-restore smoke mode after restore", () => {
+  const workflow = readFileSync(ciWorkflowPath, "utf8");
+  const restore = workflow.indexOf("restore-from-stdin.sh --confirm-replace-database");
+  const postRestoreSmoke = workflow.indexOf(
+    "npm run pilot:smoke -- --post-restore",
+    restore,
+  );
+  assert.ok(restore >= 0);
+  assert.ok(postRestoreSmoke > restore);
+});
+
 test("restore requires confirmation and fails closed through transactional restore", () => {
   const script = readFileSync(restorePath, "utf8");
   assert.match(script, /--confirm-replace-database/u);
@@ -243,7 +255,8 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /grant-app-access\.sql/u);
   assert.match(script, /iris_restore_permission_probe/u);
   assert.match(script, /iris_forbidden_app_ddl/u);
-  assert.match(script, /stop caddy core/u);
+  assert.match(script, /stop_caddy_verified/u);
+  assert.match(script, /run_compose stop core/u);
   assert.match(script, /createdb/u);
   assert.match(script, /--exit-on-error/u);
   assert.match(script, /--single-transaction/u);
@@ -252,23 +265,49 @@ test("restore requires confirmation and fails closed through transactional resto
   assert.match(script, /appendonlydir/u);
   assert.match(script, /run --rm .* migrate/u);
   assert.match(script, /up --detach --wait/u);
-  const postSwap = script.slice(script.indexOf('"${compose[@]}" stop caddy core'));
-  assert.match(postSwap, /up --detach --wait --wait-timeout 120 core/u);
+  const postSwap = script.slice(script.indexOf("stop_caddy_verified"));
+  assert.match(postSwap, /run_compose up --detach --wait --wait-timeout 120 core/u);
   assert.doesNotMatch(postSwap, /up --detach[^\n]*caddy/u);
   const swapSql = readFileSync("deploy/pilot/swap-databases.sql", "utf8");
   assert.match(swapSql, /ALTER DATABASE %I RENAME TO %I/u);
   const grantSql = readFileSync("deploy/pilot/grant-app-access.sql", "utf8");
   assert.match(grantSql, /ALTER DEFAULT PRIVILEGES/u);
+  const destructiveStop = script.lastIndexOf("\nstop_caddy_verified\n");
   assert.ok(
     script.indexOf("--dbname \"$IRIS_RESTORE_DATABASE\"") <
-      script.indexOf("stop caddy core"),
+      destructiveStop,
     "the staging database must be fully restored before traffic stops",
   );
   assert.ok(
     script.indexOf("exec node apps/core/dist/database/migrate.js") <
-      script.indexOf("stop caddy core"),
+      destructiveStop,
     "the staging database must be migrated before traffic stops",
   );
+});
+
+test("restore validates decimal deadlines and bounds every Compose operation", () => {
+  const script = readFileSync(restorePath, "utf8");
+  assert.match(script, /IRIS_RESTORE_COMMAND_TIMEOUT_SECONDS/u);
+  assert.match(script, /IRIS_RESTORE_CLEANUP_RETRY_DELAY_SECONDS/u);
+  assert.match(script, /normalize_decimal/u);
+  assert.match(script, /cleanup_retry_count=3/u);
+  assert.match(script, /timeout --kill-after=/u);
+  assert.doesNotMatch(script, /timeout[^\n]*--foreground/u);
+  assert.equal(
+    script.match(/"\$\{compose\[@\]\}"/gu)?.length,
+    1,
+    "only run_compose may invoke the Compose array",
+  );
+});
+
+test("restore proves Caddy stopped before stopping Core or swapping databases", () => {
+  const script = readFileSync(restorePath, "utf8");
+  const stopCaddy = script.lastIndexOf("\nstop_caddy_verified\n");
+  const stopCore = script.indexOf("run_compose stop core", stopCaddy);
+  const swapDatabase = script.indexOf("swap-databases.sql", stopCore);
+  assert.ok(stopCaddy >= 0);
+  assert.ok(stopCaddy < stopCore);
+  assert.ok(stopCore < swapDatabase);
 });
 
 function bashPath() {

@@ -48,6 +48,11 @@ been repaired and every authenticated check has been rerun.
 stopped-state check. The inner HTTP deadline remains independently bounded by
 `IRIS_BACKUP_HTTP_TIMEOUT_MS`.
 
+Pilot smoke makes exactly three bounded durable-disable attempts. If none returns durable proof,
+it independently stops Caddy with bounded process-tree commands and verifies the service is no
+longer running. In `--post-restore` mode, any failure after activation also stops and verifies
+Caddy even when the compensating disable succeeds.
+
 ## Rollback
 
 Keep Caddy stopped and Iris disabled throughout rollback. Restore the paired Postgres and Redis
@@ -61,8 +66,17 @@ age --decrypt --identity "$IRIS_BACKUP_IDENTITY_FILE" "$backup_file" \
   | ./deploy/pilot/restore-from-stdin.sh --confirm-replace-database
 ```
 
-The helper starts Core but never Caddy. Restore the matching reviewed Core image when the older
-image cannot read the migrated database.
+The helper reads only the decrypted tar bundle from stdin; it does not read or store the age
+identity or encrypted backup. It starts Core but never Caddy. Restore the matching reviewed Core
+image when the older image cannot read the migrated database.
+
+`IRIS_RESTORE_COMMAND_TIMEOUT_SECONDS` defaults to `120` and accepts decimal integers from `1`
+through `1800`. It bounds every Docker Compose operation, including `pg_restore`, migration,
+database swap, Redis replacement, copy, and service restart, with a process-tree deadline.
+`IRIS_RESTORE_CLEANUP_RETRY_DELAY_SECONDS` defaults to `2` and accepts decimal integers from `0`
+through `10`. Restore and fail-closed cleanup make exactly three Caddy stop attempts, then issue a
+bounded kill and verify stopped state. A failed validated restore keeps Caddy stopped; failure to
+prove that state is reported as incomplete cleanup.
 
 Restoring the Postgres snapshot restores durable intent but never live activation.
 Restoring durable intent never opens the live gate. A restored or restarted Core must report live
@@ -72,3 +86,14 @@ Repeat the full authenticated localhost gates for health, persistence, workers, 
 Explicitly POST global true only after those gates pass, and require a fresh HTTP `200` response
 with `globalEnabled=true` and `durable=true`. Start Caddy last, then run real Feishu acceptance and
 another zero-count check.
+
+CI performs those phases in one fail-closed process after the restore helper exits:
+
+```bash
+npm run pilot:smoke -- --post-restore
+```
+
+That mode first proves Caddy is stopped and runs authenticated localhost gates, durably enables the
+runtime, starts and verifies Caddy, runs public boundary and callback acceptance, and finally
+requires a durably proven disable. It leaves Caddy running only after the successful drill; any
+failure after enable closes and verifies ingress.

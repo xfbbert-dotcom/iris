@@ -110,7 +110,7 @@ jobs:
           test -n "$backup_file"
           age --decrypt --identity "$RUNNER_TEMP/iris-backup-key.txt" "$backup_file" \
             | ./deploy/pilot/restore-from-stdin.sh --confirm-replace-database
-          npm run pilot:smoke
+          npm run pilot:smoke -- --post-restore
 
       - name: Reject callbacks while Redis ingress is unavailable
         run: |

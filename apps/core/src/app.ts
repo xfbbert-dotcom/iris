@@ -93,6 +93,7 @@ export type BuildAppDependencies = {
   runtimeControl?: RuntimeControlDependency;
   closeRuntimeControl?: () => Promise<void>;
   onRuntimeStartupCleanup?: (cleanup: Promise<void>) => void;
+  onBeforeRuntimeCloseOwnership?: () => void;
   internalApiToken?: string;
   ingressHealthToken?: string;
   readinessEnv?: EnvLike;
@@ -219,41 +220,35 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const runtimeControlService =
     dependencies.runtimeControl?.service ??
     createInMemoryRuntimeControlService(runtimeController, now);
-  const answerDraftRuntime =
-    dependencies.answerDraftOrchestrator === undefined
-      ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
-          dependencies: { auditLog },
-          runtimeController,
-        })
-      : undefined;
-  const answerDraftOrchestrator =
-    dependencies.answerDraftOrchestrator ?? answerDraftRuntime?.answerDraftOrchestrator;
+  let answerDraftRuntime: AnswerDraftRuntime | undefined;
+  let answerDraftOrchestrator = dependencies.answerDraftOrchestrator;
   let reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
   let eventWorkerRuntime: EventWorkerRuntime | undefined;
   let documentSyncRuntime: DocumentSyncRuntime | undefined;
+  let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   try {
+    answerDraftRuntime =
+      answerDraftOrchestrator === undefined
+        ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
+            dependencies: { auditLog },
+            runtimeController,
+          })
+        : undefined;
+    answerDraftOrchestrator ??= answerDraftRuntime?.answerDraftOrchestrator;
     reindexWorkerRuntime =
       (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
     reindexWorkerRuntime?.start();
     eventWorkerRuntime =
       (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
         runtimeController,
-        ...(answerDraftOrchestrator === undefined ? {} : { answerDraftOrchestrator }),
+        ...(answerDraftOrchestrator === undefined
+          ? {}
+          : { answerDraftOrchestrator }),
       });
     eventWorkerRuntime?.start();
     documentSyncRuntime =
       (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
     documentSyncRuntime?.start();
-  } catch (error) {
-    const cleanup = scheduleRuntimeStartupCleanup({
-      answerDraftRuntime,
-      reindexWorkerRuntime,
-      eventWorkerRuntime,
-      documentSyncRuntime,
-    });
-    dependencies.onRuntimeStartupCleanup?.(cleanup);
-    throw error;
-  }
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
     dependencies.verifyFeishuRequest ??
@@ -277,6 +272,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     },
     runtimeController,
   });
+  startupGateway = gateway;
   const app = Fastify({ logger: false, bodyLimit: maxJsonBodyBytes });
 
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, payload, done) => {
@@ -1219,6 +1215,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     return { ok: true, status: "ready" };
   });
 
+  dependencies.onBeforeRuntimeCloseOwnership?.();
   app.addHook("onClose", async () => {
     await closeRuntimeResources([
       () => gateway.close(),
@@ -1231,6 +1228,17 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   return app;
+  } catch (error) {
+    const cleanup = scheduleRuntimeStartupCleanup({
+      gateway: startupGateway,
+      answerDraftRuntime,
+      reindexWorkerRuntime,
+      eventWorkerRuntime,
+      documentSyncRuntime,
+    });
+    dependencies.onRuntimeStartupCleanup?.(cleanup);
+    throw error;
+  }
 }
 
 function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
@@ -1353,17 +1361,20 @@ async function closeRuntimeResources(
 }
 
 function scheduleRuntimeStartupCleanup({
+  gateway,
   answerDraftRuntime,
   reindexWorkerRuntime,
   eventWorkerRuntime,
   documentSyncRuntime,
 }: {
+  gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   answerDraftRuntime: AnswerDraftRuntime | undefined;
   reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
   eventWorkerRuntime: EventWorkerRuntime | undefined;
   documentSyncRuntime: DocumentSyncRuntime | undefined;
 }): Promise<void> {
   const cleanup = closeRuntimeResources([
+    () => gateway?.close(),
     () => documentSyncRuntime?.close(),
     () => eventWorkerRuntime?.close(),
     () => reindexWorkerRuntime?.close(),

@@ -221,9 +221,12 @@ describe("Core server startup", () => {
     expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
   });
 
-  it("awaits ordered worker cleanup before runtime-control close when composition fails", async () => {
+  it("awaits worker cleanup before runtime-control close when late composition fails", async () => {
+    const occupied = await occupyLoopbackPort();
+    occupiedServer = occupied.server;
+    process.env.PORT = String(occupied.port);
     const closeOrder: string[] = [];
-    const buildError = new Error("document runtime composition failed");
+    const buildError = new Error("late app composition failed");
     const eventCloseError = new Error("event runtime cleanup failed");
     const reindexCloseError = new Error("reindex runtime cleanup failed");
     const runtimeCloseError = new Error("runtime-control cleanup failed");
@@ -272,7 +275,8 @@ describe("Core server startup", () => {
         createAnswerDraftRuntime: () => answerDraftRuntime,
         createReindexWorkerRuntime: () => reindexWorkerRuntime,
         createEventWorkerRuntime: () => eventWorkerRuntime,
-        createDocumentSyncRuntime: () => {
+        createDocumentSyncRuntime: () => undefined,
+        onBeforeRuntimeCloseOwnership: () => {
           throw buildError;
         },
       },
