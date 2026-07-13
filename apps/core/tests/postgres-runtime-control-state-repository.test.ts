@@ -28,6 +28,18 @@ describe("createPostgresRuntimeControlStateRepository", () => {
     expect(row.capabilities).toEqual(defaultCapabilities());
   });
 
+  it("clones Date values from database rows", async () => {
+    const updatedAt = new Date("2026-07-13T00:00:00.000Z");
+    const repository = createPostgresRuntimeControlStateRepository({
+      queryable: fakeQueryable([validRow({ updated_at: updatedAt })]),
+    });
+
+    const snapshot = await repository.getSnapshot();
+    updatedAt.setUTCFullYear(2030);
+
+    expect(snapshot.updatedAt).toEqual(new Date("2026-07-13T00:00:00.000Z"));
+  });
+
   it("trims and sorts disabled group IDs deterministically", async () => {
     const repository = createPostgresRuntimeControlStateRepository({
       queryable: fakeQueryable([
@@ -63,10 +75,60 @@ describe("createPostgresRuntimeControlStateRepository", () => {
     await expect(repository.getSnapshot()).rejects.toThrow("invalid runtime control snapshot");
   });
 
+  it("rejects rows without an own revision property", async () => {
+    const row = validRow() as Record<string, unknown>;
+    delete row.revision;
+    const repository = createPostgresRuntimeControlStateRepository({
+      queryable: fakeQueryable([row]),
+    });
+
+    await expect(repository.getSnapshot()).rejects.toThrow("invalid runtime control snapshot");
+  });
+
+  it("rejects capabilities without all required own properties", async () => {
+    const capabilities = defaultCapabilities() as Record<string, unknown>;
+    delete capabilities.callExternalTools;
+    const repository = createPostgresRuntimeControlStateRepository({
+      queryable: fakeQueryable([validRow({ capabilities })]),
+    });
+
+    await expect(repository.getSnapshot()).rejects.toThrow("invalid runtime control snapshot");
+  });
+
+  it("rejects sparse disabled group ID arrays", async () => {
+    const disabledGroupIds = ["chat-a", , "chat-c"];
+    const repository = createPostgresRuntimeControlStateRepository({
+      queryable: fakeQueryable([validRow({ disabled_group_ids: disabledGroupIds })]),
+    });
+
+    await expect(repository.getSnapshot()).rejects.toThrow("invalid runtime control snapshot");
+  });
+
+  it("rejects disabled group ID arrays with inherited indexes", async () => {
+    const disabledGroupIds = ["chat-a", , "chat-c"];
+    Object.setPrototypeOf(
+      disabledGroupIds,
+      Object.assign(Object.create(Array.prototype), { 1: "chat-b" }),
+    );
+    const repository = createPostgresRuntimeControlStateRepository({
+      queryable: fakeQueryable([validRow({ disabled_group_ids: disabledGroupIds })]),
+    });
+
+    await expect(repository.getSnapshot()).rejects.toThrow("invalid runtime control snapshot");
+  });
+
+  it("rejects disabled group ID arrays with non-index enumerable properties", async () => {
+    const disabledGroupIds = Object.assign(["chat-a"], { source: "legacy" });
+    const repository = createPostgresRuntimeControlStateRepository({
+      queryable: fakeQueryable([validRow({ disabled_group_ids: disabledGroupIds })]),
+    });
+
+    await expect(repository.getSnapshot()).rejects.toThrow("invalid runtime control snapshot");
+  });
+
   it.each([
     ["missing row", undefined],
     ["unknown row field", { extra: true }],
-    ["missing revision", { revision: undefined }],
     ["negative revision", { revision: "-1" }],
     ["unsafe revision", { revision: "9007199254740992" }],
     ["fractional revision", { revision: "4.5" }],
@@ -75,10 +137,6 @@ describe("createPostgresRuntimeControlStateRepository", () => {
     ["non-string group", { disabled_group_ids: [1] }],
     ["duplicate group", { disabled_group_ids: ["chat-a", " chat-a "] }],
     ["blank group", { disabled_group_ids: [" "] }],
-    [
-      "missing capability",
-      { capabilities: { ...defaultCapabilities(), callExternalTools: undefined } },
-    ],
     ["unknown capability", { capabilities: { ...defaultCapabilities(), unknown: false } }],
     [
       "non-boolean capability",
@@ -94,6 +152,14 @@ describe("createPostgresRuntimeControlStateRepository", () => {
       override === undefined ? undefined : { ...validRow(), ...(override as Record<string, unknown>) };
     const repository = createPostgresRuntimeControlStateRepository({
       queryable: fakeQueryable(row === undefined ? [] : [row]),
+    });
+
+    await expect(repository.getSnapshot()).rejects.toThrow("invalid runtime control snapshot");
+  });
+
+  it("rejects reads that return multiple rows", async () => {
+    const repository = createPostgresRuntimeControlStateRepository({
+      queryable: fakeQueryable([validRow(), validRow({ revision: "5" })]),
     });
 
     await expect(repository.getSnapshot()).rejects.toThrow("invalid runtime control snapshot");
@@ -127,16 +193,17 @@ describe("createPostgresRuntimeControlStateRepository", () => {
       updatedAt: new Date("2026-07-13T00:00:00.000Z"),
     });
 
-    expect(queryable.query).toHaveBeenCalledWith(
-      expect.stringContaining("where singleton_id = 1 and revision = $1"),
-      [
-        4,
-        false,
-        ["chat-a", "chat-b"],
-        JSON.stringify(defaultCapabilities()),
-        null,
-      ],
+    const [sql, params] = queryCalls(queryable)[0] ?? [];
+    expect(normalizeSql(sql)).toBe(
+      "update runtime_control_state set revision = revision + 1, desired_global_enabled = $2, disabled_group_ids = $3, capabilities = $4::jsonb, updated_at = now(), updated_by = $5 where singleton_id = 1 and revision = $1 returning revision, desired_global_enabled, disabled_group_ids, capabilities, updated_at, updated_by",
     );
+    expect(params).toEqual([
+      4,
+      false,
+      ["chat-a", "chat-b"],
+      JSON.stringify(defaultCapabilities()),
+      null,
+    ]);
   });
 
   it("returns conflict exactly when the compare-and-swap updates zero rows", async () => {
@@ -205,4 +272,13 @@ function validNextSnapshot() {
 function fakeQueryable(rows: unknown[]): Queryable {
   const query = vi.fn(async () => ({ rows }));
   return { query } as unknown as Queryable;
+}
+
+function queryCalls(queryable: Queryable): Array<[string, unknown[] | undefined]> {
+  return (queryable.query as unknown as { mock: { calls: Array<[string, unknown[] | undefined]> } })
+    .mock.calls;
+}
+
+function normalizeSql(sql: string | undefined): string {
+  return sql?.replace(/\s+/g, " ").trim().toLowerCase() ?? "";
 }

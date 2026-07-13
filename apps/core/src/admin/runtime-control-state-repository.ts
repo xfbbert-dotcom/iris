@@ -148,15 +148,11 @@ function decodeBoolean(value: unknown, field: string): boolean {
 }
 
 function decodeDisabledGroupIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
+  if (!isDenseJsonStringArray(value)) {
     throw invalidSnapshot("disabled_group_ids");
   }
 
   const normalized = value.map((groupId) => {
-    if (typeof groupId !== "string") {
-      throw invalidSnapshot("disabled_group_ids");
-    }
-
     const trimmed = groupId.trim();
     if (trimmed.length === 0) {
       throw invalidSnapshot("disabled_group_ids");
@@ -170,6 +166,53 @@ function decodeDisabledGroupIds(value: unknown): string[] {
   }
 
   return [...unique].sort();
+}
+
+function isDenseJsonStringArray(value: unknown): value is string[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    return false;
+  }
+
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== value.length + 1) {
+    return false;
+  }
+
+  for (const key of ownKeys) {
+    if (key === "length") {
+      continue;
+    }
+    if (typeof key !== "string" || !isArrayIndex(key, value.length)) {
+      return false;
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !("value" in descriptor) ||
+      typeof descriptor.value !== "string"
+    ) {
+      return false;
+    }
+  }
+
+  for (const key in value) {
+    if (!hasOwn(value, key)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isArrayIndex(key: string, length: number): boolean {
+  if (!/^(0|[1-9]\d*)$/.test(key)) {
+    return false;
+  }
+
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index < length;
 }
 
 function decodeCapabilities(value: unknown): IrisCapability {
