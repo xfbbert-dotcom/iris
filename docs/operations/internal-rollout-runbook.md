@@ -142,8 +142,11 @@ before starting Caddy.
 
 Deploy an explicit commit instead of a moving branch:
 
+Keep the release parent owned by the dedicated operator so commit-addressed candidate directories
+can be created without broadening permissions or requiring an interactive sudo step mid-deploy.
+
 ```bash
-sudo install -d -o "$USER" -g "$USER" /opt/iris
+sudo install -d -o "$USER" -g "$USER" /opt/iris /opt/iris/releases
 git clone https://github.com/xfbbert-dotcom/iris.git /opt/iris/repository
 cd /opt/iris/repository
 git fetch origin
