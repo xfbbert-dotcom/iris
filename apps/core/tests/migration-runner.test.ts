@@ -212,4 +212,22 @@ describe("defaultMigrationsDir", () => {
       "add column knowledge_drafts_policy_overridden boolean not null default false",
     );
   });
+
+  it("includes the conservative singleton runtime-control state", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0016_runtime_control_state.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table runtime_control_state");
+    expect(normalized).toContain("primary key check (singleton_id = 1)");
+    expect(normalized).toContain("revision bigint not null check (revision >= 0)");
+    expect(normalized).toContain("desired_global_enabled boolean not null");
+    expect(normalized).toContain("disabled_group_ids text[] not null");
+    expect(normalized).toContain("capabilities jsonb not null");
+    expect(normalized).toContain("values (1, 0, false, array[]::text[]");
+    expect(normalized).toContain("\"writeknowledgebase\":false");
+    expect(normalized).toContain("\"callexternaltools\":false");
+  });
 });
