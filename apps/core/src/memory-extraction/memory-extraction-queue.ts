@@ -40,7 +40,9 @@ export const MAX_MEMORY_EXTRACTION_QUEUE_LIMIT = 100;
 export const MEMORY_EXTRACTION_SCHEMA_VERSION = 1 as const;
 const MEMORY_EXTRACTION_IDEMPOTENCY_KEY_PREFIX = "memory-extraction:";
 export const MAX_MEMORY_EXTRACTION_IDEMPOTENCY_KEY_CHARS =
-  MEMORY_EXTRACTION_IDEMPOTENCY_KEY_PREFIX.length + MAX_MEMORY_EXTRACTION_IDENTIFIER_CHARS;
+  MAX_MEMORY_EXTRACTION_IDENTIFIER_CHARS;
+export const MAX_MEMORY_EXTRACTION_REQUEST_ID_CHARS =
+  MAX_MEMORY_EXTRACTION_IDEMPOTENCY_KEY_CHARS - MEMORY_EXTRACTION_IDEMPOTENCY_KEY_PREFIX.length;
 
 export interface MemoryExtractionQueue {
   enqueue(job: MemoryExtractionJob): Promise<void>;
@@ -70,7 +72,7 @@ export function createMemoryExtractionJob(input: {
   groupId: string;
   now: Date;
 }): MemoryExtractionJob {
-  const requestId = normalizeMemoryExtractionIdentifier(input.requestId, "requestId");
+  const requestId = normalizeMemoryExtractionRequestId(input.requestId);
   const groupId = normalizeMemoryExtractionIdentifier(input.groupId, "groupId");
   const now = requireValidMemoryExtractionDate(input.now, "now");
 
@@ -86,10 +88,19 @@ export function createMemoryExtractionJob(input: {
 }
 
 export function createMemoryExtractionIdempotencyKey(requestId: string): string {
-  return `${MEMORY_EXTRACTION_IDEMPOTENCY_KEY_PREFIX}${normalizeMemoryExtractionIdentifier(
+  return `${MEMORY_EXTRACTION_IDEMPOTENCY_KEY_PREFIX}${normalizeMemoryExtractionRequestId(
     requestId,
-    "requestId",
   )}`;
+}
+
+function normalizeMemoryExtractionRequestId(value: string): string {
+  const normalized = normalizeMemoryExtractionIdentifier(value, "requestId");
+  if (normalized.length > MAX_MEMORY_EXTRACTION_REQUEST_ID_CHARS) {
+    throw new Error(
+      `requestId must be at most ${MAX_MEMORY_EXTRACTION_REQUEST_ID_CHARS} characters`,
+    );
+  }
+  return normalized;
 }
 
 export function normalizeMemoryExtractionIdentifier(value: string, fieldName: string): string {

@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { normalizeDeadLetterErrorMessage } from "../queues/dead-letter-error-message.js";
 import {
   MAX_MEMORY_EXTRACTION_IDEMPOTENCY_KEY_CHARS,
   MAX_MEMORY_EXTRACTION_IDENTIFIER_CHARS,
@@ -17,51 +16,73 @@ import {
 
 const DEFAULT_SEEN_KEY = "iris:memory:extraction:seen";
 const DEFAULT_READY_KEY = "iris:memory:extraction:ready";
+const DEFAULT_READY_SET_KEY = "iris:memory:extraction:ready:ids";
 const DEFAULT_DELAYED_KEY = "iris:memory:extraction:delayed";
 const DEFAULT_PROCESSING_KEY = "iris:memory:extraction:processing";
+const DEFAULT_STATE_KEY = "iris:memory:extraction:state";
+const DEFAULT_PAYLOAD_KEY = "iris:memory:extraction:payloads";
+const DEFAULT_MEMBER_KEY = "iris:memory:extraction:members";
 const DEFAULT_COOLDOWN_KEY = "iris:memory:extraction:cooldown";
 const DEFAULT_DEAD_LETTER_KEY = "iris:memory:extraction:dlq";
+const DEFAULT_DEAD_LETTER_INDEX_KEY = "iris:memory:extraction:dlq:index";
 const DEFAULT_MAX_ATTEMPTS = 5;
+const MAX_DEQUEUE_POPS = MAX_MEMORY_EXTRACTION_QUEUE_LIMIT * 2;
+const CLAIMED_PAYLOAD = Symbol("memoryExtractionClaimedPayload");
+const ALLOWED_FAILURE_CODES = new Set([
+  "provider_timeout",
+  "provider_rate_limited",
+  "provider_unavailable",
+  "invalid_model_response",
+  "invalid_queue_payload",
+  "invalid_dead_letter_payload",
+  "invalid_dead_letter_json",
+  "internal_error",
+]);
 
 const ENQUEUE_SCRIPT = `
 -- memory-extraction:enqueue
-local function has_id(payload, idempotency_key)
-  local ok, decoded = pcall(cjson.decode, payload)
-  return ok and decoded["idempotencyKey"] == idempotency_key
+local state = redis.call("HGET", KEYS[5], ARGV[1])
+local indexed_payload = redis.call("HGET", KEYS[6], ARGV[1])
+if state and indexed_payload then
+  redis.call("SADD", KEYS[1], ARGV[1])
+  return 0
 end
 
-if redis.call("SISMEMBER", KEYS[1], ARGV[1]) == 1 then
-  local ready = redis.call("LRANGE", KEYS[2], 0, -1)
-  for _, payload in ipairs(ready) do
-    if has_id(payload, ARGV[1]) then return 0 end
-  end
-  local delayed = redis.call("ZRANGE", KEYS[3], 0, -1)
-  for _, payload in ipairs(delayed) do
-    if has_id(payload, ARGV[1]) then return 0 end
-  end
-  local processing = redis.call("LRANGE", KEYS[4], 0, -1)
-  for _, payload in ipairs(processing) do
-    if has_id(payload, ARGV[1]) then return 0 end
-  end
+redis.call("HSET", KEYS[6], ARGV[1], ARGV[2])
+redis.call("HSET", KEYS[7], ARGV[2], ARGV[1])
+if ARGV[3] == "delayed" then
+  redis.call("ZADD", KEYS[4], ARGV[4], ARGV[2])
+  redis.call("HSET", KEYS[5], ARGV[1], "delayed")
+else
   redis.call("RPUSH", KEYS[2], ARGV[2])
-  return 1
+  redis.call("SADD", KEYS[3], ARGV[1])
+  redis.call("HSET", KEYS[5], ARGV[1], "ready")
 end
-
-redis.call("RPUSH", KEYS[2], ARGV[2])
 redis.call("SADD", KEYS[1], ARGV[1])
 return 1
 `;
 
 const RECOVER_PROCESSING_SCRIPT = `
 -- memory-extraction:recover-processing
-local recovered = 0
-local payload = redis.call("RPOP", KEYS[1])
-while payload do
-  redis.call("LPUSH", KEYS[2], payload)
-  recovered = recovered + 1
-  payload = redis.call("RPOP", KEYS[1])
+local processing = redis.call(
+  "ZRANGEBYSCORE", KEYS[1], "-inf", "+inf", "LIMIT", 0, ARGV[1]
+)
+for _, payload in ipairs(processing) do
+  if redis.call("ZREM", KEYS[1], payload) == 1 then
+    local idempotency_key = redis.call("HGET", KEYS[6], payload)
+    if idempotency_key
+      and redis.call("HGET", KEYS[4], idempotency_key) == "processing"
+      and redis.call("HGET", KEYS[5], idempotency_key) == payload then
+      redis.call("LPUSH", KEYS[2], payload)
+      redis.call("SADD", KEYS[3], idempotency_key)
+      redis.call("HSET", KEYS[4], idempotency_key, "ready")
+    elseif idempotency_key
+      and redis.call("HGET", KEYS[5], idempotency_key) ~= payload then
+      redis.call("HDEL", KEYS[6], payload)
+    end
+  end
 end
-return recovered
+return redis.call("ZCARD", KEYS[1])
 `;
 
 const PROMOTE_DUE_SCRIPT = `
@@ -71,7 +92,17 @@ local due = redis.call(
 )
 for _, payload in ipairs(due) do
   if redis.call("ZREM", KEYS[1], payload) == 1 then
-    redis.call("RPUSH", KEYS[2], payload)
+    local idempotency_key = redis.call("HGET", KEYS[6], payload)
+    if idempotency_key
+      and redis.call("HGET", KEYS[4], idempotency_key) == "delayed"
+      and redis.call("HGET", KEYS[5], idempotency_key) == payload then
+      redis.call("RPUSH", KEYS[2], payload)
+      redis.call("SADD", KEYS[3], idempotency_key)
+      redis.call("HSET", KEYS[4], idempotency_key, "ready")
+    elseif idempotency_key
+      and redis.call("HGET", KEYS[5], idempotency_key) ~= payload then
+      redis.call("HDEL", KEYS[6], payload)
+    end
   end
 end
 return #due
@@ -79,125 +110,120 @@ return #due
 
 const DEQUEUE_SCRIPT = `
 -- memory-extraction:dequeue
-local payload = redis.call("LPOP", KEYS[1])
-if payload then
-  redis.call("RPUSH", KEYS[2], payload)
-  return payload
+local claimed = {}
+local popped = 0
+while #claimed / 2 < tonumber(ARGV[1]) and popped < tonumber(ARGV[2]) do
+  local payload = redis.call("LPOP", KEYS[1])
+  if not payload then break end
+  popped = popped + 1
+  local idempotency_key = redis.call("HGET", KEYS[6], payload)
+  if idempotency_key
+    and redis.call("HGET", KEYS[4], idempotency_key) == "ready"
+    and redis.call("HGET", KEYS[5], idempotency_key) == payload then
+    redis.call("SREM", KEYS[2], idempotency_key)
+    redis.call("ZADD", KEYS[3], ARGV[3], payload)
+    redis.call("HSET", KEYS[4], idempotency_key, "processing")
+    table.insert(claimed, idempotency_key)
+    table.insert(claimed, payload)
+  elseif idempotency_key then
+    if redis.call("HGET", KEYS[5], idempotency_key) ~= payload then
+      redis.call("HDEL", KEYS[6], payload)
+    end
+  else
+    local invalid_key = "invalid:" .. redis.sha1hex(payload)
+    if redis.call("HGET", KEYS[4], invalid_key) ~= "processing"
+      or redis.call("HGET", KEYS[5], invalid_key) ~= payload then
+      redis.call("HSET", KEYS[4], invalid_key, "processing")
+      redis.call("HSET", KEYS[5], invalid_key, payload)
+      redis.call("HSET", KEYS[6], payload, invalid_key)
+      redis.call("ZADD", KEYS[3], ARGV[3], payload)
+      table.insert(claimed, invalid_key)
+      table.insert(claimed, payload)
+    end
+  end
 end
-return nil
+return claimed
 `;
 
 const ACK_PROCESSED_SCRIPT = `
 -- memory-extraction:ack-processed
-if redis.call("LREM", KEYS[1], 1, ARGV[1]) > 0 then
-  redis.call("SREM", KEYS[2], ARGV[2])
-  return 1
-end
-return 0
+if redis.call("HGET", KEYS[5], ARGV[1]) ~= "processing"
+  or redis.call("HGET", KEYS[6], ARGV[1]) ~= ARGV[2] then return 0 end
+redis.call("HDEL", KEYS[5], ARGV[1])
+redis.call("HDEL", KEYS[6], ARGV[1])
+redis.call("HDEL", KEYS[7], ARGV[2])
+redis.call("SREM", KEYS[2], ARGV[1])
+redis.call("SREM", KEYS[3], ARGV[1])
+redis.call("ZREM", KEYS[4], ARGV[2])
+redis.call("ZREM", KEYS[1], ARGV[2])
+return 1
 `;
 
 const ACK_RETRY_SCRIPT = `
 -- memory-extraction:ack-retry
-local processing = redis.call("LRANGE", KEYS[4], 0, -1)
-local found = false
-for _, payload in ipairs(processing) do
-  if payload == ARGV[3] then found = true break end
-end
-if not found then return 0 end
-
-local function has_id(payload)
-  local ok, decoded = pcall(cjson.decode, payload)
-  return ok and decoded["idempotencyKey"] == ARGV[1]
-end
-
-local ready = redis.call("LRANGE", KEYS[2], 0, -1)
-for _, payload in ipairs(ready) do
-  if has_id(payload) then redis.call("LREM", KEYS[2], 0, payload) end
-end
-local delayed = redis.call("ZRANGE", KEYS[3], 0, -1)
-for _, payload in ipairs(delayed) do
-  if has_id(payload) then redis.call("ZREM", KEYS[3], payload) end
-end
-
+if redis.call("HGET", KEYS[6], ARGV[1]) ~= "processing"
+  or redis.call("HGET", KEYS[7], ARGV[1]) ~= ARGV[3] then return 0 end
+redis.call("SREM", KEYS[3], ARGV[1])
+redis.call("ZREM", KEYS[4], ARGV[3])
+redis.call("HDEL", KEYS[8], ARGV[3])
+redis.call("HSET", KEYS[7], ARGV[1], ARGV[2])
+redis.call("HSET", KEYS[8], ARGV[2], ARGV[1])
 if ARGV[5] == "delayed" then
-  redis.call("ZADD", KEYS[3], ARGV[4], ARGV[2])
+  redis.call("ZADD", KEYS[4], ARGV[4], ARGV[2])
+  redis.call("HSET", KEYS[6], ARGV[1], "delayed")
 else
   redis.call("RPUSH", KEYS[2], ARGV[2])
+  redis.call("SADD", KEYS[3], ARGV[1])
+  redis.call("HSET", KEYS[6], ARGV[1], "ready")
 end
 redis.call("SADD", KEYS[1], ARGV[1])
-redis.call("LREM", KEYS[4], 1, ARGV[3])
+redis.call("ZREM", KEYS[5], ARGV[3])
 return 1
 `;
 
 const ACK_DEAD_LETTER_SCRIPT = `
 -- memory-extraction:ack-dead-letter
-local processing = redis.call("LRANGE", KEYS[2], 0, -1)
-local found = false
-for _, payload in ipairs(processing) do
-  if payload == ARGV[2] then found = true break end
-end
-if not found then return 0 end
-
-redis.call("RPUSH", KEYS[1], ARGV[1])
-if ARGV[3] ~= "" then
-  local function has_id(payload)
-    local ok, decoded = pcall(cjson.decode, payload)
-    return ok and decoded["idempotencyKey"] == ARGV[3]
-  end
-  local ready = redis.call("LRANGE", KEYS[4], 0, -1)
-  for _, payload in ipairs(ready) do
-    if has_id(payload) then redis.call("LREM", KEYS[4], 0, payload) end
-  end
-  local delayed = redis.call("ZRANGE", KEYS[5], 0, -1)
-  for _, payload in ipairs(delayed) do
-    if has_id(payload) then redis.call("ZREM", KEYS[5], payload) end
-  end
-end
-redis.call("LREM", KEYS[2], 1, ARGV[2])
-if ARGV[3] ~= "" then redis.call("SREM", KEYS[3], ARGV[3]) end
+if redis.call("HGET", KEYS[7], ARGV[3]) ~= "processing"
+  or redis.call("HGET", KEYS[8], ARGV[3]) ~= ARGV[4] then return 0 end
+redis.call("RPUSH", KEYS[1], ARGV[2])
+redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
+redis.call("HDEL", KEYS[7], ARGV[3])
+redis.call("HDEL", KEYS[8], ARGV[3])
+redis.call("HDEL", KEYS[9], ARGV[4])
+redis.call("SREM", KEYS[4], ARGV[3])
+redis.call("SREM", KEYS[5], ARGV[3])
+redis.call("ZREM", KEYS[6], ARGV[4])
+redis.call("ZREM", KEYS[3], ARGV[4])
 return 1
 `;
 
 const REPLAY_DEAD_LETTER_SCRIPT = `
 -- memory-extraction:replay-dead-letter
-local dead_letters = redis.call("LRANGE", KEYS[5], 0, -1)
-local found = false
-for _, payload in ipairs(dead_letters) do
-  if payload == ARGV[3] then found = true break end
+if redis.call("HGET", KEYS[9], ARGV[3]) ~= ARGV[4] then return 0 end
+if redis.call("HGET", KEYS[6], ARGV[1]) == "processing" then
+  redis.call("HDEL", KEYS[9], ARGV[3])
+  return 1
 end
-if not found then return 0 end
-
-local function has_id(payload)
-  local ok, decoded = pcall(cjson.decode, payload)
-  return ok and decoded["idempotencyKey"] == ARGV[1]
+local existing_payload = redis.call("HGET", KEYS[7], ARGV[1])
+if existing_payload then
+  redis.call("ZREM", KEYS[4], existing_payload)
+  redis.call("HDEL", KEYS[8], existing_payload)
 end
-
-local processing = redis.call("LRANGE", KEYS[4], 0, -1)
-for _, payload in ipairs(processing) do
-  if has_id(payload) then
-    redis.call("LREM", KEYS[5], 1, ARGV[3])
-    return 1
-  end
-end
-
-local ready = redis.call("LRANGE", KEYS[2], 0, -1)
-for _, payload in ipairs(ready) do
-  if has_id(payload) then redis.call("LREM", KEYS[2], 0, payload) end
-end
-local delayed = redis.call("ZRANGE", KEYS[3], 0, -1)
-for _, payload in ipairs(delayed) do
-  if has_id(payload) then redis.call("ZREM", KEYS[3], payload) end
-end
-
+redis.call("SREM", KEYS[3], ARGV[1])
+redis.call("HSET", KEYS[7], ARGV[1], ARGV[2])
+redis.call("HSET", KEYS[8], ARGV[2], ARGV[1])
 redis.call("RPUSH", KEYS[2], ARGV[2])
+redis.call("SADD", KEYS[3], ARGV[1])
+redis.call("HSET", KEYS[6], ARGV[1], "ready")
 redis.call("SADD", KEYS[1], ARGV[1])
-redis.call("LREM", KEYS[5], 1, ARGV[3])
+redis.call("HDEL", KEYS[9], ARGV[3])
 return 1
 `;
 
 const DELETE_DEAD_LETTER_SCRIPT = `
 -- memory-extraction:delete-dead-letter
-return redis.call("LREM", KEYS[1], 1, ARGV[1])
+if redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then return 0 end
+return redis.call("HDEL", KEYS[1], ARGV[1])
 `;
 
 const SET_COOLDOWN_SCRIPT = `
@@ -215,10 +241,13 @@ export type RedisMemoryExtractionQueueClient = {
   eval(
     script: string,
     options: { keys: string[]; arguments: string[] },
-  ): Promise<number | string | null>;
+  ): Promise<number | string | string[] | null>;
   lLen(key: string): Promise<number>;
   lRange(key: string, start: number, stop: number): Promise<string[]>;
+  sCard(key: string): Promise<number>;
   zCard(key: string): Promise<number>;
+  hLen(key: string): Promise<number>;
+  hGet(key: string, field: string): Promise<string | null>;
   get(key: string): Promise<string | null>;
 };
 
@@ -226,10 +255,15 @@ export type RedisMemoryExtractionQueueOptions = {
   client: RedisMemoryExtractionQueueClient;
   seenKey?: string;
   readyKey?: string;
+  readySetKey?: string;
   delayedKey?: string;
   processingKey?: string;
+  stateKey?: string;
+  payloadKey?: string;
+  memberKey?: string;
   cooldownKey?: string;
   deadLetterKey?: string;
+  deadLetterIndexKey?: string;
   maxAttempts?: number;
   now?: () => Date;
   idGenerator?: () => string;
@@ -239,10 +273,15 @@ export function createRedisMemoryExtractionQueue({
   client,
   seenKey = DEFAULT_SEEN_KEY,
   readyKey = DEFAULT_READY_KEY,
+  readySetKey = DEFAULT_READY_SET_KEY,
   delayedKey = DEFAULT_DELAYED_KEY,
   processingKey = DEFAULT_PROCESSING_KEY,
+  stateKey = DEFAULT_STATE_KEY,
+  payloadKey = DEFAULT_PAYLOAD_KEY,
+  memberKey = DEFAULT_MEMBER_KEY,
   cooldownKey = DEFAULT_COOLDOWN_KEY,
   deadLetterKey = DEFAULT_DEAD_LETTER_KEY,
+  deadLetterIndexKey = DEFAULT_DEAD_LETTER_INDEX_KEY,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   now = () => new Date(),
   idGenerator = randomUUID,
@@ -254,7 +293,7 @@ export function createRedisMemoryExtractionQueue({
     rawId: string,
   ): Promise<"replayed" | "not_found" | "unsupported_legacy_item"> => {
     const id = normalizeMemoryExtractionIdentifier(rawId, "id");
-    const found = await findDeadLetterByStoredId(client, deadLetterKey, id, now);
+    const found = await findDeadLetterByStoredId(client, deadLetterIndexKey, id, now);
     if (found === undefined) {
       return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
@@ -269,10 +308,21 @@ export function createRedisMemoryExtractionQueue({
       attempts: 0,
     };
     const result = await client.eval(REPLAY_DEAD_LETTER_SCRIPT, {
-      keys: [seenKey, readyKey, delayedKey, processingKey, deadLetterKey],
+      keys: [
+        seenKey,
+        readyKey,
+        readySetKey,
+        delayedKey,
+        processingKey,
+        stateKey,
+        payloadKey,
+        memberKey,
+        deadLetterIndexKey,
+      ],
       arguments: [
         replayJob.idempotencyKey,
         serializeMemoryExtractionJob(replayJob),
+        id,
         found.payload,
       ],
     });
@@ -283,13 +333,13 @@ export function createRedisMemoryExtractionQueue({
     rawId: string,
   ): Promise<"deleted" | "not_found" | "unsupported_legacy_item"> => {
     const id = normalizeMemoryExtractionIdentifier(rawId, "id");
-    const found = await findDeadLetterByStoredId(client, deadLetterKey, id, now);
+    const found = await findDeadLetterByStoredId(client, deadLetterIndexKey, id, now);
     if (found === undefined) {
       return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
     const result = await client.eval(DELETE_DEAD_LETTER_SCRIPT, {
-      keys: [deadLetterKey],
-      arguments: [found.payload],
+      keys: [deadLetterIndexKey],
+      arguments: [id, found.payload],
     });
     return result === 1 ? "deleted" : "not_found";
   };
@@ -298,9 +348,16 @@ export function createRedisMemoryExtractionQueue({
     async enqueue(job) {
       const payload = serializeMemoryExtractionJob(job);
       const normalizedJob = parseMemoryExtractionJob(payload);
+      const enqueueAt = requireValidMemoryExtractionDate(now(), "now");
+      const destination = normalizedJob.notBefore > enqueueAt ? "delayed" : "ready";
       await client.eval(ENQUEUE_SCRIPT, {
-        keys: [seenKey, readyKey, delayedKey, processingKey],
-        arguments: [normalizedJob.idempotencyKey, payload],
+        keys: [seenKey, readyKey, readySetKey, delayedKey, stateKey, payloadKey, memberKey],
+        arguments: [
+          normalizedJob.idempotencyKey,
+          payload,
+          destination,
+          String(normalizedJob.notBefore.getTime()),
+        ],
       });
     },
 
@@ -312,39 +369,78 @@ export function createRedisMemoryExtractionQueue({
       const safeDequeueAt = requireValidMemoryExtractionDate(dequeueAt, "now");
 
       if (!processingRecovered) {
-        await client.eval(RECOVER_PROCESSING_SCRIPT, {
-          keys: [processingKey, readyKey],
-          arguments: [],
+        const remainingProcessing = await client.eval(RECOVER_PROCESSING_SCRIPT, {
+          keys: [processingKey, readyKey, readySetKey, stateKey, payloadKey, memberKey],
+          arguments: [String(MAX_MEMORY_EXTRACTION_QUEUE_LIMIT)],
         });
+        if (
+          typeof remainingProcessing !== "number" ||
+          !Number.isSafeInteger(remainingProcessing) ||
+          remainingProcessing < 0
+        ) {
+          throw new Error("Invalid memory extraction processing recovery result");
+        }
+        if (remainingProcessing > 0) {
+          return [];
+        }
         processingRecovered = true;
       }
       await client.eval(PROMOTE_DUE_SCRIPT, {
-        keys: [delayedKey, readyKey],
+        keys: [delayedKey, readyKey, readySetKey, stateKey, payloadKey, memberKey],
         arguments: [String(safeDequeueAt.getTime()), String(safeLimit)],
       });
 
       const jobs: MemoryExtractionJob[] = [];
-      for (let index = 0; index < safeLimit; index += 1) {
-        const result = await client.eval(DEQUEUE_SCRIPT, {
-          keys: [readyKey, processingKey],
-          arguments: [],
-        });
-        if (typeof result !== "string") {
-          break;
+      const result = await client.eval(DEQUEUE_SCRIPT, {
+        keys: [readyKey, readySetKey, processingKey, stateKey, payloadKey, memberKey],
+        arguments: [
+          String(safeLimit),
+          String(MAX_DEQUEUE_POPS),
+          String(safeDequeueAt.getTime()),
+        ],
+      });
+      if (!Array.isArray(result)) {
+        return jobs;
+      }
+      for (let index = 0; index + 1 < result.length; index += 2) {
+        const claimId = result[index];
+        const claimedPayload = result[index + 1];
+        if (typeof claimId !== "string" || typeof claimedPayload !== "string") {
+          continue;
         }
         try {
-          jobs.push(parseMemoryExtractionJob(result));
-        } catch (error) {
+          const job = parseMemoryExtractionJob(claimedPayload);
+          if (job.idempotencyKey !== claimId) {
+            throw new Error("Invalid memory extraction job payload");
+          }
+          if (job.attempts >= safeMaxAttempts) {
+            throw new Error("Memory extraction job attempts are exhausted");
+          }
+          Object.defineProperty(job, CLAIMED_PAYLOAD, {
+            value: { idempotencyKey: claimId, payload: claimedPayload },
+          });
+          jobs.push(job);
+        } catch {
           const failedAt = requireValidMemoryExtractionDate(now(), "now");
+          const deadLetterId = normalizeMemoryExtractionIdentifier(idGenerator(), "id");
           const diagnosticPayload = serializeInvalidPayloadDeadLetter({
-            id: normalizeMemoryExtractionIdentifier(idGenerator(), "id"),
-            rawPayload: result,
-            errorMessage: error instanceof Error ? error.message : String(error),
+            id: deadLetterId,
+            rawPayload: claimedPayload,
             failedAt,
           });
           await client.eval(ACK_DEAD_LETTER_SCRIPT, {
-            keys: [deadLetterKey, processingKey, seenKey, readyKey, delayedKey],
-            arguments: [diagnosticPayload, result, ""],
+            keys: [
+              deadLetterKey,
+              deadLetterIndexKey,
+              processingKey,
+              seenKey,
+              readySetKey,
+              delayedKey,
+              stateKey,
+              payloadKey,
+              memberKey,
+            ],
+            arguments: [deadLetterId, diagnosticPayload, claimId, claimedPayload],
           });
         }
       }
@@ -352,17 +448,20 @@ export function createRedisMemoryExtractionQueue({
     },
 
     async handleProcessedJob(job) {
-      const payload = serializeMemoryExtractionJob(job);
-      const normalizedJob = parseMemoryExtractionJob(payload);
+      const claimed = readClaimedPayload(job);
+      const payload = claimed?.payload ?? serializeMemoryExtractionJob(job);
+      const idempotencyKey = claimed?.idempotencyKey ?? parseMemoryExtractionJob(payload).idempotencyKey;
       await client.eval(ACK_PROCESSED_SCRIPT, {
-        keys: [processingKey, seenKey],
-        arguments: [payload, normalizedJob.idempotencyKey],
+        keys: [processingKey, seenKey, readySetKey, delayedKey, stateKey, payloadKey, memberKey],
+        arguments: [idempotencyKey, payload],
       });
     },
 
     async handleFailedJob(input) {
-      const originalPayload = serializeMemoryExtractionJob(input.job);
+      const claimed = readClaimedPayload(input.job);
+      const originalPayload = claimed?.payload ?? serializeMemoryExtractionJob(input.job);
       const originalJob = parseMemoryExtractionJob(originalPayload);
+      const claimId = claimed?.idempotencyKey ?? originalJob.idempotencyKey;
       const attempts = originalJob.attempts + 1;
       const retryAt =
         input.retryAt === undefined
@@ -377,26 +476,47 @@ export function createRedisMemoryExtractionQueue({
 
       if (attempts >= safeMaxAttempts) {
         const failedAt = requireValidMemoryExtractionDate(now(), "now");
+        const deadLetterId = normalizeMemoryExtractionIdentifier(idGenerator(), "id");
         await client.eval(ACK_DEAD_LETTER_SCRIPT, {
-          keys: [deadLetterKey, processingKey, seenKey, readyKey, delayedKey],
+          keys: [
+            deadLetterKey,
+            deadLetterIndexKey,
+            processingKey,
+            seenKey,
+            readySetKey,
+            delayedKey,
+            stateKey,
+            payloadKey,
+            memberKey,
+          ],
           arguments: [
+            deadLetterId,
             serializeJobDeadLetter({
-              id: normalizeMemoryExtractionIdentifier(idGenerator(), "id"),
+              id: deadLetterId,
               job: failedJob,
               errorMessage: input.errorMessage,
               failedAt,
             }),
+            claimId,
             originalPayload,
-            originalJob.idempotencyKey,
           ],
         });
         return { action: "dead_lettered", attempts };
       }
 
       await client.eval(ACK_RETRY_SCRIPT, {
-        keys: [seenKey, readyKey, delayedKey, processingKey],
+        keys: [
+          seenKey,
+          readyKey,
+          readySetKey,
+          delayedKey,
+          processingKey,
+          stateKey,
+          payloadKey,
+          memberKey,
+        ],
         arguments: [
-          failedJob.idempotencyKey,
+          claimId,
           failedPayload,
           originalPayload,
           String(failedJob.notBefore.getTime()),
@@ -407,11 +527,11 @@ export function createRedisMemoryExtractionQueue({
     },
 
     getPendingCount() {
-      return client.lLen(readyKey);
+      return client.sCard(readySetKey);
     },
 
     getProcessingCount() {
-      return client.lLen(processingKey);
+      return client.zCard(processingKey);
     },
 
     getDelayedCount() {
@@ -419,7 +539,7 @@ export function createRedisMemoryExtractionQueue({
     },
 
     getDeadLetterCount() {
-      return client.lLen(deadLetterKey);
+      return client.hLen(deadLetterIndexKey);
     },
 
     async getProviderCooldown() {
@@ -445,7 +565,18 @@ export function createRedisMemoryExtractionQueue({
         return [];
       }
       const payloads = await client.lRange(deadLetterKey, 0, safeLimit - 1);
-      return payloads.map((payload, index) => parseDeadLetterPayload(payload, index, now).deadLetter);
+      const deadLetters: MemoryExtractionDeadLetter[] = [];
+      for (const [index, payload] of payloads.entries()) {
+        const parsed = parseDeadLetterPayload(payload, index, now);
+        if (parsed.storedId === undefined) {
+          deadLetters.push(parsed.deadLetter);
+          continue;
+        }
+        if ((await client.hGet(deadLetterIndexKey, parsed.storedId)) === payload) {
+          deadLetters.push(parsed.deadLetter);
+        }
+      }
+      return deadLetters;
     },
 
     replayDeadLetter,
@@ -476,6 +607,16 @@ export function createRedisMemoryExtractionQueue({
       return result;
     },
   };
+}
+
+function readClaimedPayload(job: MemoryExtractionJob):
+  | { idempotencyKey: string; payload: string }
+  | undefined {
+  return (
+    job as MemoryExtractionJob & {
+      [CLAIMED_PAYLOAD]?: { idempotencyKey: string; payload: string };
+    }
+  )[CLAIMED_PAYLOAD];
 }
 
 export function serializeMemoryExtractionJob(job: MemoryExtractionJob): string {
@@ -519,6 +660,7 @@ export function parseMemoryExtractionJob(payload: string): MemoryExtractionJob {
     const attempts = readNonNegativeSafeInteger(parsed.attempts);
     if (
       parsed.schemaVersion !== MEMORY_EXTRACTION_SCHEMA_VERSION ||
+      attempts >= Number.MAX_SAFE_INTEGER ||
       idempotencyKey.length === 0 ||
       idempotencyKey.length > MAX_MEMORY_EXTRACTION_IDEMPOTENCY_KEY_CHARS ||
       idempotencyKey !== createMemoryExtractionIdempotencyKey(requestId)
@@ -562,22 +704,25 @@ function serializeJobDeadLetter(input: {
     job: serializeMemoryExtractionJobPayload(
       parseMemoryExtractionJob(serializeMemoryExtractionJob(input.job)),
     ),
-    errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
+    errorMessage: normalizeMemoryExtractionFailureCode(input.errorMessage),
     failedAt: input.failedAt.toISOString(),
   });
+}
+
+function normalizeMemoryExtractionFailureCode(errorMessage: string): string {
+  return ALLOWED_FAILURE_CODES.has(errorMessage) ? errorMessage : "internal_error";
 }
 
 function serializeInvalidPayloadDeadLetter(input: {
   id: string;
   rawPayload: string;
-  errorMessage: string;
   failedAt: Date;
 }): string {
   return JSON.stringify({
     id: input.id,
     payloadDigest: digestPayload(input.rawPayload),
     payloadBytes: Buffer.byteLength(input.rawPayload, "utf8"),
-    errorMessage: normalizeDeadLetterErrorMessage(input.errorMessage),
+    errorMessage: "invalid_queue_payload",
     failedAt: input.failedAt.toISOString(),
   });
 }
@@ -597,13 +742,13 @@ function parseDeadLetterPayload(
   try {
     parsed = JSON.parse(payload);
   } catch {
-    return invalidDeadLetterDiagnostic(payload, index, "Invalid memory extraction dead letter JSON", now);
+    return invalidDeadLetterDiagnostic(payload, index, "invalid_dead_letter_json", now);
   }
   if (!isRecord(parsed)) {
     return invalidDeadLetterDiagnostic(
       payload,
       index,
-      "Invalid memory extraction dead letter payload",
+      "invalid_dead_letter_payload",
       now,
     );
   }
@@ -613,7 +758,7 @@ function parseDeadLetterPayload(
     if (hasExactKeys(parsed, ["id", "job", "errorMessage", "failedAt"])) {
       const id = normalizeMemoryExtractionIdentifier(readString(parsed.id), "id");
       const job = parseMemoryExtractionJob(JSON.stringify(parsed.job));
-      const errorMessage = readBoundedErrorMessage(parsed.errorMessage);
+      const errorMessage = readMemoryExtractionFailureCode(parsed.errorMessage);
       const failedAt = parseValidDate(parsed.failedAt);
       return {
         payload,
@@ -633,7 +778,7 @@ function parseDeadLetterPayload(
       const id = normalizeMemoryExtractionIdentifier(readString(parsed.id), "id");
       const payloadDigest = readString(parsed.payloadDigest);
       const payloadBytes = readNonNegativeSafeInteger(parsed.payloadBytes);
-      const errorMessage = readBoundedErrorMessage(parsed.errorMessage);
+      const errorMessage = readMemoryExtractionFailureCode(parsed.errorMessage);
       const failedAt = parseValidDate(parsed.failedAt);
       if (!/^sha256:[a-f0-9]{64}$/.test(payloadDigest)) {
         throw new Error("invalid digest");
@@ -657,7 +802,7 @@ function parseDeadLetterPayload(
   return invalidDeadLetterDiagnostic(
     payload,
     index,
-    "Invalid memory extraction dead letter payload",
+    "invalid_dead_letter_payload",
     now,
     storedId,
   );
@@ -687,18 +832,25 @@ function invalidDeadLetterDiagnostic(
 
 async function findDeadLetterByStoredId(
   client: RedisMemoryExtractionQueueClient,
-  deadLetterKey: string,
+  deadLetterIndexKey: string,
   id: string,
   now: () => Date,
 ): Promise<ParsedDeadLetterPayload | undefined> {
-  const payloads = await client.lRange(deadLetterKey, 0, MAX_MEMORY_EXTRACTION_QUEUE_LIMIT - 1);
-  for (const [index, payload] of payloads.entries()) {
-    const parsed = parseDeadLetterPayload(payload, index, now);
-    if (parsed.storedId === id) {
-      return parsed;
-    }
+  const payload = await client.hGet(deadLetterIndexKey, id);
+  if (payload === null) {
+    return undefined;
   }
-  return undefined;
+  const parsed = parseDeadLetterPayload(payload, 0, now);
+  if (parsed.storedId !== id) {
+    return invalidDeadLetterDiagnostic(
+      payload,
+      0,
+      "invalid_dead_letter_payload",
+      now,
+      id,
+    );
+  }
+  return parsed;
 }
 
 function digestPayload(payload: string): string {
@@ -709,7 +861,10 @@ function sanitizeQueueLimit(limit: number): number {
   if (!Number.isFinite(limit) || Math.abs(limit) > Number.MAX_SAFE_INTEGER) {
     throw new Error("memory extraction queue limit must be a finite safe-magnitude number");
   }
-  return Math.min(MAX_MEMORY_EXTRACTION_QUEUE_LIMIT, Math.max(0, Math.floor(limit)));
+  if (!Number.isSafeInteger(limit)) {
+    throw new Error("memory extraction queue limit must be a safe integer");
+  }
+  return Math.min(MAX_MEMORY_EXTRACTION_QUEUE_LIMIT, Math.max(0, limit));
 }
 
 function sanitizeMaxAttempts(maxAttempts: number): number {
@@ -744,9 +899,9 @@ function readNonNegativeSafeInteger(value: unknown): number {
   return value as number;
 }
 
-function readBoundedErrorMessage(value: unknown): string {
+function readMemoryExtractionFailureCode(value: unknown): string {
   const errorMessage = readString(value);
-  if (errorMessage.length === 0 || errorMessage.length > 1000) {
+  if (!ALLOWED_FAILURE_CODES.has(errorMessage)) {
     throw new Error("invalid error message");
   }
   return errorMessage;

@@ -51,6 +51,20 @@ describe("createMemoryExtractionJob", () => {
     ).toThrow("groupId must be at most 512 characters");
   });
 
+  it("caps request ids so the derived idempotency key is at most 512 characters", () => {
+    const now = new Date("2026-07-14T00:00:00.000Z");
+    const boundaryJob = createMemoryExtractionJob({
+      requestId: "r".repeat(494),
+      groupId: "chat-a",
+      now,
+    });
+
+    expect(boundaryJob.idempotencyKey).toHaveLength(512);
+    expect(() =>
+      createMemoryExtractionJob({ requestId: "r".repeat(495), groupId: "chat-a", now }),
+    ).toThrow("requestId must be at most 494 characters");
+  });
+
   it("rejects invalid enqueue dates", () => {
     expect(() =>
       createMemoryExtractionJob({
