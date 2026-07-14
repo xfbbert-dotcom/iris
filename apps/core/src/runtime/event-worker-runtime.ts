@@ -55,6 +55,7 @@ import {
   type RawEventWorkerBatchSnapshot,
   type RawEventWorkerLoop,
 } from "../events/raw-event-worker-loop.js";
+import type { MemoryExtractionPlanner } from "../memory-extraction/memory-extraction-planner.js";
 import { closeRuntimeResources } from "./runtime-close.js";
 import { observeStartupPromise } from "./startup-promise.js";
 
@@ -127,11 +128,13 @@ export function createEventWorkerRuntime({
   dependencies = {},
   runtimeController,
   answerDraftOrchestrator,
+  memoryExtractionPlanner,
 }: {
   env?: EnvLike;
   dependencies?: EventWorkerRuntimeDependencies;
   runtimeController?: RuntimeGate;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
 } = {}): EventWorkerRuntime | undefined {
   const runtimeConfig = readEventWorkerRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
@@ -144,6 +147,7 @@ export function createEventWorkerRuntime({
     dependencies,
     runtimeController,
     answerDraftOrchestrator,
+    memoryExtractionPlanner,
   });
 }
 
@@ -153,12 +157,14 @@ function createEnabledEventWorkerRuntime({
   dependencies,
   runtimeController,
   answerDraftOrchestrator,
+  memoryExtractionPlanner,
 }: {
   env: EnvLike;
   runtimeConfig: Extract<EventWorkerRuntimeConfig, { enabled: true }>;
   dependencies: EventWorkerRuntimeDependencies;
   runtimeController: RuntimeGate | undefined;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
+  memoryExtractionPlanner: Pick<MemoryExtractionPlanner, "registerMessage"> | undefined;
 }): EventWorkerRuntime {
   const createRedis =
     dependencies.createRedisClient ??
@@ -215,6 +221,7 @@ function createEnabledEventWorkerRuntime({
     documentLinkExtractor,
     groupVisibleDocumentRegistrar,
     ...(mentionAnswerResponder === undefined ? {} : { mentionAnswerResponder }),
+    ...(memoryExtractionPlanner === undefined ? {} : { memoryExtractionPlanner }),
     ...(runtimeController === undefined ? {} : { runtimeController }),
   });
   const queue = createRedisRawEventQueue({

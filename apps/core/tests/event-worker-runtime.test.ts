@@ -97,6 +97,9 @@ describe("createEventWorkerRuntime", () => {
     const processor = {
       process: vi.fn(async () => undefined),
     };
+    const memoryExtractionPlanner = {
+      registerMessage: vi.fn(async () => undefined),
+    };
     const runtimeController = {
       canProcessIncomingEvent: vi.fn(() => true),
       canReadGroupContext: vi.fn(() => true),
@@ -119,6 +122,7 @@ describe("createEventWorkerRuntime", () => {
       env: enabledEnv(),
       dependencies,
       runtimeController,
+      memoryExtractionPlanner,
     });
 
     expect(runtime).toBeDefined();
@@ -149,6 +153,7 @@ describe("createEventWorkerRuntime", () => {
       documentLinkExtractor,
       groupVisibleDocumentRegistrar,
       runtimeController,
+      memoryExtractionPlanner,
     });
     runtime?.start();
     expect(loop.start).toHaveBeenCalledOnce();

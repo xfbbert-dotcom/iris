@@ -12,6 +12,7 @@ import type {
   FeishuDocumentLinkExtractor,
 } from "../documents/feishu-document-link-extractor.js";
 import type { GroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
+import type { MemoryExtractionPlanner } from "../memory-extraction/memory-extraction-planner.js";
 
 type RuntimeGate = {
   canProcessIncomingEvent(input: { groupId?: string }): boolean;
@@ -32,12 +33,14 @@ export function createFeishuMessageEventProcessor({
   documentLinkExtractor,
   groupVisibleDocumentRegistrar,
   mentionAnswerResponder,
+  memoryExtractionPlanner,
   runtimeController,
 }: {
   messages: Pick<ConversationMessageRepository, "upsertMessage">;
   documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
   groupVisibleDocumentRegistrar?: Pick<GroupVisibleDocumentRegistrar, "registerDiscoveredLinks">;
   mentionAnswerResponder?: Pick<FeishuMentionAnswerResponder, "maybeRespond">;
+  memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   runtimeController?: RuntimeGate;
 }) {
   return {
@@ -68,7 +71,16 @@ export function createFeishuMessageEventProcessor({
       }
 
       const { mentions: _mentions, ...messageFact } = parsed;
-      await messages.upsertMessage(messageFact);
+      const persistedMessage = await messages.upsertMessage(messageFact);
+
+      let memoryExtractionPlannerError: unknown;
+      if (memoryExtractionPlanner !== undefined) {
+        try {
+          await memoryExtractionPlanner.registerMessage(persistedMessage);
+        } catch (error) {
+          memoryExtractionPlannerError = error;
+        }
+      }
 
       let documentDiscoveryError: unknown;
       if (runtimeController === undefined || runtimeController.canReadDocuments()) {
@@ -90,6 +102,9 @@ export function createFeishuMessageEventProcessor({
 
       if (mentionResponseError !== undefined) {
         throw mentionResponseError;
+      }
+      if (memoryExtractionPlannerError !== undefined) {
+        throw memoryExtractionPlannerError;
       }
       if (documentDiscoveryError !== undefined) {
         throw documentDiscoveryError;

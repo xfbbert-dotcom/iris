@@ -46,6 +46,143 @@ describe("FeishuMessageEventProcessor", () => {
     });
   });
 
+  it("attempts replies first and passes the persisted message to extraction planning", async () => {
+    const calls: string[] = [];
+    const persistedMessage = {
+      id: "feishu:message-1",
+      provider: "feishu" as const,
+      providerMessageId: "message-1",
+      chatId: "chat-1",
+      senderId: "open-1",
+      messageType: "text",
+      text: "Hello",
+      sentAt: new Date("2026-07-01T17:00:00.000Z"),
+      rawEventIdempotencyKey: "raw-event:feishu:event-1",
+      createdAt: new Date("2026-07-02T01:00:01.000Z"),
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async () => {
+        calls.push("reply");
+        return { status: "skipped" as const, reason: "not_mentioned" as const };
+      }),
+    };
+    const messages = {
+      upsertMessage: vi.fn(async () => {
+        calls.push("persist");
+        return persistedMessage;
+      }),
+    };
+    const memoryExtractionPlanner = {
+      registerMessage: vi.fn(async () => {
+        calls.push("plan");
+      }),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => {
+        calls.push("documents");
+        return [];
+      }),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      mentionAnswerResponder,
+      memoryExtractionPlanner,
+      documentLinkExtractor,
+    });
+
+    await processor.process(rawEventFixture());
+
+    expect(calls).toEqual(["reply", "persist", "plan", "documents"]);
+    expect(memoryExtractionPlanner.registerMessage).toHaveBeenCalledWith(persistedMessage);
+  });
+
+  it("attempts document discovery before surfacing an extraction planner failure", async () => {
+    const plannerError = new Error("extraction scheduling failed");
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const memoryExtractionPlanner = {
+      registerMessage: vi.fn(async () => {
+        throw plannerError;
+      }),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => [{ sourceUri: "https://docs.feishu.cn/docx/a" }]),
+    };
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => undefined),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      memoryExtractionPlanner,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+    });
+
+    await expect(processor.process(rawEventFixture())).rejects.toBe(plannerError);
+
+    expect(memoryExtractionPlanner.registerMessage).toHaveBeenCalledOnce();
+    expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces reply, planner, and document failures in deterministic priority", async () => {
+    const replyError = new Error("reply failed");
+    const plannerError = new Error("planner failed");
+    const documentError = new Error("document discovery failed");
+    const attempts: string[] = [];
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async (): Promise<{
+        status: "skipped";
+        reason: "not_mentioned";
+      }> => {
+        attempts.push("reply");
+        throw replyError;
+      }),
+    };
+    const memoryExtractionPlanner = {
+      registerMessage: vi.fn(async () => {
+        attempts.push("planner");
+        throw plannerError;
+      }),
+    };
+    const documentLinkExtractor = {
+      extractLinks: vi.fn(() => [{ sourceUri: "https://docs.feishu.cn/docx/a" }]),
+    };
+    const groupVisibleDocumentRegistrar = {
+      registerDiscoveredLinks: vi.fn(async () => {
+        attempts.push("documents");
+        throw documentError;
+      }),
+    };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      mentionAnswerResponder,
+      memoryExtractionPlanner,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+    });
+
+    await expect(processor.process(rawEventFixture())).rejects.toBe(replyError);
+    expect(attempts).toEqual(["reply", "planner", "documents"]);
+
+    mentionAnswerResponder.maybeRespond.mockResolvedValueOnce({
+      status: "skipped" as const,
+      reason: "not_mentioned" as const,
+    });
+    await expect(processor.process(rawEventFixture())).rejects.toBe(plannerError);
+  });
+
   it("passes parsed Feishu mentions to the mention answer responder", async () => {
     const messages = {
       upsertMessage: vi.fn(async (input) => ({
@@ -274,6 +411,9 @@ describe("FeishuMessageEventProcessor", () => {
     const mentionAnswerResponder = {
       maybeRespond: vi.fn(async () => ({ status: "skipped" as const, reason: "not_mentioned" as const })),
     };
+    const memoryExtractionPlanner = {
+      registerMessage: vi.fn(async () => undefined),
+    };
     const runtimeController = {
       canProcessIncomingEvent: vi.fn(() => true),
       canReadGroupContext: vi.fn(() => false),
@@ -284,6 +424,7 @@ describe("FeishuMessageEventProcessor", () => {
       documentLinkExtractor,
       groupVisibleDocumentRegistrar,
       mentionAnswerResponder,
+      memoryExtractionPlanner,
       runtimeController,
     });
 
@@ -293,6 +434,7 @@ describe("FeishuMessageEventProcessor", () => {
     expect(messages.upsertMessage).not.toHaveBeenCalled();
     expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
     expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
+    expect(memoryExtractionPlanner.registerMessage).not.toHaveBeenCalled();
     expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledWith({
       messageId: "message-1",
       chatId: "chat-1",
