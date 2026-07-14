@@ -39,7 +39,7 @@ CREATE INDEX group_memory_extraction_requests_run_idx
 
 CREATE TABLE group_memory_extraction_run_evidence (
   run_id TEXT NOT NULL REFERENCES group_memory_extraction_runs(id) ON DELETE CASCADE,
-  request_id TEXT NOT NULL REFERENCES group_memory_extraction_requests(id) ON DELETE CASCADE,
+  request_id TEXT NOT NULL REFERENCES group_memory_extraction_requests(id) ON DELETE RESTRICT,
   conversation_message_id TEXT NOT NULL REFERENCES conversation_messages(id) ON DELETE RESTRICT,
   ordinal SMALLINT NOT NULL CHECK (ordinal BETWEEN 0 AND 39),
   content_hash TEXT NOT NULL CHECK (content_hash ~ '^[0-9a-f]{64}$'),

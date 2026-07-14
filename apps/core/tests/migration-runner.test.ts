@@ -303,6 +303,9 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain(
       "conversation_message_id text not null references conversation_messages(id) on delete restrict",
     );
+    expect(normalized).toContain(
+      "request_id text not null references group_memory_extraction_requests(id) on delete restrict",
+    );
     expect(normalized).toContain("content_hash ~ '^[0-9a-f]{64}$'");
   });
 });

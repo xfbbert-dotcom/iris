@@ -34,7 +34,10 @@ type RequestRow = {
 type SeedRequestRow = RequestRow & {
   message_group_id: unknown;
   message_provider_id: unknown;
+  message_text: unknown;
 };
+
+type ExistingRequestRow = RequestRow & { message_text: unknown };
 
 type MessageRow = {
   request_id?: unknown;
@@ -111,6 +114,7 @@ export function createPostgresMemoryExtractionRepository({
         WHERE cm.id = $2
           AND cm.chat_id = $3
           AND cm.provider_message_id = $4
+          AND NULLIF(BTRIM(cm.text), '') IS NOT NULL
         ON CONFLICT DO NOTHING
         RETURNING *
         `,
@@ -121,12 +125,13 @@ export function createPostgresMemoryExtractionRepository({
         return { request: mapRequest(insertedRow), created: true };
       }
 
-      const existing = await dataSource.query<RequestRow>(
+      const existing = await dataSource.query<ExistingRequestRow>(
         `
-        SELECT *
-        FROM group_memory_extraction_requests
-        WHERE conversation_message_id = $1 OR provider_message_id = $2
-        ORDER BY conversation_message_id = $1 DESC
+        SELECT r.*, cm.text AS message_text
+        FROM group_memory_extraction_requests r
+        JOIN conversation_messages cm ON cm.id = r.conversation_message_id
+        WHERE r.conversation_message_id = $1 OR r.provider_message_id = $2
+        ORDER BY r.conversation_message_id = $1 DESC
         LIMIT 1
         `,
         [input.conversationMessageId, input.providerMessageId],
@@ -134,6 +139,9 @@ export function createPostgresMemoryExtractionRepository({
       const [existingRow] = existing.rows;
       if (existingRow === undefined) {
         throw new Error("conversation message does not match extraction request");
+      }
+      if (!isReadableText(existingRow.message_text)) {
+        throw new Error("conversation message is not readable for extraction");
       }
       const request = mapRequest(existingRow);
       if (
@@ -172,35 +180,24 @@ export function createPostgresMemoryExtractionRepository({
       }
 
       return withTransaction(dataSource, async (client) => {
-        const seedResult = await client.query<SeedRequestRow>(
-          `
-          SELECT
-            r.*,
-            cm.chat_id AS message_group_id,
-            cm.provider_message_id AS message_provider_id
-          FROM group_memory_extraction_requests r
-          JOIN conversation_messages cm ON cm.id = r.conversation_message_id
-          WHERE r.id = $1
-          FOR UPDATE OF r SKIP LOCKED
-          `,
-          [seedRequestId],
-        );
-        const [seedRow] = seedResult.rows;
+        const seedRow = await findSeedRequest(client, seedRequestId, false);
         if (seedRow === undefined) {
           return undefined;
         }
-        const seed = mapRequest(seedRow);
-        if (
-          seed.groupId !== requireString("message group id", seedRow.message_group_id) ||
-          seed.providerMessageId !== requireString("message provider id", seedRow.message_provider_id)
-        ) {
-          throw new Error("extraction request does not match conversation message");
-        }
+        let seed = mapValidSeedRequest(seedRow);
         if (seed.status === "completed" || seed.status === "skipped") {
           return undefined;
         }
         if (seed.status === "processing" && seed.runId !== undefined) {
           const loaded = await loadStoredRun(client, seed.runId);
+          const lockedSeedRow = await findSeedRequest(client, seedRequestId, true);
+          if (lockedSeedRow === undefined) {
+            return undefined;
+          }
+          const lockedSeed = mapValidSeedRequest(lockedSeedRow);
+          if (lockedSeed.status !== "processing" || lockedSeed.runId !== seed.runId) {
+            return undefined;
+          }
           if (loaded.status === "ready") {
             await client.query(
               `
@@ -213,6 +210,25 @@ export function createPostgresMemoryExtractionRepository({
             );
             return loaded.run;
           }
+          return undefined;
+        }
+        const lockedSeedRow = await findSeedRequest(client, seedRequestId, true);
+        if (lockedSeedRow === undefined) {
+          return undefined;
+        }
+        seed = mapValidSeedRequest(lockedSeedRow);
+        if (seed.status !== "pending") {
+          return undefined;
+        }
+        if (!isReadableText(lockedSeedRow.message_text)) {
+          await client.query(
+            `
+            UPDATE group_memory_extraction_requests
+            SET status = 'skipped', skip_reason = 'unreadable_message', updated_at = NOW()
+            WHERE id = $1 AND status = 'pending'
+            `,
+            [seedRequestId],
+          );
           return undefined;
         }
 
@@ -233,7 +249,7 @@ export function createPostgresMemoryExtractionRepository({
            AND cm.provider_message_id = r.provider_message_id
           WHERE r.group_id = $1
             AND r.status = 'pending'
-            AND cm.text IS NOT NULL
+            AND NULLIF(BTRIM(cm.text), '') IS NOT NULL
           ORDER BY cm.created_at ASC, cm.id ASC
           LIMIT $2
           FOR UPDATE OF r SKIP LOCKED
@@ -254,7 +270,7 @@ export function createPostgresMemoryExtractionRepository({
           SELECT cm.id, cm.chat_id, cm.sender_id, cm.text, cm.sent_at, cm.created_at
           FROM conversation_messages cm
           WHERE cm.chat_id = $1
-            AND cm.text IS NOT NULL
+            AND NULLIF(BTRIM(cm.text), '') IS NOT NULL
             AND (cm.created_at, cm.id) < ($2, $3)
             AND NOT (cm.id = ANY($4::text[]))
           ORDER BY cm.created_at DESC, cm.id DESC
@@ -408,6 +424,15 @@ export function createPostgresMemoryExtractionRepository({
       const runId = requireBoundedString("runId", rawInput.runId, MAX_IDENTIFIER_CHARS);
       const reason = requireBoundedString("reason", rawInput.reason, MAX_CLASSIFICATION_CHARS);
       await withTransaction(dataSource, async (client) => {
+        await client.query(
+          `
+          SELECT id
+          FROM group_memory_extraction_runs
+          WHERE id = $1
+          FOR UPDATE
+          `,
+          [runId],
+        );
         await client.query(
           `
           UPDATE group_memory_extraction_requests
@@ -595,6 +620,39 @@ async function loadStoredRun(
   };
 }
 
+async function findSeedRequest(
+  queryable: Queryable,
+  seedRequestId: string,
+  lock: boolean,
+): Promise<SeedRequestRow | undefined> {
+  const result = await queryable.query<SeedRequestRow>(
+    `
+    SELECT
+      r.*,
+      cm.chat_id AS message_group_id,
+      cm.provider_message_id AS message_provider_id,
+      cm.text AS message_text
+    FROM group_memory_extraction_requests r
+    JOIN conversation_messages cm ON cm.id = r.conversation_message_id
+    WHERE r.id = $1
+    ${lock ? "FOR UPDATE OF r SKIP LOCKED" : ""}
+    `,
+    [seedRequestId],
+  );
+  return result.rows[0];
+}
+
+function mapValidSeedRequest(row: SeedRequestRow): MemoryExtractionRequest {
+  const seed = mapRequest(row);
+  if (
+    seed.groupId !== requireString("message group id", row.message_group_id) ||
+    seed.providerMessageId !== requireString("message provider id", row.message_provider_id)
+  ) {
+    throw new Error("extraction request does not match conversation message");
+  }
+  return seed;
+}
+
 function messageRowIsCurrent(row: MessageRow, groupId: string, evidenceEligible: boolean): boolean {
   if (
     typeof row.id !== "string" ||
@@ -730,6 +788,10 @@ function requireRequestStatus(value: unknown): MemoryExtractionRequestStatus {
   throw new Error("invalid memory extraction request status");
 }
 
+function isReadableText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function requireBoundedString(fieldName: string, value: string, maxChars: number): string {
   const normalized = requireString(fieldName, value);
   if (normalized.length > maxChars) {
@@ -773,16 +835,20 @@ async function withTransaction<T>(
   operation: (client: TransactionClient) => Promise<T>,
 ): Promise<T> {
   const client = await dataSource.connect();
-  await client.query("BEGIN");
+  let transactionStarted = false;
   try {
+    await client.query("BEGIN");
+    transactionStarted = true;
     const result = await operation(client);
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch {
-      // Preserve the operation failure.
+    if (transactionStarted) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Preserve the operation failure.
+      }
     }
     throw error;
   } finally {

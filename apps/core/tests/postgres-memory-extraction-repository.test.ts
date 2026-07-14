@@ -1,13 +1,207 @@
 import { randomUUID } from "node:crypto";
 
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
-import { createPostgresMemoryExtractionRepository } from "../src/memory-extraction/postgres-memory-extraction-repository.js";
+import {
+  createPostgresMemoryExtractionRepository,
+  type PostgresMemoryExtractionDataSource,
+  type TransactionClient,
+} from "../src/memory-extraction/postgres-memory-extraction-repository.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
+
+describe("createPostgresMemoryExtractionRepository", () => {
+  it("requires non-blank text in registration, evidence, and context SQL", async () => {
+    const source = fakeDataSource((sql) => {
+      const normalized = normalizeSql(sql);
+      if (normalized.includes("where r.id = $1")) {
+        return { rows: [seedRequestRow({ messageText: "Readable seed" })] };
+      }
+      if (normalized.includes("and r.status = 'pending'")) {
+        return { rows: [evidenceMessageRow()] };
+      }
+      if (normalized.includes("from conversation_messages cm")) {
+        return { rows: [] };
+      }
+      if (normalized.includes("from group_memories")) {
+        return { rows: [] };
+      }
+      if (normalized.includes("insert into group_memory_extraction_runs")) {
+        return {
+          rows: [
+            {
+              id: "run-1",
+              group_id: "chat-a",
+              input_fingerprint: "f".repeat(64),
+              status: "processing",
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
+
+    await repository.claimRun({
+      seedRequestId: "request-1",
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 10,
+      activeMemoryLimit: 8,
+    });
+
+    const evidenceSql = source.sql.find((sql) => normalizeSql(sql).includes("and r.status = 'pending'"));
+    const contextSql = source.sql.find((sql) =>
+      normalizeSql(sql).includes("and (cm.created_at, cm.id) <"),
+    );
+    expect(normalizeSql(evidenceSql ?? "")).toContain(
+      "nullif(btrim(cm.text), '') is not null",
+    );
+    expect(normalizeSql(contextSql ?? "")).toContain(
+      "nullif(btrim(cm.text), '') is not null",
+    );
+
+    const registrationSource = fakeDataSource(() => ({ rows: [] }));
+    const registrationRepository = createPostgresMemoryExtractionRepository({
+      dataSource: registrationSource.dataSource,
+    });
+    await expect(
+      registrationRepository.registerRequest({
+        groupId: "chat-a",
+        conversationMessageId: "feishu:blank",
+        providerMessageId: "blank",
+      }),
+    ).rejects.toThrow();
+    expect(normalizeSql(registrationSource.sql[0] ?? "")).toContain(
+      "nullif(btrim(cm.text), '') is not null",
+    );
+  });
+
+  it("skips an unreadable seed without claiming another pending request", async () => {
+    const source = fakeDataSource((sql) => {
+      const normalized = normalizeSql(sql);
+      if (normalized.includes("where r.id = $1")) {
+        return { rows: [seedRequestRow({ messageText: "   " })] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
+
+    await expect(
+      repository.claimRun({
+        seedRequestId: "request-1",
+        maxEvidenceMessages: 40,
+        contextMessageLimit: 10,
+        activeMemoryLimit: 8,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(source.sql.map(normalizeSql)).toContainEqual(
+      expect.stringContaining("set status = 'skipped', skip_reason = 'unreadable_message'"),
+    );
+    expect(source.sql.map(normalizeSql)).not.toContainEqual(
+      expect.stringContaining("and r.status = 'pending'"),
+    );
+  });
+
+  it("locks an existing run before request rows in every same-run transaction", async () => {
+    const staleSource = fakeDataSource((sql) => {
+      const normalized = normalizeSql(sql);
+      if (normalized.includes("from group_memory_extraction_runs") && normalized.includes("for update")) {
+        return {
+          rows: [
+            {
+              id: "run-1",
+              group_id: "chat-a",
+              input_fingerprint: "f".repeat(64),
+              status: "processing",
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const staleRepository = createPostgresMemoryExtractionRepository({
+      dataSource: staleSource.dataSource,
+    });
+    await staleRepository.loadRunInput("run-1");
+
+    expectRunLockBeforeRequestLock(staleSource.sql);
+
+    const skipSource = fakeDataSource(() => ({ rows: [] }));
+    const skipRepository = createPostgresMemoryExtractionRepository({
+      dataSource: skipSource.dataSource,
+    });
+    await skipRepository.skipRun({ runId: "run-1", reason: "policy_denied" });
+
+    expectRunLockBeforeRequestLock(skipSource.sql);
+
+    const claimSource = fakeDataSource((sql) => {
+      const normalized = normalizeSql(sql);
+      if (normalized.includes("from group_memory_extraction_runs") && normalized.includes("for update")) {
+        return {
+          rows: [
+            {
+              id: "run-1",
+              group_id: "chat-a",
+              input_fingerprint: "f".repeat(64),
+              status: "completed",
+            },
+          ],
+        };
+      }
+      if (normalized.includes("where r.id = $1")) {
+        return {
+          rows: [
+            seedRequestRow({
+              status: "processing",
+              runId: "run-1",
+              messageText: "Readable seed",
+            }),
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const claimRepository = createPostgresMemoryExtractionRepository({
+      dataSource: claimSource.dataSource,
+    });
+    await claimRepository.claimRun({
+      seedRequestId: "request-1",
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 10,
+      activeMemoryLimit: 8,
+    });
+
+    expectRunLockBeforeRequestLock(claimSource.sql);
+  });
+
+  it("releases the transaction client when BEGIN fails", async () => {
+    const beginError = new Error("begin failed");
+    const release = vi.fn();
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === "BEGIN") {
+          throw beginError;
+        }
+        return { rows: [] };
+      }),
+      release,
+    } as unknown as TransactionClient;
+    const dataSource = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn(async () => client),
+    } as unknown as PostgresMemoryExtractionDataSource;
+    const repository = createPostgresMemoryExtractionRepository({ dataSource });
+
+    await expect(
+      repository.skipRun({ runId: "run-1", reason: "policy_denied" }),
+    ).rejects.toBe(beginError);
+    expect(release).toHaveBeenCalledOnce();
+  });
+});
 
 runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
   let pool: pg.Pool | undefined;
@@ -24,6 +218,10 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
     (_, index) => `feishu:extraction-evidence-${index.toString().padStart(2, "0")}-${suffix}`,
   );
   const otherGroupMessageId = `feishu:extraction-other-${suffix}`;
+  const unreadableGroup = `extraction-unreadable-${suffix}`;
+  const nullTextMessageId = `feishu:extraction-null-text-${suffix}`;
+  const blankTextMessageId = `feishu:extraction-blank-text-${suffix}`;
+  const readablePeerMessageId = `feishu:extraction-readable-peer-${suffix}`;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: databaseUrl });
@@ -75,6 +273,34 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
       ],
     );
 
+    await pool.query(
+      `
+      INSERT INTO conversation_messages (
+        id, provider, provider_message_id, chat_id, sender_id,
+        message_type, text, sent_at, raw_event_idempotency_key, created_at
+      )
+      VALUES
+        ($1, 'feishu', $2, $3, 'alice', 'text', NULL, $4, $5, $4),
+        ($6, 'feishu', $7, $3, 'alice', 'text', '   ', $8, $9, $8),
+        ($10, 'feishu', $11, $3, 'bob', 'text', 'Readable peer', $12, $13, $12)
+      `,
+      [
+        nullTextMessageId,
+        `provider-${nullTextMessageId}`,
+        unreadableGroup,
+        new Date("2026-07-14T03:00:00.000Z"),
+        `event-${nullTextMessageId}`,
+        blankTextMessageId,
+        `provider-${blankTextMessageId}`,
+        new Date("2026-07-14T03:01:00.000Z"),
+        `event-${blankTextMessageId}`,
+        readablePeerMessageId,
+        `provider-${readablePeerMessageId}`,
+        new Date("2026-07-14T03:02:00.000Z"),
+        `event-${readablePeerMessageId}`,
+      ],
+    );
+
     for (let index = 0; index < 10; index += 1) {
       await pool.query(
         `
@@ -104,18 +330,27 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
     }
     try {
       await pool.query(
+        `
+        DELETE FROM group_memory_extraction_run_evidence
+        WHERE run_id IN (
+          SELECT id FROM group_memory_extraction_runs WHERE group_id = ANY($1::text[])
+        )
+        `,
+        [[...groupIds, unreadableGroup]],
+      );
+      await pool.query(
         "DELETE FROM group_memory_extraction_requests WHERE group_id = ANY($1::text[])",
-        [groupIds],
+        [[...groupIds, unreadableGroup]],
       );
       await pool.query(
         "DELETE FROM group_memory_extraction_runs WHERE group_id = ANY($1::text[])",
-        [groupIds],
+        [[...groupIds, unreadableGroup]],
       );
       await pool.query("DELETE FROM group_memories WHERE group_id = ANY($1::text[])", [
         groupIds,
       ]);
       await pool.query("DELETE FROM conversation_messages WHERE chat_id = ANY($1::text[])", [
-        groupIds,
+        [...groupIds, unreadableGroup],
       ]);
     } finally {
       await pool.end();
@@ -161,6 +396,70 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
         providerMessageId: `provider-${evidenceIds[2]}`,
       }),
     ).rejects.toThrow("conversation message does not match extraction request");
+  });
+
+  it("rejects registration for null or blank message text", async () => {
+    const repository = createRepository(pool);
+
+    for (const messageId of [nullTextMessageId, blankTextMessageId]) {
+      await expect(
+        repository.registerRequest({
+          groupId: unreadableGroup,
+          conversationMessageId: messageId,
+          providerMessageId: `provider-${messageId}`,
+        }),
+      ).rejects.toThrow();
+    }
+
+    const result = await pool!.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM group_memory_extraction_requests WHERE group_id = $1",
+      [unreadableGroup],
+    );
+    expect(result.rows).toEqual([{ count: 0 }]);
+  });
+
+  it("skips an unreadable legacy seed without claiming its readable peer", async () => {
+    const repository = createRepository(pool);
+    const badRequestId = `unreadable-request-${suffix}`;
+    await pool!.query(
+      `
+      INSERT INTO group_memory_extraction_requests (
+        id, group_id, conversation_message_id, provider_message_id, status
+      )
+      VALUES ($1, $2, $3, $4, 'pending')
+      `,
+      [badRequestId, unreadableGroup, blankTextMessageId, `provider-${blankTextMessageId}`],
+    );
+    const peer = await repository.registerRequest({
+      groupId: unreadableGroup,
+      conversationMessageId: readablePeerMessageId,
+      providerMessageId: `provider-${readablePeerMessageId}`,
+    });
+
+    await expect(
+      repository.claimRun({
+        seedRequestId: badRequestId,
+        maxEvidenceMessages: 40,
+        contextMessageLimit: 10,
+        activeMemoryLimit: 8,
+      }),
+    ).resolves.toBeUndefined();
+
+    const requests = await pool!.query<{ id: string; status: string; skip_reason: string | null }>(
+      `SELECT id, status, skip_reason FROM group_memory_extraction_requests WHERE group_id = $1 ORDER BY id`,
+      [unreadableGroup],
+    );
+    expect(requests.rows).toEqual(
+      expect.arrayContaining([
+        { id: badRequestId, status: "skipped", skip_reason: "unreadable_message" },
+        { id: peer.request.id, status: "pending", skip_reason: null },
+      ]),
+    );
+    await expect(
+      pool!.query("SELECT count(*)::int AS count FROM group_memory_extraction_runs WHERE group_id = $1", [
+        unreadableGroup,
+      ]),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
   });
 
   it("claims a bounded cursor-ordered run without crossing groups", async () => {
@@ -292,4 +591,71 @@ function createRepository(pool: pg.Pool | undefined) {
     throw new Error("Expected Postgres pool to be initialized");
   }
   return createPostgresMemoryExtractionRepository({ dataSource: pool });
+}
+
+function fakeDataSource(handler: (sql: string, params?: unknown[]) => { rows: unknown[] }) {
+  const sql: string[] = [];
+  const query = vi.fn(async (statement: string, params?: unknown[]) => {
+    sql.push(statement);
+    return handler(statement, params);
+  });
+  const client = { query, release: vi.fn() } as unknown as TransactionClient;
+  const dataSource = {
+    query,
+    connect: vi.fn(async () => client),
+  } as unknown as PostgresMemoryExtractionDataSource;
+  return { dataSource, sql };
+}
+
+function seedRequestRow(input: {
+  messageText: string | null;
+  status?: "pending" | "processing";
+  runId?: string;
+}) {
+  return {
+    id: "request-1",
+    group_id: "chat-a",
+    conversation_message_id: "feishu:message-1",
+    provider_message_id: "message-1",
+    status: input.status ?? "pending",
+    run_id: input.runId ?? null,
+    skip_reason: null,
+    created_at: new Date("2026-07-14T00:00:00.000Z"),
+    updated_at: new Date("2026-07-14T00:00:00.000Z"),
+    message_group_id: "chat-a",
+    message_provider_id: "message-1",
+    message_text: input.messageText,
+  };
+}
+
+function evidenceMessageRow() {
+  return {
+    request_id: "request-1",
+    id: "feishu:message-1",
+    chat_id: "chat-a",
+    sender_id: "alice",
+    text: "Readable seed",
+    sent_at: new Date("2026-07-14T00:00:00.000Z"),
+    created_at: new Date("2026-07-14T00:00:00.000Z"),
+  };
+}
+
+function expectRunLockBeforeRequestLock(sql: string[]): void {
+  const normalized = sql.map(normalizeSql);
+  const runLockIndex = normalized.findIndex(
+    (statement) =>
+      statement.includes("from group_memory_extraction_runs") &&
+      statement.includes("for update"),
+  );
+  const requestLockIndex = normalized.findIndex(
+    (statement) =>
+      statement.includes("group_memory_extraction_requests") &&
+      (statement.includes("for update") || statement.startsWith("update")),
+  );
+  expect(runLockIndex).toBeGreaterThanOrEqual(0);
+  expect(requestLockIndex).toBeGreaterThan(runLockIndex);
+}
+
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/gu, " ").trim().toLowerCase();
 }
