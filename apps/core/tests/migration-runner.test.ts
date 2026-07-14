@@ -275,4 +275,34 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("alter column request_fingerprint set not null");
     expect(normalized).toContain("request_fingerprint ~ '^[0-9a-f]{64}$'");
   });
+
+  it("includes durable group-memory extraction requests and runs after request fingerprints", async () => {
+    const migrationNames = (await readdir(defaultMigrationsDir())).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const fingerprintIndex = migrationNames.indexOf(
+      "0018_group_memory_request_fingerprints.sql",
+    );
+    const extractionIndex = migrationNames.indexOf("0019_group_memory_extraction.sql");
+
+    expect(fingerprintIndex).toBeGreaterThanOrEqual(0);
+    expect(extractionIndex).toBeGreaterThan(fingerprintIndex);
+
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0019_group_memory_extraction.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table group_memory_extraction_requests");
+    expect(normalized).toContain("create table group_memory_extraction_runs");
+    expect(normalized).toContain("unique (conversation_message_id)");
+    expect(normalized).toContain("unique (input_fingerprint)");
+    expect(normalized).toContain("status in ('pending', 'processing', 'completed', 'skipped')");
+    expect(normalized).toContain("status in ('processing', 'completed', 'failed')");
+    expect(normalized).toContain(
+      "conversation_message_id text not null references conversation_messages(id) on delete restrict",
+    );
+    expect(normalized).toContain("content_hash ~ '^[0-9a-f]{64}$'");
+  });
 });
