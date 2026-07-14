@@ -9,7 +9,7 @@
     "build": "npm --workspace apps/core run build",
     "pilot:config": "docker compose --env-file deploy/pilot/ci.env --file deploy/pilot/docker-compose.yml config",
     "pilot:smoke": "node scripts/pilot-smoke.mjs",
-    "test:pilot": "node --test scripts/pilot-smoke-lib.test.mjs scripts/pilot-compose.test.mjs scripts/pilot-operations.test.mjs scripts/pilot-backup-behavior.test.mjs scripts/pilot-restore-behavior.test.mjs",
+    "test:pilot": "node --test --test-concurrency=1 scripts/pilot-smoke-lib.test.mjs scripts/pilot-compose.test.mjs scripts/pilot-operations.test.mjs scripts/pilot-backup-behavior.test.mjs scripts/pilot-restore-behavior.test.mjs",
     "readiness": "npm --workspace apps/core run readiness --",
     "test": "npm --workspace apps/core test",
     "test:python": "cd workers/ai && python -m pytest",
