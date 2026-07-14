@@ -134,6 +134,29 @@ jobs:
             sleep 1
           done
           test "$callback_status" = 200
+          queues_drained=false
+          for _ in $(seq 1 75); do
+            if "${compose[@]}" exec -T core node --input-type=module --eval '
+              const response = await fetch("http://127.0.0.1:3000/internal/status", {
+                headers: { authorization: "Bearer " + process.env.IRIS_INTERNAL_API_TOKEN },
+              });
+              if (!response.ok) process.exit(1);
+              const body = await response.json();
+              const queues = [
+                [body.components?.eventWorker, ["pendingEventCount", "deadLetterEventCount"]],
+                [body.components?.documentSync, ["pendingJobCount", "deadLetterJobCount"]],
+                [body.components?.reindex, ["pendingJobCount", "deadLetterJobCount"]],
+              ];
+              if (queues.some(([component, countNames]) =>
+                component?.ok !== true || countNames.some((name) => component[name] !== 0)
+              )) process.exit(1);
+            '; then
+              queues_drained=true
+              break
+            fi
+            sleep 1
+          done
+          test "$queues_drained" = true
           npm run pilot:smoke
 
       - name: Show pilot logs on failure

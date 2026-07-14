@@ -260,6 +260,23 @@ test("CI keeps the pilot queues empty before the backup drill", () => {
   );
 });
 
+test("CI waits for queue drain after Redis recovery before ordinary smoke", () => {
+  const workflow = readFileSync(ciWorkflowPath, "utf8");
+  const redisRecovery = workflow.indexOf(
+    "- name: Reject callbacks while Redis ingress is unavailable",
+  );
+  const ordinarySmoke = workflow.indexOf("npm run pilot:smoke", redisRecovery);
+  const recoveryGate = workflow.slice(redisRecovery, ordinarySmoke);
+
+  assert.ok(redisRecovery >= 0);
+  assert.ok(ordinarySmoke > redisRecovery);
+  assert.match(recoveryGate, /pendingEventCount/u);
+  assert.match(recoveryGate, /pendingJobCount/u);
+  assert.match(recoveryGate, /deadLetterEventCount/u);
+  assert.match(recoveryGate, /deadLetterJobCount/u);
+  assert.match(recoveryGate, /test "\$queues_drained" = true/u);
+});
+
 test("restore requires confirmation and fails closed through transactional restore", () => {
   const script = readFileSync(restorePath, "utf8");
   assert.match(script, /--confirm-replace-database/u);
