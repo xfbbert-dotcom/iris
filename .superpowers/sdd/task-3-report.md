@@ -95,4 +95,57 @@ Exit 0. Git emitted only the repository's existing LF-to-CRLF working-copy notic
 ## Concerns
 
 - The full suite's 13 skipped tests are existing environment-gated Postgres integration cases. Task 3 has unit coverage over its repository/queue contracts, but this run did not start an external Postgres service.
-- No unresolved Task 3 correctness or scope concern was found.
+- No unresolved Task 3 correctness or scope concern was known at the original commit; the later review finding and fix are recorded below.
+
+## Review Fix: Confirmed Sender Open ID
+
+### Finding
+
+The event parser persisted `senderId` by falling back from Feishu `open_id` to `union_id` and then `user_id`. The planner compared that namespace-erased value directly with `irisBotOpenId`, so an Iris-authored callback without a confirmed Open ID could be mistaken for a human message and schedule self-learning.
+
+### RED Evidence
+
+Before the production fix, this exact command exited 1:
+
+```powershell
+npm --workspace apps/core test -- tests/memory-extraction-planner.test.ts tests/feishu-message-event-processor.test.ts tests/event-worker-runtime.test.ts --reporter=dot
+```
+
+Observed result: 2 files failed, 4 tests failed, and 38 tests passed. The direct planner regressions scheduled both an exact Iris Open ID supplied in the new identity argument and an unconfirmed fallback identity. The processor regression showed no identity argument was propagated, and the real event-to-planner path registered 3 messages instead of only the confirmed human message.
+
+### GREEN Evidence
+
+Focused Task 3 tests:
+
+```powershell
+npm --workspace apps/core test -- tests/memory-extraction-planner.test.ts tests/feishu-message-event-processor.test.ts tests/event-worker-runtime.test.ts --reporter=dot
+```
+
+Exit 0: 3 files passed; 42 tests passed.
+
+Typecheck:
+
+```powershell
+npm --workspace apps/core run typecheck
+```
+
+Exit 0: `tsc --noEmit` completed without diagnostics.
+
+Full Core suite:
+
+```powershell
+npm --workspace apps/core test -- --reporter=dot
+```
+
+Exit 0: 80 files passed; 1,373 tests passed; 13 skipped; 1,386 total.
+
+### Implementation And Self-Review
+
+- Parsing now preserves a separately validated `senderOpenId` signal while retaining the existing `open_id` to `union_id` to `user_id` fallback for persisted `senderId`.
+- The processor strips `senderOpenId` before `upsertMessage`, so the persistence input and stored conversation-message contract are unchanged.
+- The persisted message and confirmed Open ID signal are passed separately to the planner.
+- With `irisBotOpenId` configured, an absent, blank, or exact Iris sender Open ID fails closed before runtime checks or durable registration. A confirmed non-Iris Open ID remains eligible.
+- End-to-end processor-to-planner coverage includes missing Open ID with Union ID fallback, missing Open ID with User ID fallback, exact Iris Open ID, and confirmed human Open ID.
+- Queue payload creation remains identifier-only through `createMemoryExtractionJob`; no message or sender content was added to queue payloads or diagnostics.
+- No event-runtime extraction resource ownership or unrelated Task 3 behavior changed.
+- No unresolved concern remains from this review finding.

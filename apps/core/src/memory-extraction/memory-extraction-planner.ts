@@ -6,7 +6,10 @@ import {
 import type { MemoryExtractionRepository } from "./memory-extraction-repository.js";
 
 export interface MemoryExtractionPlanner {
-  registerMessage(message: ConversationMessage): Promise<void>;
+  registerMessage(
+    message: ConversationMessage,
+    identity?: { senderOpenId?: string },
+  ): Promise<void>;
 }
 
 type MemoryExtractionRuntimeGate = {
@@ -22,11 +25,11 @@ export function createMemoryExtractionPlanner(input: {
   now?: () => Date;
 }): MemoryExtractionPlanner {
   return {
-    async registerMessage(message) {
+    async registerMessage(message, identity) {
       if (message.text === undefined || message.text.trim().length === 0) {
         return;
       }
-      if (shouldExcludeForBotIdentity(message.senderId, input.irisBotOpenId)) {
+      if (shouldExcludeForBotIdentity(identity?.senderOpenId, input.irisBotOpenId)) {
         return;
       }
       if (!input.runtimeController.canProcessIncomingEvent({ groupId: message.chatId })) {
@@ -53,7 +56,7 @@ export function createMemoryExtractionPlanner(input: {
 }
 
 function shouldExcludeForBotIdentity(
-  senderId: string | undefined,
+  senderOpenId: string | undefined,
   irisBotOpenId: string | undefined,
 ): boolean {
   if (irisBotOpenId === undefined) {
@@ -61,11 +64,11 @@ function shouldExcludeForBotIdentity(
   }
 
   const normalizedBotOpenId = irisBotOpenId.trim();
-  const normalizedSenderId = senderId?.trim();
+  const normalizedSenderOpenId = senderOpenId?.trim();
   return (
     normalizedBotOpenId.length === 0 ||
-    normalizedSenderId === undefined ||
-    normalizedSenderId.length === 0 ||
-    normalizedSenderId === normalizedBotOpenId
+    normalizedSenderOpenId === undefined ||
+    normalizedSenderOpenId.length === 0 ||
+    normalizedSenderOpenId === normalizedBotOpenId
   );
 }

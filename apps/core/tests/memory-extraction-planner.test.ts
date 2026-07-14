@@ -21,7 +21,7 @@ describe("MemoryExtractionPlanner", () => {
       now: () => now,
     });
 
-    await planner.registerMessage(message());
+    await planner.registerMessage(message(), { senderOpenId: "user-open-id" });
 
     expect(repository.registerRequest).toHaveBeenCalledWith({
       groupId: "chat-a",
@@ -61,8 +61,8 @@ describe("MemoryExtractionPlanner", () => {
 
   it.each([
     ["the Iris bot", "iris-bot-open-id"],
-    ["an unattributed sender", undefined],
-  ])("fails closed for %s when bot identity is configured", async (_label, senderId) => {
+    ["an unconfirmed Open ID", undefined],
+  ])("fails closed for %s when bot identity is configured", async (_label, senderOpenId) => {
     const repository = {
       registerRequest: vi.fn(async () => ({ request: extractionRequest(), created: true })),
     };
@@ -75,7 +75,7 @@ describe("MemoryExtractionPlanner", () => {
       irisBotOpenId: "iris-bot-open-id",
     });
 
-    await planner.registerMessage(message({ senderId }));
+    await planner.registerMessage(message({ senderId: "fallback-identity" }), { senderOpenId });
 
     expect(repository.registerRequest).not.toHaveBeenCalled();
     expect(queue.enqueue).not.toHaveBeenCalled();

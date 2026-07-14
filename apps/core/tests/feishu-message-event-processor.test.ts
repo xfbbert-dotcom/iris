@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createFeishuMessageEventProcessor } from "../src/conversation/feishu-message-event-processor.js";
 import type { RawEvent } from "../src/events/raw-event-queue.js";
+import { createMemoryExtractionPlanner } from "../src/memory-extraction/memory-extraction-planner.js";
 
 describe("FeishuMessageEventProcessor", () => {
   it("persists text Feishu message events", async () => {
@@ -93,7 +94,108 @@ describe("FeishuMessageEventProcessor", () => {
     await processor.process(rawEventFixture());
 
     expect(calls).toEqual(["reply", "persist", "plan", "documents"]);
-    expect(memoryExtractionPlanner.registerMessage).toHaveBeenCalledWith(persistedMessage);
+    expect(memoryExtractionPlanner.registerMessage).toHaveBeenCalledWith(persistedMessage, {
+      senderOpenId: "open-1",
+    });
+  });
+
+  it("plans only messages with a confirmed non-Iris sender Open ID", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: `feishu:${input.providerMessageId}`,
+        createdAt: new Date("2026-07-02T01:00:01.000Z"),
+        ...input,
+      })),
+    };
+    const repository = {
+      registerRequest: vi.fn(async (input) => ({
+        request: {
+          id: `request:${input.providerMessageId}`,
+          groupId: input.groupId,
+          conversationMessageId: input.conversationMessageId,
+          providerMessageId: input.providerMessageId,
+          status: "pending" as const,
+          createdAt: new Date("2026-07-02T01:00:02.000Z"),
+          updatedAt: new Date("2026-07-02T01:00:02.000Z"),
+        },
+        created: true,
+      })),
+    };
+    const queue = { enqueue: vi.fn(async (_job: unknown) => undefined) };
+    const memoryExtractionPlanner = createMemoryExtractionPlanner({
+      repository,
+      queue,
+      runtimeController: {
+        canProcessIncomingEvent: vi.fn(() => true),
+        canReadGroupContext: vi.fn(() => true),
+      },
+      irisBotOpenId: "iris-bot-open-id",
+      now: () => new Date("2026-07-02T01:00:03.000Z"),
+    });
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      memoryExtractionPlanner,
+    });
+    const senderCases = [
+      {
+        messageId: "union-message",
+        senderIds: { union_id: "union-iris-fallback" },
+        persistedSenderId: "union-iris-fallback",
+      },
+      {
+        messageId: "user-message",
+        senderIds: { user_id: "user-iris-fallback" },
+        persistedSenderId: "user-iris-fallback",
+      },
+      {
+        messageId: "iris-message",
+        senderIds: { open_id: "iris-bot-open-id", union_id: "union-iris" },
+        persistedSenderId: "iris-bot-open-id",
+      },
+      {
+        messageId: "human-message",
+        senderIds: { open_id: "human-open-id", union_id: "union-human" },
+        persistedSenderId: "human-open-id",
+      },
+    ];
+
+    for (const senderCase of senderCases) {
+      await processor.process(
+        rawEventFixture({
+          idempotencyKey: `raw-event:feishu:${senderCase.messageId}`,
+          rawBody: {
+            header: {
+              event_id: `event-${senderCase.messageId}`,
+              event_type: "im.message.receive_v1",
+            },
+            event: {
+              sender: { sender_id: senderCase.senderIds },
+              message: {
+                message_id: senderCase.messageId,
+                chat_id: "chat-1",
+                message_type: "text",
+                content: JSON.stringify({ text: "Eligible conversation text" }),
+                create_time: "1782925200000",
+              },
+            },
+          },
+        }),
+      );
+    }
+
+    expect(messages.upsertMessage.mock.calls.map(([input]) => input.senderId)).toEqual(
+      senderCases.map((senderCase) => senderCase.persistedSenderId),
+    );
+    expect(repository.registerRequest).toHaveBeenCalledOnce();
+    expect(repository.registerRequest).toHaveBeenCalledWith({
+      groupId: "chat-1",
+      conversationMessageId: "feishu:human-message",
+      providerMessageId: "human-message",
+    });
+    expect(queue.enqueue).toHaveBeenCalledOnce();
+    expect(queue.enqueue).toHaveBeenCalledWith(
+      expect.not.objectContaining({ text: expect.anything(), senderId: expect.anything() }),
+    );
   });
 
   it("attempts document discovery before surfacing an extraction planner failure", async () => {

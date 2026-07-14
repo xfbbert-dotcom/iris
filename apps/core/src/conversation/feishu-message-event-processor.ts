@@ -21,6 +21,7 @@ type RuntimeGate = {
 };
 type ParsedFeishuMessageEvent = UpsertConversationMessageInput & {
   mentions: FeishuMessageMention[];
+  senderOpenId?: string;
 };
 
 const MAX_FEISHU_IDENTIFIER_CHARS = 512;
@@ -70,13 +71,16 @@ export function createFeishuMessageEventProcessor({
         mentionResponseError = error;
       }
 
-      const { mentions: _mentions, ...messageFact } = parsed;
+      const { mentions: _mentions, senderOpenId, ...messageFact } = parsed;
       const persistedMessage = await messages.upsertMessage(messageFact);
 
       let memoryExtractionPlannerError: unknown;
       if (memoryExtractionPlanner !== undefined) {
         try {
-          await memoryExtractionPlanner.registerMessage(persistedMessage);
+          await memoryExtractionPlanner.registerMessage(
+            persistedMessage,
+            senderOpenId === undefined ? {} : { senderOpenId },
+          );
         } catch (error) {
           memoryExtractionPlannerError = error;
         }
@@ -161,12 +165,14 @@ function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | un
   if (providerMessageId.length === 0 || chatId.length === 0 || messageType.length === 0) {
     return undefined;
   }
+  const senderOpenId = readSenderOpenId(eventBody.sender);
 
   return {
     provider: "feishu",
     providerMessageId,
     chatId,
     senderId: readSenderId(eventBody.sender),
+    ...(senderOpenId === undefined ? {} : { senderOpenId }),
     messageType,
     text: truncateMessageText(readText(messageType, message.content)),
     mentions: readMentions(message.mentions),
@@ -221,10 +227,18 @@ function readSenderId(sender: unknown): string | undefined {
   }
 
   return (
-    readOptionalIdentifier(sender.sender_id.open_id) ??
+    readSenderOpenId(sender) ??
     readOptionalIdentifier(sender.sender_id.union_id) ??
     readOptionalIdentifier(sender.sender_id.user_id)
   );
+}
+
+function readSenderOpenId(sender: unknown): string | undefined {
+  if (!isRecord(sender) || !isRecord(sender.sender_id)) {
+    return undefined;
+  }
+
+  return readOptionalIdentifier(sender.sender_id.open_id);
 }
 
 function readText(messageType: string, content: unknown): string | undefined {
