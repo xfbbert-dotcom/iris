@@ -17,10 +17,14 @@ const KEYS = {
   seen: "iris:memory:extraction:seen",
   ready: "iris:memory:extraction:ready",
   readySet: "iris:memory:extraction:ready:ids",
+  readyIndex: "iris:memory:extraction:ready:index",
+  readySequence: "iris:memory:extraction:ready:sequence",
   readyCounts: "iris:memory:extraction:ready:counts",
   delayed: "iris:memory:extraction:delayed",
   processing: "iris:memory:extraction:processing",
   processingSequence: "iris:memory:extraction:processing:sequence",
+  recovery: "iris:memory:extraction:processing:recovery",
+  recoverySet: "iris:memory:extraction:processing:recovery:ids",
   state: "iris:memory:extraction:state",
   payloads: "iris:memory:extraction:payloads",
   members: "iris:memory:extraction:members",
@@ -139,7 +143,7 @@ describe("Redis memory extraction queue", () => {
 
     await queue.enqueue(job);
     const [claimed] = await queue.dequeueBatch(1, job.enqueuedAt);
-    client.pushList(KEYS.ready, serializeMemoryExtractionJob(job));
+    client.pushList(KEYS.ready, job.idempotencyKey);
 
     await expect(
       queue.handleFailedJob({ job: claimed!, errorMessage: "provider_timeout" }),
@@ -177,11 +181,54 @@ describe("Redis memory extraction queue", () => {
 
     await firstQueue.enqueue(job);
     await firstQueue.dequeueBatch(1, job.enqueuedAt);
-    client.pushList(KEYS.ready, payload);
+    client.pushList(KEYS.ready, job.idempotencyKey);
     await expect(firstQueue.dequeueBatch(1, job.enqueuedAt)).resolves.toEqual([]);
 
     const restartedQueue = createRedisMemoryExtractionQueue({ client });
     await expect(restartedQueue.dequeueBatch(1, job.enqueuedAt)).resolves.toEqual([job]);
+  });
+
+  it("repairs a missing reverse member before claiming ready work", async () => {
+    const client = new StatefulRedisClient();
+    const job = jobFixture({ requestId: "request-ready-no-reverse" });
+    const payload = serializeMemoryExtractionJob(job);
+    const queue = createRedisMemoryExtractionQueue({ client });
+    await queue.enqueue(job);
+    client.deleteHash(KEYS.members, payload);
+
+    await expect(queue.dequeueBatch(1, job.enqueuedAt)).resolves.toEqual([job]);
+    expect(await queue.getPendingCount()).toBe(0);
+    expect(await queue.getDeadLetterCount()).toBe(0);
+  });
+
+  it("repairs a missing reverse member before promoting delayed work", async () => {
+    const client = new StatefulRedisClient();
+    const enqueuedAt = jobFixture().enqueuedAt;
+    const dueAt = new Date(enqueuedAt.getTime() + 60_000);
+    const job = { ...jobFixture({ requestId: "request-delayed-no-reverse" }), notBefore: dueAt };
+    const payload = serializeMemoryExtractionJob(job);
+    const queue = createRedisMemoryExtractionQueue({ client, now: () => enqueuedAt });
+    await queue.enqueue(job);
+    client.deleteHash(KEYS.members, payload);
+
+    await expect(queue.dequeueBatch(1, dueAt)).resolves.toEqual([job]);
+    expect(await queue.getDelayedCount()).toBe(0);
+    expect(await queue.getDeadLetterCount()).toBe(0);
+  });
+
+  it("repairs a missing reverse member before recovering processing work", async () => {
+    const client = new StatefulRedisClient();
+    const job = jobFixture({ requestId: "request-processing-no-reverse" });
+    const payload = serializeMemoryExtractionJob(job);
+    const firstQueue = createRedisMemoryExtractionQueue({ client });
+    await firstQueue.enqueue(job);
+    await firstQueue.dequeueBatch(1, job.enqueuedAt);
+    client.deleteHash(KEYS.members, payload);
+
+    const restartedQueue = createRedisMemoryExtractionQueue({ client });
+    await expect(restartedQueue.dequeueBatch(1, job.enqueuedAt)).resolves.toEqual([job]);
+    expect(await restartedQueue.getProcessingCount()).toBe(1);
+    expect(await restartedQueue.getDeadLetterCount()).toBe(0);
   });
 
   it("recovers startup processing once without reclaiming active work on later dequeues", async () => {
@@ -215,9 +262,9 @@ describe("Redis memory extraction queue", () => {
       script.includes("memory-extraction:recover-processing"),
     )?.[0];
     expect(recoveryScript).toContain(
-      '"ZRANGEBYSCORE", KEYS[1], "-inf", "+inf", "LIMIT", 0, ARGV[1]',
+      '"ZRANGEBYSCORE", KEYS[1], "-inf", "+inf", "WITHSCORES", "LIMIT", 0, ARGV[1]',
     );
-    expect(recoveryScript).toContain('redis.call("ZREM", KEYS[1], payload)');
+    expect(recoveryScript).toContain('redis.call("ZREM", KEYS[1], idempotency_key)');
   });
 
   it("continues bounded startup recovery until all abandoned processing is reclaimed", async () => {
@@ -266,6 +313,37 @@ describe("Redis memory extraction queue", () => {
     expect(recovered.map((job) => job.requestId)).toEqual(jobs.map((job) => job.requestId));
   });
 
+  it("prioritizes all recovery pages ahead of existing and concurrent ready work", async () => {
+    const client = new StatefulRedisClient();
+    const claimedAt = jobFixture().enqueuedAt;
+    const abandoned = Array.from({ length: 101 }, (_, index) =>
+      jobFixture({ requestId: `request-recovery-priority-${String(index + 1).padStart(3, "0")}` }),
+    );
+    const existingPending = jobFixture({ requestId: "request-existing-pending" });
+    const concurrentPending = jobFixture({ requestId: "request-concurrent-pending" });
+    const firstQueue = createRedisMemoryExtractionQueue({ client, now: () => claimedAt });
+    for (const job of abandoned) {
+      await firstQueue.enqueue(job);
+    }
+    await firstQueue.dequeueBatch(100, claimedAt);
+    await firstQueue.dequeueBatch(1, claimedAt);
+    await firstQueue.enqueue(existingPending);
+
+    const restartedQueue = createRedisMemoryExtractionQueue({ client, now: () => claimedAt });
+    await expect(restartedQueue.dequeueBatch(100, claimedAt)).resolves.toEqual([]);
+    await restartedQueue.enqueue(concurrentPending);
+
+    const dequeued = [
+      ...(await restartedQueue.dequeueBatch(100, claimedAt)),
+      ...(await restartedQueue.dequeueBatch(3, claimedAt)),
+    ];
+    expect(dequeued.map((job) => job.requestId)).toEqual([
+      ...abandoned.map((job) => job.requestId),
+      existingPending.requestId,
+      concurrentPending.requestId,
+    ]);
+  });
+
   it("moves corrupt payloads to a bounded diagnostic DLQ without retaining their contents", async () => {
     const client = new StatefulRedisClient();
     const corruptPayload = JSON.stringify({
@@ -295,6 +373,10 @@ describe("Redis memory extraction queue", () => {
       replayable: false,
     });
     expect(JSON.stringify(deadLetter)).not.toContain("sensitive message body");
+    const diagnosticAck = client.eval.mock.calls.find(([script]) =>
+      script.includes("memory-extraction:ack-dead-letter"),
+    );
+    expect(diagnosticAck?.[1].arguments[3]).not.toContain("sensitive message body");
     await expect(queue.replayDeadLetter("dlq-corrupt")).resolves.toBe(
       "unsupported_legacy_item",
     );
@@ -453,8 +535,8 @@ describe("Redis memory extraction queue", () => {
 
     await queue.enqueue(job);
     const [claimed] = await queue.dequeueBatch(1, job.enqueuedAt);
-    client.pushList(KEYS.ready, serializeMemoryExtractionJob(job));
-    client.addSorted(KEYS.delayed, serializeMemoryExtractionJob(job), job.notBefore.getTime());
+    client.pushList(KEYS.ready, job.idempotencyKey);
+    client.addSorted(KEYS.delayed, job.idempotencyKey, job.notBefore.getTime());
 
     await queue.handleFailedJob({ job: claimed!, errorMessage: "provider_auth_failed" });
 
@@ -523,15 +605,18 @@ describe("Redis memory extraction queue", () => {
     expect(replayCall?.[1].keys).toEqual([
       KEYS.seen,
       KEYS.ready,
+      KEYS.readyIndex,
       KEYS.readySet,
       KEYS.delayed,
       KEYS.processing,
+      KEYS.recoverySet,
       KEYS.state,
       KEYS.payloads,
       KEYS.members,
       KEYS.dlqIndex,
       KEYS.dlqOrder,
       KEYS.readyCounts,
+      KEYS.readySequence,
     ]);
   });
 
@@ -565,6 +650,64 @@ describe("Redis memory extraction queue", () => {
       { ...job, notBefore: replayedAt },
     ]);
     expect(await queue.getDeadLetterCount()).toBe(0);
+  });
+
+  it("drains valid ready duplicates independently of missing, low, or high counts", async () => {
+    const paths = ["success", "retry", "terminal", "replay"] as const;
+    const drifts = ["missing", "low", "high"] as const;
+
+    for (const path of paths) {
+      for (const drift of drifts) {
+        const client = new StatefulRedisClient();
+        const job = jobFixture();
+        const payload = serializeMemoryExtractionJob(job);
+        const queue = createRedisMemoryExtractionQueue({
+          client,
+          maxAttempts: path === "terminal" ? 1 : 5,
+          now: () => job.enqueuedAt,
+          idGenerator: () => `dlq-${path}-${drift}`,
+        });
+
+        let claimed: MemoryExtractionJob | undefined;
+        if (path === "replay") {
+          client.pushDeadLetter(deadLetterPayload("dlq-replay-source"));
+          client.pushReadyPayload(payload, job.idempotencyKey);
+          client.pushReadyDuplicate(payload);
+        } else {
+          await queue.enqueue(job);
+          [claimed] = await queue.dequeueBatch(1, job.enqueuedAt);
+          client.pushReadyDuplicate(payload);
+          client.pushReadyDuplicate(payload);
+        }
+
+        if (drift === "missing") {
+          client.deleteHash(KEYS.readyCounts, payload);
+        } else {
+          client.setHash(KEYS.readyCounts, payload, drift === "low" ? "1" : "99");
+        }
+
+        if (path === "success") {
+          await queue.handleProcessedJob(claimed!);
+        } else if (path === "retry" || path === "terminal") {
+          await queue.handleFailedJob({ job: claimed!, errorMessage: "provider_timeout" });
+        } else {
+          await queue.replayDeadLetter("dlq-replay-source");
+        }
+
+        await queue.dequeueBatch(10, job.enqueuedAt);
+
+        const deadLetters = await queue.listDeadLetters({ limit: 10 });
+        expect(
+          deadLetters.filter((deadLetter) => !deadLetter.replayable),
+          `${path}/${drift} must not create a diagnostic DLQ`,
+        ).toEqual([]);
+        expect(deadLetters).toHaveLength(path === "terminal" ? 1 : 0);
+        expect(
+          client.hashValue(KEYS.readyCounts, payload),
+          `${path}/${drift} must clear count drift while draining`,
+        ).toBeUndefined();
+      }
+    }
   });
 
   it("deletes a direct DLQ id beyond the first 100 list entries", async () => {
@@ -609,6 +752,32 @@ describe("Redis memory extraction queue", () => {
       expect.objectContaining({ id: "dlq-active-1" }),
       expect.objectContaining({ id: "dlq-active-2" }),
     ]);
+  });
+
+  it("repairs stale DLQ order entries without hiding later active records", async () => {
+    const client = new StatefulRedisClient();
+    client.pushDeadLetter(deadLetterPayload("dlq-stale-order"));
+    client.pushDeadLetter(deadLetterPayload("dlq-active-order"));
+    client.deleteHash(KEYS.dlqIndex, "dlq-stale-order");
+    const queue = createRedisMemoryExtractionQueue({ client });
+
+    expect(await queue.getDeadLetterCount()).toBe(1);
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ id: "dlq-active-order" }),
+    ]);
+    expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual(["dlq-active-order"]);
+  });
+
+  it("repairs a hash-only DLQ record so count and bounded listing agree", async () => {
+    const client = new StatefulRedisClient();
+    client.setHash(KEYS.dlqIndex, "dlq-hash-only", deadLetterPayload("dlq-hash-only"));
+    const queue = createRedisMemoryExtractionQueue({ client });
+
+    expect(await queue.getDeadLetterCount()).toBe(1);
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ id: "dlq-hash-only" }),
+    ]);
+    expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual(["dlq-hash-only"]);
   });
 
   it("does not grow the legacy DLQ payload list for new terminal records", async () => {
@@ -819,7 +988,7 @@ describe("Redis memory extraction queue", () => {
   it("deduplicates batch replay ids and reports unsupported diagnostics", async () => {
     const client = new StatefulRedisClient();
     const corruptPayload = "{";
-    client.pushReadyPayload(corruptPayload, "corrupt-batch-claim");
+    client.pushReadyPayload(corruptPayload, "memory-extraction:corrupt-batch-claim");
     const queue = createRedisMemoryExtractionQueue({
       client,
       idGenerator: () => "dlq-diagnostic",
@@ -892,6 +1061,7 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
       if (script.includes("memory-extraction:ack-dead-letter")) return this.ackDeadLetter(options.keys, options.arguments);
       if (script.includes("memory-extraction:replay-dead-letter")) return this.replayDeadLetter(options.keys, options.arguments);
       if (script.includes("memory-extraction:delete-dead-letter")) return this.deleteDeadLetter(options.keys, options.arguments);
+      if (script.includes("memory-extraction:repair-dead-letter-order")) return this.repairDeadLetterOrder(options.keys, options.arguments);
       if (script.includes("memory-extraction:set-cooldown")) {
         const [key] = options.keys;
         const [milliseconds] = options.arguments;
@@ -918,6 +1088,18 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   );
   readonly hLen = vi.fn(async (key: string) => this.hash(key).size);
   readonly hGet = vi.fn(async (key: string, field: string) => this.hash(key).get(field) ?? null);
+  readonly hScan = vi.fn(
+    async (key: string, cursor: string, options: { COUNT: number }) => {
+      const entries = [...this.hash(key).entries()];
+      const start = Number(cursor);
+      const page = entries.slice(start, start + options.COUNT);
+      const next = start + page.length >= entries.length ? "0" : String(start + page.length);
+      return {
+        cursor: next,
+        entries: page.map(([field, value]) => ({ field, value })),
+      };
+    },
+  );
   readonly get = vi.fn(async (key: string) => this.strings.get(key) ?? null);
 
   pushList(key: string, value: string): void {
@@ -925,8 +1107,10 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   pushReadyPayload(payload: string, idempotencyKey: string): void {
-    this.list(KEYS.ready).push(payload);
-    this.incrementHash(KEYS.readyCounts, payload, 1);
+    this.list(KEYS.ready).push(idempotencyKey);
+    const sequence = Number(this.strings.get(KEYS.readySequence) ?? 0) + 1;
+    this.strings.set(KEYS.readySequence, String(sequence));
+    this.sortedSet(KEYS.readyIndex).set(idempotencyKey, sequence);
     this.set(KEYS.readySet).add(idempotencyKey);
     this.set(KEYS.seen).add(idempotencyKey);
     this.hash(KEYS.state).set(idempotencyKey, "ready");
@@ -935,14 +1119,13 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   pushReadyDuplicate(payload: string): void {
-    this.list(KEYS.ready).push(payload);
-    this.incrementHash(KEYS.readyCounts, payload, 1);
+    this.list(KEYS.ready).push(parseMemoryExtractionJob(payload).idempotencyKey);
   }
 
   pushProcessingPayload(payload: string, idempotencyKey: string): void {
     const sequence = Number(this.strings.get(KEYS.processingSequence) ?? 0) + 1;
     this.strings.set(KEYS.processingSequence, String(sequence));
-    this.sortedSet(KEYS.processing).set(payload, sequence);
+    this.sortedSet(KEYS.processing).set(idempotencyKey, sequence);
     this.set(KEYS.seen).add(idempotencyKey);
     this.hash(KEYS.state).set(idempotencyKey, "processing");
     this.hash(KEYS.payloads).set(idempotencyKey, payload);
@@ -965,6 +1148,14 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     this.hash(key).set(field, value);
   }
 
+  deleteHash(key: string, field: string): void {
+    this.hash(key).delete(field);
+  }
+
+  hashValue(key: string, field: string): string | undefined {
+    return this.hash(key).get(field);
+  }
+
   addSorted(key: string, value: string, score: number): void {
     this.sortedSet(key).set(value, score);
   }
@@ -982,43 +1173,45 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   private enqueue(keys: string[], args: string[]): number {
-    const [seenKey, readyKey, readySetKey, delayedKey, stateKey, payloadKey, memberKey, readyCountKey, processingKey] = keys;
+    const [seenKey, readyKey, readyIndexKey, delayedKey, processingKey, recoverySetKey, stateKey, payloadKey, memberKey, readyCountKey, readySetKey, readySequenceKey] = keys;
     const [idempotencyKey, payload, destination, score] = args;
     const state = this.hash(stateKey!).get(idempotencyKey!);
     const indexedPayload = this.hash(payloadKey!).get(idempotencyKey!);
     const physical =
       (state === "ready" &&
         indexedPayload !== undefined &&
-        this.set(readySetKey!).has(idempotencyKey!) &&
-        Number(this.hash(readyCountKey!).get(indexedPayload) ?? 0) > 0) ||
+        this.sortedSet(readyIndexKey!).has(idempotencyKey!)) ||
       (state === "delayed" &&
         indexedPayload !== undefined &&
-        this.sortedSet(delayedKey!).has(indexedPayload)) ||
+        this.sortedSet(delayedKey!).has(idempotencyKey!)) ||
       (state === "processing" &&
         indexedPayload !== undefined &&
-        this.sortedSet(processingKey!).has(indexedPayload));
-    if (physical && this.hash(memberKey!).get(indexedPayload!) === idempotencyKey) {
+        this.sortedSet(processingKey!).has(idempotencyKey!)) ||
+      (state === "recovery" &&
+        indexedPayload !== undefined &&
+        this.set(recoverySetKey!).has(idempotencyKey!));
+    if (physical) {
       this.set(seenKey!).add(idempotencyKey!);
       return 0;
     }
+    this.sortedSet(readyIndexKey!).delete(idempotencyKey!);
+    this.sortedSet(delayedKey!).delete(idempotencyKey!);
+    this.sortedSet(processingKey!).delete(idempotencyKey!);
+    this.set(recoverySetKey!).delete(idempotencyKey!);
     this.set(readySetKey!).delete(idempotencyKey!);
     if (indexedPayload !== undefined) {
-      this.sortedSet(delayedKey!).delete(indexedPayload);
-      this.sortedSet(processingKey!).delete(indexedPayload);
-      if (Number(this.hash(readyCountKey!).get(indexedPayload) ?? 0) <= 0) {
-        this.hash(memberKey!).delete(indexedPayload);
-      }
+      this.hash(memberKey!).delete(indexedPayload);
+      this.hash(readyCountKey!).delete(indexedPayload);
     }
-    this.hash(stateKey!).delete(idempotencyKey!);
-    this.hash(payloadKey!).delete(idempotencyKey!);
     this.hash(payloadKey!).set(idempotencyKey!, payload!);
-    this.hash(memberKey!).set(payload!, idempotencyKey!);
     if (destination === "delayed") {
-      this.sortedSet(delayedKey!).set(payload!, Number(score));
+      this.sortedSet(delayedKey!).set(idempotencyKey!, Number(score));
       this.hash(stateKey!).set(idempotencyKey!, "delayed");
     } else {
-      this.list(readyKey!).push(payload!);
-      this.incrementHash(readyCountKey!, payload!, 1);
+      const sequence = Number(this.strings.get(readySequenceKey!) ?? 0) + 1;
+      this.strings.set(readySequenceKey!, String(sequence));
+      this.list(readyKey!).push(idempotencyKey!);
+      this.sortedSet(readyIndexKey!).set(idempotencyKey!, sequence);
       this.set(readySetKey!).add(idempotencyKey!);
       this.hash(stateKey!).set(idempotencyKey!, "ready");
     }
@@ -1027,84 +1220,90 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   private recoverProcessing(keys: string[], args: string[]): number {
-    const [processingKey, readyKey, readySetKey, stateKey, payloadKey, memberKey, readyCountKey] = keys;
+    const [processingKey, recoveryKey, recoverySetKey, readyIndexKey, readySetKey, stateKey, payloadKey] = keys;
     const processing = [...this.sortedSet(processingKey!).entries()]
       .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
       .slice(0, Number(args[0]));
-    for (const [payload] of processing) {
-      this.sortedSet(processingKey!).delete(payload);
-      const id = this.hash(memberKey!).get(payload);
-      if (id && this.hash(stateKey!).get(id) === "processing" && this.hash(payloadKey!).get(id) === payload) {
-        this.list(readyKey!).push(payload);
-        this.incrementHash(readyCountKey!, payload, 1);
+    for (const [id, sequence] of processing) {
+      this.sortedSet(processingKey!).delete(id);
+      if (this.hash(stateKey!).get(id) === "processing" && this.hash(payloadKey!).has(id)) {
+        this.list(recoveryKey!).push(id);
+        this.set(recoverySetKey!).add(id);
+        this.sortedSet(readyIndexKey!).set(id, sequence);
         this.set(readySetKey!).add(id);
-        this.hash(stateKey!).set(id, "ready");
-      } else if (id && this.hash(payloadKey!).get(id) !== payload) {
-        this.hash(memberKey!).delete(payload);
+        this.hash(stateKey!).set(id, "recovery");
+      } else {
+        this.sortedSet(readyIndexKey!).delete(id);
+        this.set(readySetKey!).delete(id);
       }
     }
     return this.sortedSet(processingKey!).size;
   }
 
   private promoteDue(keys: string[], args: string[]): number {
-    const [delayedKey, readyKey, readySetKey, stateKey, payloadKey, memberKey, readyCountKey] = keys;
+    const [delayedKey, readyKey, readyIndexKey, stateKey, payloadKey, readySetKey, readySequenceKey] = keys;
     const delayed = this.sortedSet(delayedKey!);
     const due = [...delayed.entries()]
       .filter(([, score]) => score <= Number(args[0]))
       .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
       .slice(0, Number(args[1]));
-    for (const [payload] of due) {
-      delayed.delete(payload);
-      const id = this.hash(memberKey!).get(payload);
-      if (id && this.hash(stateKey!).get(id) === "delayed" && this.hash(payloadKey!).get(id) === payload) {
-        this.list(readyKey!).push(payload);
-        this.incrementHash(readyCountKey!, payload, 1);
+    for (const [id] of due) {
+      delayed.delete(id);
+      if (this.hash(stateKey!).get(id) === "delayed" && this.hash(payloadKey!).has(id)) {
+        const sequence = Number(this.strings.get(readySequenceKey!) ?? 0) + 1;
+        this.strings.set(readySequenceKey!, String(sequence));
+        this.list(readyKey!).push(id);
+        this.sortedSet(readyIndexKey!).set(id, sequence);
         this.set(readySetKey!).add(id);
         this.hash(stateKey!).set(id, "ready");
-      } else if (id && this.hash(payloadKey!).get(id) !== payload) {
-        this.hash(memberKey!).delete(payload);
       }
     }
     return due.length;
   }
 
   private dequeue(keys: string[], args: string[]): string[] {
-    const [readyKey, readySetKey, processingKey, stateKey, payloadKey, memberKey, readyCountKey, processingSequenceKey] = keys;
+    const [recoveryKey, recoverySetKey, readyKey, readyIndexKey, readySetKey, processingKey, stateKey, payloadKey, processingSequenceKey] = keys;
     const claimed: string[] = [];
     let popped = 0;
     while (claimed.length / 2 < Number(args[0]) && popped < Number(args[1])) {
-      const payload = this.list(readyKey!).shift();
-      if (payload === undefined) break;
+      let id = this.list(recoveryKey!).shift();
+      let expectedState = "recovery";
+      if (id !== undefined) {
+        this.set(recoverySetKey!).delete(id);
+      } else {
+        id = this.list(readyKey!).shift();
+        expectedState = "ready";
+      }
+      if (id === undefined) break;
       popped += 1;
-      this.incrementHash(readyCountKey!, payload, -1);
-      const id = this.hash(memberKey!).get(payload);
-      if (id && this.hash(stateKey!).get(id) === "ready" && this.hash(payloadKey!).get(id) === payload) {
+      const payload = this.hash(payloadKey!).get(id);
+      const indexed = this.sortedSet(readyIndexKey!).has(id);
+      if (payload !== undefined && indexed && this.hash(stateKey!).get(id) === expectedState) {
+        this.sortedSet(readyIndexKey!).delete(id);
         this.set(readySetKey!).delete(id);
         const sequence = Number(this.strings.get(processingSequenceKey!) ?? 0) + 1;
         this.strings.set(processingSequenceKey!, String(sequence));
-        this.sortedSet(processingKey!).set(payload, sequence);
+        this.sortedSet(processingKey!).set(id, sequence);
         this.hash(stateKey!).set(id, "processing");
         claimed.push(id, payload);
-      } else if (id) {
-        if (
-          this.hash(payloadKey!).get(id) !== payload &&
-          Number(this.hash(readyCountKey!).get(payload) ?? 0) <= 0
-        ) {
-          this.hash(memberKey!).delete(payload);
+      } else if (id.startsWith("memory-extraction:")) {
+        if (indexed && this.hash(stateKey!).get(id) === expectedState) {
+          this.sortedSet(readyIndexKey!).delete(id);
+          this.set(readySetKey!).delete(id);
         }
       } else {
-        const invalidId = `invalid:${createHash("sha1").update(payload).digest("hex")}`;
+        const rawPayload = id;
+        const invalidId = `invalid:${createHash("sha1").update(rawPayload).digest("hex")}`;
         if (
           this.hash(stateKey!).get(invalidId) !== "processing" ||
-          this.hash(payloadKey!).get(invalidId) !== payload
+          this.hash(payloadKey!).get(invalidId) !== invalidId
         ) {
           this.hash(stateKey!).set(invalidId, "processing");
-          this.hash(payloadKey!).set(invalidId, payload);
-          this.hash(memberKey!).set(payload, invalidId);
+          this.hash(payloadKey!).set(invalidId, invalidId);
           const sequence = Number(this.strings.get(processingSequenceKey!) ?? 0) + 1;
           this.strings.set(processingSequenceKey!, String(sequence));
-          this.sortedSet(processingKey!).set(payload, sequence);
-          claimed.push(invalidId, payload);
+          this.sortedSet(processingKey!).set(invalidId, sequence);
+          claimed.push(invalidId, rawPayload);
         }
       }
     }
@@ -1112,39 +1311,42 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   private ackProcessed(keys: string[], args: string[]): number {
-    const [processingKey, seenKey, readySetKey, delayedKey, stateKey, payloadKey, memberKey, readyCountKey] = keys;
+    const [processingKey, seenKey, readyIndexKey, readySetKey, delayedKey, recoverySetKey, stateKey, payloadKey, memberKey, readyCountKey] = keys;
     const [id, payload] = args;
-    if (this.hash(stateKey!).get(id!) !== "processing" || this.hash(payloadKey!).get(id!) !== payload) return 0;
+    if (this.hash(stateKey!).get(id!) !== "processing" || this.hash(payloadKey!).get(id!) !== payload || !this.sortedSet(processingKey!).has(id!)) return 0;
+    this.sortedSet(processingKey!).delete(id!);
     this.hash(stateKey!).delete(id!);
     this.hash(payloadKey!).delete(id!);
     this.set(seenKey!).delete(id!);
+    this.sortedSet(readyIndexKey!).delete(id!);
     this.set(readySetKey!).delete(id!);
-    this.sortedSet(delayedKey!).delete(payload!);
-    this.sortedSet(processingKey!).delete(payload!);
-    if (Number(this.hash(readyCountKey!).get(payload!) ?? 0) <= 0) {
-      this.hash(memberKey!).delete(payload!);
-    }
+    this.sortedSet(delayedKey!).delete(id!);
+    this.set(recoverySetKey!).delete(id!);
+    this.hash(memberKey!).delete(payload!);
+    this.hash(readyCountKey!).delete(payload!);
     return 1;
   }
 
   private ackRetry(keys: string[], args: string[]): number {
-    const [seenKey, readyKey, readySetKey, delayedKey, processingKey, stateKey, payloadKey, memberKey, readyCountKey] = keys;
+    const [seenKey, readyKey, readyIndexKey, readySetKey, delayedKey, processingKey, recoverySetKey, stateKey, payloadKey, memberKey, readyCountKey, readySequenceKey] = keys;
     const [id, payload, originalPayload, score, destination] = args;
-    if (this.hash(stateKey!).get(id!) !== "processing" || this.hash(payloadKey!).get(id!) !== originalPayload) return 0;
+    if (this.hash(stateKey!).get(id!) !== "processing" || this.hash(payloadKey!).get(id!) !== originalPayload || !this.sortedSet(processingKey!).has(id!)) return 0;
+    this.sortedSet(processingKey!).delete(id!);
+    this.sortedSet(readyIndexKey!).delete(id!);
     this.set(readySetKey!).delete(id!);
-    this.sortedSet(delayedKey!).delete(originalPayload!);
-    this.sortedSet(processingKey!).delete(originalPayload!);
-    if (Number(this.hash(readyCountKey!).get(originalPayload!) ?? 0) <= 0) {
-      this.hash(memberKey!).delete(originalPayload!);
-    }
+    this.sortedSet(delayedKey!).delete(id!);
+    this.set(recoverySetKey!).delete(id!);
+    this.hash(memberKey!).delete(originalPayload!);
+    this.hash(readyCountKey!).delete(originalPayload!);
     this.hash(payloadKey!).set(id!, payload!);
-    this.hash(memberKey!).set(payload!, id!);
     if (destination === "delayed") {
-      this.sortedSet(delayedKey!).set(payload!, Number(score));
+      this.sortedSet(delayedKey!).set(id!, Number(score));
       this.hash(stateKey!).set(id!, "delayed");
     } else {
-      this.list(readyKey!).push(payload!);
-      this.incrementHash(readyCountKey!, payload!, 1);
+      const sequence = Number(this.strings.get(readySequenceKey!) ?? 0) + 1;
+      this.strings.set(readySequenceKey!, String(sequence));
+      this.list(readyKey!).push(id!);
+      this.sortedSet(readyIndexKey!).set(id!, sequence);
       this.set(readySetKey!).add(id!);
       this.hash(stateKey!).set(id!, "ready");
     }
@@ -1153,9 +1355,9 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   private ackDeadLetter(keys: string[], args: string[]): number {
-    const [deadLetterOrderKey, deadLetterIndexKey, processingKey, seenKey, readySetKey, delayedKey, stateKey, payloadKey, memberKey, deadLetterSequenceKey, readyCountKey] = keys;
+    const [deadLetterOrderKey, deadLetterIndexKey, readyIndexKey, seenKey, readySetKey, processingKey, delayedKey, recoverySetKey, stateKey, payloadKey, memberKey, deadLetterSequenceKey, readyCountKey] = keys;
     const [deadLetterId, deadLetterPayload, id, originalPayload] = args;
-    if (this.hash(stateKey!).get(id!) !== "processing" || this.hash(payloadKey!).get(id!) !== originalPayload) return 0;
+    if (this.hash(stateKey!).get(id!) !== "processing" || this.hash(payloadKey!).get(id!) !== originalPayload || !this.sortedSet(processingKey!).has(id!)) return 0;
     const sequence = Number(this.strings.get(deadLetterSequenceKey!) ?? 0) + 1;
     this.strings.set(deadLetterSequenceKey!, String(sequence));
     this.sortedSet(deadLetterOrderKey!).set(deadLetterId!, sequence);
@@ -1163,50 +1365,66 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     this.hash(stateKey!).delete(id!);
     this.hash(payloadKey!).delete(id!);
     this.set(seenKey!).delete(id!);
+    this.sortedSet(readyIndexKey!).delete(id!);
     this.set(readySetKey!).delete(id!);
-    this.sortedSet(delayedKey!).delete(originalPayload!);
-    this.sortedSet(processingKey!).delete(originalPayload!);
-    if (Number(this.hash(readyCountKey!).get(originalPayload!) ?? 0) <= 0) {
-      this.hash(memberKey!).delete(originalPayload!);
-    }
+    this.sortedSet(delayedKey!).delete(id!);
+    this.sortedSet(processingKey!).delete(id!);
+    this.set(recoverySetKey!).delete(id!);
+    this.hash(memberKey!).delete(originalPayload!);
+    this.hash(readyCountKey!).delete(originalPayload!);
     return 1;
   }
 
   private replayDeadLetter(keys: string[], args: string[]): number {
-    const [seenKey, readyKey, readySetKey, delayedKey, processingKey, stateKey, payloadKey, memberKey, deadLetterIndexKey, deadLetterOrderKey, readyCountKey] = keys;
+    const [seenKey, readyKey, readyIndexKey, readySetKey, delayedKey, processingKey, recoverySetKey, stateKey, payloadKey, memberKey, deadLetterIndexKey, deadLetterOrderKey, readyCountKey, readySequenceKey] = keys;
     const [id, payload, deadLetterId, deadLetterPayload] = args;
     if (this.hash(deadLetterIndexKey!).get(deadLetterId!) !== deadLetterPayload) return 0;
     const existingPayload = this.hash(payloadKey!).get(id!);
     if (
       this.hash(stateKey!).get(id!) === "processing" &&
       existingPayload !== undefined &&
-      this.hash(memberKey!).get(existingPayload) === id &&
-      this.sortedSet(processingKey!).has(existingPayload)
+      this.sortedSet(processingKey!).has(id!)
     ) {
       this.hash(deadLetterIndexKey!).delete(deadLetterId!);
       this.sortedSet(deadLetterOrderKey!).delete(deadLetterId!);
       return 1;
     }
     if (existingPayload) {
-      this.sortedSet(delayedKey!).delete(existingPayload);
-      this.sortedSet(processingKey!).delete(existingPayload);
-      if (Number(this.hash(readyCountKey!).get(existingPayload) ?? 0) <= 0) {
-        this.hash(memberKey!).delete(existingPayload);
-      }
+      this.hash(memberKey!).delete(existingPayload);
+      this.hash(readyCountKey!).delete(existingPayload);
     }
+    this.sortedSet(readyIndexKey!).delete(id!);
     this.set(readySetKey!).delete(id!);
-    this.hash(stateKey!).delete(id!);
-    this.hash(payloadKey!).delete(id!);
+    this.sortedSet(delayedKey!).delete(id!);
+    this.sortedSet(processingKey!).delete(id!);
+    this.set(recoverySetKey!).delete(id!);
     this.hash(payloadKey!).set(id!, payload!);
-    this.hash(memberKey!).set(payload!, id!);
-    this.list(readyKey!).push(payload!);
-    this.incrementHash(readyCountKey!, payload!, 1);
+    const sequence = Number(this.strings.get(readySequenceKey!) ?? 0) + 1;
+    this.strings.set(readySequenceKey!, String(sequence));
+    this.list(readyKey!).push(id!);
+    this.sortedSet(readyIndexKey!).set(id!, sequence);
     this.set(readySetKey!).add(id!);
     this.hash(stateKey!).set(id!, "ready");
     this.set(seenKey!).add(id!);
     this.hash(deadLetterIndexKey!).delete(deadLetterId!);
     this.sortedSet(deadLetterOrderKey!).delete(deadLetterId!);
     return 1;
+  }
+
+  private repairDeadLetterOrder(keys: string[], args: string[]): number {
+    const [indexKey, orderKey, sequenceKey] = keys;
+    const [id, expectedPayload] = args;
+    const payload = this.hash(indexKey!).get(id!);
+    if (payload === undefined) {
+      return this.sortedSet(orderKey!).delete(id!) ? 1 : 0;
+    }
+    if (payload === expectedPayload && !this.sortedSet(orderKey!).has(id!)) {
+      const sequence = Number(this.strings.get(sequenceKey!) ?? 0) + 1;
+      this.strings.set(sequenceKey!, String(sequence));
+      this.sortedSet(orderKey!).set(id!, sequence);
+      return 1;
+    }
+    return 0;
   }
 
   private deleteDeadLetter(keys: string[], args: string[]): number {
@@ -1216,23 +1434,6 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     this.hash(indexKey!).delete(id!);
     this.sortedSet(orderKey!).delete(id!);
     return 1;
-  }
-
-  private removeExact(values: string[], payload: string): boolean {
-    const index = values.indexOf(payload);
-    if (index < 0) return false;
-    values.splice(index, 1);
-    return true;
-  }
-
-  private incrementHash(key: string, field: string, delta: number): number {
-    const next = Number(this.hash(key).get(field) ?? 0) + delta;
-    if (next <= 0) {
-      this.hash(key).delete(field);
-    } else {
-      this.hash(key).set(field, String(next));
-    }
-    return next;
   }
 
   private list(key: string): string[] {

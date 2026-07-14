@@ -41,45 +41,46 @@ const ALLOWED_FAILURE_CODES = new Set([
 
 const ENQUEUE_SCRIPT = `
 -- memory-extraction:enqueue
-local state = redis.call("HGET", KEYS[5], ARGV[1])
-local indexed_payload = redis.call("HGET", KEYS[6], ARGV[1])
+local state = redis.call("HGET", KEYS[7], ARGV[1])
+local indexed_payload = redis.call("HGET", KEYS[8], ARGV[1])
 local physical = false
 if state == "ready" and indexed_payload
-  and redis.call("SISMEMBER", KEYS[3], ARGV[1]) == 1
-  and tonumber(redis.call("HGET", KEYS[8], indexed_payload) or "0") > 0 then
+  and redis.call("ZSCORE", KEYS[3], ARGV[1]) then
   physical = true
 elseif state == "delayed" and indexed_payload
-  and redis.call("ZSCORE", KEYS[4], indexed_payload) then
+  and redis.call("ZSCORE", KEYS[4], ARGV[1]) then
   physical = true
 elseif state == "processing" and indexed_payload
-  and redis.call("ZSCORE", KEYS[9], indexed_payload) then
+  and redis.call("ZSCORE", KEYS[5], ARGV[1]) then
+  physical = true
+elseif state == "recovery" and indexed_payload
+  and redis.call("SISMEMBER", KEYS[6], ARGV[1]) == 1 then
   physical = true
 end
-if physical and redis.call("HGET", KEYS[7], indexed_payload) == ARGV[1] then
+if physical then
   redis.call("SADD", KEYS[1], ARGV[1])
   return 0
 end
 
-redis.call("SREM", KEYS[3], ARGV[1])
+redis.call("ZREM", KEYS[3], ARGV[1])
+redis.call("ZREM", KEYS[4], ARGV[1])
+redis.call("ZREM", KEYS[5], ARGV[1])
+redis.call("SREM", KEYS[6], ARGV[1])
+redis.call("SREM", KEYS[11], ARGV[1])
 if indexed_payload then
-  redis.call("ZREM", KEYS[4], indexed_payload)
-  redis.call("ZREM", KEYS[9], indexed_payload)
-  if tonumber(redis.call("HGET", KEYS[8], indexed_payload) or "0") <= 0 then
-    redis.call("HDEL", KEYS[7], indexed_payload)
-  end
+  redis.call("HDEL", KEYS[9], indexed_payload)
+  redis.call("HDEL", KEYS[10], indexed_payload)
 end
-redis.call("HDEL", KEYS[5], ARGV[1])
-redis.call("HDEL", KEYS[6], ARGV[1])
-redis.call("HSET", KEYS[6], ARGV[1], ARGV[2])
-redis.call("HSET", KEYS[7], ARGV[2], ARGV[1])
+redis.call("HSET", KEYS[8], ARGV[1], ARGV[2])
 if ARGV[3] == "delayed" then
-  redis.call("ZADD", KEYS[4], ARGV[4], ARGV[2])
-  redis.call("HSET", KEYS[5], ARGV[1], "delayed")
+  redis.call("ZADD", KEYS[4], ARGV[4], ARGV[1])
+  redis.call("HSET", KEYS[7], ARGV[1], "delayed")
 else
-  redis.call("RPUSH", KEYS[2], ARGV[2])
-  redis.call("HINCRBY", KEYS[8], ARGV[2], 1)
-  redis.call("SADD", KEYS[3], ARGV[1])
-  redis.call("HSET", KEYS[5], ARGV[1], "ready")
+  local sequence = redis.call("INCR", KEYS[12])
+  redis.call("RPUSH", KEYS[2], ARGV[1])
+  redis.call("ZADD", KEYS[3], sequence, ARGV[1])
+  redis.call("SADD", KEYS[11], ARGV[1])
+  redis.call("HSET", KEYS[7], ARGV[1], "ready")
 end
 redis.call("SADD", KEYS[1], ARGV[1])
 return 1
@@ -88,21 +89,22 @@ return 1
 const RECOVER_PROCESSING_SCRIPT = `
 -- memory-extraction:recover-processing
 local processing = redis.call(
-  "ZRANGEBYSCORE", KEYS[1], "-inf", "+inf", "LIMIT", 0, ARGV[1]
+  "ZRANGEBYSCORE", KEYS[1], "-inf", "+inf", "WITHSCORES", "LIMIT", 0, ARGV[1]
 )
-for _, payload in ipairs(processing) do
-  if redis.call("ZREM", KEYS[1], payload) == 1 then
-    local idempotency_key = redis.call("HGET", KEYS[6], payload)
-    if idempotency_key
-      and redis.call("HGET", KEYS[4], idempotency_key) == "processing"
-      and redis.call("HGET", KEYS[5], idempotency_key) == payload then
-      redis.call("RPUSH", KEYS[2], payload)
-      redis.call("HINCRBY", KEYS[7], payload, 1)
+for index = 1, #processing, 2 do
+  local idempotency_key = processing[index]
+  local sequence = processing[index + 1]
+  if redis.call("ZREM", KEYS[1], idempotency_key) == 1 then
+    if redis.call("HGET", KEYS[6], idempotency_key) == "processing"
+      and redis.call("HGET", KEYS[7], idempotency_key) then
+      redis.call("RPUSH", KEYS[2], idempotency_key)
       redis.call("SADD", KEYS[3], idempotency_key)
-      redis.call("HSET", KEYS[4], idempotency_key, "ready")
-    elseif idempotency_key
-      and redis.call("HGET", KEYS[5], idempotency_key) ~= payload then
-      redis.call("HDEL", KEYS[6], payload)
+      redis.call("ZADD", KEYS[4], sequence, idempotency_key)
+      redis.call("SADD", KEYS[5], idempotency_key)
+      redis.call("HSET", KEYS[6], idempotency_key, "recovery")
+    else
+      redis.call("ZREM", KEYS[4], idempotency_key)
+      redis.call("SREM", KEYS[5], idempotency_key)
     end
   end
 end
@@ -115,18 +117,15 @@ local due = redis.call(
   "ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, ARGV[2]
 )
 for _, payload in ipairs(due) do
-  if redis.call("ZREM", KEYS[1], payload) == 1 then
-    local idempotency_key = redis.call("HGET", KEYS[6], payload)
-    if idempotency_key
-      and redis.call("HGET", KEYS[4], idempotency_key) == "delayed"
-      and redis.call("HGET", KEYS[5], idempotency_key) == payload then
-      redis.call("RPUSH", KEYS[2], payload)
-      redis.call("HINCRBY", KEYS[7], payload, 1)
-      redis.call("SADD", KEYS[3], idempotency_key)
+  local idempotency_key = payload
+  if redis.call("ZREM", KEYS[1], idempotency_key) == 1 then
+    if redis.call("HGET", KEYS[4], idempotency_key) == "delayed"
+      and redis.call("HGET", KEYS[5], idempotency_key) then
+      local sequence = redis.call("INCR", KEYS[7])
+      redis.call("RPUSH", KEYS[2], idempotency_key)
+      redis.call("ZADD", KEYS[3], sequence, idempotency_key)
+      redis.call("SADD", KEYS[6], idempotency_key)
       redis.call("HSET", KEYS[4], idempotency_key, "ready")
-    elseif idempotency_key
-      and redis.call("HGET", KEYS[5], idempotency_key) ~= payload then
-      redis.call("HDEL", KEYS[6], payload)
     end
   end
 end
@@ -138,34 +137,41 @@ const DEQUEUE_SCRIPT = `
 local claimed = {}
 local popped = 0
 while #claimed / 2 < tonumber(ARGV[1]) and popped < tonumber(ARGV[2]) do
-  local payload = redis.call("LPOP", KEYS[1])
-  if not payload then break end
-  popped = popped + 1
-  local ready_count = redis.call("HINCRBY", KEYS[7], payload, -1)
-  if ready_count <= 0 then redis.call("HDEL", KEYS[7], payload) end
-  local idempotency_key = redis.call("HGET", KEYS[6], payload)
-  if idempotency_key
-    and redis.call("HGET", KEYS[4], idempotency_key) == "ready"
-    and redis.call("HGET", KEYS[5], idempotency_key) == payload then
+  local idempotency_key = redis.call("LPOP", KEYS[1])
+  local expected_state = "recovery"
+  if idempotency_key then
     redis.call("SREM", KEYS[2], idempotency_key)
-    local sequence = redis.call("INCR", KEYS[8])
-    redis.call("ZADD", KEYS[3], sequence, payload)
-    redis.call("HSET", KEYS[4], idempotency_key, "processing")
+  else
+    idempotency_key = redis.call("LPOP", KEYS[3])
+    expected_state = "ready"
+  end
+  if not idempotency_key then break end
+  popped = popped + 1
+  local payload = redis.call("HGET", KEYS[8], idempotency_key)
+  local indexed = redis.call("ZSCORE", KEYS[4], idempotency_key)
+  if payload and indexed
+    and redis.call("HGET", KEYS[7], idempotency_key) == expected_state then
+    redis.call("ZREM", KEYS[4], idempotency_key)
+    redis.call("SREM", KEYS[5], idempotency_key)
+    local sequence = redis.call("INCR", KEYS[9])
+    redis.call("ZADD", KEYS[6], sequence, idempotency_key)
+    redis.call("HSET", KEYS[7], idempotency_key, "processing")
     table.insert(claimed, idempotency_key)
     table.insert(claimed, payload)
-  elseif idempotency_key then
-    if redis.call("HGET", KEYS[5], idempotency_key) ~= payload and ready_count <= 0 then
-      redis.call("HDEL", KEYS[6], payload)
+  elseif string.sub(idempotency_key, 1, 18) == "memory-extraction:" then
+    if indexed and redis.call("HGET", KEYS[7], idempotency_key) == expected_state then
+      redis.call("ZREM", KEYS[4], idempotency_key)
+      redis.call("SREM", KEYS[5], idempotency_key)
     end
   else
+    local payload = idempotency_key
     local invalid_key = "invalid:" .. redis.sha1hex(payload)
-    if redis.call("HGET", KEYS[4], invalid_key) ~= "processing"
-      or redis.call("HGET", KEYS[5], invalid_key) ~= payload then
-      redis.call("HSET", KEYS[4], invalid_key, "processing")
-      redis.call("HSET", KEYS[5], invalid_key, payload)
-      redis.call("HSET", KEYS[6], payload, invalid_key)
-      local sequence = redis.call("INCR", KEYS[8])
-      redis.call("ZADD", KEYS[3], sequence, payload)
+    if redis.call("HGET", KEYS[7], invalid_key) ~= "processing"
+      or redis.call("HGET", KEYS[8], invalid_key) ~= invalid_key then
+      redis.call("HSET", KEYS[7], invalid_key, "processing")
+      redis.call("HSET", KEYS[8], invalid_key, invalid_key)
+      local sequence = redis.call("INCR", KEYS[9])
+      redis.call("ZADD", KEYS[6], sequence, invalid_key)
       table.insert(claimed, invalid_key)
       table.insert(claimed, payload)
     end
@@ -176,40 +182,44 @@ return claimed
 
 const ACK_PROCESSED_SCRIPT = `
 -- memory-extraction:ack-processed
-if redis.call("HGET", KEYS[5], ARGV[1]) ~= "processing"
-  or redis.call("HGET", KEYS[6], ARGV[1]) ~= ARGV[2] then return 0 end
-redis.call("HDEL", KEYS[5], ARGV[1])
-redis.call("HDEL", KEYS[6], ARGV[1])
+if redis.call("HGET", KEYS[7], ARGV[1]) ~= "processing"
+  or redis.call("HGET", KEYS[8], ARGV[1]) ~= ARGV[2]
+  or not redis.call("ZSCORE", KEYS[1], ARGV[1]) then return 0 end
+redis.call("ZREM", KEYS[1], ARGV[1])
+redis.call("HDEL", KEYS[7], ARGV[1])
+redis.call("HDEL", KEYS[8], ARGV[1])
 redis.call("SREM", KEYS[2], ARGV[1])
-redis.call("SREM", KEYS[3], ARGV[1])
-redis.call("ZREM", KEYS[4], ARGV[2])
-redis.call("ZREM", KEYS[1], ARGV[2])
-if tonumber(redis.call("HGET", KEYS[8], ARGV[2]) or "0") <= 0 then
-  redis.call("HDEL", KEYS[7], ARGV[2])
-end
+redis.call("ZREM", KEYS[3], ARGV[1])
+redis.call("SREM", KEYS[4], ARGV[1])
+redis.call("ZREM", KEYS[5], ARGV[1])
+redis.call("SREM", KEYS[6], ARGV[1])
+redis.call("HDEL", KEYS[9], ARGV[2])
+redis.call("HDEL", KEYS[10], ARGV[2])
 return 1
 `;
 
 const ACK_RETRY_SCRIPT = `
 -- memory-extraction:ack-retry
-if redis.call("HGET", KEYS[6], ARGV[1]) ~= "processing"
-  or redis.call("HGET", KEYS[7], ARGV[1]) ~= ARGV[3] then return 0 end
-redis.call("SREM", KEYS[3], ARGV[1])
-redis.call("ZREM", KEYS[4], ARGV[3])
-redis.call("ZREM", KEYS[5], ARGV[3])
-if tonumber(redis.call("HGET", KEYS[9], ARGV[3]) or "0") <= 0 then
-  redis.call("HDEL", KEYS[8], ARGV[3])
-end
-redis.call("HSET", KEYS[7], ARGV[1], ARGV[2])
-redis.call("HSET", KEYS[8], ARGV[2], ARGV[1])
+if redis.call("HGET", KEYS[8], ARGV[1]) ~= "processing"
+  or redis.call("HGET", KEYS[9], ARGV[1]) ~= ARGV[3]
+  or not redis.call("ZSCORE", KEYS[6], ARGV[1]) then return 0 end
+redis.call("ZREM", KEYS[6], ARGV[1])
+redis.call("ZREM", KEYS[3], ARGV[1])
+redis.call("ZREM", KEYS[5], ARGV[1])
+redis.call("SREM", KEYS[4], ARGV[1])
+redis.call("SREM", KEYS[7], ARGV[1])
+redis.call("HDEL", KEYS[10], ARGV[3])
+redis.call("HDEL", KEYS[11], ARGV[3])
+redis.call("HSET", KEYS[9], ARGV[1], ARGV[2])
 if ARGV[5] == "delayed" then
-  redis.call("ZADD", KEYS[4], ARGV[4], ARGV[2])
-  redis.call("HSET", KEYS[6], ARGV[1], "delayed")
+  redis.call("ZADD", KEYS[5], ARGV[4], ARGV[1])
+  redis.call("HSET", KEYS[8], ARGV[1], "delayed")
 else
-  redis.call("RPUSH", KEYS[2], ARGV[2])
-  redis.call("HINCRBY", KEYS[9], ARGV[2], 1)
-  redis.call("SADD", KEYS[3], ARGV[1])
-  redis.call("HSET", KEYS[6], ARGV[1], "ready")
+  local sequence = redis.call("INCR", KEYS[12])
+  redis.call("RPUSH", KEYS[2], ARGV[1])
+  redis.call("ZADD", KEYS[3], sequence, ARGV[1])
+  redis.call("SADD", KEYS[4], ARGV[1])
+  redis.call("HSET", KEYS[8], ARGV[1], "ready")
 end
 redis.call("SADD", KEYS[1], ARGV[1])
 return 1
@@ -217,55 +227,68 @@ return 1
 
 const ACK_DEAD_LETTER_SCRIPT = `
 -- memory-extraction:ack-dead-letter
-if redis.call("HGET", KEYS[7], ARGV[3]) ~= "processing"
-  or redis.call("HGET", KEYS[8], ARGV[3]) ~= ARGV[4] then return 0 end
-local sequence = redis.call("INCR", KEYS[10])
+if redis.call("HGET", KEYS[9], ARGV[3]) ~= "processing"
+  or redis.call("HGET", KEYS[10], ARGV[3]) ~= ARGV[4]
+  or not redis.call("ZSCORE", KEYS[6], ARGV[3]) then return 0 end
+local sequence = redis.call("INCR", KEYS[12])
 redis.call("ZADD", KEYS[1], sequence, ARGV[1])
 redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
-redis.call("HDEL", KEYS[7], ARGV[3])
-redis.call("HDEL", KEYS[8], ARGV[3])
+redis.call("ZREM", KEYS[6], ARGV[3])
+redis.call("HDEL", KEYS[9], ARGV[3])
+redis.call("HDEL", KEYS[10], ARGV[3])
 redis.call("SREM", KEYS[4], ARGV[3])
-redis.call("SREM", KEYS[5], ARGV[3])
-redis.call("ZREM", KEYS[6], ARGV[4])
-redis.call("ZREM", KEYS[3], ARGV[4])
-if tonumber(redis.call("HGET", KEYS[11], ARGV[4]) or "0") <= 0 then
-  redis.call("HDEL", KEYS[9], ARGV[4])
-end
+redis.call("ZREM", KEYS[3], ARGV[3])
+redis.call("ZREM", KEYS[7], ARGV[3])
+redis.call("SREM", KEYS[8], ARGV[3])
+redis.call("HDEL", KEYS[11], ARGV[4])
+redis.call("HDEL", KEYS[13], ARGV[4])
 return 1
 `;
 
 const REPLAY_DEAD_LETTER_SCRIPT = `
 -- memory-extraction:replay-dead-letter
-if redis.call("HGET", KEYS[9], ARGV[3]) ~= ARGV[4] then return 0 end
-local state = redis.call("HGET", KEYS[6], ARGV[1])
-local existing_payload = redis.call("HGET", KEYS[7], ARGV[1])
+if redis.call("HGET", KEYS[11], ARGV[3]) ~= ARGV[4] then return 0 end
+local state = redis.call("HGET", KEYS[8], ARGV[1])
+local existing_payload = redis.call("HGET", KEYS[9], ARGV[1])
 if state == "processing" and existing_payload
-  and redis.call("HGET", KEYS[8], existing_payload) == ARGV[1]
-  and redis.call("ZSCORE", KEYS[5], existing_payload) then
-  redis.call("HDEL", KEYS[9], ARGV[3])
-  redis.call("ZREM", KEYS[10], ARGV[3])
+  and redis.call("ZSCORE", KEYS[6], ARGV[1]) then
+  redis.call("HDEL", KEYS[11], ARGV[3])
+  redis.call("ZREM", KEYS[12], ARGV[3])
   return 1
 end
 if existing_payload then
-  redis.call("ZREM", KEYS[4], existing_payload)
-  redis.call("ZREM", KEYS[5], existing_payload)
-  if tonumber(redis.call("HGET", KEYS[11], existing_payload) or "0") <= 0 then
-    redis.call("HDEL", KEYS[8], existing_payload)
-  end
+  redis.call("HDEL", KEYS[10], existing_payload)
+  redis.call("HDEL", KEYS[13], existing_payload)
 end
-redis.call("SREM", KEYS[3], ARGV[1])
-redis.call("HDEL", KEYS[6], ARGV[1])
-redis.call("HDEL", KEYS[7], ARGV[1])
-redis.call("HSET", KEYS[7], ARGV[1], ARGV[2])
-redis.call("HSET", KEYS[8], ARGV[2], ARGV[1])
-redis.call("RPUSH", KEYS[2], ARGV[2])
-redis.call("HINCRBY", KEYS[11], ARGV[2], 1)
-redis.call("SADD", KEYS[3], ARGV[1])
-redis.call("HSET", KEYS[6], ARGV[1], "ready")
+redis.call("ZREM", KEYS[3], ARGV[1])
+redis.call("ZREM", KEYS[5], ARGV[1])
+redis.call("ZREM", KEYS[6], ARGV[1])
+redis.call("SREM", KEYS[4], ARGV[1])
+redis.call("SREM", KEYS[7], ARGV[1])
+redis.call("HSET", KEYS[9], ARGV[1], ARGV[2])
+local sequence = redis.call("INCR", KEYS[14])
+redis.call("RPUSH", KEYS[2], ARGV[1])
+redis.call("ZADD", KEYS[3], sequence, ARGV[1])
+redis.call("SADD", KEYS[4], ARGV[1])
+redis.call("HSET", KEYS[8], ARGV[1], "ready")
 redis.call("SADD", KEYS[1], ARGV[1])
-redis.call("HDEL", KEYS[9], ARGV[3])
-redis.call("ZREM", KEYS[10], ARGV[3])
+redis.call("HDEL", KEYS[11], ARGV[3])
+redis.call("ZREM", KEYS[12], ARGV[3])
 return 1
+`;
+
+const REPAIR_DEAD_LETTER_ORDER_SCRIPT = `
+-- memory-extraction:repair-dead-letter-order
+local payload = redis.call("HGET", KEYS[1], ARGV[1])
+if not payload then
+  return redis.call("ZREM", KEYS[2], ARGV[1])
+end
+if payload == ARGV[2] and not redis.call("ZSCORE", KEYS[2], ARGV[1]) then
+  local sequence = redis.call("INCR", KEYS[3])
+  redis.call("ZADD", KEYS[2], sequence, ARGV[1])
+  return 1
+end
+return 0
 `;
 
 const DELETE_DEAD_LETTER_SCRIPT = `
@@ -299,6 +322,11 @@ export type RedisMemoryExtractionQueueClient = {
   zRange(key: string, start: number, stop: number): Promise<string[]>;
   hLen(key: string): Promise<number>;
   hGet(key: string, field: string): Promise<string | null>;
+  hScan(
+    key: string,
+    cursor: string,
+    options: { COUNT: number },
+  ): Promise<{ cursor: string; entries: Array<{ field: string; value: string }> }>;
   get(key: string): Promise<string | null>;
 };
 
@@ -339,7 +367,11 @@ export function createRedisMemoryExtractionQueue({
 }: RedisMemoryExtractionQueueOptions): MemoryExtractionQueue {
   const safeMaxAttempts = sanitizeMaxAttempts(maxAttempts);
   const readyCountKey = `${readyKey}:counts`;
+  const readyIndexKey = `${readyKey}:index`;
+  const readySequenceKey = `${readyKey}:sequence`;
   const processingSequenceKey = `${processingKey}:sequence`;
+  const recoveryKey = `${processingKey}:recovery`;
+  const recoverySetKey = `${processingKey}:recovery:ids`;
   const deadLetterOrderKey = `${deadLetterKey}:order`;
   const deadLetterSequenceKey = `${deadLetterKey}:sequence`;
   let processingRecovered = false;
@@ -366,15 +398,18 @@ export function createRedisMemoryExtractionQueue({
       keys: [
         seenKey,
         readyKey,
+        readyIndexKey,
         readySetKey,
         delayedKey,
         processingKey,
+        recoverySetKey,
         stateKey,
         payloadKey,
         memberKey,
         deadLetterIndexKey,
         deadLetterOrderKey,
         readyCountKey,
+        readySequenceKey,
       ],
       arguments: [
         replayJob.idempotencyKey,
@@ -411,13 +446,16 @@ export function createRedisMemoryExtractionQueue({
         keys: [
           seenKey,
           readyKey,
-          readySetKey,
+          readyIndexKey,
           delayedKey,
+          processingKey,
+          recoverySetKey,
           stateKey,
           payloadKey,
           memberKey,
           readyCountKey,
-          processingKey,
+          readySetKey,
+          readySequenceKey,
         ],
         arguments: [
           normalizedJob.idempotencyKey,
@@ -439,12 +477,12 @@ export function createRedisMemoryExtractionQueue({
         const remainingProcessing = await client.eval(RECOVER_PROCESSING_SCRIPT, {
           keys: [
             processingKey,
-            readyKey,
+            recoveryKey,
+            recoverySetKey,
+            readyIndexKey,
             readySetKey,
             stateKey,
             payloadKey,
-            memberKey,
-            readyCountKey,
           ],
           arguments: [String(MAX_MEMORY_EXTRACTION_QUEUE_LIMIT)],
         });
@@ -464,11 +502,11 @@ export function createRedisMemoryExtractionQueue({
         keys: [
           delayedKey,
           readyKey,
-          readySetKey,
+          readyIndexKey,
           stateKey,
           payloadKey,
-          memberKey,
-          readyCountKey,
+          readySetKey,
+          readySequenceKey,
         ],
         arguments: [String(safeDequeueAt.getTime()), String(safeLimit)],
       });
@@ -476,14 +514,17 @@ export function createRedisMemoryExtractionQueue({
       const jobs: MemoryExtractionJob[] = [];
       const result = await client.eval(DEQUEUE_SCRIPT, {
         keys: [
+          recoveryKey,
+          recoverySetKey,
           readyKey,
+          readyIndexKey,
           readySetKey,
           processingKey,
           stateKey,
           payloadKey,
+          processingSequenceKey,
           memberKey,
           readyCountKey,
-          processingSequenceKey,
         ],
         arguments: [
           String(safeLimit),
@@ -523,17 +564,24 @@ export function createRedisMemoryExtractionQueue({
             keys: [
               deadLetterOrderKey,
               deadLetterIndexKey,
-              processingKey,
+              readyIndexKey,
               seenKey,
               readySetKey,
+              processingKey,
               delayedKey,
+              recoverySetKey,
               stateKey,
               payloadKey,
               memberKey,
               deadLetterSequenceKey,
               readyCountKey,
             ],
-            arguments: [deadLetterId, diagnosticPayload, claimId, claimedPayload],
+            arguments: [
+              deadLetterId,
+              diagnosticPayload,
+              claimId,
+              claimId.startsWith("invalid:") ? claimId : claimedPayload,
+            ],
           });
         }
       }
@@ -548,8 +596,10 @@ export function createRedisMemoryExtractionQueue({
         keys: [
           processingKey,
           seenKey,
+          readyIndexKey,
           readySetKey,
           delayedKey,
+          recoverySetKey,
           stateKey,
           payloadKey,
           memberKey,
@@ -583,10 +633,12 @@ export function createRedisMemoryExtractionQueue({
           keys: [
             deadLetterOrderKey,
             deadLetterIndexKey,
-            processingKey,
+            readyIndexKey,
             seenKey,
             readySetKey,
+            processingKey,
             delayedKey,
+            recoverySetKey,
             stateKey,
             payloadKey,
             memberKey,
@@ -612,13 +664,16 @@ export function createRedisMemoryExtractionQueue({
         keys: [
           seenKey,
           readyKey,
+          readyIndexKey,
           readySetKey,
           delayedKey,
           processingKey,
+          recoverySetKey,
           stateKey,
           payloadKey,
           memberKey,
           readyCountKey,
+          readySequenceKey,
         ],
         arguments: [
           claimId,
@@ -632,7 +687,7 @@ export function createRedisMemoryExtractionQueue({
     },
 
     getPendingCount() {
-      return client.sCard(readySetKey);
+      return client.zCard(readyIndexKey);
     },
 
     getProcessingCount() {
@@ -669,19 +724,63 @@ export function createRedisMemoryExtractionQueue({
       if (safeLimit === 0) {
         return [];
       }
-      const ids = await client.zRange(deadLetterOrderKey, 0, safeLimit - 1);
-      const deadLetters: MemoryExtractionDeadLetter[] = [];
-      for (const [index, id] of ids.entries()) {
-        const payload = await client.hGet(deadLetterIndexKey, id);
-        if (payload === null) {
-          continue;
+      let repairedMissingOrder = 0;
+      let cursor = "0";
+      do {
+        const scan = await client.hScan(deadLetterIndexKey, cursor, {
+          COUNT: MAX_MEMORY_EXTRACTION_QUEUE_LIMIT,
+        });
+        cursor = scan.cursor;
+        for (const entry of scan.entries) {
+          const repaired = await client.eval(REPAIR_DEAD_LETTER_ORDER_SCRIPT, {
+            keys: [deadLetterIndexKey, deadLetterOrderKey, deadLetterSequenceKey],
+            arguments: [entry.field, entry.value],
+          });
+          if (repaired === 1) {
+            repairedMissingOrder += 1;
+          }
+          if (repairedMissingOrder >= safeLimit) {
+            break;
+          }
         }
-        const parsed = parseDeadLetterPayload(payload, index, now);
-        if (parsed.storedId === id) {
-          deadLetters.push(parsed.deadLetter);
+      } while (cursor !== "0" && repairedMissingOrder < safeLimit);
+
+      const deadLetters: MemoryExtractionDeadLetter[] = [];
+      while (deadLetters.length < safeLimit) {
+        const ids = await client.zRange(deadLetterOrderKey, 0, safeLimit - 1);
+        if (ids.length === 0) {
+          break;
+        }
+        let removedStale = false;
+        deadLetters.length = 0;
+        for (const [index, id] of ids.entries()) {
+          const payload = await client.hGet(deadLetterIndexKey, id);
+          if (payload === null) {
+            await client.eval(REPAIR_DEAD_LETTER_ORDER_SCRIPT, {
+              keys: [deadLetterIndexKey, deadLetterOrderKey, deadLetterSequenceKey],
+              arguments: [id, ""],
+            });
+            removedStale = true;
+            continue;
+          }
+          const parsed = parseDeadLetterPayload(payload, index, now);
+          deadLetters.push(
+            parsed.storedId === id
+              ? parsed.deadLetter
+              : invalidDeadLetterDiagnostic(
+                  payload,
+                  index,
+                  "invalid_dead_letter_payload",
+                  now,
+                  id,
+                ).deadLetter,
+          );
+        }
+        if (!removedStale) {
+          break;
         }
       }
-      return deadLetters;
+      return deadLetters.slice(0, safeLimit);
     },
 
     replayDeadLetter,
