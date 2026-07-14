@@ -431,10 +431,11 @@ function isIdentifier(value: unknown): value is string {
 }
 
 function isContent(value: unknown): value is string {
-  return typeof value === "string" &&
-    value.trim().length > 0 &&
-    codePointLength(value) <= MAX_MEMORY_CONTENT_CHARS &&
-    !hasLoneSurrogate(value);
+  if (typeof value !== "string" || hasLoneSurrogate(value)) {
+    return false;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= MAX_MEMORY_CONTENT_CHARS;
 }
 
 function isMessageText(value: unknown): value is string {
@@ -469,11 +470,14 @@ function codePointLength(value: string): number {
 }
 
 function parseRetryAfterMs(value: string | null): number | undefined {
-  if (value === null || !/^(0|[1-9][0-9]{0,4})$/u.test(value)) {
+  if (value === null || value.length > 16 || !/^(0|[1-9][0-9]*)$/u.test(value)) {
     return undefined;
   }
   const seconds = Number(value);
-  return seconds <= MAX_RETRY_AFTER_SECONDS ? seconds * 1000 : undefined;
+  if (!Number.isSafeInteger(seconds)) {
+    return undefined;
+  }
+  return Math.min(MAX_RETRY_AFTER_SECONDS, Math.max(60, seconds)) * 1000;
 }
 
 function safeHeader(response: Response, name: string): string | null {

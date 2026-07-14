@@ -162,11 +162,32 @@ describe("validateCandidates", () => {
 
   it("rejects exact safely-normalized duplicates presented as new", () => {
     const run = runFixture();
-    run.existingMemories[0]!.content = "Launch   IS\tThursday.";
+    run.existingMemories[0]!.content = "Launch IS Thursday.";
 
     const result = validateCandidates({
       run,
       candidates: [candidateFixture({ content: "  launch is Thursday.  " })],
+    });
+
+    expect(result).toMatchObject({
+      accepted: [],
+      rejectedCount: 1,
+      duplicateCount: 1,
+      rejectionCodes: ["exact_duplicate"],
+    });
+  });
+
+  it.each([
+    ["NBSP persistence trimming", "Launch Plan", "\u00a0launch plan\u00a0"],
+    ["canonical accents", "Caf\u00e9", "Cafe\u0301"],
+    ["non-ASCII case", "\u00c5NGSTR\u00d6M", "\u00e5ngstr\u00f6m"],
+  ])("rejects Unicode-equivalent active-memory duplicates: %s", (_name, existing, proposed) => {
+    const run = runFixture();
+    run.existingMemories[0]!.content = existing;
+
+    const result = validateCandidates({
+      run,
+      candidates: [candidateFixture({ content: proposed })],
     });
 
     expect(result).toMatchObject({
@@ -201,6 +222,41 @@ describe("validateCandidates", () => {
       expect(result.rejectionCodes).toEqual(["invalid_content"]);
     },
   );
+
+  it.each([
+    ["4000 ASCII code units", "x".repeat(4000), true],
+    ["4001 ASCII code units", "x".repeat(4001), false],
+    ["2000 surrogate pairs", "\ud83d\ude00".repeat(2000), true],
+    ["2001 surrogate pairs", "\ud83d\ude00".repeat(2001), false],
+    ["trim before measuring", `  ${"x".repeat(4000)}  `, true],
+    ["lone high surrogate", String.fromCharCode(0xd800), false],
+    ["lone low surrogate", String.fromCharCode(0xdc00), false],
+  ])("uses Group Memory UTF-16 content admission: %s", (_name, content, valid) => {
+    const result = validateCandidates({
+      run: runFixture(),
+      candidates: [candidateFixture({ content })],
+    });
+
+    if (valid) {
+      expect(result.accepted).toHaveLength(1);
+      expect(result.accepted[0]!.content).toBe(content.trim());
+    } else {
+      expect(result).toMatchObject({ accepted: [], rejectedCount: 1 });
+      expect(result.rejectionCodes).toEqual(["invalid_content"]);
+    }
+  });
+
+  it("preserves trimmed decomposed content instead of persisting the NFC comparison key", () => {
+    const content = "  Re\u0301sume\u0301 policy  ";
+
+    const result = validateCandidates({
+      run: runFixture(),
+      candidates: [candidateFixture({ content })],
+    });
+
+    expect(result.accepted[0]!.content).toBe("Re\u0301sume\u0301 policy");
+    expect(result.accepted[0]!.content).not.toBe(content.trim().normalize("NFC"));
+  });
 
   it("rejects unknown fields and invalid finite numeric or enum values", () => {
     const invalidCandidates = [
@@ -256,7 +312,7 @@ describe("validateCandidates", () => {
       },
       {
         category: "project",
-        content: "Zebra launch",
+        content: "Zebra   launch",
         importance: 4,
         confidence: 0.95,
         evidenceMessageIds: ["message-1", "message-2"],

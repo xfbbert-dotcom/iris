@@ -239,21 +239,29 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
     expect(response.bodyRead).toBe(false);
   });
 
-  it("maps 429 with only a safe bounded integer retry delay", async () => {
-    const response = unreadableResponse(429, { "retry-after": "120" });
+  it.each([
+    ["0", 60_000],
+    ["1", 60_000],
+    ["59", 60_000],
+    ["60", 60_000],
+    ["86400", 86_400_000],
+    ["86401", 86_400_000],
+    [String(Number.MAX_SAFE_INTEGER), 86_400_000],
+  ])("clamps a valid integer Retry-After %s to %s ms", async (retryAfter, expectedMs) => {
+    const response = unreadableResponse(429, { "retry-after": retryAfter });
     const client = createClient(async () => response);
 
     await expect(client.extract(runFixture())).rejects.toEqual(
       expect.objectContaining({
         code: "rate_limited",
         retryable: true,
-        retryAfterMs: 120_000,
+        retryAfterMs: expectedMs,
       }),
     );
     expect(response.bodyRead).toBe(false);
   });
 
-  it.each(["-1", "+1", "1.0", "01", "86401", "999999999999999999999"])(
+  it.each(["-1", "+1", "1.0", "01", "9007199254740992", "999999999999999999999"])(
     "drops an unsafe or malformed retry delay without reading the body: %s",
     async (retryAfter) => {
       const response = unreadableResponse(429, { "retry-after": retryAfter });
@@ -296,6 +304,29 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
     await expect(client.extract(runFixture())).rejects.toEqual(
       expect.objectContaining({ code: "invalid_response", retryable: false }),
     );
+  });
+
+  it.each([
+    ["4000 ASCII code units", "x".repeat(4000), true],
+    ["4001 ASCII code units", "x".repeat(4001), false],
+    ["2000 surrogate pairs", "\ud83d\ude00".repeat(2000), true],
+    ["2001 surrogate pairs", "\ud83d\ude00".repeat(2001), false],
+    ["4000 trimmed code units", `  ${"x".repeat(4000)}  `, true],
+    ["lone high surrogate", String.fromCharCode(0xd800), false],
+    ["lone low surrogate", String.fromCharCode(0xdc00), false],
+  ])("uses persistence-aligned candidate content bounds: %s", async (_name, content, valid) => {
+    const client = createClient(async () =>
+      jsonResponse(responseFixture({ ...candidateWire(), content })),
+    );
+    const promise = client.extract(runFixture());
+
+    if (valid) {
+      await expect(promise).resolves.toMatchObject({
+        candidates: [expect.objectContaining({ content })],
+      });
+    } else {
+      await expect(promise).rejects.toMatchObject({ code: "invalid_response" });
+    }
   });
 
   it("never leaks token, URL credentials, response body, or run text in errors", async () => {

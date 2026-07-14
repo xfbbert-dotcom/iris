@@ -78,7 +78,7 @@ export function validateCandidates(input: {
   const existingMemoryIds = uniqueExistingMemoryIds(input.run);
   const existingContent = new Set(
     input.run.existingMemories
-      .map((memory) => normalizeContentForComparison(memory.content))
+      .map((memory) => canonicalizeContent(memory.content)?.comparisonKey)
       .filter((value): value is string => value !== undefined),
   );
   const accepted: Array<ValidatedMemoryCandidate & { comparisonKey: string }> = [];
@@ -104,8 +104,8 @@ export function validateCandidates(input: {
       reject("invalid_category");
       continue;
     }
-    const content = normalizeAcceptedContent(candidate.content);
-    if (content === undefined) {
+    const canonicalContent = canonicalizeContent(candidate.content);
+    if (canonicalContent === undefined) {
       reject("invalid_content");
       continue;
     }
@@ -145,7 +145,7 @@ export function validateCandidates(input: {
       continue;
     }
 
-    const comparisonKey = normalizeContentForComparison(content)!;
+    const { content, comparisonKey } = canonicalContent;
     if (existingContent.has(comparisonKey)) {
       duplicateCount += 1;
       reject("exact_duplicate");
@@ -268,25 +268,22 @@ function isExactCandidateRecord(value: unknown): value is Record<string, unknown
     REQUIRED_CANDIDATE_KEYS.every((key) => Object.hasOwn(value, key));
 }
 
-function normalizeAcceptedContent(value: unknown): string | undefined {
-  if (typeof value !== "string" || codePointLength(value) > MAX_CONTENT_CHARS) {
+function canonicalizeContent(value: unknown): {
+  content: string;
+  comparisonKey: string;
+} | undefined {
+  if (typeof value !== "string" || hasLoneSurrogate(value)) {
     return undefined;
   }
-  if (hasLoneSurrogate(value) || /[\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff]/u.test(value) || value.trim().length === 0) {
+  if (/[\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff]/u.test(value)) {
     return undefined;
   }
-  const normalized = value
-    .replace(/^[ \t\r\n\f\v]+|[ \t\r\n\f\v]+$/gu, "")
-    .replace(/[ \t\r\n\f\v]+/gu, " ");
-  return normalized.length === 0 ? undefined : normalized;
-}
-
-function normalizeContentForComparison(value: unknown): string | undefined {
-  const content = normalizeAcceptedContent(value);
-  if (content === undefined) {
+  const content = value.trim();
+  if (content.length === 0 || content.length > MAX_CONTENT_CHARS) {
     return undefined;
   }
-  return content.replace(/[A-Z]/gu, (character) => character.toLowerCase());
+  const comparisonKey = content.normalize("NFC").toLowerCase().normalize("NFC");
+  return { content, comparisonKey };
 }
 
 function isIdentifier(value: unknown): value is string {
