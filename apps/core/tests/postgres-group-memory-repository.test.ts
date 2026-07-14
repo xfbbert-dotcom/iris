@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -218,6 +218,66 @@ describe("createPostgresGroupMemoryRepository", () => {
     })).rejects.toBeInstanceOf(GroupMemoryIdempotencyConflictError);
   });
 
+  it("rejects a correction replay whose normalized request fingerprint differs", async () => {
+    const existingCorrection = memoryRow({
+      id: "memory-2",
+      idempotency_key: "correction-1",
+      origin: "operator",
+      created_by: "alice",
+      supersedes_memory_id: "memory-1",
+      request_fingerprint: "0".repeat(64),
+    });
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/where gm\.id = \$1[\s\S]+for update/u, [memoryRow()]),
+      step(/from group_memories[\s\S]+idempotency_key/u, [existingCorrection]),
+      step(/commit/u),
+    ]);
+    const repository = createPostgresGroupMemoryRepository({
+      dataSource: dataSource(client),
+    });
+
+    await expect(repository.correct({
+      memoryId: "memory-1",
+      content: "The launch is Thursday.",
+      idempotencyKey: "correction-1",
+      origin: "operator",
+      createdBy: "alice",
+    })).rejects.toBeInstanceOf(GroupMemoryIdempotencyConflictError);
+  });
+
+  it("returns the existing correction for an exact normalized request replay", async () => {
+    const correctionInput = {
+      memoryId: "memory-1",
+      content: "The launch is Thursday.",
+      idempotencyKey: "correction-1",
+      origin: "operator" as const,
+      createdBy: "alice",
+    };
+    const existingCorrection = memoryRow({
+      id: "memory-2",
+      idempotency_key: correctionInput.idempotencyKey,
+      origin: correctionInput.origin,
+      created_by: correctionInput.createdBy,
+      supersedes_memory_id: correctionInput.memoryId,
+      request_fingerprint: correctionRequestFingerprint(correctionInput),
+    });
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/where gm\.id = \$1[\s\S]+for update/u, [memoryRow()]),
+      step(/from group_memories[\s\S]+idempotency_key/u, [existingCorrection]),
+      step(/commit/u),
+    ]);
+    const repository = createPostgresGroupMemoryRepository({
+      dataSource: dataSource(client),
+    });
+
+    await expect(repository.correct(correctionInput)).resolves.toMatchObject({
+      created: false,
+      memory: { id: "memory-2", supersedesMemoryId: "memory-1" },
+    });
+  });
+
   it("rolls back a failed correction without superseding the original", async () => {
     const insertionError = new Error("insert failed");
     const client = scriptedClient([
@@ -325,18 +385,26 @@ runIfDatabase("PostgresGroupMemoryRepository with Postgres", () => {
     }
     const repository = createPostgresGroupMemoryRepository({ dataSource: pool });
 
-    await expect(repository.create({
+    const createMemoryInput = {
       groupId,
-      scope: "group",
-      category: "decision",
+      scope: "group" as const,
+      category: "decision" as const,
       content: "Launch Thursday.",
       importance: 4,
       confidence: 0.9,
       idempotencyKey: `create-${suffix}`,
-      origin: "operator",
+      origin: "operator" as const,
       createdBy: "alice",
       evidenceMessageIds: [messageId],
-    })).resolves.toMatchObject({ created: true, memory: { groupId, status: "active" } });
+    };
+    await expect(repository.create(createMemoryInput)).resolves.toMatchObject({
+      created: true,
+      memory: { groupId, status: "active" },
+    });
+    await expect(repository.create(createMemoryInput)).resolves.toMatchObject({
+      created: false,
+      memory: { groupId, status: "active" },
+    });
 
     await expect(pool.query("DELETE FROM conversation_messages WHERE id = $1", [messageId]))
       .rejects.toMatchObject({ code: "23503" });
@@ -356,13 +424,14 @@ runIfDatabase("PostgresGroupMemoryRepository with Postgres", () => {
 
     const [original] = await repository.listActiveByGroup({ groupId, limit: 8 });
     expect(original).toMatchObject({ content: "Launch Thursday.", status: "active" });
-    const correction = await repository.correct({
+    const correctionInput = {
       memoryId: original!.id,
       content: "Launch Friday.",
       idempotencyKey: `correct-${suffix}`,
       origin: "operator",
       createdBy: "alice",
-    });
+    } as const;
+    const correction = await repository.correct(correctionInput);
 
     expect(correction).toMatchObject({
       created: true,
@@ -374,6 +443,14 @@ runIfDatabase("PostgresGroupMemoryRepository with Postgres", () => {
         evidenceMessageIds: [messageId],
       },
     });
+    await expect(repository.correct(correctionInput)).resolves.toMatchObject({
+      created: false,
+      memory: { id: correction.memory.id },
+    });
+    await expect(repository.correct({
+      ...correctionInput,
+      importance: original!.importance,
+    })).rejects.toBeInstanceOf(GroupMemoryIdempotencyConflictError);
     await expect(repository.listActiveByGroup({ groupId, limit: 8 })).resolves.toEqual([
       expect.objectContaining({ id: correction.memory.id, content: "Launch Friday." }),
     ]);
@@ -477,11 +554,60 @@ function memoryRow(overrides: Record<string, unknown> = {}) {
     origin: "extractor",
     created_by: "memory-worker",
     supersedes_memory_id: null,
+    request_fingerprint: createRequestFingerprint(createInput()),
     evidence_message_ids: ["feishu:msg-1", "feishu:msg-2"],
     created_at: new Date("2026-07-14T00:00:00.000Z"),
     updated_at: new Date("2026-07-14T00:00:00.000Z"),
     ...overrides,
   };
+}
+
+function createRequestFingerprint(input: ReturnType<typeof createInput>): string {
+  return hashRequest({
+    version: 1,
+    operation: "create",
+    groupId: input.groupId,
+    scope: input.scope,
+    category: input.category,
+    threadKey: null,
+    content: input.content,
+    importance: input.importance,
+    confidence: input.confidence,
+    idempotencyKey: input.idempotencyKey,
+    origin: input.origin,
+    createdBy: input.createdBy,
+    evidenceMessageIds: [...new Set(input.evidenceMessageIds)].sort(),
+  });
+}
+
+function correctionRequestFingerprint(input: {
+  memoryId: string;
+  content: string;
+  importance?: number;
+  confidence?: number;
+  idempotencyKey: string;
+  origin: "extractor" | "operator" | "system";
+  createdBy: string;
+  evidenceMessageIds?: string[];
+}): string {
+  return hashRequest({
+    version: 1,
+    operation: "correct",
+    memoryId: input.memoryId,
+    content: input.content,
+    importance: input.importance ?? null,
+    confidence: input.confidence ?? null,
+    idempotencyKey: input.idempotencyKey,
+    origin: input.origin,
+    createdBy: input.createdBy,
+    evidenceMessageIds: input.evidenceMessageIds === undefined
+      ? null
+      : [...new Set(input.evidenceMessageIds)].sort(),
+  });
+}
+
+function hashRequest(value: Record<string, unknown>): string {
+  return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 }
 
 function expectedMemory(overrides: Record<string, unknown> = {}) {

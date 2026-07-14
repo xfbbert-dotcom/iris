@@ -42,6 +42,8 @@ curl --fail-with-body -X POST "$BASE_URL/internal/group-memories" \
 
 记录返回的 `memory.id` 为 `MEMORY_ORIGINAL`。再次提交完全相同的请求，必须返回同一 ID 且 `created=false`；保持同一 `groupId + idempotencyKey` 但修改正文或证据时，必须返回 `409 group_memory_idempotency_conflict`。
 
+纠错接口同样必须做精确请求重放校验：省略 `importance`、`confidence` 或 `evidenceMessageIds`，与显式传入可产生相同最终状态的值并不等价；复用同一纠错幂等键时必须返回 `409 group_memory_idempotency_conflict`。
+
 再用 `GROUP_A` 配合 `MESSAGE_B1` 创建记忆，必须失败，且数据库中不得出现该记忆。这证明证据不能跨群绑定。
 
 ## 4. 回答检索与 Context Anchor

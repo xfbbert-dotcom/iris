@@ -258,4 +258,21 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("memory_scope in ('group', 'thread', 'action')");
     expect(normalized).toContain("status in ('active', 'superseded')");
   });
+
+  it("adds a fail-closed request fingerprint to group-memory idempotency records", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0018_group_memory_request_fingerprints.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain(
+      "add column if not exists request_fingerprint text",
+    );
+    expect(normalized).toContain(
+      "set request_fingerprint = repeat('0', 64)",
+    );
+    expect(normalized).toContain("alter column request_fingerprint set not null");
+    expect(normalized).toContain("request_fingerprint ~ '^[0-9a-f]{64}$'");
+  });
 });

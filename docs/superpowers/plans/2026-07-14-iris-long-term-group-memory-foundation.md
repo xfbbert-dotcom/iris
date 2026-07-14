@@ -20,6 +20,7 @@
 - 最近原始群聊仍是 Context Anchor，必须位于提示词最底部；记忆不能稀释或覆盖 live chat。
 - 单次回答最多注入 8 条 active 记忆；单条格式化内容最多 600 字符。
 - 所有写操作必须有最大长度、有限数值、幂等键和内部 API 认证；不得记录记忆正文到审计摘要。
+- 幂等重放必须比较持久化的规范化请求 SHA-256；纠错请求省略可选字段与显式传入相同最终值属于不同请求，必须返回冲突。
 
 ---
 
@@ -160,7 +161,7 @@ Expected: FAIL because repository modules do not exist.
 
 - [ ] **Step 3: Implement repository with transactions**
 
-Use `randomUUID()` for IDs. Before insert, select every evidence message by ID and verify count and `chat_id` match `groupId`. Create and correction must use `BEGIN`/`COMMIT`, and `ROLLBACK` on every failure. Duplicate `(group_id, idempotency_key)` 只有在请求指纹完全一致时返回已有记忆；同键不同请求必须返回幂等冲突，不得误报成功。
+Use `randomUUID()` for IDs. Before insert, select every evidence message by ID and verify count and `chat_id` match `groupId`. Create and correction must use `BEGIN`/`COMMIT`, and `ROLLBACK` on every failure. Duplicate `(group_id, idempotency_key)` 只有在持久化的规范化请求 SHA-256 完全一致时返回已有记忆；同键不同请求必须返回幂等冲突，不得误报成功。新增 `0018_group_memory_request_fingerprints.sql` 为既有试验数据写入不可匹配的 fail-closed 占位指纹，禁止根据最终记忆状态猜测历史请求。
 
 Correction transaction order:
 
