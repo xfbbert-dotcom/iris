@@ -19,6 +19,88 @@ describe("assemblePromptContext", () => {
     expect(context.trim().endsWith("</live_chat_context>")).toBe(true);
   });
 
+  it("anchors group memories between documents and live chat", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [{ source: "doc-a", text: "Document evidence" }],
+      groupMemories: [{
+        id: "memory-1",
+        scope: "group",
+        category: "decision",
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1", "msg-2"],
+      }],
+      liveChatMessages: [{ speaker: "Alice", text: "Did the date change?" }],
+    });
+
+    expect(context.indexOf("<background_documents>")).toBeLessThan(
+      context.indexOf("<group_memories>"),
+    );
+    expect(context.indexOf("<group_memories>")).toBeLessThan(
+      context.indexOf("<live_chat_context>"),
+    );
+    expect(context).toContain(
+      '<memory id="memory-1" scope="group" category="decision" evidence_message_ids="msg-1,msg-2">Launch Thursday.</memory>',
+    );
+    expect(context.trim().endsWith("</live_chat_context>")).toBe(true);
+  });
+
+  it("filters blank memories and caps them at eight items", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      groupMemories: [
+        {
+          id: "blank",
+          scope: "group",
+          category: "summary",
+          content: "  ",
+          evidenceMessageIds: ["msg-blank"],
+        },
+        ...Array.from({ length: 10 }, (_, index) => ({
+          id: `memory-${index + 1}`,
+          scope: "group" as const,
+          category: "decision" as const,
+          content: `memory ${index + 1}`,
+          evidenceMessageIds: [`msg-${index + 1}`],
+        })),
+      ],
+      liveChatMessages: [],
+    });
+
+    expect(context).not.toContain('id="blank"');
+    expect(context).toContain('id="memory-1"');
+    expect(context).toContain('id="memory-8"');
+    expect(context).not.toContain('id="memory-9"');
+    expect(context.match(/<memory /g)).toHaveLength(8);
+  });
+
+  it("escapes and bounds group memory text and attributes", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      groupMemories: [{
+        id: `${'"<&'.repeat(300)} trailing-memory-id`,
+        scope: "thread",
+        category: "term",
+        content: `${"&".repeat(800)} trailing-memory-content`,
+        evidenceMessageIds: [`${'"<&'.repeat(500)} trailing-evidence`],
+      }],
+      liveChatMessages: [],
+    });
+    const formatted = context.match(
+      /<memory id="(?<id>.*?)" scope="thread" category="term" evidence_message_ids="(?<evidence>.*?)">(?<text>.*?)<\/memory>/s,
+    )?.groups;
+
+    expect(formatted).toBeDefined();
+    expect(formatted!.id.length).toBeLessThanOrEqual(512);
+    expect(formatted!.evidence.length).toBeLessThanOrEqual(1024);
+    expect(formatted!.text.length).toBeLessThanOrEqual(600);
+    expect(formatted!.id).toContain("[truncated]");
+    expect(formatted!.evidence).toContain("[truncated]");
+    expect(formatted!.text).toContain("[truncated]");
+    expect(context).not.toContain("trailing-memory-id");
+    expect(context).not.toContain("trailing-evidence");
+    expect(context).not.toContain("trailing-memory-content");
+  });
+
   it("limits live chat to the latest 20 messages", () => {
     const liveChatMessages = Array.from({ length: 25 }, (_, index) => ({
       speaker: "User",

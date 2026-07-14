@@ -1,3 +1,8 @@
+import type {
+  GroupMemoryCategory,
+  GroupMemoryScope,
+} from "./group-memory-repository.js";
+
 export type BackgroundDocument = {
   source: string;
   text: string;
@@ -8,8 +13,17 @@ export type LiveChatMessage = {
   text: string;
 };
 
+export type PromptGroupMemory = {
+  id: string;
+  scope: GroupMemoryScope;
+  category: GroupMemoryCategory;
+  content: string;
+  evidenceMessageIds: string[];
+};
+
 export type PromptContextInput = {
   backgroundDocuments: BackgroundDocument[];
+  groupMemories?: PromptGroupMemory[];
   liveChatMessages: LiveChatMessage[];
   liveChatLimit?: number;
 };
@@ -19,6 +33,10 @@ const MAX_LIVE_CHAT_LIMIT = 20;
 const MAX_BACKGROUND_DOCUMENT_LIMIT = 12;
 const MAX_BACKGROUND_DOCUMENT_SOURCE_ATTRIBUTE_CHARS = 512;
 const MAX_BACKGROUND_DOCUMENT_TEXT_CHARS = 1200;
+const MAX_GROUP_MEMORY_LIMIT = 8;
+const MAX_GROUP_MEMORY_ID_ATTRIBUTE_CHARS = 512;
+const MAX_GROUP_MEMORY_EVIDENCE_ATTRIBUTE_CHARS = 1024;
+const MAX_GROUP_MEMORY_TEXT_CHARS = 600;
 const MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS = 256;
 const MAX_LIVE_CHAT_MESSAGE_TEXT_CHARS = 2000;
 const TRUNCATION_MARKER = " ... [truncated]";
@@ -36,16 +54,37 @@ export function assemblePromptContext(input: PromptContextInput): string {
   const liveMessages = liveChatLimit === 0
     ? []
     : meaningfulLiveChatMessages.slice(-liveChatLimit);
+  const groupMemories = (input.groupMemories ?? [])
+    .filter((memory) => memory.id.trim().length > 0 && memory.content.trim().length > 0)
+    .slice(0, MAX_GROUP_MEMORY_LIMIT);
 
   return [
     "<background_documents>",
     ...backgroundDocuments.map(formatBackgroundDocument),
     "</background_documents>",
     "",
+    "<group_memories>",
+    ...groupMemories.map(formatGroupMemory),
+    "</group_memories>",
+    "",
     "<live_chat_context>",
     ...liveMessages.map(formatLiveChatMessage),
     "</live_chat_context>"
   ].join("\n");
+}
+
+function formatGroupMemory(memory: PromptGroupMemory): string {
+  const evidenceMessageIds = memory.evidenceMessageIds
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0)
+    .join(",");
+  return `<memory id="${formatXmlAttribute(
+    memory.id,
+    MAX_GROUP_MEMORY_ID_ATTRIBUTE_CHARS,
+  )}" scope="${memory.scope}" category="${memory.category}" evidence_message_ids="${formatXmlAttribute(
+    evidenceMessageIds,
+    MAX_GROUP_MEMORY_EVIDENCE_ATTRIBUTE_CHARS,
+  )}">${formatXmlText(memory.content, MAX_GROUP_MEMORY_TEXT_CHARS)}</memory>`;
 }
 
 function formatBackgroundDocument(document: BackgroundDocument): string {
