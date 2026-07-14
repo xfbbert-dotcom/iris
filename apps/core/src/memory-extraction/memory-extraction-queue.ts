@@ -35,6 +35,16 @@ export type ReplayMemoryExtractionDeadLettersResult = {
   unsupportedLegacyIds: string[];
 };
 
+export type MemoryExtractionTerminalErrorCode =
+  | "provider_unauthorized"
+  | "invalid_model_response"
+  | "corrupt_routing";
+
+export type RecoverMemoryExtractionProcessingResult = {
+  recoveredCount: number;
+  remainingCount: number;
+};
+
 export const MAX_MEMORY_EXTRACTION_IDENTIFIER_CHARS = 512;
 export const MAX_MEMORY_EXTRACTION_QUEUE_LIMIT = 100;
 export const MEMORY_EXTRACTION_SCHEMA_VERSION = 1 as const;
@@ -46,8 +56,15 @@ export const MAX_MEMORY_EXTRACTION_REQUEST_ID_CHARS =
 
 export interface MemoryExtractionQueue {
   enqueue(job: MemoryExtractionJob): Promise<void>;
+  recoverProcessing(input: {
+    limit: number;
+  }): Promise<RecoverMemoryExtractionProcessingResult>;
   dequeueBatch(limit: number, now?: Date): Promise<MemoryExtractionJob[]>;
   handleProcessedJob(job: MemoryExtractionJob): Promise<void>;
+  handleTerminalJob(input: {
+    job: MemoryExtractionJob;
+    errorCode: MemoryExtractionTerminalErrorCode;
+  }): Promise<{ action: "dead_lettered"; attempts: number }>;
   handleFailedJob(input: {
     job: MemoryExtractionJob;
     errorMessage: string;

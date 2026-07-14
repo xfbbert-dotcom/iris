@@ -41,7 +41,7 @@ describe("createMemoryExtractionWorker", () => {
     expect(dependencies.queue.dequeueBatch).toHaveBeenCalledWith(20, NOW);
     expect(dependencies.repository.claimRun).toHaveBeenCalledOnce();
     expect(dependencies.repository.claimRun).toHaveBeenCalledWith({
-      seedRequestId: "request-1",
+      requestIds: ["request-1", "request-2"],
       maxEvidenceMessages: 40,
       contextMessageLimit: 10,
       activeMemoryLimit: 8,
@@ -78,6 +78,44 @@ describe("createMemoryExtractionWorker", () => {
     expect(claimedRun.requestIds).toEqual(["request-1", "request-2"]);
   });
 
+  it("covers only the bounded same-group run and defers overflow jobs", async () => {
+    const jobs = Array.from(
+      { length: 41 },
+      (_, index) => job(`request-${String(index + 1).padStart(2, "0")}`),
+    );
+    const coveredRequestIds = jobs.slice(0, 40).map(({ requestId }) => requestId);
+    const dependencies = createDependencies({
+      jobs,
+      claimedRun: run({ requestIds: coveredRequestIds }),
+    });
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    const results = await worker.processBatch({ limit: 100 });
+
+    expect(dependencies.repository.claimRun).toHaveBeenCalledOnce();
+    expect(dependencies.repository.claimRun).toHaveBeenCalledWith(
+      expect.objectContaining({ requestIds: coveredRequestIds }),
+    );
+    expect(dependencies.client.extract).toHaveBeenCalledOnce();
+    expect(dependencies.repository.completeRun).toHaveBeenCalledOnce();
+    expect(dependencies.queue.handleProcessedJob).toHaveBeenCalledTimes(40);
+    expect(dependencies.queue.handleFailedJob).toHaveBeenCalledOnce();
+    expect(dependencies.queue.handleFailedJob).toHaveBeenCalledWith({
+      job: jobs[40],
+      errorMessage: "internal_error",
+      retryAt: new Date("2026-07-15T00:00:30.000Z"),
+    });
+    expect(results.slice(0, 40)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "completed", requestId: "request-01" }),
+        expect.objectContaining({ status: "completed", requestId: "request-40" }),
+      ]),
+    );
+    expect(results[40]).toEqual(
+      expect.objectContaining({ status: "failed", requestId: "request-41" }),
+    );
+  });
+
   it("permanently skips and ACKs disabled requests before claim or content load", async () => {
     const dependencies = createDependencies({ jobs: [job("request-1"), job("request-2")] });
     dependencies.runtimeController.canReadGroupContext.mockReturnValue(false);
@@ -106,6 +144,57 @@ describe("createMemoryExtractionWorker", () => {
     expect(dependencies.client.extract).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "terminal-DLQs forged routing without touching the durable request (runtime enabled=%s)",
+    async (runtimeEnabled) => {
+      const forgedJob = job("request-1", "forged-chat");
+      const dependencies = createDependencies({
+        jobs: [forgedJob],
+        routes: [{ requestId: "request-1", groupId: "chat-a", status: "pending" }],
+      });
+      dependencies.runtimeController.canProcessIncomingEvent.mockReturnValue(runtimeEnabled);
+      dependencies.runtimeController.canReadGroupContext.mockReturnValue(runtimeEnabled);
+      const worker = createMemoryExtractionWorker(dependencies);
+
+      await expect(worker.processBatch({ limit: 20 })).resolves.toEqual([
+        expect.objectContaining({
+          status: "failed",
+          requestId: "request-1",
+          classification: "invalid_queue_payload",
+          retryAction: "dead_lettered",
+        }),
+      ]);
+      expect(dependencies.queue.handleTerminalJob).toHaveBeenCalledWith({
+        job: forgedJob,
+        errorCode: "corrupt_routing",
+      });
+      expect(dependencies.repository.skipRequest).not.toHaveBeenCalled();
+      expect(dependencies.repository.failRun).not.toHaveBeenCalled();
+      expect(dependencies.repository.claimRun).not.toHaveBeenCalled();
+      expect(dependencies.repository.loadRunInput).not.toHaveBeenCalled();
+      expect(dependencies.client.extract).not.toHaveBeenCalled();
+    },
+  );
+
+  it("terminal-DLQs a stale or missing route without loading chat content", async () => {
+    const staleJob = job("request-missing", "old-chat");
+    const dependencies = createDependencies({ jobs: [staleJob], routes: [] });
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await worker.processBatch({ limit: 20 });
+
+    expect(dependencies.repository.getRequestRoutes).toHaveBeenCalledWith({
+      requestIds: ["request-missing"],
+    });
+    expect(dependencies.queue.handleTerminalJob).toHaveBeenCalledWith({
+      job: staleJob,
+      errorCode: "corrupt_routing",
+    });
+    expect(dependencies.repository.skipRequest).not.toHaveBeenCalled();
+    expect(dependencies.repository.claimRun).not.toHaveBeenCalled();
+    expect(dependencies.repository.loadRunInput).not.toHaveBeenCalled();
+  });
+
   it("permanently skips a run when policy changes immediately before apply", async () => {
     const dependencies = createDependencies({ jobs: [job("request-1"), job("request-2")] });
     dependencies.runtimeController.canReadGroupContext
@@ -127,8 +216,10 @@ describe("createMemoryExtractionWorker", () => {
   });
 
   it("ACKs a completed duplicate without a model or apply call", async () => {
-    const dependencies = createDependencies({ jobs: [job("request-1")] });
-    dependencies.repository.claimRun.mockResolvedValue(undefined);
+    const dependencies = createDependencies({
+      jobs: [job("request-1")],
+      routes: [{ requestId: "request-1", groupId: "chat-a", status: "completed", runId: "run-1" }],
+    });
     const worker = createMemoryExtractionWorker(dependencies);
 
     await expect(worker.processBatch({ limit: 20 })).resolves.toEqual([
@@ -139,6 +230,7 @@ describe("createMemoryExtractionWorker", () => {
     );
     expect(dependencies.client.extract).not.toHaveBeenCalled();
     expect(dependencies.repository.completeRun).not.toHaveBeenCalled();
+    expect(dependencies.repository.claimRun).not.toHaveBeenCalled();
   });
 
   it("requeues a stale run without ACK, model, or apply", async () => {
@@ -251,10 +343,6 @@ describe("createMemoryExtractionWorker", () => {
     dependencies.client.extract.mockRejectedValue(
       new AiWorkerMemoryExtractionError("unauthorized", false),
     );
-    dependencies.queue.handleFailedJob.mockResolvedValue({
-      action: "dead_lettered",
-      attempts: 1,
-    });
     const worker = createMemoryExtractionWorker(dependencies);
 
     await expect(worker.processBatch({ limit: 20 })).resolves.toEqual([
@@ -268,16 +356,20 @@ describe("createMemoryExtractionWorker", () => {
       runId: "run-1",
       classification: "provider_unauthorized",
     });
-    expect(dependencies.queue.handleFailedJob).toHaveBeenCalledWith({
+    expect(dependencies.queue.handleTerminalJob).toHaveBeenCalledWith({
       job: expect.objectContaining({ requestId: "request-1" }),
-      errorMessage: "internal_error",
+      errorCode: "provider_unauthorized",
     });
+    expect(dependencies.queue.handleFailedJob).not.toHaveBeenCalled();
   });
 
-  it("does not repeat the model for an automatically requeued terminal run", async () => {
+  it("does not reset a terminal run budget for a fresh replacement job", async () => {
     const dependencies = createDependencies({
-      jobs: [job("request-1", "chat-a", 1)],
-      claimedRun: run({ previousFailureClassification: "provider_unauthorized" }),
+      jobs: [job("request-1", "chat-a", 0)],
+      claimedRun: run({
+        requestIds: ["request-1"],
+        previousFailureClassification: "provider_unauthorized",
+      }),
     });
     const worker = createMemoryExtractionWorker(dependencies);
 
@@ -285,9 +377,83 @@ describe("createMemoryExtractionWorker", () => {
 
     expect(dependencies.client.extract).not.toHaveBeenCalled();
     expect(dependencies.repository.completeRun).not.toHaveBeenCalled();
+    expect(dependencies.queue.handleTerminalJob).toHaveBeenCalledWith({
+      job: expect.objectContaining({ requestId: "request-1", attempts: 0 }),
+      errorCode: "provider_unauthorized",
+    });
+    expect(dependencies.queue.handleFailedJob).not.toHaveBeenCalled();
+  });
+
+  it("inherits a terminal multi-request run budget from a recovered job subset", async () => {
+    const recoveredJob = job("request-1", "chat-a", 0);
+    const dependencies = createDependencies({
+      jobs: [recoveredJob],
+      routes: [{
+        requestId: "request-1",
+        groupId: "chat-a",
+        status: "processing",
+        runId: "run-1",
+      }],
+      claimedRun: run({ previousFailureClassification: "provider_unauthorized" }),
+    });
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await expect(worker.processBatch({ limit: 1 })).resolves.toEqual([
+      expect.objectContaining({
+        status: "failed",
+        requestId: "request-1",
+        classification: "provider_unauthorized",
+        retryAction: "dead_lettered",
+      }),
+    ]);
+    expect(dependencies.client.extract).not.toHaveBeenCalled();
+    expect(dependencies.queue.handleTerminalJob).toHaveBeenCalledWith({
+      job: recoveredJob,
+      errorCode: "provider_unauthorized",
+    });
+    expect(dependencies.queue.handleFailedJob).not.toHaveBeenCalled();
+  });
+
+  it("advances at most one durable run scope for a same-group batch", async () => {
+    const jobs = [job("request-1"), job("request-2")];
+    const dependencies = createDependencies({
+      jobs,
+      routes: [
+        {
+          requestId: "request-1",
+          groupId: "chat-a",
+          status: "processing",
+          runId: "run-1",
+        },
+        {
+          requestId: "request-2",
+          groupId: "chat-a",
+          status: "processing",
+          runId: "run-2",
+        },
+      ],
+      claimedRun: run({ requestIds: ["request-1"] }),
+    });
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await expect(worker.processBatch({ limit: 20 })).resolves.toEqual([
+      expect.objectContaining({ status: "completed", requestId: "request-1" }),
+      expect.objectContaining({
+        status: "failed",
+        requestId: "request-2",
+        retryAction: "requeued",
+      }),
+    ]);
+    expect(dependencies.repository.claimRun).toHaveBeenCalledWith(
+      expect.objectContaining({ requestIds: ["request-1"] }),
+    );
+    expect(dependencies.client.extract).toHaveBeenCalledOnce();
+    expect(dependencies.repository.completeRun).toHaveBeenCalledOnce();
+    expect(dependencies.queue.handleProcessedJob).toHaveBeenCalledWith(jobs[0]);
     expect(dependencies.queue.handleFailedJob).toHaveBeenCalledWith({
-      job: expect.objectContaining({ requestId: "request-1", attempts: 1 }),
+      job: jobs[1],
       errorMessage: "internal_error",
+      retryAt: new Date("2026-07-15T00:00:30.000Z"),
     });
   });
 
@@ -301,8 +467,8 @@ describe("createMemoryExtractionWorker", () => {
         jobs: [job("request-1", "chat-a", previousFailureClassification === undefined ? 0 : 1)],
         claimedRun: run(
           previousFailureClassification === undefined
-            ? {}
-            : { previousFailureClassification },
+            ? { requestIds: ["request-1"] }
+            : { requestIds: ["request-1"], previousFailureClassification },
         ),
       });
       dependencies.client.extract.mockRejectedValue(
@@ -316,13 +482,45 @@ describe("createMemoryExtractionWorker", () => {
         runId: "run-1",
         classification: expectedClassification,
       });
-      expect(dependencies.queue.handleFailedJob).toHaveBeenCalledWith({
-        job: expect.objectContaining({ requestId: "request-1" }),
-        errorMessage: "invalid_model_response",
-        ...(delayed ? { retryAt: new Date("2026-07-15T00:00:30.000Z") } : {}),
-      });
+      if (delayed) {
+        expect(dependencies.queue.handleFailedJob).toHaveBeenCalledWith({
+          job: expect.objectContaining({ requestId: "request-1" }),
+          errorMessage: "invalid_model_response",
+          retryAt: new Date("2026-07-15T00:00:30.000Z"),
+        });
+        expect(dependencies.queue.handleTerminalJob).not.toHaveBeenCalled();
+      } else {
+        expect(dependencies.queue.handleTerminalJob).toHaveBeenCalledWith({
+          job: expect.objectContaining({ requestId: "request-1" }),
+          errorCode: "invalid_model_response",
+        });
+        expect(dependencies.queue.handleFailedJob).not.toHaveBeenCalled();
+      }
     },
   );
+
+  it("requeues a run that becomes stale inside atomic completion without reporting success", async () => {
+    const dependencies = createDependencies({ jobs: [job("request-1")] });
+    dependencies.repository.completeRun.mockRejectedValue(new MemoryExtractionStaleRunError());
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await expect(worker.processBatch({ limit: 20 })).resolves.toEqual([
+      expect.objectContaining({
+        status: "failed",
+        classification: "input_stale",
+        retryAction: "requeued",
+      }),
+    ]);
+    expect(dependencies.queue.handleProcessedJob).not.toHaveBeenCalled();
+    expect(dependencies.queue.handleFailedJob).toHaveBeenCalledWith({
+      job: expect.objectContaining({ requestId: "request-1" }),
+      errorMessage: "internal_error",
+      retryAt: new Date("2026-07-15T00:00:30.000Z"),
+    });
+    expect(dependencies.auditLog.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "memory_extraction_completed" }),
+    );
+  });
 
   it("deterministically completes an empty accepted set with bounded diagnostics", async () => {
     const dependencies = createDependencies({ jobs: [job("request-1")] });
@@ -392,6 +590,35 @@ describe("createMemoryExtractionWorker", () => {
     });
   });
 
+  it("recovers exhausted queue-handler work on the next batch without restarting", async () => {
+    const dependencies = createDependencies({ jobs: [job("request-1")] });
+    dependencies.repository.getRequestRoutes
+      .mockResolvedValueOnce([
+        { requestId: "request-1", groupId: "chat-a", status: "pending" },
+      ])
+      .mockResolvedValueOnce([
+        { requestId: "request-1", groupId: "chat-a", status: "completed", runId: "run-1" },
+      ]);
+    dependencies.queue.recoverProcessing
+      .mockResolvedValueOnce({ recoveredCount: 0, remainingCount: 0 })
+      .mockResolvedValueOnce({ recoveredCount: 1, remainingCount: 0 });
+    dependencies.queue.handleProcessedJob.mockRejectedValue(new Error("redis unavailable"));
+    dependencies.queue.handleFailedJob.mockRejectedValue(new Error("redis unavailable"));
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await expect(worker.processBatch({ limit: 20 })).rejects.toThrow(
+      "memory extraction queue recovery failed",
+    );
+    dependencies.queue.handleProcessedJob.mockResolvedValue(undefined);
+
+    await expect(worker.processBatch({ limit: 20 })).resolves.toEqual([
+      expect.objectContaining({ status: "skipped", reason: "already_terminal" }),
+    ]);
+    expect(dependencies.queue.recoverProcessing).toHaveBeenCalledTimes(2);
+    expect(dependencies.client.extract).toHaveBeenCalledOnce();
+    expect(dependencies.repository.completeRun).toHaveBeenCalledOnce();
+  });
+
   it("isolates audit sink failure after commit and reports only a bounded observer error", async () => {
     const onAuditError = vi.fn();
     const dependencies = createDependencies({ jobs: [job("request-1")], onAuditError });
@@ -430,13 +657,26 @@ describe("createMemoryExtractionWorker", () => {
 function createDependencies(input: {
   jobs: MemoryExtractionJob[];
   claimedRun?: ClaimedMemoryExtractionRun;
+  routes?: Array<{
+    requestId: string;
+    groupId: string;
+    status: "pending" | "processing" | "completed" | "skipped";
+    runId?: string;
+  }>;
   onAuditError?: (error: unknown) => void;
 }) {
-  const claimedRun = input.claimedRun ?? run();
+  const claimedRun = input.claimedRun ?? run({
+    requestIds: input.jobs.map(({ requestId }) => requestId),
+  });
   const queue = {
     enqueue: vi.fn(async () => undefined),
+    recoverProcessing: vi.fn(async () => ({ recoveredCount: 0, remainingCount: 0 })),
     dequeueBatch: vi.fn(async () => input.jobs),
     handleProcessedJob: vi.fn(async () => undefined),
+    handleTerminalJob: vi.fn(async ({ job: terminalJob }: { job: MemoryExtractionJob }) => ({
+      action: "dead_lettered" as const,
+      attempts: terminalJob.attempts + 1,
+    })),
     handleFailedJob: vi.fn(
       async (): Promise<Awaited<ReturnType<MemoryExtractionQueue["handleFailedJob"]>>> => ({
         action: "requeued",
@@ -460,6 +700,13 @@ function createDependencies(input: {
   };
   const repository = {
     registerRequest: vi.fn(),
+    getRequestRoutes: vi.fn(async () =>
+      input.routes ?? input.jobs.map(({ requestId, groupId }) => ({
+        requestId,
+        groupId,
+        status: "pending" as const,
+      })),
+    ),
     claimRun: vi.fn(async () => claimedRun as ClaimedMemoryExtractionRun | undefined),
     loadRunInput: vi.fn(
       async (): Promise<

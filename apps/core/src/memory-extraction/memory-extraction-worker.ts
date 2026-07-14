@@ -8,10 +8,12 @@ import {
   MAX_MEMORY_EXTRACTION_QUEUE_LIMIT,
   type MemoryExtractionJob,
   type MemoryExtractionQueue,
+  type MemoryExtractionTerminalErrorCode,
 } from "./memory-extraction-queue.js";
 import type {
   ClaimedMemoryExtractionRun,
   MemoryExtractionRepository,
+  MemoryExtractionRequestRoute,
 } from "./memory-extraction-repository.js";
 import { MemoryExtractionStaleRunError } from "./memory-extraction-repository.js";
 
@@ -79,6 +81,7 @@ export type MemoryExtractionWorkerDependencies = {
 };
 
 type IndexedJob = { job: MemoryExtractionJob; index: number };
+type RoutedJob = IndexedJob & { route: MemoryExtractionRequestRoute };
 
 export function createMemoryExtractionWorker(input: MemoryExtractionWorkerDependencies) {
   const now = input.now ?? (() => new Date());
@@ -87,140 +90,191 @@ export function createMemoryExtractionWorker(input: MemoryExtractionWorkerDepend
     async processBatch({ limit }: { limit: number }): Promise<MemoryExtractionWorkerResult[]> {
       const safeLimit = sanitizeBatchLimit(limit);
       const dequeueAt = requireValidNow(now());
+      await recoverProcessing(input.queue);
       const jobs = await input.queue.dequeueBatch(safeLimit, dequeueAt);
       const indexedJobs = jobs.map((job, index) => ({ job, index }));
-      const groups = groupJobs(indexedJobs);
       const results = new Map<number, MemoryExtractionWorkerResult>();
+      if (indexedJobs.length === 0) {
+        return [];
+      }
+
+      let routes: MemoryExtractionRequestRoute[];
+      try {
+        routes = await input.repository.getRequestRoutes({
+          requestIds: indexedJobs.map(({ job }) => job.requestId),
+        });
+      } catch {
+        await failIndexedJobs({
+          queue: input.queue,
+          jobs: indexedJobs,
+          results,
+          classification: "internal_error",
+          errorMessage: "internal_error",
+          retryAt: (job) => retryAtForJob(dequeueAt, job),
+        });
+        return orderedResults(indexedJobs, results);
+      }
+
+      let routeByRequestId: Map<string, MemoryExtractionRequestRoute>;
+      try {
+        routeByRequestId = indexRoutes(routes, indexedJobs);
+      } catch {
+        await failIndexedJobs({
+          queue: input.queue,
+          jobs: indexedJobs,
+          results,
+          classification: "internal_error",
+          errorMessage: "internal_error",
+          retryAt: (job) => retryAtForJob(dequeueAt, job),
+        });
+        return orderedResults(indexedJobs, results);
+      }
+      const groups = new Map<string, RoutedJob[]>();
+      for (const indexedJob of indexedJobs) {
+        const route = routeByRequestId.get(indexedJob.job.requestId);
+        if (route === undefined || route.groupId !== indexedJob.job.groupId) {
+          await recordAudit(input, {
+            type: "memory_extraction_failed",
+            documentId: indexedJob.job.requestId,
+            fragmentIds: [],
+            message: "corrupt_routing",
+          });
+          await terminalIndexedJobs({
+            queue: input.queue,
+            jobs: [indexedJob],
+            results,
+            classification: "invalid_queue_payload",
+            errorCode: "corrupt_routing",
+            ...(route === undefined ? {} : { groupId: route.groupId }),
+          });
+          continue;
+        }
+        if (route.status === "completed" || route.status === "skipped") {
+          results.set(
+            indexedJob.index,
+            await acknowledgeResult({
+              queue: input.queue,
+              indexedJob,
+              now: dequeueAt,
+              success: {
+                status: "skipped",
+                requestId: route.requestId,
+                groupId: route.groupId,
+                ...(route.runId === undefined ? {} : { runId: route.runId }),
+                reason: "already_terminal",
+              },
+            }),
+          );
+          continue;
+        }
+        const routedJob = { ...indexedJob, route };
+        const group = groups.get(route.groupId);
+        if (group === undefined) {
+          groups.set(route.groupId, [routedJob]);
+        } else {
+          group.push(routedJob);
+        }
+      }
 
       for (const groupJobs of groups.values()) {
         await processGroup({ dependencies: input, jobs: groupJobs, results, now: dequeueAt });
       }
 
-      return indexedJobs.map(({ index }) => {
-        const result = results.get(index);
-        if (result === undefined) {
-          throw new Error("memory extraction worker result is incomplete");
-        }
-        return result;
-      });
+      return orderedResults(indexedJobs, results);
     },
   };
 }
 
 async function processGroup(input: {
   dependencies: MemoryExtractionWorkerDependencies;
-  jobs: IndexedJob[];
+  jobs: RoutedJob[];
   results: Map<number, MemoryExtractionWorkerResult>;
   now: Date;
 }): Promise<void> {
   const { dependencies, jobs, results, now } = input;
-  const groupId = jobs[0]!.job.groupId;
-  let seedIndex = 0;
-
-  while (seedIndex < jobs.length) {
-    const current = jobs[seedIndex]!;
-    if (!runtimeAllows(dependencies.runtimeController, groupId)) {
-      await skipBeforeLoad({ dependencies, indexedJob: current, results, now });
-      seedIndex += 1;
-      continue;
+  const groupId = jobs[0]!.route.groupId;
+  if (!runtimeAllows(dependencies.runtimeController, groupId)) {
+    for (const indexedJob of jobs) {
+      await skipBeforeLoad({ dependencies, indexedJob, results, now, groupId });
     }
-
-    const cooldown = await getActiveCooldown(dependencies.queue, now);
-    if (cooldown !== undefined) {
-      await failIndexedJobs({
-        queue: dependencies.queue,
-        jobs: jobs.slice(seedIndex),
-        results,
-        classification: "provider_rate_limited",
-        errorMessage: "provider_rate_limited",
-        retryAt: () => cooldown,
-      });
-      return;
-    }
-
-    let claimedRun: ClaimedMemoryExtractionRun | undefined;
-    try {
-      claimedRun = await dependencies.repository.claimRun({
-        seedRequestId: current.job.requestId,
-        maxEvidenceMessages: MAX_EVIDENCE_MESSAGES,
-        contextMessageLimit: MAX_CONTEXT_MESSAGES,
-        activeMemoryLimit: MAX_ACTIVE_MEMORIES,
-      });
-    } catch (error) {
-      const stale = error instanceof MemoryExtractionStaleRunError;
-      await failIndexedJobs({
-        queue: dependencies.queue,
-        jobs: jobs.slice(seedIndex),
-        results,
-        classification: stale ? "input_stale" : "internal_error",
-        errorMessage: "internal_error",
-        retryAt: (job) => retryAtForJob(now, job),
-      });
-      return;
-    }
-
-    if (claimedRun === undefined) {
-      results.set(
-        current.index,
-        await acknowledgeResult({
-          queue: dependencies.queue,
-          indexedJob: current,
-          now,
-          success: {
-            status: "skipped",
-            requestId: current.job.requestId,
-            groupId: current.job.groupId,
-            reason: "already_terminal",
-          },
-        }),
-      );
-      seedIndex += 1;
-      continue;
-    }
-
-    await processClaimedRun({
-      dependencies,
-      jobs: jobs.slice(seedIndex),
-      claimedRun,
-      results,
-      now,
-      routingGroupId: groupId,
-    });
     return;
   }
-}
 
-async function processClaimedRun(input: {
-  dependencies: MemoryExtractionWorkerDependencies;
-  jobs: IndexedJob[];
-  claimedRun: ClaimedMemoryExtractionRun;
-  results: Map<number, MemoryExtractionWorkerResult>;
-  now: Date;
-  routingGroupId: string;
-}): Promise<void> {
-  const { dependencies, jobs, claimedRun, results, now, routingGroupId } = input;
-  const coveredRequestIds = new Set(claimedRun.requestIds);
-  const coveredJobs = jobs.filter(({ job }) => coveredRequestIds.has(job.requestId));
-  const uncoveredJobs = jobs.filter(({ job }) => !coveredRequestIds.has(job.requestId));
-
-  if (claimedRun.groupId !== routingGroupId || coveredJobs.length === 0) {
-    await persistRunFailure(dependencies.repository, claimedRun.id, "invalid_queue_payload");
-    await recordAudit(dependencies, {
-      type: "memory_extraction_failed",
-      documentId: claimedRun.id,
-      fragmentIds: evidenceIds(claimedRun),
-      message: "invalid_queue_payload",
-    });
+  const cooldown = await getActiveCooldown(dependencies.queue, now);
+  if (cooldown !== undefined) {
     await failIndexedJobs({
       queue: dependencies.queue,
       jobs,
       results,
-      runId: claimedRun.id,
-      classification: "invalid_queue_payload",
-      errorMessage: "invalid_queue_payload",
+      classification: "provider_rate_limited",
+      errorMessage: "provider_rate_limited",
+      retryAt: () => cooldown,
     });
     return;
   }
+
+  const scopedJobs = jobs.filter((job) => sameDurableRunScope(job.route, jobs[0]!.route));
+  const runJobs = scopedJobs.slice(0, MAX_EVIDENCE_MESSAGES);
+  const runJobIndexes = new Set(runJobs.map(({ index }) => index));
+  const deferredJobs = jobs.filter(({ index }) => !runJobIndexes.has(index));
+  let claimedRun: ClaimedMemoryExtractionRun | undefined;
+  try {
+    claimedRun = await dependencies.repository.claimRun({
+      requestIds: runJobs.map(({ route }) => route.requestId),
+      maxEvidenceMessages: MAX_EVIDENCE_MESSAGES,
+      contextMessageLimit: MAX_CONTEXT_MESSAGES,
+      activeMemoryLimit: MAX_ACTIVE_MEMORIES,
+    });
+  } catch (error) {
+    const stale = error instanceof MemoryExtractionStaleRunError;
+    await failIndexedJobs({
+      queue: dependencies.queue,
+      jobs: runJobs,
+      results,
+      classification: stale ? "input_stale" : "internal_error",
+      errorMessage: "internal_error",
+      retryAt: (job) => retryAtForJob(now, job),
+    });
+    await deferJobs(dependencies.queue, deferredJobs, results, now);
+    return;
+  }
+
+  if (claimedRun === undefined) {
+    await reconcileUnclaimedJobs({ dependencies, jobs: runJobs, results, now });
+    await deferJobs(dependencies.queue, deferredJobs, results, now);
+    return;
+  }
+
+  const expectedRequestIds = runJobs.map(({ route }) => route.requestId);
+  if (
+    claimedRun.groupId !== groupId ||
+    !claimedRunMatchesRoutes(claimedRun, runJobs, expectedRequestIds)
+  ) {
+    await failIndexedJobs({
+      queue: dependencies.queue,
+      jobs: runJobs,
+      results,
+      runId: claimedRun.id,
+      classification: "internal_error",
+      errorMessage: "internal_error",
+      retryAt: (job) => retryAtForJob(now, job),
+    });
+    await deferJobs(dependencies.queue, deferredJobs, results, now);
+    return;
+  }
+
+  await processClaimedRun({ dependencies, jobs: runJobs, claimedRun, results, now });
+  await deferJobs(dependencies.queue, deferredJobs, results, now);
+}
+
+async function processClaimedRun(input: {
+  dependencies: MemoryExtractionWorkerDependencies;
+  jobs: RoutedJob[];
+  claimedRun: ClaimedMemoryExtractionRun;
+  results: Map<number, MemoryExtractionWorkerResult>;
+  now: Date;
+}): Promise<void> {
+  const { dependencies, jobs, claimedRun, results, now } = input;
 
   let loaded:
     | Awaited<ReturnType<MemoryExtractionRepository["loadRunInput"]>>
@@ -255,7 +309,7 @@ async function processClaimedRun(input: {
   if (loaded.status === "completed") {
     await acknowledgeIndexedJobs({
       dependencies,
-      jobs: coveredJobs,
+      jobs,
       results,
       now,
       result: (job) => ({
@@ -266,38 +320,39 @@ async function processClaimedRun(input: {
         reason: "already_terminal",
       }),
     });
-    await requeueUncovered({ dependencies, jobs: uncoveredJobs, results, now });
     return;
   }
   if (loaded.status === "not_found" || !sameRun(claimedRun, loaded.run)) {
-    await persistRunFailure(dependencies.repository, claimedRun.id, "invalid_queue_payload");
     await failIndexedJobs({
       queue: dependencies.queue,
       jobs,
       results,
       runId: claimedRun.id,
-      classification: "invalid_queue_payload",
-      errorMessage: "invalid_queue_payload",
+      classification: "internal_error",
+      errorMessage: "internal_error",
+      retryAt: (job) => retryAtForJob(now, job),
     });
     return;
   }
 
   const run = loaded.run;
-  const previousFailure = claimedRun.previousFailureClassification;
-  if (
-    coveredJobs.every(({ job }) => job.attempts > 0) &&
-    isTerminalFailure(previousFailure)
-  ) {
+  const previousFailure = run.previousFailureClassification;
+  if (isTerminalFailure(previousFailure)) {
     await persistRunFailure(dependencies.repository, run.id, previousFailure);
-    await failIndexedJobs({
+    await recordAudit(dependencies, {
+      type: "memory_extraction_failed",
+      documentId: run.id,
+      fragmentIds: evidenceIds(run),
+      message: publicFailureClassification(previousFailure),
+    });
+    await terminalIndexedJobs({
       queue: dependencies.queue,
-      jobs: coveredJobs,
+      jobs,
       results,
       runId: run.id,
       classification: publicFailureClassification(previousFailure),
-      errorMessage: terminalQueueError(previousFailure),
+      errorCode: terminalErrorCode(previousFailure),
     });
-    await requeueUncovered({ dependencies, jobs: uncoveredJobs, results, now });
     return;
   }
 
@@ -310,8 +365,7 @@ async function processClaimedRun(input: {
   } catch (error) {
     await handleModelFailure({
       dependencies,
-      jobs: coveredJobs,
-      uncoveredJobs,
+      jobs,
       results,
       run,
       previousFailure,
@@ -327,8 +381,7 @@ async function processClaimedRun(input: {
   } catch {
     await handleModelFailure({
       dependencies,
-      jobs: coveredJobs,
-      uncoveredJobs,
+      jobs,
       results,
       run,
       previousFailure,
@@ -347,14 +400,13 @@ async function processClaimedRun(input: {
     } catch {
       await failIndexedJobs({
         queue: dependencies.queue,
-        jobs: coveredJobs,
+        jobs,
         results,
         runId: run.id,
         classification: "internal_error",
         errorMessage: "internal_error",
         retryAt: (job) => retryAtForJob(now, job),
       });
-      await requeueUncovered({ dependencies, jobs: uncoveredJobs, results, now });
       return;
     }
     await recordAudit(dependencies, {
@@ -365,7 +417,7 @@ async function processClaimedRun(input: {
     });
     await acknowledgeIndexedJobs({
       dependencies,
-      jobs: coveredJobs,
+      jobs,
       results,
       now,
       result: (job) => ({
@@ -376,7 +428,6 @@ async function processClaimedRun(input: {
         reason: "runtime_disabled_before_apply",
       }),
     });
-    await requeueUncovered({ dependencies, jobs: uncoveredJobs, results, now });
     return;
   }
 
@@ -395,17 +446,17 @@ async function processClaimedRun(input: {
         rejectionCodes: [...validation.rejectionCodes],
       },
     });
-  } catch {
+  } catch (error) {
+    const stale = error instanceof MemoryExtractionStaleRunError;
     await failIndexedJobs({
       queue: dependencies.queue,
-      jobs: coveredJobs,
+      jobs,
       results,
       runId: run.id,
-      classification: "internal_error",
+      classification: stale ? "input_stale" : "internal_error",
       errorMessage: "internal_error",
       retryAt: (job) => retryAtForJob(now, job),
     });
-    await requeueUncovered({ dependencies, jobs: uncoveredJobs, results, now });
     return;
   }
 
@@ -417,7 +468,7 @@ async function processClaimedRun(input: {
   });
   await acknowledgeIndexedJobs({
     dependencies,
-    jobs: coveredJobs,
+    jobs,
     results,
     now,
     result: (job) => ({
@@ -429,7 +480,6 @@ async function processClaimedRun(input: {
       memoryIds: [...completion.memoryIds],
     }),
   });
-  await requeueUncovered({ dependencies, jobs: uncoveredJobs, results, now });
 }
 
 async function skipBeforeLoad(input: {
@@ -437,8 +487,9 @@ async function skipBeforeLoad(input: {
   indexedJob: IndexedJob;
   results: Map<number, MemoryExtractionWorkerResult>;
   now: Date;
+  groupId: string;
 }): Promise<void> {
-  const { dependencies, indexedJob, results, now } = input;
+  const { dependencies, indexedJob, results, now, groupId } = input;
   try {
     await dependencies.repository.skipRequest({
       requestId: indexedJob.job.requestId,
@@ -470,7 +521,7 @@ async function skipBeforeLoad(input: {
       success: {
         status: "skipped",
         requestId: indexedJob.job.requestId,
-        groupId: indexedJob.job.groupId,
+        groupId,
         reason: "runtime_disabled_before_load",
       },
     }),
@@ -479,8 +530,7 @@ async function skipBeforeLoad(input: {
 
 async function handleModelFailure(input: {
   dependencies: MemoryExtractionWorkerDependencies;
-  jobs: IndexedJob[];
-  uncoveredJobs: IndexedJob[];
+  jobs: RoutedJob[];
   results: Map<number, MemoryExtractionWorkerResult>;
   run: ClaimedMemoryExtractionRun;
   previousFailure: string | undefined;
@@ -514,12 +564,6 @@ async function handleModelFailure(input: {
       errorMessage: "internal_error",
       retryAt: (job) => retryAtForJob(input.now, job),
     });
-    await requeueUncovered({
-      dependencies: input.dependencies,
-      jobs: input.uncoveredJobs,
-      results: input.results,
-      now: input.now,
-    });
     return;
   }
 
@@ -529,21 +573,26 @@ async function handleModelFailure(input: {
     fragmentIds: evidenceIds(input.run),
     message: classified.publicClassification,
   });
-  await failIndexedJobs({
-    queue: input.dependencies.queue,
-    jobs: input.jobs,
-    results: input.results,
-    runId: input.run.id,
-    classification: classified.publicClassification,
-    errorMessage: classified.queueError,
-    ...(classified.retryAt === undefined ? {} : { retryAt: classified.retryAt }),
-  });
-  await requeueUncovered({
-    dependencies: input.dependencies,
-    jobs: input.uncoveredJobs,
-    results: input.results,
-    now: input.now,
-  });
+  if (classified.terminalCode !== undefined) {
+    await terminalIndexedJobs({
+      queue: input.dependencies.queue,
+      jobs: input.jobs,
+      results: input.results,
+      runId: input.run.id,
+      classification: classified.publicClassification,
+      errorCode: classified.terminalCode,
+    });
+  } else {
+    await failIndexedJobs({
+      queue: input.dependencies.queue,
+      jobs: input.jobs,
+      results: input.results,
+      runId: input.run.id,
+      classification: classified.publicClassification,
+      errorMessage: classified.queueError,
+      ...(classified.retryAt === undefined ? {} : { retryAt: classified.retryAt }),
+    });
+  }
 }
 
 function classifyModelFailure(input: {
@@ -568,6 +617,7 @@ function classifyModelFailure(input: {
     | "internal_error";
   retryAt?: (job: MemoryExtractionJob) => Date;
   cooldownUntil?: Date;
+  terminalCode?: MemoryExtractionTerminalErrorCode;
 } {
   const hadInvalidResponse = failureTracksInvalidResponse(input.previousFailure);
   if (!(input.error instanceof AiWorkerMemoryExtractionError)) {
@@ -585,6 +635,7 @@ function classifyModelFailure(input: {
       persistedClassification: "provider_unauthorized",
       publicClassification: "provider_unauthorized",
       queueError: "internal_error",
+      terminalCode: "provider_unauthorized",
     };
   }
   if (input.error.code === "invalid_response") {
@@ -595,6 +646,7 @@ function classifyModelFailure(input: {
         : "invalid_model_response_retry",
       publicClassification: "invalid_model_response",
       queueError: "invalid_model_response",
+      ...(terminal ? { terminalCode: "invalid_model_response" as const } : {}),
       ...(terminal ? {} : { retryAt: (job: MemoryExtractionJob) => retryAtForJob(input.now, job) }),
     };
   }
@@ -714,6 +766,39 @@ async function failJobs(input: {
   return results;
 }
 
+async function terminalIndexedJobs(input: {
+  queue: MemoryExtractionQueue;
+  jobs: IndexedJob[];
+  results: Map<number, MemoryExtractionWorkerResult>;
+  runId?: string;
+  groupId?: string;
+  classification: Extract<MemoryExtractionWorkerResult, { status: "failed" }>["classification"];
+  errorCode: MemoryExtractionTerminalErrorCode;
+}): Promise<void> {
+  for (const indexedJob of input.jobs) {
+    let terminal: Awaited<ReturnType<MemoryExtractionQueue["handleTerminalJob"]>>;
+    try {
+      terminal = await retryQueueOperation(() =>
+        input.queue.handleTerminalJob({
+          job: indexedJob.job,
+          errorCode: input.errorCode,
+        }),
+      );
+    } catch {
+      throw new Error("memory extraction queue recovery failed");
+    }
+    input.results.set(indexedJob.index, {
+      status: "failed",
+      requestId: indexedJob.job.requestId,
+      groupId: input.groupId ?? indexedJob.job.groupId,
+      ...(input.runId === undefined ? {} : { runId: input.runId }),
+      classification: input.classification,
+      retryAction: terminal.action,
+      attempts: terminal.attempts,
+    });
+  }
+}
+
 async function handleFailedJobWithRetry(
   queue: MemoryExtractionQueue,
   input: Parameters<MemoryExtractionQueue["handleFailedJob"]>[0],
@@ -738,25 +823,6 @@ async function retryQueueOperation<T>(operation: () => Promise<T>): Promise<T> {
     throw new Error("memory extraction queue operation failed");
   }
   throw new Error("memory extraction queue operation failed");
-}
-
-async function requeueUncovered(input: {
-  dependencies: MemoryExtractionWorkerDependencies;
-  jobs: IndexedJob[];
-  results: Map<number, MemoryExtractionWorkerResult>;
-  now: Date;
-}): Promise<void> {
-  if (input.jobs.length === 0) {
-    return;
-  }
-  await failIndexedJobs({
-    queue: input.dependencies.queue,
-    jobs: input.jobs,
-    results: input.results,
-    classification: "internal_error",
-    errorMessage: "internal_error",
-    retryAt: (job) => retryAtForJob(input.now, job),
-  });
 }
 
 async function persistRunFailure(
@@ -852,6 +918,37 @@ function sameRun(
     sameStrings(claimed.requestIds, loaded.requestIds);
 }
 
+function sameDurableRunScope(
+  left: MemoryExtractionRequestRoute,
+  right: MemoryExtractionRequestRoute,
+): boolean {
+  if (left.groupId !== right.groupId || left.status !== right.status) {
+    return false;
+  }
+  return left.status === "pending" || left.runId === right.runId;
+}
+
+function claimedRunMatchesRoutes(
+  claimedRun: ClaimedMemoryExtractionRun,
+  jobs: RoutedJob[],
+  expectedRequestIds: string[],
+): boolean {
+  const firstRoute = jobs[0]!.route;
+  if (firstRoute.status === "pending") {
+    return jobs.every(({ route }) => route.status === "pending") &&
+      sameStrings(claimedRun.requestIds, expectedRequestIds);
+  }
+  if (firstRoute.status !== "processing" || firstRoute.runId !== claimedRun.id) {
+    return false;
+  }
+  const claimedRequestIds = new Set(claimedRun.requestIds);
+  return jobs.every(({ route }) =>
+    route.status === "processing" &&
+    route.runId === claimedRun.id &&
+    claimedRequestIds.has(route.requestId),
+  );
+}
+
 function sameStrings(left: string[], right: string[]): boolean {
   const leftValues = [...left].sort(compareStrings);
   const rightValues = [...right].sort(compareStrings);
@@ -887,25 +984,152 @@ function publicFailureClassification(
   return "invalid_queue_payload";
 }
 
-function terminalQueueError(classification: string): string {
-  return classification === "invalid_model_response_terminal"
-    ? "invalid_model_response"
-    : classification === "invalid_queue_payload"
-      ? "invalid_queue_payload"
-      : "internal_error";
+function terminalErrorCode(classification: string): MemoryExtractionTerminalErrorCode {
+  if (classification === "provider_unauthorized") {
+    return "provider_unauthorized";
+  }
+  if (classification === "invalid_model_response_terminal") {
+    return "invalid_model_response";
+  }
+  return "corrupt_routing";
 }
 
-function groupJobs(jobs: IndexedJob[]): Map<string, IndexedJob[]> {
-  const groups = new Map<string, IndexedJob[]>();
-  for (const indexedJob of jobs) {
-    const group = groups.get(indexedJob.job.groupId);
-    if (group === undefined) {
-      groups.set(indexedJob.job.groupId, [indexedJob]);
-    } else {
-      group.push(indexedJob);
+function indexRoutes(
+  routes: MemoryExtractionRequestRoute[],
+  jobs: IndexedJob[],
+): Map<string, MemoryExtractionRequestRoute> {
+  const requestIds = new Set(jobs.map(({ job }) => job.requestId));
+  const indexed = new Map<string, MemoryExtractionRequestRoute>();
+  for (const route of routes) {
+    if (!requestIds.has(route.requestId) || indexed.has(route.requestId)) {
+      throw new Error("memory extraction route lookup returned invalid identifiers");
     }
+    indexed.set(route.requestId, route);
   }
-  return groups;
+  return indexed;
+}
+
+async function recoverProcessing(queue: MemoryExtractionQueue): Promise<void> {
+  try {
+    await retryQueueOperation(() =>
+      queue.recoverProcessing({ limit: MAX_MEMORY_EXTRACTION_QUEUE_LIMIT }),
+    );
+  } catch {
+    throw new Error("memory extraction queue recovery failed");
+  }
+}
+
+function orderedResults(
+  jobs: IndexedJob[],
+  results: Map<number, MemoryExtractionWorkerResult>,
+): MemoryExtractionWorkerResult[] {
+  return jobs.map(({ index }) => {
+    const result = results.get(index);
+    if (result === undefined) {
+      throw new Error("memory extraction batch result is incomplete");
+    }
+    return result;
+  });
+}
+
+async function deferJobs(
+  queue: MemoryExtractionQueue,
+  jobs: RoutedJob[],
+  results: Map<number, MemoryExtractionWorkerResult>,
+  now: Date,
+): Promise<void> {
+  if (jobs.length === 0) {
+    return;
+  }
+  await failIndexedJobs({
+    queue,
+    jobs,
+    results,
+    classification: "internal_error",
+    errorMessage: "internal_error",
+    retryAt: (job) => retryAtForJob(now, job),
+  });
+}
+
+async function reconcileUnclaimedJobs(input: {
+  dependencies: MemoryExtractionWorkerDependencies;
+  jobs: RoutedJob[];
+  results: Map<number, MemoryExtractionWorkerResult>;
+  now: Date;
+}): Promise<void> {
+  let routes: MemoryExtractionRequestRoute[];
+  try {
+    routes = await input.dependencies.repository.getRequestRoutes({
+      requestIds: input.jobs.map(({ job }) => job.requestId),
+    });
+  } catch {
+    await failIndexedJobs({
+      queue: input.dependencies.queue,
+      jobs: input.jobs,
+      results: input.results,
+      classification: "internal_error",
+      errorMessage: "internal_error",
+      retryAt: (job) => retryAtForJob(input.now, job),
+    });
+    return;
+  }
+
+  let routeByRequestId: Map<string, MemoryExtractionRequestRoute>;
+  try {
+    routeByRequestId = indexRoutes(routes, input.jobs);
+  } catch {
+    await failIndexedJobs({
+      queue: input.dependencies.queue,
+      jobs: input.jobs,
+      results: input.results,
+      classification: "internal_error",
+      errorMessage: "internal_error",
+      retryAt: (job) => retryAtForJob(input.now, job),
+    });
+    return;
+  }
+
+  for (const indexedJob of input.jobs) {
+    const route = routeByRequestId.get(indexedJob.job.requestId);
+    if (route === undefined || route.groupId !== indexedJob.route.groupId) {
+      await terminalIndexedJobs({
+        queue: input.dependencies.queue,
+        jobs: [indexedJob],
+        results: input.results,
+        classification: "invalid_queue_payload",
+        errorCode: "corrupt_routing",
+        ...(route === undefined ? {} : { groupId: route.groupId }),
+      });
+      continue;
+    }
+    if (route.status === "completed" || route.status === "skipped") {
+      input.results.set(
+        indexedJob.index,
+        await acknowledgeResult({
+          queue: input.dependencies.queue,
+          indexedJob,
+          now: input.now,
+          success: {
+            status: "skipped",
+            requestId: route.requestId,
+            groupId: route.groupId,
+            ...(route.runId === undefined ? {} : { runId: route.runId }),
+            reason: "already_terminal",
+          },
+        }),
+      );
+      continue;
+    }
+    await failIndexedJobs({
+      queue: input.dependencies.queue,
+      jobs: [indexedJob],
+      results: input.results,
+      ...(route.runId === undefined ? {} : { runId: route.runId }),
+      classification: "internal_error",
+      errorMessage: "internal_error",
+      retryAt: (job) => retryAtForJob(input.now, job),
+    });
+  }
 }
 
 function sanitizeBatchLimit(value: number): number {

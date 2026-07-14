@@ -15,14 +15,61 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("createPostgresMemoryExtractionRepository", () => {
-  it("uses one explicit POSIX whitespace predicate for registration, evidence, and context", async () => {
+  it("looks up canonical durable request routes without selecting chat content", async () => {
+    const source = fakeDataSource((sql, params) => {
+      expect(normalizeSql(sql)).toContain(
+        "select r.id, r.group_id, r.status, r.run_id",
+      );
+      expect(normalizeSql(sql)).not.toContain("cm.text");
+      expect(params).toEqual([["request-1", "request-2"]]);
+      return {
+        rows: [
+          {
+            id: "request-1",
+            group_id: "chat-a",
+            status: "pending",
+            run_id: null,
+          },
+          {
+            id: "request-2",
+            group_id: "chat-b",
+            status: "processing",
+            run_id: "run-2",
+          },
+        ],
+      };
+    });
+    const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
+    const requestIds = ["request-2", "request-1"];
+
+    await expect(repository.getRequestRoutes({ requestIds })).resolves.toEqual([
+      { requestId: "request-1", groupId: "chat-a", status: "pending" },
+      {
+        requestId: "request-2",
+        groupId: "chat-b",
+        status: "processing",
+        runId: "run-2",
+      },
+    ]);
+    expect(requestIds).toEqual(["request-2", "request-1"]);
+    await expect(
+      repository.getRequestRoutes({
+        requestIds: Array.from({ length: 101 }, (_, index) => `request-${index}`),
+      }),
+    ).rejects.toThrow("requestIds must contain at most 100 identifiers");
+  });
+
+  it("uses exact request ids for claims and one POSIX whitespace predicate for SQL reads", async () => {
     const source = fakeDataSource((sql) => {
       const normalized = normalizeSql(sql);
-      if (normalized.includes("where r.id = $1")) {
-        return { rows: [seedRequestRow({ messageText: "Readable seed" })] };
+      if (
+        normalized.includes("select r.id, r.group_id, r.status, r.run_id") &&
+        !normalized.includes("for update")
+      ) {
+        return { rows: [requestRouteRow()] };
       }
-      if (normalized.includes("and r.status = 'pending'")) {
-        return { rows: [evidenceMessageRow()] };
+      if (normalized.includes("for update of r skip locked")) {
+        return { rows: [claimMessageRow()] };
       }
       if (normalized.includes("from conversation_messages cm")) {
         return { rows: [] };
@@ -42,23 +89,29 @@ describe("createPostgresMemoryExtractionRepository", () => {
           ],
         };
       }
+      if (normalized.startsWith("update group_memory_extraction_requests")) {
+        return { rows: [{ id: "request-1" }] };
+      }
       return { rows: [] };
     });
     const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
 
     await repository.claimRun({
-      seedRequestId: "request-1",
+      requestIds: ["request-1"],
       maxEvidenceMessages: 40,
       contextMessageLimit: 10,
       activeMemoryLimit: 8,
     });
 
-    const evidenceSql = source.sql.find((sql) => normalizeSql(sql).includes("and r.status = 'pending'"));
+    const claimSql = source.sql.find((sql) =>
+      normalizeSql(sql).includes("for update of r skip locked"),
+    );
     const contextSql = source.sql.find((sql) =>
       normalizeSql(sql).includes("and (cm.created_at, cm.id) <"),
     );
     const readableTextPredicate = "cm.text ~ '[^[:space:]]'";
-    expect(normalizeSql(evidenceSql ?? "")).toContain(readableTextPredicate);
+    expect(normalizeSql(claimSql ?? "")).toContain("where r.id = any($1::text[])");
+    expect(normalizeSql(claimSql ?? "")).not.toContain("where r.group_id =");
     expect(normalizeSql(contextSql ?? "")).toContain(readableTextPredicate);
 
     const registrationSource = fakeDataSource(() => ({ rows: [] }));
@@ -113,8 +166,11 @@ describe("createPostgresMemoryExtractionRepository", () => {
   ])("skips a $label-only seed without claiming another pending request", async ({ messageText }) => {
     const source = fakeDataSource((sql) => {
       const normalized = normalizeSql(sql);
-      if (normalized.includes("where r.id = $1")) {
-        return { rows: [seedRequestRow({ messageText })] };
+      if (normalized.includes("select r.id, r.group_id, r.status, r.run_id")) {
+        return { rows: [requestRouteRow()] };
+      }
+      if (normalized.includes("for update of r skip locked")) {
+        return { rows: [claimMessageRow({ messageText })] };
       }
       return { rows: [] };
     });
@@ -122,7 +178,7 @@ describe("createPostgresMemoryExtractionRepository", () => {
 
     await expect(
       repository.claimRun({
-        seedRequestId: "request-1",
+        requestIds: ["request-1"],
         maxEvidenceMessages: 40,
         contextMessageLimit: 10,
         activeMemoryLimit: 8,
@@ -133,7 +189,7 @@ describe("createPostgresMemoryExtractionRepository", () => {
       expect.stringContaining("set status = 'skipped', skip_reason = 'unreadable_message'"),
     );
     expect(source.sql.map(normalizeSql)).not.toContainEqual(
-      expect.stringContaining("and r.status = 'pending'"),
+      expect.stringContaining("insert into group_memory_extraction_runs"),
     );
   });
 
@@ -183,16 +239,11 @@ describe("createPostgresMemoryExtractionRepository", () => {
           ],
         };
       }
-      if (normalized.includes("where r.id = $1")) {
-        return {
-          rows: [
-            seedRequestRow({
-              status: "processing",
-              runId: "run-1",
-              messageText: "Readable seed",
-            }),
-          ],
-        };
+      if (normalized.includes("select r.id, r.group_id, r.status, r.run_id")) {
+        return { rows: [requestRouteRow({ status: "processing", runId: "run-1" })] };
+      }
+      if (normalized.includes("for update of r skip locked")) {
+        return { rows: [claimMessageRow({ status: "processing", runId: "run-1" })] };
       }
       return { rows: [] };
     });
@@ -200,7 +251,7 @@ describe("createPostgresMemoryExtractionRepository", () => {
       dataSource: claimSource.dataSource,
     });
     await claimRepository.claimRun({
-      seedRequestId: "request-1",
+      requestIds: ["request-1"],
       maxEvidenceMessages: 40,
       contextMessageLimit: 10,
       activeMemoryLimit: 8,
@@ -292,16 +343,11 @@ describe("createPostgresMemoryExtractionRepository", () => {
   it("commits a stale processing-run reset and signals the worker to retry", async () => {
     const source = fakeDataSource((sql) => {
       const normalized = normalizeSql(sql);
-      if (normalized.includes("where r.id = $1")) {
-        return {
-          rows: [
-            seedRequestRow({
-              status: "processing",
-              runId: "run-1",
-              messageText: "Readable seed",
-            }),
-          ],
-        };
+      if (normalized.includes("select r.id, r.group_id, r.status, r.run_id")) {
+        return { rows: [requestRouteRow({ status: "processing", runId: "run-1" })] };
+      }
+      if (normalized.includes("for update of r skip locked")) {
+        return { rows: [claimMessageRow({ status: "processing", runId: "run-1" })] };
       }
       if (
         normalized.includes("from group_memory_extraction_runs") &&
@@ -315,7 +361,7 @@ describe("createPostgresMemoryExtractionRepository", () => {
 
     await expect(
       repository.claimRun({
-        seedRequestId: "request-1",
+        requestIds: ["request-1"],
         maxEvidenceMessages: 40,
         contextMessageLimit: 10,
         activeMemoryLimit: 8,
@@ -332,17 +378,75 @@ describe("createPostgresMemoryExtractionRepository", () => {
     expect(statements).toContain("commit");
   });
 
+  it("reclaims an existing multi-request run from a covered retry subset", async () => {
+    const storedEvidence = storedEvidenceRows();
+    const inputFingerprint = storedInputFingerprint(storedEvidence);
+    const source = fakeDataSource((sql) => {
+      const normalized = normalizeSql(sql);
+      if (
+        normalized.includes("select r.id, r.group_id, r.status, r.run_id") &&
+        !normalized.includes("for update")
+      ) {
+        return { rows: [requestRouteRow({ status: "processing", runId: "run-1" })] };
+      }
+      if (
+        normalized.includes("from group_memory_extraction_runs") &&
+        normalized.includes("for update")
+      ) {
+        return {
+          rows: [completionRunRow({
+            input_fingerprint: inputFingerprint,
+            status: "failed",
+            failure_classification: "provider_unauthorized",
+          })],
+        };
+      }
+      if (normalized.includes("from group_memory_extraction_run_evidence e")) {
+        return { rows: storedEvidence };
+      }
+      if (normalized.includes("from group_memory_extraction_run_context c")) {
+        return { rows: [] };
+      }
+      if (normalized.includes("from group_memory_extraction_run_memories rm")) {
+        return { rows: [] };
+      }
+      if (normalized.includes("for update of r skip locked")) {
+        return { rows: [claimMessageRow({ status: "processing", runId: "run-1" })] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
+
+    await expect(
+      repository.claimRun({
+        requestIds: ["request-1"],
+        maxEvidenceMessages: 40,
+        contextMessageLimit: 10,
+        activeMemoryLimit: 8,
+      }),
+    ).resolves.toMatchObject({
+      id: "run-1",
+      requestIds: ["request-1", "request-2"],
+      previousFailureClassification: "provider_unauthorized",
+    });
+  });
+
   it("locks a run and its claimed requests before atomically inserting canonical memories", async () => {
     let memoryInsertCount = 0;
+    const storedEvidence = storedEvidenceRows();
+    const inputFingerprint = storedInputFingerprint(storedEvidence);
     const source = fakeDataSource((sql, params) => {
       const normalized = normalizeSql(sql);
       if (
         normalized.includes("from group_memory_extraction_runs") &&
         normalized.includes("for update")
       ) {
-        return { rows: [completionRunRow()] };
+        return { rows: [completionRunRow({ input_fingerprint: inputFingerprint })] };
       }
       if (normalized.includes("from group_memory_extraction_run_evidence e")) {
+        if (normalized.includes("as stored_message_id")) {
+          return { rows: storedEvidence };
+        }
         return {
           rows: [
             completionEvidenceRow("request-1", "feishu:msg-1", 0),
@@ -350,8 +454,17 @@ describe("createPostgresMemoryExtractionRepository", () => {
           ],
         };
       }
+      if (
+        normalized.includes("from group_memory_extraction_run_context") ||
+        normalized.includes("from group_memory_extraction_run_memories")
+      ) {
+        return { rows: [] };
+      }
       if (normalized.includes("from group_memories") && normalized.includes("idempotency_key")) {
         return { rows: [] };
+      }
+      if (normalized.startsWith("select cm.id from conversation_messages")) {
+        return { rows: storedEvidence.map(({ id }) => ({ id })) };
       }
       if (normalized.includes("from conversation_messages")) {
         const evidenceIds = params?.[0] as string[];
@@ -388,7 +501,7 @@ describe("createPostgresMemoryExtractionRepository", () => {
 
     const result = await repository.completeRun({
       runId: "run-1",
-      inputFingerprint: "f".repeat(64),
+      inputFingerprint,
       acceptedCandidates,
       diagnostics: diagnostics({ acceptedCount: 2, proposedCount: 2 }),
     });
@@ -431,15 +544,20 @@ describe("createPostgresMemoryExtractionRepository", () => {
   it("rolls back every memory and state transition when a later candidate insert fails", async () => {
     const insertFailure = new Error("synthetic insert failure");
     let memoryInsertCount = 0;
+    const storedEvidence = storedEvidenceRows();
+    const inputFingerprint = storedInputFingerprint(storedEvidence);
     const source = fakeDataSource((sql, params) => {
       const normalized = normalizeSql(sql);
       if (
         normalized.includes("from group_memory_extraction_runs") &&
         normalized.includes("for update")
       ) {
-        return { rows: [completionRunRow()] };
+        return { rows: [completionRunRow({ input_fingerprint: inputFingerprint })] };
       }
       if (normalized.includes("from group_memory_extraction_run_evidence e")) {
+        if (normalized.includes("as stored_message_id")) {
+          return { rows: storedEvidence };
+        }
         return {
           rows: [
             completionEvidenceRow("request-1", "feishu:msg-1", 0),
@@ -447,8 +565,17 @@ describe("createPostgresMemoryExtractionRepository", () => {
           ],
         };
       }
+      if (
+        normalized.includes("from group_memory_extraction_run_context") ||
+        normalized.includes("from group_memory_extraction_run_memories")
+      ) {
+        return { rows: [] };
+      }
       if (normalized.includes("from group_memories") && normalized.includes("idempotency_key")) {
         return { rows: [] };
+      }
+      if (normalized.startsWith("select cm.id from conversation_messages")) {
+        return { rows: storedEvidence.map(({ id }) => ({ id })) };
       }
       if (normalized.includes("from conversation_messages")) {
         return {
@@ -469,7 +596,7 @@ describe("createPostgresMemoryExtractionRepository", () => {
     await expect(
       repository.completeRun({
         runId: "run-1",
-        inputFingerprint: "f".repeat(64),
+        inputFingerprint,
         acceptedCandidates: [
           validatedCandidate({ content: "Candidate A." }),
           validatedCandidate({ category: "workflow", content: "Candidate B." }),
@@ -808,7 +935,7 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
 
     await expect(
       repository.claimRun({
-        seedRequestId: badRequestId,
+        requestIds: [badRequestId],
         maxEvidenceMessages: 40,
         contextMessageLimit: 10,
         activeMemoryLimit: 8,
@@ -835,16 +962,14 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
   it("claims a bounded cursor-ordered run without crossing groups", async () => {
     const repository = createRepository(pool);
     const registrationOrder = [...evidenceIds].reverse();
-    let seedRequestId = "";
+    const requestIdsByMessageId = new Map<string, string>();
     for (const messageId of registrationOrder) {
       const registered = await repository.registerRequest({
         groupId: groupA,
         conversationMessageId: messageId,
         providerMessageId: `provider-${messageId}`,
       });
-      if (messageId === evidenceIds[41]) {
-        seedRequestId = registered.request.id;
-      }
+      requestIdsByMessageId.set(messageId, registered.request.id);
     }
     const other = await repository.registerRequest({
       groupId: groupB,
@@ -853,7 +978,7 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
     });
 
     const run = await repository.claimRun({
-      seedRequestId,
+      requestIds: evidenceIds.slice(0, 40).map((messageId) => requestIdsByMessageId.get(messageId)!),
       maxEvidenceMessages: 400,
       contextMessageLimit: 100,
       activeMemoryLimit: 80,
@@ -877,7 +1002,7 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
     expect(run!.contextMessages.some((message) => message.groupId !== groupA)).toBe(false);
 
     const otherRun = await repository.claimRun({
-      seedRequestId: other.request.id,
+      requestIds: [other.request.id],
       maxEvidenceMessages: 40,
       contextMessageLimit: 10,
       activeMemoryLimit: 8,
@@ -891,13 +1016,13 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
   it("reloads unchanged facts and rejects a changed fingerprint as stale", async () => {
     const repository = createRepository(pool);
     const pending = await repository.claimRun({
-      seedRequestId: (
+      requestIds: [(
         await repository.registerRequest({
           groupId: groupA,
           conversationMessageId: evidenceIds[40]!,
           providerMessageId: `provider-${evidenceIds[40]}`,
         })
-      ).request.id,
+      ).request.id],
       maxEvidenceMessages: 1,
       contextMessageLimit: 0,
       activeMemoryLimit: 0,
@@ -1032,7 +1157,7 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
       );
     }
     const claimed = await repository.claimRun({
-      seedRequestId: requests[0]!.request.id,
+      requestIds: requests.map(({ request }) => request.id),
       maxEvidenceMessages: 40,
       contextMessageLimit: 0,
       activeMemoryLimit: 0,
@@ -1146,28 +1271,47 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
       providerMessageId: `provider-${messageIds[2]}`,
     });
     const claimed = await repository.claimRun({
-      seedRequestId: registered.request.id,
+      requestIds: [registered.request.id],
       maxEvidenceMessages: 1,
       contextMessageLimit: 0,
       activeMemoryLimit: 0,
     });
     expect(claimed).toBeDefined();
 
+    const completion = {
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [],
+      diagnostics: {
+        proposedCount: 1,
+        acceptedCount: 0,
+        rejectedCount: 1,
+        duplicateCount: 0,
+        conflictCount: 0,
+        rejectionCodes: ["low_confidence"],
+      },
+    };
+    await expect(repository.completeRun(completion)).resolves.toEqual({
+      status: "completed",
+      memoryIds: [],
+    });
+    const marker = await pool!.query<{ failure_classification: string }>(
+      "SELECT failure_classification FROM group_memory_extraction_runs WHERE id = $1",
+      [claimed!.id],
+    );
+    expect(marker.rows[0]!.failure_classification).toMatch(
+      /^v2:p1:a0:r1:d0:c0:xlow_confidence:h[A-Za-z0-9_-]{43}$/u,
+    );
+    await expect(repository.completeRun(completion)).resolves.toEqual({
+      status: "already_completed",
+      memoryIds: [],
+    });
     await expect(
       repository.completeRun({
-        runId: claimed!.id,
-        inputFingerprint: claimed!.inputFingerprint,
-        acceptedCandidates: [],
-        diagnostics: {
-          proposedCount: 1,
-          acceptedCount: 0,
-          rejectedCount: 1,
-          duplicateCount: 0,
-          conflictCount: 0,
-          rejectionCodes: ["low_confidence"],
-        },
+        ...completion,
+        diagnostics: { ...completion.diagnostics, rejectionCodes: ["invalid_content"] },
       }),
-    ).resolves.toEqual({ status: "completed", memoryIds: [] });
+    ).rejects.toThrow("memory extraction completion conflicts with persisted run");
     await expect(repository.loadRunInput(claimed!.id)).resolves.toEqual({
       status: "completed",
     });
@@ -1181,7 +1325,7 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
       providerMessageId: `provider-${messageIds[3]}`,
     });
     const claimed = await repository.claimRun({
-      seedRequestId: registered.request.id,
+      requestIds: [registered.request.id],
       maxEvidenceMessages: 1,
       contextMessageLimit: 0,
       activeMemoryLimit: 0,
@@ -1258,6 +1402,278 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
   });
 });
 
+runIfDatabase("PostgresMemoryExtractionRepository review invariants with Postgres", () => {
+  let pool: pg.Pool | undefined;
+  const suffix = randomUUID();
+  const groupPrefix = `extraction-review-${suffix}`;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    try {
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+    } finally {
+      client.release();
+    }
+  });
+
+  afterAll(async () => {
+    if (pool === undefined) {
+      return;
+    }
+    try {
+      await pool.query(
+        `
+        DELETE FROM group_memory_extraction_run_evidence
+        WHERE run_id IN (
+          SELECT id FROM group_memory_extraction_runs WHERE group_id LIKE $1
+        )
+        `,
+        [`${groupPrefix}%`],
+      );
+      await pool.query("DELETE FROM group_memory_extraction_requests WHERE group_id LIKE $1", [
+        `${groupPrefix}%`,
+      ]);
+      await pool.query("DELETE FROM group_memory_extraction_runs WHERE group_id LIKE $1", [
+        `${groupPrefix}%`,
+      ]);
+      await pool.query(
+        `
+        DELETE FROM group_memory_message_evidence
+        WHERE memory_id IN (SELECT id FROM group_memories WHERE group_id LIKE $1)
+        `,
+        [`${groupPrefix}%`],
+      );
+      await pool.query("DELETE FROM group_memories WHERE group_id LIKE $1", [`${groupPrefix}%`]);
+      await pool.query("DELETE FROM conversation_messages WHERE chat_id LIKE $1", [
+        `${groupPrefix}%`,
+      ]);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("claims exactly the dequeued request ids and preserves that scope through stale recovery", async () => {
+    const repository = createRepository(pool);
+    const groupId = `${groupPrefix}-scope`;
+    const requests = [];
+    for (let index = 0; index < 3; index += 1) {
+      const messageId = `feishu:${groupId}-${index}`;
+      await insertExtractionMessage(pool!, {
+        id: messageId,
+        groupId,
+        text: `Scoped message ${index}`,
+        createdAt: new Date(Date.UTC(2026, 6, 15, 4, index)),
+      });
+      requests.push(
+        await repository.registerRequest({
+          groupId,
+          conversationMessageId: messageId,
+          providerMessageId: `provider-${messageId}`,
+        }),
+      );
+    }
+    const coveredRequestIds = requests.slice(0, 2).map(({ request }) => request.id).reverse();
+
+    const claimed = await repository.claimRun({
+      requestIds: coveredRequestIds,
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+
+    expect(claimed).toBeDefined();
+    expect(new Set(claimed!.requestIds)).toEqual(new Set(coveredRequestIds));
+    await expect(
+      pool!.query<{ id: string; status: string; run_id: string | null }>(
+        "SELECT id, status, run_id FROM group_memory_extraction_requests WHERE group_id = $1 ORDER BY created_at, id",
+        [groupId],
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        { status: "processing", run_id: claimed!.id },
+        { status: "processing", run_id: claimed!.id },
+        { status: "pending", run_id: null },
+      ],
+    });
+
+    await repository.failRun({ runId: claimed!.id, classification: "provider_timeout" });
+    await pool!.query("UPDATE conversation_messages SET text = text || ' changed' WHERE id = $1", [
+      claimed!.evidenceMessages[0]!.id,
+    ]);
+    await expect(
+      repository.claimRun({
+        requestIds: [...coveredRequestIds].reverse(),
+        maxEvidenceMessages: 40,
+        contextMessageLimit: 0,
+        activeMemoryLimit: 0,
+      }),
+    ).rejects.toBeInstanceOf(MemoryExtractionStaleRunError);
+    const reset = await pool!.query<{ id: string; status: string; run_id: string | null }>(
+      "SELECT id, status, run_id FROM group_memory_extraction_requests WHERE group_id = $1 ORDER BY created_at, id",
+      [groupId],
+    );
+    expect(reset.rows).toEqual([
+      expect.objectContaining({ status: "pending", run_id: null }),
+      expect.objectContaining({ status: "pending", run_id: null }),
+      expect.objectContaining({ status: "pending", run_id: null }),
+    ]);
+
+    const replacement = await repository.claimRun({
+      requestIds: coveredRequestIds,
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    expect(replacement).toBeDefined();
+    expect(replacement!.id).not.toBe(claimed!.id);
+    expect(new Set(replacement!.requestIds)).toEqual(new Set(coveredRequestIds));
+  });
+
+  it("fails completion stale when an authoritative message changes and inserts no candidate", async () => {
+    const repository = createRepository(pool);
+    const groupId = `${groupPrefix}-message`;
+    const messageId = `feishu:${groupId}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId,
+      text: "Original message",
+      createdAt: new Date("2026-07-15T05:00:00.000Z"),
+    });
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    await pool!.query("UPDATE conversation_messages SET text = 'Changed after model' WHERE id = $1", [
+      messageId,
+    ]);
+
+    await expect(
+      repository.completeRun({
+        runId: claimed!.id,
+        inputFingerprint: claimed!.inputFingerprint,
+        acceptedCandidates: [validatedCandidate({ evidenceMessageIds: [messageId] })],
+        diagnostics: diagnostics(),
+      }),
+    ).rejects.toBeInstanceOf(MemoryExtractionStaleRunError);
+    await expectCompletionStaleWithoutMemory(pool!, {
+      runId: claimed!.id,
+      requestId: registered.request.id,
+      idempotencyKey: sha256(claimed!.id + "0"),
+    });
+  });
+
+  it("fails completion stale when a claimed active memory version changes", async () => {
+    const repository = createRepository(pool);
+    const groupId = `${groupPrefix}-memory`;
+    const messageId = `feishu:${groupId}`;
+    const existingMemoryId = `memory-${suffix}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId,
+      text: "Memory freshness message",
+      createdAt: new Date("2026-07-15T06:00:00.000Z"),
+    });
+    await pool!.query(
+      `
+      INSERT INTO group_memories (
+        id, group_id, memory_scope, category, content, importance, confidence,
+        status, idempotency_key, origin, created_by, request_fingerprint
+      )
+      VALUES ($1, $2, 'group', 'decision', 'Current fact', 4, 0.9,
+        'active', $3, 'operator', 'test', $4)
+      `,
+      [existingMemoryId, groupId, `existing-${suffix}`, "a".repeat(64)],
+    );
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 1,
+    });
+    expect(claimed!.existingMemories.map(({ id }) => id)).toEqual([existingMemoryId]);
+    await pool!.query(
+      "UPDATE group_memories SET content = 'Changed fact', updated_at = updated_at + interval '1 second' WHERE id = $1",
+      [existingMemoryId],
+    );
+
+    await expect(
+      repository.completeRun({
+        runId: claimed!.id,
+        inputFingerprint: claimed!.inputFingerprint,
+        acceptedCandidates: [validatedCandidate({ evidenceMessageIds: [messageId] })],
+        diagnostics: diagnostics(),
+      }),
+    ).rejects.toBeInstanceOf(MemoryExtractionStaleRunError);
+    await expectCompletionStaleWithoutMemory(pool!, {
+      runId: claimed!.id,
+      requestId: registered.request.id,
+      idempotencyKey: sha256(claimed!.id + "0"),
+    });
+  });
+});
+
+async function insertExtractionMessage(
+  pool: pg.Pool,
+  input: { id: string; groupId: string; text: string; createdAt: Date },
+): Promise<void> {
+  await pool.query(
+    `
+    INSERT INTO conversation_messages (
+      id, provider, provider_message_id, chat_id, sender_id,
+      message_type, text, sent_at, raw_event_idempotency_key, created_at
+    )
+    VALUES ($1, 'feishu', $2, $3, 'alice', 'text', $4, $5, $6, $5)
+    `,
+    [
+      input.id,
+      `provider-${input.id}`,
+      input.groupId,
+      input.text,
+      input.createdAt,
+      `event-${input.id}`,
+    ],
+  );
+}
+
+async function expectCompletionStaleWithoutMemory(
+  pool: pg.Pool,
+  input: { runId: string; requestId: string; idempotencyKey: string },
+): Promise<void> {
+  await expect(
+    pool.query<{ status: string; failure_classification: string }>(
+      "SELECT status, failure_classification FROM group_memory_extraction_runs WHERE id = $1",
+      [input.runId],
+    ),
+  ).resolves.toMatchObject({
+    rows: [{ status: "failed", failure_classification: "input_stale" }],
+  });
+  await expect(
+    pool.query<{ status: string; run_id: string | null }>(
+      "SELECT status, run_id FROM group_memory_extraction_requests WHERE id = $1",
+      [input.requestId],
+    ),
+  ).resolves.toMatchObject({ rows: [{ status: "pending", run_id: null }] });
+  await expect(
+    pool.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM group_memories WHERE idempotency_key = $1",
+      [input.idempotencyKey],
+    ),
+  ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+}
+
 function createRepository(pool: pg.Pool | undefined) {
   if (pool === undefined) {
     throw new Error("Expected Postgres pool to be initialized");
@@ -1297,6 +1713,43 @@ function seedRequestRow(input: {
     message_group_id: "chat-a",
     message_provider_id: "message-1",
     message_text: input.messageText,
+  };
+}
+
+function requestRouteRow(input: {
+  id?: string;
+  groupId?: string;
+  status?: "pending" | "processing" | "completed" | "skipped";
+  runId?: string;
+} = {}) {
+  return {
+    id: input.id ?? "request-1",
+    group_id: input.groupId ?? "chat-a",
+    status: input.status ?? "pending",
+    run_id: input.runId ?? null,
+  };
+}
+
+function claimMessageRow(input: {
+  requestId?: string;
+  messageId?: string;
+  messageText?: string | null;
+  status?: "pending" | "processing";
+  runId?: string;
+} = {}) {
+  const messageId = input.messageId ?? "feishu:message-1";
+  return {
+    request_id: input.requestId ?? "request-1",
+    request_group_id: "chat-a",
+    request_provider_message_id: "message-1",
+    request_status: input.status ?? "pending",
+    request_run_id: input.runId ?? null,
+    id: messageId,
+    chat_id: "chat-a",
+    sender_id: "alice",
+    text: input.messageText ?? "Readable seed",
+    sent_at: new Date("2026-07-14T00:00:00.000Z"),
+    created_at: new Date("2026-07-14T00:00:00.000Z"),
   };
 }
 
@@ -1373,6 +1826,57 @@ function completionEvidenceRow(requestId: string, messageId: string, ordinal: nu
     request_group_id: "chat-a",
     message_group_id: "chat-a",
   };
+}
+
+function storedEvidenceRows() {
+  return [
+    storedEvidenceRow("request-1", "feishu:msg-1", "Launch on Thursday.", 0),
+    storedEvidenceRow("request-2", "feishu:msg-2", "Use the release checklist.", 1),
+  ];
+}
+
+function storedEvidenceRow(requestId: string, id: string, text: string, minute: number) {
+  const timestamp = new Date(Date.UTC(2026, 6, 15, 0, minute));
+  const message = {
+    id,
+    groupId: "chat-a",
+    senderId: "alice",
+    text,
+    sentAt: timestamp,
+    createdAt: timestamp,
+    evidenceEligible: true,
+  };
+  return {
+    request_id: requestId,
+    stored_message_id: id,
+    stored_content_hash: sha256(JSON.stringify({
+      id: message.id,
+      groupId: message.groupId,
+      senderId: message.senderId,
+      text: message.text,
+      sentAt: message.sentAt.toISOString(),
+      createdAt: message.createdAt.toISOString(),
+      evidenceEligible: message.evidenceEligible,
+    })),
+    id,
+    chat_id: message.groupId,
+    sender_id: message.senderId,
+    text,
+    sent_at: timestamp,
+    created_at: timestamp,
+  };
+}
+
+function storedInputFingerprint(rows: ReturnType<typeof storedEvidenceRows>): string {
+  return sha256(JSON.stringify({
+    groupId: "chat-a",
+    evidenceMessages: rows.map((row) => ({
+      id: row.id,
+      contentHash: row.stored_content_hash,
+    })),
+    contextMessages: [],
+    existingMemories: [],
+  }));
 }
 
 function validatedCandidate(overrides: Record<string, unknown> = {}) {

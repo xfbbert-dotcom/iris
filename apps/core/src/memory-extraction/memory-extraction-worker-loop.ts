@@ -61,8 +61,10 @@ export function createMemoryExtractionWorkerLoop({
   const safeIntervalMs = sanitizeInterval(intervalMs);
   const safeBatchLimit = sanitizeBatchLimit(batchLimit);
   let running = false;
+  let stopping = false;
   let controller: AbortController | undefined;
   let loopPromise: Promise<void> | undefined;
+  let stopPromise: Promise<void> | undefined;
   let latestBatch: MemoryExtractionWorkerBatchSnapshot | undefined;
 
   const tick = async (): Promise<void> => {
@@ -112,13 +114,18 @@ export function createMemoryExtractionWorkerLoop({
 
   return {
     start() {
+      if (stopping) {
+        throw new Error("memory extraction loop is stopping");
+      }
       if (running) {
         return;
       }
       running = true;
       controller = new AbortController();
-      loopPromise = consume(controller.signal).catch((error) => {
-        running = false;
+      const activeLoop = consume(controller.signal).catch((error) => {
+        if (loopPromise === activeLoop) {
+          running = false;
+        }
         reportError(onError, new Error("memory extraction loop failed"));
         if (!isAbortError(error)) {
           latestBatch = latestBatch ?? {
@@ -133,14 +140,33 @@ export function createMemoryExtractionWorkerLoop({
           };
         }
       });
+      loopPromise = activeLoop;
     },
 
     async stop() {
+      if (stopPromise !== undefined) {
+        await stopPromise;
+        return;
+      }
+      if (!running && loopPromise === undefined) {
+        return;
+      }
+      stopping = true;
       running = false;
-      controller?.abort();
-      await loopPromise;
-      controller = undefined;
-      loopPromise = undefined;
+      const stoppedController = controller;
+      const stoppedLoop = loopPromise;
+      stoppedController?.abort();
+      const completion = (async () => {
+        await stoppedLoop;
+        if (loopPromise === stoppedLoop) {
+          controller = undefined;
+          loopPromise = undefined;
+        }
+        stopping = false;
+        stopPromise = undefined;
+      })();
+      stopPromise = completion;
+      await completion;
     },
 
     isRunning() {

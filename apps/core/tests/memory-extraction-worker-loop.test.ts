@@ -76,6 +76,32 @@ describe("createMemoryExtractionWorkerLoop", () => {
     expect(stopped).toBe(true);
   });
 
+  it("rejects start during stop so an old generation cannot clobber a new loop", async () => {
+    const sleep = controlledSleep();
+    const batch = deferred<[]>();
+    const worker = { processBatch: vi.fn(() => batch.promise) };
+    const loop = createMemoryExtractionWorkerLoop({
+      worker,
+      intervalMs: 1,
+      batchLimit: 20,
+      sleep: sleep.sleep,
+    });
+    loop.start();
+    sleep.calls[0]!.resolve();
+    await vi.waitFor(() => expect(worker.processBatch).toHaveBeenCalledOnce());
+
+    const stopping = loop.stop();
+    expect(() => loop.start()).toThrow("memory extraction loop is stopping");
+    batch.resolve([]);
+    await stopping;
+
+    expect(loop.isRunning()).toBe(false);
+    loop.start();
+    expect(loop.isRunning()).toBe(true);
+    expect(sleep.calls).toHaveLength(2);
+    await loop.stop();
+  });
+
   it("records cloned batch snapshots and isolates throwing observers", async () => {
     const sleep = controlledSleep();
     const worker = {

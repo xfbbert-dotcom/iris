@@ -31,6 +31,13 @@ export type MemoryExtractionStatusCounts = {
   failedRuns: number;
 };
 
+export type MemoryExtractionRequestRoute = {
+  requestId: string;
+  groupId: string;
+  status: MemoryExtractionRequestStatus;
+  runId?: string;
+};
+
 export type ExtractionMessage = {
   id: string;
   groupId: string;
@@ -79,8 +86,11 @@ export interface MemoryExtractionRepository {
     conversationMessageId: string;
     providerMessageId: string;
   }): Promise<{ request: MemoryExtractionRequest; created: boolean }>;
+  getRequestRoutes(input: {
+    requestIds: string[];
+  }): Promise<MemoryExtractionRequestRoute[]>;
   claimRun(input: {
-    seedRequestId: string;
+    requestIds: string[];
     maxEvidenceMessages: number;
     contextMessageLimit: number;
     activeMemoryLimit: number;

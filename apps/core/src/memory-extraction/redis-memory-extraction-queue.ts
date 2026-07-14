@@ -11,6 +11,8 @@ import {
   type MemoryExtractionDeadLetter,
   type MemoryExtractionJob,
   type MemoryExtractionQueue,
+  type MemoryExtractionTerminalErrorCode,
+  type RecoverMemoryExtractionProcessingResult,
   type ReplayMemoryExtractionDeadLettersResult,
 } from "./memory-extraction-queue.js";
 
@@ -33,11 +35,18 @@ const ALLOWED_FAILURE_CODES = new Set([
   "provider_timeout",
   "provider_rate_limited",
   "provider_unavailable",
+  "provider_unauthorized",
   "invalid_model_response",
   "invalid_queue_payload",
+  "corrupt_routing",
   "invalid_dead_letter_payload",
   "invalid_dead_letter_json",
   "internal_error",
+]);
+const TERMINAL_FAILURE_CODES = new Set<MemoryExtractionTerminalErrorCode>([
+  "provider_unauthorized",
+  "invalid_model_response",
+  "corrupt_routing",
 ]);
 
 const ENQUEUE_SCRIPT = `
@@ -92,6 +101,7 @@ const RECOVER_PROCESSING_SCRIPT = `
 local processing = redis.call(
   "ZRANGEBYSCORE", KEYS[1], "-inf", "+inf", "WITHSCORES", "LIMIT", 0, ARGV[1]
 )
+local recovered = 0
 for index = 1, #processing, 2 do
   local idempotency_key = processing[index]
   local sequence = processing[index + 1]
@@ -103,13 +113,14 @@ for index = 1, #processing, 2 do
       redis.call("ZADD", KEYS[4], sequence, idempotency_key)
       redis.call("SADD", KEYS[5], idempotency_key)
       redis.call("HSET", KEYS[6], idempotency_key, "recovery")
+      recovered = recovered + 1
     else
       redis.call("ZREM", KEYS[4], idempotency_key)
       redis.call("SREM", KEYS[5], idempotency_key)
     end
   end
 end
-return redis.call("ZCARD", KEYS[1])
+return { recovered, redis.call("ZCARD", KEYS[1]) }
 `;
 
 const PROMOTE_DUE_SCRIPT = `
@@ -247,6 +258,37 @@ redis.call("HDEL", KEYS[13], ARGV[4])
 return 1
 `;
 
+const ACK_TERMINAL_SCRIPT = `
+-- memory-extraction:ack-terminal
+local exact_processing = redis.call("HGET", KEYS[9], ARGV[3]) == "processing"
+  and redis.call("HGET", KEYS[10], ARGV[3]) == ARGV[4]
+  and redis.call("ZSCORE", KEYS[6], ARGV[3])
+if exact_processing then
+  if redis.call("SISMEMBER", KEYS[14], ARGV[1]) ~= 1
+    or not redis.call("HGET", KEYS[2], ARGV[1])
+    or not redis.call("ZSCORE", KEYS[1], ARGV[1]) then
+    local sequence = redis.call("INCR", KEYS[12])
+    redis.call("ZADD", KEYS[1], sequence, ARGV[1])
+    redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
+    redis.call("SADD", KEYS[14], ARGV[1])
+  end
+  redis.call("ZREM", KEYS[6], ARGV[3])
+  redis.call("HDEL", KEYS[9], ARGV[3])
+  redis.call("HDEL", KEYS[10], ARGV[3])
+  redis.call("SREM", KEYS[4], ARGV[3])
+  redis.call("ZREM", KEYS[3], ARGV[3])
+  redis.call("ZREM", KEYS[7], ARGV[3])
+  redis.call("SREM", KEYS[8], ARGV[3])
+  redis.call("HDEL", KEYS[11], ARGV[4])
+  redis.call("HDEL", KEYS[13], ARGV[4])
+  return 1
+end
+if redis.call("SISMEMBER", KEYS[14], ARGV[1]) == 1
+  and redis.call("HGET", KEYS[2], ARGV[1])
+  and redis.call("ZSCORE", KEYS[1], ARGV[1]) then return 2 end
+return 0
+`;
+
 const REPLAY_DEAD_LETTER_SCRIPT = `
 -- memory-extraction:replay-dead-letter
 local function is_canonical_dlq_id(value)
@@ -370,7 +412,7 @@ export type RedisMemoryExtractionQueueClient = {
   eval(
     script: string,
     options: { keys: string[]; arguments: string[] },
-  ): Promise<number | string | string[] | null>;
+  ): Promise<number | string | Array<number | string> | null>;
   sCard(key: string): Promise<number>;
   zCard(key: string): Promise<number>;
   get(key: string): Promise<string | null>;
@@ -422,6 +464,34 @@ export function createRedisMemoryExtractionQueue({
   const deadLetterAuthorityKey = `${deadLetterKey}:ids`;
   const deadLetterSequenceKey = `${deadLetterKey}:sequence`;
   let processingRecovered = false;
+
+  const recoverProcessing = async (
+    rawLimit: number,
+  ): Promise<RecoverMemoryExtractionProcessingResult> => {
+    const safeLimit = sanitizeQueueLimit(rawLimit);
+    if (safeLimit === 0) {
+      return { recoveredCount: 0, remainingCount: 0 };
+    }
+    const result = await client.eval(RECOVER_PROCESSING_SCRIPT, {
+      keys: [
+        processingKey,
+        recoveryKey,
+        recoverySetKey,
+        readyIndexKey,
+        readySetKey,
+        stateKey,
+        payloadKey,
+      ],
+      arguments: [String(safeLimit)],
+    });
+    if (!Array.isArray(result) || result.length !== 2) {
+      throw new Error("Invalid memory extraction processing recovery result");
+    }
+    const recoveredCount = readRecoveryCount(result[0]);
+    const remainingCount = readRecoveryCount(result[1]);
+    processingRecovered = remainingCount === 0;
+    return { recoveredCount, remainingCount };
+  };
 
   const replayDeadLetter = async (
     rawId: string,
@@ -528,6 +598,10 @@ export function createRedisMemoryExtractionQueue({
       });
     },
 
+    async recoverProcessing(input) {
+      return recoverProcessing(input.limit);
+    },
+
     async dequeueBatch(limit, dequeueAt = now()) {
       const safeLimit = sanitizeQueueLimit(limit);
       if (safeLimit === 0) {
@@ -536,29 +610,10 @@ export function createRedisMemoryExtractionQueue({
       const safeDequeueAt = requireValidMemoryExtractionDate(dequeueAt, "now");
 
       if (!processingRecovered) {
-        const remainingProcessing = await client.eval(RECOVER_PROCESSING_SCRIPT, {
-          keys: [
-            processingKey,
-            recoveryKey,
-            recoverySetKey,
-            readyIndexKey,
-            readySetKey,
-            stateKey,
-            payloadKey,
-          ],
-          arguments: [String(MAX_MEMORY_EXTRACTION_QUEUE_LIMIT)],
-        });
-        if (
-          typeof remainingProcessing !== "number" ||
-          !Number.isSafeInteger(remainingProcessing) ||
-          remainingProcessing < 0
-        ) {
-          throw new Error("Invalid memory extraction processing recovery result");
-        }
-        if (remainingProcessing > 0) {
+        const recovery = await recoverProcessing(MAX_MEMORY_EXTRACTION_QUEUE_LIMIT);
+        if (recovery.remainingCount > 0) {
           return [];
         }
-        processingRecovered = true;
       }
       await client.eval(PROMOTE_DUE_SCRIPT, {
         keys: [
@@ -670,6 +725,57 @@ export function createRedisMemoryExtractionQueue({
         ],
         arguments: [idempotencyKey, payload],
       });
+    },
+
+    async handleTerminalJob(input) {
+      if (!TERMINAL_FAILURE_CODES.has(input.errorCode)) {
+        throw new Error("memory extraction terminal error code is invalid");
+      }
+      const claimed = readClaimedPayload(input.job);
+      const originalPayload = claimed?.payload ?? serializeMemoryExtractionJob(input.job);
+      const originalJob = parseMemoryExtractionJob(originalPayload);
+      const claimId = claimed?.idempotencyKey ?? originalJob.idempotencyKey;
+      const attempts = originalJob.attempts + 1;
+      const failedJob: MemoryExtractionJob = { ...originalJob, attempts };
+      const failedAt = requireValidMemoryExtractionDate(now(), "now");
+      const deadLetterId = createTerminalDeadLetterId({
+        claimId,
+        originalPayload,
+        errorCode: input.errorCode,
+      });
+      const result = await client.eval(ACK_TERMINAL_SCRIPT, {
+        keys: [
+          deadLetterOrderKey,
+          deadLetterIndexKey,
+          readyIndexKey,
+          seenKey,
+          readySetKey,
+          processingKey,
+          delayedKey,
+          recoverySetKey,
+          stateKey,
+          payloadKey,
+          memberKey,
+          deadLetterSequenceKey,
+          readyCountKey,
+          deadLetterAuthorityKey,
+        ],
+        arguments: [
+          deadLetterId,
+          serializeJobDeadLetter({
+            id: deadLetterId,
+            job: failedJob,
+            errorMessage: input.errorCode,
+            failedAt,
+          }),
+          claimId,
+          originalPayload,
+        ],
+      });
+      if (result !== 1 && result !== 2) {
+        throw new Error("memory extraction terminal transition did not match processing job");
+      }
+      return { action: "dead_lettered" as const, attempts };
     },
 
     async handleFailedJob(input) {
@@ -1107,6 +1213,24 @@ function digestPayload(payload: string): string {
 
 function createGeneratedDeadLetterId(rawId: string): string {
   return `dlq:${createHash("sha256").update(rawId, "utf8").digest("hex")}`;
+}
+
+function createTerminalDeadLetterId(input: {
+  claimId: string;
+  originalPayload: string;
+  errorCode: MemoryExtractionTerminalErrorCode;
+}): string {
+  return createGeneratedDeadLetterId(
+    JSON.stringify([input.claimId, digestPayload(input.originalPayload), input.errorCode]),
+  );
+}
+
+function readRecoveryCount(value: unknown): number {
+  const count = typeof value === "string" ? Number(value) : value;
+  if (!Number.isSafeInteger(count) || (count as number) < 0) {
+    throw new Error("Invalid memory extraction processing recovery result");
+  }
+  return count as number;
 }
 
 function sanitizeQueueLimit(limit: number): number {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
-import { describe, expect, it, vi } from "vitest";
+import { createClient } from "redis";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   createMemoryExtractionJob,
@@ -1254,6 +1255,159 @@ describe("Redis memory extraction queue", () => {
       unsupportedLegacyIds: [generatedDeadLetterId("dlq-diagnostic")],
     });
   });
+
+  it("force-dead-letters an exact processing payload immediately and idempotently", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createRedisMemoryExtractionQueue({
+      client,
+      maxAttempts: 5,
+      now: () => new Date("2026-07-14T07:00:00.000Z"),
+    });
+    const job = jobFixture({ requestId: "request-terminal-now" });
+    await queue.enqueue(job);
+    const [claimed] = await queue.dequeueBatch(1, job.enqueuedAt);
+
+    await expect(
+      queue.handleTerminalJob({ job: claimed!, errorCode: "provider_unauthorized" }),
+    ).resolves.toEqual({ action: "dead_lettered", attempts: 1 });
+    await expect(
+      queue.handleTerminalJob({ job: claimed!, errorCode: "provider_unauthorized" }),
+    ).resolves.toEqual({ action: "dead_lettered", attempts: 1 });
+
+    expect(await queue.getProcessingCount()).toBe(0);
+    expect(await queue.getDeadLetterCount()).toBe(1);
+    await expect(queue.listDeadLetters({ limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        job: expect.objectContaining({ requestId: job.requestId, attempts: 1 }),
+        errorMessage: "provider_unauthorized",
+        replayable: true,
+      }),
+    ]);
+  });
+
+  it("refuses a terminal transition for a modified claimed payload", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createRedisMemoryExtractionQueue({ client });
+    const job = jobFixture({ requestId: "request-terminal-exact" });
+    await queue.enqueue(job);
+    const [claimed] = await queue.dequeueBatch(1, job.enqueuedAt);
+
+    await expect(
+      queue.handleTerminalJob({
+        job: { ...claimed!, attempts: claimed!.attempts + 1 },
+        errorCode: "corrupt_routing",
+      }),
+    ).rejects.toThrow("terminal transition did not match processing job");
+    expect(await queue.getProcessingCount()).toBe(1);
+    expect(await queue.getDeadLetterCount()).toBe(0);
+  });
+
+  it("recovers bounded abandoned processing on demand without process restart", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createRedisMemoryExtractionQueue({ client });
+    const jobs = [
+      jobFixture({ requestId: "request-recover-1" }),
+      jobFixture({ requestId: "request-recover-2" }),
+    ];
+    for (const job of jobs) {
+      await queue.enqueue(job);
+    }
+    await queue.dequeueBatch(2, jobs[0]!.enqueuedAt);
+
+    await expect(queue.recoverProcessing({ limit: 1 })).resolves.toEqual({
+      recoveredCount: 1,
+      remainingCount: 1,
+    });
+    await expect(queue.recoverProcessing({ limit: 1 })).resolves.toEqual({
+      recoveredCount: 1,
+      remainingCount: 0,
+    });
+    await expect(queue.dequeueBatch(2, jobs[0]!.enqueuedAt)).resolves.toEqual(jobs);
+  });
+});
+
+const redisUrl = process.env.IRIS_TEST_REDIS_URL?.trim();
+const runIfRedis = redisUrl ? describe : describe.skip;
+
+runIfRedis("Redis memory extraction queue with live Redis", () => {
+  const prefix = `iris:test:memory-extraction:${process.pid}:${Date.now()}`;
+  const keys = {
+    seenKey: `${prefix}:seen`,
+    readyKey: `${prefix}:ready`,
+    readySetKey: `${prefix}:ready:ids`,
+    delayedKey: `${prefix}:delayed`,
+    processingKey: `${prefix}:processing`,
+    stateKey: `${prefix}:state`,
+    payloadKey: `${prefix}:payloads`,
+    memberKey: `${prefix}:members`,
+    cooldownKey: `${prefix}:cooldown`,
+    deadLetterKey: `${prefix}:dlq`,
+    deadLetterIndexKey: `${prefix}:dlq:index`,
+  };
+  let liveClient: ReturnType<typeof createClient> | undefined;
+
+  beforeAll(async () => {
+    liveClient = createClient({ url: redisUrl });
+    await liveClient.connect();
+  });
+
+  afterAll(async () => {
+    if (liveClient === undefined) {
+      return;
+    }
+    const storedKeys: string[] = [];
+    for await (const keys of liveClient.scanIterator({ MATCH: `${prefix}:*`, COUNT: 100 })) {
+      storedKeys.push(...keys);
+    }
+    if (storedKeys.length > 0) {
+      await liveClient.del(storedKeys);
+    }
+    await liveClient.quit();
+  });
+
+  it("performs terminal DLQ and next-batch recovery as atomic Redis transitions", async () => {
+    const queue = createRedisMemoryExtractionQueue({
+      client: liveClient as unknown as RedisMemoryExtractionQueueClient,
+      ...keys,
+      maxAttempts: 5,
+      now: () => new Date("2026-07-14T08:00:00.000Z"),
+    });
+    const terminal = jobFixture({ requestId: "request-live-terminal" });
+    await queue.enqueue(terminal);
+    const [claimedTerminal] = await queue.dequeueBatch(1, terminal.enqueuedAt);
+
+    await expect(
+      queue.handleTerminalJob({
+        job: claimedTerminal!,
+        errorCode: "invalid_model_response",
+      }),
+    ).resolves.toEqual({ action: "dead_lettered", attempts: 1 });
+    await expect(
+      queue.handleTerminalJob({
+        job: claimedTerminal!,
+        errorCode: "invalid_model_response",
+      }),
+    ).resolves.toEqual({ action: "dead_lettered", attempts: 1 });
+    expect(await queue.getProcessingCount()).toBe(0);
+    expect(await queue.getDeadLetterCount()).toBe(1);
+    const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
+    expect(deadLetter).toMatchObject({
+      job: { requestId: terminal.requestId, attempts: 1 },
+      errorMessage: "invalid_model_response",
+      replayable: true,
+    });
+    expect(JSON.stringify(deadLetter)).not.toContain("candidate_content");
+
+    const abandoned = jobFixture({ requestId: "request-live-recovery" });
+    await queue.enqueue(abandoned);
+    const [claimedAbandoned] = await queue.dequeueBatch(1, abandoned.enqueuedAt);
+    expect(claimedAbandoned).toMatchObject({ requestId: abandoned.requestId });
+    await expect(queue.recoverProcessing({ limit: 100 })).resolves.toEqual({
+      recoveredCount: 1,
+      remainingCount: 0,
+    });
+    await expect(queue.dequeueBatch(1, abandoned.enqueuedAt)).resolves.toEqual([abandoned]);
+  });
 });
 
 function jobFixture(
@@ -1310,13 +1464,14 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     async (
       script: string,
       options: { keys: string[]; arguments: string[] },
-    ): Promise<number | string | string[] | null> => {
+    ): Promise<number | string | Array<number | string> | null> => {
       if (script.includes("memory-extraction:enqueue")) return this.enqueue(options.keys, options.arguments);
       if (script.includes("memory-extraction:recover-processing")) return this.recoverProcessing(options.keys, options.arguments);
       if (script.includes("memory-extraction:promote-due")) return this.promoteDue(options.keys, options.arguments);
       if (script.includes("memory-extraction:dequeue")) return this.dequeue(options.keys, options.arguments);
       if (script.includes("memory-extraction:ack-processed")) return this.ackProcessed(options.keys, options.arguments);
       if (script.includes("memory-extraction:ack-retry")) return this.ackRetry(options.keys, options.arguments);
+      if (script.includes("memory-extraction:ack-terminal")) return this.ackTerminal(options.keys, options.arguments);
       if (script.includes("memory-extraction:ack-dead-letter")) return this.ackDeadLetter(options.keys, options.arguments);
       if (script.includes("memory-extraction:replay-dead-letter")) return this.replayDeadLetter(options.keys, options.arguments);
       if (script.includes("memory-extraction:find-dead-letter")) return this.findDeadLetter(options.keys, options.arguments);
@@ -1482,11 +1637,12 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     return 1;
   }
 
-  private recoverProcessing(keys: string[], args: string[]): number {
+  private recoverProcessing(keys: string[], args: string[]): number[] {
     const [processingKey, recoveryKey, recoverySetKey, readyIndexKey, readySetKey, stateKey, payloadKey] = keys;
     const processing = [...this.sortedSet(processingKey!).entries()]
       .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
       .slice(0, Number(args[0]));
+    let recovered = 0;
     for (const [id, sequence] of processing) {
       this.sortedSet(processingKey!).delete(id);
       if (this.hash(stateKey!).get(id) === "processing" && this.hash(payloadKey!).has(id)) {
@@ -1495,12 +1651,13 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
         this.sortedSet(readyIndexKey!).set(id, sequence);
         this.set(readySetKey!).add(id);
         this.hash(stateKey!).set(id, "recovery");
+        recovered += 1;
       } else {
         this.sortedSet(readyIndexKey!).delete(id);
         this.set(readySetKey!).delete(id);
       }
     }
-    return this.sortedSet(processingKey!).size;
+    return [recovered, this.sortedSet(processingKey!).size];
   }
 
   private promoteDue(keys: string[], args: string[]): number {
@@ -1637,6 +1794,44 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     this.hash(memberKey!).delete(originalPayload!);
     this.hash(readyCountKey!).delete(originalPayload!);
     return 1;
+  }
+
+  private ackTerminal(keys: string[], args: string[]): number {
+    const [deadLetterOrderKey, deadLetterIndexKey, readyIndexKey, seenKey, readySetKey, processingKey, delayedKey, recoverySetKey, stateKey, payloadKey, memberKey, deadLetterSequenceKey, readyCountKey, deadLetterAuthorityKey] = keys;
+    const [deadLetterId, deadLetterPayload, id, originalPayload] = args;
+    const exactProcessing =
+      this.hash(stateKey!).get(id!) === "processing" &&
+      this.hash(payloadKey!).get(id!) === originalPayload &&
+      this.sortedSet(processingKey!).has(id!);
+    if (exactProcessing) {
+      if (
+        !this.set(deadLetterAuthorityKey!).has(deadLetterId!) ||
+        !this.sortedSet(deadLetterOrderKey!).has(deadLetterId!) ||
+        !this.hash(deadLetterIndexKey!).has(deadLetterId!)
+      ) {
+        const sequence = Number(this.strings.get(deadLetterSequenceKey!) ?? 0) + 1;
+        this.strings.set(deadLetterSequenceKey!, String(sequence));
+        this.sortedSet(deadLetterOrderKey!).set(deadLetterId!, sequence);
+        this.hash(deadLetterIndexKey!).set(deadLetterId!, deadLetterPayload!);
+        this.set(deadLetterAuthorityKey!).add(deadLetterId!);
+      }
+      this.hash(stateKey!).delete(id!);
+      this.hash(payloadKey!).delete(id!);
+      this.set(seenKey!).delete(id!);
+      this.sortedSet(readyIndexKey!).delete(id!);
+      this.set(readySetKey!).delete(id!);
+      this.sortedSet(delayedKey!).delete(id!);
+      this.sortedSet(processingKey!).delete(id!);
+      this.set(recoverySetKey!).delete(id!);
+      this.hash(memberKey!).delete(originalPayload!);
+      this.hash(readyCountKey!).delete(originalPayload!);
+      return 1;
+    }
+    return this.set(deadLetterAuthorityKey!).has(deadLetterId!) &&
+      this.sortedSet(deadLetterOrderKey!).has(deadLetterId!) &&
+      this.hash(deadLetterIndexKey!).has(deadLetterId!)
+      ? 2
+      : 0;
   }
 
   private replayDeadLetter(keys: string[], args: string[]): number {

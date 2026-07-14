@@ -11,6 +11,7 @@ import type {
   ExtractionMessage,
   MemoryExtractionRepository,
   MemoryExtractionRequest,
+  MemoryExtractionRequestRoute,
   MemoryExtractionRequestStatus,
 } from "./memory-extraction-repository.js";
 import {
@@ -41,16 +42,25 @@ type RequestRow = {
   updated_at: unknown;
 };
 
-type SeedRequestRow = RequestRow & {
+type ExistingRequestRow = RequestRow & {
   message_group_id: unknown;
   message_provider_id: unknown;
   message_text: unknown;
 };
 
-type ExistingRequestRow = RequestRow & {
-  message_group_id: unknown;
-  message_provider_id: unknown;
-  message_text: unknown;
+type RequestRouteRow = {
+  id: unknown;
+  group_id: unknown;
+  status: unknown;
+  run_id: unknown;
+};
+
+type ClaimMessageRow = MessageRow & {
+  request_id: unknown;
+  request_group_id: unknown;
+  request_provider_message_id: unknown;
+  request_status: unknown;
+  request_run_id: unknown;
 };
 
 type MessageRow = {
@@ -119,6 +129,7 @@ type StatusCountsRow = {
 };
 
 const MAX_IDENTIFIER_CHARS = 512;
+const MAX_ROUTE_REQUESTS = 100;
 const MAX_CLASSIFICATION_CHARS = 128;
 const MAX_EVIDENCE_MESSAGES = 40;
 const MAX_CONTEXT_MESSAGES = 10;
@@ -231,11 +242,32 @@ export function createPostgresMemoryExtractionRepository({
       return { request, created: false };
     },
 
+    async getRequestRoutes(rawInput) {
+      const requestIds = normalizeIdentifierSet(
+        "requestIds",
+        rawInput.requestIds,
+        MAX_ROUTE_REQUESTS,
+      );
+      if (requestIds.length === 0) {
+        return [];
+      }
+      const result = await dataSource.query<RequestRouteRow>(
+        `
+        SELECT r.id, r.group_id, r.status, r.run_id
+        FROM group_memory_extraction_requests r
+        WHERE r.id = ANY($1::text[])
+        ORDER BY r.id ASC
+        `,
+        [requestIds],
+      );
+      return result.rows.map(mapRequestRoute);
+    },
+
     async claimRun(rawInput) {
-      const seedRequestId = requireBoundedString(
-        "seedRequestId",
-        rawInput.seedRequestId,
-        MAX_IDENTIFIER_CHARS,
+      const requestedIds = normalizeIdentifierSet(
+        "requestIds",
+        rawInput.requestIds,
+        MAX_EVIDENCE_MESSAGES,
       );
       const maxEvidenceMessages = boundedLimit(
         "maxEvidenceMessages",
@@ -252,31 +284,48 @@ export function createPostgresMemoryExtractionRepository({
         rawInput.activeMemoryLimit,
         MAX_ACTIVE_MEMORIES,
       );
-      if (maxEvidenceMessages === 0) {
+      if (
+        requestedIds.length === 0 ||
+        maxEvidenceMessages === 0 ||
+        requestedIds.length > maxEvidenceMessages
+      ) {
         return undefined;
       }
 
       let staleRunDetected = false;
       const claimedRun = await withTransaction(dataSource, async (client) => {
-        const seedRow = await findSeedRequest(client, seedRequestId, false);
-        if (seedRow === undefined) {
+        const referenceResult = await client.query<RequestRouteRow>(
+          `
+          SELECT r.id, r.group_id, r.status, r.run_id
+          FROM group_memory_extraction_requests r
+          WHERE r.id = ANY($1::text[])
+          ORDER BY r.id ASC
+          `,
+          [requestedIds],
+        );
+        const reference = validateClaimReferences(referenceResult.rows, requestedIds);
+        if (reference === undefined || reference.status === "completed" || reference.status === "skipped") {
           return undefined;
         }
-        let seed = mapValidSeedRequest(seedRow);
-        if (seed.status === "completed" || seed.status === "skipped") {
-          return undefined;
-        }
-        if (seed.status === "processing" && seed.runId !== undefined) {
-          const loaded = await loadStoredRun(client, seed.runId);
-          const lockedSeedRow = await findSeedRequest(client, seedRequestId, true);
-          if (lockedSeedRow === undefined) {
-            return undefined;
+
+        if (reference.status === "processing") {
+          if (reference.runId === undefined) {
+            throw new Error("processing extraction requests have no run");
           }
-          const lockedSeed = mapValidSeedRequest(lockedSeedRow);
-          if (lockedSeed.status !== "processing" || lockedSeed.runId !== seed.runId) {
+          const loaded = await loadStoredRun(client, reference.runId);
+          const lockedRows = await loadClaimRows(client, requestedIds);
+          const locked = validateClaimRows(lockedRows, requestedIds, "processing");
+          if (
+            locked === undefined ||
+            locked.groupId !== reference.groupId ||
+            locked.runId !== reference.runId
+          ) {
             return undefined;
           }
           if (loaded.status === "ready") {
+            if (!identifierSetContainsAll(loaded.run.requestIds, requestedIds)) {
+              throw new Error("memory extraction run request scope conflicts with claimed jobs");
+            }
             await client.query(
               `
               UPDATE group_memory_extraction_runs
@@ -284,65 +333,39 @@ export function createPostgresMemoryExtractionRepository({
                   completed_at = NULL, updated_at = NOW()
               WHERE id = $1 AND status = 'failed'
               `,
-              [seed.runId],
+              [reference.runId],
             );
             return loaded.run;
           }
           if (loaded.status === "stale") {
-            await markRunStale(client, seed.runId);
+            await markRunStale(client, reference.runId);
             staleRunDetected = true;
           }
           return undefined;
         }
-        const lockedSeedRow = await findSeedRequest(client, seedRequestId, true);
-        if (lockedSeedRow === undefined) {
+
+        const lockedRows = await loadClaimRows(client, requestedIds);
+        const locked = validateClaimRows(lockedRows, requestedIds, "pending");
+        if (locked === undefined || locked.groupId !== reference.groupId) {
           return undefined;
         }
-        seed = mapValidSeedRequest(lockedSeedRow);
-        if (seed.status !== "pending") {
-          return undefined;
-        }
-        if (!isReadableText(lockedSeedRow.message_text)) {
+        const unreadableRequestIds = lockedRows
+          .filter((row) => !isReadableText(row.text))
+          .map((row) => requireExactIdentifier(row.request_id));
+        if (unreadableRequestIds.length > 0) {
           await client.query(
             `
             UPDATE group_memory_extraction_requests
             SET status = 'skipped', skip_reason = 'unreadable_message', updated_at = NOW()
-            WHERE id = $1 AND status = 'pending'
+            WHERE id = ANY($1::text[]) AND status = 'pending'
             `,
-            [seedRequestId],
+            [unreadableRequestIds],
           );
           return undefined;
         }
-
-        const evidenceResult = await client.query<MessageRow>(
-          `
-          SELECT
-            r.id AS request_id,
-            cm.id,
-            cm.chat_id,
-            cm.sender_id,
-            cm.text,
-            cm.sent_at,
-            cm.created_at
-          FROM group_memory_extraction_requests r
-          JOIN conversation_messages cm
-            ON cm.id = r.conversation_message_id
-           AND cm.chat_id = r.group_id
-           AND cm.provider_message_id = r.provider_message_id
-          WHERE r.group_id = $1
-            AND r.status = 'pending'
-            AND ${READABLE_MESSAGE_TEXT_SQL}
-          ORDER BY cm.created_at ASC, cm.id ASC
-          LIMIT $2
-          FOR UPDATE OF r SKIP LOCKED
-          `,
-          [seed.groupId, maxEvidenceMessages],
-        );
-        if (evidenceResult.rows.length === 0) {
-          return undefined;
-        }
-        const evidenceMessages = evidenceResult.rows.map((row) => mapMessage(row, true));
-        const requestIds = evidenceResult.rows.map((row) =>
+        const evidenceRows = [...lockedRows].sort(compareClaimMessageRows);
+        const evidenceMessages = evidenceRows.map((row) => mapMessage(row, true));
+        const requestIds = evidenceRows.map((row) =>
           requireString("request id", row.request_id),
         );
         const firstEvidence = evidenceMessages[0]!;
@@ -359,7 +382,7 @@ export function createPostgresMemoryExtractionRepository({
           LIMIT $5
           `,
           [
-            seed.groupId,
+            locked.groupId,
             firstEvidence.createdAt,
             firstEvidence.id,
             evidenceMessages.map((message) => message.id),
@@ -378,11 +401,11 @@ export function createPostgresMemoryExtractionRepository({
           ORDER BY importance DESC, updated_at DESC, id ASC
           LIMIT $2
           `,
-          [seed.groupId, activeMemoryLimit],
+          [locked.groupId, activeMemoryLimit],
         );
         const existingMemories = memoryResult.rows.map(mapMemory);
         const inputFingerprint = fingerprintInput({
-          groupId: seed.groupId,
+          groupId: locked.groupId,
           evidenceMessages,
           contextMessages,
           existingMemories,
@@ -396,13 +419,13 @@ export function createPostgresMemoryExtractionRepository({
           VALUES ($1, $2, $3, 'processing')
           RETURNING id, group_id, input_fingerprint, status
           `,
-          [runId, seed.groupId, inputFingerprint],
+          [runId, locked.groupId, inputFingerprint],
         );
         if (runResult.rows.length !== 1) {
           throw new Error("memory extraction run insert returned no rows");
         }
 
-        for (const [ordinal, row] of evidenceResult.rows.entries()) {
+        for (const [ordinal, row] of evidenceRows.entries()) {
           const message = evidenceMessages[ordinal]!;
           await client.query(
             `
@@ -436,18 +459,20 @@ export function createPostgresMemoryExtractionRepository({
             [runId, memory.id, ordinal, memory.updatedAt],
           );
         }
-        await client.query(
+        const requestUpdate = await client.query<{ id: unknown }>(
           `
           UPDATE group_memory_extraction_requests
           SET status = 'processing', run_id = $1, skip_reason = NULL, updated_at = NOW()
-          WHERE id = ANY($2::text[])
+          WHERE id = ANY($2::text[]) AND status = 'pending'
+          RETURNING id
           `,
           [runId, requestIds],
         );
+        assertExactIds(requestUpdate.rows.map((row) => row.id), requestIds);
 
         return {
           id: runId,
-          groupId: seed.groupId,
+          groupId: locked.groupId,
           inputFingerprint,
           requestIds,
           evidenceMessages,
@@ -639,7 +664,8 @@ export function createPostgresMemoryExtractionRepository({
         (_, index) => completionIdempotencyKey(input.runId, index),
       );
 
-      return withTransaction(dataSource, async (client) => {
+      let staleRunDetected = false;
+      const completion = await withTransaction(dataSource, async (client) => {
         const runResult = await client.query<RunRow>(
           `
           SELECT id, group_id, input_fingerprint, status, failure_classification
@@ -712,6 +738,21 @@ export function createPostgresMemoryExtractionRepository({
           throw new MemoryExtractionCompletionConflictError();
         }
 
+        const current = await loadStoredRun(client, input.runId, { lockInputs: true });
+        if (current.status === "stale") {
+          await markRunStale(client, input.runId);
+          staleRunDetected = true;
+          return undefined;
+        }
+        if (
+          current.status !== "ready" ||
+          current.run.groupId !== groupId ||
+          current.run.inputFingerprint !== input.inputFingerprint ||
+          !sameIdentifierSet(current.run.requestIds, claimed.requestIds)
+        ) {
+          throw new MemoryExtractionCompletionConflictError();
+        }
+
         const memoryIds: string[] = [];
         for (const [index, candidate] of input.acceptedCandidates.entries()) {
           const memory = await insertGroupMemoryWithEvidence({
@@ -760,6 +801,13 @@ export function createPostgresMemoryExtractionRepository({
 
         return { status: "completed" as const, memoryIds };
       });
+      if (staleRunDetected) {
+        throw new MemoryExtractionStaleRunError();
+      }
+      if (completion === undefined) {
+        throw new MemoryExtractionCompletionConflictError();
+      }
+      return completion;
     },
 
     async getStatusCounts() {
@@ -937,17 +985,21 @@ function createCompletionMarker(input: {
   acceptedCandidates: ValidatedMemoryCandidate[];
   diagnostics: MemoryExtractionDiagnostics;
 }): string {
-  const digest = sha256(JSON.stringify({
-    acceptedCandidates: input.acceptedCandidates,
-    diagnostics: input.diagnostics,
-  }));
+  const digest = createHash("sha256")
+    .update(JSON.stringify({
+      acceptedCandidates: input.acceptedCandidates,
+      diagnostics: input.diagnostics,
+    }), "utf8")
+    .digest("base64url");
+  const persistedRejectionCodes = input.diagnostics.rejectionCodes.slice(0, 2).join(",");
   return [
-    "v1",
+    "v2",
     `p${input.diagnostics.proposedCount}`,
     `a${input.diagnostics.acceptedCount}`,
     `r${input.diagnostics.rejectedCount}`,
     `d${input.diagnostics.duplicateCount}`,
     `c${input.diagnostics.conflictCount}`,
+    `x${persistedRejectionCodes}`,
     `h${digest}`,
   ].join(":");
 }
@@ -1136,9 +1188,45 @@ async function markRunStale(queryable: Queryable, runId: string): Promise<void> 
   );
 }
 
+async function lockStoredRunInputs(queryable: Queryable, runId: string): Promise<void> {
+  await queryable.query(
+    `
+    SELECT cm.id
+    FROM conversation_messages cm
+    WHERE cm.id IN (
+      SELECT e.conversation_message_id
+      FROM group_memory_extraction_run_evidence e
+      WHERE e.run_id = $1
+      UNION
+      SELECT c.conversation_message_id
+      FROM group_memory_extraction_run_context c
+      WHERE c.run_id = $1
+    )
+    ORDER BY cm.id ASC
+    FOR SHARE
+    `,
+    [runId],
+  );
+  await queryable.query(
+    `
+    SELECT gm.id
+    FROM group_memories gm
+    WHERE gm.id IN (
+      SELECT rm.memory_id
+      FROM group_memory_extraction_run_memories rm
+      WHERE rm.run_id = $1
+    )
+    ORDER BY gm.id ASC
+    FOR SHARE
+    `,
+    [runId],
+  );
+}
+
 async function loadStoredRun(
   queryable: Queryable,
   runId: string,
+  options: { lockInputs?: boolean } = {},
 ): Promise<
   | { status: "ready"; run: ClaimedMemoryExtractionRun }
   | { status: "completed" }
@@ -1167,6 +1255,10 @@ async function loadStoredRun(
   const previousFailureClassification = status === "failed"
     ? requireOptionalClassification(runRow.failure_classification)
     : undefined;
+
+  if (options.lockInputs === true) {
+    await lockStoredRunInputs(queryable, runId);
+  }
 
   const evidenceResult = await queryable.query<MessageRow>(
     `
@@ -1265,37 +1357,106 @@ async function loadStoredRun(
   };
 }
 
-async function findSeedRequest(
+async function loadClaimRows(
   queryable: Queryable,
-  seedRequestId: string,
-  lock: boolean,
-): Promise<SeedRequestRow | undefined> {
-  const result = await queryable.query<SeedRequestRow>(
+  requestIds: string[],
+): Promise<ClaimMessageRow[]> {
+  const result = await queryable.query<ClaimMessageRow>(
     `
     SELECT
-      r.*,
-      cm.chat_id AS message_group_id,
-      cm.provider_message_id AS message_provider_id,
-      cm.text AS message_text
+      r.id AS request_id,
+      r.group_id AS request_group_id,
+      r.provider_message_id AS request_provider_message_id,
+      r.status AS request_status,
+      r.run_id AS request_run_id,
+      cm.id,
+      cm.chat_id,
+      cm.sender_id,
+      cm.text,
+      cm.sent_at,
+      cm.created_at
     FROM group_memory_extraction_requests r
-    JOIN conversation_messages cm ON cm.id = r.conversation_message_id
-    WHERE r.id = $1
-    ${lock ? "FOR UPDATE OF r SKIP LOCKED" : ""}
+    JOIN conversation_messages cm
+      ON cm.id = r.conversation_message_id
+     AND cm.chat_id = r.group_id
+     AND cm.provider_message_id = r.provider_message_id
+    WHERE r.id = ANY($1::text[])
+    ORDER BY r.id ASC
+    FOR UPDATE OF r SKIP LOCKED
     `,
-    [seedRequestId],
+    [requestIds],
   );
-  return result.rows[0];
+  return result.rows;
 }
 
-function mapValidSeedRequest(row: SeedRequestRow): MemoryExtractionRequest {
-  const seed = mapRequest(row);
-  if (
-    seed.groupId !== requireString("message group id", row.message_group_id) ||
-    seed.providerMessageId !== requireString("message provider id", row.message_provider_id)
-  ) {
-    throw new Error("extraction request does not match conversation message");
+function validateClaimReferences(
+  rows: RequestRouteRow[],
+  requestIds: string[],
+): { groupId: string; status: MemoryExtractionRequestStatus; runId?: string } | undefined {
+  if (rows.length !== requestIds.length) {
+    return undefined;
   }
-  return seed;
+  const routes = rows.map(mapRequestRoute);
+  if (!sameIdentifierSet(routes.map(({ requestId }) => requestId), requestIds)) {
+    return undefined;
+  }
+  const groupId = routes[0]!.groupId;
+  const status = routes[0]!.status;
+  const runId = routes[0]!.runId;
+  if (
+    routes.some((route) =>
+      route.groupId !== groupId || route.status !== status || route.runId !== runId,
+    )
+  ) {
+    throw new Error("memory extraction request routes do not form one durable scope");
+  }
+  return { groupId, status, ...(runId === undefined ? {} : { runId }) };
+}
+
+function validateClaimRows(
+  rows: ClaimMessageRow[],
+  requestIds: string[],
+  expectedStatus: "pending" | "processing",
+): { groupId: string; runId?: string } | undefined {
+  if (rows.length !== requestIds.length) {
+    return undefined;
+  }
+  const actualIds = rows.map((row) => requireExactIdentifier(row.request_id));
+  if (!sameIdentifierSet(actualIds, requestIds)) {
+    return undefined;
+  }
+  const groupId = requireExactIdentifier(rows[0]!.request_group_id);
+  const runIdValue = rows[0]!.request_run_id;
+  const runId = runIdValue === null || runIdValue === undefined
+    ? undefined
+    : requireExactIdentifier(runIdValue);
+  for (const row of rows) {
+    if (
+      row.request_status !== expectedStatus ||
+      row.request_group_id !== groupId ||
+      row.chat_id !== groupId ||
+      row.request_provider_message_id === null ||
+      row.request_provider_message_id === undefined ||
+      row.request_run_id !== (runId ?? null)
+    ) {
+      return undefined;
+    }
+  }
+  if (expectedStatus === "processing" && runId === undefined) {
+    return undefined;
+  }
+  if (expectedStatus === "pending" && runId !== undefined) {
+    return undefined;
+  }
+  return { groupId, ...(runId === undefined ? {} : { runId }) };
+}
+
+function compareClaimMessageRows(left: ClaimMessageRow, right: ClaimMessageRow): number {
+  const created = requireDate("message created at", left.created_at).getTime() -
+    requireDate("message created at", right.created_at).getTime();
+  return created === 0
+    ? compareStrings(requireExactIdentifier(left.id), requireExactIdentifier(right.id))
+    : created;
 }
 
 function messageRowIsCurrent(row: MessageRow, groupId: string, evidenceEligible: boolean): boolean {
@@ -1419,6 +1580,62 @@ function mapMemory(row: MemoryRow): ExtractionExistingMemory {
     content: requireString("memory content", row.content, true),
     updatedAt: requireDate("memory updated at", row.updated_at),
   };
+}
+
+function mapRequestRoute(row: RequestRouteRow): MemoryExtractionRequestRoute {
+  const status = requireRequestStatus(row.status);
+  const runId = row.run_id === null || row.run_id === undefined
+    ? undefined
+    : requireBoundedString(
+        "request run id",
+        requireString("request run id", row.run_id),
+        MAX_IDENTIFIER_CHARS,
+      );
+  if ((status === "processing" || status === "completed") && runId === undefined) {
+    throw new Error("terminal extraction request has no run");
+  }
+  return {
+    requestId: requireBoundedString(
+      "request id",
+      requireString("request id", row.id),
+      MAX_IDENTIFIER_CHARS,
+    ),
+    groupId: requireBoundedString(
+      "request group id",
+      requireString("request group id", row.group_id),
+      MAX_IDENTIFIER_CHARS,
+    ),
+    status,
+    ...(runId === undefined ? {} : { runId }),
+  };
+}
+
+function normalizeIdentifierSet(fieldName: string, value: unknown, maximum: number): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${fieldName} must be an array`);
+  }
+  if (value.length > maximum) {
+    throw new Error(`${fieldName} must contain at most ${maximum} identifiers`);
+  }
+  const identifiers = value.map((identifier) =>
+    requireBoundedString(fieldName, requireString(fieldName, identifier), MAX_IDENTIFIER_CHARS),
+  );
+  if (new Set(identifiers).size !== identifiers.length) {
+    throw new Error(`${fieldName} must not contain duplicate identifiers`);
+  }
+  return identifiers.sort(compareStrings);
+}
+
+function sameIdentifierSet(left: string[], right: string[]): boolean {
+  const canonicalLeft = [...left].sort(compareStrings);
+  const canonicalRight = [...right].sort(compareStrings);
+  return canonicalLeft.length === canonicalRight.length &&
+    canonicalLeft.every((value, index) => value === canonicalRight[index]);
+}
+
+function identifierSetContainsAll(authoritative: string[], requested: string[]): boolean {
+  const authoritativeIds = new Set(authoritative);
+  return requested.every((identifier) => authoritativeIds.has(identifier));
 }
 
 function requireRequestStatus(value: unknown): MemoryExtractionRequestStatus {
