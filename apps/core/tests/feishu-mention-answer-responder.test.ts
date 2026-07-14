@@ -16,6 +16,7 @@ describe("FeishuMentionAnswerResponder", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const replyInputs: ReplyTextInput[] = [];
@@ -96,6 +97,7 @@ describe("FeishuMentionAnswerResponder", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
@@ -132,6 +134,7 @@ describe("FeishuMentionAnswerResponder", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
@@ -193,6 +196,7 @@ describe("FeishuMentionAnswerResponder", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
@@ -500,6 +504,7 @@ describe("FeishuMentionAnswerResponder", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) };
@@ -538,6 +543,7 @@ describe("FeishuMentionAnswerResponder", () => {
           allowedFragments: never[];
           deniedDocumentIds: never[];
           retrievedFragmentCount: number;
+          usedGroupMemories: never[];
         }) => void)
       | undefined;
     let draftCallCount = 0;
@@ -551,6 +557,7 @@ describe("FeishuMentionAnswerResponder", () => {
             allowedFragments: never[];
             deniedDocumentIds: never[];
             retrievedFragmentCount: number;
+            usedGroupMemories: never[];
           }>((resolve) => {
             resolveFirstDraft = resolve;
           });
@@ -562,6 +569,7 @@ describe("FeishuMentionAnswerResponder", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         };
       }),
     };
@@ -592,6 +600,7 @@ describe("FeishuMentionAnswerResponder", () => {
       allowedFragments: [],
       deniedDocumentIds: [],
       retrievedFragmentCount: 0,
+      usedGroupMemories: [],
     });
     await expect(firstReply).resolves.toEqual({
       status: "replied",
@@ -609,6 +618,7 @@ describe("FeishuMentionAnswerResponder", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const replier = {

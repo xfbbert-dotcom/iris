@@ -114,6 +114,115 @@ describe("DocumentRetrievalContextBuilder", () => {
     );
   });
 
+  it("loads current-group memories and exposes evidence metadata", async () => {
+    const groupMemoryContextProvider = {
+      loadActiveMemories: vi.fn(async () => [{
+        id: "memory-1",
+        scope: "group" as const,
+        category: "decision" as const,
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1"],
+      }]),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: { searchSimilarFragments: vi.fn(async () => []) },
+      memoryGroupId: "chat-current",
+      groupMemoryContextProvider,
+      canReadDocument: vi.fn(),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "When is launch?",
+      liveChatMessages: [{ speaker: "Alice", text: "Please use the current plan." }],
+    });
+
+    expect(groupMemoryContextProvider.loadActiveMemories).toHaveBeenCalledWith({
+      groupId: "chat-current",
+      limit: 8,
+    });
+    expect(result.usedGroupMemories).toEqual([{
+      id: "memory-1",
+      scope: "group",
+      category: "decision",
+      content: "Launch Thursday.",
+      evidenceMessageIds: ["msg-1"],
+    }]);
+    expect(result.promptContext).toContain('id="memory-1"');
+    expect(result.promptContext.trim().endsWith("</live_chat_context>")).toBe(true);
+  });
+
+  it("loads group memories independently when document retrieval is disabled", async () => {
+    const groupMemoryContextProvider = {
+      loadActiveMemories: vi.fn(async () => [{
+        id: "memory-1",
+        scope: "group" as const,
+        category: "decision" as const,
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1"],
+      }]),
+    };
+    const embedder = { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder,
+      fragments,
+      memoryGroupId: "chat-current",
+      groupMemoryContextProvider,
+      canReadDocument: vi.fn(),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "Memory only",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(groupMemoryContextProvider.loadActiveMemories).toHaveBeenCalledOnce();
+    expect(result.usedGroupMemories.map((memory) => memory.id)).toEqual(["memory-1"]);
+    expect(result.promptContext).toContain("Launch Thursday.");
+    expect(embedder.embedTexts).not.toHaveBeenCalled();
+    expect(fragments.searchSimilarFragments).not.toHaveBeenCalled();
+  });
+
+  it("does not load memories without a current group boundary", async () => {
+    const groupMemoryContextProvider = { loadActiveMemories: vi.fn(async () => []) };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: { searchSimilarFragments: vi.fn(async () => []) },
+      groupMemoryContextProvider,
+      canReadDocument: vi.fn(),
+    });
+
+    const result = await builder.buildContext({ queryText: "No group", liveChatMessages: [] });
+
+    expect(groupMemoryContextProvider.loadActiveMemories).not.toHaveBeenCalled();
+    expect(result.usedGroupMemories).toEqual([]);
+  });
+
+  it("fails closed when current-group memory retrieval fails", async () => {
+    const embedder = { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder,
+      fragments: { searchSimilarFragments: vi.fn(async () => []) },
+      memoryGroupId: "chat-current",
+      groupMemoryContextProvider: {
+        loadActiveMemories: vi.fn(async () => { throw new Error("memory unavailable"); }),
+      },
+      canReadDocument: vi.fn(),
+    });
+
+    await expect(builder.buildContext({
+      queryText: "Fail closed",
+      liveChatMessages: [],
+    })).rejects.toThrow("memory unavailable");
+    expect(embedder.embedTexts).not.toHaveBeenCalled();
+  });
+
   it("skips embedding, search, and permission checks when fragmentLimit is 0", async () => {
     const embedder = { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) };
     const fragments = { searchSimilarFragments: vi.fn(async () => []) };

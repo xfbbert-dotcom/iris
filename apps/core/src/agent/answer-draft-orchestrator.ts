@@ -3,7 +3,7 @@ import type {
   DocumentRetrievalContextBuilder,
   DocumentRetrievalContextResult,
 } from "../memory/document-retrieval-context.js";
-import type { LiveChatMessage } from "../memory/context-assembly.js";
+import type { LiveChatMessage, PromptGroupMemory } from "../memory/context-assembly.js";
 
 export type GenerateAnswerDraftInput = {
   question: string;
@@ -32,6 +32,7 @@ export type AnswerDraftResult = {
   allowedFragments: RetrievedDocumentFragment[];
   deniedDocumentIds: string[];
   retrievedFragmentCount: number;
+  usedGroupMemories: PromptGroupMemory[];
 };
 
 export interface AnswerDraftOrchestrator {
@@ -228,5 +229,9 @@ function toAnswerDraftResult(
     allowedFragments: context.allowedFragments,
     deniedDocumentIds: context.deniedDocumentIds,
     retrievedFragmentCount: context.retrievedFragmentCount,
+    usedGroupMemories: context.usedGroupMemories.map((memory) => ({
+      ...memory,
+      evidenceMessageIds: [...memory.evidenceMessageIds],
+    })),
   };
 }

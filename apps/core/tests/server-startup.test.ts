@@ -260,6 +260,7 @@ describe("Core server startup", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
       close: vi.fn(async () => {

@@ -47,6 +47,7 @@ describe("POST /internal/answer-drafts", () => {
         ],
         deniedDocumentIds: ["source-denied"],
         retrievedFragmentCount: 2,
+        usedGroupMemories: [],
       })),
     };
     const app = buildApp({ answerDraftOrchestrator });
@@ -89,6 +90,7 @@ describe("POST /internal/answer-drafts", () => {
       ],
       deniedDocumentIds: ["source-denied"],
       retrievedFragmentCount: 2,
+      usedGroupMemories: [],
     });
   });
 
@@ -119,6 +121,7 @@ describe("POST /internal/answer-drafts", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const app = buildApp({ answerDraftOrchestrator });
@@ -244,6 +247,7 @@ describe("POST /internal/answer-drafts", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const app = buildApp({ answerDraftOrchestrator });
@@ -342,6 +346,7 @@ describe("answer draft runtime wiring", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
     });
@@ -367,6 +372,7 @@ describe("answer draft runtime wiring", () => {
             allowedFragments: [],
             deniedDocumentIds: [],
             retrievedFragmentCount: 0,
+            usedGroupMemories: [],
           })),
         },
         close,
@@ -396,6 +402,7 @@ describe("answer draft runtime wiring", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
       close: vi.fn(async () => undefined),
@@ -417,6 +424,7 @@ describe("answer draft runtime wiring", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const createEventWorkerRuntimeMock = vi.fn();
@@ -474,6 +482,7 @@ describe("answer draft runtime wiring", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
       close: vi.fn(async () => undefined),
@@ -510,6 +519,7 @@ describe("answer draft runtime wiring", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
       close: vi.fn(async () => undefined),

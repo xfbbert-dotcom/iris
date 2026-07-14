@@ -9,7 +9,12 @@ import {
   filterFragmentsByLivePermission,
   type RetrievedDocumentFragment as PermissionGuardFragment,
 } from "../permissions/permission-guard.js";
-import { assemblePromptContext, type LiveChatMessage } from "./context-assembly.js";
+import {
+  assemblePromptContext,
+  type LiveChatMessage,
+  type PromptGroupMemory,
+} from "./context-assembly.js";
+import type { GroupMemoryContextProvider } from "./group-memory-context-provider.js";
 
 const DEFAULT_FRAGMENT_LIMIT = 8;
 const MAX_FRAGMENT_LIMIT = 12;
@@ -31,6 +36,7 @@ export type DocumentRetrievalContextResult = {
   allowedFragments: RetrievedDocumentFragment[];
   deniedDocumentIds: string[];
   retrievedFragmentCount: number;
+  usedGroupMemories: PromptGroupMemory[];
 };
 
 export interface DocumentRetrievalContextBuilder {
@@ -43,6 +49,8 @@ export function createDocumentRetrievalContextBuilder({
   fragments,
   sourceTypes,
   groupId,
+  memoryGroupId,
+  groupMemoryContextProvider,
   canReadDocument,
   auditLog,
 }: {
@@ -51,6 +59,8 @@ export function createDocumentRetrievalContextBuilder({
   fragments: Pick<DocumentFragmentRepository, "searchSimilarFragments">;
   sourceTypes?: DocumentSourceType[];
   groupId?: string;
+  memoryGroupId?: string;
+  groupMemoryContextProvider?: GroupMemoryContextProvider;
   canReadDocument: (documentId: string) => Promise<boolean>;
   auditLog?: AuditLog;
 }): DocumentRetrievalContextBuilder {
@@ -58,16 +68,22 @@ export function createDocumentRetrievalContextBuilder({
     async buildContext(input) {
       const queryText = sanitizeQueryText(input.queryText);
       const fragmentLimit = sanitizeFragmentLimit(input.fragmentLimit);
+      const usedGroupMemories = await loadGroupMemories({
+        groupId: memoryGroupId,
+        provider: groupMemoryContextProvider,
+      });
       if (fragmentLimit === 0) {
         return {
           promptContext: assemblePromptContext({
             backgroundDocuments: [],
+            groupMemories: usedGroupMemories,
             liveChatMessages: input.liveChatMessages,
             liveChatLimit: input.liveChatLimit,
           }),
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: clonePromptGroupMemories(usedGroupMemories),
         };
       }
 
@@ -102,15 +118,37 @@ export function createDocumentRetrievalContextBuilder({
             source: `${fragment.sourceUri}#chunk-${fragment.chunkIndex}`,
             text: fragment.text,
           })),
+          groupMemories: usedGroupMemories,
           liveChatMessages: input.liveChatMessages,
           liveChatLimit: input.liveChatLimit,
         }),
         allowedFragments,
         deniedDocumentIds: permissionGuardResult.deniedDocumentIds,
         retrievedFragmentCount: retrievedFragments.length,
+        usedGroupMemories: clonePromptGroupMemories(usedGroupMemories),
       };
     },
   };
+}
+
+async function loadGroupMemories({
+  groupId,
+  provider,
+}: {
+  groupId: string | undefined;
+  provider: GroupMemoryContextProvider | undefined;
+}): Promise<PromptGroupMemory[]> {
+  if (groupId === undefined || provider === undefined) {
+    return [];
+  }
+  return provider.loadActiveMemories({ groupId, limit: 8 });
+}
+
+function clonePromptGroupMemories(memories: PromptGroupMemory[]): PromptGroupMemory[] {
+  return memories.map((memory) => ({
+    ...memory,
+    evidenceMessageIds: [...memory.evidenceMessageIds],
+  }));
 }
 
 function sanitizeQueryText(value: string): string {

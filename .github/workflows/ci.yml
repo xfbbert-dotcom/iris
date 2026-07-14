@@ -58,6 +58,7 @@ jobs:
           npm --workspace apps/core test -- postgres-document-source-registry.test.ts
           npm --workspace apps/core test -- document-snapshot-repository.test.ts
           npm --workspace apps/core test -- document-fragment-repository.test.ts
+          npm --workspace apps/core test -- postgres-group-memory-repository.test.ts
 
       - name: Validate Docker Compose
         run: docker compose config
@@ -82,6 +83,9 @@ jobs:
             PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
               --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
               --command "SELECT count(*) FROM document_sources" > /dev/null
+            PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
+              --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
+              --command "SELECT count(*) FROM group_memories" > /dev/null
             if PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
               --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
               --command "CREATE TABLE iris_forbidden_app_ddl(id integer)" > /dev/null 2>&1; then

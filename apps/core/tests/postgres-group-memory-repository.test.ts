@@ -1,4 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { readDatabaseConfig } from "../src/database/database-config.js";
+import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 
 import {
   createPostgresGroupMemoryRepository,
@@ -6,6 +12,9 @@ import {
   type Queryable,
   type TransactionClient,
 } from "../src/memory/postgres-group-memory-repository.js";
+
+const databaseUrl = process.env.DATABASE_URL?.trim();
+const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("createPostgresGroupMemoryRepository", () => {
   it("creates an evidence-bound memory transactionally", async () => {
@@ -200,6 +209,126 @@ describe("createPostgresGroupMemoryRepository", () => {
       expect.stringMatching(/delete from group_memories[\s\S]+returning id/iu),
       ["missing"],
     );
+  });
+});
+
+runIfDatabase("PostgresGroupMemoryRepository with Postgres", () => {
+  let pool: pg.Pool | undefined;
+  const suffix = randomUUID();
+  const groupId = `memory-group-${suffix}`;
+  const otherGroupId = `other-memory-group-${suffix}`;
+  const messageId = `feishu:memory-message-${suffix}`;
+  const otherMessageId = `feishu:other-memory-message-${suffix}`;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: readDatabaseConfig().databaseUrl });
+    const client = await pool.connect();
+    try {
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+    } finally {
+      client.release();
+    }
+    await pool.query(
+      `
+      INSERT INTO conversation_messages (
+        id, provider, provider_message_id, chat_id, sender_id,
+        message_type, text, sent_at, raw_event_idempotency_key
+      )
+      VALUES
+        ($1, 'feishu', $2, $3, 'alice', 'text', 'Launch Thursday.', NOW(), $4),
+        ($5, 'feishu', $6, $7, 'bob', 'text', 'Other group.', NOW(), $8)
+      `,
+      [
+        messageId,
+        `provider-${messageId}`,
+        groupId,
+        `event-${messageId}`,
+        otherMessageId,
+        `provider-${otherMessageId}`,
+        otherGroupId,
+        `event-${otherMessageId}`,
+      ],
+    );
+  });
+
+  afterAll(async () => {
+    if (pool === undefined) {
+      return;
+    }
+    try {
+      await pool.query("DELETE FROM group_memories WHERE group_id = ANY($1::text[])", [
+        [groupId, otherGroupId],
+      ]);
+      await pool.query("DELETE FROM conversation_messages WHERE id = ANY($1::text[])", [
+        [messageId, otherMessageId],
+      ]);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("creates, isolates, corrects, and hard-deletes evidence-bound memory", async () => {
+    if (pool === undefined) {
+      throw new Error("Expected Postgres pool to be initialized");
+    }
+    const repository = createPostgresGroupMemoryRepository({ dataSource: pool });
+
+    await expect(repository.create({
+      groupId,
+      scope: "group",
+      category: "decision",
+      content: "Launch Thursday.",
+      importance: 4,
+      confidence: 0.9,
+      idempotencyKey: `create-${suffix}`,
+      origin: "operator",
+      createdBy: "alice",
+      evidenceMessageIds: [messageId],
+    })).resolves.toMatchObject({ created: true, memory: { groupId, status: "active" } });
+
+    await expect(repository.create({
+      groupId,
+      scope: "group",
+      category: "decision",
+      content: "Cross-group evidence must fail.",
+      importance: 4,
+      confidence: 0.9,
+      idempotencyKey: `cross-group-${suffix}`,
+      origin: "operator",
+      createdBy: "alice",
+      evidenceMessageIds: [otherMessageId],
+    })).rejects.toThrow("memory evidence must belong to the same group");
+
+    const [original] = await repository.listActiveByGroup({ groupId, limit: 8 });
+    expect(original).toMatchObject({ content: "Launch Thursday.", status: "active" });
+    const correction = await repository.correct({
+      memoryId: original!.id,
+      content: "Launch Friday.",
+      idempotencyKey: `correct-${suffix}`,
+      origin: "operator",
+      createdBy: "alice",
+    });
+
+    expect(correction).toMatchObject({
+      created: true,
+      memory: {
+        groupId,
+        content: "Launch Friday.",
+        status: "active",
+        supersedesMemoryId: original!.id,
+        evidenceMessageIds: [messageId],
+      },
+    });
+    await expect(repository.listActiveByGroup({ groupId, limit: 8 })).resolves.toEqual([
+      expect.objectContaining({ id: correction.memory.id, content: "Launch Friday." }),
+    ]);
+    await expect(repository.getById(original!.id)).resolves.toMatchObject({
+      status: "superseded",
+    });
+    await expect(repository.listActiveByGroup({ groupId: otherGroupId, limit: 8 })).resolves.toEqual([]);
+
+    await expect(repository.deleteById(correction.memory.id)).resolves.toBe("deleted");
+    await expect(repository.getById(correction.memory.id)).resolves.toBeUndefined();
   });
 });
 

@@ -5,6 +5,7 @@ import type { GenerateAnswerDraftInput } from "../src/agent/answer-draft-orchest
 import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
+import type { GroupMemory, GroupMemoryRepository } from "../src/memory/group-memory-repository.js";
 import type { GroupMemoryService } from "../src/memory/group-memory-service.js";
 import { createAnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
 
@@ -133,6 +134,95 @@ describe("createAnswerDraftRuntime", () => {
     expect(runtime?.groupMemoryService).toBe(groupMemoryService);
 
     await runtime?.close();
+  });
+
+  it("retrieves long-term memory only for the current group", async () => {
+    const listActiveByGroup = vi.fn(async () => [groupMemory()]);
+    const model = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Thursday" })),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canReadGroupContext: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createMemoryEnabledRuntime({
+      listActiveByGroup,
+      model,
+      runtimeController,
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "When is launch?",
+      chatId: " chat-a ",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(listActiveByGroup).toHaveBeenCalledWith({ groupId: "chat-a", limit: 8 });
+    expect(runtimeController.canReadGroupContext).toHaveBeenCalledWith("chat-a");
+    expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-a");
+    expect(result?.usedGroupMemories.map((memory) => memory.id)).toEqual(["memory-1"]);
+    expect(model.generateAnswerDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ promptContext: expect.stringContaining("Launch Thursday.") }),
+    );
+  });
+
+  it.each([
+    ["group context reading", false, true],
+    ["group processing", true, false],
+  ])("does not retrieve memory when %s is disabled", async (_label, canRead, canProcess) => {
+    const listActiveByGroup = vi.fn(async () => [groupMemory()]);
+    const runtime = createMemoryEnabledRuntime({
+      listActiveByGroup,
+      runtimeController: {
+        canReadDocuments: vi.fn(() => true),
+        canRetrieveKnowledgeBase: vi.fn(() => true),
+        canReadGroupContext: vi.fn(() => canRead),
+        canProcessGroupMessage: vi.fn(() => canProcess),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "When is launch?",
+      chatId: "chat-a",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(listActiveByGroup).not.toHaveBeenCalled();
+    expect(result?.usedGroupMemories).toEqual([]);
+  });
+
+  it("does not retrieve memory without a valid chatId", async () => {
+    const listActiveByGroup = vi.fn(async () => [groupMemory()]);
+    const runtime = createMemoryEnabledRuntime({ listActiveByGroup });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "When is launch?",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(listActiveByGroup).not.toHaveBeenCalled();
+    expect(result?.usedGroupMemories).toEqual([]);
+  });
+
+  it("fails the answer closed when durable memory retrieval fails", async () => {
+    const model = { generateAnswerDraft: vi.fn() };
+    const runtime = createMemoryEnabledRuntime({
+      listActiveByGroup: vi.fn(async () => { throw new Error("memory unavailable"); }),
+      model,
+    });
+
+    await expect(runtime?.answerDraftOrchestrator.generateDraft({
+      question: "When is launch?",
+      chatId: "chat-a",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    })).rejects.toThrow("memory unavailable");
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
   it("creates a working orchestrator with allow-indexed development permissions", async () => {
@@ -1184,6 +1274,74 @@ function source(overrides: Partial<DocumentSource> = {}): DocumentSource {
     createdAt: new Date("2026-07-01T01:00:00.000Z"),
     updatedAt: new Date("2026-07-01T01:00:00.000Z"),
     evidence: [],
+    ...overrides,
+  };
+}
+
+function createMemoryEnabledRuntime({
+  listActiveByGroup,
+  model = {
+    generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+  },
+  runtimeController,
+}: {
+  listActiveByGroup: GroupMemoryRepository["listActiveByGroup"];
+  model?: {
+    generateAnswerDraft: ReturnType<typeof vi.fn>;
+  };
+  runtimeController?: {
+    canReadDocuments(): boolean;
+    canRetrieveKnowledgeBase(): boolean;
+    canReadGroupContext?(groupId: string): boolean;
+    canProcessGroupMessage?(groupId: string): boolean;
+  };
+}) {
+  const repository = {
+    listActiveByGroup,
+  } as unknown as GroupMemoryRepository;
+  return createAnswerDraftRuntime({
+    env: enabledEnv(),
+    runtimeController,
+    dependencies: {
+      createPostgresPool: vi.fn(() => ({
+        query: vi.fn(),
+        connect: vi.fn(),
+        end: vi.fn(async () => undefined),
+      })),
+      createGroupMemoryRepository: vi.fn(() => repository),
+      createGroupMemoryService: vi.fn(() => ({ service: true } as unknown as GroupMemoryService)),
+      createDocumentFragmentRepository: vi.fn(() => ({
+        searchSimilarFragments: vi.fn(async () => []),
+      })),
+      createLiveChatContextProvider: vi.fn(() => ({
+        loadRecentMessages: vi.fn(async () => []),
+      })),
+      createModelProvider: vi.fn(() => model),
+      createEmbeddingProfileRepository: vi.fn(() => ({
+        getStaticDevelopmentProfile: vi.fn(async () => profile()),
+        findOrCreateProfile: vi.fn(),
+        getProfileById: vi.fn(),
+      })),
+    },
+  });
+}
+
+function groupMemory(overrides: Partial<GroupMemory> = {}): GroupMemory {
+  return {
+    id: "memory-1",
+    groupId: "chat-a",
+    scope: "group",
+    category: "decision",
+    content: "Launch Thursday.",
+    importance: 4,
+    confidence: 0.9,
+    status: "active",
+    idempotencyKey: "create-1",
+    origin: "operator",
+    createdBy: "alice",
+    evidenceMessageIds: ["msg-1"],
+    createdAt: new Date("2026-07-14T00:00:00.000Z"),
+    updatedAt: new Date("2026-07-14T00:00:00.000Z"),
     ...overrides,
   };
 }

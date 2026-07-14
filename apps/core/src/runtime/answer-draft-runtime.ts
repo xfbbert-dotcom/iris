@@ -63,6 +63,10 @@ import {
   createGroupMemoryService,
   type GroupMemoryService,
 } from "../memory/group-memory-service.js";
+import {
+  createGroupMemoryContextProvider,
+  type GroupMemoryContextProvider,
+} from "../memory/group-memory-context-provider.js";
 
 export type AnswerDraftRuntime = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">;
@@ -180,12 +184,15 @@ export function createAnswerDraftRuntime({
         })
       : undefined;
   const pool = createPool(readDatabaseConfig(env));
-  const groupMemoryService = isPostgresGroupMemoryDataSource(pool)
-    ? createMemoryService({
-        repository: createMemories({ dataSource: pool }),
-        ...(dependencies.auditLog === undefined ? {} : { auditLog: dependencies.auditLog }),
-      })
+  const groupMemoryRepository = isPostgresGroupMemoryDataSource(pool)
+    ? createMemories({ dataSource: pool })
     : undefined;
+  const groupMemoryService = groupMemoryRepository === undefined
+    ? undefined
+    : createMemoryService({
+        repository: groupMemoryRepository,
+        ...(dependencies.auditLog === undefined ? {} : { auditLog: dependencies.auditLog }),
+      });
   const profiles = createProfiles({ queryable: pool });
   const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
   const sourceRegistry =
@@ -211,10 +218,10 @@ export function createAnswerDraftRuntime({
         throw error;
       });
       const runtimeEmbedding = await runtimeEmbeddingPromise;
-      const currentGroupId =
-        runtimeConfig.permissionMode === "source-policy"
-          ? normalizeCurrentGroupId(input.chatId)
-          : undefined;
+      const currentGroupId = normalizeCurrentGroupId(input.chatId);
+      const documentGroupId = runtimeConfig.permissionMode === "source-policy"
+        ? currentGroupId
+        : undefined;
       const contextBuilder = createDocumentRetrievalContextBuilder({
         embeddingProfileId: runtimeEmbedding.profile.id,
         embedder: runtimeEmbedding.embedder,
@@ -222,15 +229,26 @@ export function createAnswerDraftRuntime({
         sourceTypes: selectAnswerSourceTypes({
           permissionMode: runtimeConfig.permissionMode,
           runtimeController,
-          currentGroupId,
+          currentGroupId: documentGroupId,
         }),
-        ...(currentGroupId === undefined ? {} : { groupId: currentGroupId }),
+        ...(documentGroupId === undefined ? {} : { groupId: documentGroupId }),
+        ...(currentGroupId === undefined ? {} : { memoryGroupId: currentGroupId }),
+        ...(groupMemoryRepository === undefined
+          ? {}
+          : {
+              groupMemoryContextProvider: createRuntimeGatedGroupMemoryContextProvider({
+                delegate: createGroupMemoryContextProvider({
+                  repository: groupMemoryRepository,
+                }),
+                runtimeController,
+              }),
+            }),
         canReadDocument: createCanReadDocument({
           permissionMode: runtimeConfig.permissionMode,
           sourceRegistry,
           runtimeController,
           livePermissionChecker,
-          currentGroupId,
+          currentGroupId: documentGroupId,
         }),
         auditLog: dependencies.auditLog,
       });
@@ -256,6 +274,32 @@ function isPostgresGroupMemoryDataSource(
   value: Queryable,
 ): value is Queryable & PostgresGroupMemoryDataSource {
   return "connect" in value && typeof value.connect === "function";
+}
+
+function createRuntimeGatedGroupMemoryContextProvider({
+  delegate,
+  runtimeController,
+}: {
+  delegate: GroupMemoryContextProvider;
+  runtimeController?: RuntimeRetrievalGate;
+}): GroupMemoryContextProvider {
+  return {
+    async loadActiveMemories(input) {
+      if (
+        runtimeController?.canReadGroupContext !== undefined &&
+        !runtimeController.canReadGroupContext(input.groupId)
+      ) {
+        return [];
+      }
+      if (
+        runtimeController?.canProcessGroupMessage !== undefined &&
+        !runtimeController.canProcessGroupMessage(input.groupId)
+      ) {
+        return [];
+      }
+      return delegate.loadActiveMemories(input);
+    },
+  };
 }
 
 function createRuntimeGatedLiveChatContextProvider({

@@ -165,6 +165,7 @@ describe("runtime control API", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const app = buildApp({
@@ -1092,6 +1093,7 @@ describe("runtime control API", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const app = buildApp({
@@ -1129,6 +1131,7 @@ describe("runtime control API", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const app = buildApp({
@@ -1550,6 +1553,7 @@ describe("runtime control API", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const app = buildApp({

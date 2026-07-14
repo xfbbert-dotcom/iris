@@ -27,6 +27,13 @@ describe("AnswerDraftOrchestrator", () => {
         ],
         deniedDocumentIds: ["source-denied"],
         retrievedFragmentCount: 2,
+        usedGroupMemories: [{
+          id: "memory-1",
+          scope: "group" as const,
+          category: "decision" as const,
+          content: "Launch Thursday.",
+          evidenceMessageIds: ["msg-1"],
+        }],
       })),
     };
     const model: ModelProvider = {
@@ -61,6 +68,13 @@ describe("AnswerDraftOrchestrator", () => {
       ],
       deniedDocumentIds: ["source-denied"],
       retrievedFragmentCount: 2,
+      usedGroupMemories: [{
+        id: "memory-1",
+        scope: "group",
+        category: "decision",
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1"],
+      }],
     });
   });
 
@@ -99,6 +113,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -145,6 +160,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -175,6 +191,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -213,6 +230,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -406,6 +424,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -452,6 +471,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -496,6 +516,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -547,6 +568,7 @@ describe("AnswerDraftOrchestrator", () => {
             allowedFragments: [],
             deniedDocumentIds: [],
             retrievedFragmentCount: 0,
+            usedGroupMemories: [],
           };
         },
       ),
@@ -585,6 +607,7 @@ describe("AnswerDraftOrchestrator", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
       model: { generateAnswerDraft: vi.fn(async () => ({ answerText: " \n " })) },
@@ -603,6 +626,7 @@ describe("AnswerDraftOrchestrator", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
       model: {
