@@ -244,6 +244,22 @@ test("CI runs the private-first post-restore smoke mode after restore", () => {
   assert.ok(postRestoreSmoke > restore);
 });
 
+test("CI keeps the pilot queues empty before the backup drill", () => {
+  const workflow = readFileSync(ciWorkflowPath, "utf8");
+  const startStack = workflow.indexOf("- name: Start pilot stack");
+  const backupDrill = workflow.indexOf(
+    "- name: Drill paired pilot backup and restore",
+    startStack,
+  );
+
+  assert.ok(startStack >= 0);
+  assert.ok(backupDrill > startStack);
+  assert.doesNotMatch(
+    workflow.slice(startStack, backupDrill),
+    /npm run pilot:smoke(?:\s|$)/u,
+  );
+});
+
 test("restore requires confirmation and fails closed through transactional restore", () => {
   const script = readFileSync(restorePath, "utf8");
   assert.match(script, /--confirm-replace-database/u);

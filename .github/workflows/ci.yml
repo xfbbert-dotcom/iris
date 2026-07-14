@@ -90,9 +90,6 @@ jobs:
             fi
           '
 
-      - name: Smoke pilot boundaries
-        run: npm run pilot:smoke
-
       - name: Drill paired pilot backup and restore
         run: |
           sudo apt-get update
