@@ -37,7 +37,11 @@ type SeedRequestRow = RequestRow & {
   message_text: unknown;
 };
 
-type ExistingRequestRow = RequestRow & { message_text: unknown };
+type ExistingRequestRow = RequestRow & {
+  message_group_id: unknown;
+  message_provider_id: unknown;
+  message_text: unknown;
+};
 
 type MessageRow = {
   request_id?: unknown;
@@ -82,6 +86,7 @@ const MAX_CLASSIFICATION_CHARS = 128;
 const MAX_EVIDENCE_MESSAGES = 40;
 const MAX_CONTEXT_MESSAGES = 10;
 const MAX_ACTIVE_MEMORIES = 8;
+const READABLE_MESSAGE_TEXT_SQL = "cm.text ~ '[^[:space:]]'";
 
 export function createPostgresMemoryExtractionRepository({
   dataSource,
@@ -114,7 +119,7 @@ export function createPostgresMemoryExtractionRepository({
         WHERE cm.id = $2
           AND cm.chat_id = $3
           AND cm.provider_message_id = $4
-          AND NULLIF(BTRIM(cm.text), '') IS NOT NULL
+          AND ${READABLE_MESSAGE_TEXT_SQL}
         ON CONFLICT DO NOTHING
         RETURNING *
         `,
@@ -127,7 +132,11 @@ export function createPostgresMemoryExtractionRepository({
 
       const existing = await dataSource.query<ExistingRequestRow>(
         `
-        SELECT r.*, cm.text AS message_text
+        SELECT
+          r.*,
+          cm.chat_id AS message_group_id,
+          cm.provider_message_id AS message_provider_id,
+          cm.text AS message_text
         FROM group_memory_extraction_requests r
         JOIN conversation_messages cm ON cm.id = r.conversation_message_id
         WHERE r.conversation_message_id = $1 OR r.provider_message_id = $2
@@ -144,10 +153,22 @@ export function createPostgresMemoryExtractionRepository({
         throw new Error("conversation message is not readable for extraction");
       }
       const request = mapRequest(existingRow);
+      const messageGroupId = requireString(
+        "conversation message group id",
+        existingRow.message_group_id,
+      );
+      const messageProviderId = requireString(
+        "conversation message provider id",
+        existingRow.message_provider_id,
+      );
       if (
         request.groupId !== input.groupId ||
         request.conversationMessageId !== input.conversationMessageId ||
-        request.providerMessageId !== input.providerMessageId
+        request.providerMessageId !== input.providerMessageId ||
+        messageGroupId !== input.groupId ||
+        messageGroupId !== request.groupId ||
+        messageProviderId !== input.providerMessageId ||
+        messageProviderId !== request.providerMessageId
       ) {
         throw new Error("conversation message does not match extraction request");
       }
@@ -249,7 +270,7 @@ export function createPostgresMemoryExtractionRepository({
            AND cm.provider_message_id = r.provider_message_id
           WHERE r.group_id = $1
             AND r.status = 'pending'
-            AND NULLIF(BTRIM(cm.text), '') IS NOT NULL
+            AND ${READABLE_MESSAGE_TEXT_SQL}
           ORDER BY cm.created_at ASC, cm.id ASC
           LIMIT $2
           FOR UPDATE OF r SKIP LOCKED
@@ -270,7 +291,7 @@ export function createPostgresMemoryExtractionRepository({
           SELECT cm.id, cm.chat_id, cm.sender_id, cm.text, cm.sent_at, cm.created_at
           FROM conversation_messages cm
           WHERE cm.chat_id = $1
-            AND NULLIF(BTRIM(cm.text), '') IS NOT NULL
+            AND ${READABLE_MESSAGE_TEXT_SQL}
             AND (cm.created_at, cm.id) < ($2, $3)
             AND NOT (cm.id = ANY($4::text[]))
           ORDER BY cm.created_at DESC, cm.id DESC

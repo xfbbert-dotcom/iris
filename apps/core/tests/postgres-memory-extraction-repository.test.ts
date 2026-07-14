@@ -14,7 +14,7 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("createPostgresMemoryExtractionRepository", () => {
-  it("requires non-blank text in registration, evidence, and context SQL", async () => {
+  it("uses one explicit POSIX whitespace predicate for registration, evidence, and context", async () => {
     const source = fakeDataSource((sql) => {
       const normalized = normalizeSql(sql);
       if (normalized.includes("where r.id = $1")) {
@@ -56,12 +56,9 @@ describe("createPostgresMemoryExtractionRepository", () => {
     const contextSql = source.sql.find((sql) =>
       normalizeSql(sql).includes("and (cm.created_at, cm.id) <"),
     );
-    expect(normalizeSql(evidenceSql ?? "")).toContain(
-      "nullif(btrim(cm.text), '') is not null",
-    );
-    expect(normalizeSql(contextSql ?? "")).toContain(
-      "nullif(btrim(cm.text), '') is not null",
-    );
+    const readableTextPredicate = "cm.text ~ '[^[:space:]]'";
+    expect(normalizeSql(evidenceSql ?? "")).toContain(readableTextPredicate);
+    expect(normalizeSql(contextSql ?? "")).toContain(readableTextPredicate);
 
     const registrationSource = fakeDataSource(() => ({ rows: [] }));
     const registrationRepository = createPostgresMemoryExtractionRepository({
@@ -74,16 +71,49 @@ describe("createPostgresMemoryExtractionRepository", () => {
         providerMessageId: "blank",
       }),
     ).rejects.toThrow();
-    expect(normalizeSql(registrationSource.sql[0] ?? "")).toContain(
-      "nullif(btrim(cm.text), '') is not null",
-    );
+    expect(normalizeSql(registrationSource.sql[0] ?? "")).toContain(readableTextPredicate);
   });
 
-  it("skips an unreadable seed without claiming another pending request", async () => {
+  it.each([
+    {
+      name: "moved group",
+      messageGroupId: "chat-b",
+      messageProviderId: "message-1",
+    },
+    {
+      name: "changed provider identity",
+      messageGroupId: "chat-a",
+      messageProviderId: "message-2",
+    },
+  ])("fails closed on idempotent replay after $name", async ({ messageGroupId, messageProviderId }) => {
+    const source = fakeDataSource((sql) => {
+      if (normalizeSql(sql).startsWith("insert into group_memory_extraction_requests")) {
+        return { rows: [] };
+      }
+      return {
+        rows: [existingRequestRow({ messageGroupId, messageProviderId })],
+      };
+    });
+    const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
+
+    await expect(
+      repository.registerRequest({
+        groupId: "chat-a",
+        conversationMessageId: "feishu:message-1",
+        providerMessageId: "message-1",
+      }),
+    ).rejects.toThrow("conversation message does not match extraction request");
+  });
+
+  it.each([
+    { label: "space", messageText: "   " },
+    { label: "tab", messageText: "\t\t" },
+    { label: "newline", messageText: "\n\n" },
+  ])("skips a $label-only seed without claiming another pending request", async ({ messageText }) => {
     const source = fakeDataSource((sql) => {
       const normalized = normalizeSql(sql);
       if (normalized.includes("where r.id = $1")) {
-        return { rows: [seedRequestRow({ messageText: "   " })] };
+        return { rows: [seedRequestRow({ messageText })] };
       }
       return { rows: [] };
     });
@@ -221,7 +251,12 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
   const unreadableGroup = `extraction-unreadable-${suffix}`;
   const nullTextMessageId = `feishu:extraction-null-text-${suffix}`;
   const blankTextMessageId = `feishu:extraction-blank-text-${suffix}`;
+  const tabTextMessageId = `feishu:extraction-tab-text-${suffix}`;
+  const newlineTextMessageId = `feishu:extraction-newline-text-${suffix}`;
+  const newlineContextMessageId = `feishu:extraction-newline-context-${suffix}`;
   const readablePeerMessageId = `feishu:extraction-readable-peer-${suffix}`;
+  const identityGroup = `extraction-identity-${suffix}`;
+  const identityMessageId = `feishu:extraction-identity-${suffix}`;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: databaseUrl });
@@ -270,6 +305,44 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
         groupB,
         new Date("2026-07-14T00:30:00.000Z"),
         `event-${otherGroupMessageId}`,
+      ],
+    );
+
+    await pool.query(
+      `
+      INSERT INTO conversation_messages (
+        id, provider, provider_message_id, chat_id, sender_id,
+        message_type, text, sent_at, raw_event_idempotency_key, created_at
+      )
+      VALUES
+        ($1, 'feishu', $2, $3, 'alice', 'text', $4, $5, $6, $5),
+        ($7, 'feishu', $8, $3, 'alice', 'text', $9, $10, $11, $10),
+        ($12, 'feishu', $13, $14, 'alice', 'text', $15, $16, $17, $16),
+        ($18, 'feishu', $19, $20, 'alice', 'text', 'Identity message', $21, $22, $21)
+      `,
+      [
+        tabTextMessageId,
+        `provider-${tabTextMessageId}`,
+        unreadableGroup,
+        "\t\t",
+        new Date("2026-07-14T03:03:00.000Z"),
+        `event-${tabTextMessageId}`,
+        newlineTextMessageId,
+        `provider-${newlineTextMessageId}`,
+        "\n\n",
+        new Date("2026-07-14T03:04:00.000Z"),
+        `event-${newlineTextMessageId}`,
+        newlineContextMessageId,
+        `provider-${newlineContextMessageId}`,
+        groupA,
+        "\n",
+        new Date("2026-07-14T00:12:30.000Z"),
+        `event-${newlineContextMessageId}`,
+        identityMessageId,
+        `provider-${identityMessageId}`,
+        identityGroup,
+        new Date("2026-07-14T04:00:00.000Z"),
+        `event-${identityMessageId}`,
       ],
     );
 
@@ -336,21 +409,21 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
           SELECT id FROM group_memory_extraction_runs WHERE group_id = ANY($1::text[])
         )
         `,
-        [[...groupIds, unreadableGroup]],
+        [[...groupIds, unreadableGroup, identityGroup]],
       );
       await pool.query(
         "DELETE FROM group_memory_extraction_requests WHERE group_id = ANY($1::text[])",
-        [[...groupIds, unreadableGroup]],
+        [[...groupIds, unreadableGroup, identityGroup]],
       );
       await pool.query(
         "DELETE FROM group_memory_extraction_runs WHERE group_id = ANY($1::text[])",
-        [[...groupIds, unreadableGroup]],
+        [[...groupIds, unreadableGroup, identityGroup]],
       );
       await pool.query("DELETE FROM group_memories WHERE group_id = ANY($1::text[])", [
         groupIds,
       ]);
       await pool.query("DELETE FROM conversation_messages WHERE chat_id = ANY($1::text[])", [
-        [...groupIds, unreadableGroup],
+        [...groupIds, unreadableGroup, identityGroup],
       ]);
     } finally {
       await pool.end();
@@ -386,6 +459,46 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });
 
+  it("fails closed when authoritative replay identity has changed", async () => {
+    const repository = createRepository(pool);
+    const input = {
+      groupId: identityGroup,
+      conversationMessageId: identityMessageId,
+      providerMessageId: `provider-${identityMessageId}`,
+    };
+    await repository.registerRequest(input);
+
+    await pool!.query("UPDATE conversation_messages SET chat_id = $2 WHERE id = $1", [
+      identityMessageId,
+      `${identityGroup}-moved`,
+    ]);
+    try {
+      await expect(repository.registerRequest(input)).rejects.toThrow(
+        "conversation message does not match extraction request",
+      );
+    } finally {
+      await pool!.query("UPDATE conversation_messages SET chat_id = $2 WHERE id = $1", [
+        identityMessageId,
+        identityGroup,
+      ]);
+    }
+
+    await pool!.query("UPDATE conversation_messages SET provider_message_id = $2 WHERE id = $1", [
+      identityMessageId,
+      `${input.providerMessageId}-changed`,
+    ]);
+    try {
+      await expect(repository.registerRequest(input)).rejects.toThrow(
+        "conversation message does not match extraction request",
+      );
+    } finally {
+      await pool!.query("UPDATE conversation_messages SET provider_message_id = $2 WHERE id = $1", [
+        identityMessageId,
+        input.providerMessageId,
+      ]);
+    }
+  });
+
   it("fails closed when registration metadata disagrees with the message fact", async () => {
     const repository = createRepository(pool);
 
@@ -398,10 +511,15 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
     ).rejects.toThrow("conversation message does not match extraction request");
   });
 
-  it("rejects registration for null or blank message text", async () => {
+  it("rejects registration for null or whitespace-only message text", async () => {
     const repository = createRepository(pool);
 
-    for (const messageId of [nullTextMessageId, blankTextMessageId]) {
+    for (const messageId of [
+      nullTextMessageId,
+      blankTextMessageId,
+      tabTextMessageId,
+      newlineTextMessageId,
+    ]) {
       await expect(
         repository.registerRequest({
           groupId: unreadableGroup,
@@ -428,7 +546,7 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
       )
       VALUES ($1, $2, $3, $4, 'pending')
       `,
-      [badRequestId, unreadableGroup, blankTextMessageId, `provider-${blankTextMessageId}`],
+      [badRequestId, unreadableGroup, tabTextMessageId, `provider-${tabTextMessageId}`],
     );
     const peer = await repository.registerRequest({
       groupId: unreadableGroup,
@@ -637,6 +755,26 @@ function evidenceMessageRow() {
     text: "Readable seed",
     sent_at: new Date("2026-07-14T00:00:00.000Z"),
     created_at: new Date("2026-07-14T00:00:00.000Z"),
+  };
+}
+
+function existingRequestRow(input: {
+  messageGroupId: string;
+  messageProviderId: string;
+}) {
+  return {
+    id: "request-1",
+    group_id: "chat-a",
+    conversation_message_id: "feishu:message-1",
+    provider_message_id: "message-1",
+    status: "pending",
+    run_id: null,
+    skip_reason: null,
+    created_at: new Date("2026-07-14T00:00:00.000Z"),
+    updated_at: new Date("2026-07-14T00:00:00.000Z"),
+    message_group_id: input.messageGroupId,
+    message_provider_id: input.messageProviderId,
+    message_text: "Readable message",
   };
 }
 
