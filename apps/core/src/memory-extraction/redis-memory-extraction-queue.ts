@@ -234,6 +234,7 @@ if redis.call("HGET", KEYS[9], ARGV[3]) ~= "processing"
 local sequence = redis.call("INCR", KEYS[12])
 redis.call("ZADD", KEYS[1], sequence, ARGV[1])
 redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
+redis.call("SADD", KEYS[14], ARGV[1])
 redis.call("ZREM", KEYS[6], ARGV[3])
 redis.call("HDEL", KEYS[9], ARGV[3])
 redis.call("HDEL", KEYS[10], ARGV[3])
@@ -253,6 +254,7 @@ local function is_canonical_dlq_id(value)
     and string.match(value, "^dlq:[0-9a-f]+$") ~= nil
 end
 if not is_canonical_dlq_id(ARGV[3])
+  or redis.call("SISMEMBER", KEYS[15], ARGV[3]) ~= 1
   or not redis.call("ZSCORE", KEYS[12], ARGV[3])
   or redis.call("HGET", KEYS[11], ARGV[3]) ~= ARGV[4] then return 0 end
 local state = redis.call("HGET", KEYS[8], ARGV[1])
@@ -261,6 +263,7 @@ if state == "processing" and existing_payload
   and redis.call("ZSCORE", KEYS[6], ARGV[1]) then
   redis.call("HDEL", KEYS[11], ARGV[3])
   redis.call("ZREM", KEYS[12], ARGV[3])
+  redis.call("SREM", KEYS[15], ARGV[3])
   return 1
 end
 if existing_payload then
@@ -281,6 +284,7 @@ redis.call("HSET", KEYS[8], ARGV[1], "ready")
 redis.call("SADD", KEYS[1], ARGV[1])
 redis.call("HDEL", KEYS[11], ARGV[3])
 redis.call("ZREM", KEYS[12], ARGV[3])
+redis.call("SREM", KEYS[15], ARGV[3])
 return 1
 `;
 
@@ -299,17 +303,21 @@ for _, id in ipairs(ids) do
   if not is_canonical_dlq_id(id) and stale_removed < stale_limit then
     redis.call("ZREM", KEYS[2], id)
     redis.call("HDEL", KEYS[1], id)
+    redis.call("SREM", KEYS[3], id)
     stale_removed = stale_removed + 1
   elseif not is_canonical_dlq_id(id) then
     break
   else
     local payload = redis.call("HGET", KEYS[1], id)
-    if payload then
+    local authoritative = redis.call("SISMEMBER", KEYS[3], id) == 1
+    if payload and authoritative then
       table.insert(listed, id)
       table.insert(listed, payload)
       if #listed / 2 >= limit then break end
     elseif stale_removed < stale_limit then
       redis.call("ZREM", KEYS[2], id)
+      redis.call("HDEL", KEYS[1], id)
+      redis.call("SREM", KEYS[3], id)
       stale_removed = stale_removed + 1
     else
       break
@@ -326,6 +334,7 @@ local function is_canonical_dlq_id(value)
     and string.match(value, "^dlq:[0-9a-f]+$") ~= nil
 end
 if not is_canonical_dlq_id(ARGV[1])
+  or redis.call("SISMEMBER", KEYS[3], ARGV[1]) ~= 1
   or not redis.call("ZSCORE", KEYS[2], ARGV[1]) then return nil end
 return redis.call("HGET", KEYS[1], ARGV[1])
 `;
@@ -337,10 +346,12 @@ local function is_canonical_dlq_id(value)
     and string.match(value, "^dlq:[0-9a-f]+$") ~= nil
 end
 if not is_canonical_dlq_id(ARGV[1])
+  or redis.call("SISMEMBER", KEYS[3], ARGV[1]) ~= 1
   or not redis.call("ZSCORE", KEYS[2], ARGV[1])
   or redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then return 0 end
 redis.call("HDEL", KEYS[1], ARGV[1])
 redis.call("ZREM", KEYS[2], ARGV[1])
+redis.call("SREM", KEYS[3], ARGV[1])
 return 1
 `;
 
@@ -360,6 +371,7 @@ export type RedisMemoryExtractionQueueClient = {
     script: string,
     options: { keys: string[]; arguments: string[] },
   ): Promise<number | string | string[] | null>;
+  sCard(key: string): Promise<number>;
   zCard(key: string): Promise<number>;
   get(key: string): Promise<string | null>;
 };
@@ -407,6 +419,7 @@ export function createRedisMemoryExtractionQueue({
   const recoveryKey = `${processingKey}:recovery`;
   const recoverySetKey = `${processingKey}:recovery:ids`;
   const deadLetterOrderKey = `${deadLetterKey}:order`;
+  const deadLetterAuthorityKey = `${deadLetterKey}:ids`;
   const deadLetterSequenceKey = `${deadLetterKey}:sequence`;
   let processingRecovered = false;
 
@@ -418,6 +431,7 @@ export function createRedisMemoryExtractionQueue({
       client,
       deadLetterIndexKey,
       deadLetterOrderKey,
+      deadLetterAuthorityKey,
       id,
       now,
     );
@@ -450,6 +464,7 @@ export function createRedisMemoryExtractionQueue({
         deadLetterOrderKey,
         readyCountKey,
         readySequenceKey,
+        deadLetterAuthorityKey,
       ],
       arguments: [
         replayJob.idempotencyKey,
@@ -469,6 +484,7 @@ export function createRedisMemoryExtractionQueue({
       client,
       deadLetterIndexKey,
       deadLetterOrderKey,
+      deadLetterAuthorityKey,
       id,
       now,
     );
@@ -476,7 +492,7 @@ export function createRedisMemoryExtractionQueue({
       return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
     const result = await client.eval(DELETE_DEAD_LETTER_SCRIPT, {
-      keys: [deadLetterIndexKey, deadLetterOrderKey],
+      keys: [deadLetterIndexKey, deadLetterOrderKey, deadLetterAuthorityKey],
       arguments: [id, found.payload],
     });
     return result === 1 ? "deleted" : "not_found";
@@ -621,6 +637,7 @@ export function createRedisMemoryExtractionQueue({
               memberKey,
               deadLetterSequenceKey,
               readyCountKey,
+              deadLetterAuthorityKey,
             ],
             arguments: [
               deadLetterId,
@@ -690,6 +707,7 @@ export function createRedisMemoryExtractionQueue({
             memberKey,
             deadLetterSequenceKey,
             readyCountKey,
+            deadLetterAuthorityKey,
           ],
           arguments: [
             deadLetterId,
@@ -745,7 +763,7 @@ export function createRedisMemoryExtractionQueue({
     },
 
     getDeadLetterCount() {
-      return client.zCard(deadLetterOrderKey);
+      return client.sCard(deadLetterAuthorityKey);
     },
 
     async getProviderCooldown() {
@@ -771,7 +789,7 @@ export function createRedisMemoryExtractionQueue({
         return [];
       }
       const listed = await client.eval(LIST_DEAD_LETTERS_SCRIPT, {
-        keys: [deadLetterIndexKey, deadLetterOrderKey],
+        keys: [deadLetterIndexKey, deadLetterOrderKey, deadLetterAuthorityKey],
         arguments: [String(safeLimit), String(DEAD_LETTER_STALE_REPAIR_LIMIT)],
       });
       if (!Array.isArray(listed)) {
@@ -1059,11 +1077,12 @@ async function findDeadLetterByStoredId(
   client: RedisMemoryExtractionQueueClient,
   deadLetterIndexKey: string,
   deadLetterOrderKey: string,
+  deadLetterAuthorityKey: string,
   id: string,
   now: () => Date,
 ): Promise<ParsedDeadLetterPayload | undefined> {
   const payload = await client.eval(FIND_DEAD_LETTER_SCRIPT, {
-    keys: [deadLetterIndexKey, deadLetterOrderKey],
+    keys: [deadLetterIndexKey, deadLetterOrderKey, deadLetterAuthorityKey],
     arguments: [id],
   });
   if (typeof payload !== "string") {

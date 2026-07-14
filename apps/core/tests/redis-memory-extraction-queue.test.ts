@@ -32,6 +32,7 @@ const KEYS = {
   dlq: "iris:memory:extraction:dlq",
   dlqIndex: "iris:memory:extraction:dlq:index",
   dlqOrder: "iris:memory:extraction:dlq:order",
+  dlqAuthority: "iris:memory:extraction:dlq:ids",
   dlqSequence: "iris:memory:extraction:dlq:sequence",
 } as const;
 
@@ -624,6 +625,7 @@ describe("Redis memory extraction queue", () => {
       KEYS.dlqOrder,
       KEYS.readyCounts,
       KEYS.readySequence,
+      KEYS.dlqAuthority,
     ]);
   });
 
@@ -912,6 +914,7 @@ describe("Redis memory extraction queue", () => {
     client.pushDeadLetter(deadLetterPayload(activeId));
     const queue = createRedisMemoryExtractionQueue({ client });
 
+    expect(await queue.getDeadLetterCount()).toBe(1);
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
       expect.objectContaining({ id: activeId }),
     ]);
@@ -923,6 +926,74 @@ describe("Redis memory extraction queue", () => {
     expect(JSON.stringify(await queue.listDeadLetters({ limit: 10 }))).not.toContain(
       "sk_live_secret_token",
     );
+  });
+
+  it("excludes canonical order and hash records without authority membership", async () => {
+    const client = new StatefulRedisClient();
+    const id = generatedDeadLetterId("canonical-without-authority");
+    client.addSorted(KEYS.dlqOrder, id, 1);
+    client.setHash(KEYS.dlqIndex, id, deadLetterPayload(id));
+    const queue = createRedisMemoryExtractionQueue({ client });
+
+    expect(await queue.getDeadLetterCount()).toBe(0);
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([]);
+    expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual([]);
+    expect(client.hashValue(KEYS.dlqIndex, id)).toBeUndefined();
+  });
+
+  it("prunes stale authoritative membership and keeps count exact", async () => {
+    const client = new StatefulRedisClient();
+    const id = generatedDeadLetterId("authorized-without-payload");
+    client.addSorted(KEYS.dlqOrder, id, 1);
+    client.addSet(KEYS.dlqAuthority, id);
+    const queue = createRedisMemoryExtractionQueue({ client });
+
+    expect(await queue.getDeadLetterCount()).toBe(1);
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([]);
+    expect(await queue.getDeadLetterCount()).toBe(0);
+    expect(client.setMembers(KEYS.dlqAuthority)).toEqual([]);
+  });
+
+  it("maintains authoritative count through terminal, replay, and delete transitions", async () => {
+    const replayClient = new StatefulRedisClient();
+    const replayQueue = createRedisMemoryExtractionQueue({
+      client: replayClient,
+      maxAttempts: 1,
+      idGenerator: () => "authority-replay",
+    });
+    const replayJob = jobFixture({ requestId: "request-authority-replay" });
+    await replayQueue.enqueue(replayJob);
+    const [replayClaim] = await replayQueue.dequeueBatch(1, replayJob.enqueuedAt);
+    await replayQueue.handleFailedJob({
+      job: replayClaim!,
+      errorMessage: "provider_timeout",
+    });
+    const [replayDeadLetter] = await replayQueue.listDeadLetters({ limit: 1 });
+    expect(await replayQueue.getDeadLetterCount()).toBe(1);
+    expect(replayClient.setMembers(KEYS.dlqAuthority)).toEqual([replayDeadLetter!.id]);
+    await replayQueue.replayDeadLetter(replayDeadLetter!.id);
+    expect(await replayQueue.getDeadLetterCount()).toBe(0);
+    expect(replayClient.setMembers(KEYS.dlqAuthority)).toEqual([]);
+
+    const deleteClient = new StatefulRedisClient();
+    const deleteQueue = createRedisMemoryExtractionQueue({
+      client: deleteClient,
+      maxAttempts: 1,
+      idGenerator: () => "authority-delete",
+    });
+    const deleteJob = jobFixture({ requestId: "request-authority-delete" });
+    await deleteQueue.enqueue(deleteJob);
+    const [deleteClaim] = await deleteQueue.dequeueBatch(1, deleteJob.enqueuedAt);
+    await deleteQueue.handleFailedJob({
+      job: deleteClaim!,
+      errorMessage: "provider_timeout",
+    });
+    const [deleteDeadLetter] = await deleteQueue.listDeadLetters({ limit: 1 });
+    expect(await deleteQueue.getDeadLetterCount()).toBe(1);
+    expect(deleteClient.setMembers(KEYS.dlqAuthority)).toEqual([deleteDeadLetter!.id]);
+    await deleteQueue.deleteDeadLetter(deleteDeadLetter!.id);
+    expect(await deleteQueue.getDeadLetterCount()).toBe(0);
+    expect(deleteClient.setMembers(KEYS.dlqAuthority)).toEqual([]);
   });
 
   it("digests raw generated DLQ ids before persisting or returning them", async () => {
@@ -1327,6 +1398,9 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     this.strings.set(KEYS.dlqSequence, String(sequence));
     this.sortedSet(KEYS.dlqOrder).set(id, sequence);
     this.hash(KEYS.dlqIndex).set(id, payload);
+    if (isCanonicalDeadLetterId(id)) {
+      this.set(KEYS.dlqAuthority).add(id);
+    }
   }
 
   addSet(key: string, value: string): void {
@@ -1544,13 +1618,14 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   private ackDeadLetter(keys: string[], args: string[]): number {
-    const [deadLetterOrderKey, deadLetterIndexKey, readyIndexKey, seenKey, readySetKey, processingKey, delayedKey, recoverySetKey, stateKey, payloadKey, memberKey, deadLetterSequenceKey, readyCountKey] = keys;
+    const [deadLetterOrderKey, deadLetterIndexKey, readyIndexKey, seenKey, readySetKey, processingKey, delayedKey, recoverySetKey, stateKey, payloadKey, memberKey, deadLetterSequenceKey, readyCountKey, deadLetterAuthorityKey] = keys;
     const [deadLetterId, deadLetterPayload, id, originalPayload] = args;
     if (this.hash(stateKey!).get(id!) !== "processing" || this.hash(payloadKey!).get(id!) !== originalPayload || !this.sortedSet(processingKey!).has(id!)) return 0;
     const sequence = Number(this.strings.get(deadLetterSequenceKey!) ?? 0) + 1;
     this.strings.set(deadLetterSequenceKey!, String(sequence));
     this.sortedSet(deadLetterOrderKey!).set(deadLetterId!, sequence);
     this.hash(deadLetterIndexKey!).set(deadLetterId!, deadLetterPayload!);
+    this.set(deadLetterAuthorityKey!).add(deadLetterId!);
     this.hash(stateKey!).delete(id!);
     this.hash(payloadKey!).delete(id!);
     this.set(seenKey!).delete(id!);
@@ -1565,10 +1640,11 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   private replayDeadLetter(keys: string[], args: string[]): number {
-    const [seenKey, readyKey, readyIndexKey, readySetKey, delayedKey, processingKey, recoverySetKey, stateKey, payloadKey, memberKey, deadLetterIndexKey, deadLetterOrderKey, readyCountKey, readySequenceKey] = keys;
+    const [seenKey, readyKey, readyIndexKey, readySetKey, delayedKey, processingKey, recoverySetKey, stateKey, payloadKey, memberKey, deadLetterIndexKey, deadLetterOrderKey, readyCountKey, readySequenceKey, deadLetterAuthorityKey] = keys;
     const [id, payload, deadLetterId, deadLetterPayload] = args;
     if (
       !isCanonicalDeadLetterId(deadLetterId!) ||
+      !this.set(deadLetterAuthorityKey!).has(deadLetterId!) ||
       !this.sortedSet(deadLetterOrderKey!).has(deadLetterId!) ||
       this.hash(deadLetterIndexKey!).get(deadLetterId!) !== deadLetterPayload
     ) return 0;
@@ -1580,6 +1656,7 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     ) {
       this.hash(deadLetterIndexKey!).delete(deadLetterId!);
       this.sortedSet(deadLetterOrderKey!).delete(deadLetterId!);
+      this.set(deadLetterAuthorityKey!).delete(deadLetterId!);
       return 1;
     }
     if (existingPayload) {
@@ -1601,11 +1678,12 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     this.set(seenKey!).add(id!);
     this.hash(deadLetterIndexKey!).delete(deadLetterId!);
     this.sortedSet(deadLetterOrderKey!).delete(deadLetterId!);
+    this.set(deadLetterAuthorityKey!).delete(deadLetterId!);
     return 1;
   }
 
   private listDeadLetters(keys: string[], args: string[]): string[] {
-    const [indexKey, orderKey] = keys;
+    const [indexKey, orderKey, authorityKey] = keys;
     const limit = Number(args[0]);
     const staleLimit = Number(args[1]);
     const ids = [...this.sortedSet(orderKey!).entries()]
@@ -1618,15 +1696,18 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
       if (!isCanonicalDeadLetterId(id) && staleRemoved < staleLimit) {
         this.sortedSet(orderKey!).delete(id);
         this.hash(indexKey!).delete(id);
+        this.set(authorityKey!).delete(id);
         staleRemoved += 1;
       } else if (!isCanonicalDeadLetterId(id)) {
         break;
-      } else if (this.hash(indexKey!).has(id)) {
+      } else if (this.hash(indexKey!).has(id) && this.set(authorityKey!).has(id)) {
         const payload = this.hash(indexKey!).get(id)!;
         listed.push(id, payload);
         if (listed.length / 2 >= limit) break;
       } else if (staleRemoved < staleLimit) {
         this.sortedSet(orderKey!).delete(id);
+        this.hash(indexKey!).delete(id);
+        this.set(authorityKey!).delete(id);
         staleRemoved += 1;
       } else {
         break;
@@ -1636,24 +1717,30 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   private findDeadLetter(keys: string[], args: string[]): string | null {
-    const [indexKey, orderKey] = keys;
+    const [indexKey, orderKey, authorityKey] = keys;
     const [id] = args;
-    if (!isCanonicalDeadLetterId(id!) || !this.sortedSet(orderKey!).has(id!)) {
+    if (
+      !isCanonicalDeadLetterId(id!) ||
+      !this.set(authorityKey!).has(id!) ||
+      !this.sortedSet(orderKey!).has(id!)
+    ) {
       return null;
     }
     return this.hash(indexKey!).get(id!) ?? null;
   }
 
   private deleteDeadLetter(keys: string[], args: string[]): number {
-    const [indexKey, orderKey] = keys;
+    const [indexKey, orderKey, authorityKey] = keys;
     const [id, payload] = args;
     if (
       !isCanonicalDeadLetterId(id!) ||
+      !this.set(authorityKey!).has(id!) ||
       !this.sortedSet(orderKey!).has(id!) ||
       this.hash(indexKey!).get(id!) !== payload
     ) return 0;
     this.hash(indexKey!).delete(id!);
     this.sortedSet(orderKey!).delete(id!);
+    this.set(authorityKey!).delete(id!);
     return 1;
   }
 
