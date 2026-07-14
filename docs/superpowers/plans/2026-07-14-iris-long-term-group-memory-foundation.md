@@ -13,6 +13,7 @@
 - `2026-06-30-iris-architecture-whitepaper.md` 是最高架构依据；本计划不得改变其权限、知识权威、部署或多租户边界。
 - 当前仅允许读取请求 `chatId` 对应群的记忆；不得实现跨群检索。
 - 每条新记忆必须至少绑定一条 `conversation_messages` 证据，并验证证据消息属于同一群。
+- 证据消息被记忆引用时不得单独删除；必须先在同一治理流程中删除或失效相关记忆，避免 active 记忆失去证据。
 - 长时记忆是语义辅助，不是事实权威；提示词必须携带 memory ID 和 evidence message IDs。
 - 纠错必须创建新版本并让旧版本立即退出 active 检索；删除必须物理删除记忆和关联证据。
 - `readGroupContext=false`、群被禁用或全局禁用时，回答运行时不得读取该群长时记忆。
@@ -38,7 +39,7 @@
 ```ts
 expect(sql).toContain("CREATE TABLE IF NOT EXISTS group_memories");
 expect(sql).toContain("UNIQUE (group_id, idempotency_key)");
-expect(sql).toContain("REFERENCES conversation_messages(id) ON DELETE CASCADE");
+expect(sql).toContain("REFERENCES conversation_messages(id) ON DELETE RESTRICT");
 ```
 
 - [ ] **Step 2: Run the test and verify RED**
@@ -79,7 +80,7 @@ CREATE TABLE IF NOT EXISTS group_memories (
 
 CREATE TABLE IF NOT EXISTS group_memory_message_evidence (
   memory_id TEXT NOT NULL REFERENCES group_memories(id) ON DELETE CASCADE,
-  conversation_message_id TEXT NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+  conversation_message_id TEXT NOT NULL REFERENCES conversation_messages(id) ON DELETE RESTRICT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (memory_id, conversation_message_id)
 );
@@ -159,13 +160,13 @@ Expected: FAIL because repository modules do not exist.
 
 - [ ] **Step 3: Implement repository with transactions**
 
-Use `randomUUID()` for IDs. Before insert, select every evidence message by ID and verify count and `chat_id` match `groupId`. Create and correction must use `BEGIN`/`COMMIT`, and `ROLLBACK` on every failure. Duplicate `(group_id, idempotency_key)` returns the existing memory without mutating content.
+Use `randomUUID()` for IDs. Before insert, select every evidence message by ID and verify count and `chat_id` match `groupId`. Create and correction must use `BEGIN`/`COMMIT`, and `ROLLBACK` on every failure. Duplicate `(group_id, idempotency_key)` 只有在请求指纹完全一致时返回已有记忆；同键不同请求必须返回幂等冲突，不得误报成功。
 
 Correction transaction order:
 
 ```text
 lock original memory FOR UPDATE
--> if correction idempotency key already exists, return it
+-> if correction idempotency key already exists, verify it belongs to this exact correction; otherwise reject conflict
 -> verify original is active
 -> reuse original evidence plus any new evidence
 -> insert replacement with supersedes_memory_id

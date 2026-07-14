@@ -47,7 +47,7 @@ CREATE INDEX IF NOT EXISTS group_memories_supersedes_memory_id_idx
 
 CREATE TABLE IF NOT EXISTS group_memory_message_evidence (
   memory_id TEXT NOT NULL REFERENCES group_memories(id) ON DELETE CASCADE,
-  conversation_message_id TEXT NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+  conversation_message_id TEXT NOT NULL REFERENCES conversation_messages(id) ON DELETE RESTRICT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (memory_id, conversation_message_id)
 );

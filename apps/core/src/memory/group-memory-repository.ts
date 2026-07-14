@@ -16,6 +16,13 @@ export type GroupMemoryCategory = (typeof GROUP_MEMORY_CATEGORIES)[number];
 export type GroupMemoryOrigin = (typeof GROUP_MEMORY_ORIGINS)[number];
 export type GroupMemoryStatus = "active" | "superseded";
 
+export class GroupMemoryIdempotencyConflictError extends Error {
+  constructor() {
+    super("group memory idempotency key conflicts with another operation");
+    this.name = "GroupMemoryIdempotencyConflictError";
+  }
+}
+
 export type GroupMemory = {
   id: string;
   groupId: string;

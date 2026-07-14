@@ -40,7 +40,7 @@ curl --fail-with-body -X POST "$BASE_URL/internal/group-memories" \
   --data "{\"groupId\":\"$GROUP_A\",\"scope\":\"group\",\"category\":\"decision\",\"content\":\"IRIS_MEMORY_ACCEPTANCE_ORIGINAL\",\"importance\":5,\"confidence\":1,\"idempotencyKey\":\"phase-3a-create-1\",\"evidenceMessageIds\":[\"$MESSAGE_A1\",\"$MESSAGE_A2\"]}"
 ```
 
-记录返回的 `memory.id` 为 `MEMORY_ORIGINAL`。再次提交同一个 `groupId + idempotencyKey`，必须返回同一 ID 且 `created=false`。
+记录返回的 `memory.id` 为 `MEMORY_ORIGINAL`。再次提交完全相同的请求，必须返回同一 ID 且 `created=false`；保持同一 `groupId + idempotencyKey` 但修改正文或证据时，必须返回 `409 group_memory_idempotency_conflict`。
 
 再用 `GROUP_A` 配合 `MESSAGE_B1` 创建记忆，必须失败，且数据库中不得出现该记忆。这证明证据不能跨群绑定。
 
@@ -108,5 +108,6 @@ curl --fail-with-body -X DELETE "$BASE_URL/internal/group-memories/$MEMORY_CORRE
 - `group_memory_created`、`group_memory_corrected`、`group_memory_deleted` 审计事件存在。
 - 审计摘要只包含记忆 ID、证据消息 ID 和操作员提示，不包含记忆正文。
 - Postgres 中删除的 replacement 及其 evidence 关联已经物理消失。
+- 尝试直接删除仍被 active 记忆引用的 `conversation_messages` 时，Postgres 必须拒绝外键删除；不得留下无证据 active 记忆。
 - `readGroupContext` 已恢复到验收前状态。
 - 任一步失败都不得继续宣称 Phase 3A 通过；保持 Iris fail closed 并保存响应、审计和队列状态。

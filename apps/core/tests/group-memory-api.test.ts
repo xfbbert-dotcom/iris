@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
-import type { GroupMemory } from "../src/memory/group-memory-repository.js";
+import {
+  GroupMemoryIdempotencyConflictError,
+  type GroupMemory,
+} from "../src/memory/group-memory-repository.js";
 import type { GroupMemoryService } from "../src/memory/group-memory-service.js";
 
 const apps: Array<ReturnType<typeof buildApp>> = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
+  vi.unstubAllEnvs();
 });
 
 describe("group memory internal API", () => {
@@ -21,6 +25,33 @@ describe("group memory internal API", () => {
     });
 
     expect(response.statusCode).toBe(401);
+    expect(service.list).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the memory service exists without an internal API token", async () => {
+    vi.stubEnv("IRIS_INTERNAL_API_TOKEN", "");
+    vi.stubEnv("IRIS_INGRESS_HEALTH_TOKEN", "");
+    const service = fakeService();
+    const app = buildApp({
+      groupMemoryService: service,
+      verifyFeishuRequest: () => true,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/group-memories?groupId=chat-a",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "group_memory_api_auth_unavailable",
+    });
     expect(service.list).not.toHaveBeenCalled();
   });
 
@@ -158,6 +189,23 @@ describe("group memory internal API", () => {
     expect(service.list).not.toHaveBeenCalled();
   });
 
+  it.each(["0", "101", "1.5", "-1"])(
+    "rejects an out-of-contract list limit of %s",
+    async (limit) => {
+      const service = fakeService();
+      const app = createApp(service);
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/internal/group-memories?groupId=chat-a&limit=${limit}`,
+        headers: { authorization: "Bearer internal-token" },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(service.list).not.toHaveBeenCalled();
+    },
+  );
+
   it("corrects memory as the authenticated operator", async () => {
     const replacement = sampleMemory({ id: "memory-2", supersedesMemoryId: "memory-1" });
     const service = fakeService({
@@ -246,6 +294,37 @@ describe("group memory internal API", () => {
     expect(response.statusCode).toBe(500);
     expect(response.json()).toEqual({ ok: false, error: "group_memory_operation_failed" });
     expect(response.body).not.toContain("secret");
+  });
+
+  it("returns 409 for an idempotency key reused by another memory operation", async () => {
+    const service = fakeService({
+      create: vi.fn(async () => {
+        throw new GroupMemoryIdempotencyConflictError();
+      }),
+    });
+    const app = createApp(service);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/group-memories",
+      headers: {
+        authorization: "Bearer internal-token",
+        "x-iris-operator": "alice",
+      },
+      payload: {
+        groupId: "chat-a",
+        scope: "group",
+        category: "decision",
+        content: "Launch Thursday.",
+        importance: 4,
+        confidence: 0.9,
+        idempotencyKey: "conflict",
+        evidenceMessageIds: ["msg-1"],
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ ok: false, error: "group_memory_idempotency_conflict" });
   });
 });
 

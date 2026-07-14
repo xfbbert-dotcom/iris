@@ -31,7 +31,8 @@ export function createGroupMemoryContextProvider({
           memory.groupId === groupId &&
           memory.status === "active" &&
           memory.id.trim().length > 0 &&
-          memory.content.trim().length > 0
+          memory.content.trim().length > 0 &&
+          memory.evidenceMessageIds.length > 0
         ))
         .slice(0, limit)
         .map((memory) => ({

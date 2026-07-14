@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 
 import {
   GROUP_MEMORY_CATEGORIES,
+  GroupMemoryIdempotencyConflictError,
   GROUP_MEMORY_SCOPES,
   type GroupMemoryCategory,
   type GroupMemoryScope,
@@ -12,12 +13,17 @@ import {
 } from "./group-memory-service.js";
 
 const MAX_OPERATOR_CHARS = 512;
+const MAX_LIST_LIMIT = 100;
 
 export function registerGroupMemoryApi(
   app: FastifyInstance,
   service: GroupMemoryService | undefined,
+  { authenticationConfigured }: { authenticationConfigured: boolean },
 ): void {
   app.get("/internal/group-memories", async (request, reply) => {
+    if (!authenticationConfigured) {
+      return authenticationUnavailable(reply);
+    }
     if (service === undefined) {
       return unavailable(reply);
     }
@@ -33,6 +39,9 @@ export function registerGroupMemoryApi(
   });
 
   app.post("/internal/group-memories", async (request, reply) => {
+    if (!authenticationConfigured) {
+      return authenticationUnavailable(reply);
+    }
     if (service === undefined) {
       return unavailable(reply);
     }
@@ -57,6 +66,9 @@ export function registerGroupMemoryApi(
   app.post<{ Params: { id: string } }>(
     "/internal/group-memories/:id/corrections",
     async (request, reply) => {
+      if (!authenticationConfigured) {
+        return authenticationUnavailable(reply);
+      }
       if (service === undefined) {
         return unavailable(reply);
       }
@@ -83,6 +95,9 @@ export function registerGroupMemoryApi(
   app.delete<{ Params: { id: string } }>(
     "/internal/group-memories/:id",
     async (request, reply) => {
+      if (!authenticationConfigured) {
+        return authenticationUnavailable(reply);
+      }
       if (service === undefined) {
         return unavailable(reply);
       }
@@ -118,7 +133,12 @@ function parseListQuery(value: unknown): {
   const activeOnly = value.activeOnly === undefined
     ? true
     : parseBooleanString(value.activeOnly);
-  if (limit === undefined || activeOnly === undefined) {
+  if (
+    limit === undefined ||
+    limit < 1 ||
+    limit > MAX_LIST_LIMIT ||
+    activeOnly === undefined
+  ) {
     return undefined;
   }
   return { groupId: value.groupId, limit, activeOnly };
@@ -253,6 +273,12 @@ function handleOperationError(error: unknown, reply: FastifyReply) {
   if (error instanceof GroupMemoryInputError) {
     return invalidRequest(reply);
   }
+  if (error instanceof GroupMemoryIdempotencyConflictError) {
+    return reply.code(409).send({
+      ok: false,
+      error: "group_memory_idempotency_conflict",
+    });
+  }
   if (error instanceof Error && error.message === "group memory not found") {
     return reply.code(404).send({ ok: false, error: "group_memory_not_found" });
   }
@@ -268,6 +294,13 @@ function invalidRequest(reply: FastifyReply) {
 
 function unavailable(reply: FastifyReply) {
   return reply.code(503).send({ ok: false, error: "group_memory_service_unavailable" });
+}
+
+function authenticationUnavailable(reply: FastifyReply) {
+  return reply.code(503).send({
+    ok: false,
+    error: "group_memory_api_auth_unavailable",
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

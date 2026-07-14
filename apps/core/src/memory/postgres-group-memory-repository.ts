@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   GROUP_MEMORY_CATEGORIES,
+  GroupMemoryIdempotencyConflictError,
   GROUP_MEMORY_ORIGINS,
   GROUP_MEMORY_SCOPES,
   type CorrectGroupMemoryInput,
@@ -87,6 +88,7 @@ export function createPostgresGroupMemoryRepository({
           input.idempotencyKey,
         );
         if (existing !== undefined) {
+          assertCreateReplayMatches(existing, input);
           return { memory: existing, created: false };
         }
 
@@ -106,6 +108,7 @@ export function createPostgresGroupMemoryRepository({
           if (racedExisting === undefined) {
             throw new Error("group memory insert conflict returned no memory");
           }
+          assertCreateReplayMatches(racedExisting, input);
           return { memory: racedExisting, created: false };
         }
 
@@ -149,6 +152,7 @@ export function createPostgresGroupMemoryRepository({
           input.idempotencyKey,
         );
         if (existing !== undefined) {
+          assertCorrectionReplayMatches(existing, original, input);
           return { memory: existing, created: false };
         }
         if (original.status !== "active") {
@@ -190,6 +194,7 @@ export function createPostgresGroupMemoryRepository({
           if (racedExisting === undefined) {
             throw new Error("group memory correction conflict returned no memory");
           }
+          assertCorrectionReplayMatches(racedExisting, original, input);
           return { memory: racedExisting, created: false };
         }
 
@@ -223,6 +228,62 @@ export function createPostgresGroupMemoryRepository({
       return result.rows.length === 0 ? "not_found" : "deleted";
     },
   };
+}
+
+function assertCreateReplayMatches(
+  existing: GroupMemory,
+  input: CreateGroupMemoryInput,
+): void {
+  if (
+    existing.supersedesMemoryId !== undefined ||
+    existing.groupId !== input.groupId ||
+    existing.scope !== input.scope ||
+    existing.category !== input.category ||
+    existing.threadKey !== input.threadKey ||
+    existing.content !== input.content ||
+    existing.importance !== input.importance ||
+    existing.confidence !== input.confidence ||
+    existing.origin !== input.origin ||
+    existing.createdBy !== input.createdBy ||
+    !haveSameStrings(existing.evidenceMessageIds, input.evidenceMessageIds)
+  ) {
+    throw new GroupMemoryIdempotencyConflictError();
+  }
+}
+
+function assertCorrectionReplayMatches(
+  existing: GroupMemory,
+  original: GroupMemory,
+  input: CorrectGroupMemoryInput,
+): void {
+  const expectedEvidence = dedupeStrings([
+    ...original.evidenceMessageIds,
+    ...(input.evidenceMessageIds ?? []),
+  ]);
+  if (
+    existing.supersedesMemoryId !== original.id ||
+    existing.groupId !== original.groupId ||
+    existing.scope !== original.scope ||
+    existing.category !== original.category ||
+    existing.threadKey !== original.threadKey ||
+    existing.content !== input.content ||
+    existing.importance !== (input.importance ?? original.importance) ||
+    existing.confidence !== (input.confidence ?? original.confidence) ||
+    existing.origin !== input.origin ||
+    existing.createdBy !== input.createdBy ||
+    !haveSameStrings(existing.evidenceMessageIds, expectedEvidence)
+  ) {
+    throw new GroupMemoryIdempotencyConflictError();
+  }
+}
+
+function haveSameStrings(left: string[], right: string[]): boolean {
+  const leftValues = [...new Set(left)].sort();
+  const rightValues = [...new Set(right)].sort();
+  return (
+    leftValues.length === rightValues.length &&
+    leftValues.every((value, index) => value === rightValues[index])
+  );
 }
 
 async function withTransaction<T>(
@@ -571,9 +632,13 @@ function readEvidenceArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     throw new Error("memory evidence is invalid");
   }
-  return value.map((id) =>
+  const evidence = value.map((id) =>
     requireBoundedString("evidence message id", id, MAX_IDENTIFIER_CHARS),
   );
+  if (evidence.length === 0) {
+    throw new Error("memory evidence must not be empty");
+  }
+  return evidence;
 }
 
 function requireDate(fieldName: string, value: unknown): Date {

@@ -252,7 +252,7 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("create table if not exists group_memories");
     expect(normalized).toContain("unique (group_id, idempotency_key)");
     expect(normalized).toContain(
-      "conversation_message_id text not null references conversation_messages(id) on delete cascade",
+      "conversation_message_id text not null references conversation_messages(id) on delete restrict",
     );
     expect(normalized).toContain("primary key (memory_id, conversation_message_id)");
     expect(normalized).toContain("memory_scope in ('group', 'thread', 'action')");

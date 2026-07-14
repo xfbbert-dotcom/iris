@@ -319,7 +319,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
-  registerGroupMemoryApi(app, groupMemoryService);
+  registerGroupMemoryApi(app, groupMemoryService, {
+    authenticationConfigured: internalApiToken !== undefined,
+  });
 
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;

@@ -61,6 +61,15 @@ describe("GroupMemoryContextProvider", () => {
     expect(source.evidenceMessageIds).toEqual(["msg-1"]);
   });
 
+  it("refuses to expose an active memory without evidence", async () => {
+    const repository = {
+      listActiveByGroup: vi.fn(async () => [memory({ evidenceMessageIds: [] })]),
+    };
+    const provider = createGroupMemoryContextProvider({ repository });
+
+    await expect(provider.loadActiveMemories({ groupId: "chat-a" })).resolves.toEqual([]);
+  });
+
   it("does not query for a zero limit", async () => {
     const repository = { listActiveByGroup: vi.fn(async () => []) };
     const provider = createGroupMemoryContextProvider({ repository });

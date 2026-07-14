@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { readDatabaseConfig } from "../src/database/database-config.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
+import { GroupMemoryIdempotencyConflictError } from "../src/memory/group-memory-repository.js";
 
 import {
   createPostgresGroupMemoryRepository,
@@ -63,6 +64,26 @@ describe("createPostgresGroupMemoryRepository", () => {
     );
   });
 
+  it("rejects a create idempotency key reused with a different request", async () => {
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/from group_memories[\s\S]+idempotency_key/u, [
+        memoryRow({ content: "Different content" }),
+      ]),
+      step(/rollback/u),
+    ]);
+    const repository = createPostgresGroupMemoryRepository({
+      dataSource: dataSource(client),
+    });
+
+    await expect(repository.create(createInput())).rejects.toBeInstanceOf(
+      GroupMemoryIdempotencyConflictError,
+    );
+    expect(normalizedCalls(client)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("insert into group_memories")]),
+    );
+  });
+
   it("rejects missing evidence before opening a transaction", async () => {
     const source = dataSource(scriptedClient([]));
     const repository = createPostgresGroupMemoryRepository({ dataSource: source });
@@ -107,6 +128,17 @@ describe("createPostgresGroupMemoryRepository", () => {
       expect.stringMatching(/where gm\.group_id = \$1[\s\S]+gm\.status = 'active'/iu),
       ["chat-a", 100],
     );
+  });
+
+  it("fails closed when a persisted memory has no evidence", async () => {
+    const source = dataSource(scriptedClient([]), [
+      memoryRow({ evidence_message_ids: [] }),
+    ]);
+    const repository = createPostgresGroupMemoryRepository({ dataSource: source });
+
+    await expect(
+      repository.listActiveByGroup({ groupId: "chat-a", limit: 8 }),
+    ).rejects.toThrow("memory evidence must not be empty");
   });
 
   it("corrects an active memory atomically and reuses its evidence", async () => {
@@ -164,6 +196,26 @@ describe("createPostgresGroupMemoryRepository", () => {
         evidenceMessageIds: ["feishu:msg-1", "feishu:msg-2", "feishu:msg-3"],
       }),
     });
+  });
+
+  it("rejects a correction idempotency key belonging to another operation", async () => {
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/where gm\.id = \$1[\s\S]+for update/u, [memoryRow()]),
+      step(/from group_memories[\s\S]+idempotency_key/u, [memoryRow()]),
+      step(/rollback/u),
+    ]);
+    const repository = createPostgresGroupMemoryRepository({
+      dataSource: dataSource(client),
+    });
+
+    await expect(repository.correct({
+      memoryId: "memory-1",
+      content: "The launch is Friday.",
+      idempotencyKey: "extract:chat-a:topic-1",
+      origin: "operator",
+      createdBy: "alice",
+    })).rejects.toBeInstanceOf(GroupMemoryIdempotencyConflictError);
   });
 
   it("rolls back a failed correction without superseding the original", async () => {
@@ -285,6 +337,9 @@ runIfDatabase("PostgresGroupMemoryRepository with Postgres", () => {
       createdBy: "alice",
       evidenceMessageIds: [messageId],
     })).resolves.toMatchObject({ created: true, memory: { groupId, status: "active" } });
+
+    await expect(pool.query("DELETE FROM conversation_messages WHERE id = $1", [messageId]))
+      .rejects.toMatchObject({ code: "23503" });
 
     await expect(repository.create({
       groupId,
