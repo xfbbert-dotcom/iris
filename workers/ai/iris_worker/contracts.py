@@ -77,7 +77,7 @@ class ExtractionMessage(BaseModel):
     @field_validator("sent_at")
     @classmethod
     def validate_sent_at(cls, value: str) -> str:
-        _require_timezone_timestamp(value)
+        _parse_timezone_timestamp(value)
         return value
 
     @field_validator("text")
@@ -106,7 +106,7 @@ class ExistingMemory(BaseModel):
     @field_validator("updated_at")
     @classmethod
     def validate_updated_at(cls, value: str) -> str:
-        _require_timezone_timestamp(value)
+        _parse_timezone_timestamp(value)
         return value
 
 
@@ -166,6 +166,11 @@ class MemoryExtractionRequest(BaseModel):
         message_ids = [message.id for message in self.messages]
         if len(message_ids) != len(set(message_ids)):
             raise ValueError("message ids must be unique")
+        sent_times = [
+            _parse_timezone_timestamp(message.sent_at) for message in self.messages
+        ]
+        if any(current < previous for previous, current in zip(sent_times, sent_times[1:])):
+            raise ValueError("messages must be in nondecreasing chronological order")
         if len(self.evidence_message_ids) != len(set(self.evidence_message_ids)):
             raise ValueError("evidence_message_ids must be unique")
         if not set(self.evidence_message_ids).issubset(message_ids):
@@ -184,7 +189,7 @@ class MemoryExtractionResponse(BaseModel):
     candidates: Annotated[list[MemoryCandidate], Field(max_length=MAX_CANDIDATES)]
 
 
-def _require_timezone_timestamp(value: str) -> None:
+def _parse_timezone_timestamp(value: str) -> datetime:
     normalized = f"{value[:-1]}+00:00" if value.endswith("Z") else value
     try:
         parsed = datetime.fromisoformat(normalized)
@@ -192,3 +197,4 @@ def _require_timezone_timestamp(value: str) -> None:
         raise ValueError("timestamp must be ISO 8601") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("timestamp must include a timezone")
+    return parsed

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Annotated, Literal, Protocol
@@ -120,6 +121,7 @@ class OpenAICompatibleModelClient:
         self._api_key = settings.model_api_key
         self._model = settings.model_name
         timeout_seconds = settings.model_timeout_ms / 1000
+        self._wall_timeout_seconds = timeout_seconds
         self._timeout = httpx.Timeout(
             connect=timeout_seconds,
             read=timeout_seconds,
@@ -130,6 +132,18 @@ class OpenAICompatibleModelClient:
         self._transport = transport
 
     async def complete_json_object(
+        self, *, system_instruction: str, user_content: str
+    ) -> str:
+        try:
+            async with asyncio.timeout(self._wall_timeout_seconds):
+                return await self._complete_json_object(
+                    system_instruction=system_instruction,
+                    user_content=user_content,
+                )
+        except TimeoutError:
+            raise ModelClientError("provider_timeout") from None
+
+    async def _complete_json_object(
         self, *, system_instruction: str, user_content: str
     ) -> str:
         payload = {
@@ -152,10 +166,12 @@ class OpenAICompatibleModelClient:
                     self._endpoint,
                     headers={
                         "Authorization": f"Bearer {self._api_key}",
+                        "Accept-Encoding": "identity",
                         "Content-Type": "application/json",
                     },
                     json=payload,
                 ) as response:
+                    _require_identity_content_encoding(response)
                     if response.status_code == 429:
                         raise ModelClientError(
                             "provider_rate_limited",
@@ -184,11 +200,20 @@ async def _read_bounded_body(response: httpx.Response, limit: int) -> bytes:
         if int(content_length, 10) > limit:
             raise ModelClientError("invalid_model_response")
     body = bytearray()
-    async for chunk in response.aiter_bytes():
+    async for chunk in response.aiter_raw():
         if len(body) + len(chunk) > limit:
             raise ModelClientError("invalid_model_response")
         body.extend(chunk)
     return bytes(body)
+
+
+def _require_identity_content_encoding(response: httpx.Response) -> None:
+    content_encoding = response.headers.get("Content-Encoding")
+    if content_encoding is not None and content_encoding.strip().lower() not in {
+        "",
+        "identity",
+    }:
+        raise ModelClientError("invalid_model_response")
 
 
 def _parse_completion_content(body: bytes) -> str:

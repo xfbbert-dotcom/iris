@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import unicodedata
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import urlsplit
@@ -70,15 +71,32 @@ def _required_value(
 def _required_header_value(
     env: Mapping[str, str], name: str, *, max_chars: int
 ) -> str:
-    value = _required_value(env, name, max_chars=max_chars)
-    if not value.isascii() or any(character.isspace() for character in value):
-        raise ValueError(f"{name} must be an ASCII header token without whitespace")
+    value = env.get(name, "")
+    if (
+        not value
+        or len(value) > max_chars
+        or any(ord(character) < 0x21 or ord(character) > 0x7E for character in value)
+        or "," in value
+    ):
+        raise ValueError(
+            f"{name} must be a visible ASCII single-header token without commas"
+        )
     return value
 
 
 def _read_model_base_url(env: Mapping[str, str]) -> str:
     name = "IRIS_MODEL_BASE_URL"
-    value = _required_value(env, name, max_chars=2048)
+    value = env.get(name, "")
+    if (
+        not value
+        or len(value) > 2048
+        or any(
+            character.isspace()
+            or unicodedata.category(character) == "Cc"
+            for character in value
+        )
+    ):
+        raise ValueError(f"{name} must not contain whitespace or control characters")
     parsed = urlsplit(value)
     if (
         parsed.scheme not in {"http", "https"}

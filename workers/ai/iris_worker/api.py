@@ -89,7 +89,7 @@ def create_app(
     service = extraction_service or MemoryExtractionService(
         OpenAICompatibleModelClient(settings)
     )
-    app = FastAPI(docs_url=None, redoc_url=None)
+    app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
     app.add_middleware(_ExtractionBoundaryMiddleware, token=settings.internal_token)
 
     @app.exception_handler(RequestValidationError)

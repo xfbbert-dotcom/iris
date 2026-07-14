@@ -287,6 +287,43 @@ def test_nested_message_shape_is_strict_and_bounded(message: dict[str, object]):
         parse_request(valid_request(messages=[message]))
 
 
+def test_request_rejects_messages_in_reverse_chronological_order():
+    messages = [
+        {
+            "id": "message-1",
+            "sent_at": "2026-07-14T00:00:01.000Z",
+            "text": "later",
+        },
+        {
+            "id": "message-2",
+            "sent_at": "2026-07-14T00:00:00.000Z",
+            "text": "earlier",
+        },
+    ]
+
+    with pytest.raises(ValidationError):
+        parse_request(valid_request(messages=messages))
+
+
+def test_request_allows_messages_with_equal_timestamps():
+    messages = [
+        {
+            "id": "message-1",
+            "sent_at": "2026-07-14T00:00:00.000Z",
+            "text": "first",
+        },
+        {
+            "id": "message-2",
+            "sent_at": "2026-07-14T00:00:00.000Z",
+            "text": "second",
+        },
+    ]
+
+    request = parse_request(valid_request(messages=messages))
+
+    assert [message.id for message in request.messages] == ["message-1", "message-2"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "candidate_overrides",

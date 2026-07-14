@@ -1,10 +1,41 @@
+import asyncio
+import gzip
 import json
 
 import httpx
 import pytest
 
 
-def settings(*, max_response_bytes: int = 4096):
+class TrackingStream(httpx.AsyncByteStream):
+    def __init__(self, content: bytes):
+        self.content = content
+        self.iterated = False
+
+    async def __aiter__(self):
+        self.iterated = True
+        yield self.content
+
+
+class SlowEndlessStream(httpx.AsyncByteStream):
+    def __init__(self):
+        self.chunks_yielded = 0
+
+    async def __aiter__(self):
+        while True:
+            await asyncio.sleep(0.02)
+            self.chunks_yielded += 1
+            yield b"x"
+
+
+def streaming_json_response(payload: object) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"Content-Type": "application/json"},
+        stream=TrackingStream(json.dumps(payload, separators=(",", ":")).encode()),
+    )
+
+
+def settings(*, max_response_bytes: int = 4096, timeout_ms: int = 4321):
     from iris_worker.config import Settings
 
     return Settings.from_env(
@@ -13,7 +44,7 @@ def settings(*, max_response_bytes: int = 4096):
             "IRIS_MODEL_BASE_URL": "https://model.example/v1",
             "IRIS_MODEL_API_KEY": "model-api-key",
             "IRIS_MODEL_NAME": "extractor-model",
-            "IRIS_MODEL_TIMEOUT_MS": "4321",
+            "IRIS_MODEL_TIMEOUT_MS": str(timeout_ms),
             "IRIS_MODEL_MAX_RESPONSE_BYTES": str(max_response_bytes),
         }
     )
@@ -41,11 +72,13 @@ def completion_response(content: str) -> dict[str, object]:
     }
 
 
-def client_for(handler, *, max_response_bytes: int = 4096):
+def client_for(
+    handler, *, max_response_bytes: int = 4096, timeout_ms: int = 4321
+):
     from iris_worker.model_client import OpenAICompatibleModelClient
 
     return OpenAICompatibleModelClient(
-        settings(max_response_bytes=max_response_bytes),
+        settings(max_response_bytes=max_response_bytes, timeout_ms=timeout_ms),
         transport=httpx.MockTransport(handler),
     )
 
@@ -57,7 +90,7 @@ async def test_calls_chat_completions_with_json_object_mode_and_explicit_timeout
     async def handler(request: httpx.Request) -> httpx.Response:
         captured["request"] = request
         captured["payload"] = json.loads(request.content)
-        return httpx.Response(200, json=completion_response('{"schema_version":1}'))
+        return streaming_json_response(completion_response('{"schema_version":1}'))
 
     client = client_for(handler)
     result = await client.complete_json_object(
@@ -69,6 +102,7 @@ async def test_calls_chat_completions_with_json_object_mode_and_explicit_timeout
     assert isinstance(request, httpx.Request)
     assert request.url == httpx.URL("https://model.example/v1/chat/completions")
     assert request.headers["authorization"] == "Bearer model-api-key"
+    assert request.headers["accept-encoding"] == "identity"
     assert request.extensions["timeout"] == {
         "connect": 4.321,
         "read": 4.321,
@@ -92,7 +126,7 @@ async def test_accepts_large_structured_content_within_configured_byte_budget():
     content = json.dumps({"candidates": [{"content": "x" * 5000}]})
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=completion_response(content))
+        return streaming_json_response(completion_response(content))
 
     result = await client_for(handler, max_response_bytes=65_536).complete_json_object(
         system_instruction="trusted instruction",
@@ -204,7 +238,7 @@ async def test_rejects_response_over_byte_budget_without_exposing_body():
     from iris_worker.model_client import ModelClientError
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=b"x" * 4097)
+        return httpx.Response(200, stream=TrackingStream(b"x" * 4097))
 
     with pytest.raises(ModelClientError) as caught:
         await client_for(handler).complete_json_object(
@@ -214,6 +248,55 @@ async def test_rejects_response_over_byte_budget_without_exposing_body():
 
     assert caught.value.code == "invalid_model_response"
     assert str(caught.value) == "invalid_model_response"
+
+
+@pytest.mark.asyncio
+async def test_rejects_gzip_response_before_streaming_or_decoding_it():
+    from iris_worker.model_client import ModelClientError
+
+    stream = TrackingStream(gzip.compress(b"decompressed-secret" * 200_000))
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Encoding": "gzip"},
+            stream=stream,
+        )
+
+    with pytest.raises(ModelClientError) as caught:
+        await client_for(handler).complete_json_object(
+            system_instruction="prompt-secret",
+            user_content="message-secret",
+        )
+
+    assert caught.value.code == "invalid_model_response"
+    assert str(caught.value) == "invalid_model_response"
+    assert "secret" not in repr(caught.value)
+    assert stream.iterated is False
+
+
+@pytest.mark.asyncio
+async def test_total_wall_clock_deadline_stops_endless_slow_response():
+    from iris_worker.model_client import ModelClientError
+
+    stream = SlowEndlessStream()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream)
+
+    with pytest.raises(ModelClientError) as caught:
+        await asyncio.wait_for(
+            client_for(handler, timeout_ms=80).complete_json_object(
+                system_instruction="prompt-secret",
+                user_content="message-secret",
+            ),
+            timeout=0.5,
+        )
+
+    assert caught.value.code == "provider_timeout"
+    assert str(caught.value) == "provider_timeout"
+    assert "secret" not in repr(caught.value)
+    assert stream.chunks_yielded >= 2
 
 
 @pytest.mark.asyncio
@@ -256,7 +339,7 @@ async def test_strictly_rejects_malformed_or_blank_provider_envelopes(body: byte
     from iris_worker.model_client import ModelClientError
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=body)
+        return httpx.Response(200, stream=TrackingStream(body))
 
     with pytest.raises(ModelClientError) as caught:
         await client_for(handler).complete_json_object(

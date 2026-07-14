@@ -46,6 +46,25 @@ def test_required_configuration_is_nonblank(name: str, value: str):
 
 
 @pytest.mark.parametrize(
+    "name",
+    ["IRIS_AI_WORKER_TOKEN", "IRIS_MODEL_API_KEY"],
+)
+@pytest.mark.parametrize(
+    "value",
+    [
+        "token\x00value",
+        "token\nvalue",
+        "token\x7fvalue",
+        "token,value",
+        "token-value-\u2603",
+    ],
+)
+def test_bearer_tokens_are_visible_ascii_single_header_values(name: str, value: str):
+    with pytest.raises(ValueError, match=name):
+        load_settings(valid_env(**{name: value}))
+
+
+@pytest.mark.parametrize(
     "url",
     [
         "model.example/v1",
@@ -54,6 +73,12 @@ def test_required_configuration_is_nonblank(name: str, value: str):
         "https://model.example/v1?api_key=secret",
         "https://model.example/v1#fragment",
         "https:///missing-host",
+        "\nhttps://model.example/v1",
+        "https://model.example/v1\x00",
+        "https://model.example/v\t1",
+        "https://model.example/v 1",
+        "https://model.example/v1\x7f",
+        "https://model.example/v1\u0080",
     ],
 )
 def test_model_base_url_must_be_credential_free_http_or_https(url: str):

@@ -1,5 +1,3 @@
-from collections.abc import Awaitable, Callable
-
 import pytest
 
 
@@ -60,19 +58,39 @@ class FakeService:
 
 def make_test_client(service: FakeService):
     from fastapi.testclient import TestClient
+
+    return TestClient(make_test_app(service))
+
+
+def make_test_app(service: FakeService):
     from iris_worker.api import create_app
 
-    return TestClient(create_app(settings(), extraction_service=service))
+    return create_app(settings(), extraction_service=service)
 
 
 def test_exposes_only_exact_health_and_extraction_routes():
     service = FakeService(valid_response())
-    with make_test_client(service) as client:
-        schema = client.get("/openapi.json").json()
+    app = make_test_app(service)
 
-    assert set(schema["paths"]) == {"/health", "/v1/memory/extract"}
-    assert set(schema["paths"]["/health"]) == {"get"}
-    assert set(schema["paths"]["/v1/memory/extract"]) == {"post"}
+    routes = {
+        (route.path, frozenset(route.methods or set()))
+        for route in app.routes
+    }
+
+    assert routes == {
+        ("/health", frozenset({"GET"})),
+        ("/v1/memory/extract", frozenset({"POST"})),
+    }
+
+
+@pytest.mark.parametrize("path", ["/openapi.json", "/docs", "/redoc"])
+def test_schema_and_documentation_routes_are_not_exposed(path: str):
+    service = FakeService(valid_response())
+
+    with make_test_client(service) as client:
+        response = client.get(path)
+
+    assert response.status_code == 404
 
 
 def test_health_is_bounded_and_does_not_call_provider_service():
