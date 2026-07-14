@@ -329,6 +329,37 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
     }
   });
 
+  it.each([
+    ["embedded NUL", "Launch\u0000Thursday"],
+    ["NUL-only after trim", "  \u0000  "],
+  ])("rejects candidate content containing U+0000 without echoing it: %s", async (_name, content) => {
+    const client = createClient(async () =>
+      jsonResponse(responseFixture({ ...candidateWire(), content })),
+    );
+
+    const error = await client.extract(runFixture()).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      name: "AiWorkerMemoryExtractionError",
+      message: "invalid_response",
+      code: "invalid_response",
+      retryable: false,
+      retryAfterMs: undefined,
+    });
+    expect(Object.values(error as Record<string, unknown>)).not.toContain(content);
+  });
+
+  it("continues to parse ordinary multilingual Unicode candidate content", async () => {
+    const content = "\u7814\u53d1 Caf\u00e9 \ud83d\ude00";
+    const client = createClient(async () =>
+      jsonResponse(responseFixture({ ...candidateWire(), content })),
+    );
+
+    await expect(client.extract(runFixture())).resolves.toMatchObject({
+      candidates: [expect.objectContaining({ content })],
+    });
+  });
+
   it("never leaks token, URL credentials, response body, or run text in errors", async () => {
     expect(
       () => createClient(vi.fn(), { baseUrl: "https://user:password@worker.example" }),

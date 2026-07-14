@@ -431,7 +431,7 @@ function isIdentifier(value: unknown): value is string {
 }
 
 function isContent(value: unknown): value is string {
-  if (typeof value !== "string" || hasLoneSurrogate(value)) {
+  if (typeof value !== "string" || value.includes("\u0000") || hasLoneSurrogate(value)) {
     return false;
   }
   const normalized = value.trim();

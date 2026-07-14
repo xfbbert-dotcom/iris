@@ -224,6 +224,42 @@ describe("validateCandidates", () => {
   );
 
   it.each([
+    ["embedded NUL", "Launch\u0000Thursday"],
+    ["NUL-only after trim", "  \u0000  "],
+  ])("rejects candidate content containing U+0000 with content-free diagnostics: %s", (_name, content) => {
+    expect(
+      validateCandidates({
+        run: runFixture(),
+        candidates: [candidateFixture({ content })],
+      }),
+    ).toEqual({
+      accepted: [],
+      proposedCount: 1,
+      acceptedCount: 0,
+      rejectedCount: 1,
+      duplicateCount: 0,
+      conflictCount: 0,
+      rejectionCodes: ["invalid_content"],
+    });
+  });
+
+  it("continues to admit ordinary multilingual Unicode candidate content", () => {
+    const content = "\u7814\u53d1 Caf\u00e9 \ud83d\ude00";
+
+    const result = validateCandidates({
+      run: runFixture(),
+      candidates: [candidateFixture({ content })],
+    });
+
+    expect(result).toMatchObject({
+      accepted: [expect.objectContaining({ content })],
+      acceptedCount: 1,
+      rejectedCount: 0,
+      rejectionCodes: [],
+    });
+  });
+
+  it.each([
     ["4000 ASCII code units", "x".repeat(4000), true],
     ["4001 ASCII code units", "x".repeat(4001), false],
     ["2000 surrogate pairs", "\ud83d\ude00".repeat(2000), true],

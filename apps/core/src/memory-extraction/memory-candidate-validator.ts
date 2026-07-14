@@ -272,7 +272,7 @@ function canonicalizeContent(value: unknown): {
   content: string;
   comparisonKey: string;
 } | undefined {
-  if (typeof value !== "string" || hasLoneSurrogate(value)) {
+  if (typeof value !== "string" || value.includes("\u0000") || hasLoneSurrogate(value)) {
     return undefined;
   }
   if (/[\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff]/u.test(value)) {
