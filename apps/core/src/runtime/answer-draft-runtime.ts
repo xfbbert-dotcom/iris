@@ -54,9 +54,19 @@ import {
 } from "../memory/live-chat-context-provider.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createOpenAICompatibleModelProvider } from "../model/openai-compatible-model-provider.js";
+import type { GroupMemoryRepository } from "../memory/group-memory-repository.js";
+import {
+  createPostgresGroupMemoryRepository,
+  type PostgresGroupMemoryDataSource,
+} from "../memory/postgres-group-memory-repository.js";
+import {
+  createGroupMemoryService,
+  type GroupMemoryService,
+} from "../memory/group-memory-service.js";
 
 export type AnswerDraftRuntime = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  groupMemoryService?: GroupMemoryService;
   close(): Promise<void>;
 };
 
@@ -89,6 +99,13 @@ export type AnswerDraftRuntimeDependencies = {
   createFeishuDocumentPermissionChecker?: (
     dependencies: FeishuDocumentPermissionCheckerDependencies,
   ) => FeishuDocumentPermissionChecker;
+  createGroupMemoryRepository?: (dependencies: {
+    dataSource: PostgresGroupMemoryDataSource;
+  }) => GroupMemoryRepository;
+  createGroupMemoryService?: (dependencies: {
+    repository: GroupMemoryRepository;
+    auditLog?: AuditLog;
+  }) => GroupMemoryService;
   auditLog?: AuditLog;
 };
 
@@ -149,6 +166,10 @@ export function createAnswerDraftRuntime({
     dependencies.createFeishuTenantAccessTokenProvider ?? createFeishuTenantAccessTokenProvider;
   const createLivePermissionChecker =
     dependencies.createFeishuDocumentPermissionChecker ?? createFeishuDocumentPermissionChecker;
+  const createMemories =
+    dependencies.createGroupMemoryRepository ?? createPostgresGroupMemoryRepository;
+  const createMemoryService =
+    dependencies.createGroupMemoryService ?? createGroupMemoryService;
 
   const livePermissionChecker =
     runtimeConfig.permissionMode === "source-policy"
@@ -159,6 +180,12 @@ export function createAnswerDraftRuntime({
         })
       : undefined;
   const pool = createPool(readDatabaseConfig(env));
+  const groupMemoryService = isPostgresGroupMemoryDataSource(pool)
+    ? createMemoryService({
+        repository: createMemories({ dataSource: pool }),
+        ...(dependencies.auditLog === undefined ? {} : { auditLog: dependencies.auditLog }),
+      })
+    : undefined;
   const profiles = createProfiles({ queryable: pool });
   const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
   const sourceRegistry =
@@ -218,10 +245,17 @@ export function createAnswerDraftRuntime({
 
   return {
     answerDraftOrchestrator,
+    ...(groupMemoryService === undefined ? {} : { groupMemoryService }),
     close() {
       return pool.end();
     },
   };
+}
+
+function isPostgresGroupMemoryDataSource(
+  value: Queryable,
+): value is Queryable & PostgresGroupMemoryDataSource {
+  return "connect" in value && typeof value.connect === "function";
 }
 
 function createRuntimeGatedLiveChatContextProvider({

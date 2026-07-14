@@ -5,6 +5,7 @@ import type { GenerateAnswerDraftInput } from "../src/agent/answer-draft-orchest
 import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
+import type { GroupMemoryService } from "../src/memory/group-memory-service.js";
 import { createAnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
 
 describe("createAnswerDraftRuntime", () => {
@@ -94,6 +95,44 @@ describe("createAnswerDraftRuntime", () => {
 
     await runtime?.close();
     expect(pool.end).toHaveBeenCalled();
+  });
+
+  it("exposes a group memory service when the Postgres pool supports transactions", async () => {
+    const pool = {
+      query: vi.fn(),
+      connect: vi.fn(),
+      end: vi.fn(async () => undefined),
+    };
+    const repository = { repository: true };
+    const groupMemoryService = { service: true } as unknown as GroupMemoryService;
+    const createGroupMemoryRepository = vi.fn(() => repository as never);
+    const createGroupMemoryService = vi.fn(() => groupMemoryService);
+
+    const runtime = createAnswerDraftRuntime({
+      env: enabledEnv(),
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createGroupMemoryRepository,
+        createGroupMemoryService,
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    expect(createGroupMemoryRepository).toHaveBeenCalledWith({ dataSource: pool });
+    expect(createGroupMemoryService).toHaveBeenCalledWith({ repository });
+    expect(runtime?.groupMemoryService).toBe(groupMemoryService);
+
+    await runtime?.close();
   });
 
   it("creates a working orchestrator with allow-indexed development permissions", async () => {

@@ -63,6 +63,8 @@ import {
 } from "./documents/feishu-document-body-fetcher.js";
 import { buildInternalStatusSnapshot } from "./admin/internal-status-snapshot.js";
 import { buildInternalRolloutReadinessReport } from "./admin/internal-rollout-readiness.js";
+import { registerGroupMemoryApi } from "./memory/group-memory-api.js";
+import type { GroupMemoryService } from "./memory/group-memory-service.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
@@ -97,6 +99,7 @@ export type BuildAppDependencies = {
   internalApiToken?: string;
   ingressHealthToken?: string;
   readinessEnv?: EnvLike;
+  groupMemoryService?: GroupMemoryService;
 };
 
 export type StartServerOptions = {
@@ -237,6 +240,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
           })
         : undefined;
     answerDraftOrchestrator ??= answerDraftRuntime?.answerDraftOrchestrator;
+    const groupMemoryService =
+      dependencies.groupMemoryService ?? answerDraftRuntime?.groupMemoryService;
     reindexWorkerRuntime =
       (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
     reindexWorkerRuntime?.start();
@@ -313,6 +318,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       });
     }
   });
+
+  registerGroupMemoryApi(app, groupMemoryService);
 
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
