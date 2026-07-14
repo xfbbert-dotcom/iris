@@ -39,13 +39,18 @@ def streaming_json_response(payload: object) -> httpx.Response:
     )
 
 
-def settings(*, max_response_bytes: int = 4096, timeout_ms: int = 4321):
+def settings(
+    *,
+    base_url: str = "https://model.example/v1",
+    max_response_bytes: int = 4096,
+    timeout_ms: int = 4321,
+):
     from iris_worker.config import Settings
 
     return Settings.from_env(
         {
             "IRIS_AI_WORKER_TOKEN": "internal-worker-token",
-            "IRIS_MODEL_BASE_URL": "https://model.example/v1",
+            "IRIS_MODEL_BASE_URL": base_url,
             "IRIS_MODEL_API_KEY": "model-api-key",
             "IRIS_MODEL_NAME": "extractor-model",
             "IRIS_MODEL_TIMEOUT_MS": str(timeout_ms),
@@ -341,6 +346,53 @@ async def test_rejects_untrusted_content_length_without_reading_body(
     assert str(caught.value) == "invalid_model_response"
     assert "secret" not in repr(caught.value)
     assert stream.iterated is False
+
+
+@pytest.mark.asyncio
+async def test_real_http_protocol_rejects_extreme_content_length_without_raw_error():
+    from iris_worker.model_client import ModelClientError, OpenAICompatibleModelClient
+
+    response_sent = asyncio.Event()
+
+    async def handle_connection(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Length: "
+                + (b"9" * 5000)
+                + b"\r\n\r\nprovider-body-secret"
+            )
+            await writer.drain()
+        finally:
+            response_sent.set()
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass
+
+    server = await asyncio.start_server(handle_connection, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = OpenAICompatibleModelClient(
+        settings(base_url=f"http://127.0.0.1:{port}", timeout_ms=1000)
+    )
+
+    try:
+        with pytest.raises(ModelClientError) as caught:
+            await client.complete_json_object(
+                system_instruction="prompt-secret",
+                user_content="message-secret",
+            )
+        await asyncio.wait_for(response_sent.wait(), timeout=1)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert caught.value.code == "invalid_model_response"
+    assert str(caught.value) == "invalid_model_response"
+    assert "secret" not in repr(caught.value)
 
 
 @pytest.mark.asyncio

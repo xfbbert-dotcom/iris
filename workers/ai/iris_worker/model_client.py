@@ -162,7 +162,7 @@ class OpenAICompatibleModelClient:
                 transport=self._transport,
                 trust_env=False,
             ) as client:
-                async with client.stream(
+                request = client.build_request(
                     "POST",
                     self._endpoint,
                     headers={
@@ -171,7 +171,12 @@ class OpenAICompatibleModelClient:
                         "Content-Type": "application/json",
                     },
                     json=payload,
-                ) as response:
+                )
+                try:
+                    response = await client.send(request, stream=True)
+                except ValueError:
+                    raise ModelClientError("invalid_model_response") from None
+                try:
                     if response.status_code == 429:
                         raise ModelClientError(
                             "provider_rate_limited",
@@ -185,6 +190,8 @@ class OpenAICompatibleModelClient:
                     body = await _read_bounded_body(
                         response, self._max_response_bytes
                     )
+                finally:
+                    await response.aclose()
         except ModelClientError:
             raise
         except httpx.TimeoutException:
