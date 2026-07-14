@@ -147,12 +147,12 @@ try {
     } catch (error) {
       cleanupError = error;
     }
-    if (cleanupError !== undefined || (postRestore && primaryError !== undefined)) {
-      try {
-        await stopCaddyVerified();
-      } catch (error) {
-        cleanupError = combineCleanupErrors(cleanupError, error);
-      }
+  }
+  if (cleanupError !== undefined || (postRestore && primaryError !== undefined)) {
+    try {
+      await stopCaddyVerified();
+    } catch (error) {
+      cleanupError = combineCleanupErrors(cleanupError, error);
     }
   }
 }

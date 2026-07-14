@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
 
 import {
   startServer,
@@ -229,6 +230,7 @@ describe("Core server startup", () => {
     const buildError = new Error("late app composition failed");
     const eventCloseError = new Error("event runtime cleanup failed");
     const reindexCloseError = new Error("reindex runtime cleanup failed");
+    const fastifyCloseError = new Error("Fastify cleanup failed");
     const runtimeCloseError = new Error("runtime-control cleanup failed");
     let signalEventCloseStarted!: () => void;
     const eventCloseStarted = new Promise<void>((resolve) => {
@@ -276,7 +278,11 @@ describe("Core server startup", () => {
         createReindexWorkerRuntime: () => reindexWorkerRuntime,
         createEventWorkerRuntime: () => eventWorkerRuntime,
         createDocumentSyncRuntime: () => undefined,
-        onBeforeRuntimeCloseOwnership: () => {
+        onBeforeRuntimeCloseOwnership: (app: FastifyInstance) => {
+          app.addHook("onClose", async () => {
+            closeOrder.push("fastify");
+            throw fastifyCloseError;
+          });
           throw buildError;
         },
       },
@@ -293,12 +299,19 @@ describe("Core server startup", () => {
     const { error: startupError } = await startupOutcome;
 
     expect(runtimeCloseCountBeforeWorkerCleanup).toBe(0);
-    expect(closeOrder).toEqual(["event", "reindex", "answer", "runtime-control"]);
+    expect(closeOrder).toEqual([
+      "event",
+      "reindex",
+      "answer",
+      "fastify",
+      "runtime-control",
+    ]);
     expect(startupError).toBeInstanceOf(AggregateError);
     expect((startupError as AggregateError).errors).toEqual([
       buildError,
       eventCloseError,
       reindexCloseError,
+      fastifyCloseError,
       runtimeCloseError,
     ]);
     expect(reindexWorkerRuntime.start).toHaveBeenCalledOnce();

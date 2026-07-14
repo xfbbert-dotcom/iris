@@ -313,6 +313,47 @@ test("post-restore smoke gates privately before starting Caddy and public accept
   }
 });
 
+test("post-restore initially-running Caddy is stopped and preserves cleanup failure evidence", () => {
+  const result = runSmokeWithFetchMode("post-restore", {
+    args: ["--post-restore", "200"],
+    caddyRunning: true,
+    composeMode: "cleanup-verification-fails",
+  });
+  try {
+    assert.notEqual(result.status, 0);
+    assert.ok(result.elapsedMs < 5_000, `initial cleanup took ${result.elapsedMs}ms`);
+    assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
+    assert.deepEqual(result.mutations, []);
+    assert.equal(result.log.match(/fail-stop-caddy/gu)?.length, 3);
+    assert.match(result.log, /fail-kill-caddy/u);
+    assert.match(result.stderr, /Expected Caddy to be stopped before private post-restore gates/u);
+    assert.match(result.stderr, /Unable to verify Caddy stopped/u);
+    assert.match(result.stderr, /AggregateError/u);
+    assert.doesNotMatch(result.stdout, /"ok":true/u);
+  } finally {
+    result.cleanup();
+  }
+});
+
+test("post-restore uses kill fallback after three partial Caddy stops", () => {
+  const result = runSmokeWithFetchMode("post-restore", {
+    args: ["--post-restore", "200"],
+    caddyRunning: true,
+    composeMode: "partial-stop-until-kill",
+  });
+  try {
+    assert.notEqual(result.status, 0);
+    assert.equal(result.caddyRunning, false, result.stderr || result.stdout);
+    assert.equal(result.log.match(/partial-stop-caddy/gu)?.length, 3);
+    assert.match(result.log, /kill-caddy/u);
+    assert.match(result.stderr, /Expected Caddy to be stopped before private post-restore gates/u);
+    assert.doesNotMatch(result.stderr, /Unable to verify Caddy stopped/u);
+    assert.doesNotMatch(result.stdout, /"ok":true/u);
+  } finally {
+    result.cleanup();
+  }
+});
+
 test("disable transport failure stops Caddy and terminates the Compose process tree", async () => {
   const result = runSmokeWithFetchMode("enable-ambiguous-disable-pre-mutation", {
     composeMode: "hang-first-stop",
@@ -356,6 +397,7 @@ function runSmokeWithFetchMode(
   writeFileSync(preloadPath, smokeFetchPreload);
   writeFileSync(fakeDockerPath, fakeSmokeDocker);
 
+  const startedAt = Date.now();
   const result = spawnSync(
     process.execPath,
     ["--import", pathToFileURL(preloadPath).href, "scripts/pilot-smoke.mjs", ...args],
@@ -375,9 +417,11 @@ function runSmokeWithFetchMode(
       },
     },
   );
+  const elapsedMs = Date.now() - startedAt;
 
   return {
     status: result.status,
+    elapsedMs,
     stderr: result.stderr,
     stdout: result.stdout,
     mutations: readFileSync(resolve(stateDir, "mutations.log"), "utf8")
@@ -547,6 +591,13 @@ while (args[0] === "--env-file" || args[0] === "--file") args.splice(0, 2);
 const operation = args.shift();
 
 if (operation === "ps") {
+  if (
+    composeMode === "cleanup-verification-fails" &&
+    existsSync(resolve(stateDir, "cleanup-stop-attempted"))
+  ) {
+    log("fail-ps-caddy");
+    process.exit(42);
+  }
   if (readFileSync(resolve(stateDir, "caddy"), "utf8").trim() === "true") {
     process.stdout.write("caddy\\n");
   }
@@ -573,6 +624,16 @@ if (operation === "stop" && args.at(-1) === "caddy") {
     log("hang-stop-caddy");
     await new Promise(() => undefined);
   }
+  if (composeMode === "cleanup-verification-fails") {
+    writeFileSync(resolve(stateDir, "cleanup-stop-attempted"), "");
+    writeFileSync(resolve(stateDir, "caddy"), "false");
+    log("fail-stop-caddy");
+    process.exit(42);
+  }
+  if (composeMode === "partial-stop-until-kill") {
+    log("partial-stop-caddy");
+    process.exit(0);
+  }
   writeFileSync(resolve(stateDir, "caddy"), "false");
   log("stop-caddy");
   process.exit(0);
@@ -580,6 +641,10 @@ if (operation === "stop" && args.at(-1) === "caddy") {
 
 if (operation === "kill" && args.at(-1) === "caddy") {
   writeFileSync(resolve(stateDir, "caddy"), "false");
+  if (composeMode === "cleanup-verification-fails") {
+    log("fail-kill-caddy");
+    process.exit(42);
+  }
   log("kill-caddy");
   process.exit(0);
 }

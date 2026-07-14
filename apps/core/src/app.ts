@@ -1,4 +1,4 @@
-import Fastify, { type FastifyReply } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { installGracefulShutdown } from "./runtime/graceful-shutdown.js";
@@ -93,7 +93,7 @@ export type BuildAppDependencies = {
   runtimeControl?: RuntimeControlDependency;
   closeRuntimeControl?: () => Promise<void>;
   onRuntimeStartupCleanup?: (cleanup: Promise<void>) => void;
-  onBeforeRuntimeCloseOwnership?: () => void;
+  onBeforeRuntimeCloseOwnership?: (app: FastifyInstance) => void;
   internalApiToken?: string;
   ingressHealthToken?: string;
   readinessEnv?: EnvLike;
@@ -226,6 +226,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let eventWorkerRuntime: EventWorkerRuntime | undefined;
   let documentSyncRuntime: DocumentSyncRuntime | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
+  let startupApp: FastifyInstance | undefined;
+  let appOwnsRuntimeResources = false;
   try {
     answerDraftRuntime =
       answerDraftOrchestrator === undefined
@@ -274,6 +276,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   });
   startupGateway = gateway;
   const app = Fastify({ logger: false, bodyLimit: maxJsonBodyBytes });
+  startupApp = app;
 
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, payload, done) => {
     const rawBody = typeof payload === "string" ? payload : payload.toString("utf8");
@@ -1215,8 +1218,11 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     return { ok: true, status: "ready" };
   });
 
-  dependencies.onBeforeRuntimeCloseOwnership?.();
+  dependencies.onBeforeRuntimeCloseOwnership?.(app);
   app.addHook("onClose", async () => {
+    if (!appOwnsRuntimeResources) {
+      return;
+    }
     await closeRuntimeResources([
       () => gateway.close(),
       () => documentSyncRuntime?.close(),
@@ -1226,10 +1232,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => dependencies.closeRuntimeControl?.(),
     ]);
   });
+  appOwnsRuntimeResources = true;
 
   return app;
   } catch (error) {
     const cleanup = scheduleRuntimeStartupCleanup({
+      app: startupApp,
       gateway: startupGateway,
       answerDraftRuntime,
       reindexWorkerRuntime,
@@ -1361,12 +1369,14 @@ async function closeRuntimeResources(
 }
 
 function scheduleRuntimeStartupCleanup({
+  app,
   gateway,
   answerDraftRuntime,
   reindexWorkerRuntime,
   eventWorkerRuntime,
   documentSyncRuntime,
 }: {
+  app: Pick<FastifyInstance, "close"> | undefined;
   gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   answerDraftRuntime: AnswerDraftRuntime | undefined;
   reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
@@ -1379,6 +1389,7 @@ function scheduleRuntimeStartupCleanup({
     () => eventWorkerRuntime?.close(),
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
+    () => app?.close(),
   ]);
   void cleanup.catch(() => undefined);
   return cleanup;
