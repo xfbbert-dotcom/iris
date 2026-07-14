@@ -3,6 +3,31 @@ import { describe, expect, it } from "vitest";
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 
 describe("InMemoryAuditLog", () => {
+  it("records memory lifecycle events without requiring memory content", async () => {
+    const auditLog = new InMemoryAuditLog({
+      now: () => new Date("2026-07-14T01:00:00.000Z"),
+    });
+
+    await auditLog.record({
+      type: "group_memory_corrected",
+      documentId: "memory-2",
+      fragmentIds: ["msg-1"],
+      operatorHint: "alice",
+      message: "supersedes:memory-1",
+    });
+
+    expect(auditLog.events).toEqual([
+      {
+        type: "group_memory_corrected",
+        documentId: "memory-2",
+        fragmentIds: ["msg-1"],
+        operatorHint: "alice",
+        message: "supersedes:memory-1",
+        recordedAt: new Date("2026-07-14T01:00:00.000Z"),
+      },
+    ]);
+  });
+
   it("records audit events with default retention", async () => {
     const recordedAt = new Date("2026-07-03T06:00:00.000Z");
     const auditLog = new InMemoryAuditLog({ now: () => recordedAt });

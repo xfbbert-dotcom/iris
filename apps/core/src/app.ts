@@ -1732,7 +1732,10 @@ function parseAuditEventType(value: unknown): AuditEvent["type"] | false | undef
   const type = value.trim();
   return type === "permission_guard_denied" ||
     type === "permission_guard_error" ||
-    type === "runtime_control_updated"
+    type === "runtime_control_updated" ||
+    type === "group_memory_created" ||
+    type === "group_memory_corrected" ||
+    type === "group_memory_deleted"
     ? type
     : false;
 }

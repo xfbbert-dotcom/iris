@@ -22,7 +22,18 @@ export type RuntimeControlAuditEvent = {
   message?: string;
 };
 
-export type AuditEvent = PermissionGuardAuditEvent | RuntimeControlAuditEvent;
+export type GroupMemoryAuditEvent = {
+  type: "group_memory_created" | "group_memory_corrected" | "group_memory_deleted";
+  documentId: string;
+  fragmentIds: string[];
+  operatorHint?: string;
+  message?: string;
+};
+
+export type AuditEvent =
+  | PermissionGuardAuditEvent
+  | RuntimeControlAuditEvent
+  | GroupMemoryAuditEvent;
 
 export type RecordedAuditEvent = AuditEvent & {
   recordedAt: Date;
