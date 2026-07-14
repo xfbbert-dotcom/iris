@@ -248,7 +248,13 @@ return 1
 
 const REPLAY_DEAD_LETTER_SCRIPT = `
 -- memory-extraction:replay-dead-letter
-if redis.call("HGET", KEYS[11], ARGV[3]) ~= ARGV[4] then return 0 end
+local function is_canonical_dlq_id(value)
+  return string.len(value) == 68
+    and string.match(value, "^dlq:[0-9a-f]+$") ~= nil
+end
+if not is_canonical_dlq_id(ARGV[3])
+  or not redis.call("ZSCORE", KEYS[12], ARGV[3])
+  or redis.call("HGET", KEYS[11], ARGV[3]) ~= ARGV[4] then return 0 end
 local state = redis.call("HGET", KEYS[8], ARGV[1])
 local existing_payload = redis.call("HGET", KEYS[9], ARGV[1])
 if state == "processing" and existing_payload
@@ -280,30 +286,59 @@ return 1
 
 const LIST_DEAD_LETTERS_SCRIPT = `
 -- memory-extraction:list-dead-letters
+local function is_canonical_dlq_id(value)
+  return string.len(value) == 68
+    and string.match(value, "^dlq:[0-9a-f]+$") ~= nil
+end
 local limit = tonumber(ARGV[1])
 local stale_limit = tonumber(ARGV[2])
 local ids = redis.call("ZRANGE", KEYS[2], 0, limit + stale_limit - 1)
 local listed = {}
 local stale_removed = 0
 for _, id in ipairs(ids) do
-  local payload = redis.call("HGET", KEYS[1], id)
-  if payload then
-    table.insert(listed, id)
-    table.insert(listed, payload)
-    if #listed / 2 >= limit then break end
-  elseif stale_removed < stale_limit then
+  if not is_canonical_dlq_id(id) and stale_removed < stale_limit then
     redis.call("ZREM", KEYS[2], id)
+    redis.call("HDEL", KEYS[1], id)
     stale_removed = stale_removed + 1
-  else
+  elseif not is_canonical_dlq_id(id) then
     break
+  else
+    local payload = redis.call("HGET", KEYS[1], id)
+    if payload then
+      table.insert(listed, id)
+      table.insert(listed, payload)
+      if #listed / 2 >= limit then break end
+    elseif stale_removed < stale_limit then
+      redis.call("ZREM", KEYS[2], id)
+      stale_removed = stale_removed + 1
+    else
+      break
+    end
   end
 end
 return listed
 `;
 
+const FIND_DEAD_LETTER_SCRIPT = `
+-- memory-extraction:find-dead-letter
+local function is_canonical_dlq_id(value)
+  return string.len(value) == 68
+    and string.match(value, "^dlq:[0-9a-f]+$") ~= nil
+end
+if not is_canonical_dlq_id(ARGV[1])
+  or not redis.call("ZSCORE", KEYS[2], ARGV[1]) then return nil end
+return redis.call("HGET", KEYS[1], ARGV[1])
+`;
+
 const DELETE_DEAD_LETTER_SCRIPT = `
 -- memory-extraction:delete-dead-letter
-if redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then return 0 end
+local function is_canonical_dlq_id(value)
+  return string.len(value) == 68
+    and string.match(value, "^dlq:[0-9a-f]+$") ~= nil
+end
+if not is_canonical_dlq_id(ARGV[1])
+  or not redis.call("ZSCORE", KEYS[2], ARGV[1])
+  or redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then return 0 end
 redis.call("HDEL", KEYS[1], ARGV[1])
 redis.call("ZREM", KEYS[2], ARGV[1])
 return 1
@@ -326,7 +361,6 @@ export type RedisMemoryExtractionQueueClient = {
     options: { keys: string[]; arguments: string[] },
   ): Promise<number | string | string[] | null>;
   zCard(key: string): Promise<number>;
-  hGet(key: string, field: string): Promise<string | null>;
   get(key: string): Promise<string | null>;
 };
 
@@ -380,7 +414,13 @@ export function createRedisMemoryExtractionQueue({
     rawId: string,
   ): Promise<"replayed" | "not_found" | "unsupported_legacy_item"> => {
     const id = normalizeMemoryExtractionIdentifier(rawId, "id");
-    const found = await findDeadLetterByStoredId(client, deadLetterIndexKey, id, now);
+    const found = await findDeadLetterByStoredId(
+      client,
+      deadLetterIndexKey,
+      deadLetterOrderKey,
+      id,
+      now,
+    );
     if (found === undefined) {
       return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
@@ -425,7 +465,13 @@ export function createRedisMemoryExtractionQueue({
     rawId: string,
   ): Promise<"deleted" | "not_found" | "unsupported_legacy_item"> => {
     const id = normalizeMemoryExtractionIdentifier(rawId, "id");
-    const found = await findDeadLetterByStoredId(client, deadLetterIndexKey, id, now);
+    const found = await findDeadLetterByStoredId(
+      client,
+      deadLetterIndexKey,
+      deadLetterOrderKey,
+      id,
+      now,
+    );
     if (found === undefined) {
       return id.startsWith("legacy:") ? "unsupported_legacy_item" : "not_found";
     }
@@ -1012,11 +1058,15 @@ function invalidDeadLetterDiagnostic(
 async function findDeadLetterByStoredId(
   client: RedisMemoryExtractionQueueClient,
   deadLetterIndexKey: string,
+  deadLetterOrderKey: string,
   id: string,
   now: () => Date,
 ): Promise<ParsedDeadLetterPayload | undefined> {
-  const payload = await client.hGet(deadLetterIndexKey, id);
-  if (payload === null) {
+  const payload = await client.eval(FIND_DEAD_LETTER_SCRIPT, {
+    keys: [deadLetterIndexKey, deadLetterOrderKey],
+    arguments: [id],
+  });
+  if (typeof payload !== "string") {
     return undefined;
   }
   const parsed = parseDeadLetterPayload(payload, 0, now);
