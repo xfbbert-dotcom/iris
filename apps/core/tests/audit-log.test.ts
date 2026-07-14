@@ -3,6 +3,76 @@ import { describe, expect, it } from "vitest";
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 
 describe("InMemoryAuditLog", () => {
+  it("records content-free memory extraction lifecycle and recovery events", async () => {
+    const auditLog = new InMemoryAuditLog({
+      now: () => new Date("2026-07-15T01:00:00.000Z"),
+    });
+
+    await auditLog.record({
+      type: "memory_extraction_completed",
+      documentId: "run-1",
+      fragmentIds: ["feishu:msg-1", "feishu:msg-2"],
+      message: "completed",
+    });
+    await auditLog.record({
+      type: "memory_extraction_skipped",
+      documentId: "request-1",
+      fragmentIds: [],
+      message: "runtime_disabled_before_load",
+    });
+    await auditLog.record({
+      type: "memory_extraction_failed",
+      documentId: "run-2",
+      fragmentIds: ["feishu:msg-3"],
+      message: "provider_timeout",
+    });
+    await auditLog.record({
+      type: "memory_extraction_dlq_replayed",
+      documentId: "dlq-1",
+      fragmentIds: ["request-2"],
+      message: "replayed",
+    });
+    await auditLog.record({
+      type: "memory_extraction_dlq_deleted",
+      documentId: "dlq-2",
+      fragmentIds: ["request-3"],
+      message: "deleted",
+    });
+
+    expect(auditLog.events.map(({ recordedAt: _recordedAt, ...event }) => event)).toEqual([
+      {
+        type: "memory_extraction_completed",
+        documentId: "run-1",
+        fragmentIds: ["feishu:msg-1", "feishu:msg-2"],
+        message: "completed",
+      },
+      {
+        type: "memory_extraction_skipped",
+        documentId: "request-1",
+        fragmentIds: [],
+        message: "runtime_disabled_before_load",
+      },
+      {
+        type: "memory_extraction_failed",
+        documentId: "run-2",
+        fragmentIds: ["feishu:msg-3"],
+        message: "provider_timeout",
+      },
+      {
+        type: "memory_extraction_dlq_replayed",
+        documentId: "dlq-1",
+        fragmentIds: ["request-2"],
+        message: "replayed",
+      },
+      {
+        type: "memory_extraction_dlq_deleted",
+        documentId: "dlq-2",
+        fragmentIds: ["request-3"],
+        message: "deleted",
+      },
+    ]);
+  });
+
   it("records memory lifecycle events without requiring memory content", async () => {
     const auditLog = new InMemoryAuditLog({
       now: () => new Date("2026-07-14T01:00:00.000Z"),

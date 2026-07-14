@@ -30,10 +30,24 @@ export type GroupMemoryAuditEvent = {
   message?: string;
 };
 
+export type MemoryExtractionAuditEvent = {
+  type:
+    | "memory_extraction_completed"
+    | "memory_extraction_skipped"
+    | "memory_extraction_failed"
+    | "memory_extraction_dlq_replayed"
+    | "memory_extraction_dlq_deleted";
+  documentId: string;
+  fragmentIds: string[];
+  operatorHint?: string;
+  message?: string;
+};
+
 export type AuditEvent =
   | PermissionGuardAuditEvent
   | RuntimeControlAuditEvent
-  | GroupMemoryAuditEvent;
+  | GroupMemoryAuditEvent
+  | MemoryExtractionAuditEvent;
 
 export type RecordedAuditEvent = AuditEvent & {
   recordedAt: Date;

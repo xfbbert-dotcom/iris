@@ -11,13 +11,16 @@ import {
   type GroupMemoryCategory,
   type GroupMemoryOrigin,
   type GroupMemoryRepository,
-  type GroupMemoryScope,
   type GroupMemoryStatus,
 } from "./group-memory-repository.js";
+import {
+  fingerprintCreateGroupMemoryRequest,
+  insertGroupMemoryRecordWithEvidence,
+  normalizeCreateGroupMemory,
+  type Queryable as GroupMemoryQueryable,
+} from "./postgres-group-memory-writer.js";
 
-export type Queryable = {
-  query<T = unknown>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
-};
+export type Queryable = GroupMemoryQueryable;
 
 export type TransactionClient = Queryable & { release(): void };
 
@@ -44,8 +47,6 @@ type GroupMemoryRow = {
   created_at: unknown;
   updated_at: unknown;
 };
-
-type EvidenceMessageRow = { id: unknown; chat_id: unknown };
 
 type IdempotentMemoryRecord = {
   memory: GroupMemory;
@@ -87,49 +88,15 @@ export function createPostgresGroupMemoryRepository({
 }): GroupMemoryRepository {
   return {
     async create(rawInput) {
-      const input = normalizeCreateInput(rawInput);
-      const requestFingerprint = fingerprintCreateRequest(input);
+      const id = randomUUID();
+      const memoryInput = normalizeCreateGroupMemory({ id, ...rawInput });
       return withTransaction(dataSource, async (client) => {
-        const existing = await findByIdempotencyKey(
-          client,
-          input.groupId,
-          input.idempotencyKey,
-        );
-        if (existing !== undefined) {
-          assertCreateReplayMatches(existing, input, requestFingerprint);
-          return { memory: existing.memory, created: false };
-        }
-
-        await assertEvidenceBelongsToGroup(
-          client,
-          input.groupId,
-          input.evidenceMessageIds,
-        );
-        const id = randomUUID();
-        const inserted = await insertMemory(client, id, input, requestFingerprint);
-        if (inserted === undefined) {
-          const racedExisting = await findByIdempotencyKey(
-            client,
-            input.groupId,
-            input.idempotencyKey,
-          );
-          if (racedExisting === undefined) {
-            throw new Error("group memory insert conflict returned no memory");
-          }
-          assertCreateReplayMatches(racedExisting, input, requestFingerprint);
-          return { memory: racedExisting.memory, created: false };
-        }
-
-        const insertedId = requireBoundedString(
-          "memory id",
-          inserted.id,
-          MAX_IDENTIFIER_CHARS,
-        );
-        await insertEvidence(client, insertedId, input.evidenceMessageIds);
-        return {
-          memory: mapRow(inserted, input.evidenceMessageIds),
-          created: true,
-        };
+        const result = await insertGroupMemoryRecordWithEvidence({
+          queryable: client,
+          memory: memoryInput,
+          requestFingerprint: fingerprintCreateGroupMemoryRequest(memoryInput),
+        });
+        return result;
       });
     },
 
@@ -172,8 +139,6 @@ export function createPostgresGroupMemoryRepository({
           ...original.evidenceMessageIds,
           ...(input.evidenceMessageIds ?? []),
         ]);
-        await assertEvidenceBelongsToGroup(client, original.groupId, evidenceMessageIds);
-
         const replacementInput: CreateGroupMemoryInput = {
           groupId: original.groupId,
           scope: original.scope,
@@ -188,37 +153,23 @@ export function createPostgresGroupMemoryRepository({
           evidenceMessageIds,
         };
         const replacementId = randomUUID();
-        const inserted = await insertMemory(
-          client,
-          replacementId,
-          replacementInput,
+        const replacementResult = await insertGroupMemoryRecordWithEvidence({
+          queryable: client,
+          memory: { id: replacementId, ...replacementInput },
           requestFingerprint,
-          original.id,
-        );
-        if (inserted === undefined) {
-          const racedExisting = await findByIdempotencyKey(
-            client,
-            original.groupId,
-            input.idempotencyKey,
-          );
-          if (racedExisting === undefined) {
-            throw new Error("group memory correction conflict returned no memory");
-          }
+          supersedesMemoryId: original.id,
+          existingChecked: true,
+        });
+        if (!replacementResult.created) {
           assertCorrectionReplayMatches(
-            racedExisting,
+            { memory: replacementResult.memory, requestFingerprint },
             original,
             input,
             requestFingerprint,
           );
-          return { memory: racedExisting.memory, created: false };
+          return { memory: replacementResult.memory, created: false };
         }
 
-        const insertedId = requireBoundedString(
-          "memory id",
-          inserted.id,
-          MAX_IDENTIFIER_CHARS,
-        );
-        await insertEvidence(client, insertedId, evidenceMessageIds);
         await client.query(
           `
           UPDATE group_memories
@@ -228,7 +179,7 @@ export function createPostgresGroupMemoryRepository({
           [original.id],
         );
         return {
-          memory: mapRow(inserted, evidenceMessageIds),
+          memory: replacementResult.memory,
           created: true,
         };
       });
@@ -243,30 +194,6 @@ export function createPostgresGroupMemoryRepository({
       return result.rows.length === 0 ? "not_found" : "deleted";
     },
   };
-}
-
-function assertCreateReplayMatches(
-  existing: IdempotentMemoryRecord,
-  input: CreateGroupMemoryInput,
-  requestFingerprint: string,
-): void {
-  const memory = existing.memory;
-  if (
-    existing.requestFingerprint !== requestFingerprint ||
-    memory.supersedesMemoryId !== undefined ||
-    memory.groupId !== input.groupId ||
-    memory.scope !== input.scope ||
-    memory.category !== input.category ||
-    memory.threadKey !== input.threadKey ||
-    memory.content !== input.content ||
-    memory.importance !== input.importance ||
-    memory.confidence !== input.confidence ||
-    memory.origin !== input.origin ||
-    memory.createdBy !== input.createdBy ||
-    !haveSameStrings(memory.evidenceMessageIds, input.evidenceMessageIds)
-  ) {
-    throw new GroupMemoryIdempotencyConflictError();
-  }
 }
 
 function assertCorrectionReplayMatches(
@@ -296,24 +223,6 @@ function assertCorrectionReplayMatches(
   ) {
     throw new GroupMemoryIdempotencyConflictError();
   }
-}
-
-function fingerprintCreateRequest(input: CreateGroupMemoryInput): string {
-  return fingerprintRequest({
-    version: 1,
-    operation: "create",
-    groupId: input.groupId,
-    scope: input.scope,
-    category: input.category,
-    threadKey: input.threadKey ?? null,
-    content: input.content,
-    importance: input.importance,
-    confidence: input.confidence,
-    idempotencyKey: input.idempotencyKey,
-    origin: input.origin,
-    createdBy: input.createdBy,
-    evidenceMessageIds: canonicalizeStrings(input.evidenceMessageIds),
-  });
 }
 
 function fingerprintCorrectionRequest(input: CorrectGroupMemoryInput): string {
@@ -440,114 +349,11 @@ async function listByGroup(
   return result.rows.map((row) => mapRow(row));
 }
 
-async function assertEvidenceBelongsToGroup(
-  queryable: Queryable,
-  groupId: string,
-  evidenceMessageIds: string[],
-): Promise<void> {
-  const result = await queryable.query<EvidenceMessageRow>(
-    `
-    SELECT id, chat_id
-    FROM conversation_messages
-    WHERE id = ANY($1::text[])
-    FOR SHARE
-    `,
-    [evidenceMessageIds],
-  );
-  const evidenceById = new Map(
-    result.rows.map((row) => [
-      requireBoundedString("evidence message id", row.id, MAX_IDENTIFIER_CHARS),
-      requireBoundedString("evidence chat id", row.chat_id, MAX_IDENTIFIER_CHARS),
-    ]),
-  );
-  if (
-    evidenceById.size !== evidenceMessageIds.length ||
-    evidenceMessageIds.some((id) => evidenceById.get(id) !== groupId)
-  ) {
-    throw new Error("memory evidence must belong to the same group");
-  }
-}
-
-async function insertMemory(
-  client: TransactionClient,
-  id: string,
-  input: CreateGroupMemoryInput,
-  requestFingerprint: string,
-  supersedesMemoryId?: string,
-): Promise<GroupMemoryRow | undefined> {
-  const result = await client.query<GroupMemoryRow>(
-    `
-    INSERT INTO group_memories (
-      id, group_id, memory_scope, category, thread_key, content,
-      importance, confidence, status, idempotency_key, origin,
-      created_by, supersedes_memory_id, request_fingerprint
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12, $13)
-    ON CONFLICT (group_id, idempotency_key) DO NOTHING
-    RETURNING *
-    `,
-    [
-      id,
-      input.groupId,
-      input.scope,
-      input.category,
-      input.threadKey ?? null,
-      input.content,
-      input.importance,
-      input.confidence,
-      input.idempotencyKey,
-      input.origin,
-      input.createdBy,
-      supersedesMemoryId ?? null,
-      requestFingerprint,
-    ],
-  );
-  return result.rows[0];
-}
-
 function requireRequestFingerprint(value: unknown): string {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
     throw new Error("memory request fingerprint is invalid");
   }
   return value;
-}
-
-async function insertEvidence(
-  client: TransactionClient,
-  memoryId: string,
-  evidenceMessageIds: string[],
-): Promise<void> {
-  await client.query(
-    `
-    INSERT INTO group_memory_message_evidence (memory_id, conversation_message_id)
-    SELECT $1, evidence_id
-    FROM unnest($2::text[]) AS evidence_id
-    ON CONFLICT (memory_id, conversation_message_id) DO NOTHING
-    `,
-    [memoryId, evidenceMessageIds],
-  );
-}
-
-function normalizeCreateInput(input: CreateGroupMemoryInput): CreateGroupMemoryInput {
-  const scope = requireEnum("scope", input.scope, GROUP_MEMORY_SCOPES);
-  const threadKey = normalizeThreadKey(scope, input.threadKey);
-  return {
-    groupId: requireBoundedString("groupId", input.groupId, MAX_IDENTIFIER_CHARS),
-    scope,
-    category: requireEnum("category", input.category, GROUP_MEMORY_CATEGORIES),
-    ...(threadKey === undefined ? {} : { threadKey }),
-    content: requireBoundedString("content", input.content, MAX_CONTENT_CHARS),
-    importance: requireImportance(input.importance),
-    confidence: requireConfidence(input.confidence),
-    idempotencyKey: requireBoundedString(
-      "idempotencyKey",
-      input.idempotencyKey,
-      MAX_IDENTIFIER_CHARS,
-    ),
-    origin: requireEnum("origin", input.origin, GROUP_MEMORY_ORIGINS),
-    createdBy: requireBoundedString("createdBy", input.createdBy, MAX_IDENTIFIER_CHARS),
-    evidenceMessageIds: requireEvidenceMessageIds(input.evidenceMessageIds),
-  };
 }
 
 function normalizeCorrectionInput(input: CorrectGroupMemoryInput): CorrectGroupMemoryInput {
@@ -571,30 +377,6 @@ function normalizeCorrectionInput(input: CorrectGroupMemoryInput): CorrectGroupM
       ? {}
       : { evidenceMessageIds: normalizeOptionalEvidence(input.evidenceMessageIds) }),
   };
-}
-
-function normalizeThreadKey(
-  scope: GroupMemoryScope,
-  threadKey: string | undefined,
-): string | undefined {
-  if (scope === "thread") {
-    if (threadKey === undefined) {
-      throw new Error("threadKey is required for thread memory");
-    }
-    return requireBoundedString("threadKey", threadKey, MAX_IDENTIFIER_CHARS);
-  }
-  if (threadKey !== undefined) {
-    throw new Error("threadKey is only allowed for thread memory");
-  }
-  return undefined;
-}
-
-function requireEvidenceMessageIds(value: string[]): string[] {
-  const normalized = normalizeOptionalEvidence(value);
-  if (normalized.length === 0) {
-    throw new Error("evidenceMessageIds must not be empty");
-  }
-  return normalized;
 }
 
 function normalizeOptionalEvidence(value: string[]): string[] {

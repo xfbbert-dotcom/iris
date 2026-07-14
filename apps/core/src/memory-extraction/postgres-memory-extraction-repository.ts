@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import {
+  MEMORY_CANDIDATE_CATEGORIES,
+  type MemoryExtractionDiagnostics,
+  type ValidatedMemoryCandidate,
+} from "./ai-worker-memory-extraction-client.js";
 import type {
   ClaimedMemoryExtractionRun,
   ExtractionExistingMemory,
@@ -8,6 +13,11 @@ import type {
   MemoryExtractionRequest,
   MemoryExtractionRequestStatus,
 } from "./memory-extraction-repository.js";
+import {
+  MemoryExtractionCompletionConflictError,
+  MemoryExtractionStaleRunError,
+} from "./memory-extraction-repository.js";
+import { insertGroupMemoryWithEvidence } from "../memory/postgres-group-memory-writer.js";
 
 export type Queryable = {
   query<T = unknown>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
@@ -71,6 +81,33 @@ type RunRow = {
   group_id: unknown;
   input_fingerprint: unknown;
   status: unknown;
+  failure_classification?: unknown;
+};
+
+type CompletionEvidenceRow = {
+  request_id: unknown;
+  conversation_message_id: unknown;
+  ordinal: unknown;
+  request_status: unknown;
+  request_run_id: unknown;
+  request_group_id: unknown;
+  message_group_id: unknown;
+};
+
+type CompletionMemoryIdRow = {
+  id: unknown;
+  idempotency_key: unknown;
+};
+
+type RequestRunReferenceRow = {
+  run_id: unknown;
+  status: unknown;
+};
+
+type LockedRunRequestRow = {
+  id: unknown;
+  status: unknown;
+  run_id: unknown;
 };
 
 type StatusCountsRow = {
@@ -86,7 +123,26 @@ const MAX_CLASSIFICATION_CHARS = 128;
 const MAX_EVIDENCE_MESSAGES = 40;
 const MAX_CONTEXT_MESSAGES = 10;
 const MAX_ACTIVE_MEMORIES = 8;
+const MAX_ACCEPTED_CANDIDATES = 8;
+const MAX_CANDIDATE_EVIDENCE_IDS = 40;
+const EXTRACTION_MEMORY_CREATED_BY = "memory-extraction-worker";
 const READABLE_MESSAGE_TEXT_SQL = "cm.text ~ '[^[:space:]]'";
+const COMPLETION_REJECTION_CODES = new Set([
+  "candidate_count",
+  "invalid_run",
+  "invalid_shape",
+  "invalid_category",
+  "invalid_content",
+  "invalid_importance",
+  "invalid_confidence",
+  "invalid_relation",
+  "invalid_evidence",
+  "invalid_relation_reference",
+  "low_confidence",
+  "duplicate_relation",
+  "conflict_relation",
+  "exact_duplicate",
+]);
 
 export function createPostgresMemoryExtractionRepository({
   dataSource,
@@ -200,7 +256,8 @@ export function createPostgresMemoryExtractionRepository({
         return undefined;
       }
 
-      return withTransaction(dataSource, async (client) => {
+      let staleRunDetected = false;
+      const claimedRun = await withTransaction(dataSource, async (client) => {
         const seedRow = await findSeedRequest(client, seedRequestId, false);
         if (seedRow === undefined) {
           return undefined;
@@ -230,6 +287,10 @@ export function createPostgresMemoryExtractionRepository({
               [seed.runId],
             );
             return loaded.run;
+          }
+          if (loaded.status === "stale") {
+            await markRunStale(client, seed.runId);
+            staleRunDetected = true;
           }
           return undefined;
         }
@@ -394,6 +455,10 @@ export function createPostgresMemoryExtractionRepository({
           existingMemories,
         };
       });
+      if (staleRunDetected) {
+        throw new MemoryExtractionStaleRunError();
+      }
+      return claimedRun;
     },
 
     async loadRunInput(runIdValue) {
@@ -403,23 +468,7 @@ export function createPostgresMemoryExtractionRepository({
         if (loaded.status !== "stale") {
           return loaded;
         }
-        await client.query(
-          `
-          UPDATE group_memory_extraction_runs
-          SET status = 'failed', failure_classification = 'input_stale',
-              completed_at = NULL, updated_at = NOW()
-          WHERE id = $1 AND status <> 'completed'
-          `,
-          [runId],
-        );
-        await client.query(
-          `
-          UPDATE group_memory_extraction_requests
-          SET status = 'pending', run_id = NULL, skip_reason = NULL, updated_at = NOW()
-          WHERE run_id = $1 AND status = 'processing'
-          `,
-          [runId],
-        );
+        await markRunStale(client, runId);
         return loaded;
       });
     },
@@ -431,14 +480,104 @@ export function createPostgresMemoryExtractionRepository({
         MAX_IDENTIFIER_CHARS,
       );
       const reason = requireBoundedString("reason", rawInput.reason, MAX_CLASSIFICATION_CHARS);
-      await dataSource.query(
-        `
-        UPDATE group_memory_extraction_requests
-        SET status = 'skipped', skip_reason = $2, updated_at = NOW()
-        WHERE id = $1 AND status = 'pending'
-        `,
-        [requestId, reason],
-      );
+      await withTransaction(dataSource, async (client) => {
+        const referenceResult = await client.query<RequestRunReferenceRow>(
+          `
+          SELECT run_id, status
+          FROM group_memory_extraction_requests
+          WHERE id = $1
+          `,
+          [requestId],
+        );
+        if (referenceResult.rows.length === 0) {
+          return;
+        }
+        if (referenceResult.rows.length !== 1) {
+          throw new Error("memory extraction request query returned multiple rows");
+        }
+        const reference = referenceResult.rows[0]!;
+        const runId = reference.run_id === null || reference.run_id === undefined
+          ? undefined
+          : requireBoundedString(
+              "request run id",
+              requireString("request run id", reference.run_id),
+              MAX_IDENTIFIER_CHARS,
+            );
+        if (runId === undefined) {
+          await client.query(
+            `
+            UPDATE group_memory_extraction_requests
+            SET status = 'skipped', skip_reason = $2, updated_at = NOW()
+            WHERE id = $1 AND status = 'pending'
+            `,
+            [requestId, reason],
+          );
+          return;
+        }
+
+        const runResult = await client.query<RunRow>(
+          `
+          SELECT id, group_id, input_fingerprint, status, failure_classification
+          FROM group_memory_extraction_runs
+          WHERE id = $1
+          FOR UPDATE
+          `,
+          [runId],
+        );
+        if (runResult.rows.length !== 1) {
+          throw new Error("memory extraction run is missing for request");
+        }
+        const lockedRequests = await client.query<LockedRunRequestRow>(
+          `
+          SELECT id, status, run_id
+          FROM group_memory_extraction_requests
+          WHERE run_id = $1
+          ORDER BY id ASC
+          FOR UPDATE
+          `,
+          [runId],
+        );
+        const requestIds = lockedRequests.rows.map((row) => {
+          const lockedRunId = requireBoundedString(
+            "request run id",
+            requireString("request run id", row.run_id),
+            MAX_IDENTIFIER_CHARS,
+          );
+          requireRequestStatus(row.status);
+          if (lockedRunId !== runId) {
+            throw new Error("memory extraction request no longer belongs to run");
+          }
+          return requireBoundedString(
+            "request id",
+            requireString("request id", row.id),
+            MAX_IDENTIFIER_CHARS,
+          );
+        });
+        if (!requestIds.includes(requestId)) {
+          throw new Error("memory extraction request no longer belongs to run");
+        }
+        if (requireRunStatus(runResult.rows[0]!.status) === "completed") {
+          return;
+        }
+
+        await client.query(
+          `
+          UPDATE group_memory_extraction_requests
+          SET status = 'skipped', skip_reason = $2, updated_at = NOW()
+          WHERE run_id = $1 AND status = 'processing'
+          `,
+          [runId, reason],
+        );
+        await client.query(
+          `
+          UPDATE group_memory_extraction_runs
+          SET status = 'completed', failure_classification = $2,
+              completed_at = NOW(), updated_at = NOW()
+          WHERE id = $1 AND status <> 'completed'
+          `,
+          [runId, reason],
+        );
+      });
     },
 
     async skipRun(rawInput) {
@@ -492,6 +631,137 @@ export function createPostgresMemoryExtractionRepository({
       );
     },
 
+    async completeRun(rawInput) {
+      const input = normalizeCompletionInput(rawInput);
+      const completionMarker = createCompletionMarker(input);
+      const allIdempotencyKeys = Array.from(
+        { length: MAX_ACCEPTED_CANDIDATES },
+        (_, index) => completionIdempotencyKey(input.runId, index),
+      );
+
+      return withTransaction(dataSource, async (client) => {
+        const runResult = await client.query<RunRow>(
+          `
+          SELECT id, group_id, input_fingerprint, status, failure_classification
+          FROM group_memory_extraction_runs
+          WHERE id = $1
+          FOR UPDATE
+          `,
+          [input.runId],
+        );
+        if (runResult.rows.length !== 1) {
+          throw new MemoryExtractionCompletionConflictError();
+        }
+        const runRow = runResult.rows[0]!;
+        const groupId = requireBoundedString(
+          "run group id",
+          requireString("run group id", runRow.group_id),
+          MAX_IDENTIFIER_CHARS,
+        );
+        const persistedFingerprint = requireFingerprint(runRow.input_fingerprint);
+        const runStatus = requireRunStatus(runRow.status);
+        if (persistedFingerprint !== input.inputFingerprint) {
+          throw new MemoryExtractionCompletionConflictError();
+        }
+
+        const evidenceResult = await client.query<CompletionEvidenceRow>(
+          `
+          SELECT
+            e.request_id,
+            e.conversation_message_id,
+            e.ordinal,
+            r.status AS request_status,
+            r.run_id AS request_run_id,
+            r.group_id AS request_group_id,
+            cm.chat_id AS message_group_id
+          FROM group_memory_extraction_run_evidence e
+          JOIN group_memory_extraction_requests r
+            ON r.id = e.request_id
+          JOIN conversation_messages cm
+            ON cm.id = e.conversation_message_id
+          WHERE e.run_id = $1
+          ORDER BY e.ordinal ASC, r.id ASC
+          FOR UPDATE OF r
+          `,
+          [input.runId],
+        );
+        const claimed = validateClaimedCompletionRows({
+          rows: evidenceResult.rows,
+          runId: input.runId,
+          groupId,
+          expectedStatus: runStatus === "completed" ? "completed" : "processing",
+        });
+        validateCompletionEvidence(input.acceptedCandidates, claimed.evidenceMessageIds);
+
+        if (runStatus === "completed") {
+          if (runRow.failure_classification !== completionMarker) {
+            throw new MemoryExtractionCompletionConflictError();
+          }
+          const memoryIds = await loadCompletedMemoryIds({
+            queryable: client,
+            groupId,
+            expectedIdempotencyKeys: allIdempotencyKeys.slice(
+              0,
+              input.acceptedCandidates.length,
+            ),
+            allIdempotencyKeys,
+          });
+          return { status: "already_completed" as const, memoryIds };
+        }
+        if (runStatus !== "processing") {
+          throw new MemoryExtractionCompletionConflictError();
+        }
+
+        const memoryIds: string[] = [];
+        for (const [index, candidate] of input.acceptedCandidates.entries()) {
+          const memory = await insertGroupMemoryWithEvidence({
+            queryable: client,
+            memory: {
+              id: randomUUID(),
+              groupId,
+              scope: "group",
+              category: candidate.category,
+              content: candidate.content,
+              importance: candidate.importance,
+              confidence: candidate.confidence,
+              idempotencyKey: completionIdempotencyKey(input.runId, index),
+              origin: "extractor",
+              createdBy: EXTRACTION_MEMORY_CREATED_BY,
+              evidenceMessageIds: candidate.evidenceMessageIds,
+            },
+          });
+          memoryIds.push(memory.id);
+        }
+
+        const requestUpdate = await client.query<{ id: unknown }>(
+          `
+          UPDATE group_memory_extraction_requests
+          SET status = 'completed', skip_reason = NULL, updated_at = NOW()
+          WHERE run_id = $1
+            AND id = ANY($2::text[])
+            AND status = 'processing'
+          RETURNING id
+          `,
+          [input.runId, claimed.requestIds],
+        );
+        assertExactIds(requestUpdate.rows.map((row) => row.id), claimed.requestIds);
+
+        const runUpdate = await client.query<{ id: unknown }>(
+          `
+          UPDATE group_memory_extraction_runs
+          SET status = 'completed', failure_classification = $3,
+              completed_at = NOW(), updated_at = NOW()
+          WHERE id = $1 AND input_fingerprint = $2 AND status = 'processing'
+          RETURNING id
+          `,
+          [input.runId, input.inputFingerprint, completionMarker],
+        );
+        assertExactIds(runUpdate.rows.map((row) => row.id), [input.runId]);
+
+        return { status: "completed" as const, memoryIds };
+      });
+    },
+
     async getStatusCounts() {
       const result = await dataSource.query<StatusCountsRow>(`
         SELECT
@@ -518,6 +788,354 @@ export function createPostgresMemoryExtractionRepository({
   };
 }
 
+function normalizeCompletionInput(input: {
+  runId: string;
+  inputFingerprint: string;
+  acceptedCandidates: ValidatedMemoryCandidate[];
+  diagnostics: MemoryExtractionDiagnostics;
+}): {
+  runId: string;
+  inputFingerprint: string;
+  acceptedCandidates: ValidatedMemoryCandidate[];
+  diagnostics: MemoryExtractionDiagnostics;
+} {
+  try {
+    const runId = requireBoundedString("runId", input.runId, MAX_IDENTIFIER_CHARS);
+    const inputFingerprint = requireFingerprint(input.inputFingerprint);
+    if (
+      !Array.isArray(input.acceptedCandidates) ||
+      input.acceptedCandidates.length > MAX_ACCEPTED_CANDIDATES
+    ) {
+      throw new Error("invalid candidates");
+    }
+    const acceptedCandidates = input.acceptedCandidates.map(normalizeCompletionCandidate);
+    acceptedCandidates.sort(compareCompletionCandidates);
+    const comparisonKeys = acceptedCandidates.map((candidate) =>
+      candidate.content.normalize("NFC").toLowerCase().normalize("NFC"),
+    );
+    if (new Set(comparisonKeys).size !== comparisonKeys.length) {
+      throw new Error("duplicate candidates");
+    }
+    const diagnostics = normalizeCompletionDiagnostics(
+      input.diagnostics,
+      acceptedCandidates.length,
+    );
+    return { runId, inputFingerprint, acceptedCandidates, diagnostics };
+  } catch (error) {
+    if (error instanceof MemoryExtractionCompletionConflictError) {
+      throw error;
+    }
+    throw new MemoryExtractionCompletionConflictError();
+  }
+}
+
+function normalizeCompletionCandidate(
+  candidate: ValidatedMemoryCandidate,
+): ValidatedMemoryCandidate {
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    !MEMORY_CANDIDATE_CATEGORIES.includes(candidate.category as never)
+  ) {
+    throw new Error("invalid candidate");
+  }
+  const content = normalizeCandidateContent(candidate.content);
+  if (!Number.isSafeInteger(candidate.importance) || candidate.importance < 1 || candidate.importance > 5) {
+    throw new Error("invalid candidate");
+  }
+  if (
+    typeof candidate.confidence !== "number" ||
+    !Number.isFinite(candidate.confidence) ||
+    candidate.confidence < 0 ||
+    candidate.confidence > 1
+  ) {
+    throw new Error("invalid candidate");
+  }
+  if (
+    !Array.isArray(candidate.evidenceMessageIds) ||
+    candidate.evidenceMessageIds.length === 0 ||
+    candidate.evidenceMessageIds.length > MAX_CANDIDATE_EVIDENCE_IDS
+  ) {
+    throw new Error("invalid candidate");
+  }
+  const evidenceMessageIds = [...new Set(candidate.evidenceMessageIds.map((id) =>
+    requireExactIdentifier(id),
+  ))].sort(compareStrings);
+  return {
+    category: candidate.category,
+    content,
+    importance: candidate.importance,
+    confidence: candidate.confidence,
+    evidenceMessageIds,
+  };
+}
+
+function normalizeCandidateContent(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.includes("\u0000") ||
+    hasLoneSurrogate(value) ||
+    /[\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff]/u.test(value)
+  ) {
+    throw new Error("invalid candidate");
+  }
+  const content = value.trim();
+  if (content.length === 0 || content.length > 4000) {
+    throw new Error("invalid candidate");
+  }
+  return content;
+}
+
+function normalizeCompletionDiagnostics(
+  diagnostics: MemoryExtractionDiagnostics,
+  acceptedCount: number,
+): MemoryExtractionDiagnostics {
+  if (typeof diagnostics !== "object" || diagnostics === null) {
+    throw new Error("invalid diagnostics");
+  }
+  const proposedCount = boundedDiagnosticCount(diagnostics.proposedCount);
+  const normalizedAcceptedCount = boundedDiagnosticCount(diagnostics.acceptedCount);
+  const rejectedCount = boundedDiagnosticCount(diagnostics.rejectedCount);
+  const duplicateCount = boundedDiagnosticCount(diagnostics.duplicateCount);
+  const conflictCount = boundedDiagnosticCount(diagnostics.conflictCount);
+  if (
+    normalizedAcceptedCount !== acceptedCount ||
+    normalizedAcceptedCount + rejectedCount !== proposedCount ||
+    duplicateCount + conflictCount > rejectedCount
+  ) {
+    throw new Error("invalid diagnostics");
+  }
+  if (
+    !Array.isArray(diagnostics.rejectionCodes) ||
+    diagnostics.rejectionCodes.length > MAX_ACCEPTED_CANDIDATES ||
+    diagnostics.rejectionCodes.some((code) => !COMPLETION_REJECTION_CODES.has(code))
+  ) {
+    throw new Error("invalid diagnostics");
+  }
+  const rejectionCodes = [...new Set(diagnostics.rejectionCodes)].sort(compareStrings);
+  if (rejectionCodes.length !== diagnostics.rejectionCodes.length) {
+    throw new Error("invalid diagnostics");
+  }
+  return {
+    proposedCount,
+    acceptedCount: normalizedAcceptedCount,
+    rejectedCount,
+    duplicateCount,
+    conflictCount,
+    rejectionCodes,
+  };
+}
+
+function boundedDiagnosticCount(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 8) {
+    throw new Error("invalid diagnostics");
+  }
+  return value as number;
+}
+
+function createCompletionMarker(input: {
+  acceptedCandidates: ValidatedMemoryCandidate[];
+  diagnostics: MemoryExtractionDiagnostics;
+}): string {
+  const digest = sha256(JSON.stringify({
+    acceptedCandidates: input.acceptedCandidates,
+    diagnostics: input.diagnostics,
+  }));
+  return [
+    "v1",
+    `p${input.diagnostics.proposedCount}`,
+    `a${input.diagnostics.acceptedCount}`,
+    `r${input.diagnostics.rejectedCount}`,
+    `d${input.diagnostics.duplicateCount}`,
+    `c${input.diagnostics.conflictCount}`,
+    `h${digest}`,
+  ].join(":");
+}
+
+function completionIdempotencyKey(runId: string, canonicalCandidateIndex: number): string {
+  return sha256(runId + String(canonicalCandidateIndex));
+}
+
+function validateClaimedCompletionRows(input: {
+  rows: CompletionEvidenceRow[];
+  runId: string;
+  groupId: string;
+  expectedStatus: "processing" | "completed";
+}): { requestIds: string[]; evidenceMessageIds: Set<string> } {
+  if (input.rows.length === 0 || input.rows.length > MAX_EVIDENCE_MESSAGES) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+  const requestIds: string[] = [];
+  const evidenceMessageIds = new Set<string>();
+  for (const [expectedOrdinal, row] of input.rows.entries()) {
+    const requestId = requireExactIdentifier(row.request_id);
+    const messageId = requireExactIdentifier(row.conversation_message_id);
+    if (
+      Number(row.ordinal) !== expectedOrdinal ||
+      row.request_status !== input.expectedStatus ||
+      row.request_run_id !== input.runId ||
+      row.request_group_id !== input.groupId ||
+      row.message_group_id !== input.groupId ||
+      requestIds.includes(requestId) ||
+      evidenceMessageIds.has(messageId)
+    ) {
+      throw new MemoryExtractionCompletionConflictError();
+    }
+    requestIds.push(requestId);
+    evidenceMessageIds.add(messageId);
+  }
+  return { requestIds, evidenceMessageIds };
+}
+
+function validateCompletionEvidence(
+  acceptedCandidates: ValidatedMemoryCandidate[],
+  authoritativeEvidenceIds: ReadonlySet<string>,
+): void {
+  if (
+    acceptedCandidates.some((candidate) =>
+      candidate.evidenceMessageIds.some((id) => !authoritativeEvidenceIds.has(id)),
+    )
+  ) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+}
+
+async function loadCompletedMemoryIds(input: {
+  queryable: Queryable;
+  groupId: string;
+  expectedIdempotencyKeys: string[];
+  allIdempotencyKeys: string[];
+}): Promise<string[]> {
+  const result = await input.queryable.query<CompletionMemoryIdRow>(
+    `
+    SELECT id, idempotency_key
+    FROM group_memories
+    WHERE group_id = $1 AND idempotency_key = ANY($2::text[])
+    ORDER BY idempotency_key ASC
+    `,
+    [input.groupId, input.allIdempotencyKeys],
+  );
+  const memoryByKey = new Map<string, string>();
+  for (const row of result.rows) {
+    const key = requireFingerprint(row.idempotency_key);
+    const id = requireExactIdentifier(row.id);
+    if (memoryByKey.has(key)) {
+      throw new MemoryExtractionCompletionConflictError();
+    }
+    memoryByKey.set(key, id);
+  }
+  if (
+    memoryByKey.size !== input.expectedIdempotencyKeys.length ||
+    input.expectedIdempotencyKeys.some((key) => !memoryByKey.has(key))
+  ) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+  return input.expectedIdempotencyKeys.map((key) => memoryByKey.get(key)!);
+}
+
+function assertExactIds(actualValues: unknown[], expectedValues: string[]): void {
+  const actual = actualValues.map(requireExactIdentifier).sort(compareStrings);
+  const expected = [...expectedValues].sort(compareStrings);
+  if (
+    actual.length !== expected.length ||
+    actual.some((value, index) => value !== expected[index])
+  ) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+}
+
+function compareCompletionCandidates(
+  left: ValidatedMemoryCandidate,
+  right: ValidatedMemoryCandidate,
+): number {
+  const leftKey = left.content.normalize("NFC").toLowerCase().normalize("NFC");
+  const rightKey = right.content.normalize("NFC").toLowerCase().normalize("NFC");
+  return compareStrings(left.category, right.category) ||
+    compareStrings(leftKey, rightKey) ||
+    compareStrings(left.content, right.content) ||
+    compareStrings(JSON.stringify(left.evidenceMessageIds), JSON.stringify(right.evidenceMessageIds)) ||
+    left.importance - right.importance ||
+    left.confidence - right.confidence;
+}
+
+function requireExactIdentifier(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_IDENTIFIER_CHARS ||
+    value !== value.trim() ||
+    hasLoneSurrogate(value) ||
+    /[\p{Cc}\p{Cf}]/u.test(value)
+  ) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+  return value;
+}
+
+function requireFingerprint(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+  return value;
+}
+
+function requireRunStatus(value: unknown): "processing" | "completed" | "failed" {
+  if (value === "processing" || value === "completed" || value === "failed") {
+    return value;
+  }
+  throw new MemoryExtractionCompletionConflictError();
+}
+
+function requireOptionalClassification(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CLASSIFICATION_CHARS) {
+    throw new Error("memory extraction run classification is invalid");
+  }
+  return value;
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+async function markRunStale(queryable: Queryable, runId: string): Promise<void> {
+  await queryable.query(
+    `
+    UPDATE group_memory_extraction_runs
+    SET status = 'failed', failure_classification = 'input_stale',
+        completed_at = NULL, updated_at = NOW()
+    WHERE id = $1 AND status <> 'completed'
+    `,
+    [runId],
+  );
+  await queryable.query(
+    `
+    UPDATE group_memory_extraction_requests
+    SET status = 'pending', run_id = NULL, skip_reason = NULL, updated_at = NOW()
+    WHERE run_id = $1 AND status = 'processing'
+    `,
+    [runId],
+  );
+}
+
 async function loadStoredRun(
   queryable: Queryable,
   runId: string,
@@ -529,7 +1147,7 @@ async function loadStoredRun(
 > {
   const runResult = await queryable.query<RunRow>(
     `
-    SELECT id, group_id, input_fingerprint, status
+    SELECT id, group_id, input_fingerprint, status, failure_classification
     FROM group_memory_extraction_runs
     WHERE id = $1
     FOR UPDATE
@@ -546,6 +1164,9 @@ async function loadStoredRun(
   }
   const groupId = requireString("run group id", runRow.group_id);
   const inputFingerprint = requireString("input fingerprint", runRow.input_fingerprint);
+  const previousFailureClassification = status === "failed"
+    ? requireOptionalClassification(runRow.failure_classification)
+    : undefined;
 
   const evidenceResult = await queryable.query<MessageRow>(
     `
@@ -637,6 +1258,9 @@ async function loadStoredRun(
       evidenceMessages,
       contextMessages,
       existingMemories,
+      ...(previousFailureClassification === undefined
+        ? {}
+        : { previousFailureClassification }),
     },
   };
 }

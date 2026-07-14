@@ -1,3 +1,8 @@
+import type {
+  MemoryExtractionDiagnostics,
+  ValidatedMemoryCandidate,
+} from "./ai-worker-memory-extraction-client.js";
+
 export type MemoryExtractionRequestStatus =
   | "pending"
   | "processing"
@@ -51,7 +56,22 @@ export type ClaimedMemoryExtractionRun = {
   evidenceMessages: ExtractionMessage[];
   contextMessages: ExtractionMessage[];
   existingMemories: ExtractionExistingMemory[];
+  previousFailureClassification?: string;
 };
+
+export class MemoryExtractionCompletionConflictError extends Error {
+  constructor() {
+    super("memory extraction completion conflicts with persisted run");
+    this.name = "MemoryExtractionCompletionConflictError";
+  }
+}
+
+export class MemoryExtractionStaleRunError extends Error {
+  constructor() {
+    super("memory extraction run input is stale");
+    this.name = "MemoryExtractionStaleRunError";
+  }
+}
 
 export interface MemoryExtractionRepository {
   registerRequest(input: {
@@ -74,5 +94,11 @@ export interface MemoryExtractionRepository {
   skipRequest(input: { requestId: string; reason: string }): Promise<void>;
   skipRun(input: { runId: string; reason: string }): Promise<void>;
   failRun(input: { runId: string; classification: string }): Promise<void>;
+  completeRun(input: {
+    runId: string;
+    inputFingerprint: string;
+    acceptedCandidates: ValidatedMemoryCandidate[];
+    diagnostics: MemoryExtractionDiagnostics;
+  }): Promise<{ status: "completed" | "already_completed"; memoryIds: string[] }>;
   getStatusCounts(): Promise<MemoryExtractionStatusCounts>;
 }

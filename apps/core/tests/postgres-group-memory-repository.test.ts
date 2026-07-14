@@ -3,9 +3,9 @@ import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { readDatabaseConfig } from "../src/database/database-config.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import { GroupMemoryIdempotencyConflictError } from "../src/memory/group-memory-repository.js";
+import { insertGroupMemoryWithEvidence } from "../src/memory/postgres-group-memory-writer.js";
 
 import {
   createPostgresGroupMemoryRepository,
@@ -14,10 +14,33 @@ import {
   type TransactionClient,
 } from "../src/memory/postgres-group-memory-repository.js";
 
-const databaseUrl = process.env.DATABASE_URL?.trim();
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("createPostgresGroupMemoryRepository", () => {
+  it("exposes the same insertion and evidence checks through a transaction-scoped writer", async () => {
+    const client = scriptedClient([
+      step(/from group_memories[\s\S]+idempotency_key/u, []),
+      step(/from conversation_messages/u, [
+        { id: "feishu:msg-1", chat_id: "chat-a" },
+        { id: "feishu:msg-2", chat_id: "chat-a" },
+      ]),
+      step(/insert into group_memories/u, [memoryRow()]),
+      step(/insert into group_memory_message_evidence/u),
+    ]);
+
+    await expect(
+      insertGroupMemoryWithEvidence({
+        queryable: client,
+        memory: { id: "memory-1", ...createInput() },
+      }),
+    ).resolves.toEqual(expectedMemory());
+
+    expect(normalizedCalls(client)).not.toEqual(
+      expect.arrayContaining(["begin", "commit", "rollback"]),
+    );
+  });
+
   it("creates an evidence-bound memory transactionally", async () => {
     const client = scriptedClient([
       step(/begin/u),
@@ -333,7 +356,7 @@ runIfDatabase("PostgresGroupMemoryRepository with Postgres", () => {
   const otherMessageId = `feishu:other-memory-message-${suffix}`;
 
   beforeAll(async () => {
-    pool = new pg.Pool({ connectionString: readDatabaseConfig().databaseUrl });
+    pool = new pg.Pool({ connectionString: databaseUrl });
     const client = await pool.connect();
     try {
       await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
