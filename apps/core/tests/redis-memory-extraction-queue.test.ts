@@ -365,7 +365,7 @@ describe("Redis memory extraction queue", () => {
 
     const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
     expect(deadLetter).toEqual({
-      id: "dlq-corrupt",
+      id: generatedDeadLetterId("dlq-corrupt"),
       payloadDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       payloadBytes: Buffer.byteLength(corruptPayload),
       errorMessage: "invalid_queue_payload",
@@ -377,7 +377,7 @@ describe("Redis memory extraction queue", () => {
       script.includes("memory-extraction:ack-dead-letter"),
     );
     expect(diagnosticAck?.[1].arguments[3]).not.toContain("sensitive message body");
-    await expect(queue.replayDeadLetter("dlq-corrupt")).resolves.toBe(
+    await expect(queue.replayDeadLetter(generatedDeadLetterId("dlq-corrupt"))).resolves.toBe(
       "unsupported_legacy_item",
     );
   });
@@ -398,7 +398,7 @@ describe("Redis memory extraction queue", () => {
     expect(await queue.getProcessingCount()).toBe(0);
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
       {
-        id: "dlq-attempt-overflow",
+        id: generatedDeadLetterId("dlq-attempt-overflow"),
         payloadDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         payloadBytes: Buffer.byteLength(payload),
         errorMessage: "invalid_queue_payload",
@@ -421,7 +421,7 @@ describe("Redis memory extraction queue", () => {
     await expect(queue.dequeueBatch(1, jobFixture().enqueuedAt)).resolves.toEqual([]);
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
       expect.objectContaining({
-        id: "dlq-attempt-ceiling",
+        id: generatedDeadLetterId("dlq-attempt-ceiling"),
         errorMessage: "invalid_queue_payload",
         replayable: false,
       }),
@@ -447,7 +447,10 @@ describe("Redis memory extraction queue", () => {
     ).resolves.toEqual({ action: "dead_lettered", attempts: 2 });
 
     const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
-    expect(deadLetter).toMatchObject({ id: "dlq-terminal", replayable: true });
+    expect(deadLetter).toMatchObject({
+      id: generatedDeadLetterId("dlq-terminal"),
+      replayable: true,
+    });
     if (deadLetter === undefined || !("job" in deadLetter)) {
       throw new Error("expected replayable memory extraction dead letter");
     }
@@ -493,7 +496,7 @@ describe("Redis memory extraction queue", () => {
     });
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
       expect.objectContaining({
-        id: "dlq-safe-attempt-boundary",
+        id: generatedDeadLetterId("dlq-safe-attempt-boundary"),
         job: expect.objectContaining({ attempts: Number.MAX_SAFE_INTEGER - 1 }),
       }),
     ]);
@@ -516,7 +519,7 @@ describe("Redis memory extraction queue", () => {
 
     const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
     expect(deadLetter).toMatchObject({
-      id: "dlq-secret",
+      id: generatedDeadLetterId("dlq-secret"),
       errorMessage: "internal_error",
       replayable: true,
     });
@@ -565,7 +568,10 @@ describe("Redis memory extraction queue", () => {
     await expect(queue.dequeueBatch(10, job.enqueuedAt)).resolves.toEqual([]);
     expect(await queue.getDeadLetterCount()).toBe(1);
     await expect(queue.listDeadLetters({ limit: 10 })).resolves.toEqual([
-      expect.objectContaining({ id: "dlq-terminal-only", replayable: true }),
+      expect.objectContaining({
+        id: generatedDeadLetterId("dlq-terminal-only"),
+        replayable: true,
+      }),
     ]);
   });
 
@@ -584,7 +590,8 @@ describe("Redis memory extraction queue", () => {
     await queue.handleFailedJob({ job: claimed!, errorMessage: "provider_auth_failed" });
     client.addSet(KEYS.seen, job.idempotencyKey);
 
-    await expect(queue.replayDeadLetter("dlq-replay")).resolves.toBe("replayed");
+    const [terminalDeadLetter] = await queue.listDeadLetters({ limit: 1 });
+    await expect(queue.replayDeadLetter(terminalDeadLetter!.id)).resolves.toBe("replayed");
     expect(await queue.getDeadLetterCount()).toBe(0);
     expect(await queue.getPendingCount()).toBe(1);
     await expect(
@@ -761,26 +768,26 @@ describe("Redis memory extraction queue", () => {
     client.deleteHash(KEYS.dlqIndex, "dlq-stale-order");
     const queue = createRedisMemoryExtractionQueue({ client });
 
-    expect(await queue.getDeadLetterCount()).toBe(1);
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
       expect.objectContaining({ id: "dlq-active-order" }),
     ]);
+    expect(await queue.getDeadLetterCount()).toBe(1);
     expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual(["dlq-active-order"]);
   });
 
-  it("repairs a hash-only DLQ record so count and bounded listing agree", async () => {
+  it("excludes a hash-only DLQ orphan from count and listing authority", async () => {
     const client = new StatefulRedisClient();
     client.setHash(KEYS.dlqIndex, "dlq-hash-only", deadLetterPayload("dlq-hash-only"));
     const queue = createRedisMemoryExtractionQueue({ client });
 
-    expect(await queue.getDeadLetterCount()).toBe(1);
-    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
-      expect.objectContaining({ id: "dlq-hash-only" }),
-    ]);
-    expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual(["dlq-hash-only"]);
+    expect(await queue.getDeadLetterCount()).toBe(0);
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([]);
+    expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual([]);
+    expect(client.hScan).not.toHaveBeenCalled();
+    await expect(queue.replayDeadLetter("dlq-hash-only")).resolves.toBe("replayed");
   });
 
-  it("uses a fixed repair budget when listing a large healthy DLQ", async () => {
+  it("lists a large healthy DLQ without HSCAN or hash repair", async () => {
     const client = new StatefulRedisClient();
     for (let index = 0; index < 250; index += 1) {
       client.pushDeadLetter(deadLetterPayload(`dlq-healthy-${index}`));
@@ -791,12 +798,12 @@ describe("Redis memory extraction queue", () => {
       expect.objectContaining({ id: "dlq-healthy-0" }),
     ]);
 
-    expect(client.hScan).toHaveBeenCalledTimes(1);
+    expect(client.hScan).not.toHaveBeenCalled();
     expect(
       client.eval.mock.calls.filter(([script]) =>
         script.includes("memory-extraction:repair-dead-letter-order"),
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
   });
 
   it("bounds stale DLQ head cleanup and makes progress across calls", async () => {
@@ -810,30 +817,54 @@ describe("Redis memory extraction queue", () => {
     const queue = createRedisMemoryExtractionQueue({ client });
 
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([]);
-    expect(client.hScan).toHaveBeenCalledTimes(1);
-    expect(client.eval).toHaveBeenCalledTimes(2);
+    expect(client.hScan).not.toHaveBeenCalled();
+    expect(client.eval).toHaveBeenCalledTimes(1);
 
     await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
       expect.objectContaining({ id: "dlq-after-stale-budget" }),
     ]);
-    expect(client.hScan).toHaveBeenCalledTimes(2);
-    expect(client.eval).toHaveBeenCalledTimes(4);
+    expect(client.hScan).not.toHaveBeenCalled();
+    expect(client.eval).toHaveBeenCalledTimes(2);
   });
 
-  it("removes malformed HSCAN fields without ordering or surfacing their contents", async () => {
+  it("never promotes a credential-shaped hash-only orphan into DLQ authority", async () => {
     const client = new StatefulRedisClient();
-    const oversizedField = "x".repeat(513);
-    const secretField = 'prompt={"apiKey":"secret-token"}';
-    client.setHash(KEYS.dlqIndex, oversizedField, deadLetterPayload("dlq-oversized-payload"));
+    const secretField = "sk_live_secret_token";
     client.setHash(KEYS.dlqIndex, secretField, deadLetterPayload("dlq-secret-payload"));
-    client.setHash(KEYS.dlqIndex, "dlq-valid-hash-only", deadLetterPayload("dlq-valid-hash-only"));
+    client.setHash(KEYS.dlqIndex, "x".repeat(513), deadLetterPayload("dlq-oversized-payload"));
     const queue = createRedisMemoryExtractionQueue({ client });
 
-    const deadLetters = await queue.listDeadLetters({ limit: 10 });
+    expect(await queue.getDeadLetterCount()).toBe(0);
+    await expect(queue.listDeadLetters({ limit: 10 })).resolves.toEqual([]);
+    expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual([]);
+    expect(client.hScan).not.toHaveBeenCalled();
+    await expect(queue.replayDeadLetter(secretField)).resolves.toBe(
+      "unsupported_legacy_item",
+    );
+    expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual([]);
+  });
 
-    expect(deadLetters).toEqual([expect.objectContaining({ id: "dlq-valid-hash-only" })]);
-    expect(JSON.stringify(deadLetters)).not.toContain("secret-token");
-    expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual(["dlq-valid-hash-only"]);
+  it("digests raw generated DLQ ids before persisting or returning them", async () => {
+    const client = new StatefulRedisClient();
+    const rawGeneratedId = "sk_live_generator_secret with spaces \u2603";
+    const queue = createRedisMemoryExtractionQueue({
+      client,
+      maxAttempts: 1,
+      idGenerator: () => rawGeneratedId,
+    });
+    const job = jobFixture();
+
+    await queue.enqueue(job);
+    const [claimed] = await queue.dequeueBatch(1, job.enqueuedAt);
+    await queue.handleFailedJob({ job: claimed!, errorMessage: "provider_timeout" });
+
+    const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
+    expect(deadLetter?.id).toMatch(/^dlq:[a-f0-9]{64}$/);
+    expect(deadLetter?.id).not.toContain(rawGeneratedId);
+    expect(client.hashValues(KEYS.dlqIndex).join("\n")).not.toContain(rawGeneratedId);
+    expect((await client.zRange(KEYS.dlqOrder, 0, 10)).join("\n")).not.toContain(
+      rawGeneratedId,
+    );
   });
 
   it("does not grow the legacy DLQ payload list for new terminal records", async () => {
@@ -919,7 +950,8 @@ describe("Redis memory extraction queue", () => {
     await queue.handleFailedJob({ job: first!, errorMessage: "provider_timeout" });
     const [second] = await queue.dequeueBatch(1, job.enqueuedAt);
     await queue.handleFailedJob({ job: second!, errorMessage: "provider_timeout" });
-    await queue.replayDeadLetter("dlq-indexed");
+    const [indexedDeadLetter] = await queue.listDeadLetters({ limit: 1 });
+    await queue.replayDeadLetter(indexedDeadLetter!.id);
 
     const mutationMarkers = [
       "memory-extraction:enqueue",
@@ -1021,7 +1053,7 @@ describe("Redis memory extraction queue", () => {
       script.includes("memory-extraction:list-dead-letters"),
     );
     expect(listCall?.[1].arguments).toEqual(["100", "100"]);
-    expect(client.hScan.mock.calls.at(-1)?.[2]).toEqual({ COUNT: 100 });
+    expect(client.hScan).not.toHaveBeenCalled();
     await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).rejects.toThrow(
       "memory extraction queue limit must be a finite safe-magnitude number",
     );
@@ -1056,11 +1088,17 @@ describe("Redis memory extraction queue", () => {
     await queue.dequeueBatch(1, jobFixture().enqueuedAt);
 
     await expect(
-      queue.replayDeadLetters({ ids: ["dlq-diagnostic", "dlq-diagnostic", "missing"] }),
+      queue.replayDeadLetters({
+        ids: [
+          generatedDeadLetterId("dlq-diagnostic"),
+          generatedDeadLetterId("dlq-diagnostic"),
+          "missing",
+        ],
+      }),
     ).resolves.toEqual({
       replayedCount: 0,
       notFoundIds: ["missing"],
-      unsupportedLegacyIds: ["dlq-diagnostic"],
+      unsupportedLegacyIds: [generatedDeadLetterId("dlq-diagnostic")],
     });
   });
 });
@@ -1100,6 +1138,10 @@ function deadLetterPayload(id: string): string {
   });
 }
 
+function generatedDeadLetterId(rawId: string): string {
+  return `dlq:${createHash("sha256").update(rawId, "utf8").digest("hex")}`;
+}
+
 class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   private readonly lists = new Map<string, string[]>();
   private readonly sets = new Map<string, Set<string>>();
@@ -1121,7 +1163,6 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
       if (script.includes("memory-extraction:ack-dead-letter")) return this.ackDeadLetter(options.keys, options.arguments);
       if (script.includes("memory-extraction:replay-dead-letter")) return this.replayDeadLetter(options.keys, options.arguments);
       if (script.includes("memory-extraction:delete-dead-letter")) return this.deleteDeadLetter(options.keys, options.arguments);
-      if (script.includes("memory-extraction:repair-dead-letter-order")) return this.repairDeadLetterOrder(options.keys, options.arguments);
       if (script.includes("memory-extraction:list-dead-letters")) return this.listDeadLetters(options.keys, options.arguments);
       if (script.includes("memory-extraction:set-cooldown")) {
         const [key] = options.keys;
@@ -1470,28 +1511,6 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     this.hash(deadLetterIndexKey!).delete(deadLetterId!);
     this.sortedSet(deadLetterOrderKey!).delete(deadLetterId!);
     return 1;
-  }
-
-  private repairDeadLetterOrder(keys: string[], args: string[]): number {
-    const [indexKey, orderKey, sequenceKey, cursorKey] = keys;
-    const [nextCursor, ...entries] = args;
-    let repaired = 0;
-    for (let index = 0; index + 1 < entries.length; index += 2) {
-      const id = entries[index]!;
-      const expectedPayload = entries[index + 1]!;
-      if (
-        /^[A-Za-z0-9][A-Za-z0-9:._-]{0,511}$/.test(id) &&
-        this.hash(indexKey!).get(id) === expectedPayload &&
-        !this.sortedSet(orderKey!).has(id)
-      ) {
-        const sequence = Number(this.strings.get(sequenceKey!) ?? 0) + 1;
-        this.strings.set(sequenceKey!, String(sequence));
-        this.sortedSet(orderKey!).set(id, sequence);
-        repaired += 1;
-      }
-    }
-    this.strings.set(cursorKey!, nextCursor!);
-    return repaired;
   }
 
   private listDeadLetters(keys: string[], args: string[]): string[] {

@@ -27,7 +27,6 @@ const DEFAULT_DEAD_LETTER_KEY = "iris:memory:extraction:dlq";
 const DEFAULT_DEAD_LETTER_INDEX_KEY = "iris:memory:extraction:dlq:index";
 const DEFAULT_MAX_ATTEMPTS = 5;
 const MAX_DEQUEUE_POPS = MAX_MEMORY_EXTRACTION_QUEUE_LIMIT * 2;
-const DEAD_LETTER_REPAIR_PAGE_SIZE = MAX_MEMORY_EXTRACTION_QUEUE_LIMIT;
 const DEAD_LETTER_STALE_REPAIR_LIMIT = MAX_MEMORY_EXTRACTION_QUEUE_LIMIT;
 const CLAIMED_PAYLOAD = Symbol("memoryExtractionClaimedPayload");
 const ALLOWED_FAILURE_CODES = new Set([
@@ -279,29 +278,6 @@ redis.call("ZREM", KEYS[12], ARGV[3])
 return 1
 `;
 
-const REPAIR_DEAD_LETTER_ORDER_SCRIPT = `
--- memory-extraction:repair-dead-letter-order
-local function is_safe_identifier(value)
-  return string.len(value) > 0
-    and string.len(value) <= 512
-    and string.match(value, "^[A-Za-z0-9][A-Za-z0-9:._%-]*$") ~= nil
-end
-local repaired = 0
-for index = 2, #ARGV, 2 do
-  local id = ARGV[index]
-  local payload = ARGV[index + 1]
-  if is_safe_identifier(id)
-    and redis.call("HGET", KEYS[1], id) == payload
-    and not redis.call("ZSCORE", KEYS[2], id) then
-    local sequence = redis.call("INCR", KEYS[3])
-    redis.call("ZADD", KEYS[2], sequence, id)
-    repaired = repaired + 1
-  end
-end
-redis.call("SET", KEYS[4], ARGV[1])
-return repaired
-`;
-
 const LIST_DEAD_LETTERS_SCRIPT = `
 -- memory-extraction:list-dead-letters
 local limit = tonumber(ARGV[1])
@@ -349,18 +325,8 @@ export type RedisMemoryExtractionQueueClient = {
     script: string,
     options: { keys: string[]; arguments: string[] },
   ): Promise<number | string | string[] | null>;
-  lLen(key: string): Promise<number>;
-  lRange(key: string, start: number, stop: number): Promise<string[]>;
-  sCard(key: string): Promise<number>;
   zCard(key: string): Promise<number>;
-  zRange(key: string, start: number, stop: number): Promise<string[]>;
-  hLen(key: string): Promise<number>;
   hGet(key: string, field: string): Promise<string | null>;
-  hScan(
-    key: string,
-    cursor: string,
-    options: { COUNT: number },
-  ): Promise<{ cursor: string; entries: Array<{ field: string; value: string }> }>;
   get(key: string): Promise<string | null>;
 };
 
@@ -408,7 +374,6 @@ export function createRedisMemoryExtractionQueue({
   const recoverySetKey = `${processingKey}:recovery:ids`;
   const deadLetterOrderKey = `${deadLetterKey}:order`;
   const deadLetterSequenceKey = `${deadLetterKey}:sequence`;
-  const deadLetterRepairCursorKey = `${deadLetterKey}:repair:cursor`;
   let processingRecovered = false;
 
   const replayDeadLetter = async (
@@ -589,7 +554,7 @@ export function createRedisMemoryExtractionQueue({
           jobs.push(job);
         } catch {
           const failedAt = requireValidMemoryExtractionDate(now(), "now");
-          const deadLetterId = normalizeMemoryExtractionIdentifier(idGenerator(), "id");
+          const deadLetterId = createGeneratedDeadLetterId(idGenerator());
           const diagnosticPayload = serializeInvalidPayloadDeadLetter({
             id: deadLetterId,
             rawPayload: claimedPayload,
@@ -663,7 +628,7 @@ export function createRedisMemoryExtractionQueue({
 
       if (attempts >= safeMaxAttempts) {
         const failedAt = requireValidMemoryExtractionDate(now(), "now");
-        const deadLetterId = normalizeMemoryExtractionIdentifier(idGenerator(), "id");
+        const deadLetterId = createGeneratedDeadLetterId(idGenerator());
         await client.eval(ACK_DEAD_LETTER_SCRIPT, {
           keys: [
             deadLetterOrderKey,
@@ -734,7 +699,7 @@ export function createRedisMemoryExtractionQueue({
     },
 
     getDeadLetterCount() {
-      return client.hLen(deadLetterIndexKey);
+      return client.zCard(deadLetterOrderKey);
     },
 
     async getProviderCooldown() {
@@ -759,29 +724,6 @@ export function createRedisMemoryExtractionQueue({
       if (safeLimit === 0) {
         return [];
       }
-      const storedCursor = await client.get(deadLetterRepairCursorKey);
-      const repairCursor = storedCursor !== null && /^\d+$/.test(storedCursor)
-        ? storedCursor
-        : "0";
-      const scan = await client.hScan(deadLetterIndexKey, repairCursor, {
-        COUNT: DEAD_LETTER_REPAIR_PAGE_SIZE,
-      });
-      const repairArguments = [scan.cursor];
-      for (const entry of scan.entries.slice(0, DEAD_LETTER_REPAIR_PAGE_SIZE)) {
-        if (isSafeDeadLetterIndexId(entry.field)) {
-          repairArguments.push(entry.field, entry.value);
-        }
-      }
-      await client.eval(REPAIR_DEAD_LETTER_ORDER_SCRIPT, {
-        keys: [
-          deadLetterIndexKey,
-          deadLetterOrderKey,
-          deadLetterSequenceKey,
-          deadLetterRepairCursorKey,
-        ],
-        arguments: repairArguments,
-      });
-
       const listed = await client.eval(LIST_DEAD_LETTERS_SCRIPT, {
         keys: [deadLetterIndexKey, deadLetterOrderKey],
         arguments: [String(safeLimit), String(DEAD_LETTER_STALE_REPAIR_LIMIT)],
@@ -1092,6 +1034,10 @@ async function findDeadLetterByStoredId(
 
 function digestPayload(payload: string): string {
   return `sha256:${createHash("sha256").update(payload, "utf8").digest("hex")}`;
+}
+
+function createGeneratedDeadLetterId(rawId: string): string {
+  return `dlq:${createHash("sha256").update(rawId, "utf8").digest("hex")}`;
 }
 
 function sanitizeQueueLimit(limit: number): number {
