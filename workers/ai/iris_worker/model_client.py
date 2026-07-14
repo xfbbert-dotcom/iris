@@ -31,6 +31,7 @@ _MODEL_ERROR_CODES = {
 }
 _RETRY_AFTER_PATTERN = re.compile(r"^(0|[1-9][0-9]{0,4})$")
 _MAX_RETRY_AFTER_SECONDS = 86_400
+_MAX_CONTENT_LENGTH_DIGITS = 20
 
 
 class ModelClient(Protocol):
@@ -171,7 +172,6 @@ class OpenAICompatibleModelClient:
                     },
                     json=payload,
                 ) as response:
-                    _require_identity_content_encoding(response)
                     if response.status_code == 429:
                         raise ModelClientError(
                             "provider_rate_limited",
@@ -181,6 +181,7 @@ class OpenAICompatibleModelClient:
                         )
                     if response.status_code < 200 or response.status_code >= 300:
                         raise ModelClientError("provider_unavailable")
+                    _require_identity_content_encoding(response)
                     body = await _read_bounded_body(
                         response, self._max_response_bytes
                     )
@@ -195,16 +196,36 @@ class OpenAICompatibleModelClient:
 
 
 async def _read_bounded_body(response: httpx.Response, limit: int) -> bytes:
-    content_length = response.headers.get("Content-Length")
-    if content_length is not None and content_length.isdecimal():
-        if int(content_length, 10) > limit:
-            raise ModelClientError("invalid_model_response")
+    _require_bounded_content_length(response, limit)
     body = bytearray()
     async for chunk in response.aiter_raw():
         if len(body) + len(chunk) > limit:
             raise ModelClientError("invalid_model_response")
         body.extend(chunk)
     return bytes(body)
+
+
+def _require_bounded_content_length(response: httpx.Response, limit: int) -> None:
+    values = response.headers.get_list("Content-Length")
+    if not values:
+        return
+    if len(values) != 1:
+        raise ModelClientError("invalid_model_response")
+
+    value = values[0]
+    if (
+        not 1 <= len(value) <= _MAX_CONTENT_LENGTH_DIGITS
+        or not value.isascii()
+        or not value.isdigit()
+    ):
+        raise ModelClientError("invalid_model_response")
+
+    normalized = value.lstrip("0") or "0"
+    limit_text = str(limit)
+    if len(normalized) > len(limit_text) or (
+        len(normalized) == len(limit_text) and normalized > limit_text
+    ):
+        raise ModelClientError("invalid_model_response")
 
 
 def _require_identity_content_encoding(response: httpx.Response) -> None:

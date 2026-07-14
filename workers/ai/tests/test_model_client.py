@@ -28,10 +28,14 @@ class SlowEndlessStream(httpx.AsyncByteStream):
 
 
 def streaming_json_response(payload: object) -> httpx.Response:
+    body = json.dumps(payload, separators=(",", ":")).encode()
     return httpx.Response(
         200,
-        headers={"Content-Type": "application/json"},
-        stream=TrackingStream(json.dumps(payload, separators=(",", ":")).encode()),
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+        },
+        stream=TrackingStream(body),
     )
 
 
@@ -188,6 +192,43 @@ async def test_maps_rate_limit_and_preserves_only_valid_retry_after():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("status", "expected_code", "expected_retry_after"),
+    [
+        (429, "provider_rate_limited", 120),
+        (503, "provider_unavailable", None),
+    ],
+)
+async def test_maps_encoded_error_status_without_reading_provider_body(
+    status: int,
+    expected_code: str,
+    expected_retry_after: int | None,
+):
+    from iris_worker.model_client import ModelClientError
+
+    stream = TrackingStream(gzip.compress(b"provider-body-secret" * 1000))
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            headers={"Content-Encoding": "gzip", "Retry-After": "120"},
+            stream=stream,
+        )
+
+    with pytest.raises(ModelClientError) as caught:
+        await client_for(handler).complete_json_object(
+            system_instruction="prompt-secret",
+            user_content="message-secret",
+        )
+
+    assert caught.value.code == expected_code
+    assert caught.value.retry_after_seconds == expected_retry_after
+    assert str(caught.value) == expected_code
+    assert "secret" not in repr(caught.value)
+    assert stream.iterated is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("header", "expected"),
     [
         ("0", 60),
@@ -248,6 +289,58 @@ async def test_rejects_response_over_byte_budget_without_exposing_body():
 
     assert caught.value.code == "invalid_model_response"
     assert str(caught.value) == "invalid_model_response"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("Content-Length", "9" * 5000)],
+        [("Content-Length", "4097")],
+        [("Content-Length", "1"), ("Content-Length", "1")],
+        [("Content-Length", "1,1")],
+        [("Content-Length", "+1")],
+        [("Content-Length", "-1")],
+        [("Content-Length", " 1")],
+        [("Content-Length", "1 ")],
+        [("Content-Length", "")],
+        [(b"Content-Length", b"\xff")],
+    ],
+    ids=[
+        "five-thousand-digits",
+        "over-byte-budget",
+        "duplicate",
+        "comma",
+        "signed-positive",
+        "signed-negative",
+        "leading-whitespace",
+        "trailing-whitespace",
+        "empty",
+        "non-ascii-decimal",
+    ],
+)
+async def test_rejects_untrusted_content_length_without_reading_body(
+    headers: list[tuple[str | bytes, str | bytes]],
+):
+    from iris_worker.model_client import ModelClientError
+
+    stream = TrackingStream(
+        json.dumps(completion_response('{"schema_version":1}')).encode()
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers=headers, stream=stream)
+
+    with pytest.raises(ModelClientError) as caught:
+        await client_for(handler).complete_json_object(
+            system_instruction="prompt-secret",
+            user_content="message-secret",
+        )
+
+    assert caught.value.code == "invalid_model_response"
+    assert str(caught.value) == "invalid_model_response"
+    assert "secret" not in repr(caught.value)
+    assert stream.iterated is False
 
 
 @pytest.mark.asyncio
