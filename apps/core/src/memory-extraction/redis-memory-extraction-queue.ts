@@ -27,6 +27,8 @@ const DEFAULT_DEAD_LETTER_KEY = "iris:memory:extraction:dlq";
 const DEFAULT_DEAD_LETTER_INDEX_KEY = "iris:memory:extraction:dlq:index";
 const DEFAULT_MAX_ATTEMPTS = 5;
 const MAX_DEQUEUE_POPS = MAX_MEMORY_EXTRACTION_QUEUE_LIMIT * 2;
+const DEAD_LETTER_REPAIR_PAGE_SIZE = MAX_MEMORY_EXTRACTION_QUEUE_LIMIT;
+const DEAD_LETTER_STALE_REPAIR_LIMIT = MAX_MEMORY_EXTRACTION_QUEUE_LIMIT;
 const CLAIMED_PAYLOAD = Symbol("memoryExtractionClaimedPayload");
 const ALLOWED_FAILURE_CODES = new Set([
   "provider_timeout",
@@ -279,16 +281,48 @@ return 1
 
 const REPAIR_DEAD_LETTER_ORDER_SCRIPT = `
 -- memory-extraction:repair-dead-letter-order
-local payload = redis.call("HGET", KEYS[1], ARGV[1])
-if not payload then
-  return redis.call("ZREM", KEYS[2], ARGV[1])
+local function is_safe_identifier(value)
+  return string.len(value) > 0
+    and string.len(value) <= 512
+    and string.match(value, "^[A-Za-z0-9][A-Za-z0-9:._%-]*$") ~= nil
 end
-if payload == ARGV[2] and not redis.call("ZSCORE", KEYS[2], ARGV[1]) then
-  local sequence = redis.call("INCR", KEYS[3])
-  redis.call("ZADD", KEYS[2], sequence, ARGV[1])
-  return 1
+local repaired = 0
+for index = 2, #ARGV, 2 do
+  local id = ARGV[index]
+  local payload = ARGV[index + 1]
+  if is_safe_identifier(id)
+    and redis.call("HGET", KEYS[1], id) == payload
+    and not redis.call("ZSCORE", KEYS[2], id) then
+    local sequence = redis.call("INCR", KEYS[3])
+    redis.call("ZADD", KEYS[2], sequence, id)
+    repaired = repaired + 1
+  end
 end
-return 0
+redis.call("SET", KEYS[4], ARGV[1])
+return repaired
+`;
+
+const LIST_DEAD_LETTERS_SCRIPT = `
+-- memory-extraction:list-dead-letters
+local limit = tonumber(ARGV[1])
+local stale_limit = tonumber(ARGV[2])
+local ids = redis.call("ZRANGE", KEYS[2], 0, limit + stale_limit - 1)
+local listed = {}
+local stale_removed = 0
+for _, id in ipairs(ids) do
+  local payload = redis.call("HGET", KEYS[1], id)
+  if payload then
+    table.insert(listed, id)
+    table.insert(listed, payload)
+    if #listed / 2 >= limit then break end
+  elseif stale_removed < stale_limit then
+    redis.call("ZREM", KEYS[2], id)
+    stale_removed = stale_removed + 1
+  else
+    break
+  end
+end
+return listed
 `;
 
 const DELETE_DEAD_LETTER_SCRIPT = `
@@ -374,6 +408,7 @@ export function createRedisMemoryExtractionQueue({
   const recoverySetKey = `${processingKey}:recovery:ids`;
   const deadLetterOrderKey = `${deadLetterKey}:order`;
   const deadLetterSequenceKey = `${deadLetterKey}:sequence`;
+  const deadLetterRepairCursorKey = `${deadLetterKey}:repair:cursor`;
   let processingRecovered = false;
 
   const replayDeadLetter = async (
@@ -724,63 +759,61 @@ export function createRedisMemoryExtractionQueue({
       if (safeLimit === 0) {
         return [];
       }
-      let repairedMissingOrder = 0;
-      let cursor = "0";
-      do {
-        const scan = await client.hScan(deadLetterIndexKey, cursor, {
-          COUNT: MAX_MEMORY_EXTRACTION_QUEUE_LIMIT,
-        });
-        cursor = scan.cursor;
-        for (const entry of scan.entries) {
-          const repaired = await client.eval(REPAIR_DEAD_LETTER_ORDER_SCRIPT, {
-            keys: [deadLetterIndexKey, deadLetterOrderKey, deadLetterSequenceKey],
-            arguments: [entry.field, entry.value],
-          });
-          if (repaired === 1) {
-            repairedMissingOrder += 1;
-          }
-          if (repairedMissingOrder >= safeLimit) {
-            break;
-          }
-        }
-      } while (cursor !== "0" && repairedMissingOrder < safeLimit);
-
-      const deadLetters: MemoryExtractionDeadLetter[] = [];
-      while (deadLetters.length < safeLimit) {
-        const ids = await client.zRange(deadLetterOrderKey, 0, safeLimit - 1);
-        if (ids.length === 0) {
-          break;
-        }
-        let removedStale = false;
-        deadLetters.length = 0;
-        for (const [index, id] of ids.entries()) {
-          const payload = await client.hGet(deadLetterIndexKey, id);
-          if (payload === null) {
-            await client.eval(REPAIR_DEAD_LETTER_ORDER_SCRIPT, {
-              keys: [deadLetterIndexKey, deadLetterOrderKey, deadLetterSequenceKey],
-              arguments: [id, ""],
-            });
-            removedStale = true;
-            continue;
-          }
-          const parsed = parseDeadLetterPayload(payload, index, now);
-          deadLetters.push(
-            parsed.storedId === id
-              ? parsed.deadLetter
-              : invalidDeadLetterDiagnostic(
-                  payload,
-                  index,
-                  "invalid_dead_letter_payload",
-                  now,
-                  id,
-                ).deadLetter,
-          );
-        }
-        if (!removedStale) {
-          break;
+      const storedCursor = await client.get(deadLetterRepairCursorKey);
+      const repairCursor = storedCursor !== null && /^\d+$/.test(storedCursor)
+        ? storedCursor
+        : "0";
+      const scan = await client.hScan(deadLetterIndexKey, repairCursor, {
+        COUNT: DEAD_LETTER_REPAIR_PAGE_SIZE,
+      });
+      const repairArguments = [scan.cursor];
+      for (const entry of scan.entries.slice(0, DEAD_LETTER_REPAIR_PAGE_SIZE)) {
+        if (isSafeDeadLetterIndexId(entry.field)) {
+          repairArguments.push(entry.field, entry.value);
         }
       }
-      return deadLetters.slice(0, safeLimit);
+      await client.eval(REPAIR_DEAD_LETTER_ORDER_SCRIPT, {
+        keys: [
+          deadLetterIndexKey,
+          deadLetterOrderKey,
+          deadLetterSequenceKey,
+          deadLetterRepairCursorKey,
+        ],
+        arguments: repairArguments,
+      });
+
+      const listed = await client.eval(LIST_DEAD_LETTERS_SCRIPT, {
+        keys: [deadLetterIndexKey, deadLetterOrderKey],
+        arguments: [String(safeLimit), String(DEAD_LETTER_STALE_REPAIR_LIMIT)],
+      });
+      if (!Array.isArray(listed)) {
+        return [];
+      }
+      const deadLetters: MemoryExtractionDeadLetter[] = [];
+      for (let index = 0; index + 1 < listed.length; index += 2) {
+        const id = listed[index];
+        const payload = listed[index + 1];
+        if (
+          typeof id !== "string" ||
+          typeof payload !== "string" ||
+          !isSafeDeadLetterIndexId(id)
+        ) {
+          continue;
+        }
+        const parsed = parseDeadLetterPayload(payload, index / 2, now);
+        deadLetters.push(
+          parsed.storedId === id
+            ? parsed.deadLetter
+            : invalidDeadLetterDiagnostic(
+                payload,
+                index / 2,
+                "invalid_dead_letter_payload",
+                now,
+                id,
+              ).deadLetter,
+        );
+      }
+      return deadLetters;
     },
 
     replayDeadLetter,
@@ -1123,6 +1156,10 @@ function readBoundedStoredId(value: unknown): string | undefined {
     return undefined;
   }
   return id;
+}
+
+function isSafeDeadLetterIndexId(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9:._-]{0,511}$/.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

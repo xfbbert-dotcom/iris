@@ -780,6 +780,62 @@ describe("Redis memory extraction queue", () => {
     expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual(["dlq-hash-only"]);
   });
 
+  it("uses a fixed repair budget when listing a large healthy DLQ", async () => {
+    const client = new StatefulRedisClient();
+    for (let index = 0; index < 250; index += 1) {
+      client.pushDeadLetter(deadLetterPayload(`dlq-healthy-${index}`));
+    }
+    const queue = createRedisMemoryExtractionQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ id: "dlq-healthy-0" }),
+    ]);
+
+    expect(client.hScan).toHaveBeenCalledTimes(1);
+    expect(
+      client.eval.mock.calls.filter(([script]) =>
+        script.includes("memory-extraction:repair-dead-letter-order"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("bounds stale DLQ head cleanup and makes progress across calls", async () => {
+    const client = new StatefulRedisClient();
+    for (let index = 0; index < 101; index += 1) {
+      const id = `dlq-stale-budget-${index}`;
+      client.pushDeadLetter(deadLetterPayload(id));
+      client.deleteHash(KEYS.dlqIndex, id);
+    }
+    client.pushDeadLetter(deadLetterPayload("dlq-after-stale-budget"));
+    const queue = createRedisMemoryExtractionQueue({ client });
+
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([]);
+    expect(client.hScan).toHaveBeenCalledTimes(1);
+    expect(client.eval).toHaveBeenCalledTimes(2);
+
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ id: "dlq-after-stale-budget" }),
+    ]);
+    expect(client.hScan).toHaveBeenCalledTimes(2);
+    expect(client.eval).toHaveBeenCalledTimes(4);
+  });
+
+  it("removes malformed HSCAN fields without ordering or surfacing their contents", async () => {
+    const client = new StatefulRedisClient();
+    const oversizedField = "x".repeat(513);
+    const secretField = 'prompt={"apiKey":"secret-token"}';
+    client.setHash(KEYS.dlqIndex, oversizedField, deadLetterPayload("dlq-oversized-payload"));
+    client.setHash(KEYS.dlqIndex, secretField, deadLetterPayload("dlq-secret-payload"));
+    client.setHash(KEYS.dlqIndex, "dlq-valid-hash-only", deadLetterPayload("dlq-valid-hash-only"));
+    const queue = createRedisMemoryExtractionQueue({ client });
+
+    const deadLetters = await queue.listDeadLetters({ limit: 10 });
+
+    expect(deadLetters).toEqual([expect.objectContaining({ id: "dlq-valid-hash-only" })]);
+    expect(JSON.stringify(deadLetters)).not.toContain("secret-token");
+    expect(await client.zRange(KEYS.dlqOrder, 0, 10)).toEqual(["dlq-valid-hash-only"]);
+  });
+
   it("does not grow the legacy DLQ payload list for new terminal records", async () => {
     const client = new StatefulRedisClient();
     const queue = createRedisMemoryExtractionQueue({
@@ -961,7 +1017,11 @@ describe("Redis memory extraction queue", () => {
     const queue = createRedisMemoryExtractionQueue({ client });
 
     await expect(queue.listDeadLetters({ limit: 101 })).resolves.toEqual([]);
-    expect(client.zRange.mock.calls.at(-1)).toEqual([KEYS.dlqOrder, 0, 99]);
+    const listCall = client.eval.mock.calls.find(([script]) =>
+      script.includes("memory-extraction:list-dead-letters"),
+    );
+    expect(listCall?.[1].arguments).toEqual(["100", "100"]);
+    expect(client.hScan.mock.calls.at(-1)?.[2]).toEqual({ COUNT: 100 });
     await expect(queue.dequeueBatch(Number.POSITIVE_INFINITY)).rejects.toThrow(
       "memory extraction queue limit must be a finite safe-magnitude number",
     );
@@ -1062,6 +1122,7 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
       if (script.includes("memory-extraction:replay-dead-letter")) return this.replayDeadLetter(options.keys, options.arguments);
       if (script.includes("memory-extraction:delete-dead-letter")) return this.deleteDeadLetter(options.keys, options.arguments);
       if (script.includes("memory-extraction:repair-dead-letter-order")) return this.repairDeadLetterOrder(options.keys, options.arguments);
+      if (script.includes("memory-extraction:list-dead-letters")) return this.listDeadLetters(options.keys, options.arguments);
       if (script.includes("memory-extraction:set-cooldown")) {
         const [key] = options.keys;
         const [milliseconds] = options.arguments;
@@ -1412,19 +1473,50 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   private repairDeadLetterOrder(keys: string[], args: string[]): number {
-    const [indexKey, orderKey, sequenceKey] = keys;
-    const [id, expectedPayload] = args;
-    const payload = this.hash(indexKey!).get(id!);
-    if (payload === undefined) {
-      return this.sortedSet(orderKey!).delete(id!) ? 1 : 0;
+    const [indexKey, orderKey, sequenceKey, cursorKey] = keys;
+    const [nextCursor, ...entries] = args;
+    let repaired = 0;
+    for (let index = 0; index + 1 < entries.length; index += 2) {
+      const id = entries[index]!;
+      const expectedPayload = entries[index + 1]!;
+      if (
+        /^[A-Za-z0-9][A-Za-z0-9:._-]{0,511}$/.test(id) &&
+        this.hash(indexKey!).get(id) === expectedPayload &&
+        !this.sortedSet(orderKey!).has(id)
+      ) {
+        const sequence = Number(this.strings.get(sequenceKey!) ?? 0) + 1;
+        this.strings.set(sequenceKey!, String(sequence));
+        this.sortedSet(orderKey!).set(id, sequence);
+        repaired += 1;
+      }
     }
-    if (payload === expectedPayload && !this.sortedSet(orderKey!).has(id!)) {
-      const sequence = Number(this.strings.get(sequenceKey!) ?? 0) + 1;
-      this.strings.set(sequenceKey!, String(sequence));
-      this.sortedSet(orderKey!).set(id!, sequence);
-      return 1;
+    this.strings.set(cursorKey!, nextCursor!);
+    return repaired;
+  }
+
+  private listDeadLetters(keys: string[], args: string[]): string[] {
+    const [indexKey, orderKey] = keys;
+    const limit = Number(args[0]);
+    const staleLimit = Number(args[1]);
+    const ids = [...this.sortedSet(orderKey!).entries()]
+      .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
+      .slice(0, limit + staleLimit)
+      .map(([id]) => id);
+    const listed: string[] = [];
+    let staleRemoved = 0;
+    for (const id of ids) {
+      const payload = this.hash(indexKey!).get(id);
+      if (payload !== undefined) {
+        listed.push(id, payload);
+        if (listed.length / 2 >= limit) break;
+      } else if (staleRemoved < staleLimit) {
+        this.sortedSet(orderKey!).delete(id);
+        staleRemoved += 1;
+      } else {
+        break;
+      }
     }
-    return 0;
+    return listed;
   }
 
   private deleteDeadLetter(keys: string[], args: string[]): number {
