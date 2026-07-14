@@ -241,4 +241,21 @@ describe("defaultMigrationsDir", () => {
       callExternalTools: false,
     });
   });
+
+  it("includes durable group memories with same-group idempotency and message evidence", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0017_group_memories.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table if not exists group_memories");
+    expect(normalized).toContain("unique (group_id, idempotency_key)");
+    expect(normalized).toContain(
+      "conversation_message_id text not null references conversation_messages(id) on delete cascade",
+    );
+    expect(normalized).toContain("primary key (memory_id, conversation_message_id)");
+    expect(normalized).toContain("memory_scope in ('group', 'thread', 'action')");
+    expect(normalized).toContain("status in ('active', 'superseded')");
+  });
 });
