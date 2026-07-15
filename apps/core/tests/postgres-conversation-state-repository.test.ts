@@ -89,7 +89,7 @@ describe("createPostgresConversationStateRepository", () => {
   it("rejects a stale mutation version before appending an event", async () => {
     const client = scriptedClient([
       step(/begin/u),
-      step(/from discussion_threads[\s\S]+for update/u, [threadRow({ version: 3 })]),
+      step(/from discussion_threads[\s\S]+for update/u, [threadRow({ version: "3" })]),
       step(/from action_items[\s\S]+for update/u, []),
       step(/from discussion_thread_events[\s\S]+operation_key/u, []),
       step(/from action_item_events[\s\S]+operation_key/u, []),
@@ -106,7 +106,7 @@ describe("createPostgresConversationStateRepository", () => {
   it("applies a version-matched mutation exactly once", async () => {
     const client = scriptedClient([
       step(/begin/u),
-      step(/from discussion_threads[\s\S]+for update/u, [threadRow({ version: 1 })]),
+      step(/from discussion_threads[\s\S]+for update/u, [threadRow({ version: "1" })]),
       step(/from action_items[\s\S]+for update/u, []),
       step(/from discussion_thread_events[\s\S]+operation_key/u, []),
       step(/from action_item_events[\s\S]+operation_key/u, []),
@@ -134,8 +134,8 @@ describe("createPostgresConversationStateRepository", () => {
     const client = scriptedClient([
       step(/begin/u),
       step(/from discussion_threads[\s\S]+for update/u, [
-        threadRow({ id: "thread-1", status: "open", version: 1 }),
-        threadRow({ id: "thread-2", status: "merged", version: 2, merged_into_thread_id: "thread-1" }),
+        threadRow({ id: "thread-1", status: "open", version: "1" }),
+        threadRow({ id: "thread-2", status: "merged", version: "2", merged_into_thread_id: "thread-1" }),
       ]),
       step(/from action_items[\s\S]+for update/u, []),
       step(/from discussion_thread_events[\s\S]+operation_key/u, []),
@@ -154,9 +154,9 @@ describe("createPostgresConversationStateRepository", () => {
     const client = scriptedClient([
       step(/begin/u),
       step(/from discussion_threads[\s\S]+where group_id = \$1 for update/u, [
-        threadRow({ id: "thread-1", status: "candidate", version: 1 }),
-        threadRow({ id: "thread-2", status: "merged", version: 2, merged_into_thread_id: "thread-3" }),
-        threadRow({ id: "thread-3", status: "open", version: 1 }),
+        threadRow({ id: "thread-1", status: "candidate", version: "1" }),
+        threadRow({ id: "thread-2", status: "merged", version: "2", merged_into_thread_id: "thread-3" }),
+        threadRow({ id: "thread-3", status: "open", version: "1" }),
       ]),
       step(/from action_items[\s\S]+for update/u, []),
       step(/from discussion_thread_events[\s\S]+operation_key/u, []),
@@ -195,6 +195,27 @@ describe("createPostgresConversationStateRepository", () => {
       groupId: "chat-a",
       operations: [createThreadOperation()],
     })).rejects.toBe(insertionError);
+  });
+
+  it("maps PostgreSQL BIGINT state columns returned as strings", async () => {
+    const source = {
+      connect: vi.fn(),
+      query: vi.fn(async (sql: string) => ({
+        rows: /from discussion_threads/iu.test(sql)
+          ? [threadRow()]
+          : /from action_items/iu.test(sql)
+            ? [actionRow()]
+            : [repairRow()],
+      })),
+    } as unknown as PostgresConversationStateDataSource;
+    const repository = createPostgresConversationStateRepository({ dataSource: source });
+
+    await expect(repository.listRelevantThreads({ groupId: "chat-a", limit: 1 }))
+      .resolves.toMatchObject([{ version: 1 }]);
+    await expect(repository.listRelevantActions({ groupId: "chat-a", limit: 1 }))
+      .resolves.toMatchObject([{ version: 1 }]);
+    await expect(repository.claimProjectionRepairs({ limit: 1, now: new Date("2026-07-16T00:00:00.000Z") }))
+      .resolves.toMatchObject([{ entityVersion: 2 }]);
   });
 });
 
@@ -429,8 +450,29 @@ function threadRow(overrides: Record<string, unknown> = {}) {
   const now = new Date("2026-07-16T00:00:00.000Z");
   return {
     id: "thread-1", group_id: "chat-a", title: "Launch", summary: "Launch scope",
-    status: "open", confidence: 0.8, merged_into_thread_id: null, version: 1,
+    status: "open", confidence: 0.8, merged_into_thread_id: null, version: "1",
     first_evidence_at: now, last_activity_at: now, resolved_at: null, created_at: now, updated_at: now,
+    ...overrides,
+  };
+}
+
+function actionRow(overrides: Record<string, unknown> = {}) {
+  const now = new Date("2026-07-16T00:00:00.000Z");
+  return {
+    id: "action-1", group_id: "chat-a", thread_id: null, description: "Follow up.",
+    owner_ref_type: "feishu_user", owner_ref: "alice", due_at: null, status: "open",
+    confidence: 0.8, version: "1", completed_at: null, cancelled_at: null,
+    created_at: now, updated_at: now,
+    ...overrides,
+  };
+}
+
+function repairRow(overrides: Record<string, unknown> = {}) {
+  const now = new Date("2026-07-16T00:00:00.000Z");
+  return {
+    id: "repair-1", entity_type: "thread", entity_id: "thread-1", group_id: "chat-a",
+    entity_version: "2", status: "processing", attempt_count: 1, next_attempt_at: now,
+    failure_classification: null, created_at: now, updated_at: now,
     ...overrides,
   };
 }

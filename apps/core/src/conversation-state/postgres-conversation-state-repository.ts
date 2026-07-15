@@ -158,7 +158,7 @@ export function createPostgresConversationStateRepository({
             requireEnum("repair entity type", repair.entity_type, CONVERSATION_STATE_ENTITY_TYPES),
             requireBoundedString("repair entity id", repair.entity_id, MAX_IDENTIFIER_CHARS),
             requireBoundedString("repair group id", repair.group_id, MAX_IDENTIFIER_CHARS),
-            requireVersion(repair.entity_version),
+            requirePersistedVersion(repair.entity_version),
             memoryId ?? null,
           ],
         );
@@ -656,7 +656,7 @@ function mapThreadRow(row: ThreadRow): DiscussionThread {
   if ((status === "merged") !== (mergedIntoThreadId !== undefined) || (status === "resolved") !== (resolvedAt !== undefined)) {
     throw new Error("persisted discussion thread is invalid");
   }
-  return { id: requireBoundedString("thread id", row.id, MAX_IDENTIFIER_CHARS), groupId: requireBoundedString("thread group id", row.group_id, MAX_IDENTIFIER_CHARS), title: requireBoundedString("thread title", row.title, MAX_TITLE_CHARS), summary: requireBoundedString("thread summary", row.summary, MAX_SUMMARY_CHARS), status, confidence: requireConfidence(Number(row.confidence)), ...(mergedIntoThreadId === undefined ? {} : { mergedIntoThreadId }), version: requireVersion(row.version), firstEvidenceAt: requireDate("firstEvidenceAt", row.first_evidence_at), lastActivityAt: requireDate("lastActivityAt", row.last_activity_at), ...(resolvedAt === undefined ? {} : { resolvedAt }), createdAt: requireDate("createdAt", row.created_at), updatedAt: requireDate("updatedAt", row.updated_at) };
+  return { id: requireBoundedString("thread id", row.id, MAX_IDENTIFIER_CHARS), groupId: requireBoundedString("thread group id", row.group_id, MAX_IDENTIFIER_CHARS), title: requireBoundedString("thread title", row.title, MAX_TITLE_CHARS), summary: requireBoundedString("thread summary", row.summary, MAX_SUMMARY_CHARS), status, confidence: requireConfidence(Number(row.confidence)), ...(mergedIntoThreadId === undefined ? {} : { mergedIntoThreadId }), version: requirePersistedVersion(row.version), firstEvidenceAt: requireDate("firstEvidenceAt", row.first_evidence_at), lastActivityAt: requireDate("lastActivityAt", row.last_activity_at), ...(resolvedAt === undefined ? {} : { resolvedAt }), createdAt: requireDate("createdAt", row.created_at), updatedAt: requireDate("updatedAt", row.updated_at) };
 }
 
 function mapActionRow(row: ActionRow): ActionItem {
@@ -666,12 +666,12 @@ function mapActionRow(row: ActionRow): ActionItem {
   if ((status === "completed") !== (completedAt !== undefined) || (status === "cancelled") !== (cancelledAt !== undefined)) throw new Error("persisted action item is invalid");
   const threadId = row.thread_id === null ? undefined : requireBoundedString("action thread id", row.thread_id, MAX_IDENTIFIER_CHARS);
   const dueAt = row.due_at === null ? undefined : requireDate("dueAt", row.due_at);
-  return { id: requireBoundedString("action id", row.id, MAX_IDENTIFIER_CHARS), groupId: requireBoundedString("action group id", row.group_id, MAX_IDENTIFIER_CHARS), ...(threadId === undefined ? {} : { threadId }), description: requireBoundedString("action description", row.description, MAX_DESCRIPTION_CHARS), ownerRefType: requireEnum("ownerRefType", row.owner_ref_type, ACTION_ITEM_OWNER_REF_TYPES), ownerRef: requireBoundedString("ownerRef", row.owner_ref, MAX_IDENTIFIER_CHARS), ...(dueAt === undefined ? {} : { dueAt }), status, confidence: requireConfidence(Number(row.confidence)), version: requireVersion(row.version), ...(completedAt === undefined ? {} : { completedAt }), ...(cancelledAt === undefined ? {} : { cancelledAt }), createdAt: requireDate("createdAt", row.created_at), updatedAt: requireDate("updatedAt", row.updated_at) };
+  return { id: requireBoundedString("action id", row.id, MAX_IDENTIFIER_CHARS), groupId: requireBoundedString("action group id", row.group_id, MAX_IDENTIFIER_CHARS), ...(threadId === undefined ? {} : { threadId }), description: requireBoundedString("action description", row.description, MAX_DESCRIPTION_CHARS), ownerRefType: requireEnum("ownerRefType", row.owner_ref_type, ACTION_ITEM_OWNER_REF_TYPES), ownerRef: requireBoundedString("ownerRef", row.owner_ref, MAX_IDENTIFIER_CHARS), ...(dueAt === undefined ? {} : { dueAt }), status, confidence: requireConfidence(Number(row.confidence)), version: requirePersistedVersion(row.version), ...(completedAt === undefined ? {} : { completedAt }), ...(cancelledAt === undefined ? {} : { cancelledAt }), createdAt: requireDate("createdAt", row.created_at), updatedAt: requireDate("updatedAt", row.updated_at) };
 }
 
 function mapRepairRow(row: RepairRow): ProjectionRepair {
   const failureClassification = row.failure_classification === null ? undefined : requireBoundedString("failureClassification", row.failure_classification, MAX_CLASSIFICATION_CHARS);
-  return { id: requireBoundedString("repair id", row.id, MAX_IDENTIFIER_CHARS), entityType: requireEnum("repair entity type", row.entity_type, CONVERSATION_STATE_ENTITY_TYPES), entityId: requireBoundedString("repair entity id", row.entity_id, MAX_IDENTIFIER_CHARS), groupId: requireBoundedString("repair group id", row.group_id, MAX_IDENTIFIER_CHARS), entityVersion: requireVersion(row.entity_version), status: requireEnum("repair status", row.status, PROJECTION_REPAIR_STATUSES), attemptCount: requireNonNegativeInteger("repair attempt count", row.attempt_count), nextAttemptAt: requireDate("repair nextAttemptAt", row.next_attempt_at), ...(failureClassification === undefined ? {} : { failureClassification }), createdAt: requireDate("repair createdAt", row.created_at), updatedAt: requireDate("repair updatedAt", row.updated_at) };
+  return { id: requireBoundedString("repair id", row.id, MAX_IDENTIFIER_CHARS), entityType: requireEnum("repair entity type", row.entity_type, CONVERSATION_STATE_ENTITY_TYPES), entityId: requireBoundedString("repair entity id", row.entity_id, MAX_IDENTIFIER_CHARS), groupId: requireBoundedString("repair group id", row.group_id, MAX_IDENTIFIER_CHARS), entityVersion: requirePersistedVersion(row.entity_version), status: requireEnum("repair status", row.status, PROJECTION_REPAIR_STATUSES), attemptCount: requireNonNegativeInteger("repair attempt count", row.attempt_count), nextAttemptAt: requireDate("repair nextAttemptAt", row.next_attempt_at), ...(failureClassification === undefined ? {} : { failureClassification }), createdAt: requireDate("repair createdAt", row.created_at), updatedAt: requireDate("repair updatedAt", row.updated_at) };
 }
 
 async function withTransaction<T>(dataSource: PostgresConversationStateDataSource, operation: (client: TransactionClient) => Promise<T>): Promise<T> {
@@ -727,6 +727,10 @@ function requireConfidence(value: unknown): number {
 function requireVersion(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw new Error("version must be a positive safe integer");
   return value;
+}
+
+function requirePersistedVersion(value: unknown): number {
+  return requireVersion(Number(value));
 }
 
 function requireNonNegativeInteger(field: string, value: unknown): number {
