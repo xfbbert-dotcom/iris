@@ -49,3 +49,16 @@ Completed. The implementation commit is `2263cced3b8286176f4d8db7712d528b2384fc9
 
 - The real PostgreSQL integration case is present but was not executed locally: neither `IRIS_TEST_DATABASE_URL` nor `TEST_DATABASE_URL` was set, and `docker compose ps` found no running services. It will run automatically when either database URL is supplied.
 - Git emitted LF-to-CRLF conversion warnings while staging the four new TypeScript files; `git diff --cached --check` still passed and no content issue was detected.
+
+## BIGINT Driver Compatibility Update
+
+Status: completed. Fix commit: `4c403074ea87771128dd7fb42f50fce9eda4b07d` (`fix: map conversation state bigint rows`).
+
+- Root cause: node-postgres returns PostgreSQL `BIGINT` values as strings. The repository passed persisted `discussion_threads.version`, `action_items.version`, and `conversation_state_projection_repairs.entity_version` straight to the number-only `requireVersion` input validator.
+- TDD red: converted scripted persisted versions to strings and added a mapping regression for thread, action, and repair rows. With `TEST_DATABASE_URL` enabled, the focused command failed 6 tests, including the real idempotent create replay, with `version must be a positive safe integer` from `mapThreadRow`.
+- Green: added `requirePersistedVersion(value)`, which applies `Number(value)` before the unchanged `requireVersion` validator, at every persisted BIGINT version boundary, including the repair row returned by `completeProjectionRepair`.
+- Verification command: `$env:TEST_DATABASE_URL='postgresql://iris:iris@127.0.0.1:5432/iris'; npm exec --workspace apps/core -- vitest run tests/conversation-state-machine.test.ts tests/postgres-conversation-state-repository.test.ts`.
+  Result: 35 passed, 0 failed; the PostgreSQL integration case executed rather than skipping.
+- `npm run typecheck`: passed.
+
+Updated concern: the previously unavailable PostgreSQL service gate is no longer a concern for this fix; it was exercised successfully. The only non-functional notice remains Git's LF-to-CRLF staging warning, while `git diff --cached --check` passed.
