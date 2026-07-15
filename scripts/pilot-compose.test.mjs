@@ -64,6 +64,7 @@ test("gates the edge on authenticated runtime readiness", () => {
 
 test("starts the pilot runtime globally disabled", () => {
   assert.equal(compose.services.core.environment.IRIS_RUNTIME_GLOBAL_ENABLED, "false");
+  assert.match(compose.services.core.environment.IRIS_FEISHU_BOT_OPEN_ID, /^ou_[A-Za-z0-9]+$/u);
 });
 
 test("keeps automatic memory extraction private with dedicated model egress", () => {
