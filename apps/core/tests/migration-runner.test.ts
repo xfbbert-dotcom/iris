@@ -232,6 +232,41 @@ describe("runMigrations", () => {
 });
 
 describe("defaultMigrationsDir", () => {
+  it("defines authoritative semantic thread, action, event, and projection repair tables", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0024_semantic_thread_action_memory.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table discussion_threads");
+    expect(normalized).toContain("status in ('candidate', 'open', 'resolved', 'merged')");
+    expect(normalized).toContain("foreign key (merged_into_thread_id, group_id)");
+    expect(normalized).toContain("unique (id, group_id)");
+    expect(normalized).toContain("version bigint not null default 1 check (version >= 1)");
+    expect(normalized).toContain("create table discussion_thread_evidence");
+    expect(normalized).toContain("primary key (thread_id, conversation_message_id)");
+    expect(normalized).toContain("foreign key (thread_id, group_id)");
+    expect(normalized).toContain("create table discussion_thread_events");
+    expect(normalized).toContain("unique (group_id, operation_key)");
+    expect(normalized).toContain("create table discussion_thread_event_evidence");
+    expect(normalized).toContain("primary key (event_id, conversation_message_id)");
+    expect(normalized).toContain("create table action_items");
+    expect(normalized).toContain("owner_ref_type in ('feishu_user', 'text_label')");
+    expect(normalized).toContain("status in ('open', 'completed', 'cancelled')");
+    expect(normalized).toContain("foreign key (thread_id, group_id)");
+    expect(normalized).toContain("create table action_item_events");
+    expect(normalized).toContain("create table action_item_event_evidence");
+    expect(normalized).toContain("create table conversation_state_memory_projections");
+    expect(normalized).toContain("primary key (entity_type, entity_id)");
+    expect(normalized).toContain("create table conversation_state_projection_repairs");
+    expect(normalized).toContain("unique (entity_type, entity_id, entity_version)");
+    expect(normalized).toContain("status in ('pending', 'processing', 'completed', 'failed')");
+    expect(normalized).toContain(
+      "create index conversation_state_projection_repairs_pending_idx",
+    );
+  });
+
   it("points at the migrations directory", () => {
     expect(defaultMigrationsDir()).toMatch(/[\\/]migrations$/);
   });
