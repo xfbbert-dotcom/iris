@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createClient } from "redis";
 
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import { RuntimeController } from "../src/admin/runtime-controller.js";
@@ -10,6 +11,9 @@ import {
   createMemoryExtractionRuntime,
   type MemoryExtractionRuntimeDependencies,
 } from "../src/runtime/memory-extraction-runtime.js";
+
+const redisTestUrl = process.env.IRIS_TEST_REDIS_URL?.trim();
+const runIfRedis = redisTestUrl === undefined ? it.skip : it;
 
 describe("createMemoryExtractionRuntime", () => {
   it("returns no runtime and opens no resources when disabled", () => {
@@ -245,9 +249,9 @@ describe("createMemoryExtractionRuntime", () => {
     await close;
 
     expect(fixture.redis.connect).not.toHaveBeenCalled();
-    expect(fixture.redis.destroy).toHaveBeenCalledOnce();
+    expect(fixture.redis.destroy).not.toHaveBeenCalled();
     expect(fixture.loop.start).not.toHaveBeenCalled();
-    expect(fixture.cleanupOrder).toEqual(["loop", "redis-destroy", "postgres"]);
+    expect(fixture.cleanupOrder).toEqual(["loop", "postgres"]);
   });
 
   it("prevents Redis connect when close wins after the database probe settles", async () => {
@@ -263,8 +267,67 @@ describe("createMemoryExtractionRuntime", () => {
     await runtime?.close();
 
     expect(fixture.redis.connect).not.toHaveBeenCalled();
-    expect(fixture.redis.destroy).toHaveBeenCalledOnce();
+    expect(fixture.redis.destroy).not.toHaveBeenCalled();
     expect(fixture.loop.start).not.toHaveBeenCalled();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+  });
+
+  it("closes a real redis@6 client that was never connected", async () => {
+    const fixture = runtimeFixture();
+    const dependencies: MemoryExtractionRuntimeDependencies = {
+      createPostgresPool: fixture.dependencies.createPostgresPool,
+      createRepository: fixture.dependencies.createRepository,
+      createQueue: fixture.dependencies.createQueue,
+      createAiWorkerClient: fixture.dependencies.createAiWorkerClient,
+      createWorker: fixture.dependencies.createWorker,
+      createWorkerLoop: fixture.dependencies.createWorkerLoop,
+      createPlanner: fixture.dependencies.createPlanner,
+    };
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies,
+    });
+
+    await expect(runtime?.close()).resolves.toBeUndefined();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+  });
+
+  it("does not call a redis@6-like throwing destroy before connect starts", async () => {
+    const clientClosedError = new Error("The client is closed");
+    clientClosedError.name = "ClientClosedError";
+    const fixture = runtimeFixture({ destroyError: clientClosedError });
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+
+    await expect(runtime?.close()).resolves.toBeUndefined();
+    expect(fixture.redis.destroy).not.toHaveBeenCalled();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+  });
+
+  runIfRedis("connects and closes a live redis@6 client without leaking it", async () => {
+    const fixture = runtimeFixture();
+    const redis = createClient({ url: redisTestUrl });
+    redis.on("error", () => undefined);
+    const dependencies: MemoryExtractionRuntimeDependencies = {
+      ...fixture.dependencies,
+      createRedisClient: () => redis as never,
+    };
+    const runtime = createMemoryExtractionRuntime({
+      env: { ...enabledEnv(), REDIS_URL: redisTestUrl },
+      runtimeController: runtimeController(),
+      dependencies,
+    });
+
+    runtime?.start();
+    await vi.waitFor(() => expect(fixture.loop.start).toHaveBeenCalledOnce());
+    expect(redis.isReady).toBe(true);
+
+    await expect(runtime?.close()).resolves.toBeUndefined();
+    expect(redis.isOpen).toBe(false);
     expect(fixture.pool.end).toHaveBeenCalledOnce();
   });
 
@@ -294,6 +357,64 @@ describe("createMemoryExtractionRuntime", () => {
     clearTimeout(fallback);
     expect(closed).toBe(true);
     expect(fixture.cleanupOrder).toEqual(["loop", "redis-destroy", "postgres"]);
+  });
+
+  it("awaits pending readiness and pool shutdown when Redis destroy throws", async () => {
+    const destroyError = new Error("pending destroy failed");
+    const fixture = runtimeFixture({
+      deferRedisConnect: true,
+      deferPoolEnd: true,
+      destroyError,
+    });
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+    runtime?.start();
+    await vi.waitFor(() => expect(fixture.redis.connect).toHaveBeenCalledOnce());
+
+    let closeSettled = false;
+    const close = runtime?.close().finally(() => {
+      closeSettled = true;
+    });
+    await vi.waitFor(() => expect(fixture.redis.destroy).toHaveBeenCalledOnce());
+
+    expect(fixture.pool.end).not.toHaveBeenCalled();
+    expect(closeSettled).toBe(false);
+    fixture.rejectRedisConnect();
+    await vi.waitFor(() => expect(fixture.pool.end).toHaveBeenCalledOnce());
+    expect(closeSettled).toBe(false);
+    fixture.resolvePoolEnd();
+    await expect(close).rejects.toBe(destroyError);
+    expect(closeSettled).toBe(true);
+    expect(fixture.cleanupOrder).toEqual(["loop", "redis-destroy", "postgres"]);
+  });
+
+  it("quits a connection that succeeds after pending Redis destroy throws", async () => {
+    const destroyError = new Error("pending destroy failed");
+    const fixture = runtimeFixture({ deferRedisConnect: true, destroyError });
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+    runtime?.start();
+    await vi.waitFor(() => expect(fixture.redis.connect).toHaveBeenCalledOnce());
+
+    const close = runtime?.close();
+    await vi.waitFor(() => expect(fixture.redis.destroy).toHaveBeenCalledOnce());
+    fixture.resolveRedisConnect();
+
+    await expect(close).rejects.toBe(destroyError);
+    expect(fixture.redis.quit).toHaveBeenCalledOnce();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+    expect(fixture.cleanupOrder).toEqual([
+      "loop",
+      "redis-destroy",
+      "redis",
+      "postgres",
+    ]);
   });
 
   it("closes every later resource when an earlier close operation fails", async () => {
@@ -340,7 +461,7 @@ describe("createMemoryExtractionRuntime", () => {
     expect(fixture.redis.connect).not.toHaveBeenCalled();
   });
 
-  it("destroys the unconnected Redis client when the pool factory throws", () => {
+  it("leaves an unopened Redis client alone when the pool factory throws", () => {
     const fixture = runtimeFixture();
     const poolError = new Error("pool factory failed");
     fixture.dependencies.createPostgresPool.mockImplementationOnce(() => {
@@ -356,7 +477,7 @@ describe("createMemoryExtractionRuntime", () => {
     ).toThrow(poolError);
 
     expect(fixture.dependencies.createRedisClient).toHaveBeenCalledOnce();
-    expect(fixture.redis.destroy).toHaveBeenCalledOnce();
+    expect(fixture.redis.destroy).not.toHaveBeenCalled();
     expect(fixture.redis.connect).not.toHaveBeenCalled();
     expect(fixture.pool.end).not.toHaveBeenCalled();
   });
@@ -410,10 +531,10 @@ describe("createMemoryExtractionRuntime", () => {
 
     await vi.waitFor(() => expect(fixture.pool.end).toHaveBeenCalledOnce());
     expect(fixture.redis.connect).toHaveBeenCalledTimes(expectedRedisConnects);
-    expect(fixture.redis.destroy).toHaveBeenCalledOnce();
+    expect(fixture.redis.destroy).not.toHaveBeenCalled();
     expect(fixture.redis.quit).not.toHaveBeenCalled();
     expect(fixture.loop.start).not.toHaveBeenCalled();
-    expect(fixture.cleanupOrder).toEqual(["loop", "redis-destroy", "postgres"]);
+    expect(fixture.cleanupOrder).toEqual(["loop", "postgres"]);
     await runtime?.close();
     expect(fixture.pool.end).toHaveBeenCalledOnce();
   });
@@ -423,10 +544,12 @@ function runtimeFixture({
   deferDatabaseProbe = false,
   deferRedisConnect = false,
   deferPoolEnd = false,
+  destroyError,
 }: {
   deferDatabaseProbe?: boolean;
   deferRedisConnect?: boolean;
   deferPoolEnd?: boolean;
+  destroyError?: Error;
 } = {}) {
   const cleanupOrder: string[] = [];
   let resolveDatabaseProbe: () => void = () => undefined;
@@ -477,6 +600,9 @@ function runtimeFixture({
     }),
     destroy: vi.fn(() => {
       cleanupOrder.push("redis-destroy");
+      if (destroyError !== undefined) {
+        throw destroyError;
+      }
       rejectRedisConnect();
     }),
   };

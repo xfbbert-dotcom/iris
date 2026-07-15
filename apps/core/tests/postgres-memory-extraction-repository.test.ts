@@ -20,12 +20,30 @@ const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("createPostgresMemoryExtractionRepository", () => {
   it("aggregates durable content-free request, run, and candidate diagnostics in one query", async () => {
-    const source = fakeDataSource((sql) => {
+    const source = fakeDataSource((sql, params) => {
       const normalized = normalizeSql(sql);
       expect(normalized).toContain("regexp_match");
       expect(normalized).toContain("group_memory_extraction_runs");
+      expect(normalized).toContain("sum(failure_count)");
+      expect(normalized).toContain("string_to_array");
       expect(normalized).not.toContain("conversation_messages");
       expect(normalized).not.toContain("rejection_codes");
+      expect(params).toEqual([[
+        "candidate_count",
+        "conflict_relation",
+        "duplicate_relation",
+        "exact_duplicate",
+        "invalid_category",
+        "invalid_confidence",
+        "invalid_content",
+        "invalid_evidence",
+        "invalid_importance",
+        "invalid_relation",
+        "invalid_relation_reference",
+        "invalid_run",
+        "invalid_shape",
+        "low_confidence",
+      ]]);
       return {
         rows: [{
           pending: 1,
@@ -55,6 +73,20 @@ describe("createPostgresMemoryExtractionRepository", () => {
       duplicateCandidates: 2,
       conflictCandidates: 1,
     });
+    expect(source.query).toHaveBeenCalledOnce();
+  });
+
+  it("increments durable failure history for every persisted run failure", async () => {
+    const source = fakeDataSource((sql, params) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("failure_count = failure_count + 1");
+      expect(normalized).toContain("where id = $1 and status <> 'completed'");
+      expect(params).toEqual(["run-1", "provider_timeout"]);
+      return { rows: [] };
+    });
+    const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
+
+    await repository.failRun({ runId: "run-1", classification: "provider_timeout" });
     expect(source.query).toHaveBeenCalledOnce();
   });
 
@@ -2018,6 +2050,130 @@ runIfDatabase("PostgresMemoryExtractionRepository review invariants with Postgre
     expect(after.duplicateCandidates - before.duplicateCandidates).toBe(1);
     expect(after.conflictCandidates - before.conflictCandidates).toBe(1);
     expect(after.completed - before.completed).toBe(1);
+  });
+
+  it("retains cumulative failure history through retries, success, and repository recreation", async () => {
+    const repository = createRepository(pool);
+    const before = await repository.getStatusCounts();
+    const groupId = `${groupPrefix}-failure-history`;
+    const messageId = `feishu:${groupId}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId,
+      text: "Durable failure history evidence",
+      createdAt: new Date("2026-07-15T07:10:00.000Z"),
+    });
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+
+    await repository.failRun({ runId: claimed!.id, classification: "provider_timeout" });
+    expect((await repository.getStatusCounts()).failedRuns - before.failedRuns).toBe(1);
+
+    await expect(repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    })).resolves.toMatchObject({ id: claimed!.id });
+    expect((await repository.getStatusCounts()).failedRuns - before.failedRuns).toBe(1);
+
+    await repository.failRun({ runId: claimed!.id, classification: "provider_unavailable" });
+    expect((await repository.getStatusCounts()).failedRuns - before.failedRuns).toBe(2);
+    await expect(repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    })).resolves.toMatchObject({ id: claimed!.id });
+
+    await repository.completeRun({
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [],
+      diagnostics: {
+        proposedCount: 0,
+        acceptedCount: 0,
+        rejectedCount: 0,
+        duplicateCount: 0,
+        conflictCount: 0,
+        rejectionCodes: [],
+      },
+    });
+    const restartedRepository = createRepository(pool);
+    expect((await restartedRepository.getStatusCounts()).failedRuns - before.failedRuns).toBe(2);
+  });
+
+  it("fails closed on unknown, duplicate, or unsorted persisted diagnostic codes", async () => {
+    const repository = createRepository(pool);
+    const groupId = `${groupPrefix}-strict-marker`;
+    const messageId = `feishu:${groupId}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId,
+      text: "Strict marker evidence",
+      createdAt: new Date("2026-07-15T07:20:00.000Z"),
+    });
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    await repository.completeRun({
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [],
+      diagnostics: {
+        proposedCount: 1,
+        acceptedCount: 0,
+        rejectedCount: 1,
+        duplicateCount: 0,
+        conflictCount: 0,
+        rejectionCodes: ["low_confidence"],
+      },
+    });
+    const stored = await pool!.query<{ failure_classification: string }>(
+      "SELECT failure_classification FROM group_memory_extraction_runs WHERE id = $1",
+      [claimed!.id],
+    );
+    const originalMarker = stored.rows[0]!.failure_classification;
+    const digest = "A".repeat(43);
+    const invalidMarkers = [
+      `v3:p1:a0:r1:d0:c0:xunknown_code:h${digest}`,
+      `v3:p1:a0:r1:d0:c0:xlow_confidence,low_confidence:h${digest}`,
+      `v3:p1:a0:r1:d0:c0:xlow_confidence,invalid_shape:h${digest}`,
+    ];
+
+    try {
+      for (const marker of invalidMarkers) {
+        await pool!.query(
+          "UPDATE group_memory_extraction_runs SET failure_classification = $2 WHERE id = $1",
+          [claimed!.id, marker],
+        );
+        await expect(repository.getStatusCounts()).rejects.toThrow(
+          "memory extraction diagnostics aggregate is invalid",
+        );
+      }
+    } finally {
+      await pool!.query(
+        "UPDATE group_memory_extraction_runs SET failure_classification = $2 WHERE id = $1",
+        [claimed!.id, originalMarker],
+      );
+    }
   });
 });
 

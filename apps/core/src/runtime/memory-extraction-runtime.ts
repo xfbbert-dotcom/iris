@@ -167,19 +167,12 @@ export function createMemoryExtractionRuntime({
     onError: () => undefined,
   });
   const redis = createRedis(runtimeConfig.redisUrl);
-  try {
-    ownedPool = createPool({ databaseUrl: runtimeConfig.databaseUrl });
-  } catch (error) {
-    try {
-      redis.destroy();
-    } catch {
-      // Preserve the pool construction failure.
-    }
-    throw error;
-  }
+  ownedPool = createPool({ databaseUrl: runtimeConfig.databaseUrl });
 
   let startInitiated = false;
   let closing = false;
+  let redisConnectStarted = false;
+  let redisConnectSettled = false;
   let redisConnected = false;
   let redisDestroyed = false;
   let closePromise: Promise<void> | undefined;
@@ -192,9 +185,19 @@ export function createMemoryExtractionRuntime({
     closePromise = closeRuntimeResources([
       () => loop.stop(),
       async () => {
-        if (!redisConnected && !redisDestroyed) {
-          redisDestroyed = true;
-          redis.destroy();
+        let destroyError: unknown;
+        if (
+          redisConnectStarted &&
+          !redisConnectSettled &&
+          !redisConnected &&
+          !redisDestroyed
+        ) {
+          try {
+            redis.destroy();
+            redisDestroyed = true;
+          } catch (error) {
+            destroyError = error;
+          }
         }
         const readinessPromises: Promise<unknown>[] = [];
         if (databaseReady !== undefined) readinessPromises.push(databaseReady);
@@ -203,6 +206,9 @@ export function createMemoryExtractionRuntime({
         await Promise.allSettled(readinessPromises);
         if (redisConnected && !redisDestroyed) {
           await redis.quit();
+        }
+        if (destroyError !== undefined) {
+          throw destroyError;
         }
       },
       () => requirePostgresPool(ownedPool).end(),
@@ -249,12 +255,17 @@ export function createMemoryExtractionRuntime({
           if (closing) {
             throw new Error("memory extraction runtime is closing");
           }
-          await redis.connect();
-          if (closing || redisDestroyed) {
-            throw new Error("memory extraction runtime is closing");
+          redisConnectStarted = true;
+          try {
+            await redis.connect();
+            redisConnected = true;
+            if (closing || redisDestroyed) {
+              throw new Error("memory extraction runtime is closing");
+            }
+            return redis;
+          } finally {
+            redisConnectSettled = true;
           }
-          redisConnected = true;
-          return redis;
         }),
       );
       dependenciesReady = observeStartupPromise(

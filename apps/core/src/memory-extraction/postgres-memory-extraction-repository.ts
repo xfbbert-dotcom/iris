@@ -169,6 +169,7 @@ const COMPLETION_REJECTION_CODES = new Set([
   "conflict_relation",
   "exact_duplicate",
 ]);
+const SORTED_COMPLETION_REJECTION_CODES = [...COMPLETION_REJECTION_CODES].sort(compareStrings);
 
 export function createPostgresMemoryExtractionRepository({
   dataSource,
@@ -664,6 +665,7 @@ export function createPostgresMemoryExtractionRepository({
         `
         UPDATE group_memory_extraction_runs
         SET status = 'failed', failure_classification = $2,
+            failure_count = failure_count + 1,
             completed_at = NULL, updated_at = NOW()
         WHERE id = $1 AND status <> 'completed'
         `,
@@ -854,7 +856,7 @@ export function createPostgresMemoryExtractionRepository({
         diagnostic_rows AS (
           SELECT regexp_match(
             r.failure_classification,
-            '^v3:p([0-8]):a([0-8]):r([0-8]):d([0-8]):c([0-8]):x[a-z_]*(,[a-z_]+)?:h[A-Za-z0-9_-]{43}$'
+            '^v3:p([0-8]):a([0-8]):r([0-8]):d([0-8]):c([0-8]):x([^:]*):h[A-Za-z0-9_-]{43}$'
           ) AS marker
           FROM group_memory_extraction_runs r
           WHERE r.status = 'completed'
@@ -867,16 +869,24 @@ export function createPostgresMemoryExtractionRepository({
         parsed_diagnostics AS (
           SELECT
             marker,
-            marker IS NOT NULL
-              AND marker[2]::int + marker[3]::int = marker[1]::int
-              AND marker[4]::int + marker[5]::int <= marker[3]::int AS valid
+            CASE
+              WHEN marker IS NULL THEN FALSE
+              ELSE marker[2]::int + marker[3]::int = marker[1]::int
+                AND marker[4]::int + marker[5]::int <= marker[3]::int
+                AND cardinality(string_to_array(marker[6], ',')) <= 2
+                AND string_to_array(marker[6], ',') <@ $1::text[]
+                AND (
+                  cardinality(string_to_array(marker[6], ',')) < 2
+                  OR array_position($1::text[], (string_to_array(marker[6], ','))[1])
+                    < array_position($1::text[], (string_to_array(marker[6], ','))[2])
+                )
+            END AS valid
           FROM diagnostic_rows
         ),
         run_counts AS (
           SELECT
-            (SELECT COUNT(*)::int
-             FROM group_memory_extraction_runs
-             WHERE status = 'failed') AS failed_runs,
+            (SELECT COALESCE(SUM(failure_count), 0)
+             FROM group_memory_extraction_runs) AS failed_runs,
             COUNT(*)::int AS diagnostic_run_count,
             COUNT(*) FILTER (WHERE valid)::int AS valid_diagnostic_run_count,
             COALESCE(SUM(CASE WHEN valid THEN marker[2]::int ELSE 0 END), 0)::int
@@ -902,7 +912,7 @@ export function createPostgresMemoryExtractionRepository({
           run_counts.duplicate_candidates,
           run_counts.conflict_candidates
         FROM request_counts CROSS JOIN run_counts
-      `);
+      `, [SORTED_COMPLETION_REJECTION_CODES]);
       const [row] = result.rows;
       if (row === undefined) {
         throw new Error("memory extraction status count returned no rows");
@@ -1398,6 +1408,7 @@ async function markRunStale(queryable: Queryable, runId: string): Promise<void> 
     `
     UPDATE group_memory_extraction_runs
     SET status = 'failed', failure_classification = 'input_stale',
+        failure_count = failure_count + 1,
         completed_at = NULL, updated_at = NOW()
     WHERE id = $1 AND status <> 'completed'
     `,

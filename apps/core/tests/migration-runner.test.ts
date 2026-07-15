@@ -12,6 +12,24 @@ import {
 } from "../src/database/migrate.js";
 
 describe("runMigrations", () => {
+  it("defines a durable cumulative memory extraction failure counter migration", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0020_group_memory_extraction_failure_count.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain(
+      "alter table group_memory_extraction_runs add column failure_count bigint",
+    );
+    expect(normalized).toContain(
+      "set failure_count = case when status = 'failed' then 1 else 0 end",
+    );
+    expect(normalized).toContain("alter column failure_count set default 0");
+    expect(normalized).toContain("alter column failure_count set not null");
+    expect(normalized).toContain("check (failure_count >= 0)");
+  });
+
   it("applies pending migrations in lexical order", async () => {
     const migrationsDir = await mkdtemp(join(tmpdir(), "iris-migrations-"));
     await writeFile(join(migrationsDir, "0002_second.sql"), "select 2;");
