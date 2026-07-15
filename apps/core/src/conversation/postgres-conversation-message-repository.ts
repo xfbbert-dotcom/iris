@@ -232,7 +232,7 @@ function normalizeMentions(
     }
   }
 
-  return normalized.sort((left, right) => {
+  normalized.sort((left, right) => {
     if (left.key !== right.key) {
       return left.key < right.key ? -1 : 1;
     }
@@ -240,6 +240,15 @@ function normalizeMentions(
       return 0;
     }
     return left.openId < right.openId ? -1 : 1;
+  });
+
+  const seenOpenIds = new Set<string>();
+  return normalized.filter(({ openId }) => {
+    if (seenOpenIds.has(openId)) {
+      return false;
+    }
+    seenOpenIds.add(openId);
+    return true;
   });
 }
 

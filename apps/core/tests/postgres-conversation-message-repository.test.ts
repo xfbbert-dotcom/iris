@@ -97,6 +97,35 @@ describe("PostgresConversationMessageRepository", () => {
     expect(queryable.query).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the lexicographically first key for duplicate Feishu mention Open IDs", async () => {
+    const queryable = fakeQueryable([
+      {
+        id: "feishu:message-1",
+        provider: "feishu",
+        provider_message_id: "message-1",
+        chat_id: "chat-1",
+        sender_id: "user-1",
+        message_type: "text",
+        text: "Hello",
+        sent_at: new Date("2026-07-02T01:00:00.000Z"),
+        raw_event_idempotency_key: "raw-event:feishu:event-1",
+        created_at: new Date("2026-07-02T01:00:01.000Z"),
+      },
+    ]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await repository.upsertMessage({
+      ...baseUpsertInput(),
+      mentions: [
+        { key: "@_user_b", openId: "ou_owner" },
+        { key: " @_user_a ", openId: " ou_owner " },
+      ],
+    });
+
+    expect(firstQueryParams(queryable)[9]).toEqual(["@_user_a"]);
+    expect(firstQueryParams(queryable)[10]).toEqual(["ou_owner"]);
+  });
+
   it.each([
     {
       mentions: [{ key: "   ", openId: "ou_owner" }],
