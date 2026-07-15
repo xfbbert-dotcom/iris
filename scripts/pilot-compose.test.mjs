@@ -60,6 +60,53 @@ test("starts the pilot runtime globally disabled", () => {
   assert.equal(compose.services.core.environment.IRIS_RUNTIME_GLOBAL_ENABLED, "false");
 });
 
+test("keeps automatic memory extraction backend-only and disabled by default", () => {
+  const aiWorker = compose.services["ai-worker"];
+  const core = compose.services.core;
+
+  assert.match(aiWorker.build.context, /[\\/]workers[\\/]ai$/u);
+  assert.equal(aiWorker.ports, undefined);
+  assert.deepEqual(aiWorker.networks, { backend: null });
+  assert.equal(aiWorker.user, "10001:10001");
+  assert.deepEqual(aiWorker.logging, {
+    driver: "json-file",
+    options: { "max-file": "5", "max-size": "10m" },
+  });
+  assert.deepEqual(aiWorker.healthcheck, {
+    test: [
+      "CMD",
+      "python",
+      "-c",
+      "import json, urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3); body = json.load(response); response.close(); assert body == {'ok': True, 'service': 'iris-ai-worker', 'schemaVersion': 1}",
+    ],
+    timeout: "5s",
+    interval: "10s",
+    retries: 12,
+    start_period: "10s",
+  });
+  assert.equal(aiWorker.restart, "unless-stopped");
+  assert.equal(aiWorker.environment.IRIS_AI_WORKER_PORT, "8000");
+  assert.equal(aiWorker.environment.IRIS_AI_WORKER_TOKEN, core.environment.IRIS_AI_WORKER_TOKEN);
+  assert.equal(aiWorker.environment.IRIS_MODEL_PROVIDER, undefined);
+  assert.equal(aiWorker.environment.IRIS_MODEL_BASE_URL, "https://memory-model.invalid/v1");
+  assert.equal(aiWorker.environment.IRIS_MODEL_API_KEY, "ci-memory-model-key");
+  assert.equal(aiWorker.environment.IRIS_MODEL_NAME, "ci-memory-model");
+  assert.equal(aiWorker.environment.IRIS_MODEL_TIMEOUT_MS, "30000");
+  assert.equal(aiWorker.environment.IRIS_MODEL_MAX_RESPONSE_BYTES, "65536");
+  assert.equal(core.environment.IRIS_MODEL_BASE_URL, "https://model.invalid/v1");
+  assert.equal(core.environment.IRIS_MODEL_API_KEY, "ci-model-key");
+  assert.equal(core.environment.IRIS_MODEL_NAME, "ci-model");
+  assert.equal(core.image.split(":").at(-1), aiWorker.image.split(":").at(-1));
+
+  assert.equal(core.environment.IRIS_AI_WORKER_BASE_URL, "http://ai-worker:8000");
+  assert.ok(core.environment.IRIS_AI_WORKER_TOKEN);
+  assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_ENABLED, "false");
+  assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_INTERVAL_MS, "1000");
+  assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_BATCH_LIMIT, "20");
+  assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE, "0.85");
+  assert.equal(core.depends_on["ai-worker"].condition, "service_started");
+});
+
 function loadPilotCompose() {
   const result = spawnSync(
     process.platform === "win32" ? "docker.exe" : "docker",

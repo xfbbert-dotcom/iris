@@ -3,6 +3,20 @@
 Use the reviewed commit and an image whose recorded source SHA is that same commit. Keep the
 internal bearer token inside Core; do not print it, the database URL, or any application secret.
 
+## Automatic Memory Extraction
+
+The `ai-worker` service is reachable only on the internal `backend` network and publishes no host
+port. Core and AI Worker images use the same `IRIS_IMAGE_TAG`. Keep
+`IRIS_MEMORY_EXTRACTION_ENABLED=false` until every internal gate in
+`docs/runbooks/iris-automatic-memory-extraction-acceptance.md` passes. The AI Worker bearer token
+must match Core's token, while its extraction-model credentials come from the separate
+`IRIS_MEMORY_EXTRACTION_MODEL_*` deployment variables; do not replace Core's existing answer-model
+configuration.
+
+Core waits only for `ai-worker` to start. An unhealthy extraction worker degrades extraction status
+but must not prevent Feishu callback, document-sync, or mention-reply startup. Never expose the
+worker on the edge network and never use live provider quota to manufacture an acceptance 429.
+
 ## Planned Restart And Reactivation
 
 Run the sequence in this exact order:

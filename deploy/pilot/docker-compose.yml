@@ -7,6 +7,13 @@ x-core-image: &core-image
     dockerfile: deploy/pilot/Dockerfile
     target: runtime
 
+x-ai-worker-image: &ai-worker-image
+  image: iris-ai-worker:${IRIS_IMAGE_TAG:?IRIS_IMAGE_TAG is required}
+  build:
+    context: ../../workers/ai
+    dockerfile: ../../deploy/pilot/ai-worker.Dockerfile
+    target: runtime
+
 x-core-environment: &core-environment
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
   REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
@@ -44,6 +51,12 @@ x-core-environment: &core-environment
   IRIS_EMBEDDING_TIMEOUT_MS: ${IRIS_EMBEDDING_TIMEOUT_MS:-30000}
   IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS: ${IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS:-true}
   IRIS_INTERNAL_DRAFT_PERMISSION_MODE: ${IRIS_INTERNAL_DRAFT_PERMISSION_MODE:-source-policy}
+  IRIS_AI_WORKER_BASE_URL: http://ai-worker:8000
+  IRIS_AI_WORKER_TOKEN: ${IRIS_AI_WORKER_TOKEN:?IRIS_AI_WORKER_TOKEN is required}
+  IRIS_MEMORY_EXTRACTION_ENABLED: ${IRIS_MEMORY_EXTRACTION_ENABLED:-false}
+  IRIS_MEMORY_EXTRACTION_INTERVAL_MS: ${IRIS_MEMORY_EXTRACTION_INTERVAL_MS:-1000}
+  IRIS_MEMORY_EXTRACTION_BATCH_LIMIT: ${IRIS_MEMORY_EXTRACTION_BATCH_LIMIT:-20}
+  IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE: ${IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE:-0.85}
 
 x-migrate-environment: &migrate-environment
   DATABASE_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL is required}
@@ -109,6 +122,37 @@ services:
     networks:
       - backend
 
+  ai-worker:
+    <<: *ai-worker-image
+    user: "10001:10001"
+    environment:
+      IRIS_AI_WORKER_PORT: "8000"
+      IRIS_AI_WORKER_TOKEN: ${IRIS_AI_WORKER_TOKEN:?IRIS_AI_WORKER_TOKEN is required}
+      IRIS_MODEL_BASE_URL: ${IRIS_MEMORY_EXTRACTION_MODEL_BASE_URL:?IRIS_MEMORY_EXTRACTION_MODEL_BASE_URL is required}
+      IRIS_MODEL_API_KEY: ${IRIS_MEMORY_EXTRACTION_MODEL_API_KEY:?IRIS_MEMORY_EXTRACTION_MODEL_API_KEY is required}
+      IRIS_MODEL_NAME: ${IRIS_MEMORY_EXTRACTION_MODEL_NAME:?IRIS_MEMORY_EXTRACTION_MODEL_NAME is required}
+      IRIS_MODEL_TIMEOUT_MS: ${IRIS_MEMORY_EXTRACTION_MODEL_TIMEOUT_MS:-30000}
+      IRIS_MODEL_MAX_RESPONSE_BYTES: ${IRIS_MEMORY_EXTRACTION_MODEL_MAX_RESPONSE_BYTES:-65536}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json, urllib.request;
+          response = urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3);
+          body = json.load(response);
+          response.close();
+          assert body == {'ok': True, 'service': 'iris-ai-worker', 'schemaVersion': 1}
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    logging: *bounded-logging
+    networks:
+      - backend
+
   core:
     <<: *core-image
     environment: *core-environment
@@ -119,6 +163,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      ai-worker:
+        condition: service_started
     ports:
       - "127.0.0.1:${IRIS_CORE_LOOPBACK_PORT:-3000}:3000"
     healthcheck:
