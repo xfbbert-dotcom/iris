@@ -1,6 +1,6 @@
 # Iris Phase 3B: Semantic Thread and Action Memory
 
-Status: design approved in conversation; awaiting written-spec review
+Status: approved for implementation planning
 
 Date: 2026-07-16
 
@@ -95,7 +95,7 @@ A merged thread is immutable except for administrative deletion. Reads follow `m
 
 `discussion_thread_evidence` binds a thread to a conversation message. The `(thread_id, message_id)` pair is unique. Core verifies that the thread group and `conversation_messages.chat_id` match before insertion.
 
-`discussion_thread_events` is append-only and records `created`, `promoted`, `summary_updated`, `resolved`, `reopened`, `merge_proposed`, `merged`, and `corrected` transitions. Event evidence is normalized through an event-to-message join table so every transition can cite one or more exact messages.
+`discussion_thread_events` is append-only and records `created`, `promoted`, `summary_updated`, `resolved`, `reopened`, `merged`, and `corrected` transitions. Event evidence is normalized through an event-to-message join table so every transition can cite one or more exact messages.
 
 Deleting or invalidating required evidence causes derived summaries to be rebuilt. A thread with insufficient remaining evidence becomes non-retrievable until new valid evidence promotes it again.
 
@@ -132,7 +132,7 @@ Core may bind an action owner to a Feishu user only from the sender identity or 
 
 `group_memories` remains the answer-oriented long-term summary store, not the source of truth for thread or action lifecycle.
 
-Open thread summaries project to `scope=thread` with a stable `thread_key`. Action summaries may project to `scope=action`. Projection rows carry evidence and can be rebuilt from authoritative entities. A projection failure does not roll back the authoritative thread or action transaction; it schedules bounded repair and keeps the incomplete projection out of retrieval.
+Open thread summaries project to `scope=thread` with a stable `thread_key`. Open action summaries may project to `scope=action`. Resolving, merging, completing, or cancelling removes the active projection; the authoritative entity and event history remain available for bounded relevant retrieval. Projection rows carry evidence and can be rebuilt from authoritative entities. A projection failure does not roll back the authoritative thread or action transaction; it schedules bounded repair and keeps the incomplete projection out of retrieval.
 
 ## 6. Extraction Contract
 
@@ -152,8 +152,8 @@ Input remains bounded and contains no data from another group.
 One model call may return:
 
 - the existing group-memory candidates;
-- thread operations: `create`, `attach_evidence`, `promote`, `merge`, `resolve`, `reopen`, or `update_summary`;
-- action operations: `create`, `complete`, `cancel`, `reopen`, or `resolve_owner`.
+- thread operations: `create`, `attach_evidence`, `promote`, `merge`, `resolve`, `reopen`, `update_summary`, or `correct`;
+- action operations: `create`, `complete`, `cancel`, `reopen`, `resolve_owner`, or `correct`.
 
 Every operation includes confidence, evidence message IDs, and the expected target version when it changes an existing entity. Lifecycle operations also include an exact evidence span. Core verifies that the span occurs in the named message text; this grounds the operation but does not grant the model authority.
 
@@ -291,6 +291,7 @@ The acceptance harness uses real Core HTTP, Event Worker, Postgres migrations, R
 5. suggestions and brainstorming create no action;
 6. candidates never appear in answers while relevant open threads do;
 7. replay, concurrency, 429 cooldown, and runtime disablement create no duplicates or unauthorized writes.
+8. an explicit natural-language correction updates the canonical thread or action while preserving the prior event history.
 
 ### 12.4 Real Feishu Acceptance
 
@@ -300,7 +301,7 @@ In one approved group:
 2. the internal operator view shows an evidence-bound thread;
 3. an explicit commitment produces the correct owner and action;
 4. a later mention question retrieves the thread and action accurately;
-5. explicit completion and reopening update state correctly;
+5. explicit correction, completion, and reopening update state correctly;
 6. Iris sends no unsolicited message during this slice.
 
 ## 13. Exit Criteria
