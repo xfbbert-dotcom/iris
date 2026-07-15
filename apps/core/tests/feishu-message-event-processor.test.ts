@@ -34,6 +34,7 @@ describe("FeishuMessageEventProcessor", () => {
       senderId: "open-1",
       messageType: "text",
       text: "Hello",
+      mentions: [],
       sentAt: new Date("2026-07-01T17:00:00.000Z"),
       rawEventIdempotencyKey: "raw-event:feishu:event-1",
     });
@@ -57,6 +58,7 @@ describe("FeishuMessageEventProcessor", () => {
       senderId: "open-1",
       messageType: "text",
       text: "Hello",
+      mentions: [],
       sentAt: new Date("2026-07-01T17:00:00.000Z"),
       rawEventIdempotencyKey: "raw-event:feishu:event-1",
       createdAt: new Date("2026-07-02T01:00:01.000Z"),
@@ -339,6 +341,44 @@ describe("FeishuMessageEventProcessor", () => {
     });
   });
 
+  it("persists only structured Feishu mention open IDs", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const processor = createFeishuMessageEventProcessor({ messages });
+
+    await processor.process(
+      rawEventFixture({
+        rawBody: {
+          header: { event_id: "event-1", event_type: "im.message.receive_v1" },
+          event: {
+            message: {
+              message_id: "message-1",
+              chat_id: "chat-1",
+              message_type: "text",
+              content: "{\"text\":\"@_user_1 @Alice\"}",
+              mentions: [
+                { key: "@_user_1", id: { open_id: "ou_owner" }, name: "Owner" },
+                { key: "@Alice", name: "Alice" },
+              ],
+              create_time: "1782925200000",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(messages.upsertMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mentions: [{ key: "@_user_1", openId: "ou_owner" }],
+      }),
+    );
+  });
+
   it("truncates oversized message text before downstream processing", async () => {
     const oversizedText = `${"T".repeat(9000)} trailing message detail`;
     const messages = {
@@ -456,9 +496,9 @@ describe("FeishuMessageEventProcessor", () => {
     expect(messages.upsertMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         providerMessageId: "message-1",
-        text: undefined,
       }),
     );
+    expect(messages.upsertMessage.mock.calls[0]?.[0]).not.toHaveProperty("text");
     expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
     expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -821,9 +861,9 @@ describe("FeishuMessageEventProcessor", () => {
     expect(messages.upsertMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         messageType: "image",
-        text: undefined,
       }),
     );
+    expect(messages.upsertMessage.mock.calls[0]?.[0]).not.toHaveProperty("text");
     expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).not.toHaveBeenCalled();
   });
 
@@ -905,9 +945,9 @@ describe("FeishuMessageEventProcessor", () => {
     expect(messages.upsertMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         providerMessageId: "message-1",
-        senderId: undefined,
       }),
     );
+    expect(messages.upsertMessage.mock.calls[0]?.[0]).not.toHaveProperty("senderId");
   });
 
   it("extracts document links from Feishu post message content", async () => {
@@ -1017,9 +1057,9 @@ describe("FeishuMessageEventProcessor", () => {
     expect(messages.upsertMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         messageType: "post",
-        text: undefined,
       }),
     );
+    expect(messages.upsertMessage.mock.calls[0]?.[0]).not.toHaveProperty("text");
   });
 
   it("ignores unsupported events", async () => {
@@ -1060,10 +1100,10 @@ describe("FeishuMessageEventProcessor", () => {
 
     expect(messages.upsertMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: undefined,
         sentAt: new Date("2026-07-02T01:00:00.000Z"),
       }),
     );
+    expect(messages.upsertMessage.mock.calls[0]?.[0]).not.toHaveProperty("text");
   });
 
   it("falls back to the Feishu header timestamp before receivedAt", async () => {

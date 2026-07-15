@@ -12,6 +12,26 @@ import {
 } from "../src/database/migrate.js";
 
 describe("runMigrations", () => {
+  it("defines durable Feishu mention identities for conversation facts", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0023_conversation_message_mentions.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table conversation_message_mentions");
+    expect(normalized).toContain(
+      "conversation_message_id text not null references conversation_messages(id) on delete cascade",
+    );
+    expect(normalized).toContain("primary key (conversation_message_id, mention_key)");
+    expect(normalized).toContain("unique (conversation_message_id, mentioned_open_id)");
+    expect(normalized).toContain("char_length(mention_key) between 1 and 512");
+    expect(normalized).toContain("char_length(mentioned_open_id) between 1 and 512");
+    expect(normalized).toContain(
+      "create index conversation_message_mentions_open_id_idx on conversation_message_mentions (mentioned_open_id, conversation_message_id)",
+    );
+  });
+
   it("defines a forward migration that releases extraction memory references on hard delete", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0021_group_memory_extraction_memory_delete.sql"),

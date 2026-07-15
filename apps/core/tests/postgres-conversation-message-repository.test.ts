@@ -48,6 +48,82 @@ describe("PostgresConversationMessageRepository", () => {
     );
   });
 
+  it("atomically replaces normalized Feishu mention identities on replay", async () => {
+    const queryable = fakeQueryable([
+      {
+        id: "feishu:message-1",
+        provider: "feishu",
+        provider_message_id: "message-1",
+        chat_id: "chat-1",
+        sender_id: "user-1",
+        message_type: "text",
+        text: "Hello",
+        sent_at: new Date("2026-07-02T01:00:00.000Z"),
+        raw_event_idempotency_key: "raw-event:feishu:event-1",
+        created_at: new Date("2026-07-02T01:00:01.000Z"),
+        mentions: [
+          { key: "@_user_1", openId: "ou_owner" },
+          { key: "@_user_2", openId: "ou_backup" },
+        ],
+      },
+    ]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(
+      repository.upsertMessage({
+        ...baseUpsertInput(),
+        mentions: [
+          { key: " @_user_2 ", openId: " ou_backup " },
+          { key: "@_user_1", openId: "ou_owner" },
+          { key: "@_user_2", openId: "ou_backup" },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      mentions: [
+        { key: "@_user_1", openId: "ou_owner" },
+        { key: "@_user_2", openId: "ou_backup" },
+      ],
+    });
+
+    expect(firstQueryText(queryable)).toContain("conversation_message_mentions");
+    expect(firstQueryText(queryable)).toContain("DELETE FROM conversation_message_mentions");
+    expect(firstQueryText(queryable)).toContain("unnest($10::text[], $11::text[])");
+    expect(firstQueryParams(queryable)).toEqual(
+      expect.arrayContaining([
+        ["@_user_1", "@_user_2"],
+        ["ou_owner", "ou_backup"],
+      ]),
+    );
+    expect(queryable.query).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      mentions: [{ key: "   ", openId: "ou_owner" }],
+      message: "mention key must not be blank",
+    },
+    {
+      mentions: [{ key: "@_user", openId: "   " }],
+      message: "mention openId must not be blank",
+    },
+    {
+      mentions: [{ key: "@".repeat(513), openId: "ou_owner" }],
+      message: "mention key must be at most 512 characters",
+    },
+    {
+      mentions: [{ key: "@_user", openId: "o".repeat(513) }],
+      message: "mention openId must be at most 512 characters",
+    },
+  ])("rejects invalid mention identities before upsert", async ({ mentions, message }) => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(repository.upsertMessage({ ...baseUpsertInput(), mentions })).rejects.toThrow(
+      message,
+    );
+    expect(queryable.query).not.toHaveBeenCalled();
+  });
+
   it("bounds oversized message text before upsert", async () => {
     const queryable = fakeQueryable([
       {
@@ -358,4 +434,15 @@ function firstQueryParams(queryable: Queryable): unknown[] {
   }
 
   return params;
+}
+
+function firstQueryText(queryable: Queryable): string {
+  const calls = (queryable.query as unknown as { mock: { calls: Array<[string, unknown[]]> } }).mock
+    .calls;
+  const text = calls[0]?.[0];
+  if (text === undefined) {
+    throw new Error("expected query to be called");
+  }
+
+  return text;
 }

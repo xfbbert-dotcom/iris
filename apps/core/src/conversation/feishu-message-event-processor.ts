@@ -19,7 +19,7 @@ type RuntimeGate = {
   canReadGroupContext(groupId: string): boolean;
   canReadDocuments(): boolean;
 };
-type ParsedFeishuMessageEvent = UpsertConversationMessageInput & {
+type ParsedFeishuMessageEvent = Omit<UpsertConversationMessageInput, "mentions"> & {
   mentions: FeishuMessageMention[];
   senderOpenId?: string;
 };
@@ -71,7 +71,20 @@ export function createFeishuMessageEventProcessor({
         mentionResponseError = error;
       }
 
-      const { mentions: _mentions, senderOpenId, ...messageFact } = parsed;
+      const { senderOpenId } = parsed;
+      const messageFact: UpsertConversationMessageInput = {
+        provider: parsed.provider,
+        providerMessageId: parsed.providerMessageId,
+        chatId: parsed.chatId,
+        ...(parsed.senderId === undefined ? {} : { senderId: parsed.senderId }),
+        messageType: parsed.messageType,
+        ...(parsed.text === undefined ? {} : { text: parsed.text }),
+        mentions: parsed.mentions.flatMap(({ key, openId }) =>
+          openId === undefined ? [] : [{ key, openId }],
+        ),
+        sentAt: parsed.sentAt,
+        rawEventIdempotencyKey: parsed.rawEventIdempotencyKey,
+      };
       const persistedMessage = await messages.upsertMessage(messageFact);
 
       let memoryExtractionPlannerError: unknown;

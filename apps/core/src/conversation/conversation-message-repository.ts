@@ -1,3 +1,8 @@
+export type ConversationMessageMention = {
+  key: string;
+  openId: string;
+};
+
 export type ConversationMessage = {
   id: string;
   provider: "feishu";
@@ -6,6 +11,7 @@ export type ConversationMessage = {
   senderId?: string;
   messageType: string;
   text?: string;
+  mentions?: ConversationMessageMention[];
   sentAt: Date;
   rawEventIdempotencyKey: string;
   createdAt: Date;
@@ -18,6 +24,7 @@ export type UpsertConversationMessageInput = {
   senderId?: string;
   messageType: string;
   text?: string;
+  mentions?: ConversationMessageMention[];
   sentAt: Date;
   rawEventIdempotencyKey: string;
 };
