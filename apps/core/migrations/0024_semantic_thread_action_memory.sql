@@ -165,22 +165,13 @@ CREATE INDEX conversation_state_projection_repairs_pending_idx
   ON conversation_state_projection_repairs (next_attempt_at, created_at)
   WHERE status = 'pending';
 
--- Management maintenance must explicitly enable this only inside its transaction:
--- SET LOCAL iris.allow_conversation_state_event_delete = 'on';
 CREATE OR REPLACE FUNCTION conversation_state_event_append_only_guard()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF TG_OP = 'UPDATE' THEN
-    RAISE EXCEPTION 'conversation state event records are append-only';
-  END IF;
-
-  IF current_setting('iris.allow_conversation_state_event_delete', true) IS DISTINCT FROM 'on' THEN
-    RAISE EXCEPTION 'conversation state event deletion requires maintenance permission';
-  END IF;
-
-  RETURN OLD;
+  RAISE EXCEPTION 'conversation state event records are append-only';
+  RETURN NULL;
 END;
 $$;
 
@@ -199,3 +190,19 @@ FOR EACH ROW EXECUTE FUNCTION conversation_state_event_append_only_guard();
 CREATE TRIGGER action_item_event_evidence_append_only
 BEFORE UPDATE OR DELETE ON action_item_event_evidence
 FOR EACH ROW EXECUTE FUNCTION conversation_state_event_append_only_guard();
+
+CREATE TRIGGER discussion_thread_events_truncate_guard
+BEFORE TRUNCATE ON discussion_thread_events
+FOR EACH STATEMENT EXECUTE FUNCTION conversation_state_event_append_only_guard();
+
+CREATE TRIGGER discussion_thread_event_evidence_truncate_guard
+BEFORE TRUNCATE ON discussion_thread_event_evidence
+FOR EACH STATEMENT EXECUTE FUNCTION conversation_state_event_append_only_guard();
+
+CREATE TRIGGER action_item_events_truncate_guard
+BEFORE TRUNCATE ON action_item_events
+FOR EACH STATEMENT EXECUTE FUNCTION conversation_state_event_append_only_guard();
+
+CREATE TRIGGER action_item_event_evidence_truncate_guard
+BEFORE TRUNCATE ON action_item_event_evidence
+FOR EACH STATEMENT EXECUTE FUNCTION conversation_state_event_append_only_guard();

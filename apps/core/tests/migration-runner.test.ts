@@ -261,9 +261,11 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("create table discussion_thread_evidence");
     expect(normalized).toContain("primary key (thread_id, conversation_message_id)");
     expect(normalized).toContain("foreign key (thread_id, group_id)");
-    expect(normalized).toContain(
-      "foreign key (conversation_message_id, group_id) references conversation_messages(id, chat_id) on delete restrict",
-    );
+    expect(
+      normalized.match(
+        /foreign key \(conversation_message_id, group_id\) references conversation_messages\(id, chat_id\) on delete restrict/g,
+      ),
+    ).toHaveLength(3);
     expect(normalized).toContain("create table discussion_thread_events");
     expect(normalized.match(/unique \(group_id, operation_key\)/g)).toHaveLength(2);
     expect(normalized).toContain("unique (id, group_id)");
@@ -304,13 +306,12 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain(
       "create or replace function conversation_state_event_append_only_guard()",
     );
-    expect(normalized).toContain(
-      "current_setting('iris.allow_conversation_state_event_delete', true)",
-    );
-    expect(normalized).toContain(
-      "set local iris.allow_conversation_state_event_delete = 'on'",
-    );
+    expect(normalized).not.toContain("iris.allow_conversation_state_event_delete");
     expect(normalized.match(/before update or delete on/g)).toHaveLength(4);
+    expect(normalized.match(/before truncate on/g)).toHaveLength(4);
+    expect(normalized.match(/for each statement execute function conversation_state_event_append_only_guard\(\)/g)).toHaveLength(
+      4,
+    );
     expect(normalized).toContain("create trigger discussion_thread_events_append_only");
     expect(normalized).toContain(
       "create trigger discussion_thread_event_evidence_append_only",
@@ -318,6 +319,16 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("create trigger action_item_events_append_only");
     expect(normalized).toContain(
       "create trigger action_item_event_evidence_append_only",
+    );
+    expect(normalized).toContain(
+      "create trigger discussion_thread_events_truncate_guard",
+    );
+    expect(normalized).toContain(
+      "create trigger discussion_thread_event_evidence_truncate_guard",
+    );
+    expect(normalized).toContain("create trigger action_item_events_truncate_guard");
+    expect(normalized).toContain(
+      "create trigger action_item_event_evidence_truncate_guard",
     );
   });
 
