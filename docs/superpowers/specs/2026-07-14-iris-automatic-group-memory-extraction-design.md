@@ -1,6 +1,6 @@
 # Iris Phase 3B: Automatic Group Memory Extraction
 
-Status: approved design
+Status: implemented first slice; local executable acceptance passed; rollout remains disabled by default
 
 Date: 2026-07-14
 
@@ -13,6 +13,8 @@ Phase 3A gave Iris a durable, evidence-bound current-group memory store and made
 Phase 3B closes that gap. Messages in an enabled Feishu group may schedule asynchronous analysis even when nobody mentions Iris. A dedicated Python AI Worker proposes long-term memory candidates. TypeScript Core remains the authority that checks runtime policy, evidence, scope, idempotency, and persistence.
 
 This phase implements an existing constitutional responsibility. It does not change the whitepaper's authority boundaries.
+
+This design is the first delivery slice of the coverage baseline's broader Phase 3B. It learns evidence-bound `group` memories from ordinary conversation. Automatic topic aggregation plus `thread` and `action` memory extraction remain the next Phase 3B slice; this document and its implementation must not be presented as the completion of those capabilities or of Iris as a whole.
 
 ## 2. Scope
 
