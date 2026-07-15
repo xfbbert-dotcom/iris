@@ -196,6 +196,8 @@ class OpenAICompatibleModelClient:
             raise
         except httpx.TimeoutException:
             raise ModelClientError("provider_timeout") from None
+        except httpx.RemoteProtocolError:
+            raise ModelClientError("invalid_model_response") from None
         except httpx.RequestError:
             raise ModelClientError("provider_unavailable") from None
 

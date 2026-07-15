@@ -152,6 +152,7 @@ async def test_accepts_large_structured_content_within_configured_byte_budget():
         (httpx.ConnectTimeout, "provider_timeout"),
         (httpx.ReadTimeout, "provider_timeout"),
         (httpx.ConnectError, "provider_unavailable"),
+        (httpx.RemoteProtocolError, "invalid_model_response"),
     ],
 )
 async def test_maps_transport_failures_without_exception_details(error_type, expected_code):
