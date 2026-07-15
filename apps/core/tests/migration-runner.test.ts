@@ -242,28 +242,82 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("create table discussion_threads");
     expect(normalized).toContain("status in ('candidate', 'open', 'resolved', 'merged')");
     expect(normalized).toContain("foreign key (merged_into_thread_id, group_id)");
-    expect(normalized).toContain("unique (id, group_id)");
-    expect(normalized).toContain("version bigint not null default 1 check (version >= 1)");
+    expect(normalized.match(/unique \(id, group_id\)/g)).toHaveLength(5);
+    expect(normalized.match(/version bigint not null default 1 check \(version >= 1\)/g)).toHaveLength(
+      2,
+    );
+    expect(normalized.match(/from_version bigint check \(from_version is null or from_version >= 1\)/g)).toHaveLength(
+      2,
+    );
+    expect(normalized.match(/to_version bigint not null check \(to_version >= 1\)/g)).toHaveLength(
+      2,
+    );
+    expect(normalized).toContain(
+      "alter table conversation_messages add constraint conversation_messages_id_chat_id_key unique (id, chat_id)",
+    );
+    expect(normalized).toContain(
+      "alter table group_memories add constraint group_memories_id_group_id_key unique (id, group_id)",
+    );
     expect(normalized).toContain("create table discussion_thread_evidence");
     expect(normalized).toContain("primary key (thread_id, conversation_message_id)");
     expect(normalized).toContain("foreign key (thread_id, group_id)");
+    expect(normalized).toContain(
+      "foreign key (conversation_message_id, group_id) references conversation_messages(id, chat_id) on delete restrict",
+    );
     expect(normalized).toContain("create table discussion_thread_events");
-    expect(normalized).toContain("unique (group_id, operation_key)");
+    expect(normalized.match(/unique \(group_id, operation_key\)/g)).toHaveLength(2);
+    expect(normalized).toContain("unique (id, group_id)");
     expect(normalized).toContain("create table discussion_thread_event_evidence");
-    expect(normalized).toContain("primary key (event_id, conversation_message_id)");
+    expect(normalized.match(/primary key \(event_id, conversation_message_id\)/g)).toHaveLength(2);
+    expect(normalized).toContain(
+      "foreign key (event_id, group_id) references discussion_thread_events(id, group_id) on delete cascade",
+    );
     expect(normalized).toContain("create table action_items");
     expect(normalized).toContain("owner_ref_type in ('feishu_user', 'text_label')");
     expect(normalized).toContain("status in ('open', 'completed', 'cancelled')");
     expect(normalized).toContain("foreign key (thread_id, group_id)");
     expect(normalized).toContain("create table action_item_events");
+    expect(normalized).toContain(
+      "foreign key (action_item_id, group_id) references action_items(id, group_id) on delete cascade",
+    );
     expect(normalized).toContain("create table action_item_event_evidence");
+    expect(normalized).toContain(
+      "foreign key (event_id, group_id) references action_item_events(id, group_id) on delete cascade",
+    );
     expect(normalized).toContain("create table conversation_state_memory_projections");
     expect(normalized).toContain("primary key (entity_type, entity_id)");
+    expect(normalized).toContain(
+      "projected_version bigint not null check (projected_version >= 1)",
+    );
+    expect(normalized).toContain(
+      "foreign key (memory_id, group_id) references group_memories(id, group_id) on delete set null (memory_id)",
+    );
     expect(normalized).toContain("create table conversation_state_projection_repairs");
     expect(normalized).toContain("unique (entity_type, entity_id, entity_version)");
+    expect(normalized).toContain(
+      "entity_version bigint not null check (entity_version >= 1)",
+    );
     expect(normalized).toContain("status in ('pending', 'processing', 'completed', 'failed')");
     expect(normalized).toContain(
       "create index conversation_state_projection_repairs_pending_idx",
+    );
+    expect(normalized).toContain(
+      "create or replace function conversation_state_event_append_only_guard()",
+    );
+    expect(normalized).toContain(
+      "current_setting('iris.allow_conversation_state_event_delete', true)",
+    );
+    expect(normalized).toContain(
+      "set local iris.allow_conversation_state_event_delete = 'on'",
+    );
+    expect(normalized.match(/before update or delete on/g)).toHaveLength(4);
+    expect(normalized).toContain("create trigger discussion_thread_events_append_only");
+    expect(normalized).toContain(
+      "create trigger discussion_thread_event_evidence_append_only",
+    );
+    expect(normalized).toContain("create trigger action_item_events_append_only");
+    expect(normalized).toContain(
+      "create trigger action_item_event_evidence_append_only",
     );
   });
 

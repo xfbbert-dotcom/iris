@@ -1,3 +1,9 @@
+ALTER TABLE conversation_messages
+ADD CONSTRAINT conversation_messages_id_chat_id_key UNIQUE (id, chat_id);
+
+ALTER TABLE group_memories
+ADD CONSTRAINT group_memories_id_group_id_key UNIQUE (id, group_id);
+
 CREATE TABLE discussion_threads (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   group_id TEXT NOT NULL CHECK (char_length(group_id) BETWEEN 1 AND 512),
@@ -23,12 +29,13 @@ CREATE TABLE discussion_threads (
 CREATE TABLE discussion_thread_evidence (
   thread_id TEXT NOT NULL,
   group_id TEXT NOT NULL,
-  conversation_message_id TEXT NOT NULL
-    REFERENCES conversation_messages(id) ON DELETE RESTRICT,
+  conversation_message_id TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (thread_id, conversation_message_id),
   FOREIGN KEY (thread_id, group_id)
-    REFERENCES discussion_threads(id, group_id) ON DELETE CASCADE
+    REFERENCES discussion_threads(id, group_id) ON DELETE CASCADE,
+  FOREIGN KEY (conversation_message_id, group_id)
+    REFERENCES conversation_messages(id, chat_id) ON DELETE RESTRICT
 );
 
 CREATE TABLE discussion_thread_events (
@@ -43,16 +50,21 @@ CREATE TABLE discussion_thread_events (
   to_version BIGINT NOT NULL CHECK (to_version >= 1),
   operation_key TEXT NOT NULL CHECK (char_length(operation_key) BETWEEN 1 AND 512),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (id, group_id),
   UNIQUE (group_id, operation_key),
   FOREIGN KEY (thread_id, group_id)
     REFERENCES discussion_threads(id, group_id) ON DELETE CASCADE
 );
 
 CREATE TABLE discussion_thread_event_evidence (
-  event_id TEXT NOT NULL REFERENCES discussion_thread_events(id) ON DELETE CASCADE,
-  conversation_message_id TEXT NOT NULL
-    REFERENCES conversation_messages(id) ON DELETE RESTRICT,
-  PRIMARY KEY (event_id, conversation_message_id)
+  event_id TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  conversation_message_id TEXT NOT NULL,
+  PRIMARY KEY (event_id, conversation_message_id),
+  FOREIGN KEY (event_id, group_id)
+    REFERENCES discussion_thread_events(id, group_id) ON DELETE CASCADE,
+  FOREIGN KEY (conversation_message_id, group_id)
+    REFERENCES conversation_messages(id, chat_id) ON DELETE RESTRICT
 );
 
 CREATE TABLE action_items (
@@ -88,16 +100,21 @@ CREATE TABLE action_item_events (
   to_version BIGINT NOT NULL CHECK (to_version >= 1),
   operation_key TEXT NOT NULL CHECK (char_length(operation_key) BETWEEN 1 AND 512),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (id, group_id),
   UNIQUE (group_id, operation_key),
   FOREIGN KEY (action_item_id, group_id)
     REFERENCES action_items(id, group_id) ON DELETE CASCADE
 );
 
 CREATE TABLE action_item_event_evidence (
-  event_id TEXT NOT NULL REFERENCES action_item_events(id) ON DELETE CASCADE,
-  conversation_message_id TEXT NOT NULL
-    REFERENCES conversation_messages(id) ON DELETE RESTRICT,
-  PRIMARY KEY (event_id, conversation_message_id)
+  event_id TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  conversation_message_id TEXT NOT NULL,
+  PRIMARY KEY (event_id, conversation_message_id),
+  FOREIGN KEY (event_id, group_id)
+    REFERENCES action_item_events(id, group_id) ON DELETE CASCADE,
+  FOREIGN KEY (conversation_message_id, group_id)
+    REFERENCES conversation_messages(id, chat_id) ON DELETE RESTRICT
 );
 
 CREATE TABLE conversation_state_memory_projections (
@@ -105,9 +122,11 @@ CREATE TABLE conversation_state_memory_projections (
   entity_id TEXT NOT NULL CHECK (char_length(entity_id) BETWEEN 1 AND 512),
   group_id TEXT NOT NULL CHECK (char_length(group_id) BETWEEN 1 AND 512),
   projected_version BIGINT NOT NULL CHECK (projected_version >= 1),
-  memory_id TEXT REFERENCES group_memories(id) ON DELETE SET NULL,
+  memory_id TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (entity_type, entity_id)
+  PRIMARY KEY (entity_type, entity_id),
+  FOREIGN KEY (memory_id, group_id)
+    REFERENCES group_memories(id, group_id) ON DELETE SET NULL (memory_id)
 );
 
 CREATE TABLE conversation_state_projection_repairs (
@@ -145,3 +164,38 @@ CREATE INDEX action_item_event_evidence_message_id_idx
 CREATE INDEX conversation_state_projection_repairs_pending_idx
   ON conversation_state_projection_repairs (next_attempt_at, created_at)
   WHERE status = 'pending';
+
+-- Management maintenance must explicitly enable this only inside its transaction:
+-- SET LOCAL iris.allow_conversation_state_event_delete = 'on';
+CREATE OR REPLACE FUNCTION conversation_state_event_append_only_guard()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    RAISE EXCEPTION 'conversation state event records are append-only';
+  END IF;
+
+  IF current_setting('iris.allow_conversation_state_event_delete', true) IS DISTINCT FROM 'on' THEN
+    RAISE EXCEPTION 'conversation state event deletion requires maintenance permission';
+  END IF;
+
+  RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER discussion_thread_events_append_only
+BEFORE UPDATE OR DELETE ON discussion_thread_events
+FOR EACH ROW EXECUTE FUNCTION conversation_state_event_append_only_guard();
+
+CREATE TRIGGER discussion_thread_event_evidence_append_only
+BEFORE UPDATE OR DELETE ON discussion_thread_event_evidence
+FOR EACH ROW EXECUTE FUNCTION conversation_state_event_append_only_guard();
+
+CREATE TRIGGER action_item_events_append_only
+BEFORE UPDATE OR DELETE ON action_item_events
+FOR EACH ROW EXECUTE FUNCTION conversation_state_event_append_only_guard();
+
+CREATE TRIGGER action_item_event_evidence_append_only
+BEFORE UPDATE OR DELETE ON action_item_event_evidence
+FOR EACH ROW EXECUTE FUNCTION conversation_state_event_append_only_guard();

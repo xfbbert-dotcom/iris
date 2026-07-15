@@ -70,6 +70,7 @@ export type DiscussionThreadEvent = {
 
 export type DiscussionThreadEventEvidence = {
   eventId: string;
+  groupId: string;
   conversationMessageId: string;
 };
 
@@ -103,6 +104,7 @@ export type ActionItemEvent = {
 
 export type ActionItemEventEvidence = {
   eventId: string;
+  groupId: string;
   conversationMessageId: string;
 };
 
@@ -129,15 +131,47 @@ export type ProjectionRepair = {
   updatedAt: Date;
 };
 
-export type ConversationStateOperation = {
+export type CreateDiscussionThreadEvent = DiscussionThreadEvent & {
+  fromVersion?: undefined;
+};
+
+export type MutationDiscussionThreadEvent = DiscussionThreadEvent & {
+  fromVersion: number;
+};
+
+export type CreateActionItemEvent = ActionItemEvent & {
+  fromVersion?: undefined;
+};
+
+export type MutationActionItemEvent = ActionItemEvent & {
+  fromVersion: number;
+};
+
+export type CreateConversationStateOperation = {
+  kind: "create";
   operationKey: string;
-  expectedVersion?: number;
+  expectedVersion?: never;
   thread?: DiscussionThread;
   action?: ActionItem;
-  threadEvent?: DiscussionThreadEvent;
-  actionEvent?: ActionItemEvent;
+  threadEvent?: CreateDiscussionThreadEvent;
+  actionEvent?: CreateActionItemEvent;
   evidenceMessageIds: string[];
 };
+
+export type MutationConversationStateOperation = {
+  kind: "mutation";
+  operationKey: string;
+  expectedVersion: number;
+  thread?: DiscussionThread;
+  action?: ActionItem;
+  threadEvent?: MutationDiscussionThreadEvent;
+  actionEvent?: MutationActionItemEvent;
+  evidenceMessageIds: string[];
+};
+
+export type ConversationStateOperation =
+  | CreateConversationStateOperation
+  | MutationConversationStateOperation;
 
 export type ApplyConversationStateOperationsInput = {
   groupId: string;
@@ -176,12 +210,16 @@ export interface ConversationStateRepository {
   }>;
   listRelevantThreads(input: RelevantThreadQuery): Promise<DiscussionThread[]>;
   listRelevantActions(input: RelevantActionQuery): Promise<ActionItem[]>;
+  /** Privileged system-wide projection worker boundary; never expose to answering paths. */
   claimProjectionRepairs(input: { limit: number; now: Date }): Promise<ProjectionRepair[]>;
+  /** Privileged system-wide projection worker boundary; never expose to answering paths. */
   completeProjectionRepair(input: { id: string; memoryId?: string }): Promise<void>;
+  /** Privileged system-wide projection worker boundary; never expose to answering paths. */
   failProjectionRepair(input: {
     id: string;
     retryAt: Date;
     classification: string;
   }): Promise<void>;
+  /** Privileged system-wide operator boundary; never expose to answering paths. */
   getStatusCounts(): Promise<ConversationStateStatusCounts>;
 }
