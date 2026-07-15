@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const compose = loadPilotCompose();
+const acceptanceRunbook = readFileSync(
+  "docs/runbooks/iris-automatic-memory-extraction-acceptance.md",
+  "utf8",
+);
+const pilotEnvExample = readFileSync(".env.pilot.example", "utf8");
 
 test("pins every third-party pilot image to an immutable digest", () => {
   for (const serviceName of ["postgres", "redis", "caddy"]) {
@@ -60,13 +66,26 @@ test("starts the pilot runtime globally disabled", () => {
   assert.equal(compose.services.core.environment.IRIS_RUNTIME_GLOBAL_ENABLED, "false");
 });
 
-test("keeps automatic memory extraction backend-only and disabled by default", () => {
+test("keeps automatic memory extraction private with dedicated model egress", () => {
   const aiWorker = compose.services["ai-worker"];
   const core = compose.services.core;
 
   assert.match(aiWorker.build.context, /[\\/]workers[\\/]ai$/u);
   assert.equal(aiWorker.ports, undefined);
-  assert.deepEqual(aiWorker.networks, { backend: null });
+  assert.deepEqual(aiWorker.networks, { backend: null, "model-egress": null });
+  assert.equal(aiWorker.networks.edge, undefined);
+  assert.equal(compose.networks.backend.internal, true);
+  assert.equal(compose.networks["model-egress"].driver, "bridge");
+  assert.notEqual(compose.networks["model-egress"].internal, true);
+  for (const [serviceName, service] of Object.entries(compose.services)) {
+    if (serviceName !== "ai-worker") {
+      assert.equal(
+        service.networks?.["model-egress"],
+        undefined,
+        `${serviceName} must not join model-egress`,
+      );
+    }
+  }
   assert.equal(aiWorker.user, "10001:10001");
   assert.deepEqual(aiWorker.logging, {
     driver: "json-file",
@@ -107,13 +126,86 @@ test("keeps automatic memory extraction backend-only and disabled by default", (
   assert.equal(core.depends_on["ai-worker"].condition, "service_started");
 });
 
-function loadPilotCompose() {
+test("renders the pilot example with disabled extraction and placeholder secrets", () => {
+  for (const name of [
+    "IRIS_AI_WORKER_TOKEN",
+    "IRIS_MEMORY_EXTRACTION_ENABLED",
+    "IRIS_MEMORY_EXTRACTION_INTERVAL_MS",
+    "IRIS_MEMORY_EXTRACTION_BATCH_LIMIT",
+    "IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE",
+    "IRIS_MEMORY_EXTRACTION_MODEL_BASE_URL",
+    "IRIS_MEMORY_EXTRACTION_MODEL_API_KEY",
+    "IRIS_MEMORY_EXTRACTION_MODEL_NAME",
+    "IRIS_MEMORY_EXTRACTION_MODEL_TIMEOUT_MS",
+    "IRIS_MEMORY_EXTRACTION_MODEL_MAX_RESPONSE_BYTES",
+  ]) {
+    assert.match(pilotEnvExample, new RegExp(`^${name}=`, "mu"));
+  }
+
+  const exampleCompose = loadPilotCompose(".env.pilot.example");
+  const core = exampleCompose.services.core;
+  const aiWorker = exampleCompose.services["ai-worker"];
+  const postgres = exampleCompose.services.postgres;
+
+  assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_ENABLED, "false");
+  assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_INTERVAL_MS, "1000");
+  assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_BATCH_LIMIT, "20");
+  assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE, "0.85");
+  assert.equal(aiWorker.environment.IRIS_MODEL_TIMEOUT_MS, "30000");
+  assert.equal(aiWorker.environment.IRIS_MODEL_MAX_RESPONSE_BYTES, "65536");
+
+  for (const value of [
+    postgres.environment.POSTGRES_PASSWORD,
+    postgres.environment.IRIS_MIGRATOR_PASSWORD,
+    postgres.environment.IRIS_APP_PASSWORD,
+    core.environment.IRIS_INTERNAL_API_TOKEN,
+    core.environment.IRIS_INGRESS_HEALTH_TOKEN,
+    core.environment.FEISHU_VERIFICATION_TOKEN,
+    core.environment.FEISHU_APP_SECRET,
+    core.environment.IRIS_MODEL_API_KEY,
+    core.environment.IRIS_EMBEDDING_API_KEY,
+    core.environment.IRIS_AI_WORKER_TOKEN,
+    aiWorker.environment.IRIS_AI_WORKER_TOKEN,
+    aiWorker.environment.IRIS_MODEL_API_KEY,
+  ]) {
+    assert.match(value, /^replace-with-/u);
+  }
+  assert.doesNotMatch(JSON.stringify(exampleCompose), /ci-(?:model|internal|app|memory)/u);
+});
+
+test("gates real Feishu activation behind public boundary checks and fails closed", () => {
+  const pilotSection = acceptanceRunbook.slice(
+    acceptanceRunbook.indexOf("## Gates 10-12: One-Group Feishu Pilot"),
+  );
+  const orderedMarkers = [
+    "10. Keep global Iris and the pilot group durably disabled",
+    "Start Caddy",
+    "public `/health`",
+    "public `/internal/*`",
+    "callback boundary",
+    "Only then durably enable global Iris and the single pilot group",
+    "11.",
+    "12.",
+  ];
+  let previousIndex = -1;
+  for (const marker of orderedMarkers) {
+    const markerIndex = pilotSection.indexOf(marker);
+    assert.ok(markerIndex > previousIndex, `${marker} must appear in gate order`);
+    previousIndex = markerIndex;
+  }
+  assert.match(
+    pilotSection,
+    /If any real-pilot gate fails, immediately disable the pilot group, disable global Iris, stop Caddy, and enter Rollback/u,
+  );
+});
+
+function loadPilotCompose(envFile = "deploy/pilot/ci.env") {
   const result = spawnSync(
     process.platform === "win32" ? "docker.exe" : "docker",
     [
       "compose",
       "--env-file",
-      "deploy/pilot/ci.env",
+      envFile,
       "--file",
       "deploy/pilot/docker-compose.yml",
       "config",

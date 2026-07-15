@@ -88,20 +88,25 @@ A failure ends acceptance, durably disables global Iris, and triggers rollback.
 9. Durably disable group A and global Iris, require `globalEnabled=false` and `durable=true`, and
    recheck every queue/DLQ count is zero before leaving the internal phase.
 
-## One-Group Feishu Pilot
+## Gates 10-12: One-Group Feishu Pilot
 
-Only after all internal gates pass, durably enable global Iris and exactly one approved real Feishu
-pilot group. Keep every other group disabled.
+If any real-pilot gate fails, immediately disable the pilot group, disable global Iris, stop Caddy, and enter Rollback.
 
-1. Send one ordinary, non-mention decision message in the approved group and record its Feishu
-   message ID and time. Do not include secrets or sensitive personal data.
-2. Wait boundedly for all raw, document, reindex, and extraction queues/DLQs to return to zero.
-   Require exactly one evidence-bound memory for that message and no memory in another group.
-3. Send a later `@Iris` question whose answer requires the decision. Require the answer to use the
-   decision accurately and cite no document, message, or memory outside the approved group and
-   current permission policy.
-4. Re-run health and zero-count gates. Acceptance passes only if existing callback acknowledgement,
-   ordinary chat persistence, document sync, and mention replies remain healthy.
+10. Keep global Iris and the pilot group durably disabled. Start Caddy while both gates remain
+    disabled. Require public `/health` to succeed, public `/internal/*` probes to return `404`, and
+    the callback boundary check to acknowledge within its deadline without opening the pilot group.
+    Only then durably enable global Iris and the single pilot group, leaving every other group
+    disabled, and send one ordinary non-mention decision message. Record only its Feishu message ID
+    and time; do not include secrets or sensitive personal data.
+11. Wait boundedly for raw, document, reindex, and extraction queues/DLQs to return to zero. Require
+    exactly one evidence-bound memory for the ordinary decision and no memory in another group.
+    Send a later `@Iris` question whose answer requires that decision. Require the answer to use the
+    decision accurately and cite no document, message, or memory outside the approved group and
+    current permission policy.
+12. Re-run public health, callback acknowledgement, worker health, and every zero-count gate.
+    Acceptance passes only if ordinary chat persistence, document sync, existing mention replies,
+    and the public boundary all remain healthy. Keep activation limited to the single approved
+    pilot group; any expansion requires a separate reviewed rollout.
 
 ## Rollback
 

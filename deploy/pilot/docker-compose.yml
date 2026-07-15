@@ -152,6 +152,7 @@ services:
     logging: *bounded-logging
     networks:
       - backend
+      - model-egress
 
   core:
     <<: *core-image
@@ -219,6 +220,8 @@ services:
 networks:
   backend:
     internal: true
+  model-egress:
+    driver: bridge
   edge:
 
 volumes:
