@@ -9,6 +9,7 @@ import {
   readOptionalFeishuOpenApiConfig,
   readDocumentSyncWorkerRuntimeConfig,
   readModelProviderConfig,
+  readMemoryExtractionRuntimeConfig,
   readReindexWorkerRuntimeConfig,
   readServerPort,
 } from "../src/config/env.js";
@@ -158,6 +159,121 @@ describe("readEventWorkerRuntimeConfig", () => {
         IRIS_EVENT_WORKER_INTERVAL_MS: "2147483648",
       }),
     ).toThrow("IRIS_EVENT_WORKER_INTERVAL_MS must not exceed 2147483647");
+  });
+});
+
+describe("readMemoryExtractionRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_MEMORY_EXTRACTION_ENABLED: "true",
+    DATABASE_URL: "postgres://iris:secret@db.example.com:5432/iris",
+    REDIS_URL: "rediss://:secret@redis.example.com:6380/1",
+    IRIS_AI_WORKER_BASE_URL: "http://ai-worker:8000/",
+    IRIS_AI_WORKER_TOKEN: "worker-token",
+    IRIS_FEISHU_BOT_OPEN_ID: "ou_iris",
+  };
+
+  it("is disabled by default without reading enabled-only configuration", () => {
+    expect(readMemoryExtractionRuntimeConfig({})).toEqual({ enabled: false });
+    expect(
+      readMemoryExtractionRuntimeConfig({
+        IRIS_MEMORY_EXTRACTION_ENABLED: "false",
+        DATABASE_URL: "not-a-database-url",
+        REDIS_URL: "not-a-redis-url",
+        IRIS_AI_WORKER_BASE_URL: "file:///secret",
+        IRIS_AI_WORKER_TOKEN: "not safe",
+      }),
+    ).toEqual({ enabled: false });
+  });
+
+  it("reads exact enabled defaults and bounded overrides", () => {
+    expect(readMemoryExtractionRuntimeConfig(enabledEnv)).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@db.example.com:5432/iris",
+      redisUrl: "rediss://:secret@redis.example.com:6380/1",
+      aiWorkerBaseUrl: "http://ai-worker:8000",
+      aiWorkerToken: "worker-token",
+      irisBotOpenId: "ou_iris",
+      intervalMs: 1000,
+      batchLimit: 20,
+      minConfidence: 0.85,
+    });
+    expect(
+      readMemoryExtractionRuntimeConfig({
+        ...enabledEnv,
+        IRIS_MEMORY_EXTRACTION_INTERVAL_MS: " 2500 ",
+        IRIS_MEMORY_EXTRACTION_BATCH_LIMIT: " 100 ",
+        IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE: " 1 ",
+      }),
+    ).toMatchObject({
+      intervalMs: 2500,
+      batchLimit: 100,
+      minConfidence: 1,
+    });
+  });
+
+  it("requires strict database, Redis, worker, and bot identity configuration", () => {
+    for (const [name, message] of [
+      ["DATABASE_URL", "DATABASE_URL is required for database operations"],
+      ["REDIS_URL", "REDIS_URL is required"],
+      ["IRIS_AI_WORKER_BASE_URL", "IRIS_AI_WORKER_BASE_URL is required"],
+      ["IRIS_AI_WORKER_TOKEN", "IRIS_AI_WORKER_TOKEN is required"],
+      ["IRIS_FEISHU_BOT_OPEN_ID", "IRIS_FEISHU_BOT_OPEN_ID is required"],
+    ] as const) {
+      const env = { ...enabledEnv, [name]: undefined };
+      expect(() => readMemoryExtractionRuntimeConfig(env)).toThrow(message);
+    }
+
+    expect(() =>
+      readMemoryExtractionRuntimeConfig({ ...enabledEnv, DATABASE_URL: "https://db.example.com" }),
+    ).toThrow("DATABASE_URL must be a postgres URL");
+    expect(() =>
+      readMemoryExtractionRuntimeConfig({ ...enabledEnv, REDIS_URL: "https://redis.example.com" }),
+    ).toThrow("REDIS_URL must be a redis URL");
+  });
+
+  it.each([
+    ["ftp://ai-worker", "IRIS_AI_WORKER_BASE_URL must be an http(s) URL"],
+    ["https://user:secret@ai-worker", "IRIS_AI_WORKER_BASE_URL must not include embedded credentials"],
+    ["https://ai-worker/path?token=secret", "IRIS_AI_WORKER_BASE_URL must not include query or fragment"],
+    ["https://ai-worker/path#secret", "IRIS_AI_WORKER_BASE_URL must not include query or fragment"],
+    ["https://ai-worker/\npath", "IRIS_AI_WORKER_BASE_URL must not include control characters"],
+  ])("rejects unsafe AI Worker URL %s", (value, message) => {
+    expect(() =>
+      readMemoryExtractionRuntimeConfig({ ...enabledEnv, IRIS_AI_WORKER_BASE_URL: value }),
+    ).toThrow(message);
+  });
+
+  it.each(["", "worker token", "worker,token", "令牌", "worker\ntoken"])(
+    "rejects an unsafe AI Worker token without echoing it: %j",
+    (value) => {
+      let error: unknown;
+      try {
+        readMemoryExtractionRuntimeConfig({ ...enabledEnv, IRIS_AI_WORKER_TOKEN: value });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/^IRIS_AI_WORKER_TOKEN /);
+      if (value.length > 0) {
+        expect((error as Error).message).not.toContain(value);
+      }
+    },
+  );
+
+  it.each([
+    ["IRIS_MEMORY_EXTRACTION_INTERVAL_MS", "0", "must be a positive integer"],
+    ["IRIS_MEMORY_EXTRACTION_INTERVAL_MS", "2147483648", "must not exceed 2147483647"],
+    ["IRIS_MEMORY_EXTRACTION_BATCH_LIMIT", "10.0", "must be a positive integer"],
+    ["IRIS_MEMORY_EXTRACTION_BATCH_LIMIT", "101", "must not exceed 100"],
+    ["IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE", "-0.01", "must be between 0 and 1"],
+    ["IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE", "1.01", "must be between 0 and 1"],
+    ["IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE", "NaN", "must be between 0 and 1"],
+    ["IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE", "Infinity", "must be between 0 and 1"],
+  ])("rejects unsafe numeric config %s=%s", (name, value, message) => {
+    expect(() =>
+      readMemoryExtractionRuntimeConfig({ ...enabledEnv, [name]: value }),
+    ).toThrow(`${name} ${message}`);
   });
 });
 

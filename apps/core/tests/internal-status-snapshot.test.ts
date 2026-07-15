@@ -203,6 +203,55 @@ describe("buildInternalStatusSnapshot", () => {
     expect(snapshot.summary.degradedComponents).toEqual(["reindex"]);
   });
 
+  it("degrades for an enabled memory extraction runtime with an unavailable AI worker", () => {
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-15T03:00:00.000Z"),
+      components: {
+        memoryExtraction: {
+          ok: false,
+          enabled: true,
+          running: true,
+          workerHealthy: false,
+          pendingJobCount: 3,
+          processingJobCount: 2,
+          delayedJobCount: 1,
+          deadLetterJobCount: 0,
+          providerCooldownUntil: new Date("2026-07-15T04:00:00.000Z"),
+          degradedReason: "ai_worker_unavailable",
+        },
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      ok: false,
+      status: "degraded",
+      componentOrder: ["memoryExtraction"],
+      summary: {
+        degradedComponents: ["memoryExtraction"],
+        stoppedEnabledRuntimeComponents: [],
+        primaryAttentionComponent: {
+          name: "memoryExtraction",
+          status: "degraded",
+        },
+      },
+      components: {
+        memoryExtraction: {
+          status: "degraded",
+          ok: false,
+          enabled: true,
+          running: true,
+          workerHealthy: false,
+          pendingJobCount: 3,
+          processingJobCount: 2,
+          delayedJobCount: 1,
+          deadLetterJobCount: 0,
+          providerCooldownUntil: new Date("2026-07-15T04:00:00.000Z"),
+          degradedReason: "ai_worker_unavailable",
+        },
+      },
+    });
+  });
+
   it("does not share nested component values with the returned snapshot", () => {
     const latestBatch = {
       status: "succeeded" as const,

@@ -13,6 +13,7 @@ import {
 import { RuntimeController } from "../src/admin/runtime-controller.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
+import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
 import { isolateEnvVar } from "./test-env.js";
@@ -141,6 +142,142 @@ describe("Core server startup", () => {
     expect(vi.mocked(eventWorkerRuntime.close).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(runtimeControlRuntime.close).mock.invocationCallOrder[0] ?? 0,
     );
+  });
+
+  it("starts extraction before the event runtime, injects its planner, and closes in reverse order", async () => {
+    const reservation = await occupyLoopbackPort();
+    const port = reservation.port;
+    await closeServer(reservation.server);
+    process.env.PORT = String(port);
+    const order: string[] = [];
+    const extractionRuntime = fakeMemoryExtractionRuntime({
+      start: vi.fn(() => order.push("start-extraction")),
+      close: vi.fn(async () => {
+        order.push("close-extraction");
+      }),
+    });
+    const eventWorkerRuntime = fakeEventWorkerRuntime({
+      start: vi.fn(() => order.push("start-event")),
+      close: vi.fn(async () => {
+        order.push("close-event");
+      }),
+    });
+    const runtimeControlRuntime = fakeRuntimeControlRuntime({
+      onClose: () => order.push("close-runtime-control"),
+    });
+    const createMemoryExtractionRuntime = vi.fn(() => {
+      order.push("create-extraction");
+      return extractionRuntime;
+    });
+    const createEventWorkerRuntime = vi.fn((input) => {
+      order.push("create-event");
+      expect(input).toEqual({
+        runtimeController: runtimeControlRuntime.runtimeControl.controller,
+        memoryExtractionPlanner: extractionRuntime.planner,
+      });
+      return eventWorkerRuntime;
+    });
+
+    const app = await startServer({
+      createRuntimeControlRuntime: async () => runtimeControlRuntime,
+      appDependencies: {
+        createAnswerDraftRuntime: () => undefined,
+        createReindexWorkerRuntime: () => undefined,
+        createMemoryExtractionRuntime,
+        createEventWorkerRuntime,
+        createDocumentSyncRuntime: () => undefined,
+      },
+    });
+
+    expect(order).toEqual([
+      "create-extraction",
+      "start-extraction",
+      "create-event",
+      "start-event",
+    ]);
+    await app.close();
+    expect(order).toEqual([
+      "create-extraction",
+      "start-extraction",
+      "create-event",
+      "start-event",
+      "close-event",
+      "close-extraction",
+      "close-runtime-control",
+    ]);
+  });
+
+  it("awaits extraction cleanup when event runtime composition fails", async () => {
+    const compositionError = new Error("event composition failed");
+    const order: string[] = [];
+    const extractionRuntime = fakeMemoryExtractionRuntime({
+      start: vi.fn(() => order.push("start-extraction")),
+      close: vi.fn(async () => {
+        order.push("close-extraction");
+      }),
+    });
+    const runtimeControlRuntime = fakeRuntimeControlRuntime({
+      onClose: () => order.push("close-runtime-control"),
+    });
+
+    await expect(
+      startServer({
+        createRuntimeControlRuntime: async () => runtimeControlRuntime,
+        appDependencies: {
+          createAnswerDraftRuntime: () => undefined,
+          createReindexWorkerRuntime: () => undefined,
+          createMemoryExtractionRuntime: () => extractionRuntime,
+          createEventWorkerRuntime: () => {
+            throw compositionError;
+          },
+          createDocumentSyncRuntime: () => undefined,
+        },
+      }),
+    ).rejects.toBe(compositionError);
+
+    expect(order).toEqual([
+      "start-extraction",
+      "close-extraction",
+      "close-runtime-control",
+    ]);
+    expect(extractionRuntime.close).toHaveBeenCalledOnce();
+    expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
+  });
+
+  it("closes extraction after event runtime when the listener cannot bind", async () => {
+    const occupied = await occupyLoopbackPort();
+    occupiedServer = occupied.server;
+    process.env.PORT = String(occupied.port);
+    const closeOrder: string[] = [];
+    const extractionRuntime = fakeMemoryExtractionRuntime({
+      close: vi.fn(async () => {
+        closeOrder.push("extraction");
+      }),
+    });
+    const eventWorkerRuntime = fakeEventWorkerRuntime({
+      close: vi.fn(async () => {
+        closeOrder.push("event");
+      }),
+    });
+    const runtimeControlRuntime = fakeRuntimeControlRuntime({
+      onClose: () => closeOrder.push("runtime-control"),
+    });
+
+    await expect(
+      startServer({
+        createRuntimeControlRuntime: async () => runtimeControlRuntime,
+        appDependencies: {
+          createAnswerDraftRuntime: () => undefined,
+          createReindexWorkerRuntime: () => undefined,
+          createMemoryExtractionRuntime: () => extractionRuntime,
+          createEventWorkerRuntime: () => eventWorkerRuntime,
+          createDocumentSyncRuntime: () => undefined,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "EADDRINUSE" });
+
+    expect(closeOrder).toEqual(["event", "extraction", "runtime-control"]);
+    expect(extractionRuntime.close).toHaveBeenCalledOnce();
   });
 
   it("always injects the factory's matching runtime-control pair", async () => {
@@ -483,6 +620,39 @@ function fakeReindexWorkerRuntime(
       intervalMs: 100,
       batchLimit: 10,
       pendingJobCount: 0,
+      deadLetterJobCount: 0,
+    })),
+    start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeMemoryExtractionRuntime(
+  overrides: Partial<MemoryExtractionRuntime> = {},
+): MemoryExtractionRuntime {
+  return {
+    planner: { registerMessage: vi.fn(async () => undefined) },
+    deadLetters: {
+      list: vi.fn(async () => []),
+      replay: vi.fn(async () => "not_found" as const),
+      delete: vi.fn(async () => "not_found" as const),
+      replayBatch: vi.fn(async () => ({
+        replayedCount: 0,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      })),
+    },
+    getStatus: vi.fn(async () => ({
+      enabled: true as const,
+      running: true,
+      workerHealthy: true,
+      intervalMs: 1000,
+      batchLimit: 20,
+      minConfidence: 0.85,
+      pendingJobCount: 0,
+      processingJobCount: 0,
+      delayedJobCount: 0,
       deadLetterJobCount: 0,
     })),
     start: vi.fn(),

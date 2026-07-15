@@ -1,0 +1,462 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { InMemoryAuditLog } from "../src/audit/audit-log.js";
+import { RuntimeController } from "../src/admin/runtime-controller.js";
+import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
+import type { ConversationMessage } from "../src/conversation/conversation-message-repository.js";
+import type { MemoryExtractionQueue } from "../src/memory-extraction/memory-extraction-queue.js";
+import type { MemoryExtractionRepository } from "../src/memory-extraction/memory-extraction-repository.js";
+import {
+  createMemoryExtractionRuntime,
+  type MemoryExtractionRuntimeDependencies,
+} from "../src/runtime/memory-extraction-runtime.js";
+
+describe("createMemoryExtractionRuntime", () => {
+  it("returns no runtime and opens no resources when disabled", () => {
+    const createPostgresPool = vi.fn();
+    const createRedisClient = vi.fn();
+    const createAiWorkerClient = vi.fn();
+
+    expect(
+      createMemoryExtractionRuntime({
+        env: {
+          IRIS_MEMORY_EXTRACTION_ENABLED: "false",
+          DATABASE_URL: "not-a-database-url",
+          REDIS_URL: "not-a-redis-url",
+          IRIS_AI_WORKER_BASE_URL: "file:///secret",
+          IRIS_AI_WORKER_TOKEN: "unsafe token",
+        },
+        runtimeController: runtimeController(),
+        dependencies: {
+          createPostgresPool,
+          createRedisClient,
+          createAiWorkerClient,
+        },
+      }),
+    ).toBeUndefined();
+
+    expect(createPostgresPool).not.toHaveBeenCalled();
+    expect(createRedisClient).not.toHaveBeenCalled();
+    expect(createAiWorkerClient).not.toHaveBeenCalled();
+  });
+
+  it("owns one dependency graph, waits for database and Redis, and closes once in reverse order", async () => {
+    const fixture = runtimeFixture({ deferRedisConnect: true });
+    const auditLog = new InMemoryAuditLog();
+    const controller = runtimeController();
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: controller,
+      auditLog,
+      dependencies: fixture.dependencies,
+    });
+
+    expect(runtime).toBeDefined();
+    expect(fixture.dependencies.createPostgresPool).toHaveBeenCalledOnce();
+    expect(fixture.dependencies.createRedisClient).toHaveBeenCalledOnce();
+    expect(fixture.dependencies.createRepository).toHaveBeenCalledWith({
+      dataSource: fixture.pool,
+    });
+    expect(fixture.dependencies.createQueue).toHaveBeenCalledWith({
+      client: expect.objectContaining({
+        eval: expect.any(Function),
+        sCard: expect.any(Function),
+        zCard: expect.any(Function),
+        get: expect.any(Function),
+      }),
+    });
+    expect(fixture.dependencies.createAiWorkerClient).toHaveBeenCalledWith({
+      baseUrl: "http://ai-worker:8000",
+      token: "worker-token",
+    });
+    expect(fixture.dependencies.createWorker).toHaveBeenCalledWith({
+      queue: fixture.queue,
+      repository: fixture.repository,
+      client: fixture.aiClient,
+      auditLog,
+      runtimeController: controller,
+    });
+    expect(fixture.dependencies.createWorkerLoop).toHaveBeenCalledWith({
+      worker: fixture.worker,
+      intervalMs: 1000,
+      batchLimit: 20,
+      onError: expect.any(Function),
+    });
+    expect(fixture.dependencies.createPlanner).toHaveBeenCalledWith({
+      repository: fixture.repository,
+      queue: fixture.queue,
+      runtimeController: controller,
+      irisBotOpenId: "ou_iris",
+    });
+    expect(fixture.redis.connect).not.toHaveBeenCalled();
+    expect(fixture.loop.start).not.toHaveBeenCalled();
+
+    runtime?.start();
+    runtime?.start();
+
+    expect(fixture.pool.query).toHaveBeenCalledOnce();
+    expect(fixture.loop.start).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(fixture.redis.connect).toHaveBeenCalledOnce());
+
+    fixture.resolveRedisConnect();
+    await vi.waitFor(() => expect(fixture.loop.start).toHaveBeenCalledOnce());
+
+    const message = conversationMessage();
+    await runtime?.planner.registerMessage(message, { senderOpenId: "ou_human" });
+    expect(fixture.planner.registerMessage).toHaveBeenCalledWith(message, {
+      senderOpenId: "ou_human",
+    });
+
+    await expect(runtime?.getStatus()).resolves.toEqual({
+      enabled: true,
+      running: true,
+      workerHealthy: true,
+      intervalMs: 1000,
+      batchLimit: 20,
+      minConfidence: 0.85,
+      pendingJobCount: 3,
+      processingJobCount: 2,
+      delayedJobCount: 1,
+      deadLetterJobCount: 4,
+      providerCooldownUntil: new Date("2026-07-15T02:00:00.000Z"),
+      latestBatch: {
+        status: "succeeded",
+        startedAt: new Date("2026-07-15T01:00:00.000Z"),
+        finishedAt: new Date("2026-07-15T01:00:01.000Z"),
+        completedCount: 2,
+        skippedCount: 1,
+        deferredCount: 1,
+        failedCount: 0,
+        failed: false,
+      },
+    });
+    await expect(runtime?.deadLetters.list({ limit: 20 })).resolves.toEqual([]);
+    await expect(runtime?.deadLetters.replay("dlq-1")).resolves.toBe("replayed");
+    await expect(runtime?.deadLetters.replayBatch({ ids: ["dlq-1"] })).resolves.toEqual({
+      replayedCount: 1,
+      notFoundIds: [],
+      unsupportedLegacyIds: [],
+    });
+    await expect(runtime?.deadLetters.delete("dlq-1")).resolves.toBe("deleted");
+
+    await Promise.all([runtime?.close(), runtime?.close()]);
+    expect(fixture.cleanupOrder).toEqual(["loop", "redis", "postgres"]);
+    expect(fixture.loop.stop).toHaveBeenCalledOnce();
+    expect(fixture.redis.quit).toHaveBeenCalledOnce();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+
+    runtime?.start();
+    expect(fixture.redis.connect).toHaveBeenCalledOnce();
+    expect(fixture.loop.start).toHaveBeenCalledOnce();
+  });
+
+  it("reports an unhealthy AI worker without exposing connection configuration", async () => {
+    const fixture = runtimeFixture();
+    fixture.aiClient.checkHealth.mockRejectedValueOnce(new Error("provider secret response"));
+    fixture.loop.getSnapshot.mockReturnValueOnce({
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 20,
+      latestBatch: {
+        status: "failed",
+        startedAt: new Date("2026-07-15T01:00:00.000Z"),
+        finishedAt: new Date("2026-07-15T01:00:01.000Z"),
+        completedCount: 0,
+        skippedCount: 0,
+        deferredCount: 0,
+        failedCount: 0,
+        failed: true,
+        errorMessage: "provider secret response",
+        providerPayload: "secret upstream body",
+      },
+    } as never);
+    const runtime = createMemoryExtractionRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_AI_WORKER_TOKEN: "do-not-expose-this-token",
+      },
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+    runtime?.start();
+    await vi.waitFor(() => expect(fixture.loop.start).toHaveBeenCalledOnce());
+
+    const status = await runtime?.getStatus();
+
+    expect(status).toMatchObject({
+      enabled: true,
+      running: true,
+      workerHealthy: false,
+      pendingJobCount: 3,
+      processingJobCount: 2,
+      delayedJobCount: 1,
+      deadLetterJobCount: 4,
+    });
+    expect(JSON.stringify(status)).not.toContain("do-not-expose-this-token");
+    expect(JSON.stringify(status)).not.toContain("provider secret response");
+    expect(JSON.stringify(status)).not.toContain("secret upstream body");
+    expect(JSON.stringify(status)).not.toContain("ai-worker:8000");
+
+    await runtime?.close();
+  });
+
+  it("does not start the loop when close wins a pending dependency connection", async () => {
+    const fixture = runtimeFixture({ deferRedisConnect: true });
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+    runtime?.start();
+    await vi.waitFor(() => expect(fixture.redis.connect).toHaveBeenCalledOnce());
+
+    const close = runtime?.close();
+    fixture.resolveRedisConnect();
+    await close;
+
+    expect(fixture.loop.start).not.toHaveBeenCalled();
+    expect(fixture.cleanupOrder).toEqual(["loop", "redis", "postgres"]);
+  });
+
+  it("closes every later resource when an earlier close operation fails", async () => {
+    const fixture = runtimeFixture();
+    fixture.loop.stop.mockImplementationOnce(async () => {
+      fixture.cleanupOrder.push("loop");
+      throw new Error("loop stop failed");
+    });
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+    runtime?.start();
+    await vi.waitFor(() => expect(fixture.loop.start).toHaveBeenCalledOnce());
+
+    await expect(runtime?.close()).rejects.toThrow("loop stop failed");
+
+    expect(fixture.cleanupOrder).toEqual(["loop", "redis", "postgres"]);
+    expect(fixture.redis.quit).toHaveBeenCalledOnce();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+    await expect(runtime?.close()).rejects.toThrow("loop stop failed");
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+  });
+
+  it("cleans the pool after a partial composition failure without connecting Redis", async () => {
+    const fixture = runtimeFixture();
+    const compositionError = new Error("queue composition failed");
+    fixture.dependencies.createQueue.mockImplementationOnce(() => {
+      throw compositionError;
+    });
+
+    expect(() =>
+      createMemoryExtractionRuntime({
+        env: enabledEnv(),
+        runtimeController: runtimeController(),
+        dependencies: fixture.dependencies,
+      }),
+    ).toThrow(compositionError);
+
+    await vi.waitFor(() => expect(fixture.pool.end).toHaveBeenCalledOnce());
+    expect(fixture.dependencies.createRedisClient).not.toHaveBeenCalled();
+    expect(fixture.redis.connect).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a synchronous dependency-start failure for app startup cleanup", async () => {
+    const fixture = runtimeFixture();
+    const databaseError = new Error("database readiness failed");
+    fixture.poolQuery.mockImplementationOnce(() => {
+      throw databaseError;
+    });
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+
+    expect(() => runtime?.start()).toThrow(databaseError);
+    expect(fixture.redis.connect).not.toHaveBeenCalled();
+    await runtime?.close();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "database readiness",
+      fail(fixture: ReturnType<typeof runtimeFixture>) {
+        fixture.poolQuery.mockRejectedValueOnce(new Error("database readiness failed"));
+      },
+      expectedRedisConnects: 0,
+    },
+    {
+      name: "Redis readiness",
+      fail(fixture: ReturnType<typeof runtimeFixture>) {
+        fixture.redis.connect.mockRejectedValueOnce(new Error("Redis readiness failed"));
+      },
+      expectedRedisConnects: 1,
+    },
+  ])("cleans owned resources after asynchronous $name failure", async ({
+    fail,
+    expectedRedisConnects,
+  }) => {
+    const fixture = runtimeFixture();
+    fail(fixture);
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+
+    runtime?.start();
+
+    await vi.waitFor(() => expect(fixture.pool.end).toHaveBeenCalledOnce());
+    expect(fixture.redis.connect).toHaveBeenCalledTimes(expectedRedisConnects);
+    expect(fixture.redis.quit).not.toHaveBeenCalled();
+    expect(fixture.loop.start).not.toHaveBeenCalled();
+    expect(fixture.cleanupOrder).toEqual(["loop", "postgres"]);
+    await runtime?.close();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+  });
+});
+
+function runtimeFixture({ deferRedisConnect = false }: { deferRedisConnect?: boolean } = {}) {
+  const cleanupOrder: string[] = [];
+  let resolveRedisConnect: () => void = () => undefined;
+  const transactionClient = {
+    query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
+    release: vi.fn(),
+  };
+  const poolQuery = vi.fn(async () => ({ rows: [{ ok: 1 }], rowCount: 1 }));
+  const pool = {
+    query: poolQuery,
+    connect: vi.fn(async () => transactionClient),
+    end: vi.fn(async () => {
+      cleanupOrder.push("postgres");
+    }),
+  };
+  const redis = {
+    connect: vi.fn(() => {
+      if (!deferRedisConnect) {
+        return Promise.resolve(redis);
+      }
+      return new Promise<typeof redis>((resolve) => {
+        resolveRedisConnect = () => resolve(redis);
+      });
+    }),
+    eval: vi.fn(async () => 1),
+    sCard: vi.fn(async () => 0),
+    zCard: vi.fn(async () => 0),
+    get: vi.fn(async () => null),
+    quit: vi.fn(async () => {
+      cleanupOrder.push("redis");
+    }),
+  };
+  const repository = {} as MemoryExtractionRepository;
+  const queue: MemoryExtractionQueue = {
+    enqueue: vi.fn(async () => undefined),
+    recoverProcessing: vi.fn(async () => ({ recoveredCount: 0, remainingCount: 0 })),
+    dequeueBatch: vi.fn(async () => []),
+    deferJob: vi.fn(async () => undefined),
+    handleProcessedJob: vi.fn(async () => undefined),
+    handleTerminalJob: vi.fn(async () => ({ action: "dead_lettered" as const, attempts: 1 })),
+    handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
+    getPendingCount: vi.fn(async () => 3),
+    getProcessingCount: vi.fn(async () => 2),
+    getDelayedCount: vi.fn(async () => 1),
+    getDeadLetterCount: vi.fn(async () => 4),
+    getProviderCooldown: vi.fn(async () => new Date("2026-07-15T02:00:00.000Z")),
+    setProviderCooldown: vi.fn(async () => undefined),
+    listDeadLetters: vi.fn(async () => []),
+    replayDeadLetter: vi.fn(async () => "replayed" as const),
+    deleteDeadLetter: vi.fn(async () => "deleted" as const),
+    replayDeadLetters: vi.fn(async () => ({
+      replayedCount: 1,
+      notFoundIds: [],
+      unsupportedLegacyIds: [],
+    })),
+  };
+  const aiClient = {
+    checkHealth: vi.fn(async () => true),
+    extract: vi.fn(),
+  };
+  const worker = { processBatch: vi.fn(async () => []) };
+  const loop = {
+    start: vi.fn(),
+    stop: vi.fn(async () => {
+      cleanupOrder.push("loop");
+    }),
+    isRunning: vi.fn(() => true),
+    getSnapshot: vi.fn(() => ({
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 20,
+      latestBatch: {
+        status: "succeeded" as const,
+        startedAt: new Date("2026-07-15T01:00:00.000Z"),
+        finishedAt: new Date("2026-07-15T01:00:01.000Z"),
+        completedCount: 2,
+        skippedCount: 1,
+        deferredCount: 1,
+        failedCount: 0,
+        failed: false as const,
+      },
+    })),
+  };
+  const planner = { registerMessage: vi.fn(async () => undefined) };
+  const rawDependencies = {
+    createPostgresPool: vi.fn(() => pool),
+    createRedisClient: vi.fn(() => redis),
+    createRepository: vi.fn(() => repository),
+    createQueue: vi.fn(() => queue),
+    createAiWorkerClient: vi.fn(() => aiClient),
+    createWorker: vi.fn(() => worker),
+    createWorkerLoop: vi.fn(() => loop),
+    createPlanner: vi.fn(() => planner),
+  };
+  const dependencies = rawDependencies as typeof rawDependencies &
+    MemoryExtractionRuntimeDependencies;
+
+  return {
+    aiClient,
+    cleanupOrder,
+    dependencies,
+    loop,
+    planner,
+    pool,
+    poolQuery,
+    queue,
+    redis,
+    repository,
+    resolveRedisConnect: () => resolveRedisConnect(),
+    worker,
+  };
+}
+
+function enabledEnv() {
+  return {
+    IRIS_MEMORY_EXTRACTION_ENABLED: "true",
+    DATABASE_URL: "postgres://example/iris",
+    REDIS_URL: "redis://localhost:6379",
+    IRIS_AI_WORKER_BASE_URL: "http://ai-worker:8000",
+    IRIS_AI_WORKER_TOKEN: "worker-token",
+    IRIS_FEISHU_BOT_OPEN_ID: "ou_iris",
+  };
+}
+
+function runtimeController() {
+  return new RuntimeController(createDefaultRuntimeConfig());
+}
+
+function conversationMessage(): ConversationMessage {
+  return {
+    id: "message-1",
+    provider: "feishu",
+    providerMessageId: "om_1",
+    chatId: "group-1",
+    senderId: "ou_human",
+    messageType: "text",
+    text: "A durable project fact",
+    sentAt: new Date("2026-07-15T00:00:00.000Z"),
+    rawEventIdempotencyKey: "raw-event:feishu:event-1",
+    createdAt: new Date("2026-07-15T00:00:01.000Z"),
+  };
+}

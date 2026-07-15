@@ -50,6 +50,14 @@ import {
   type DocumentSyncRuntime
 } from "./runtime/document-sync-runtime.js";
 import {
+  createMemoryExtractionRuntime,
+  type MemoryExtractionRuntime,
+  type MemoryExtractionRuntimeStatus,
+} from "./runtime/memory-extraction-runtime.js";
+import type {
+  MemoryExtractionDeadLetter,
+} from "./memory-extraction/memory-extraction-queue.js";
+import {
   createRuntimeControlRuntime as createDefaultRuntimeControlRuntime,
   type RuntimeControlRuntime,
 } from "./runtime/runtime-control-runtime.js";
@@ -69,6 +77,12 @@ import type { GroupMemoryService } from "./memory/group-memory-service.js";
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  memoryExtractionPlanner?: MemoryExtractionRuntime["planner"];
+};
+
+type MemoryExtractionRuntimeFactoryInput = {
+  runtimeController: RuntimeController;
+  auditLog: InMemoryAuditLog;
 };
 
 export type RuntimeControlDependency = {
@@ -89,6 +103,9 @@ export type BuildAppDependencies = {
     input?: Parameters<typeof createDefaultAnswerDraftRuntime>[0],
   ) => AnswerDraftRuntime | undefined;
   createEventWorkerRuntime?: (input?: EventWorkerRuntimeFactoryInput) => EventWorkerRuntime | undefined;
+  createMemoryExtractionRuntime?: (
+    input?: MemoryExtractionRuntimeFactoryInput,
+  ) => MemoryExtractionRuntime | undefined;
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
   runtimeController?: RuntimeController;
@@ -188,6 +205,7 @@ const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
 const latestBatchFailedReason = "latest_batch_failed" as const;
 const latestBatchItemsFailedReason = "latest_batch_items_failed" as const;
 const mentionRepliesUnavailableReason = "mention_replies_unavailable" as const;
+const aiWorkerUnavailableReason = "ai_worker_unavailable" as const;
 const maxInternalStringLength = 512;
 const maxInternalSourceUriLength = DOCUMENT_SOURCE_URI_MAX_CHARS;
 const maxInternalRawSourceUriLength = 8192;
@@ -198,6 +216,18 @@ const maxAnswerDraftLiveChatSpeakerLength = 256;
 const maxAnswerDraftLiveChatTextLength = 2000;
 const maxJsonBodyBytes = 256 * 1024;
 const internalTruncationMarker = " ... [truncated]";
+const memoryExtractionFailureClassifications = new Set([
+  "provider_timeout",
+  "provider_rate_limited",
+  "provider_unavailable",
+  "provider_unauthorized",
+  "invalid_model_response",
+  "invalid_queue_payload",
+  "corrupt_routing",
+  "invalid_dead_letter_payload",
+  "invalid_dead_letter_json",
+  "internal_error",
+]);
 
 export function buildApp(dependencies: BuildAppDependencies = {}) {
   const internalApiToken =
@@ -226,6 +256,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let answerDraftRuntime: AnswerDraftRuntime | undefined;
   let answerDraftOrchestrator = dependencies.answerDraftOrchestrator;
   let reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
+  let memoryExtractionRuntime: MemoryExtractionRuntime | undefined;
   let eventWorkerRuntime: EventWorkerRuntime | undefined;
   let documentSyncRuntime: DocumentSyncRuntime | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
@@ -245,12 +276,21 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     reindexWorkerRuntime =
       (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
     reindexWorkerRuntime?.start();
+    memoryExtractionRuntime =
+      (dependencies.createMemoryExtractionRuntime ?? createMemoryExtractionRuntime)({
+        runtimeController,
+        auditLog,
+      });
+    memoryExtractionRuntime?.start();
     eventWorkerRuntime =
       (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
         runtimeController,
         ...(answerDraftOrchestrator === undefined
           ? {}
           : { answerDraftOrchestrator }),
+        ...(memoryExtractionRuntime === undefined
+          ? {}
+          : { memoryExtractionPlanner: memoryExtractionRuntime.planner }),
       });
     eventWorkerRuntime?.start();
     documentSyncRuntime =
@@ -406,6 +446,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         enabled: answerDraftOrchestrator !== undefined,
       },
       feishuGateway: getFeishuGatewayStatus(feishuGatewayStatus),
+      ...(memoryExtractionRuntime === undefined
+        ? {}
+        : { memoryExtraction: await getMemoryExtractionStatus(memoryExtractionRuntime) }),
       eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
@@ -662,6 +705,143 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return { ok: true, ...(await eventWorkerRuntime.getStatus()) };
     } catch {
       return reply.code(500).send({ ok: false, error: "event_worker_status_failed" });
+    }
+  });
+
+  app.get("/internal/memory-extraction/status", async (_request, reply) => {
+    if (memoryExtractionRuntime === undefined) {
+      return { ok: true, enabled: false, running: false };
+    }
+
+    try {
+      return {
+        ok: true,
+        ...toContentFreeMemoryExtractionStatus(await memoryExtractionRuntime.getStatus()),
+      };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_status_failed",
+      });
+    }
+  });
+
+  app.get("/internal/memory-extraction/dead-letters", async (request, reply) => {
+    if (memoryExtractionRuntime === undefined) {
+      return reply.code(503).send({
+        ok: false,
+        error: "memory_extraction_runtime_unavailable",
+      });
+    }
+
+    const limit = parseMemoryExtractionDeadLetterLimit(request.query);
+    if (limit === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const deadLetters = await memoryExtractionRuntime.deadLetters.list({ limit });
+      return {
+        ok: true,
+        deadLetters: deadLetters.map(toMemoryExtractionDeadLetterResponse),
+      };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_dead_letter_operation_failed",
+      });
+    }
+  });
+
+  app.post("/internal/memory-extraction/dead-letters/replay", async (request, reply) => {
+    if (memoryExtractionRuntime === undefined) {
+      return reply.code(503).send({
+        ok: false,
+        error: "memory_extraction_runtime_unavailable",
+      });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseMemoryExtractionDeadLetterBatchReplayRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const result = await memoryExtractionRuntime.deadLetters.replayBatch(parsedRequest);
+      await recordMemoryExtractionBatchReplayAuditEvents({
+        auditLog,
+        requestedIds: parsedRequest.ids,
+        result,
+      });
+      return { ok: true, ...result };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_dead_letter_operation_failed",
+      });
+    }
+  });
+
+  app.post("/internal/memory-extraction/dead-letters/:id/replay", async (request, reply) => {
+    if (memoryExtractionRuntime === undefined) {
+      return reply.code(503).send({
+        ok: false,
+        error: "memory_extraction_runtime_unavailable",
+      });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const status = await memoryExtractionRuntime.deadLetters.replay(id);
+      if (status === "replayed") {
+        await recordMemoryExtractionRecoveryAuditEvent({
+          auditLog,
+          type: "memory_extraction_dlq_replayed",
+          id,
+        });
+      }
+      return { ok: true, status };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_dead_letter_operation_failed",
+      });
+    }
+  });
+
+  app.delete("/internal/memory-extraction/dead-letters/:id", async (request, reply) => {
+    if (memoryExtractionRuntime === undefined) {
+      return reply.code(503).send({
+        ok: false,
+        error: "memory_extraction_runtime_unavailable",
+      });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const status = await memoryExtractionRuntime.deadLetters.delete(id);
+      if (status === "deleted") {
+        await recordMemoryExtractionRecoveryAuditEvent({
+          auditLog,
+          type: "memory_extraction_dlq_deleted",
+          id,
+        });
+      }
+      return { ok: true, status };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_dead_letter_operation_failed",
+      });
     }
   });
 
@@ -1236,6 +1416,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => gateway.close(),
       () => documentSyncRuntime?.close(),
       () => eventWorkerRuntime?.close(),
+      () => memoryExtractionRuntime?.close(),
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
       () => dependencies.closeRuntimeControl?.(),
@@ -1250,6 +1431,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       gateway: startupGateway,
       answerDraftRuntime,
       reindexWorkerRuntime,
+      memoryExtractionRuntime,
       eventWorkerRuntime,
       documentSyncRuntime,
     });
@@ -1382,6 +1564,7 @@ function scheduleRuntimeStartupCleanup({
   gateway,
   answerDraftRuntime,
   reindexWorkerRuntime,
+  memoryExtractionRuntime,
   eventWorkerRuntime,
   documentSyncRuntime,
 }: {
@@ -1389,6 +1572,7 @@ function scheduleRuntimeStartupCleanup({
   gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   answerDraftRuntime: AnswerDraftRuntime | undefined;
   reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
+  memoryExtractionRuntime: MemoryExtractionRuntime | undefined;
   eventWorkerRuntime: EventWorkerRuntime | undefined;
   documentSyncRuntime: DocumentSyncRuntime | undefined;
 }): Promise<void> {
@@ -1396,6 +1580,7 @@ function scheduleRuntimeStartupCleanup({
     () => gateway?.close(),
     () => documentSyncRuntime?.close(),
     () => eventWorkerRuntime?.close(),
+    () => memoryExtractionRuntime?.close(),
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
     () => app?.close(),
@@ -1476,6 +1661,84 @@ function parseAnswerDraftRequest(value: unknown): AnswerDraftRequest | undefined
     liveChatMessages: liveChatMessages as LiveChatMessage[],
     ...(value.fragmentLimit === undefined ? {} : { fragmentLimit: value.fragmentLimit }),
     ...(value.liveChatLimit === undefined ? {} : { liveChatLimit: value.liveChatLimit })
+  };
+}
+
+async function getMemoryExtractionStatus(runtime: MemoryExtractionRuntime) {
+  try {
+    const status = toContentFreeMemoryExtractionStatus(await runtime.getStatus());
+    const workerHealth = withWorkerHealth(status, status.deadLetterJobCount);
+    if (!workerHealth.ok) {
+      return workerHealth;
+    }
+    if (!status.workerHealthy) {
+      return {
+        ok: false,
+        ...status,
+        degradedReason: aiWorkerUnavailableReason,
+      };
+    }
+
+    return workerHealth;
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      error: "memory_extraction_status_failed",
+    };
+  }
+}
+
+function toContentFreeMemoryExtractionStatus(
+  status: MemoryExtractionRuntimeStatus,
+): MemoryExtractionRuntimeStatus {
+  return {
+    enabled: true,
+    running: status.running,
+    workerHealthy: status.workerHealthy,
+    intervalMs: status.intervalMs,
+    batchLimit: status.batchLimit,
+    minConfidence: status.minConfidence,
+    pendingJobCount: status.pendingJobCount,
+    processingJobCount: status.processingJobCount,
+    delayedJobCount: status.delayedJobCount,
+    deadLetterJobCount: status.deadLetterJobCount,
+    ...(status.providerCooldownUntil === undefined
+      ? {}
+      : { providerCooldownUntil: new Date(status.providerCooldownUntil) }),
+    ...(status.latestBatch === undefined
+      ? {}
+      : { latestBatch: toContentFreeMemoryExtractionBatchSnapshot(status.latestBatch) }),
+  };
+}
+
+function toContentFreeMemoryExtractionBatchSnapshot(
+  snapshot: NonNullable<MemoryExtractionRuntimeStatus["latestBatch"]>,
+): NonNullable<MemoryExtractionRuntimeStatus["latestBatch"]> {
+  if (snapshot.status === "failed") {
+    return {
+      status: "failed" as const,
+      startedAt: new Date(snapshot.startedAt),
+      finishedAt: new Date(snapshot.finishedAt),
+      completedCount: 0,
+      skippedCount: 0,
+      deferredCount: 0,
+      failedCount: 0,
+      failed: true as const,
+      errorMessage: "memory_extraction_batch_failed",
+    };
+  }
+
+  return {
+    status: "succeeded" as const,
+    startedAt: new Date(snapshot.startedAt),
+    finishedAt: new Date(snapshot.finishedAt),
+    completedCount: snapshot.completedCount,
+    skippedCount: snapshot.skippedCount,
+    deferredCount: snapshot.deferredCount,
+    failedCount: snapshot.failedCount,
+    failed: false as const,
   };
 }
 
@@ -1622,6 +1885,13 @@ function parseReindexDocumentProfileRequest(
   return { embeddingProfileId, limit: value.limit };
 }
 
+function parseMemoryExtractionDeadLetterLimit(value: unknown): number | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "limit")) {
+    return undefined;
+  }
+  return parseDeadLetterLimit(value.limit);
+}
+
 function parseDeadLetterLimit(value: unknown): number | undefined {
   if (value === undefined) {
     return 20;
@@ -1744,7 +2014,12 @@ function parseAuditEventType(value: unknown): AuditEvent["type"] | false | undef
     type === "runtime_control_updated" ||
     type === "group_memory_created" ||
     type === "group_memory_corrected" ||
-    type === "group_memory_deleted"
+    type === "group_memory_deleted" ||
+    type === "memory_extraction_completed" ||
+    type === "memory_extraction_skipped" ||
+    type === "memory_extraction_failed" ||
+    type === "memory_extraction_dlq_replayed" ||
+    type === "memory_extraction_dlq_deleted"
     ? type
     : false;
 }
@@ -2029,6 +2304,80 @@ function toDocumentSourceSyncHealth(snapshot: DocumentSnapshot | undefined) {
   };
 }
 
+function toMemoryExtractionDeadLetterResponse(deadLetter: MemoryExtractionDeadLetter) {
+  const base = {
+    id: deadLetter.id,
+    errorMessage: normalizeMemoryExtractionFailureClassification(deadLetter.errorMessage),
+    failedAt: new Date(deadLetter.failedAt),
+    replayable: deadLetter.replayable,
+  };
+  if ("job" in deadLetter) {
+    return {
+      ...base,
+      job: {
+        schemaVersion: deadLetter.job.schemaVersion,
+        idempotencyKey: deadLetter.job.idempotencyKey,
+        requestId: deadLetter.job.requestId,
+        groupId: deadLetter.job.groupId,
+        enqueuedAt: new Date(deadLetter.job.enqueuedAt),
+        notBefore: new Date(deadLetter.job.notBefore),
+        attempts: deadLetter.job.attempts,
+      },
+    };
+  }
+
+  return {
+    ...base,
+    payloadDigest: deadLetter.payloadDigest,
+    payloadBytes: deadLetter.payloadBytes,
+  };
+}
+
+function normalizeMemoryExtractionFailureClassification(value: string): string {
+  return memoryExtractionFailureClassifications.has(value) ? value : "internal_error";
+}
+
+async function recordMemoryExtractionBatchReplayAuditEvents(input: {
+  auditLog: InMemoryAuditLog;
+  requestedIds: string[];
+  result: Awaited<
+    ReturnType<MemoryExtractionRuntime["deadLetters"]["replayBatch"]>
+  >;
+}): Promise<void> {
+  const unsuccessfulIds = new Set([
+    ...input.result.notFoundIds,
+    ...input.result.unsupportedLegacyIds,
+  ]);
+  const replayedIds = input.requestedIds.filter((id) => !unsuccessfulIds.has(id));
+  if (replayedIds.length !== input.result.replayedCount) {
+    return;
+  }
+
+  for (const id of replayedIds) {
+    await recordMemoryExtractionRecoveryAuditEvent({
+      auditLog: input.auditLog,
+      type: "memory_extraction_dlq_replayed",
+      id,
+    });
+  }
+}
+
+async function recordMemoryExtractionRecoveryAuditEvent(input: {
+  auditLog: InMemoryAuditLog;
+  type: "memory_extraction_dlq_replayed" | "memory_extraction_dlq_deleted";
+  id: string;
+}): Promise<void> {
+  try {
+    await input.auditLog.record({
+      type: input.type,
+      documentId: input.id,
+      fragmentIds: [],
+    });
+  } catch {
+    // Operator recovery succeeds independently of the bounded audit sink.
+  }
+}
+
 function toAuditEventResponse(event: RecordedAuditEvent) {
   return {
     ...event,
@@ -2124,6 +2473,15 @@ function parseDeadLetterBatchReplayRequest(
   }
 
   return { ids: Array.from(new Set(ids as string[])) };
+}
+
+function parseMemoryExtractionDeadLetterBatchReplayRequest(
+  value: unknown,
+): DeadLetterBatchReplayRequest | undefined {
+  if (!isRecord(value) || Object.keys(value).length !== 1 || !("ids" in value)) {
+    return undefined;
+  }
+  return parseDeadLetterBatchReplayRequest(value);
 }
 
 function parseRegisterAuthorizedWikiDocumentRequest(

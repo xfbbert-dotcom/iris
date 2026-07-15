@@ -1,4 +1,5 @@
 import type { FeishuAuthConfig } from "../feishu/feishu-auth.js";
+import { readDatabaseConfig } from "../database/database-config.js";
 
 export type EnvLike = Record<string, string | undefined>;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -51,6 +52,20 @@ export type DocumentSyncWorkerRuntimeConfig =
       redisUrl: string;
       intervalMs: number;
       batchLimit: number;
+    };
+
+export type MemoryExtractionRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      databaseUrl: string;
+      redisUrl: string;
+      aiWorkerBaseUrl: string;
+      aiWorkerToken: string;
+      irisBotOpenId: string;
+      intervalMs: number;
+      batchLimit: number;
+      minConfidence: number;
     };
 
 export type FeishuOpenApiConfig = {
@@ -232,6 +247,53 @@ export function readDocumentSyncWorkerRuntimeConfig(
   };
 }
 
+export function readMemoryExtractionRuntimeConfig(
+  env: EnvLike = process.env,
+): MemoryExtractionRuntimeConfig {
+  const enabled = readOptionalEnv(env.IRIS_MEMORY_EXTRACTION_ENABLED);
+  if (enabled !== "true") {
+    return { enabled: false };
+  }
+
+  const { databaseUrl } = readDatabaseConfig(env);
+  const redisUrl = readRedisUrlEnv(readRequiredEnv("REDIS_URL", env.REDIS_URL));
+  const irisBotOpenId = readOptionalFeishuBotOpenId(env);
+  if (irisBotOpenId === undefined) {
+    throw new Error("IRIS_FEISHU_BOT_OPEN_ID is required when memory extraction is enabled");
+  }
+
+  return {
+    enabled: true,
+    databaseUrl,
+    redisUrl,
+    aiWorkerBaseUrl: readHttpBaseUrlEnv(
+      "IRIS_AI_WORKER_BASE_URL",
+      env.IRIS_AI_WORKER_BASE_URL,
+    ),
+    aiWorkerToken: readVisibleBearerTokenEnv(
+      "IRIS_AI_WORKER_TOKEN",
+      env.IRIS_AI_WORKER_TOKEN,
+    ),
+    irisBotOpenId,
+    intervalMs: readTimerDelayEnv(
+      "IRIS_MEMORY_EXTRACTION_INTERVAL_MS",
+      env.IRIS_MEMORY_EXTRACTION_INTERVAL_MS,
+      1000,
+    ),
+    batchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_MEMORY_EXTRACTION_BATCH_LIMIT",
+      env.IRIS_MEMORY_EXTRACTION_BATCH_LIMIT,
+      20,
+      100,
+    ),
+    minConfidence: readConfidenceEnv(
+      "IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE",
+      env.IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE,
+      0.85,
+    ),
+  };
+}
+
 export function readFeishuOpenApiConfig(env: EnvLike = process.env): FeishuOpenApiConfig {
   return {
     appId: readRequiredEnv("FEISHU_APP_ID", env.FEISHU_APP_ID),
@@ -280,6 +342,9 @@ function readRequiredEnv(name: string, value: string | undefined): string {
 }
 
 function readHttpBaseUrlEnv(name: string, value: string | undefined): string {
+  if (value !== undefined && /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new Error(`${name} must not include control characters`);
+  }
   const trimmed = readRequiredEnv(name, value);
   let parsed: URL;
   try {
@@ -298,6 +363,15 @@ function readHttpBaseUrlEnv(name: string, value: string | undefined): string {
   }
 
   return trimTrailingSlash(trimmed);
+}
+
+function readVisibleBearerTokenEnv(name: string, value: string | undefined): string {
+  const token = readRequiredEnv(name, value);
+  if (token.length > 4096 || !/^[!-~]+$/u.test(token) || token.includes(",")) {
+    throw new Error(`${name} must be a visible safe bearer token`);
+  }
+
+  return token;
 }
 
 function readRedisUrlEnv(value: string | undefined): string {
@@ -349,6 +423,40 @@ function readTimerDelayEnv(
     throw new Error(`${name} must not exceed ${MAX_TIMER_DELAY_MS}`);
   }
 
+  return parsed;
+}
+
+function readBoundedPositiveIntegerEnv(
+  name: string,
+  value: string | undefined,
+  defaultValue: number,
+  maximum: number,
+): number {
+  const parsed = readPositiveIntegerEnv(name, value, defaultValue);
+  if (parsed > maximum) {
+    throw new Error(`${name} must not exceed ${maximum}`);
+  }
+
+  return parsed;
+}
+
+function readConfidenceEnv(
+  name: string,
+  value: string | undefined,
+  defaultValue: number,
+): number {
+  const trimmed = readOptionalEnv(value);
+  if (trimmed === undefined) {
+    return defaultValue;
+  }
+  if (!/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/u.test(trimmed)) {
+    throw new Error(`${name} must be between 0 and 1`);
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new Error(`${name} must be between 0 and 1`);
+  }
   return parsed;
 }
 
