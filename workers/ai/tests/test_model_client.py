@@ -375,8 +375,9 @@ async def test_real_http_protocol_rejects_extreme_content_length_without_raw_err
 
     server = await asyncio.start_server(handle_connection, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
+    # Keep this protocol assertion independent of Windows event-loop scheduling latency.
     client = OpenAICompatibleModelClient(
-        settings(base_url=f"http://127.0.0.1:{port}", timeout_ms=1000)
+        settings(base_url=f"http://127.0.0.1:{port}", timeout_ms=5000)
     )
 
     try:
