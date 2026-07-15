@@ -43,9 +43,9 @@ describe("readOptionalFeishuBotOpenId", () => {
     expect(readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: "   " })).toBeUndefined();
   });
 
-  it("reads and trims the Iris Feishu bot open ID", () => {
-    expect(readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: " ou_iris " })).toBe(
-      "ou_iris",
+  it("reads an exact ASCII Iris Feishu bot open ID", () => {
+    expect(readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: "ou_AbC123" })).toBe(
+      "ou_AbC123",
     );
   });
 
@@ -53,6 +53,30 @@ describe("readOptionalFeishuBotOpenId", () => {
     expect(() =>
       readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: "o".repeat(513) }),
     ).toThrow("IRIS_FEISHU_BOT_OPEN_ID must be at most 512 characters");
+  });
+
+  it.each([
+    " ou_iris ",
+    "ou_iris bot",
+    "ou_iris\u0000hidden",
+    "ou_iris\u007f",
+    "ou_caf\u00e9",
+    "on_iris",
+    "ou_",
+    "ou_iris-1",
+  ])("rejects an unsafe Iris Feishu bot open ID without echoing it: %j", (value) => {
+    let error: unknown;
+    try {
+      readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: value });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "IRIS_FEISHU_BOT_OPEN_ID must match the Feishu open ID format",
+    );
+    expect((error as Error).message).not.toContain(value);
   });
 });
 

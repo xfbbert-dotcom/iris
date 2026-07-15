@@ -40,6 +40,27 @@ describe("validateCandidates", () => {
     expect(result.rejectionCodes).toEqual(["low_confidence"]);
   });
 
+  it("uses an explicit minimum confidence without changing the default", () => {
+    const candidate = candidateFixture({ confidence: 0.9 });
+
+    expect(validateCandidates({ run: runFixture(), candidates: [candidate] })).toMatchObject({
+      acceptedCount: 1,
+      rejectedCount: 0,
+    });
+    expect(
+      validateCandidates({
+        run: runFixture(),
+        candidates: [candidate],
+        minConfidence: 1,
+      }),
+    ).toMatchObject({
+      accepted: [],
+      acceptedCount: 0,
+      rejectedCount: 1,
+      rejectionCodes: ["low_confidence"],
+    });
+  });
+
   it("rejects context-only evidence even when the context object claims eligibility", () => {
     const run = runFixture();
     run.contextMessages[0]!.evidenceEligible = true;

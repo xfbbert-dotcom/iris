@@ -129,6 +129,12 @@ type StatusCountsRow = {
   completed: unknown;
   skipped: unknown;
   failed_runs: unknown;
+  diagnostic_run_count: unknown;
+  valid_diagnostic_run_count: unknown;
+  accepted_candidates: unknown;
+  rejected_candidates: unknown;
+  duplicate_candidates: unknown;
+  conflict_candidates: unknown;
 };
 
 type ActiveMemoryContentRow = {
@@ -837,18 +843,80 @@ export function createPostgresMemoryExtractionRepository({
 
     async getStatusCounts() {
       const result = await dataSource.query<StatusCountsRow>(`
+        WITH request_counts AS (
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+            COUNT(*) FILTER (WHERE status = 'processing')::int AS processing,
+            COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+            COUNT(*) FILTER (WHERE status = 'skipped')::int AS skipped
+          FROM group_memory_extraction_requests
+        ),
+        diagnostic_rows AS (
+          SELECT regexp_match(
+            r.failure_classification,
+            '^v3:p([0-8]):a([0-8]):r([0-8]):d([0-8]):c([0-8]):x[a-z_]*(,[a-z_]+)?:h[A-Za-z0-9_-]{43}$'
+          ) AS marker
+          FROM group_memory_extraction_runs r
+          WHERE r.status = 'completed'
+            AND EXISTS (
+              SELECT 1
+              FROM group_memory_extraction_requests request
+              WHERE request.run_id = r.id AND request.status = 'completed'
+            )
+        ),
+        parsed_diagnostics AS (
+          SELECT
+            marker,
+            marker IS NOT NULL
+              AND marker[2]::int + marker[3]::int = marker[1]::int
+              AND marker[4]::int + marker[5]::int <= marker[3]::int AS valid
+          FROM diagnostic_rows
+        ),
+        run_counts AS (
+          SELECT
+            (SELECT COUNT(*)::int
+             FROM group_memory_extraction_runs
+             WHERE status = 'failed') AS failed_runs,
+            COUNT(*)::int AS diagnostic_run_count,
+            COUNT(*) FILTER (WHERE valid)::int AS valid_diagnostic_run_count,
+            COALESCE(SUM(CASE WHEN valid THEN marker[2]::int ELSE 0 END), 0)::int
+              AS accepted_candidates,
+            COALESCE(SUM(CASE WHEN valid THEN marker[3]::int ELSE 0 END), 0)::int
+              AS rejected_candidates,
+            COALESCE(SUM(CASE WHEN valid THEN marker[4]::int ELSE 0 END), 0)::int
+              AS duplicate_candidates,
+            COALESCE(SUM(CASE WHEN valid THEN marker[5]::int ELSE 0 END), 0)::int
+              AS conflict_candidates
+          FROM parsed_diagnostics
+        )
         SELECT
-          COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
-          COUNT(*) FILTER (WHERE status = 'processing')::int AS processing,
-          COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
-          COUNT(*) FILTER (WHERE status = 'skipped')::int AS skipped,
-          (SELECT COUNT(*)::int FROM group_memory_extraction_runs WHERE status = 'failed')
-            AS failed_runs
-        FROM group_memory_extraction_requests
+          request_counts.pending,
+          request_counts.processing,
+          request_counts.completed,
+          request_counts.skipped,
+          run_counts.failed_runs,
+          run_counts.diagnostic_run_count,
+          run_counts.valid_diagnostic_run_count,
+          run_counts.accepted_candidates,
+          run_counts.rejected_candidates,
+          run_counts.duplicate_candidates,
+          run_counts.conflict_candidates
+        FROM request_counts CROSS JOIN run_counts
       `);
       const [row] = result.rows;
       if (row === undefined) {
         throw new Error("memory extraction status count returned no rows");
+      }
+      const diagnosticRunCount = requireNumber(
+        "diagnostic run count",
+        row.diagnostic_run_count,
+      );
+      const validDiagnosticRunCount = requireNumber(
+        "valid diagnostic run count",
+        row.valid_diagnostic_run_count,
+      );
+      if (diagnosticRunCount !== validDiagnosticRunCount) {
+        throw new Error("memory extraction diagnostics aggregate is invalid");
       }
       return {
         pending: requireNumber("pending count", row.pending),
@@ -856,6 +924,22 @@ export function createPostgresMemoryExtractionRepository({
         completed: requireNumber("completed count", row.completed),
         skipped: requireNumber("skipped count", row.skipped),
         failedRuns: requireNumber("failed run count", row.failed_runs),
+        acceptedCandidates: requireNumber(
+          "accepted candidate count",
+          row.accepted_candidates,
+        ),
+        rejectedCandidates: requireNumber(
+          "rejected candidate count",
+          row.rejected_candidates,
+        ),
+        duplicateCandidates: requireNumber(
+          "duplicate candidate count",
+          row.duplicate_candidates,
+        ),
+        conflictCandidates: requireNumber(
+          "conflict candidate count",
+          row.conflict_candidates,
+        ),
       };
     },
   };

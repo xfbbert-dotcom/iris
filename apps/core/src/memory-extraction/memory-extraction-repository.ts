@@ -29,6 +29,10 @@ export type MemoryExtractionStatusCounts = {
   completed: number;
   skipped: number;
   failedRuns: number;
+  acceptedCandidates: number;
+  rejectedCandidates: number;
+  duplicateCandidates: number;
+  conflictCandidates: number;
 };
 
 export type MemoryExtractionRequestRoute = {

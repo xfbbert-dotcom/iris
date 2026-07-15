@@ -248,7 +248,7 @@ describe("createEventWorkerRuntime", () => {
         ...enabledEnv(),
         FEISHU_APP_ID: "app-id",
         FEISHU_APP_SECRET: "app-secret",
-        IRIS_FEISHU_BOT_OPEN_ID: " ou_iris ",
+        IRIS_FEISHU_BOT_OPEN_ID: "ou_iris",
       },
       dependencies,
       runtimeController,

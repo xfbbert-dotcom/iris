@@ -6,7 +6,7 @@ import {
 } from "./ai-worker-memory-extraction-client.js";
 import type { ClaimedMemoryExtractionRun } from "./memory-extraction-repository.js";
 
-const MIN_CONFIDENCE = 0.85;
+const DEFAULT_MIN_CONFIDENCE = 0.85;
 const MAX_CANDIDATES = 8;
 const MAX_EVIDENCE_IDS = 40;
 const MAX_CONTEXT_MESSAGES = 10;
@@ -49,7 +49,9 @@ export type MemoryCandidateValidationResult = MemoryExtractionDiagnostics & {
 export function validateCandidates(input: {
   run: ClaimedMemoryExtractionRun;
   candidates: readonly ProposedMemoryCandidate[];
+  minConfidence?: number;
 }): MemoryCandidateValidationResult {
+  const minConfidence = requireMinConfidence(input.minConfidence);
   if (!Array.isArray(input.candidates) || input.candidates.length > MAX_CANDIDATES) {
     return {
       accepted: [],
@@ -130,7 +132,7 @@ export function validateCandidates(input: {
       reject("invalid_relation_reference");
       continue;
     }
-    if (candidate.confidence < MIN_CONFIDENCE) {
+    if (candidate.confidence < minConfidence) {
       reject("low_confidence");
       continue;
     }
@@ -189,6 +191,19 @@ export function validateCandidates(input: {
     conflictCount,
     rejectionCodes: rejectionCodes.sort(compareRejectionCodes),
   };
+}
+
+function requireMinConfidence(value: number | undefined): number {
+  const minConfidence = value ?? DEFAULT_MIN_CONFIDENCE;
+  if (
+    typeof minConfidence !== "number" ||
+    !Number.isFinite(minConfidence) ||
+    minConfidence < 0 ||
+    minConfidence > 1
+  ) {
+    throw new Error("minimum confidence must be between 0 and 1");
+  }
+  return minConfidence;
 }
 
 function isGrosslyInvalidRun(run: ClaimedMemoryExtractionRun): boolean {

@@ -83,6 +83,7 @@ export type MemoryExtractionWorkerDependencies = {
   client: AiWorkerMemoryExtractionClient;
   auditLog?: AuditLog;
   runtimeController: RuntimeController;
+  minConfidence?: number;
   now?: () => Date;
   onAuditError?: (error: unknown) => void;
 };
@@ -384,7 +385,13 @@ async function processClaimedRun(input: {
 
   let validation: ReturnType<typeof validateCandidates>;
   try {
-    validation = validateCandidates({ run, candidates: response.candidates });
+    validation = validateCandidates({
+      run,
+      candidates: response.candidates,
+      ...(dependencies.minConfidence === undefined
+        ? {}
+        : { minConfidence: dependencies.minConfidence }),
+    });
   } catch {
     await handleModelFailure({
       dependencies,

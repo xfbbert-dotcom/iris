@@ -446,9 +446,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         enabled: answerDraftOrchestrator !== undefined,
       },
       feishuGateway: getFeishuGatewayStatus(feishuGatewayStatus),
-      ...(memoryExtractionRuntime === undefined
-        ? {}
-        : { memoryExtraction: await getMemoryExtractionStatus(memoryExtractionRuntime) }),
+      memoryExtraction:
+        memoryExtractionRuntime === undefined
+          ? { ok: true, enabled: false, running: false }
+          : await getMemoryExtractionStatus(memoryExtractionRuntime),
       eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
@@ -768,12 +769,26 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
 
     try {
-      const result = await memoryExtractionRuntime.deadLetters.replayBatch(parsedRequest);
-      await recordMemoryExtractionBatchReplayAuditEvents({
-        auditLog,
-        requestedIds: parsedRequest.ids,
-        result,
-      });
+      const result = {
+        replayedCount: 0,
+        notFoundIds: [] as string[],
+        unsupportedLegacyIds: [] as string[],
+      };
+      for (const id of parsedRequest.ids) {
+        const status = await memoryExtractionRuntime.deadLetters.replay(id);
+        if (status === "replayed") {
+          result.replayedCount += 1;
+          await recordMemoryExtractionRecoveryAuditEvent({
+            auditLog,
+            type: "memory_extraction_dlq_replayed",
+            id,
+          });
+        } else if (status === "not_found") {
+          result.notFoundIds.push(id);
+        } else {
+          result.unsupportedLegacyIds.push(id);
+        }
+      }
       return { ok: true, ...result };
     } catch {
       return reply.code(500).send({
@@ -1704,6 +1719,12 @@ function toContentFreeMemoryExtractionStatus(
     processingJobCount: status.processingJobCount,
     delayedJobCount: status.delayedJobCount,
     deadLetterJobCount: status.deadLetterJobCount,
+    acceptedCandidateCount: status.acceptedCandidateCount,
+    rejectedCandidateCount: status.rejectedCandidateCount,
+    duplicateCandidateCount: status.duplicateCandidateCount,
+    conflictCandidateCount: status.conflictCandidateCount,
+    skippedRequestCount: status.skippedRequestCount,
+    failedRunCount: status.failedRunCount,
     ...(status.providerCooldownUntil === undefined
       ? {}
       : { providerCooldownUntil: new Date(status.providerCooldownUntil) }),
@@ -2335,31 +2356,6 @@ function toMemoryExtractionDeadLetterResponse(deadLetter: MemoryExtractionDeadLe
 
 function normalizeMemoryExtractionFailureClassification(value: string): string {
   return memoryExtractionFailureClassifications.has(value) ? value : "internal_error";
-}
-
-async function recordMemoryExtractionBatchReplayAuditEvents(input: {
-  auditLog: InMemoryAuditLog;
-  requestedIds: string[];
-  result: Awaited<
-    ReturnType<MemoryExtractionRuntime["deadLetters"]["replayBatch"]>
-  >;
-}): Promise<void> {
-  const unsuccessfulIds = new Set([
-    ...input.result.notFoundIds,
-    ...input.result.unsupportedLegacyIds,
-  ]);
-  const replayedIds = input.requestedIds.filter((id) => !unsuccessfulIds.has(id));
-  if (replayedIds.length !== input.result.replayedCount) {
-    return;
-  }
-
-  for (const id of replayedIds) {
-    await recordMemoryExtractionRecoveryAuditEvent({
-      auditLog: input.auditLog,
-      type: "memory_extraction_dlq_replayed",
-      id,
-    });
-  }
 }
 
 async function recordMemoryExtractionRecoveryAuditEvent(input: {

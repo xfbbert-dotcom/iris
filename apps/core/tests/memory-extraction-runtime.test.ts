@@ -55,7 +55,10 @@ describe("createMemoryExtractionRuntime", () => {
     expect(fixture.dependencies.createPostgresPool).toHaveBeenCalledOnce();
     expect(fixture.dependencies.createRedisClient).toHaveBeenCalledOnce();
     expect(fixture.dependencies.createRepository).toHaveBeenCalledWith({
-      dataSource: fixture.pool,
+      dataSource: expect.objectContaining({
+        query: expect.any(Function),
+        connect: expect.any(Function),
+      }),
     });
     expect(fixture.dependencies.createQueue).toHaveBeenCalledWith({
       client: expect.objectContaining({
@@ -75,6 +78,7 @@ describe("createMemoryExtractionRuntime", () => {
       client: fixture.aiClient,
       auditLog,
       runtimeController: controller,
+      minConfidence: 0.85,
     });
     expect(fixture.dependencies.createWorkerLoop).toHaveBeenCalledWith({
       worker: fixture.worker,
@@ -118,6 +122,12 @@ describe("createMemoryExtractionRuntime", () => {
       processingJobCount: 2,
       delayedJobCount: 1,
       deadLetterJobCount: 4,
+      acceptedCandidateCount: 9,
+      rejectedCandidateCount: 7,
+      duplicateCandidateCount: 3,
+      conflictCandidateCount: 2,
+      skippedRequestCount: 6,
+      failedRunCount: 5,
       providerCooldownUntil: new Date("2026-07-15T02:00:00.000Z"),
       latestBatch: {
         status: "succeeded",
@@ -200,8 +210,66 @@ describe("createMemoryExtractionRuntime", () => {
     await runtime?.close();
   });
 
-  it("does not start the loop when close wins a pending dependency connection", async () => {
-    const fixture = runtimeFixture({ deferRedisConnect: true });
+  it("wires configured minimum confidence into worker behavior and status", async () => {
+    const fixture = runtimeFixture();
+    const runtime = createMemoryExtractionRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE: "1",
+      },
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+
+    expect(fixture.dependencies.createWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ minConfidence: 1 }),
+    );
+    runtime?.start();
+    await vi.waitFor(() => expect(fixture.loop.start).toHaveBeenCalledOnce());
+    await expect(runtime?.getStatus()).resolves.toMatchObject({ minConfidence: 1 });
+    await runtime?.close();
+  });
+
+  it("prevents Redis connect when close begins during a pending database probe", async () => {
+    const fixture = runtimeFixture({ deferDatabaseProbe: true });
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+    runtime?.start();
+    expect(fixture.redis.connect).not.toHaveBeenCalled();
+
+    const close = runtime?.close();
+    fixture.resolveDatabaseProbe();
+    await close;
+
+    expect(fixture.redis.connect).not.toHaveBeenCalled();
+    expect(fixture.redis.destroy).toHaveBeenCalledOnce();
+    expect(fixture.loop.start).not.toHaveBeenCalled();
+    expect(fixture.cleanupOrder).toEqual(["loop", "redis-destroy", "postgres"]);
+  });
+
+  it("prevents Redis connect when close wins after the database probe settles", async () => {
+    const fixture = runtimeFixture({ deferDatabaseProbe: true });
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+    runtime?.start();
+
+    fixture.resolveDatabaseProbe();
+    await runtime?.close();
+
+    expect(fixture.redis.connect).not.toHaveBeenCalled();
+    expect(fixture.redis.destroy).toHaveBeenCalledOnce();
+    expect(fixture.loop.start).not.toHaveBeenCalled();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+  });
+
+  it("destroys a pending Redis connect and awaits readiness plus pool shutdown", async () => {
+    const fixture = runtimeFixture({ deferRedisConnect: true, deferPoolEnd: true });
     const runtime = createMemoryExtractionRuntime({
       env: enabledEnv(),
       runtimeController: runtimeController(),
@@ -210,12 +278,22 @@ describe("createMemoryExtractionRuntime", () => {
     runtime?.start();
     await vi.waitFor(() => expect(fixture.redis.connect).toHaveBeenCalledOnce());
 
-    const close = runtime?.close();
-    fixture.resolveRedisConnect();
-    await close;
+    let closed = false;
+    const close = runtime?.close().then(() => {
+      closed = true;
+    });
+    const fallback = setTimeout(() => fixture.rejectRedisConnect(), 100);
+    await vi.waitFor(() => expect(fixture.pool.end).toHaveBeenCalledOnce());
 
+    expect(fixture.redis.destroy).toHaveBeenCalledOnce();
+    expect(fixture.redis.quit).not.toHaveBeenCalled();
     expect(fixture.loop.start).not.toHaveBeenCalled();
-    expect(fixture.cleanupOrder).toEqual(["loop", "redis", "postgres"]);
+    expect(closed).toBe(false);
+    fixture.resolvePoolEnd();
+    await close;
+    clearTimeout(fallback);
+    expect(closed).toBe(true);
+    expect(fixture.cleanupOrder).toEqual(["loop", "redis-destroy", "postgres"]);
   });
 
   it("closes every later resource when an earlier close operation fails", async () => {
@@ -241,7 +319,7 @@ describe("createMemoryExtractionRuntime", () => {
     expect(fixture.pool.end).toHaveBeenCalledOnce();
   });
 
-  it("cleans the pool after a partial composition failure without connecting Redis", async () => {
+  it("runs fallible pure composition before creating connection resources", () => {
     const fixture = runtimeFixture();
     const compositionError = new Error("queue composition failed");
     fixture.dependencies.createQueue.mockImplementationOnce(() => {
@@ -256,9 +334,31 @@ describe("createMemoryExtractionRuntime", () => {
       }),
     ).toThrow(compositionError);
 
-    await vi.waitFor(() => expect(fixture.pool.end).toHaveBeenCalledOnce());
+    expect(fixture.dependencies.createPostgresPool).not.toHaveBeenCalled();
     expect(fixture.dependencies.createRedisClient).not.toHaveBeenCalled();
+    expect(fixture.pool.end).not.toHaveBeenCalled();
     expect(fixture.redis.connect).not.toHaveBeenCalled();
+  });
+
+  it("destroys the unconnected Redis client when the pool factory throws", () => {
+    const fixture = runtimeFixture();
+    const poolError = new Error("pool factory failed");
+    fixture.dependencies.createPostgresPool.mockImplementationOnce(() => {
+      throw poolError;
+    });
+
+    expect(() =>
+      createMemoryExtractionRuntime({
+        env: enabledEnv(),
+        runtimeController: runtimeController(),
+        dependencies: fixture.dependencies,
+      }),
+    ).toThrow(poolError);
+
+    expect(fixture.dependencies.createRedisClient).toHaveBeenCalledOnce();
+    expect(fixture.redis.destroy).toHaveBeenCalledOnce();
+    expect(fixture.redis.connect).not.toHaveBeenCalled();
+    expect(fixture.pool.end).not.toHaveBeenCalled();
   });
 
   it("surfaces a synchronous dependency-start failure for app startup cleanup", async () => {
@@ -310,27 +410,52 @@ describe("createMemoryExtractionRuntime", () => {
 
     await vi.waitFor(() => expect(fixture.pool.end).toHaveBeenCalledOnce());
     expect(fixture.redis.connect).toHaveBeenCalledTimes(expectedRedisConnects);
+    expect(fixture.redis.destroy).toHaveBeenCalledOnce();
     expect(fixture.redis.quit).not.toHaveBeenCalled();
     expect(fixture.loop.start).not.toHaveBeenCalled();
-    expect(fixture.cleanupOrder).toEqual(["loop", "postgres"]);
+    expect(fixture.cleanupOrder).toEqual(["loop", "redis-destroy", "postgres"]);
     await runtime?.close();
     expect(fixture.pool.end).toHaveBeenCalledOnce();
   });
 });
 
-function runtimeFixture({ deferRedisConnect = false }: { deferRedisConnect?: boolean } = {}) {
+function runtimeFixture({
+  deferDatabaseProbe = false,
+  deferRedisConnect = false,
+  deferPoolEnd = false,
+}: {
+  deferDatabaseProbe?: boolean;
+  deferRedisConnect?: boolean;
+  deferPoolEnd?: boolean;
+} = {}) {
   const cleanupOrder: string[] = [];
+  let resolveDatabaseProbe: () => void = () => undefined;
   let resolveRedisConnect: () => void = () => undefined;
+  let rejectRedisConnect: () => void = () => undefined;
+  let resolvePoolEnd: () => void = () => undefined;
   const transactionClient = {
     query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
     release: vi.fn(),
   };
-  const poolQuery = vi.fn(async () => ({ rows: [{ ok: 1 }], rowCount: 1 }));
+  const poolQuery = vi.fn(() => {
+    if (!deferDatabaseProbe) {
+      return Promise.resolve({ rows: [{ ok: 1 }], rowCount: 1 });
+    }
+    return new Promise<{ rows: Array<{ ok: number }>; rowCount: number }>((resolve) => {
+      resolveDatabaseProbe = () => resolve({ rows: [{ ok: 1 }], rowCount: 1 });
+    });
+  });
   const pool = {
     query: poolQuery,
     connect: vi.fn(async () => transactionClient),
-    end: vi.fn(async () => {
+    end: vi.fn(() => {
       cleanupOrder.push("postgres");
+      if (!deferPoolEnd) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        resolvePoolEnd = resolve;
+      });
     }),
   };
   const redis = {
@@ -338,8 +463,9 @@ function runtimeFixture({ deferRedisConnect = false }: { deferRedisConnect?: boo
       if (!deferRedisConnect) {
         return Promise.resolve(redis);
       }
-      return new Promise<typeof redis>((resolve) => {
+      return new Promise<typeof redis>((resolve, reject) => {
         resolveRedisConnect = () => resolve(redis);
+        rejectRedisConnect = () => reject(new Error("Redis connect aborted"));
       });
     }),
     eval: vi.fn(async () => 1),
@@ -349,8 +475,24 @@ function runtimeFixture({ deferRedisConnect = false }: { deferRedisConnect?: boo
     quit: vi.fn(async () => {
       cleanupOrder.push("redis");
     }),
+    destroy: vi.fn(() => {
+      cleanupOrder.push("redis-destroy");
+      rejectRedisConnect();
+    }),
   };
-  const repository = {} as MemoryExtractionRepository;
+  const repository = {
+    getStatusCounts: vi.fn(async () => ({
+      pending: 0,
+      processing: 0,
+      completed: 0,
+      skipped: 6,
+      failedRuns: 5,
+      acceptedCandidates: 9,
+      rejectedCandidates: 7,
+      duplicateCandidates: 3,
+      conflictCandidates: 2,
+    })),
+  } as unknown as MemoryExtractionRepository;
   const queue: MemoryExtractionQueue = {
     enqueue: vi.fn(async () => undefined),
     recoverProcessing: vi.fn(async () => ({ recoveredCount: 0, remainingCount: 0 })),
@@ -426,6 +568,9 @@ function runtimeFixture({ deferRedisConnect = false }: { deferRedisConnect?: boo
     queue,
     redis,
     repository,
+    resolveDatabaseProbe: () => resolveDatabaseProbe(),
+    rejectRedisConnect: () => rejectRedisConnect(),
+    resolvePoolEnd: () => resolvePoolEnd(),
     resolveRedisConnect: () => resolveRedisConnect(),
     worker,
   };

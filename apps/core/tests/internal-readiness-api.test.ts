@@ -75,6 +75,44 @@ describe("memory extraction internal API", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true, enabled: false, running: false });
+
+    const consolidated = await app.inject({ method: "GET", url: "/internal/status" });
+    expect(consolidated.statusCode).toBe(200);
+    expect(consolidated.json().componentOrder).toEqual([
+      "audit",
+      "runtimeControl",
+      "answerDraft",
+      "feishuGateway",
+      "memoryExtraction",
+      "eventWorker",
+      "documentSync",
+      "reindex",
+    ]);
+    expect(consolidated.json().summary).toMatchObject({
+      componentCount: 8,
+      healthyComponentCount: 3,
+      enabledComponentCount: 3,
+      disabledComponentCount: 5,
+      disabledComponents: [
+        "answerDraft",
+        "memoryExtraction",
+        "eventWorker",
+        "documentSync",
+        "reindex",
+      ],
+      componentStatusCounts: {
+        healthy: 3,
+        disabled: 5,
+        degraded: 0,
+        stopped: 0,
+      },
+    });
+    expect(consolidated.json().components.memoryExtraction).toEqual({
+      status: "disabled",
+      ok: true,
+      enabled: false,
+      running: false,
+    });
     await app.close();
   });
 
@@ -159,6 +197,12 @@ describe("memory extraction internal API", () => {
       processingJobCount: 2,
       delayedJobCount: 1,
       deadLetterJobCount: 0,
+      acceptedCandidateCount: 9,
+      rejectedCandidateCount: 7,
+      duplicateCandidateCount: 3,
+      conflictCandidateCount: 2,
+      skippedRequestCount: 6,
+      failedRunCount: 5,
       providerCooldownUntil: "2026-07-15T06:00:00.000Z",
       latestBatch: {
         status: "succeeded",
@@ -186,6 +230,12 @@ describe("memory extraction internal API", () => {
           processingJobCount: 2,
           delayedJobCount: 1,
           deadLetterJobCount: 0,
+          acceptedCandidateCount: 9,
+          rejectedCandidateCount: 7,
+          duplicateCandidateCount: 3,
+          conflictCandidateCount: 2,
+          skippedRequestCount: 6,
+          failedRunCount: 5,
           degradedReason: "ai_worker_unavailable",
         },
       },
@@ -200,6 +250,37 @@ describe("memory extraction internal API", () => {
     expect(JSON.stringify(direct.json())).not.toContain("raw provider error");
     expect(JSON.stringify(direct.json())).not.toContain("secret upstream body");
 
+    await app.close();
+  });
+
+  it("degrades status with a fixed content-free error when diagnostics aggregation fails", async () => {
+    const runtime = fakeMemoryExtractionRuntime({
+      getStatus: vi.fn(async () => {
+        throw new Error("database returned raw candidate and secret-token");
+      }),
+    });
+    const app = buildTestApp({ createMemoryExtractionRuntime: () => runtime });
+
+    const direct = await app.inject({
+      method: "GET",
+      url: "/internal/memory-extraction/status",
+    });
+    const consolidated = await app.inject({ method: "GET", url: "/internal/status" });
+    const health = await app.inject({ method: "GET", url: "/health" });
+
+    expect(direct.statusCode).toBe(500);
+    expect(direct.json()).toEqual({ ok: false, error: "memory_extraction_status_failed" });
+    expect(consolidated.statusCode).toBe(200);
+    expect(consolidated.json().components.memoryExtraction).toEqual({
+      status: "degraded",
+      ok: false,
+      enabled: true,
+      running: false,
+      error: "memory_extraction_status_failed",
+    });
+    expect(health.statusCode).toBe(200);
+    expect(JSON.stringify(direct.json())).not.toContain("secret-token");
+    expect(JSON.stringify(consolidated.json())).not.toContain("raw candidate");
     await app.close();
   });
 
@@ -309,6 +390,8 @@ describe("memory extraction internal API", () => {
         replay: vi
           .fn()
           .mockResolvedValueOnce("replayed" as const)
+          .mockResolvedValueOnce("not_found" as const)
+          .mockResolvedValueOnce("replayed" as const)
           .mockResolvedValueOnce("not_found" as const),
         replayBatch: vi.fn(async () => ({
           replayedCount: 1,
@@ -358,9 +441,9 @@ describe("memory extraction internal API", () => {
       notFoundIds: ["missing"],
       unsupportedLegacyIds: [],
     });
-    expect(runtime.deadLetters.replayBatch).toHaveBeenCalledWith({
-      ids: ["dlq-batch", "missing"],
-    });
+    expect(runtime.deadLetters.replay).toHaveBeenNthCalledWith(3, "dlq-batch");
+    expect(runtime.deadLetters.replay).toHaveBeenNthCalledWith(4, "missing");
+    expect(runtime.deadLetters.replayBatch).not.toHaveBeenCalled();
     expect(auditLog.events).toEqual([
       expect.objectContaining({
         type: "memory_extraction_dlq_replayed",
@@ -393,6 +476,57 @@ describe("memory extraction internal API", () => {
       expect(invalid.statusCode).toBe(400);
     }
 
+    await app.close();
+  });
+
+  it("audits each successful batch replay before a later replay fails", async () => {
+    const auditLog = new InMemoryAuditLog();
+    const runtime = fakeMemoryExtractionRuntime({
+      deadLetters: {
+        list: vi.fn(async () => []),
+        replay: vi
+          .fn()
+          .mockResolvedValueOnce("replayed" as const)
+          .mockResolvedValueOnce("not_found" as const)
+          .mockResolvedValueOnce("replayed" as const)
+          .mockRejectedValueOnce(new Error("redis secret failure")),
+        replayBatch: vi.fn(),
+        delete: vi.fn(async () => "not_found" as const),
+      },
+    });
+    const app = buildTestApp({
+      auditLog,
+      createMemoryExtractionRuntime: () => runtime,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/memory-extraction/dead-letters/replay",
+      payload: { ids: ["replayed-1", "missing", "replayed-2", "failed", "replayed-1"] },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "memory_extraction_dead_letter_operation_failed",
+    });
+    expect(runtime.deadLetters.replay).toHaveBeenCalledTimes(4);
+    expect(runtime.deadLetters.replayBatch).not.toHaveBeenCalled();
+    expect(auditLog.events).toEqual([
+      expect.objectContaining({
+        type: "memory_extraction_dlq_replayed",
+        documentId: "replayed-1",
+        fragmentIds: [],
+      }),
+      expect.objectContaining({
+        type: "memory_extraction_dlq_replayed",
+        documentId: "replayed-2",
+        fragmentIds: [],
+      }),
+    ]);
+    expect(JSON.stringify(response.json())).not.toContain("redis secret failure");
+    expect(JSON.stringify(auditLog.events)).not.toContain("missing");
+    expect(JSON.stringify(auditLog.events)).not.toContain("failed");
     await app.close();
   });
 
@@ -484,6 +618,12 @@ function memoryExtractionStatus(overrides: Record<string, unknown> = {}) {
     processingJobCount: 2,
     delayedJobCount: 1,
     deadLetterJobCount: 0,
+    acceptedCandidateCount: 9,
+    rejectedCandidateCount: 7,
+    duplicateCandidateCount: 3,
+    conflictCandidateCount: 2,
+    skippedRequestCount: 6,
+    failedRunCount: 5,
     ...overrides,
   };
 }

@@ -44,6 +44,7 @@ type PostgresPool = PostgresMemoryExtractionDataSource & { end(): Promise<void> 
 type RedisClient = RedisMemoryExtractionQueueClient & {
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
+  destroy(): void;
 };
 
 export type MemoryExtractionDeadLetterOperations = {
@@ -64,6 +65,12 @@ export type MemoryExtractionRuntimeStatus = {
   processingJobCount: number;
   delayedJobCount: number;
   deadLetterJobCount: number;
+  acceptedCandidateCount: number;
+  rejectedCandidateCount: number;
+  duplicateCandidateCount: number;
+  conflictCandidateCount: number;
+  skippedRequestCount: number;
+  failedRunCount: number;
   providerCooldownUntil?: Date;
   latestBatch?: MemoryExtractionWorkerBatchSnapshot;
 };
@@ -125,168 +132,208 @@ export function createMemoryExtractionRuntime({
   const createLoop = dependencies.createWorkerLoop ?? createMemoryExtractionWorkerLoop;
   const createPlanner = dependencies.createPlanner ?? createMemoryExtractionPlanner;
 
-  let pool: PostgresPool | undefined;
+  const client = createAiWorkerClient({
+    baseUrl: runtimeConfig.aiWorkerBaseUrl,
+    token: runtimeConfig.aiWorkerToken,
+  });
+  let ownedPool: PostgresPool | undefined;
+  let redisConnection: Promise<RedisClient> | undefined;
+  let databaseReady: Promise<void> | undefined;
+  let dependenciesReady: Promise<void> | undefined;
+  const repository = createRepository({
+    dataSource: createLazyPostgresDataSource(() => requirePostgresPool(ownedPool)),
+  });
+  const queue: MemoryExtractionQueue = createQueue({
+    client: createLazyRedisClient(() => requireRedisConnection(redisConnection)),
+  });
+  const planner = createPlanner({
+    repository,
+    queue,
+    runtimeController,
+    irisBotOpenId: runtimeConfig.irisBotOpenId,
+  });
+  const worker = createWorker({
+    queue,
+    repository,
+    client,
+    ...(auditLog === undefined ? {} : { auditLog }),
+    runtimeController,
+    minConfidence: runtimeConfig.minConfidence,
+  });
+  const loop: MemoryExtractionWorkerLoop = createLoop({
+    worker,
+    intervalMs: runtimeConfig.intervalMs,
+    batchLimit: runtimeConfig.batchLimit,
+    onError: () => undefined,
+  });
+  const redis = createRedis(runtimeConfig.redisUrl);
   try {
-    const client = createAiWorkerClient({
-      baseUrl: runtimeConfig.aiWorkerBaseUrl,
-      token: runtimeConfig.aiWorkerToken,
-    });
-    const ownedPool = createPool({ databaseUrl: runtimeConfig.databaseUrl });
-    pool = ownedPool;
-    const repository = createRepository({ dataSource: ownedPool });
-
-    let redisConnection: Promise<RedisClient> | undefined;
-    let dependenciesReady: Promise<void> | undefined;
-    const queue: MemoryExtractionQueue = createQueue({
-      client: createLazyRedisClient(() => requireRedisConnection(redisConnection)),
-    });
-    const planner = createPlanner({
-      repository,
-      queue,
-      runtimeController,
-      irisBotOpenId: runtimeConfig.irisBotOpenId,
-    });
-    const worker = createWorker({
-      queue,
-      repository,
-      client,
-      ...(auditLog === undefined ? {} : { auditLog }),
-      runtimeController,
-    });
-    const loop: MemoryExtractionWorkerLoop = createLoop({
-      worker,
-      intervalMs: runtimeConfig.intervalMs,
-      batchLimit: runtimeConfig.batchLimit,
-      onError: () => undefined,
-    });
-    const redis = createRedis(runtimeConfig.redisUrl);
-    let startInitiated = false;
-    let closing = false;
-    let closePromise: Promise<void> | undefined;
-
-    const close = () => {
-      if (closePromise !== undefined) {
-        return closePromise;
-      }
-      closing = true;
-      closePromise = closeRuntimeResources([
-        () => loop.stop(),
-        async () => {
-          if (redisConnection === undefined) {
-            return;
-          }
-          let connectedRedis: RedisClient;
-          try {
-            connectedRedis = await redisConnection;
-          } catch {
-            return;
-          }
-          await connectedRedis.quit();
-        },
-        () => ownedPool.end(),
-      ]);
-      return closePromise;
-    };
-
-    const exposedPlanner: MemoryExtractionPlanner = {
-      async registerMessage(
-        message: ConversationMessage,
-        identity?: { senderOpenId?: string },
-      ) {
-        if (dependenciesReady === undefined) {
-          throw new Error("memory extraction runtime is not started");
-        }
-        await dependenciesReady;
-        if (closing) {
-          return;
-        }
-        await planner.registerMessage(message, identity);
-      },
-    };
-
-    return {
-      planner: exposedPlanner,
-      deadLetters: {
-        list: (input) => queue.listDeadLetters(input),
-        replay: (id) => queue.replayDeadLetter(id),
-        replayBatch: (input) => queue.replayDeadLetters(input),
-        delete: (id) => queue.deleteDeadLetter(id),
-      },
-      start() {
-        if (startInitiated || closing) {
-          return;
-        }
-        startInitiated = true;
-
-        const databaseProbe = ownedPool.query<{ ok: number }>("select 1 as ok");
-        const databaseReady = observeStartupPromise(
-          Promise.resolve(databaseProbe).then(() => undefined),
-        );
-        redisConnection = observeStartupPromise(
-          databaseReady.then(async () => {
-            await redis.connect();
-            return redis;
-          }),
-        );
-        dependenciesReady = observeStartupPromise(
-          Promise.all([databaseReady, redisConnection]).then(() => undefined),
-        );
-        void dependenciesReady.then(
-          () => {
-            if (!closing) {
-              loop.start();
-            }
-          },
-          () => {
-            void close().catch(() => undefined);
-          },
-        );
-      },
-      async getStatus() {
-        const loopSnapshot = loop.getSnapshot();
-        const [
-          workerHealthy,
-          pendingJobCount,
-          processingJobCount,
-          delayedJobCount,
-          deadLetterJobCount,
-          providerCooldownUntil,
-        ] = await Promise.all([
-          readWorkerHealth(client),
-          queue.getPendingCount(),
-          queue.getProcessingCount(),
-          queue.getDelayedCount(),
-          queue.getDeadLetterCount(),
-          queue.getProviderCooldown(),
-        ]);
-
-        return {
-          enabled: true,
-          running: loopSnapshot.running,
-          workerHealthy,
-          intervalMs: loopSnapshot.intervalMs,
-          batchLimit: loopSnapshot.batchLimit,
-          minConfidence: runtimeConfig.minConfidence,
-          pendingJobCount,
-          processingJobCount,
-          delayedJobCount,
-          deadLetterJobCount,
-          ...(providerCooldownUntil === undefined
-            ? {}
-            : { providerCooldownUntil: new Date(providerCooldownUntil) }),
-          ...(loopSnapshot.latestBatch === undefined
-            ? {}
-            : { latestBatch: toContentFreeBatchSnapshot(loopSnapshot.latestBatch) }),
-        };
-      },
-      close,
-    };
+    ownedPool = createPool({ databaseUrl: runtimeConfig.databaseUrl });
   } catch (error) {
-    if (pool !== undefined) {
-      schedulePartialPoolClose(pool);
+    try {
+      redis.destroy();
+    } catch {
+      // Preserve the pool construction failure.
     }
     throw error;
   }
+
+  let startInitiated = false;
+  let closing = false;
+  let redisConnected = false;
+  let redisDestroyed = false;
+  let closePromise: Promise<void> | undefined;
+
+  const close = () => {
+    if (closePromise !== undefined) {
+      return closePromise;
+    }
+    closing = true;
+    closePromise = closeRuntimeResources([
+      () => loop.stop(),
+      async () => {
+        if (!redisConnected && !redisDestroyed) {
+          redisDestroyed = true;
+          redis.destroy();
+        }
+        const readinessPromises: Promise<unknown>[] = [];
+        if (databaseReady !== undefined) readinessPromises.push(databaseReady);
+        if (redisConnection !== undefined) readinessPromises.push(redisConnection);
+        if (dependenciesReady !== undefined) readinessPromises.push(dependenciesReady);
+        await Promise.allSettled(readinessPromises);
+        if (redisConnected && !redisDestroyed) {
+          await redis.quit();
+        }
+      },
+      () => requirePostgresPool(ownedPool).end(),
+    ]);
+    return closePromise;
+  };
+
+  const exposedPlanner: MemoryExtractionPlanner = {
+    async registerMessage(
+      message: ConversationMessage,
+      identity?: { senderOpenId?: string },
+    ) {
+      if (dependenciesReady === undefined) {
+        throw new Error("memory extraction runtime is not started");
+      }
+      await dependenciesReady;
+      if (closing) {
+        return;
+      }
+      await planner.registerMessage(message, identity);
+    },
+  };
+
+  return {
+    planner: exposedPlanner,
+    deadLetters: {
+      list: (input) => queue.listDeadLetters(input),
+      replay: (id) => queue.replayDeadLetter(id),
+      replayBatch: (input) => queue.replayDeadLetters(input),
+      delete: (id) => queue.deleteDeadLetter(id),
+    },
+    start() {
+      if (startInitiated || closing) {
+        return;
+      }
+      startInitiated = true;
+
+      const databaseProbe = ownedPool.query<{ ok: number }>("select 1 as ok");
+      databaseReady = observeStartupPromise(
+        Promise.resolve(databaseProbe).then(() => undefined),
+      );
+      redisConnection = observeStartupPromise(
+        databaseReady.then(async () => {
+          if (closing) {
+            throw new Error("memory extraction runtime is closing");
+          }
+          await redis.connect();
+          if (closing || redisDestroyed) {
+            throw new Error("memory extraction runtime is closing");
+          }
+          redisConnected = true;
+          return redis;
+        }),
+      );
+      dependenciesReady = observeStartupPromise(
+        Promise.all([databaseReady, redisConnection]).then(() => undefined),
+      );
+      void dependenciesReady.then(
+        () => {
+          if (!closing) {
+            loop.start();
+          }
+        },
+        () => {
+          void close().catch(() => undefined);
+        },
+      );
+    },
+    async getStatus() {
+      const loopSnapshot = loop.getSnapshot();
+      const [
+        workerHealthy,
+        pendingJobCount,
+        processingJobCount,
+        delayedJobCount,
+        deadLetterJobCount,
+        providerCooldownUntil,
+        repositoryStatus,
+      ] = await Promise.all([
+        readWorkerHealth(client),
+        queue.getPendingCount(),
+        queue.getProcessingCount(),
+        queue.getDelayedCount(),
+        queue.getDeadLetterCount(),
+        queue.getProviderCooldown(),
+        repository.getStatusCounts(),
+      ]);
+
+      return {
+        enabled: true,
+        running: loopSnapshot.running,
+        workerHealthy,
+        intervalMs: loopSnapshot.intervalMs,
+        batchLimit: loopSnapshot.batchLimit,
+        minConfidence: runtimeConfig.minConfidence,
+        pendingJobCount,
+        processingJobCount,
+        delayedJobCount,
+        deadLetterJobCount,
+        acceptedCandidateCount: repositoryStatus.acceptedCandidates,
+        rejectedCandidateCount: repositoryStatus.rejectedCandidates,
+        duplicateCandidateCount: repositoryStatus.duplicateCandidates,
+        conflictCandidateCount: repositoryStatus.conflictCandidates,
+        skippedRequestCount: repositoryStatus.skipped,
+        failedRunCount: repositoryStatus.failedRuns,
+        ...(providerCooldownUntil === undefined
+          ? {}
+          : { providerCooldownUntil: new Date(providerCooldownUntil) }),
+        ...(loopSnapshot.latestBatch === undefined
+          ? {}
+          : { latestBatch: toContentFreeBatchSnapshot(loopSnapshot.latestBatch) }),
+      };
+    },
+    close,
+  };
+}
+
+function createLazyPostgresDataSource(
+  getPool: () => PostgresPool,
+): PostgresMemoryExtractionDataSource {
+  return {
+    query: (sql, params) => getPool().query(sql, params),
+    connect: () => getPool().connect(),
+  };
+}
+
+function requirePostgresPool(pool: PostgresPool | undefined): PostgresPool {
+  if (pool === undefined) {
+    throw new Error("memory extraction database is not initialized");
+  }
+  return pool;
 }
 
 function createLazyRedisClient(
@@ -352,12 +399,4 @@ function toContentFreeBatchSnapshot(
     failedCount: snapshot.failedCount,
     failed: false,
   };
-}
-
-function schedulePartialPoolClose(pool: PostgresPool): void {
-  try {
-    void Promise.resolve(pool.end()).catch(() => undefined);
-  } catch {
-    // Preserve the composition error while still attempting owned-resource cleanup.
-  }
 }

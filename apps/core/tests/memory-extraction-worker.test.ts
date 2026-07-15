@@ -78,6 +78,28 @@ describe("createMemoryExtractionWorker", () => {
     expect(claimedRun.requestIds).toEqual(["request-1", "request-2"]);
   });
 
+  it("applies the configured minimum confidence during candidate validation", async () => {
+    const dependencies = {
+      ...createDependencies({ jobs: [job("request-1")] }),
+      minConfidence: 1,
+    };
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await worker.processBatch({ limit: 20 });
+
+    expect(dependencies.repository.completeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        acceptedCandidates: [],
+        diagnostics: expect.objectContaining({
+          proposedCount: 1,
+          acceptedCount: 0,
+          rejectedCount: 1,
+          rejectionCodes: ["low_confidence"],
+        }),
+      }),
+    );
+  });
+
   it("covers only the bounded same-group run and defers overflow jobs", async () => {
     const jobs = Array.from(
       { length: 41 },
@@ -790,6 +812,10 @@ function createDependencies(input: {
       completed: 0,
       skipped: 0,
       failedRuns: 0,
+      acceptedCandidates: 0,
+      rejectedCandidates: 0,
+      duplicateCandidates: 0,
+      conflictCandidates: 0,
     })),
   };
   const client = {

@@ -86,14 +86,17 @@ export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConf
 }
 
 export function readOptionalFeishuBotOpenId(env: EnvLike = process.env): string | undefined {
-  const botOpenId = readOptionalEnv(env.IRIS_FEISHU_BOT_OPEN_ID);
-  if (botOpenId === undefined) {
+  const botOpenId = env.IRIS_FEISHU_BOT_OPEN_ID;
+  if (botOpenId === undefined || botOpenId.trim().length === 0) {
     return undefined;
   }
   if (botOpenId.length > MAX_FEISHU_BOT_OPEN_ID_CHARS) {
     throw new Error(
       `IRIS_FEISHU_BOT_OPEN_ID must be at most ${MAX_FEISHU_BOT_OPEN_ID_CHARS} characters`,
     );
+  }
+  if (!/^ou_[A-Za-z0-9]+$/u.test(botOpenId)) {
+    throw new Error("IRIS_FEISHU_BOT_OPEN_ID must match the Feishu open ID format");
   }
 
   return botOpenId;

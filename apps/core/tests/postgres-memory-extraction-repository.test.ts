@@ -19,6 +19,68 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("createPostgresMemoryExtractionRepository", () => {
+  it("aggregates durable content-free request, run, and candidate diagnostics in one query", async () => {
+    const source = fakeDataSource((sql) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("regexp_match");
+      expect(normalized).toContain("group_memory_extraction_runs");
+      expect(normalized).not.toContain("conversation_messages");
+      expect(normalized).not.toContain("rejection_codes");
+      return {
+        rows: [{
+          pending: 1,
+          processing: 2,
+          completed: 3,
+          skipped: 4,
+          failed_runs: 5,
+          diagnostic_run_count: 2,
+          valid_diagnostic_run_count: 2,
+          accepted_candidates: 6,
+          rejected_candidates: 7,
+          duplicate_candidates: 2,
+          conflict_candidates: 1,
+        }],
+      };
+    });
+    const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
+
+    await expect(repository.getStatusCounts()).resolves.toEqual({
+      pending: 1,
+      processing: 2,
+      completed: 3,
+      skipped: 4,
+      failedRuns: 5,
+      acceptedCandidates: 6,
+      rejectedCandidates: 7,
+      duplicateCandidates: 2,
+      conflictCandidates: 1,
+    });
+    expect(source.query).toHaveBeenCalledOnce();
+  });
+
+  it("fails content-free when durable completion diagnostics are malformed", async () => {
+    const source = fakeDataSource(() => ({
+      rows: [{
+        pending: 0,
+        processing: 0,
+        completed: 1,
+        skipped: 0,
+        failed_runs: 0,
+        diagnostic_run_count: 1,
+        valid_diagnostic_run_count: 0,
+        accepted_candidates: 0,
+        rejected_candidates: 0,
+        duplicate_candidates: 0,
+        conflict_candidates: 0,
+      }],
+    }));
+    const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
+
+    await expect(repository.getStatusCounts()).rejects.toThrow(
+      "memory extraction diagnostics aggregate is invalid",
+    );
+  });
+
   it("looks up canonical durable request routes without selecting chat content", async () => {
     const source = fakeDataSource((sql, params) => {
       expect(normalizeSql(sql)).toContain(
@@ -1907,6 +1969,55 @@ runIfDatabase("PostgresMemoryExtractionRepository review invariants with Postgre
       requestId: registered.request.id,
       idempotencyKey: sha256(claimed!.id + "0"),
     });
+  });
+
+  it("retains cumulative candidate diagnostics after repository recreation", async () => {
+    const repository = createRepository(pool);
+    const before = await repository.getStatusCounts();
+    const groupId = `${groupPrefix}-diagnostics`;
+    const messageId = `feishu:${groupId}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId,
+      text: "Durable diagnostics evidence",
+      createdAt: new Date("2026-07-15T07:00:00.000Z"),
+    });
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+
+    await repository.completeRun({
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [validatedCandidate({
+        content: `Restart-safe candidate ${suffix}`,
+        evidenceMessageIds: [messageId],
+      })],
+      diagnostics: {
+        proposedCount: 4,
+        acceptedCount: 1,
+        rejectedCount: 3,
+        duplicateCount: 1,
+        conflictCount: 1,
+        rejectionCodes: ["conflict_relation", "duplicate_relation"],
+      },
+    });
+
+    const restartedRepository = createRepository(pool);
+    const after = await restartedRepository.getStatusCounts();
+    expect(after.acceptedCandidates - before.acceptedCandidates).toBe(1);
+    expect(after.rejectedCandidates - before.rejectedCandidates).toBe(3);
+    expect(after.duplicateCandidates - before.duplicateCandidates).toBe(1);
+    expect(after.conflictCandidates - before.conflictCandidates).toBe(1);
+    expect(after.completed - before.completed).toBe(1);
   });
 });
 
