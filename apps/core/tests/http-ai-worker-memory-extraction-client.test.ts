@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -229,7 +231,7 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
     expect(response.bodyRead).toBe(false);
   });
 
-  it.each([500, 502, 503, 599])("maps %s to retryable unavailable", async (status) => {
+  it.each([500, 503, 599])("maps %s to retryable unavailable", async (status) => {
     const response = unreadableResponse(status);
     const client = createClient(async () => response);
 
@@ -237,6 +239,63 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
       expect.objectContaining({ code: "unavailable", retryable: true }),
     );
     expect(response.bodyRead).toBe(false);
+  });
+
+  it("maps the exact bounded Python invalid-model-response contract to the retryable invalid family", async () => {
+    const contractBody = readFileSync(
+      new URL("../../../workers/ai/tests/fixtures/invalid_model_response.json", import.meta.url),
+      "utf8",
+    );
+    const client = createClient(async () =>
+      new Response(contractBody, {
+        status: 502,
+        headers: {
+          "content-type": "application/json",
+          "content-encoding": "identity",
+        },
+      }),
+    );
+
+    await expect(client.extract(runFixture())).rejects.toMatchObject({
+      code: "invalid_response",
+      retryable: true,
+      message: "invalid_response",
+    });
+  });
+
+  it.each([
+    ["unknown field", '{"error":"invalid_model_response","detail":"private"}'],
+    ["malformed JSON", '{"error":"invalid_model_response"'],
+    ["unknown error", '{"error":"private_provider_detail"}'],
+  ])("keeps a %s 502 body in the generic unavailable family", async (_name, body) => {
+    const client = createClient(async () => new Response(body, { status: 502 }));
+
+    const error = await client.extract(runFixture()).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "unavailable", retryable: true });
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain(body);
+  });
+
+  it("keeps an oversized 502 body generic and cancels its stream", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"error":"invalid_model_response","padding":"'));
+        controller.enqueue(new Uint8Array(100));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const client = createClient(async () => new Response(stream, { status: 502 }), {
+      maxResponseBytes: 48,
+    });
+
+    await expect(client.extract(runFixture())).rejects.toMatchObject({
+      code: "unavailable",
+      retryable: true,
+    });
+    expect(cancelled).toBe(true);
   });
 
   it.each([

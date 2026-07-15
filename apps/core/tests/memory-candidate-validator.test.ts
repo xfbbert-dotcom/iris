@@ -21,6 +21,7 @@ describe("validateCandidates", () => {
           evidenceMessageIds: ["message-1"],
         },
       ],
+      conflicts: [],
       proposedCount: 1,
       acceptedCount: 1,
       rejectedCount: 0,
@@ -148,20 +149,65 @@ describe("validateCandidates", () => {
   });
 
   it("records a valid conflict relation without automatically correcting memory", () => {
+    const run = runFixture();
+    run.evidenceMessages.push({
+      ...run.evidenceMessages[0]!,
+      id: "message-2",
+      text: "Launch moved to Friday.",
+    });
     const result = validateCandidates({
-      run: runFixture(),
+      run,
       candidates: [
-        candidateFixture({ relation: "conflict", existingMemoryId: "memory-1" }),
+        candidateFixture({
+          category: "project",
+          content: "  Launch moved to Friday.  ",
+          importance: 5,
+          confidence: 0.91,
+          evidenceMessageIds: ["message-2", "message-1", "message-2"],
+          relation: "conflict",
+          existingMemoryId: "memory-1",
+        }),
       ],
     });
 
     expect(result).toMatchObject({
       accepted: [],
+      conflicts: [{
+        category: "project",
+        content: "Launch moved to Friday.",
+        importance: 5,
+        confidence: 0.91,
+        evidenceMessageIds: ["message-1", "message-2"],
+        existingMemoryId: "memory-1",
+      }],
       rejectedCount: 1,
       duplicateCount: 0,
       conflictCount: 1,
       rejectionCodes: ["conflict_relation"],
     });
+  });
+
+  it("does not retain malformed, ungrounded, low-confidence, or invalid-target conflicts", () => {
+    const candidates = [
+      candidateFixture({
+        relation: "conflict",
+        existingMemoryId: "memory-1",
+        confidence: 0.2,
+      }),
+      candidateFixture({
+        relation: "conflict",
+        existingMemoryId: "memory-1",
+        evidenceMessageIds: ["missing-message"],
+      }),
+      candidateFixture({ relation: "conflict", existingMemoryId: "missing-memory" }),
+      { ...candidateFixture({ relation: "conflict", existingMemoryId: "memory-1" }), raw: true },
+    ] as unknown as ProposedMemoryCandidate[];
+
+    const result = validateCandidates({ run: runFixture(), candidates });
+
+    expect(result.conflicts).toEqual([]);
+    expect(result.conflictCount).toBe(0);
+    expect(result.rejectedCount).toBe(4);
   });
 
   it.each([
@@ -255,6 +301,7 @@ describe("validateCandidates", () => {
       }),
     ).toEqual({
       accepted: [],
+      conflicts: [],
       proposedCount: 1,
       acceptedCount: 0,
       rejectedCount: 1,
@@ -391,6 +438,7 @@ describe("validateCandidates", () => {
 
     expect(result).toEqual({
       accepted: [],
+      conflicts: [],
       proposedCount: 8,
       acceptedCount: 0,
       rejectedCount: 8,
@@ -409,6 +457,7 @@ describe("validateCandidates", () => {
 
     expect(validateCandidates({ run, candidates: [candidateFixture()] })).toEqual({
       accepted: [],
+      conflicts: [],
       proposedCount: 1,
       acceptedCount: 0,
       rejectedCount: 1,

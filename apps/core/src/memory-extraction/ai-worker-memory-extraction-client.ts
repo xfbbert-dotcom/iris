@@ -27,6 +27,10 @@ export type ValidatedMemoryCandidate = {
   evidenceMessageIds: string[];
 };
 
+export type ValidatedMemoryConflictCandidate = ValidatedMemoryCandidate & {
+  existingMemoryId: string;
+};
+
 export type MemoryExtractionDiagnostics = {
   proposedCount: number;
   acceptedCount: number;

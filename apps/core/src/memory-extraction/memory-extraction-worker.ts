@@ -56,7 +56,7 @@ export type MemoryExtractionWorkerResult =
       requestId: string;
       groupId: string;
       runId?: string;
-      reason: "unselected_run_scope";
+      reason: "provider_cooldown" | "unselected_run_scope";
     }
   | {
       status: "failed";
@@ -210,13 +210,9 @@ async function processGroup(input: {
 
   const cooldown = await getActiveCooldown(dependencies.queue, now);
   if (cooldown !== undefined) {
-    await failIndexedJobs({
-      queue: dependencies.queue,
-      jobs,
-      results,
-      classification: "provider_rate_limited",
-      errorMessage: "provider_rate_limited",
-      retryAt: () => cooldown,
+    await deferJobs(dependencies.queue, jobs, results, {
+      reason: "provider_cooldown",
+      notBefore: cooldown,
     });
     return;
   }
@@ -451,6 +447,7 @@ async function processClaimedRun(input: {
       runId: run.id,
       inputFingerprint: run.inputFingerprint,
       acceptedCandidates: validation.accepted,
+      conflictCandidates: validation.conflicts,
       diagnostics: {
         proposedCount: validation.proposedCount,
         acceptedCount: validation.acceptedCount,
@@ -1050,13 +1047,21 @@ async function deferJobs(
   queue: MemoryExtractionQueue,
   jobs: RoutedJob[],
   results: Map<number, MemoryExtractionWorkerResult>,
+  options: {
+    reason?: Extract<MemoryExtractionWorkerResult, { status: "deferred" }>["reason"];
+    notBefore?: Date;
+  } = {},
 ): Promise<void> {
   if (jobs.length === 0) {
     return;
   }
   for (const indexedJob of jobs) {
     try {
-      await retryQueueOperation(() => queue.deferJob(indexedJob.job));
+      await retryQueueOperation(() =>
+        options.notBefore === undefined
+          ? queue.deferJob(indexedJob.job)
+          : queue.deferJob(indexedJob.job, options.notBefore),
+      );
     } catch {
       throw new Error("memory extraction queue recovery failed");
     }
@@ -1065,7 +1070,7 @@ async function deferJobs(
       requestId: indexedJob.route.requestId,
       groupId: indexedJob.route.groupId,
       ...(indexedJob.route.runId === undefined ? {} : { runId: indexedJob.route.runId }),
-      reason: "unselected_run_scope",
+      reason: options.reason ?? "unselected_run_scope",
     });
   }
 }

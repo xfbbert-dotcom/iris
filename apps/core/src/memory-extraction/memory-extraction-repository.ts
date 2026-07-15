@@ -1,6 +1,7 @@
 import type {
   MemoryExtractionDiagnostics,
   ValidatedMemoryCandidate,
+  ValidatedMemoryConflictCandidate,
 } from "./ai-worker-memory-extraction-client.js";
 
 export type MemoryExtractionRequestStatus =
@@ -112,6 +113,7 @@ export interface MemoryExtractionRepository {
     runId: string;
     inputFingerprint: string;
     acceptedCandidates: ValidatedMemoryCandidate[];
+    conflictCandidates: ValidatedMemoryConflictCandidate[];
     diagnostics: MemoryExtractionDiagnostics;
   }): Promise<{ status: "completed" | "already_completed"; memoryIds: string[] }>;
   getStatusCounts(): Promise<MemoryExtractionStatusCounts>;

@@ -1,0 +1,23 @@
+ALTER TABLE group_memory_extraction_run_memories
+DROP CONSTRAINT group_memory_extraction_run_memories_pkey;
+
+ALTER TABLE group_memory_extraction_run_memories
+DROP CONSTRAINT group_memory_extraction_run_memories_run_id_ordinal_key;
+
+ALTER TABLE group_memory_extraction_run_memories
+ALTER COLUMN memory_id DROP NOT NULL;
+
+ALTER TABLE group_memory_extraction_run_memories
+ADD CONSTRAINT group_memory_extraction_run_memories_pkey
+PRIMARY KEY (run_id, ordinal);
+
+ALTER TABLE group_memory_extraction_run_memories
+DROP CONSTRAINT group_memory_extraction_run_memories_memory_id_fkey;
+
+ALTER TABLE group_memory_extraction_run_memories
+ADD CONSTRAINT group_memory_extraction_run_memories_memory_id_fkey
+FOREIGN KEY (memory_id) REFERENCES group_memories(id) ON DELETE SET NULL;
+
+CREATE UNIQUE INDEX group_memory_extraction_run_memories_run_memory_id_unique
+ON group_memory_extraction_run_memories (run_id, memory_id)
+WHERE memory_id IS NOT NULL;

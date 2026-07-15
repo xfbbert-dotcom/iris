@@ -212,25 +212,36 @@ return 1
 
 const ACK_DEFER_SCRIPT = `
 -- memory-extraction:ack-defer
-local exact_processing = redis.call("HGET", KEYS[7], ARGV[1]) == "processing"
-  and redis.call("HGET", KEYS[8], ARGV[1]) == ARGV[2]
-  and redis.call("ZSCORE", KEYS[4], ARGV[1])
+local exact_processing = redis.call("HGET", KEYS[8], ARGV[1]) == "processing"
+  and redis.call("HGET", KEYS[9], ARGV[1]) == ARGV[2]
+  and redis.call("ZSCORE", KEYS[6], ARGV[1])
 if exact_processing then
-  redis.call("ZREM", KEYS[4], ARGV[1])
+  redis.call("ZREM", KEYS[6], ARGV[1])
+  redis.call("ZREM", KEYS[3], ARGV[1])
   redis.call("ZREM", KEYS[5], ARGV[1])
-  redis.call("SREM", KEYS[6], ARGV[1])
-  redis.call("ZREM", KEYS[2], ARGV[1])
-  redis.call("SREM", KEYS[3], ARGV[1])
-  local sequence = redis.call("INCR", KEYS[9])
-  redis.call("RPUSH", KEYS[1], ARGV[1])
-  redis.call("ZADD", KEYS[2], sequence, ARGV[1])
-  redis.call("SADD", KEYS[3], ARGV[1])
-  redis.call("HSET", KEYS[7], ARGV[1], "ready")
+  redis.call("SREM", KEYS[4], ARGV[1])
+  redis.call("SREM", KEYS[7], ARGV[1])
+  redis.call("HDEL", KEYS[10], ARGV[2])
+  redis.call("HDEL", KEYS[11], ARGV[2])
+  redis.call("HSET", KEYS[9], ARGV[1], ARGV[3])
+  if ARGV[5] == "delayed" then
+    redis.call("ZADD", KEYS[5], ARGV[4], ARGV[1])
+    redis.call("HSET", KEYS[8], ARGV[1], "delayed")
+  else
+    local sequence = redis.call("INCR", KEYS[12])
+    redis.call("RPUSH", KEYS[2], ARGV[1])
+    redis.call("ZADD", KEYS[3], sequence, ARGV[1])
+    redis.call("SADD", KEYS[4], ARGV[1])
+    redis.call("HSET", KEYS[8], ARGV[1], "ready")
+  end
+  redis.call("SADD", KEYS[1], ARGV[1])
   return 1
 end
-if redis.call("HGET", KEYS[7], ARGV[1]) == "ready"
-  and redis.call("HGET", KEYS[8], ARGV[1]) == ARGV[2]
-  and redis.call("ZSCORE", KEYS[2], ARGV[1]) then return 2 end
+local current_state = redis.call("HGET", KEYS[8], ARGV[1])
+if current_state == ARGV[5]
+  and redis.call("HGET", KEYS[9], ARGV[1]) == ARGV[3]
+  and ((current_state == "ready" and redis.call("ZSCORE", KEYS[3], ARGV[1]))
+    or (current_state == "delayed" and redis.call("ZSCORE", KEYS[5], ARGV[1]))) then return 2 end
 return 0
 `;
 
@@ -751,23 +762,40 @@ export function createRedisMemoryExtractionQueue({
       });
     },
 
-    async deferJob(job) {
+    async deferJob(job, notBefore) {
       const claimed = readClaimedPayload(job);
-      const payload = claimed?.payload ?? serializeMemoryExtractionJob(job);
-      const idempotencyKey = claimed?.idempotencyKey ?? parseMemoryExtractionJob(payload).idempotencyKey;
+      const originalPayload = claimed?.payload ?? serializeMemoryExtractionJob(job);
+      const originalJob = parseMemoryExtractionJob(originalPayload);
+      const idempotencyKey = claimed?.idempotencyKey ?? originalJob.idempotencyKey;
+      const deferredAt = notBefore === undefined
+        ? originalJob.notBefore
+        : requireValidMemoryExtractionDate(notBefore, "notBefore");
+      const deferredPayload = serializeMemoryExtractionJob({
+        ...originalJob,
+        notBefore: deferredAt,
+      });
       const result = await client.eval(ACK_DEFER_SCRIPT, {
         keys: [
+          seenKey,
           readyKey,
           readyIndexKey,
           readySetKey,
-          processingKey,
           delayedKey,
+          processingKey,
           recoverySetKey,
           stateKey,
           payloadKey,
+          memberKey,
+          readyCountKey,
           readySequenceKey,
         ],
-        arguments: [idempotencyKey, payload],
+        arguments: [
+          idempotencyKey,
+          originalPayload,
+          deferredPayload,
+          String(deferredAt.getTime()),
+          notBefore === undefined ? "ready" : "delayed",
+        ],
       });
       if (result !== 1 && result !== 2) {
         throw new Error("memory extraction defer transition did not match processing job");

@@ -3,6 +3,7 @@ import {
   type MemoryExtractionDiagnostics,
   type ProposedMemoryCandidate,
   type ValidatedMemoryCandidate,
+  type ValidatedMemoryConflictCandidate,
 } from "./ai-worker-memory-extraction-client.js";
 import type { ClaimedMemoryExtractionRun } from "./memory-extraction-repository.js";
 
@@ -44,6 +45,7 @@ const REJECTION_CODE_ORDER = [
 
 export type MemoryCandidateValidationResult = MemoryExtractionDiagnostics & {
   accepted: ValidatedMemoryCandidate[];
+  conflicts: ValidatedMemoryConflictCandidate[];
 };
 
 export function validateCandidates(input: {
@@ -55,6 +57,7 @@ export function validateCandidates(input: {
   if (!Array.isArray(input.candidates) || input.candidates.length > MAX_CANDIDATES) {
     return {
       accepted: [],
+      conflicts: [],
       proposedCount: MAX_CANDIDATES,
       acceptedCount: 0,
       rejectedCount: MAX_CANDIDATES,
@@ -67,6 +70,7 @@ export function validateCandidates(input: {
   if (isGrosslyInvalidRun(input.run)) {
     return {
       accepted: [],
+      conflicts: [],
       proposedCount: input.candidates.length,
       acceptedCount: 0,
       rejectedCount: input.candidates.length,
@@ -84,6 +88,7 @@ export function validateCandidates(input: {
       .filter((value): value is string => value !== undefined),
   );
   const accepted: Array<ValidatedMemoryCandidate & { comparisonKey: string }> = [];
+  const conflicts: Array<ValidatedMemoryConflictCandidate & { comparisonKey: string }> = [];
   const rejectionCodes: string[] = [];
   let duplicateCount = 0;
   let conflictCount = 0;
@@ -136,18 +141,27 @@ export function validateCandidates(input: {
       reject("low_confidence");
       continue;
     }
+    const { content, comparisonKey } = canonicalContent;
     if (candidate.relation === "duplicate") {
       duplicateCount += 1;
       reject("duplicate_relation");
       continue;
     }
     if (candidate.relation === "conflict") {
+      conflicts.push({
+        category: candidate.category,
+        content,
+        importance: candidate.importance,
+        confidence: candidate.confidence,
+        evidenceMessageIds: evidence,
+        existingMemoryId: candidate.existingMemoryId!,
+        comparisonKey,
+      });
       conflictCount += 1;
       reject("conflict_relation");
       continue;
     }
 
-    const { content, comparisonKey } = canonicalContent;
     if (existingContent.has(comparisonKey)) {
       duplicateCount += 1;
       reject("exact_duplicate");
@@ -182,8 +196,19 @@ export function validateCandidates(input: {
     });
   }
 
+  conflicts.sort(compareConflictCandidates);
+  const canonicalConflicts = conflicts.map((candidate) => ({
+    category: candidate.category,
+    content: candidate.content,
+    importance: candidate.importance,
+    confidence: candidate.confidence,
+    evidenceMessageIds: [...candidate.evidenceMessageIds],
+    existingMemoryId: candidate.existingMemoryId,
+  }));
+
   return {
     accepted: canonical,
+    conflicts: canonicalConflicts,
     proposedCount: input.candidates.length,
     acceptedCount: canonical.length,
     rejectedCount,
@@ -336,6 +361,14 @@ function compareCandidates(
     compareStrings(JSON.stringify(left.evidenceMessageIds), JSON.stringify(right.evidenceMessageIds)) ||
     left.importance - right.importance ||
     left.confidence - right.confidence;
+}
+
+function compareConflictCandidates(
+  left: ValidatedMemoryConflictCandidate & { comparisonKey: string },
+  right: ValidatedMemoryConflictCandidate & { comparisonKey: string },
+): number {
+  return compareCandidates(left, right) ||
+    compareStrings(left.existingMemoryId, right.existingMemoryId);
 }
 
 function compareStrings(left: string, right: string): number {

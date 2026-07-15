@@ -12,6 +12,48 @@ import {
 } from "../src/database/migrate.js";
 
 describe("runMigrations", () => {
+  it("defines a forward migration that releases extraction memory references on hard delete", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0021_group_memory_extraction_memory_delete.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain(
+      "drop constraint group_memory_extraction_run_memories_pkey",
+    );
+    expect(normalized).toContain("primary key (run_id, ordinal)");
+    expect(normalized).toContain("alter column memory_id drop not null");
+    expect(normalized).toContain(
+      "foreign key (memory_id) references group_memories(id) on delete set null",
+    );
+    expect(normalized).toContain("where memory_id is not null");
+    expect(normalized).not.toContain("drop table group_memory_extraction_run_memories");
+  });
+
+  it("defines durable conflict candidates and evidence without retaining raw model payloads", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0022_group_memory_extraction_conflicts.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table group_memory_extraction_conflict_candidates");
+    expect(normalized).toContain("primary key (run_id, ordinal)");
+    expect(normalized).toContain("category text not null");
+    expect(normalized).toContain("content text not null");
+    expect(normalized).toContain("importance smallint not null");
+    expect(normalized).toContain("confidence double precision not null");
+    expect(normalized).toContain(
+      "target_memory_id text references group_memories(id) on delete set null",
+    );
+    expect(normalized).toContain("create table group_memory_extraction_conflict_evidence");
+    expect(normalized).toContain(
+      "foreign key (run_id, conflict_ordinal) references group_memory_extraction_conflict_candidates (run_id, ordinal) on delete cascade",
+    );
+    expect(normalized).not.toMatch(/raw_(payload|response)|model_payload/u);
+  });
+
   it("defines a durable cumulative memory extraction failure counter migration", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0020_group_memory_extraction_failure_count.sql"),

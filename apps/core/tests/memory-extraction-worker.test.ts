@@ -57,6 +57,7 @@ describe("createMemoryExtractionWorker", () => {
           content: "Use the release checklist.",
         }),
       ],
+      conflictCandidates: [],
       diagnostics: expect.objectContaining({ acceptedCount: 2, rejectedCount: 0 }),
     });
     expect(dependencies.queue.handleProcessedJob).toHaveBeenCalledTimes(2);
@@ -344,21 +345,39 @@ describe("createMemoryExtractionWorker", () => {
     ]);
   });
 
-  it("honors a shared cooldown without claiming or calling the model", async () => {
-    const dependencies = createDependencies({ jobs: [job("request-1")] });
+  it("defers every job under shared cooldown without claiming, calling the model, or charging attempts", async () => {
+    const jobs = [job("request-1", "chat-a", 4), job("request-2", "chat-b", 4)];
+    const dependencies = createDependencies({
+      jobs,
+      routes: jobs.map((queuedJob) => ({
+        requestId: queuedJob.requestId,
+        groupId: queuedJob.groupId,
+        status: "pending" as const,
+      })),
+    });
     const cooldown = new Date("2026-07-15T00:15:00.000Z");
     dependencies.queue.getProviderCooldown.mockResolvedValue(cooldown);
     const worker = createMemoryExtractionWorker(dependencies);
 
-    await worker.processBatch({ limit: 20 });
+    await expect(worker.processBatch({ limit: 20 })).resolves.toEqual([
+      expect.objectContaining({
+        status: "deferred",
+        requestId: "request-1",
+        reason: "provider_cooldown",
+      }),
+      expect.objectContaining({
+        status: "deferred",
+        requestId: "request-2",
+        reason: "provider_cooldown",
+      }),
+    ]);
 
     expect(dependencies.repository.claimRun).not.toHaveBeenCalled();
     expect(dependencies.client.extract).not.toHaveBeenCalled();
-    expect(dependencies.queue.handleFailedJob).toHaveBeenCalledWith({
-      job: expect.objectContaining({ requestId: "request-1" }),
-      errorMessage: "provider_rate_limited",
-      retryAt: cooldown,
-    });
+    expect(dependencies.queue.deferJob).toHaveBeenNthCalledWith(1, jobs[0], cooldown);
+    expect(dependencies.queue.deferJob).toHaveBeenNthCalledWith(2, jobs[1], cooldown);
+    expect(dependencies.queue.handleFailedJob).not.toHaveBeenCalled();
+    expect(dependencies.queue.handleTerminalJob).not.toHaveBeenCalled();
   });
 
   it("classifies unauthorized as terminal and does not schedule a delayed retry", async () => {
@@ -617,6 +636,7 @@ describe("createMemoryExtractionWorker", () => {
       runId: "run-1",
       inputFingerprint: "f".repeat(64),
       acceptedCandidates: [],
+      conflictCandidates: [],
       diagnostics: {
         proposedCount: 1,
         acceptedCount: 0,
@@ -634,6 +654,66 @@ describe("createMemoryExtractionWorker", () => {
     });
     expect(JSON.stringify(dependencies.auditLog.record.mock.calls)).not.toContain(
       "Rejected model text",
+    );
+  });
+
+  it("passes only fully validated conflict candidates into atomic completion", async () => {
+    const dependencies = createDependencies({
+      jobs: [job("request-1")],
+      claimedRun: run({
+        requestIds: ["request-1"],
+        existingMemories: [{
+          id: "memory-existing",
+          category: "decision",
+          content: "Launch on Thursday.",
+          updatedAt: new Date("2026-07-14T23:00:00.000Z"),
+        }],
+      }),
+    });
+    dependencies.client.extract.mockResolvedValue({
+      runId: "run-1",
+      candidates: [
+        candidate({
+          content: "  Launch moved to Friday.  ",
+          evidenceMessageIds: ["feishu:msg-2", "feishu:msg-1", "feishu:msg-2"],
+          relation: "conflict",
+          existingMemoryId: "memory-existing",
+        }),
+        candidate({
+          content: "Rejected private model text",
+          confidence: 0.2,
+          relation: "conflict",
+          existingMemoryId: "memory-existing",
+        }),
+      ],
+    });
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await worker.processBatch({ limit: 20 });
+
+    expect(dependencies.repository.completeRun).toHaveBeenCalledWith({
+      runId: "run-1",
+      inputFingerprint: "f".repeat(64),
+      acceptedCandidates: [],
+      conflictCandidates: [{
+        category: "decision",
+        content: "Launch moved to Friday.",
+        importance: 4,
+        confidence: 0.9,
+        evidenceMessageIds: ["feishu:msg-1", "feishu:msg-2"],
+        existingMemoryId: "memory-existing",
+      }],
+      diagnostics: {
+        proposedCount: 2,
+        acceptedCount: 0,
+        rejectedCount: 2,
+        duplicateCount: 0,
+        conflictCount: 1,
+        rejectionCodes: ["low_confidence", "conflict_relation"],
+      },
+    });
+    expect(JSON.stringify(dependencies.repository.completeRun.mock.calls)).not.toContain(
+      "Rejected private model text",
     );
   });
 

@@ -4,6 +4,7 @@ import {
   MEMORY_CANDIDATE_CATEGORIES,
   type MemoryExtractionDiagnostics,
   type ValidatedMemoryCandidate,
+  type ValidatedMemoryConflictCandidate,
 } from "./ai-worker-memory-extraction-client.js";
 import type {
   ClaimedMemoryExtractionRun,
@@ -345,8 +346,7 @@ export function createPostgresMemoryExtractionRepository({
             await client.query(
               `
               UPDATE group_memory_extraction_runs
-              SET status = 'processing', failure_classification = NULL,
-                  completed_at = NULL, updated_at = NOW()
+              SET status = 'processing', completed_at = NULL, updated_at = NOW()
               WHERE id = $1 AND status = 'failed'
               `,
               [reference.runId],
@@ -736,7 +736,10 @@ export function createPostgresMemoryExtractionRepository({
           groupId,
           expectedStatus: runStatus === "completed" ? "completed" : "processing",
         });
-        validateCompletionEvidence(input.acceptedCandidates, claimed.evidenceMessageIds);
+        validateCompletionEvidence(
+          [...input.acceptedCandidates, ...input.conflictCandidates],
+          claimed.evidenceMessageIds,
+        );
 
         if (runStatus === "completed") {
           const completionMarker = parseCompletionMarker(runRow.failure_classification);
@@ -775,6 +778,10 @@ export function createPostgresMemoryExtractionRepository({
         ) {
           throw new MemoryExtractionCompletionConflictError();
         }
+        validateCompletionConflictTargets(
+          input.conflictCandidates,
+          current.run.existingMemories,
+        );
 
         const admitted = await admitCandidatesAgainstActiveMemories({
           queryable: client,
@@ -806,6 +813,11 @@ export function createPostgresMemoryExtractionRepository({
           });
           memoryIds.push(memory.id);
         }
+        await insertConflictCandidates({
+          queryable: client,
+          runId: input.runId,
+          conflictCandidates: input.conflictCandidates,
+        });
 
         const requestUpdate = await client.query<{ id: unknown }>(
           `
@@ -959,11 +971,13 @@ function normalizeCompletionInput(input: {
   runId: string;
   inputFingerprint: string;
   acceptedCandidates: ValidatedMemoryCandidate[];
+  conflictCandidates: ValidatedMemoryConflictCandidate[];
   diagnostics: MemoryExtractionDiagnostics;
 }): {
   runId: string;
   inputFingerprint: string;
   acceptedCandidates: ValidatedMemoryCandidate[];
+  conflictCandidates: ValidatedMemoryConflictCandidate[];
   diagnostics: MemoryExtractionDiagnostics;
 } {
   try {
@@ -971,7 +985,8 @@ function normalizeCompletionInput(input: {
     const inputFingerprint = requireFingerprint(input.inputFingerprint);
     if (
       !Array.isArray(input.acceptedCandidates) ||
-      input.acceptedCandidates.length > MAX_ACCEPTED_CANDIDATES
+      !Array.isArray(input.conflictCandidates) ||
+      input.acceptedCandidates.length + input.conflictCandidates.length > MAX_ACCEPTED_CANDIDATES
     ) {
       throw new Error("invalid candidates");
     }
@@ -983,17 +998,38 @@ function normalizeCompletionInput(input: {
     if (new Set(comparisonKeys).size !== comparisonKeys.length) {
       throw new Error("duplicate candidates");
     }
+    const conflictCandidates = input.conflictCandidates.map(
+      normalizeCompletionConflictCandidate,
+    );
+    conflictCandidates.sort(compareCompletionConflictCandidates);
     const diagnostics = normalizeCompletionDiagnostics(
       input.diagnostics,
       acceptedCandidates.length,
+      conflictCandidates.length,
     );
-    return { runId, inputFingerprint, acceptedCandidates, diagnostics };
+    return {
+      runId,
+      inputFingerprint,
+      acceptedCandidates,
+      conflictCandidates,
+      diagnostics,
+    };
   } catch (error) {
     if (error instanceof MemoryExtractionCompletionConflictError) {
       throw error;
     }
     throw new MemoryExtractionCompletionConflictError();
   }
+}
+
+function normalizeCompletionConflictCandidate(
+  candidate: ValidatedMemoryConflictCandidate,
+): ValidatedMemoryConflictCandidate {
+  const normalized = normalizeCompletionCandidate(candidate);
+  return {
+    ...normalized,
+    existingMemoryId: requireExactIdentifier(candidate.existingMemoryId),
+  };
 }
 
 function normalizeCompletionCandidate(
@@ -1056,6 +1092,7 @@ function normalizeCandidateContent(value: unknown): string {
 function normalizeCompletionDiagnostics(
   diagnostics: MemoryExtractionDiagnostics,
   acceptedCount: number,
+  conflictCandidateCount: number,
 ): MemoryExtractionDiagnostics {
   if (typeof diagnostics !== "object" || diagnostics === null) {
     throw new Error("invalid diagnostics");
@@ -1067,6 +1104,7 @@ function normalizeCompletionDiagnostics(
   const conflictCount = boundedDiagnosticCount(diagnostics.conflictCount);
   if (
     normalizedAcceptedCount !== acceptedCount ||
+    conflictCount !== conflictCandidateCount ||
     normalizedAcceptedCount + rejectedCount !== proposedCount ||
     duplicateCount + conflictCount > rejectedCount
   ) {
@@ -1102,13 +1140,21 @@ function boundedDiagnosticCount(value: unknown): number {
 
 function createCompletionReplayDigest(input: {
   acceptedCandidates: ValidatedMemoryCandidate[];
+  conflictCandidates: ValidatedMemoryConflictCandidate[];
   diagnostics: MemoryExtractionDiagnostics;
 }): string {
+  const replayPayload = input.conflictCandidates.length === 0
+    ? {
+        acceptedCandidates: input.acceptedCandidates,
+        diagnostics: input.diagnostics,
+      }
+    : {
+        acceptedCandidates: input.acceptedCandidates,
+        conflictCandidates: input.conflictCandidates,
+        diagnostics: input.diagnostics,
+      };
   return createHash("sha256")
-    .update(JSON.stringify({
-      acceptedCandidates: input.acceptedCandidates,
-      diagnostics: input.diagnostics,
-    }), "utf8")
+    .update(JSON.stringify(replayPayload), "utf8")
     .digest("base64url");
 }
 
@@ -1287,6 +1333,57 @@ function validateCompletionEvidence(
   }
 }
 
+function validateCompletionConflictTargets(
+  conflictCandidates: ValidatedMemoryConflictCandidate[],
+  existingMemories: ExtractionExistingMemory[],
+): void {
+  const existingMemoryIds = new Set(existingMemories.map((memory) => memory.id));
+  if (
+    conflictCandidates.some((candidate) =>
+      !existingMemoryIds.has(candidate.existingMemoryId),
+    )
+  ) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+}
+
+async function insertConflictCandidates(input: {
+  queryable: Queryable;
+  runId: string;
+  conflictCandidates: ValidatedMemoryConflictCandidate[];
+}): Promise<void> {
+  for (const [conflictOrdinal, candidate] of input.conflictCandidates.entries()) {
+    await input.queryable.query(
+      `
+      INSERT INTO group_memory_extraction_conflict_candidates (
+        run_id, ordinal, category, content, importance, confidence, target_memory_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `,
+      [
+        input.runId,
+        conflictOrdinal,
+        candidate.category,
+        candidate.content,
+        candidate.importance,
+        candidate.confidence,
+        candidate.existingMemoryId,
+      ],
+    );
+    for (const [evidenceOrdinal, messageId] of candidate.evidenceMessageIds.entries()) {
+      await input.queryable.query(
+        `
+        INSERT INTO group_memory_extraction_conflict_evidence (
+          run_id, conflict_ordinal, conversation_message_id, ordinal
+        )
+        VALUES ($1, $2, $3, $4)
+        `,
+        [input.runId, conflictOrdinal, messageId, evidenceOrdinal],
+      );
+    }
+  }
+}
+
 async function loadCompletedMemoryIds(input: {
   queryable: Queryable;
   groupId: string;
@@ -1343,6 +1440,14 @@ function compareCompletionCandidates(
     compareStrings(JSON.stringify(left.evidenceMessageIds), JSON.stringify(right.evidenceMessageIds)) ||
     left.importance - right.importance ||
     left.confidence - right.confidence;
+}
+
+function compareCompletionConflictCandidates(
+  left: ValidatedMemoryConflictCandidate,
+  right: ValidatedMemoryConflictCandidate,
+): number {
+  return compareCompletionCandidates(left, right) ||
+    compareStrings(left.existingMemoryId, right.existingMemoryId);
 }
 
 function requireExactIdentifier(value: unknown): string {
@@ -1488,7 +1593,7 @@ async function loadStoredRun(
   }
   const groupId = requireString("run group id", runRow.group_id);
   const inputFingerprint = requireString("input fingerprint", runRow.input_fingerprint);
-  const previousFailureClassification = status === "failed"
+  const previousFailureClassification = status === "failed" || status === "processing"
     ? requireOptionalClassification(runRow.failure_classification)
     : undefined;
 

@@ -13,6 +13,7 @@ import {
   serializeMemoryExtractionJob,
   type RedisMemoryExtractionQueueClient,
 } from "../src/memory-extraction/redis-memory-extraction-queue.js";
+import { createMemoryExtractionWorker } from "../src/memory-extraction/memory-extraction-worker.js";
 
 const KEYS = {
   seen: "iris:memory:extraction:seen",
@@ -1351,6 +1352,28 @@ describe("Redis memory extraction queue", () => {
     await expect(queue.dequeueBatch(1, jobs[0]!.enqueuedAt)).resolves.toEqual([jobs[1]]);
   });
 
+  it("atomically defers processing into cooldown delay without charging attempts", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createRedisMemoryExtractionQueue({ client, maxAttempts: 1 });
+    const queuedJob = jobFixture({ requestId: "request-cooldown-defer" });
+    const cooldown = new Date("2026-07-14T00:15:00.000Z");
+    await queue.enqueue(queuedJob);
+    const [claimed] = await queue.dequeueBatch(1, queuedJob.enqueuedAt);
+
+    await expect(queue.deferJob(claimed!, cooldown)).resolves.toBeUndefined();
+
+    expect(await queue.getPendingCount()).toBe(0);
+    expect(await queue.getDelayedCount()).toBe(1);
+    expect(await queue.getProcessingCount()).toBe(0);
+    expect(await queue.getDeadLetterCount()).toBe(0);
+    await expect(
+      queue.dequeueBatch(1, new Date("2026-07-14T00:14:59.999Z")),
+    ).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(1, cooldown)).resolves.toEqual([
+      { ...queuedJob, notBefore: cooldown, attempts: 0 },
+    ]);
+  });
+
   it("refuses to defer a modified claimed payload", async () => {
     const client = new StatefulRedisClient();
     const queue = createRedisMemoryExtractionQueue({ client });
@@ -1452,6 +1475,70 @@ runIfRedis("Redis memory extraction queue with live Redis", () => {
     await expect(queue.deferJob(recovered!)).resolves.toBeUndefined();
     await expect(queue.dequeueBatch(1, abandoned.enqueuedAt)).resolves.toEqual([abandoned]);
     expect(await queue.getDeadLetterCount()).toBe(1);
+  });
+
+  it("composes worker cooldown deferral fairly without consuming live Redis attempts", async () => {
+    const cooldownPrefix = `${prefix}:cooldown-composition`;
+    const queue = createRedisMemoryExtractionQueue({
+      client: liveClient as unknown as RedisMemoryExtractionQueueClient,
+      seenKey: `${cooldownPrefix}:seen`,
+      readyKey: `${cooldownPrefix}:ready`,
+      readySetKey: `${cooldownPrefix}:ready:ids`,
+      delayedKey: `${cooldownPrefix}:delayed`,
+      processingKey: `${cooldownPrefix}:processing`,
+      stateKey: `${cooldownPrefix}:state`,
+      payloadKey: `${cooldownPrefix}:payloads`,
+      memberKey: `${cooldownPrefix}:members`,
+      cooldownKey: `${cooldownPrefix}:cooldown`,
+      deadLetterKey: `${cooldownPrefix}:dlq`,
+      deadLetterIndexKey: `${cooldownPrefix}:dlq:index`,
+      maxAttempts: 1,
+    });
+    const now = new Date("2026-07-14T09:00:00.000Z");
+    const cooldown = new Date("2026-07-14T09:15:00.000Z");
+    const jobs = [
+      jobFixture({ requestId: "request-live-cooldown-a", groupId: "chat-a", enqueuedAt: now }),
+      jobFixture({ requestId: "request-live-cooldown-b", groupId: "chat-b", enqueuedAt: now }),
+    ];
+    for (const queuedJob of jobs) {
+      await queue.enqueue(queuedJob);
+    }
+    await queue.setProviderCooldown(cooldown);
+    const repository = {
+      getRequestRoutes: vi.fn(async () => jobs.map((queuedJob) => ({
+        requestId: queuedJob.requestId,
+        groupId: queuedJob.groupId,
+        status: "pending" as const,
+      }))),
+      claimRun: vi.fn(),
+    };
+    const client = { extract: vi.fn() };
+    const worker = createMemoryExtractionWorker({
+      queue,
+      repository: repository as never,
+      client: client as never,
+      runtimeController: {
+        canProcessIncomingEvent: () => true,
+        canReadGroupContext: () => true,
+      },
+      now: () => now,
+    });
+
+    await expect(worker.processBatch({ limit: 2 })).resolves.toEqual([
+      expect.objectContaining({ status: "deferred", reason: "provider_cooldown" }),
+      expect.objectContaining({ status: "deferred", reason: "provider_cooldown" }),
+    ]);
+    expect(repository.claimRun).not.toHaveBeenCalled();
+    expect(client.extract).not.toHaveBeenCalled();
+    expect(await queue.getDelayedCount()).toBe(2);
+    expect(await queue.getProcessingCount()).toBe(0);
+    expect(await queue.getDeadLetterCount()).toBe(0);
+    await expect(
+      queue.dequeueBatch(2, new Date("2026-07-14T09:14:59.999Z")),
+    ).resolves.toEqual([]);
+    await expect(queue.dequeueBatch(2, cooldown)).resolves.toEqual(
+      jobs.map((queuedJob) => ({ ...queuedJob, notBefore: cooldown, attempts: 0 })),
+    );
   });
 });
 
@@ -1794,29 +1881,40 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
   }
 
   private ackDefer(keys: string[], args: string[]): number {
-    const [readyKey, readyIndexKey, readySetKey, processingKey, delayedKey, recoverySetKey, stateKey, payloadKey, readySequenceKey] = keys;
-    const [id, payload] = args;
+    const [seenKey, readyKey, readyIndexKey, readySetKey, delayedKey, processingKey, recoverySetKey, stateKey, payloadKey, memberKey, readyCountKey, readySequenceKey] = keys;
+    const [id, originalPayload, deferredPayload, score, destination] = args;
     const exactProcessing =
       this.hash(stateKey!).get(id!) === "processing" &&
-      this.hash(payloadKey!).get(id!) === payload &&
+      this.hash(payloadKey!).get(id!) === originalPayload &&
       this.sortedSet(processingKey!).has(id!);
     if (exactProcessing) {
       this.sortedSet(processingKey!).delete(id!);
-      this.sortedSet(delayedKey!).delete(id!);
-      this.set(recoverySetKey!).delete(id!);
       this.sortedSet(readyIndexKey!).delete(id!);
       this.set(readySetKey!).delete(id!);
-      const sequence = Number(this.strings.get(readySequenceKey!) ?? 0) + 1;
-      this.strings.set(readySequenceKey!, String(sequence));
-      this.list(readyKey!).push(id!);
-      this.sortedSet(readyIndexKey!).set(id!, sequence);
-      this.set(readySetKey!).add(id!);
-      this.hash(stateKey!).set(id!, "ready");
+      this.sortedSet(delayedKey!).delete(id!);
+      this.set(recoverySetKey!).delete(id!);
+      this.hash(memberKey!).delete(originalPayload!);
+      this.hash(readyCountKey!).delete(originalPayload!);
+      this.hash(payloadKey!).set(id!, deferredPayload!);
+      if (destination === "delayed") {
+        this.sortedSet(delayedKey!).set(id!, Number(score));
+        this.hash(stateKey!).set(id!, "delayed");
+      } else {
+        const sequence = Number(this.strings.get(readySequenceKey!) ?? 0) + 1;
+        this.strings.set(readySequenceKey!, String(sequence));
+        this.list(readyKey!).push(id!);
+        this.sortedSet(readyIndexKey!).set(id!, sequence);
+        this.set(readySetKey!).add(id!);
+        this.hash(stateKey!).set(id!, "ready");
+      }
+      this.set(seenKey!).add(id!);
       return 1;
     }
-    return this.hash(stateKey!).get(id!) === "ready" &&
-      this.hash(payloadKey!).get(id!) === payload &&
-      this.sortedSet(readyIndexKey!).has(id!)
+    const currentState = this.hash(stateKey!).get(id!);
+    return currentState === destination &&
+      this.hash(payloadKey!).get(id!) === deferredPayload &&
+      ((currentState === "ready" && this.sortedSet(readyIndexKey!).has(id!)) ||
+        (currentState === "delayed" && this.sortedSet(delayedKey!).has(id!)))
       ? 2
       : 0;
   }

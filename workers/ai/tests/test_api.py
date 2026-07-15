@@ -1,4 +1,14 @@
+import json
+from pathlib import Path
+
 import pytest
+
+
+INVALID_MODEL_RESPONSE_FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "invalid_model_response.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 
 def valid_request(**overrides: object) -> dict[str, object]:
@@ -177,7 +187,7 @@ def test_extract_accepts_valid_authenticated_request():
             "invalid_model_response",
             None,
             502,
-            {"error": "invalid_model_response"},
+            INVALID_MODEL_RESPONSE_FIXTURE,
         ),
     ],
 )
@@ -213,7 +223,7 @@ def test_maps_extraction_parser_failure_without_details():
         )
 
     assert response.status_code == 502
-    assert response.json() == {"error": "invalid_model_response"}
+    assert response.json() == INVALID_MODEL_RESPONSE_FIXTURE
 
 
 def test_validation_errors_do_not_echo_message_content():

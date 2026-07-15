@@ -130,7 +130,7 @@ export class HttpAiWorkerMemoryExtractionClient implements AiWorkerMemoryExtract
           throw new AiWorkerMemoryExtractionError("unavailable", true);
         }
 
-        const statusError = classifyStatus(response);
+        const statusError = await classifyStatus(response, this.maxResponseBytes);
         if (statusError !== undefined) {
           throw statusError;
         }
@@ -236,7 +236,10 @@ function mapExistingMemory(memory: ExtractionExistingMemory): Record<string, unk
   };
 }
 
-function classifyStatus(response: Response): AiWorkerMemoryExtractionError | undefined {
+async function classifyStatus(
+  response: Response,
+  maxResponseBytes: number,
+): Promise<AiWorkerMemoryExtractionError | undefined> {
   if (response.status === 200) {
     return undefined;
   }
@@ -249,6 +252,20 @@ function classifyStatus(response: Response): AiWorkerMemoryExtractionError | und
       true,
       parseRetryAfterMs(safeHeader(response, "retry-after")),
     );
+  }
+  if (response.status === 502) {
+    try {
+      const value = await readSuccessJson(response, maxResponseBytes);
+      const body = requireExactRecord(value, ["error"]);
+      if (body.error === "invalid_model_response") {
+        return new AiWorkerMemoryExtractionError("invalid_response", true);
+      }
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+    }
+    return new AiWorkerMemoryExtractionError("unavailable", true);
   }
   if (response.status >= 500 && response.status <= 599) {
     return new AiWorkerMemoryExtractionError("unavailable", true);
