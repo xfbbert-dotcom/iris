@@ -42,9 +42,12 @@ import { observeStartupPromise } from "./startup-promise.js";
 
 type PostgresPool = PostgresMemoryExtractionDataSource & { end(): Promise<void> };
 type RedisClient = RedisMemoryExtractionQueueClient & {
+  readonly isOpen: boolean;
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
   destroy(): void;
+  once(event: "connect", listener: () => void): RedisClient;
+  off(event: "connect", listener: () => void): RedisClient;
 };
 
 export type MemoryExtractionDeadLetterOperations = {
@@ -120,7 +123,14 @@ export function createMemoryExtractionRuntime({
     ((config) => createPostgresPool(config) as unknown as PostgresPool);
   const createRedis =
     dependencies.createRedisClient ??
-    ((url: string) => createClient({ url }) as unknown as RedisClient);
+    ((url: string) => {
+      const redis = createClient({
+        url,
+        socket: { reconnectStrategy: false },
+      });
+      redis.on("error", () => undefined);
+      return redis as unknown as RedisClient;
+    });
   const createRepository =
     dependencies.createRepository ?? createPostgresMemoryExtractionRepository;
   const createQueue = dependencies.createQueue ?? createRedisMemoryExtractionQueue;
@@ -173,6 +183,8 @@ export function createMemoryExtractionRuntime({
   let closing = false;
   let redisConnectStarted = false;
   let redisConnectSettled = false;
+  let redisTransportConnected = false;
+  let redisTransportReady: Promise<void> | undefined;
   let redisConnected = false;
   let redisDestroyed = false;
   let closePromise: Promise<void> | undefined;
@@ -192,6 +204,28 @@ export function createMemoryExtractionRuntime({
           !redisConnected &&
           !redisDestroyed
         ) {
+          const connection = redisConnection;
+          const transportReady = redisTransportReady;
+          if (connection !== undefined && transportReady !== undefined) {
+            await Promise.race([
+              transportReady,
+              connection.then(
+                () => undefined,
+                () => undefined,
+              ),
+            ]);
+          }
+          if (redisTransportConnected && !redisConnectSettled) {
+            await waitForRedisInitiatorTurn();
+          }
+        }
+        if (
+          redisConnectStarted &&
+          !redisConnectSettled &&
+          redisTransportConnected &&
+          !redisConnected &&
+          !redisDestroyed
+        ) {
           try {
             redis.destroy();
             redisDestroyed = true;
@@ -204,7 +238,7 @@ export function createMemoryExtractionRuntime({
         if (redisConnection !== undefined) readinessPromises.push(redisConnection);
         if (dependenciesReady !== undefined) readinessPromises.push(dependenciesReady);
         await Promise.allSettled(readinessPromises);
-        if (redisConnected && !redisDestroyed) {
+        if (redisConnected && !redisDestroyed && redis.isOpen) {
           await redis.quit();
         }
         if (destroyError !== undefined) {
@@ -255,6 +289,15 @@ export function createMemoryExtractionRuntime({
           if (closing) {
             throw new Error("memory extraction runtime is closing");
           }
+          let resolveTransportReady: () => void = () => undefined;
+          redisTransportReady = new Promise<void>((resolve) => {
+            resolveTransportReady = resolve;
+          });
+          const onTransportConnect = () => {
+            redisTransportConnected = true;
+            resolveTransportReady();
+          };
+          redis.once("connect", onTransportConnect);
           redisConnectStarted = true;
           try {
             await redis.connect();
@@ -265,6 +308,7 @@ export function createMemoryExtractionRuntime({
             return redis;
           } finally {
             redisConnectSettled = true;
+            redis.off("connect", onTransportConnect);
           }
         }),
       );
@@ -373,6 +417,11 @@ function requireRedisConnection(
     return Promise.reject(new Error("memory extraction runtime is not started"));
   }
   return connection;
+}
+
+function waitForRedisInitiatorTurn(): Promise<void> {
+  // node-redis emits `connect` before its async handshake commands enter the queue.
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 async function readWorkerHealth(client: AiWorkerMemoryExtractionClient): Promise<boolean> {

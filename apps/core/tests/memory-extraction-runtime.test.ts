@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { once } from "node:events";
+import { createServer, type AddressInfo, type Server, type Socket } from "node:net";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "redis";
 
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
@@ -12,8 +15,79 @@ import {
   type MemoryExtractionRuntimeDependencies,
 } from "../src/runtime/memory-extraction-runtime.js";
 
+const redisCreations = vi.hoisted(() => [] as Array<{
+  client: unknown;
+  options: unknown;
+}>);
+
+vi.mock("redis", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("redis")>();
+  return {
+    ...actual,
+    createClient(options: Parameters<typeof actual.createClient>[0]) {
+      const client = actual.createClient(options);
+      redisCreations.push({ client, options });
+      return client;
+    },
+  };
+});
+
 const redisTestUrl = process.env.IRIS_TEST_REDIS_URL?.trim();
 const runIfRedis = redisTestUrl === undefined ? it.skip : it;
+const networkTestResources = {
+  clients: new Set<{ readonly isOpen: boolean; destroy(): void }>(),
+  runtimeClosers: new Set<() => Promise<void>>(),
+  servers: new Set<Server>(),
+  sockets: new Set<Socket>(),
+};
+
+afterEach(async () => {
+  const errors: unknown[] = [];
+  try {
+    for (const socket of networkTestResources.sockets) {
+      try {
+        socket.destroy();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    await Promise.all(
+      [...networkTestResources.runtimeClosers].map(async (close) => {
+        try {
+          await settleBeforeDeadline(close(), 1_000, "runtime cleanup timed out");
+        } catch (error) {
+          errors.push(error);
+        }
+      }),
+    );
+    for (const client of networkTestResources.clients) {
+      try {
+        if (client.isOpen) {
+          client.destroy();
+        }
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    await Promise.all(
+      [...networkTestResources.servers].map(async (server) => {
+        try {
+          await settleBeforeDeadline(closeTcpServer(server), 1_000, "server cleanup timed out");
+        } catch (error) {
+          errors.push(error);
+        }
+      }),
+    );
+  } finally {
+    networkTestResources.clients.clear();
+    networkTestResources.runtimeClosers.clear();
+    networkTestResources.servers.clear();
+    networkTestResources.sockets.clear();
+  }
+  if (errors.length > 0) {
+    throw errors[0];
+  }
+});
 
 describe("createMemoryExtractionRuntime", () => {
   it("returns no runtime and opens no resources when disabled", () => {
@@ -293,6 +367,29 @@ describe("createMemoryExtractionRuntime", () => {
     expect(fixture.pool.end).toHaveBeenCalledOnce();
   });
 
+  it("creates the production Redis client with reconnect disabled and a safe error listener", async () => {
+    redisCreations.length = 0;
+    const fixture = runtimeFixture();
+    const dependencies = withoutRedisFactory(fixture.dependencies);
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies,
+    });
+    const creation = redisCreations.at(-1);
+    const client = creation?.client as ReturnType<typeof createClient> | undefined;
+
+    expect.soft(creation?.options).toMatchObject({
+      url: "redis://localhost:6379",
+      socket: { reconnectStrategy: false },
+    });
+    expect.soft(client?.listenerCount("error")).toBe(1);
+    expect(() => client?.emit("error", new Error("private Redis failure"))).not.toThrow();
+
+    await runtime?.close();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+  });
+
   it("does not call a redis@6-like throwing destroy before connect starts", async () => {
     const clientClosedError = new Error("The client is closed");
     clientClosedError.name = "ClientClosedError";
@@ -311,6 +408,7 @@ describe("createMemoryExtractionRuntime", () => {
   runIfRedis("connects and closes a live redis@6 client without leaking it", async () => {
     const fixture = runtimeFixture();
     const redis = createClient({ url: redisTestUrl });
+    networkTestResources.clients.add(redis);
     redis.on("error", () => undefined);
     const dependencies: MemoryExtractionRuntimeDependencies = {
       ...fixture.dependencies,
@@ -321,6 +419,9 @@ describe("createMemoryExtractionRuntime", () => {
       runtimeController: runtimeController(),
       dependencies,
     });
+    if (runtime !== undefined) {
+      networkTestResources.runtimeClosers.add(() => runtime.close());
+    }
 
     runtime?.start();
     await vi.waitFor(() => expect(fixture.loop.start).toHaveBeenCalledOnce());
@@ -329,6 +430,158 @@ describe("createMemoryExtractionRuntime", () => {
     await expect(runtime?.close()).resolves.toBeUndefined();
     expect(redis.isOpen).toBe(false);
     expect(fixture.pool.end).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a real node-redis half-handshake after the transport connects", async () => {
+    const sockets = new Set<Socket>();
+    let acceptSocket: (socket: Socket) => void = () => undefined;
+    const acceptedSocket = new Promise<Socket>((resolve) => {
+      acceptSocket = resolve;
+    });
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      networkTestResources.sockets.add(socket);
+      socket.once("close", () => {
+        sockets.delete(socket);
+        networkTestResources.sockets.delete(socket);
+      });
+      socket.resume();
+      acceptSocket(socket);
+    });
+    networkTestResources.servers.add(server);
+    const port = await listenOnLoopback(server);
+    const redis = createClient({
+      url: `redis://127.0.0.1:${port}`,
+      socket: { reconnectStrategy: false },
+    });
+    networkTestResources.clients.add(redis);
+    redis.on("error", () => undefined);
+    const transportConnect = vi.fn();
+    redis.on("connect", transportConnect);
+    const nativeDestroy = redis.destroy.bind(redis);
+    const destroy = vi.fn(() => nativeDestroy());
+    redis.destroy = destroy as typeof redis.destroy;
+    const nativeConnect = redis.connect.bind(redis);
+    let signalConnectStarted: () => void = () => undefined;
+    const connectStarted = new Promise<void>((resolve) => {
+      signalConnectStarted = resolve;
+    });
+    redis.connect = (() => {
+      const connection = nativeConnect();
+      signalConnectStarted();
+      return connection;
+    }) as typeof redis.connect;
+    const fixture = runtimeFixture();
+    const runtime = createMemoryExtractionRuntime({
+      env: {
+        ...enabledEnv(),
+        REDIS_URL: `redis://127.0.0.1:${port}`,
+      },
+      runtimeController: runtimeController(),
+      dependencies: {
+        ...fixture.dependencies,
+        createRedisClient: () => redis as never,
+      },
+    });
+    if (runtime !== undefined) {
+      networkTestResources.runtimeClosers.add(() => runtime.close());
+    }
+    let close: Promise<void> | undefined;
+
+    try {
+      runtime?.start();
+      await connectStarted;
+      const socket = await settleBeforeDeadline(
+        acceptedSocket,
+        1_000,
+        "half-handshake server did not accept the connection",
+      );
+      close = runtime?.close();
+
+      try {
+        await settleBeforeDeadline(close, 1_000, "half-handshake close timed out");
+      } catch (error) {
+        throw new Error(
+          `half-handshake state: transport=${transportConnect.mock.calls.length}, ` +
+          `destroy=${destroy.mock.calls.length}, open=${String(redis.isOpen)}, ` +
+          `poolEnd=${fixture.pool.end.mock.calls.length}`,
+          { cause: error },
+        );
+      }
+      expect(socket).toBeDefined();
+      const accepted = socket!;
+      if (!accepted.destroyed) {
+        await settleBeforeDeadline(
+          once(accepted, "close"),
+          1_000,
+          "half-handshake socket close timed out",
+        );
+      }
+
+      expect(redis.isOpen).toBe(false);
+      expect(transportConnect).toHaveBeenCalledOnce();
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(accepted.destroyed).toBe(true);
+      expect(sockets.size).toBe(0);
+      expect(fixture.loop.start).not.toHaveBeenCalled();
+      expect(fixture.pool.end).toHaveBeenCalledOnce();
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+    }
+  }, 3_000);
+
+  runIfRedis("absorbs a live Redis peer disconnect without reconnecting or leaking", async () => {
+    redisCreations.length = 0;
+    const fixture = runtimeFixture();
+    const runtime = createMemoryExtractionRuntime({
+      env: { ...enabledEnv(), REDIS_URL: redisTestUrl },
+      runtimeController: runtimeController(),
+      dependencies: withoutRedisFactory(fixture.dependencies),
+    });
+    const creation = redisCreations.at(-1);
+    const redis = creation?.client as ReturnType<typeof createClient> | undefined;
+    if (redis === undefined) {
+      throw new Error("production Redis client was not created");
+    }
+    networkTestResources.clients.add(redis);
+    if (runtime !== undefined) {
+      networkTestResources.runtimeClosers.add(() => runtime.close());
+    }
+    const hadProductionErrorListener = redis.listenerCount("error") > 0;
+    expect.soft(hadProductionErrorListener).toBe(true);
+    if (!hadProductionErrorListener) {
+      redis.on("error", () => undefined);
+    }
+    const reconnecting = vi.fn();
+    redis.on("reconnecting", reconnecting);
+    const peerError = once(redis, "error");
+    const admin = createClient({
+      url: redisTestUrl,
+      socket: { reconnectStrategy: false },
+    });
+    networkTestResources.clients.add(admin);
+    admin.on("error", () => undefined);
+
+    try {
+      runtime?.start();
+      await vi.waitFor(() => expect(fixture.loop.start).toHaveBeenCalledOnce());
+      await admin.connect();
+      const clientId = await redis.sendCommand(["CLIENT", "ID"]);
+      await admin.sendCommand(["CLIENT", "KILL", "ID", String(clientId)]);
+      await peerError;
+
+      expect(redis.isOpen).toBe(false);
+      expect(reconnecting).not.toHaveBeenCalled();
+      await expect(runtime?.close()).resolves.toBeUndefined();
+      expect(fixture.pool.end).toHaveBeenCalledOnce();
+    } finally {
+      if (admin.isOpen) {
+        admin.destroy();
+      }
+      await runtime?.close().catch(() => undefined);
+    }
   });
 
   it("destroys a pending Redis connect and awaits readiness plus pool shutdown", async () => {
@@ -345,7 +598,10 @@ describe("createMemoryExtractionRuntime", () => {
     const close = runtime?.close().then(() => {
       closed = true;
     });
-    const fallback = setTimeout(() => fixture.rejectRedisConnect(), 100);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fixture.redis.destroy).not.toHaveBeenCalled();
+    expect(fixture.pool.end).not.toHaveBeenCalled();
+    fixture.emitRedisTransportConnect();
     await vi.waitFor(() => expect(fixture.pool.end).toHaveBeenCalledOnce());
 
     expect(fixture.redis.destroy).toHaveBeenCalledOnce();
@@ -354,7 +610,6 @@ describe("createMemoryExtractionRuntime", () => {
     expect(closed).toBe(false);
     fixture.resolvePoolEnd();
     await close;
-    clearTimeout(fallback);
     expect(closed).toBe(true);
     expect(fixture.cleanupOrder).toEqual(["loop", "redis-destroy", "postgres"]);
   });
@@ -378,6 +633,8 @@ describe("createMemoryExtractionRuntime", () => {
     const close = runtime?.close().finally(() => {
       closeSettled = true;
     });
+    expect(fixture.redis.destroy).not.toHaveBeenCalled();
+    fixture.emitRedisTransportConnect();
     await vi.waitFor(() => expect(fixture.redis.destroy).toHaveBeenCalledOnce());
 
     expect(fixture.pool.end).not.toHaveBeenCalled();
@@ -403,6 +660,8 @@ describe("createMemoryExtractionRuntime", () => {
     await vi.waitFor(() => expect(fixture.redis.connect).toHaveBeenCalledOnce());
 
     const close = runtime?.close();
+    expect(fixture.redis.destroy).not.toHaveBeenCalled();
+    fixture.emitRedisTransportConnect();
     await vi.waitFor(() => expect(fixture.redis.destroy).toHaveBeenCalledOnce());
     fixture.resolveRedisConnect();
 
@@ -556,6 +815,32 @@ function runtimeFixture({
   let resolveRedisConnect: () => void = () => undefined;
   let rejectRedisConnect: () => void = () => undefined;
   let resolvePoolEnd: () => void = () => undefined;
+  const redisListeners = new Map<
+    string,
+    Set<{ listener: (...args: unknown[]) => void; once: boolean }>
+  >();
+  let redisOpen = false;
+  const addRedisListener = (
+    event: string,
+    listener: (...args: unknown[]) => void,
+    once: boolean,
+  ) => {
+    const listeners = redisListeners.get(event) ?? new Set();
+    listeners.add({ listener, once });
+    redisListeners.set(event, listeners);
+  };
+  const emitRedisEvent = (event: string, ...args: unknown[]) => {
+    const listeners = redisListeners.get(event);
+    if (listeners === undefined) {
+      return;
+    }
+    for (const entry of [...listeners]) {
+      entry.listener(...args);
+      if (entry.once) {
+        listeners.delete(entry);
+      }
+    }
+  };
   const transactionClient = {
     query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
     release: vi.fn(),
@@ -583,13 +868,36 @@ function runtimeFixture({
   };
   const redis = {
     connect: vi.fn(() => {
+      redisOpen = true;
       if (!deferRedisConnect) {
+        emitRedisEvent("connect");
         return Promise.resolve(redis);
       }
       return new Promise<typeof redis>((resolve, reject) => {
         resolveRedisConnect = () => resolve(redis);
-        rejectRedisConnect = () => reject(new Error("Redis connect aborted"));
+        rejectRedisConnect = () => {
+          redisOpen = false;
+          reject(new Error("Redis connect aborted"));
+        };
       });
+    }),
+    get isOpen() {
+      return redisOpen;
+    },
+    once: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      addRedisListener(event, listener, true);
+      return redis;
+    }),
+    off: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      const listeners = redisListeners.get(event);
+      if (listeners !== undefined) {
+        for (const entry of listeners) {
+          if (entry.listener === listener) {
+            listeners.delete(entry);
+          }
+        }
+      }
+      return redis;
     }),
     eval: vi.fn(async () => 1),
     sCard: vi.fn(async () => 0),
@@ -597,12 +905,14 @@ function runtimeFixture({
     get: vi.fn(async () => null),
     quit: vi.fn(async () => {
       cleanupOrder.push("redis");
+      redisOpen = false;
     }),
     destroy: vi.fn(() => {
       cleanupOrder.push("redis-destroy");
       if (destroyError !== undefined) {
         throw destroyError;
       }
+      redisOpen = false;
       rejectRedisConnect();
     }),
   };
@@ -687,6 +997,7 @@ function runtimeFixture({
     aiClient,
     cleanupOrder,
     dependencies,
+    emitRedisTransportConnect: () => emitRedisEvent("connect"),
     loop,
     planner,
     pool,
@@ -711,6 +1022,60 @@ function enabledEnv() {
     IRIS_AI_WORKER_TOKEN: "worker-token",
     IRIS_FEISHU_BOT_OPEN_ID: "ou_iris",
   };
+}
+
+function withoutRedisFactory(
+  dependencies: MemoryExtractionRuntimeDependencies,
+): MemoryExtractionRuntimeDependencies {
+  const {
+    createRedisClient: _createRedisClient,
+    ...withoutRedis
+  } = dependencies;
+  return withoutRedis;
+}
+
+async function listenOnLoopback(server: Server): Promise<number> {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return (server.address() as AddressInfo).port;
+}
+
+async function closeTcpServer(server: Server): Promise<void> {
+  if (!server.listening) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(error);
+      }
+    });
+  });
+}
+
+async function settleBeforeDeadline<T>(
+  promise: Promise<T> | undefined,
+  timeoutMs: number,
+  message: string,
+): Promise<T | undefined> {
+  if (promise === undefined) {
+    return undefined;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 function runtimeController() {
