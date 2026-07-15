@@ -52,6 +52,13 @@ export type MemoryExtractionWorkerResult =
         | "runtime_disabled_before_apply";
     }
   | {
+      status: "deferred";
+      requestId: string;
+      groupId: string;
+      runId?: string;
+      reason: "unselected_run_scope";
+    }
+  | {
       status: "failed";
       requestId: string;
       groupId: string;
@@ -235,13 +242,13 @@ async function processGroup(input: {
       errorMessage: "internal_error",
       retryAt: (job) => retryAtForJob(now, job),
     });
-    await deferJobs(dependencies.queue, deferredJobs, results, now);
+    await deferJobs(dependencies.queue, deferredJobs, results);
     return;
   }
 
   if (claimedRun === undefined) {
     await reconcileUnclaimedJobs({ dependencies, jobs: runJobs, results, now });
-    await deferJobs(dependencies.queue, deferredJobs, results, now);
+    await deferJobs(dependencies.queue, deferredJobs, results);
     return;
   }
 
@@ -259,12 +266,12 @@ async function processGroup(input: {
       errorMessage: "internal_error",
       retryAt: (job) => retryAtForJob(now, job),
     });
-    await deferJobs(dependencies.queue, deferredJobs, results, now);
+    await deferJobs(dependencies.queue, deferredJobs, results);
     return;
   }
 
   await processClaimedRun({ dependencies, jobs: runJobs, claimedRun, results, now });
-  await deferJobs(dependencies.queue, deferredJobs, results, now);
+  await deferJobs(dependencies.queue, deferredJobs, results);
 }
 
 async function processClaimedRun(input: {
@@ -1036,19 +1043,24 @@ async function deferJobs(
   queue: MemoryExtractionQueue,
   jobs: RoutedJob[],
   results: Map<number, MemoryExtractionWorkerResult>,
-  now: Date,
 ): Promise<void> {
   if (jobs.length === 0) {
     return;
   }
-  await failIndexedJobs({
-    queue,
-    jobs,
-    results,
-    classification: "internal_error",
-    errorMessage: "internal_error",
-    retryAt: (job) => retryAtForJob(now, job),
-  });
+  for (const indexedJob of jobs) {
+    try {
+      await retryQueueOperation(() => queue.deferJob(indexedJob.job));
+    } catch {
+      throw new Error("memory extraction queue recovery failed");
+    }
+    results.set(indexedJob.index, {
+      status: "deferred",
+      requestId: indexedJob.route.requestId,
+      groupId: indexedJob.route.groupId,
+      ...(indexedJob.route.runId === undefined ? {} : { runId: indexedJob.route.runId }),
+      reason: "unselected_run_scope",
+    });
+  }
 }
 
 async function reconcileUnclaimedJobs(input: {

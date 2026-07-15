@@ -16,6 +16,7 @@ import {
 import {
   fingerprintCreateGroupMemoryRequest,
   insertGroupMemoryRecordWithEvidence,
+  lockGroupMemoryWriteScope,
   normalizeCreateGroupMemory,
   type Queryable as GroupMemoryQueryable,
 } from "./postgres-group-memory-writer.js";
@@ -91,6 +92,10 @@ export function createPostgresGroupMemoryRepository({
       const id = randomUUID();
       const memoryInput = normalizeCreateGroupMemory({ id, ...rawInput });
       return withTransaction(dataSource, async (client) => {
+        await lockGroupMemoryWriteScope({
+          queryable: client,
+          groupId: memoryInput.groupId,
+        });
         const result = await insertGroupMemoryRecordWithEvidence({
           queryable: client,
           memory: memoryInput,
@@ -117,8 +122,13 @@ export function createPostgresGroupMemoryRepository({
       const input = normalizeCorrectionInput(rawInput);
       const requestFingerprint = fingerprintCorrectionRequest(input);
       return withTransaction(dataSource, async (client) => {
+        const durableGroupId = await findGroupIdByMemoryId(client, input.memoryId);
+        if (durableGroupId === undefined) {
+          throw new Error("group memory not found");
+        }
+        await lockGroupMemoryWriteScope({ queryable: client, groupId: durableGroupId });
         const original = await findByIdForUpdate(client, input.memoryId);
-        if (original === undefined) {
+        if (original === undefined || original.groupId !== durableGroupId) {
           throw new Error("group memory not found");
         }
 
@@ -187,13 +197,41 @@ export function createPostgresGroupMemoryRepository({
 
     async deleteById(id) {
       const memoryId = requireBoundedString("memoryId", id, MAX_IDENTIFIER_CHARS);
-      const result = await dataSource.query<{ id: unknown }>(
-        `DELETE FROM group_memories WHERE id = $1 RETURNING id`,
-        [memoryId],
-      );
-      return result.rows.length === 0 ? "not_found" : "deleted";
+      return withTransaction(dataSource, async (client) => {
+        const groupId = await findGroupIdByMemoryId(client, memoryId);
+        if (groupId === undefined) {
+          return "not_found" as const;
+        }
+        await lockGroupMemoryWriteScope({ queryable: client, groupId });
+        const result = await client.query<{ id: unknown }>(
+          `DELETE FROM group_memories WHERE id = $1 AND group_id = $2 RETURNING id`,
+          [memoryId, groupId],
+        );
+        return result.rows.length === 0 ? "not_found" as const : "deleted" as const;
+      });
     },
   };
+}
+
+async function findGroupIdByMemoryId(
+  queryable: Queryable,
+  memoryId: string,
+): Promise<string | undefined> {
+  const result = await queryable.query<{ group_id: unknown }>(
+    `
+    SELECT group_id
+    FROM group_memories
+    WHERE id = $1
+    `,
+    [memoryId],
+  );
+  if (result.rows.length > 1) {
+    throw new Error("group memory lookup returned multiple rows");
+  }
+  const row = result.rows[0];
+  return row === undefined
+    ? undefined
+    : requireBoundedString("memory group id", row.group_id, MAX_IDENTIFIER_CHARS);
 }
 
 function assertCorrectionReplayMatches(

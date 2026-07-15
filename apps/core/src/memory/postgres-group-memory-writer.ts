@@ -45,6 +45,7 @@ type IdempotentMemoryRecord = {
 
 export const MAX_GROUP_MEMORY_IDENTIFIER_CHARS = 512;
 export const MAX_GROUP_MEMORY_CONTENT_CHARS = 4000;
+const GROUP_MEMORY_ADVISORY_LOCK_NAMESPACE = "iris:group-memory:";
 
 const selectMemoryColumns = `
   gm.id,
@@ -69,6 +70,23 @@ const selectMemoryColumns = `
   gm.created_at,
   gm.updated_at
 `;
+
+export async function lockGroupMemoryWriteScope(input: {
+  queryable: Queryable;
+  groupId: string;
+}): Promise<void> {
+  const groupId = requireBoundedString(
+    "groupId",
+    input.groupId,
+    MAX_GROUP_MEMORY_IDENTIFIER_CHARS,
+  );
+  await input.queryable.query(
+    `
+    SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+    `,
+    [`${GROUP_MEMORY_ADVISORY_LOCK_NAMESPACE}${groupId}`],
+  );
+}
 
 export async function insertGroupMemoryWithEvidence(input: {
   queryable: Queryable;

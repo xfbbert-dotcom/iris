@@ -210,6 +210,30 @@ redis.call("HDEL", KEYS[10], ARGV[2])
 return 1
 `;
 
+const ACK_DEFER_SCRIPT = `
+-- memory-extraction:ack-defer
+local exact_processing = redis.call("HGET", KEYS[7], ARGV[1]) == "processing"
+  and redis.call("HGET", KEYS[8], ARGV[1]) == ARGV[2]
+  and redis.call("ZSCORE", KEYS[4], ARGV[1])
+if exact_processing then
+  redis.call("ZREM", KEYS[4], ARGV[1])
+  redis.call("ZREM", KEYS[5], ARGV[1])
+  redis.call("SREM", KEYS[6], ARGV[1])
+  redis.call("ZREM", KEYS[2], ARGV[1])
+  redis.call("SREM", KEYS[3], ARGV[1])
+  local sequence = redis.call("INCR", KEYS[9])
+  redis.call("RPUSH", KEYS[1], ARGV[1])
+  redis.call("ZADD", KEYS[2], sequence, ARGV[1])
+  redis.call("SADD", KEYS[3], ARGV[1])
+  redis.call("HSET", KEYS[7], ARGV[1], "ready")
+  return 1
+end
+if redis.call("HGET", KEYS[7], ARGV[1]) == "ready"
+  and redis.call("HGET", KEYS[8], ARGV[1]) == ARGV[2]
+  and redis.call("ZSCORE", KEYS[2], ARGV[1]) then return 2 end
+return 0
+`;
+
 const ACK_RETRY_SCRIPT = `
 -- memory-extraction:ack-retry
 if redis.call("HGET", KEYS[8], ARGV[1]) ~= "processing"
@@ -725,6 +749,29 @@ export function createRedisMemoryExtractionQueue({
         ],
         arguments: [idempotencyKey, payload],
       });
+    },
+
+    async deferJob(job) {
+      const claimed = readClaimedPayload(job);
+      const payload = claimed?.payload ?? serializeMemoryExtractionJob(job);
+      const idempotencyKey = claimed?.idempotencyKey ?? parseMemoryExtractionJob(payload).idempotencyKey;
+      const result = await client.eval(ACK_DEFER_SCRIPT, {
+        keys: [
+          readyKey,
+          readyIndexKey,
+          readySetKey,
+          processingKey,
+          delayedKey,
+          recoverySetKey,
+          stateKey,
+          payloadKey,
+          readySequenceKey,
+        ],
+        arguments: [idempotencyKey, payload],
+      });
+      if (result !== 1 && result !== 2) {
+        throw new Error("memory extraction defer transition did not match processing job");
+      }
     },
 
     async handleTerminalJob(input) {

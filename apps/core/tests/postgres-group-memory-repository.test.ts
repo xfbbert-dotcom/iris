@@ -5,7 +5,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import { GroupMemoryIdempotencyConflictError } from "../src/memory/group-memory-repository.js";
-import { insertGroupMemoryWithEvidence } from "../src/memory/postgres-group-memory-writer.js";
+import {
+  insertGroupMemoryWithEvidence,
+  lockGroupMemoryWriteScope,
+} from "../src/memory/postgres-group-memory-writer.js";
 
 import {
   createPostgresGroupMemoryRepository,
@@ -44,6 +47,7 @@ describe("createPostgresGroupMemoryRepository", () => {
   it("creates an evidence-bound memory transactionally", async () => {
     const client = scriptedClient([
       step(/begin/u),
+      step(/pg_advisory_xact_lock/u),
       step(/from group_memories[\s\S]+idempotency_key/u, []),
       step(/from conversation_messages/u, [
         { id: "feishu:msg-1", chat_id: "chat-a" },
@@ -71,6 +75,7 @@ describe("createPostgresGroupMemoryRepository", () => {
   it("returns the existing memory for a duplicate group idempotency key", async () => {
     const client = scriptedClient([
       step(/begin/u),
+      step(/pg_advisory_xact_lock/u),
       step(/from group_memories[\s\S]+idempotency_key/u, [memoryRow()]),
       step(/commit/u),
     ]);
@@ -90,6 +95,7 @@ describe("createPostgresGroupMemoryRepository", () => {
   it("rejects a create idempotency key reused with a different request", async () => {
     const client = scriptedClient([
       step(/begin/u),
+      step(/pg_advisory_xact_lock/u),
       step(/from group_memories[\s\S]+idempotency_key/u, [
         memoryRow({ content: "Different content" }),
       ]),
@@ -120,6 +126,7 @@ describe("createPostgresGroupMemoryRepository", () => {
   it("rolls back when evidence belongs to another group", async () => {
     const client = scriptedClient([
       step(/begin/u),
+      step(/pg_advisory_xact_lock/u),
       step(/from group_memories[\s\S]+idempotency_key/u, []),
       step(/from conversation_messages/u, [
         { id: "feishu:msg-1", chat_id: "chat-b" },
@@ -178,6 +185,10 @@ describe("createPostgresGroupMemoryRepository", () => {
     });
     const client = scriptedClient([
       step(/begin/u),
+      step(/select group_id[\s\S]+from group_memories[\s\S]+where id = \$1/u, [
+        { group_id: "chat-a" },
+      ]),
+      step(/pg_advisory_xact_lock/u),
       step(/where gm\.id = \$1[\s\S]+for update/u, [memoryRow()]),
       step(/from group_memories[\s\S]+idempotency_key/u, []),
       step(/from conversation_messages/u, [
@@ -224,6 +235,10 @@ describe("createPostgresGroupMemoryRepository", () => {
   it("rejects a correction idempotency key belonging to another operation", async () => {
     const client = scriptedClient([
       step(/begin/u),
+      step(/select group_id[\s\S]+from group_memories[\s\S]+where id = \$1/u, [
+        { group_id: "chat-a" },
+      ]),
+      step(/pg_advisory_xact_lock/u),
       step(/where gm\.id = \$1[\s\S]+for update/u, [memoryRow()]),
       step(/from group_memories[\s\S]+idempotency_key/u, [memoryRow()]),
       step(/rollback/u),
@@ -252,6 +267,10 @@ describe("createPostgresGroupMemoryRepository", () => {
     });
     const client = scriptedClient([
       step(/begin/u),
+      step(/select group_id[\s\S]+from group_memories[\s\S]+where id = \$1/u, [
+        { group_id: "chat-a" },
+      ]),
+      step(/pg_advisory_xact_lock/u),
       step(/where gm\.id = \$1[\s\S]+for update/u, [memoryRow()]),
       step(/from group_memories[\s\S]+idempotency_key/u, [existingCorrection]),
       step(/commit/u),
@@ -287,6 +306,10 @@ describe("createPostgresGroupMemoryRepository", () => {
     });
     const client = scriptedClient([
       step(/begin/u),
+      step(/select group_id[\s\S]+from group_memories[\s\S]+where id = \$1/u, [
+        { group_id: "chat-a" },
+      ]),
+      step(/pg_advisory_xact_lock/u),
       step(/where gm\.id = \$1[\s\S]+for update/u, [memoryRow()]),
       step(/from group_memories[\s\S]+idempotency_key/u, [existingCorrection]),
       step(/commit/u),
@@ -305,6 +328,10 @@ describe("createPostgresGroupMemoryRepository", () => {
     const insertionError = new Error("insert failed");
     const client = scriptedClient([
       step(/begin/u),
+      step(/select group_id[\s\S]+from group_memories[\s\S]+where id = \$1/u, [
+        { group_id: "chat-a" },
+      ]),
+      step(/pg_advisory_xact_lock/u),
       step(/where gm\.id = \$1[\s\S]+for update/u, [memoryRow()]),
       step(/from group_memories[\s\S]+idempotency_key/u, []),
       step(/from conversation_messages/u, [
@@ -333,16 +360,27 @@ describe("createPostgresGroupMemoryRepository", () => {
   });
 
   it("hard deletes a memory and reports not-found deterministically", async () => {
-    const source = dataSource(scriptedClient([]), [{ id: "memory-1" }]);
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/select group_id[\s\S]+from group_memories[\s\S]+where id = \$1/u, [
+        { group_id: "chat-a" },
+      ]),
+      step(/pg_advisory_xact_lock/u),
+      step(/delete from group_memories[\s\S]+returning id/u, [{ id: "memory-1" }]),
+      step(/commit/u),
+      step(/begin/u),
+      step(/select group_id[\s\S]+from group_memories[\s\S]+where id = \$1/u, []),
+      step(/commit/u),
+    ]);
+    const source = dataSource(client);
     const repository = createPostgresGroupMemoryRepository({ dataSource: source });
 
     await expect(repository.deleteById("memory-1")).resolves.toBe("deleted");
 
-    source.query.mockResolvedValueOnce({ rows: [] });
     await expect(repository.deleteById("missing")).resolves.toBe("not_found");
-    expect(source.query).toHaveBeenLastCalledWith(
+    expect(client.query).toHaveBeenCalledWith(
       expect.stringMatching(/delete from group_memories[\s\S]+returning id/iu),
-      ["missing"],
+      ["memory-1", "chat-a"],
     );
   });
 });
@@ -399,6 +437,29 @@ runIfDatabase("PostgresGroupMemoryRepository with Postgres", () => {
       ]);
     } finally {
       await pool.end();
+    }
+  });
+
+  it("serializes one group without blocking an independent group lock", async () => {
+    const first = await pool!.connect();
+    const second = await pool!.connect();
+    try {
+      await first.query("BEGIN");
+      await second.query("BEGIN");
+      await lockGroupMemoryWriteScope({ queryable: first, groupId });
+      await second.query("SET LOCAL lock_timeout = '100ms'");
+
+      await expect(
+        lockGroupMemoryWriteScope({ queryable: second, groupId: otherGroupId }),
+      ).resolves.toBeUndefined();
+      await expect(
+        lockGroupMemoryWriteScope({ queryable: second, groupId }),
+      ).rejects.toMatchObject({ code: "55P03" });
+    } finally {
+      await first.query("ROLLBACK");
+      await second.query("ROLLBACK");
+      first.release();
+      second.release();
     }
   });
 

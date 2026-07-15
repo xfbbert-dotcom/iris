@@ -60,6 +60,7 @@ export interface MemoryExtractionQueue {
     limit: number;
   }): Promise<RecoverMemoryExtractionProcessingResult>;
   dequeueBatch(limit: number, now?: Date): Promise<MemoryExtractionJob[]>;
+  deferJob(job: MemoryExtractionJob): Promise<void>;
   handleProcessedJob(job: MemoryExtractionJob): Promise<void>;
   handleTerminalJob(input: {
     job: MemoryExtractionJob;

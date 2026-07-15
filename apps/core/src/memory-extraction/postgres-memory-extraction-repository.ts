@@ -18,7 +18,10 @@ import {
   MemoryExtractionCompletionConflictError,
   MemoryExtractionStaleRunError,
 } from "./memory-extraction-repository.js";
-import { insertGroupMemoryWithEvidence } from "../memory/postgres-group-memory-writer.js";
+import {
+  insertGroupMemoryWithEvidence,
+  lockGroupMemoryWriteScope,
+} from "../memory/postgres-group-memory-writer.js";
 
 export type Queryable = {
   query<T = unknown>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
@@ -128,6 +131,11 @@ type StatusCountsRow = {
   failed_runs: unknown;
 };
 
+type ActiveMemoryContentRow = {
+  id: unknown;
+  content: unknown;
+};
+
 const MAX_IDENTIFIER_CHARS = 512;
 const MAX_ROUTE_REQUESTS = 100;
 const MAX_CLASSIFICATION_CHARS = 128;
@@ -135,6 +143,7 @@ const MAX_EVIDENCE_MESSAGES = 40;
 const MAX_CONTEXT_MESSAGES = 10;
 const MAX_ACTIVE_MEMORIES = 8;
 const MAX_ACCEPTED_CANDIDATES = 8;
+const MAX_AUTHORITATIVE_ACTIVE_MEMORIES = 10_000;
 const MAX_CANDIDATE_EVIDENCE_IDS = 40;
 const EXTRACTION_MEMORY_CREATED_BY = "memory-extraction-worker";
 const READABLE_MESSAGE_TEXT_SQL = "cm.text ~ '[^[:space:]]'";
@@ -658,7 +667,7 @@ export function createPostgresMemoryExtractionRepository({
 
     async completeRun(rawInput) {
       const input = normalizeCompletionInput(rawInput);
-      const completionMarker = createCompletionMarker(input);
+      const replayDigest = createCompletionReplayDigest(input);
       const allIdempotencyKeys = Array.from(
         { length: MAX_ACCEPTED_CANDIDATES },
         (_, index) => completionIdempotencyKey(input.runId, index),
@@ -690,6 +699,8 @@ export function createPostgresMemoryExtractionRepository({
           throw new MemoryExtractionCompletionConflictError();
         }
 
+        await lockGroupMemoryWriteScope({ queryable: client, groupId });
+
         const evidenceResult = await client.query<CompletionEvidenceRow>(
           `
           SELECT
@@ -720,7 +731,11 @@ export function createPostgresMemoryExtractionRepository({
         validateCompletionEvidence(input.acceptedCandidates, claimed.evidenceMessageIds);
 
         if (runStatus === "completed") {
-          if (runRow.failure_classification !== completionMarker) {
+          const completionMarker = parseCompletionMarker(runRow.failure_classification);
+          if (
+            completionMarker === undefined ||
+            completionMarker.replayDigest !== replayDigest
+          ) {
             throw new MemoryExtractionCompletionConflictError();
           }
           const memoryIds = await loadCompletedMemoryIds({
@@ -728,7 +743,7 @@ export function createPostgresMemoryExtractionRepository({
             groupId,
             expectedIdempotencyKeys: allIdempotencyKeys.slice(
               0,
-              input.acceptedCandidates.length,
+              completionMarker.acceptedCount,
             ),
             allIdempotencyKeys,
           });
@@ -753,8 +768,18 @@ export function createPostgresMemoryExtractionRepository({
           throw new MemoryExtractionCompletionConflictError();
         }
 
+        const admitted = await admitCandidatesAgainstActiveMemories({
+          queryable: client,
+          groupId,
+          acceptedCandidates: input.acceptedCandidates,
+          diagnostics: input.diagnostics,
+        });
+        const completionMarker = createCompletionMarker({
+          diagnostics: admitted.diagnostics,
+          replayDigest,
+        });
         const memoryIds: string[] = [];
-        for (const [index, candidate] of input.acceptedCandidates.entries()) {
+        for (const [index, candidate] of admitted.acceptedCandidates.entries()) {
           const memory = await insertGroupMemoryWithEvidence({
             queryable: client,
             memory: {
@@ -981,27 +1006,143 @@ function boundedDiagnosticCount(value: unknown): number {
   return value as number;
 }
 
-function createCompletionMarker(input: {
+function createCompletionReplayDigest(input: {
   acceptedCandidates: ValidatedMemoryCandidate[];
   diagnostics: MemoryExtractionDiagnostics;
 }): string {
-  const digest = createHash("sha256")
+  return createHash("sha256")
     .update(JSON.stringify({
       acceptedCandidates: input.acceptedCandidates,
       diagnostics: input.diagnostics,
     }), "utf8")
     .digest("base64url");
+}
+
+function createCompletionMarker(input: {
+  diagnostics: MemoryExtractionDiagnostics;
+  replayDigest: string;
+}): string {
   const persistedRejectionCodes = input.diagnostics.rejectionCodes.slice(0, 2).join(",");
   return [
-    "v2",
+    "v3",
     `p${input.diagnostics.proposedCount}`,
     `a${input.diagnostics.acceptedCount}`,
     `r${input.diagnostics.rejectedCount}`,
     `d${input.diagnostics.duplicateCount}`,
     `c${input.diagnostics.conflictCount}`,
     `x${persistedRejectionCodes}`,
-    `h${digest}`,
+    `h${input.replayDigest}`,
   ].join(":");
+}
+
+function parseCompletionMarker(value: unknown): {
+  acceptedCount: number;
+  replayDigest: string;
+} | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = /^v3:p([0-8]):a([0-8]):r([0-8]):d([0-8]):c([0-8]):x([^:]*):h([A-Za-z0-9_-]{43})$/u.exec(value);
+  if (match === null) {
+    return undefined;
+  }
+  const proposedCount = Number(match[1]);
+  const acceptedCount = Number(match[2]);
+  const rejectedCount = Number(match[3]);
+  const duplicateCount = Number(match[4]);
+  const conflictCount = Number(match[5]);
+  const rejectionCodes = match[6]!.length === 0 ? [] : match[6]!.split(",");
+  if (
+    acceptedCount + rejectedCount !== proposedCount ||
+    duplicateCount + conflictCount > rejectedCount ||
+    rejectionCodes.length > 2 ||
+    new Set(rejectionCodes).size !== rejectionCodes.length ||
+    rejectionCodes.some((code) => !COMPLETION_REJECTION_CODES.has(code)) ||
+    [...rejectionCodes].sort(compareStrings).some((code, index) => code !== rejectionCodes[index])
+  ) {
+    return undefined;
+  }
+  return { acceptedCount, replayDigest: match[7]! };
+}
+
+async function admitCandidatesAgainstActiveMemories(input: {
+  queryable: Queryable;
+  groupId: string;
+  acceptedCandidates: ValidatedMemoryCandidate[];
+  diagnostics: MemoryExtractionDiagnostics;
+}): Promise<{
+  acceptedCandidates: ValidatedMemoryCandidate[];
+  diagnostics: MemoryExtractionDiagnostics;
+}> {
+  const result = await input.queryable.query<ActiveMemoryContentRow>(
+    `
+    SELECT gm.id, gm.content
+    FROM group_memories gm
+    WHERE gm.group_id = $1 AND gm.status = 'active'
+    ORDER BY gm.id ASC
+    LIMIT $2
+    `,
+    [input.groupId, MAX_AUTHORITATIVE_ACTIVE_MEMORIES + 1],
+  );
+  if (result.rows.length > MAX_AUTHORITATIVE_ACTIVE_MEMORIES) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+  const activeContent = new Set(result.rows.map((row) => {
+    requireExactIdentifier(row.id);
+    return authoritativeContentComparisonKey(row.content);
+  }));
+  const acceptedCandidates: ValidatedMemoryCandidate[] = [];
+  let duplicateCount = 0;
+  for (const candidate of input.acceptedCandidates) {
+    const comparisonKey = authoritativeContentComparisonKey(candidate.content);
+    if (activeContent.has(comparisonKey)) {
+      duplicateCount += 1;
+      continue;
+    }
+    activeContent.add(comparisonKey);
+    acceptedCandidates.push({
+      ...candidate,
+      evidenceMessageIds: [...candidate.evidenceMessageIds],
+    });
+  }
+  if (duplicateCount === 0) {
+    return {
+      acceptedCandidates,
+      diagnostics: {
+        ...input.diagnostics,
+        rejectionCodes: [...input.diagnostics.rejectionCodes],
+      },
+    };
+  }
+  return {
+    acceptedCandidates,
+    diagnostics: {
+      proposedCount: input.diagnostics.proposedCount,
+      acceptedCount: input.diagnostics.acceptedCount - duplicateCount,
+      rejectedCount: input.diagnostics.rejectedCount + duplicateCount,
+      duplicateCount: input.diagnostics.duplicateCount + duplicateCount,
+      conflictCount: input.diagnostics.conflictCount,
+      rejectionCodes: [...new Set([
+        ...input.diagnostics.rejectionCodes,
+        "exact_duplicate",
+      ])].sort(compareStrings),
+    },
+  };
+}
+
+function authoritativeContentComparisonKey(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.includes("\u0000") ||
+    hasLoneSurrogate(value)
+  ) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+  const content = value.trim();
+  if (content.length === 0 || content.length > 4000) {
+    throw new MemoryExtractionCompletionConflictError();
+  }
+  return content.normalize("NFC").toLowerCase().normalize("NFC");
 }
 
 function completionIdempotencyKey(runId: string, canonicalCandidateIndex: number): string {

@@ -6,6 +6,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import { MemoryExtractionStaleRunError } from "../src/memory-extraction/memory-extraction-repository.js";
 import {
+  insertGroupMemoryWithEvidence,
+  lockGroupMemoryWriteScope,
+} from "../src/memory/postgres-group-memory-writer.js";
+import {
   createPostgresMemoryExtractionRepository,
   type PostgresMemoryExtractionDataSource,
   type TransactionClient,
@@ -609,6 +613,96 @@ describe("createPostgresMemoryExtractionRepository", () => {
     expect(source.sql.map(normalizeSql)).not.toContainEqual(
       expect.stringMatching(/^update group_memory_extraction_(requests|runs)/u),
     );
+  });
+
+  it("rechecks the full active set at commit and atomically revises duplicate diagnostics", async () => {
+    const storedEvidence = storedEvidenceRows();
+    const inputFingerprint = storedInputFingerprint(storedEvidence);
+    let completed = false;
+    let completionMarker: string | undefined;
+    let memoryInsertCount = 0;
+    const source = fakeDataSource((sql, params) => {
+      const normalized = normalizeSql(sql);
+      if (
+        normalized.includes("from group_memory_extraction_runs") &&
+        normalized.includes("for update")
+      ) {
+        return {
+          rows: [completionRunRow({
+            input_fingerprint: inputFingerprint,
+            status: completed ? "completed" : "processing",
+            failure_classification: completionMarker ?? null,
+          })],
+        };
+      }
+      if (normalized.includes("from group_memory_extraction_run_evidence e")) {
+        if (normalized.includes("as stored_message_id")) {
+          return { rows: storedEvidence };
+        }
+        return {
+          rows: [
+            completionEvidenceRow("request-1", "feishu:msg-1", 0, completed ? "completed" : "processing"),
+            completionEvidenceRow("request-2", "feishu:msg-2", 1, completed ? "completed" : "processing"),
+          ],
+        };
+      }
+      if (
+        normalized.includes("from group_memory_extraction_run_context") ||
+        normalized.includes("from group_memory_extraction_run_memories")
+      ) {
+        return { rows: [] };
+      }
+      if (normalized.startsWith("select cm.id from conversation_messages")) {
+        return { rows: storedEvidence.map(({ id }) => ({ id })) };
+      }
+      if (
+        normalized.includes("select gm.id, gm.content") &&
+        normalized.includes("gm.status = 'active'")
+      ) {
+        return { rows: [{ id: "memory-outside-snapshot", content: "Duplicate fact" }] };
+      }
+      if (normalized.includes("from group_memories") && normalized.includes("idempotency_key")) {
+        return { rows: [] };
+      }
+      if (normalized.includes("from conversation_messages")) {
+        return {
+          rows: ((params?.[0] as string[]) ?? []).map((id) => ({ id, chat_id: "chat-a" })),
+        };
+      }
+      if (normalized.startsWith("insert into group_memories")) {
+        memoryInsertCount += 1;
+        return { rows: [insertedMemoryRow(params ?? [])] };
+      }
+      if (normalized.startsWith("update group_memory_extraction_requests")) {
+        return { rows: [{ id: "request-1" }, { id: "request-2" }] };
+      }
+      if (normalized.startsWith("update group_memory_extraction_runs")) {
+        completionMarker = params?.[2] as string;
+        completed = true;
+        return { rows: [{ id: "run-1" }] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresMemoryExtractionRepository({ dataSource: source.dataSource });
+    const completionInput = {
+      runId: "run-1",
+      inputFingerprint,
+      acceptedCandidates: [validatedCandidate({ content: "  DUPLICATE FACT  " })],
+      diagnostics: diagnostics(),
+    };
+
+    await expect(repository.completeRun(completionInput)).resolves.toEqual({
+      status: "completed",
+      memoryIds: [],
+    });
+    expect(memoryInsertCount).toBe(0);
+    expect(completionMarker).toMatch(
+      /^v3:p1:a0:r1:d1:c0:xexact_duplicate:h[A-Za-z0-9_-]{43}$/u,
+    );
+    await expect(repository.completeRun(completionInput)).resolves.toEqual({
+      status: "already_completed",
+      memoryIds: [],
+    });
   });
 });
 
@@ -1300,7 +1394,7 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
       [claimed!.id],
     );
     expect(marker.rows[0]!.failure_classification).toMatch(
-      /^v2:p1:a0:r1:d0:c0:xlow_confidence:h[A-Za-z0-9_-]{43}$/u,
+      /^v3:p1:a0:r1:d0:c0:xlow_confidence:h[A-Za-z0-9_-]{43}$/u,
     );
     await expect(repository.completeRun(completion)).resolves.toEqual({
       status: "already_completed",
@@ -1530,6 +1624,197 @@ runIfDatabase("PostgresMemoryExtractionRepository review invariants with Postgre
     expect(new Set(replacement!.requestIds)).toEqual(new Set(coveredRequestIds));
   });
 
+  it("rejects an exact duplicate found only in the ninth active memory and replays exactly", async () => {
+    const repository = createRepository(pool);
+    const groupId = `${groupPrefix}-ninth`;
+    const messageId = `feishu:${groupId}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId,
+      text: "Ninth-memory evidence",
+      createdAt: new Date("2026-07-15T04:30:00.000Z"),
+    });
+    for (let index = 0; index < 9; index += 1) {
+      await insertActiveMemory(pool!, {
+        id: `memory-${groupId}-${index}`,
+        groupId,
+        content: index === 8 ? "Ninth duplicate" : `Higher memory ${index}`,
+        importance: index === 8 ? 1 : 5,
+        idempotencyKey: `key-${groupId}-${index}`,
+      });
+    }
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 8,
+    });
+    expect(claimed!.existingMemories).toHaveLength(8);
+    expect(claimed!.existingMemories.map(({ content }) => content)).not.toContain(
+      "Ninth duplicate",
+    );
+    const completionInput = {
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [validatedCandidate({
+        content: "  NINTH DUPLICATE  ",
+        evidenceMessageIds: [messageId],
+      })],
+      diagnostics: diagnostics(),
+    };
+
+    await expect(repository.completeRun(completionInput)).resolves.toEqual({
+      status: "completed",
+      memoryIds: [],
+    });
+    await expect(repository.completeRun(completionInput)).resolves.toEqual({
+      status: "already_completed",
+      memoryIds: [],
+    });
+    const run = await pool!.query<{ failure_classification: string }>(
+      "SELECT failure_classification FROM group_memory_extraction_runs WHERE id = $1",
+      [claimed!.id],
+    );
+    expect(run.rows[0]!.failure_classification).toMatch(
+      /^v3:p1:a0:r1:d1:c0:xexact_duplicate:h[A-Za-z0-9_-]{43}$/u,
+    );
+    await expect(
+      pool!.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM group_memories WHERE group_id = $1 AND idempotency_key = $2",
+        [groupId, sha256(claimed!.id + "0")],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+  });
+
+  it("waits for a concurrent same-group writer and rejects its newly committed duplicate", async () => {
+    const repository = createRepository(pool);
+    const groupId = `${groupPrefix}-concurrent`;
+    const messageId = `feishu:${groupId}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId,
+      text: "Concurrent writer evidence",
+      createdAt: new Date("2026-07-15T04:40:00.000Z"),
+    });
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    const completionInput = {
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [validatedCandidate({
+        content: "Concurrent duplicate",
+        evidenceMessageIds: [messageId],
+      })],
+      diagnostics: diagnostics(),
+    };
+    const writer = await pool!.connect();
+    let transactionOpen = false;
+    let completionSettled = false;
+    let completionPromise: ReturnType<typeof repository.completeRun> | undefined;
+    try {
+      await writer.query("BEGIN");
+      transactionOpen = true;
+      await lockGroupMemoryWriteScope({ queryable: writer, groupId });
+      await insertGroupMemoryWithEvidence({
+        queryable: writer,
+        memory: {
+          id: `memory-${groupId}`,
+          groupId,
+          scope: "group",
+          category: "decision",
+          content: "Concurrent duplicate",
+          importance: 4,
+          confidence: 0.9,
+          idempotencyKey: `key-${groupId}`,
+          origin: "operator",
+          createdBy: "test",
+          evidenceMessageIds: [messageId],
+        },
+      });
+      completionPromise = repository.completeRun(completionInput).finally(() => {
+        completionSettled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      expect(completionSettled).toBe(false);
+
+      await writer.query("COMMIT");
+      transactionOpen = false;
+      await expect(completionPromise).resolves.toEqual({
+        status: "completed",
+        memoryIds: [],
+      });
+    } finally {
+      if (transactionOpen) {
+        await writer.query("ROLLBACK");
+      }
+      await completionPromise?.catch(() => undefined);
+      writer.release();
+    }
+  });
+
+  it("does not treat another group's active content as a duplicate", async () => {
+    const repository = createRepository(pool);
+    const groupId = `${groupPrefix}-isolated`;
+    const otherGroupId = `${groupPrefix}-isolated-other`;
+    const messageId = `feishu:${groupId}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId,
+      text: "Group-isolation evidence",
+      createdAt: new Date("2026-07-15T04:50:00.000Z"),
+    });
+    await insertActiveMemory(pool!, {
+      id: `memory-${otherGroupId}`,
+      groupId: otherGroupId,
+      content: "Shared wording",
+      importance: 5,
+      idempotencyKey: `key-${otherGroupId}`,
+    });
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 40,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 8,
+    });
+
+    const completed = await repository.completeRun({
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [validatedCandidate({
+        content: "shared wording",
+        evidenceMessageIds: [messageId],
+      })],
+      diagnostics: diagnostics(),
+    });
+
+    expect(completed.status).toBe("completed");
+    expect(completed.memoryIds).toHaveLength(1);
+    await expect(
+      pool!.query<{ group_id: string }>("SELECT group_id FROM group_memories WHERE id = $1", [
+        completed.memoryIds[0],
+      ]),
+    ).resolves.toMatchObject({ rows: [{ group_id: groupId }] });
+  });
+
   it("fails completion stale when an authoritative message changes and inserts no candidate", async () => {
     const repository = createRepository(pool);
     const groupId = `${groupPrefix}-message`;
@@ -1645,6 +1930,29 @@ async function insertExtractionMessage(
       input.createdAt,
       `event-${input.id}`,
     ],
+  );
+}
+
+async function insertActiveMemory(
+  pool: pg.Pool,
+  input: {
+    id: string;
+    groupId: string;
+    content: string;
+    importance: number;
+    idempotencyKey: string;
+  },
+): Promise<void> {
+  await pool.query(
+    `
+    INSERT INTO group_memories (
+      id, group_id, memory_scope, category, content, importance, confidence,
+      status, idempotency_key, origin, created_by, request_fingerprint
+    )
+    VALUES ($1, $2, 'group', 'decision', $3, $4, 0.9,
+      'active', $5, 'operator', 'test', $6)
+    `,
+    [input.id, input.groupId, input.content, input.importance, input.idempotencyKey, "b".repeat(64)],
   );
 }
 
@@ -1816,12 +2124,17 @@ function completionRunRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function completionEvidenceRow(requestId: string, messageId: string, ordinal: number) {
+function completionEvidenceRow(
+  requestId: string,
+  messageId: string,
+  ordinal: number,
+  requestStatus: "processing" | "completed" = "processing",
+) {
   return {
     request_id: requestId,
     conversation_message_id: messageId,
     ordinal,
-    request_status: "processing",
+    request_status: requestStatus,
     request_run_id: "run-1",
     request_group_id: "chat-a",
     message_group_id: "chat-a",

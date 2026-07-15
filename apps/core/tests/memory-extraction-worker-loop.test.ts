@@ -110,6 +110,7 @@ describe("createMemoryExtractionWorkerLoop", () => {
         .mockResolvedValueOnce([
           { status: "completed" },
           { status: "skipped" },
+          { status: "deferred" },
           { status: "failed" },
         ])
         .mockRejectedValueOnce(new Error("memory extraction batch failed")),
@@ -143,6 +144,7 @@ describe("createMemoryExtractionWorkerLoop", () => {
       finishedAt: times[1],
       completedCount: 1,
       skippedCount: 1,
+      deferredCount: 1,
       failedCount: 1,
       failed: false,
     });
@@ -157,6 +159,7 @@ describe("createMemoryExtractionWorkerLoop", () => {
       finishedAt: times[3],
       completedCount: 0,
       skippedCount: 0,
+      deferredCount: 0,
       failedCount: 0,
       failed: true,
       errorMessage: "memory extraction batch failed",

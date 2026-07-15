@@ -1324,6 +1324,47 @@ describe("Redis memory extraction queue", () => {
     });
     await expect(queue.dequeueBatch(2, jobs[0]!.enqueuedAt)).resolves.toEqual(jobs);
   });
+
+  it("atomically defers an exact processing payload without charging attempts", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createRedisMemoryExtractionQueue({ client, maxAttempts: 2 });
+    const jobs = [
+      jobFixture({ requestId: "request-fair-1" }),
+      jobFixture({ requestId: "request-fair-2" }),
+    ];
+    for (const queuedJob of jobs) {
+      await queue.enqueue(queuedJob);
+    }
+    const claimed = await queue.dequeueBatch(2, jobs[0]!.enqueuedAt);
+
+    await expect(queue.deferJob(claimed[1]!)).resolves.toBeUndefined();
+    await expect(queue.handleFailedJob({
+      job: claimed[0]!,
+      errorMessage: "provider_timeout",
+      retryAt: new Date("2026-07-14T00:00:30.000Z"),
+    })).resolves.toEqual({ action: "requeued", attempts: 1 });
+
+    expect(await queue.getPendingCount()).toBe(1);
+    expect(await queue.getDelayedCount()).toBe(1);
+    expect(await queue.getProcessingCount()).toBe(0);
+    expect(await queue.getDeadLetterCount()).toBe(0);
+    await expect(queue.dequeueBatch(1, jobs[0]!.enqueuedAt)).resolves.toEqual([jobs[1]]);
+  });
+
+  it("refuses to defer a modified claimed payload", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createRedisMemoryExtractionQueue({ client });
+    const queuedJob = jobFixture({ requestId: "request-defer-exact" });
+    await queue.enqueue(queuedJob);
+    const [claimed] = await queue.dequeueBatch(1, queuedJob.enqueuedAt);
+
+    await expect(queue.deferJob({ ...claimed!, attempts: 1 })).rejects.toThrow(
+      "defer transition did not match processing job",
+    );
+    expect(await queue.getProcessingCount()).toBe(1);
+    expect(await queue.getPendingCount()).toBe(0);
+    expect(await queue.getDeadLetterCount()).toBe(0);
+  });
 });
 
 const redisUrl = process.env.IRIS_TEST_REDIS_URL?.trim();
@@ -1406,7 +1447,11 @@ runIfRedis("Redis memory extraction queue with live Redis", () => {
       recoveredCount: 1,
       remainingCount: 0,
     });
+    const [recovered] = await queue.dequeueBatch(1, abandoned.enqueuedAt);
+    expect(recovered).toEqual(abandoned);
+    await expect(queue.deferJob(recovered!)).resolves.toBeUndefined();
     await expect(queue.dequeueBatch(1, abandoned.enqueuedAt)).resolves.toEqual([abandoned]);
+    expect(await queue.getDeadLetterCount()).toBe(1);
   });
 });
 
@@ -1470,6 +1515,7 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
       if (script.includes("memory-extraction:promote-due")) return this.promoteDue(options.keys, options.arguments);
       if (script.includes("memory-extraction:dequeue")) return this.dequeue(options.keys, options.arguments);
       if (script.includes("memory-extraction:ack-processed")) return this.ackProcessed(options.keys, options.arguments);
+      if (script.includes("memory-extraction:ack-defer")) return this.ackDefer(options.keys, options.arguments);
       if (script.includes("memory-extraction:ack-retry")) return this.ackRetry(options.keys, options.arguments);
       if (script.includes("memory-extraction:ack-terminal")) return this.ackTerminal(options.keys, options.arguments);
       if (script.includes("memory-extraction:ack-dead-letter")) return this.ackDeadLetter(options.keys, options.arguments);
@@ -1745,6 +1791,34 @@ class StatefulRedisClient implements RedisMemoryExtractionQueueClient {
     this.hash(memberKey!).delete(payload!);
     this.hash(readyCountKey!).delete(payload!);
     return 1;
+  }
+
+  private ackDefer(keys: string[], args: string[]): number {
+    const [readyKey, readyIndexKey, readySetKey, processingKey, delayedKey, recoverySetKey, stateKey, payloadKey, readySequenceKey] = keys;
+    const [id, payload] = args;
+    const exactProcessing =
+      this.hash(stateKey!).get(id!) === "processing" &&
+      this.hash(payloadKey!).get(id!) === payload &&
+      this.sortedSet(processingKey!).has(id!);
+    if (exactProcessing) {
+      this.sortedSet(processingKey!).delete(id!);
+      this.sortedSet(delayedKey!).delete(id!);
+      this.set(recoverySetKey!).delete(id!);
+      this.sortedSet(readyIndexKey!).delete(id!);
+      this.set(readySetKey!).delete(id!);
+      const sequence = Number(this.strings.get(readySequenceKey!) ?? 0) + 1;
+      this.strings.set(readySequenceKey!, String(sequence));
+      this.list(readyKey!).push(id!);
+      this.sortedSet(readyIndexKey!).set(id!, sequence);
+      this.set(readySetKey!).add(id!);
+      this.hash(stateKey!).set(id!, "ready");
+      return 1;
+    }
+    return this.hash(stateKey!).get(id!) === "ready" &&
+      this.hash(payloadKey!).get(id!) === payload &&
+      this.sortedSet(readyIndexKey!).has(id!)
+      ? 2
+      : 0;
   }
 
   private ackRetry(keys: string[], args: string[]): number {

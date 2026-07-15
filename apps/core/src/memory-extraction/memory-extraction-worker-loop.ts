@@ -22,6 +22,7 @@ export type MemoryExtractionWorkerBatchSnapshot =
       finishedAt: Date;
       completedCount: number;
       skippedCount: number;
+      deferredCount: number;
       failedCount: number;
       failed: false;
     }
@@ -31,6 +32,7 @@ export type MemoryExtractionWorkerBatchSnapshot =
       finishedAt: Date;
       completedCount: 0;
       skippedCount: 0;
+      deferredCount: 0;
       failedCount: 0;
       failed: true;
       errorMessage: string;
@@ -77,6 +79,7 @@ export function createMemoryExtractionWorkerLoop({
         finishedAt: requireDate(now()),
         completedCount: results.filter((result) => result.status === "completed").length,
         skippedCount: results.filter((result) => result.status === "skipped").length,
+        deferredCount: results.filter((result) => result.status === "deferred").length,
         failedCount: results.filter((result) => result.status === "failed").length,
         failed: false,
       };
@@ -87,6 +90,7 @@ export function createMemoryExtractionWorkerLoop({
         finishedAt: requireDate(now()),
         completedCount: 0,
         skippedCount: 0,
+        deferredCount: 0,
         failedCount: 0,
         failed: true,
         errorMessage: normalizeWorkerErrorMessage(error),
@@ -134,6 +138,7 @@ export function createMemoryExtractionWorkerLoop({
             finishedAt: requireDate(now()),
             completedCount: 0,
             skippedCount: 0,
+            deferredCount: 0,
             failedCount: 0,
             failed: true,
             errorMessage: "memory extraction loop failed",

@@ -99,12 +99,9 @@ describe("createMemoryExtractionWorker", () => {
     expect(dependencies.client.extract).toHaveBeenCalledOnce();
     expect(dependencies.repository.completeRun).toHaveBeenCalledOnce();
     expect(dependencies.queue.handleProcessedJob).toHaveBeenCalledTimes(40);
-    expect(dependencies.queue.handleFailedJob).toHaveBeenCalledOnce();
-    expect(dependencies.queue.handleFailedJob).toHaveBeenCalledWith({
-      job: jobs[40],
-      errorMessage: "internal_error",
-      retryAt: new Date("2026-07-15T00:00:30.000Z"),
-    });
+    expect(dependencies.queue.deferJob).toHaveBeenCalledOnce();
+    expect(dependencies.queue.deferJob).toHaveBeenCalledWith(jobs[40]);
+    expect(dependencies.queue.handleFailedJob).not.toHaveBeenCalled();
     expect(results.slice(0, 40)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ status: "completed", requestId: "request-01" }),
@@ -112,7 +109,11 @@ describe("createMemoryExtractionWorker", () => {
       ]),
     );
     expect(results[40]).toEqual(
-      expect.objectContaining({ status: "failed", requestId: "request-41" }),
+      expect.objectContaining({
+        status: "deferred",
+        requestId: "request-41",
+        reason: "unselected_run_scope",
+      }),
     );
   });
 
@@ -439,9 +440,9 @@ describe("createMemoryExtractionWorker", () => {
     await expect(worker.processBatch({ limit: 20 })).resolves.toEqual([
       expect.objectContaining({ status: "completed", requestId: "request-1" }),
       expect.objectContaining({
-        status: "failed",
+        status: "deferred",
         requestId: "request-2",
-        retryAction: "requeued",
+        reason: "unselected_run_scope",
       }),
     ]);
     expect(dependencies.repository.claimRun).toHaveBeenCalledWith(
@@ -450,11 +451,69 @@ describe("createMemoryExtractionWorker", () => {
     expect(dependencies.client.extract).toHaveBeenCalledOnce();
     expect(dependencies.repository.completeRun).toHaveBeenCalledOnce();
     expect(dependencies.queue.handleProcessedJob).toHaveBeenCalledWith(jobs[0]);
-    expect(dependencies.queue.handleFailedJob).toHaveBeenCalledWith({
-      job: jobs[1],
-      errorMessage: "internal_error",
-      retryAt: new Date("2026-07-15T00:00:30.000Z"),
-    });
+    expect(dependencies.queue.deferJob).toHaveBeenCalledWith(jobs[1]);
+    expect(dependencies.queue.handleFailedJob).not.toHaveBeenCalled();
+  });
+
+  it("fairly advances repeated-failure run scopes without charging deferred jobs", async () => {
+    const jobs = [job("request-1"), job("request-2"), job("request-3")];
+    const runs = jobs.map((queuedJob, index) => run({
+      id: `run-${index + 1}`,
+      requestIds: [queuedJob.requestId],
+    }));
+    const runByRequestId = new Map(runs.map((claimed) => [claimed.requestIds[0]!, claimed]));
+    const runById = new Map(runs.map((claimed) => [claimed.id, claimed]));
+    const dependencies = createDependencies({ jobs });
+    dependencies.queue.dequeueBatch
+      .mockResolvedValueOnce(jobs)
+      .mockResolvedValueOnce(jobs.slice(1))
+      .mockResolvedValueOnce(jobs.slice(2));
+    dependencies.repository.getRequestRoutes.mockImplementation(async ({ requestIds }) =>
+      requestIds.map((requestId) => ({
+        requestId,
+        groupId: "chat-a",
+        status: "processing" as const,
+        runId: runByRequestId.get(requestId)!.id,
+      })),
+    );
+    dependencies.repository.claimRun.mockImplementation(async ({ requestIds }) =>
+      runByRequestId.get(requestIds[0]!),
+    );
+    dependencies.repository.loadRunInput.mockImplementation(async (runId) => ({
+      status: "ready" as const,
+      run: runById.get(runId)!,
+    }));
+    dependencies.client.extract
+      .mockRejectedValueOnce(new AiWorkerMemoryExtractionError("timeout", true))
+      .mockRejectedValueOnce(new AiWorkerMemoryExtractionError("unavailable", true))
+      .mockResolvedValueOnce({ runId: "run-3", candidates: [candidate()] });
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await expect(worker.processBatch({ limit: 100 })).resolves.toEqual([
+      expect.objectContaining({ status: "failed", requestId: "request-1" }),
+      expect.objectContaining({ status: "deferred", requestId: "request-2" }),
+      expect.objectContaining({ status: "deferred", requestId: "request-3" }),
+    ]);
+    await expect(worker.processBatch({ limit: 100 })).resolves.toEqual([
+      expect.objectContaining({ status: "failed", requestId: "request-2" }),
+      expect.objectContaining({ status: "deferred", requestId: "request-3" }),
+    ]);
+    await expect(worker.processBatch({ limit: 100 })).resolves.toEqual([
+      expect.objectContaining({ status: "completed", requestId: "request-3" }),
+    ]);
+
+    expect(dependencies.queue.deferJob.mock.calls.map(([deferredJob]) => ({
+      requestId: deferredJob.requestId,
+      attempts: deferredJob.attempts,
+    }))).toEqual([
+      { requestId: "request-2", attempts: 0 },
+      { requestId: "request-3", attempts: 0 },
+      { requestId: "request-3", attempts: 0 },
+    ]);
+    expect(dependencies.queue.handleFailedJob).toHaveBeenCalledTimes(2);
+    expect(dependencies.queue.handleTerminalJob).not.toHaveBeenCalled();
+    expect(dependencies.client.extract).toHaveBeenCalledTimes(3);
+    expect(dependencies.repository.completeRun).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -672,6 +731,7 @@ function createDependencies(input: {
     enqueue: vi.fn(async () => undefined),
     recoverProcessing: vi.fn(async () => ({ recoveredCount: 0, remainingCount: 0 })),
     dequeueBatch: vi.fn(async () => input.jobs),
+    deferJob: vi.fn(async (_job: MemoryExtractionJob) => undefined),
     handleProcessedJob: vi.fn(async () => undefined),
     handleTerminalJob: vi.fn(async ({ job: terminalJob }: { job: MemoryExtractionJob }) => ({
       action: "dead_lettered" as const,
@@ -700,16 +760,20 @@ function createDependencies(input: {
   };
   const repository = {
     registerRequest: vi.fn(),
-    getRequestRoutes: vi.fn(async () =>
+    getRequestRoutes: vi.fn(async (
+      _routeInput: Parameters<MemoryExtractionRepository["getRequestRoutes"]>[0],
+    ) =>
       input.routes ?? input.jobs.map(({ requestId, groupId }) => ({
         requestId,
         groupId,
         status: "pending" as const,
       })),
     ),
-    claimRun: vi.fn(async () => claimedRun as ClaimedMemoryExtractionRun | undefined),
+    claimRun: vi.fn(async (
+      _claimInput: Parameters<MemoryExtractionRepository["claimRun"]>[0],
+    ) => claimedRun as ClaimedMemoryExtractionRun | undefined),
     loadRunInput: vi.fn(
-      async (): Promise<
+      async (_runId: string): Promise<
         Awaited<ReturnType<MemoryExtractionRepository["loadRunInput"]>>
       > => ({ status: "ready", run: claimedRun }),
     ),
