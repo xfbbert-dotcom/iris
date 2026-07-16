@@ -198,7 +198,30 @@ runIfDatabase("physical conversation evidence deletion with Postgres", () => {
       groupId,
       messageId,
       operatorHint: "privacy-reviewer",
-    })).resolves.toEqual({ status: "not_found" });
+    })).resolves.toEqual({
+      status: "already_deleted",
+      affectedThreadCount: 0,
+      affectedActionCount: 0,
+      deletedMemoryCount: 0,
+    });
+
+    const tombstone = await pool.query<Record<string, unknown>>(
+      `
+      SELECT provider, provider_message_id, conversation_message_id, chat_id,
+        to_jsonb(tombstone)::text AS persisted_json
+      FROM conversation_message_deletion_tombstones tombstone
+      WHERE provider = 'feishu' AND provider_message_id = $1
+      `,
+      [providerMessageId],
+    );
+    expect(tombstone.rows).toMatchObject([{
+      provider: "feishu",
+      provider_message_id: providerMessageId,
+      conversation_message_id: messageId,
+      chat_id: groupId,
+    }]);
+    expect(tombstone.rows[0]?.persisted_json).not.toContain(secret);
+    expect(tombstone.rows[0]?.persisted_json).not.toContain("privacy-reviewer");
 
     await expect(inspectionStore.listThreadEvents({ threadId, limit: 10 })).resolves.toEqual(
       expect.arrayContaining([

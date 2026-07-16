@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createFeishuMessageEventProcessor } from "../src/conversation/feishu-message-event-processor.js";
+import { createFeishuMessageEventProcessor as createFeishuMessageEventProcessorWithReplayGuard } from "../src/conversation/feishu-message-event-processor.js";
+import type { ConversationMessageReplayGuard } from "../src/conversation/conversation-message-replay-guard.js";
 import type { RawEvent } from "../src/events/raw-event-queue.js";
 import { createMemoryExtractionPlanner } from "../src/memory-extraction/memory-extraction-planner.js";
 
@@ -51,6 +52,12 @@ describe("FeishuMessageEventProcessor", () => {
 
   it("attempts replies first and passes the persisted message to extraction planning", async () => {
     const calls: string[] = [];
+    const messageReplayGuard: ConversationMessageReplayGuard = {
+      async runUnlessDeleted<T>({ effect }: { effect: () => Promise<T> }) {
+        calls.push("guard");
+        return { status: "active", value: await effect() };
+      },
+    };
     const persistedMessage = {
       id: "feishu:message-1",
       provider: "feishu" as const,
@@ -90,6 +97,7 @@ describe("FeishuMessageEventProcessor", () => {
     };
     const processor = createFeishuMessageEventProcessor({
       messages,
+      messageReplayGuard,
       mentionAnswerResponder,
       memoryExtractionPlanner,
       documentLinkExtractor,
@@ -97,10 +105,53 @@ describe("FeishuMessageEventProcessor", () => {
 
     await processor.process(rawEventFixture());
 
-    expect(calls).toEqual(["reply", "persist", "plan", "documents"]);
+    expect(calls).toEqual([
+      "guard", "reply",
+      "guard", "persist",
+      "guard", "plan",
+      "guard", "documents",
+    ]);
     expect(memoryExtractionPlanner.registerMessage).toHaveBeenCalledWith(persistedMessage, {
       senderOpenId: "open-1",
     });
+  });
+
+  it("rechecks deletion before each effect and stops after persistence when the tombstone appears", async () => {
+    let guardCalls = 0;
+    const messageReplayGuard: ConversationMessageReplayGuard = {
+      async runUnlessDeleted<T>({ effect }: { effect: () => Promise<T> }) {
+        guardCalls += 1;
+        if (guardCalls === 3) return { status: "deleted" };
+        return { status: "active", value: await effect() };
+      },
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async () => ({ status: "skipped" as const, reason: "not_mentioned" as const })),
+    };
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-1",
+        createdAt: new Date("2026-07-02T01:00:01.000Z"),
+        ...input,
+      })),
+    };
+    const memoryExtractionPlanner = { registerMessage: vi.fn(async () => undefined) };
+    const documentLinkExtractor = { extractLinks: vi.fn(() => []) };
+    const processor = createFeishuMessageEventProcessor({
+      messages,
+      messageReplayGuard,
+      mentionAnswerResponder,
+      memoryExtractionPlanner,
+      documentLinkExtractor,
+    });
+
+    await processor.process(rawEventFixture());
+
+    expect(guardCalls).toBe(3);
+    expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledOnce();
+    expect(messages.upsertMessage).toHaveBeenCalledOnce();
+    expect(memoryExtractionPlanner.registerMessage).not.toHaveBeenCalled();
+    expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
   });
 
   it("plans only messages with a confirmed non-Iris sender Open ID", async () => {
@@ -1201,6 +1252,24 @@ describe("FeishuMessageEventProcessor", () => {
     );
   });
 });
+
+const allowActiveMessages: ConversationMessageReplayGuard = {
+  async runUnlessDeleted<T>({ effect }: { effect: () => Promise<T> }) {
+    return { status: "active", value: await effect() };
+  },
+};
+
+function createFeishuMessageEventProcessor(
+  input: Omit<Parameters<typeof createFeishuMessageEventProcessorWithReplayGuard>[0], "messageReplayGuard"> & {
+    messageReplayGuard?: ConversationMessageReplayGuard;
+  },
+) {
+  const { messageReplayGuard = allowActiveMessages, ...dependencies } = input;
+  return createFeishuMessageEventProcessorWithReplayGuard({
+    ...dependencies,
+    messageReplayGuard,
+  });
+}
 
 function rawEventFixture(overrides: Partial<RawEvent> = {}): RawEvent {
   return {

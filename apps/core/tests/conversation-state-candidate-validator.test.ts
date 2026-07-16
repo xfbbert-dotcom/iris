@@ -414,6 +414,64 @@ describe("validateConversationStateCandidates", () => {
     expect(result.diagnostics.rejectionCodes).toEqual(["invalid_dependency"]);
   });
 
+  it.each(["complete", "cancel", "resolve_owner"] as const)(
+    "terminally rejects merge plus %s for an action on the merge source",
+    (operation) => {
+      const run = claimedRun() as any;
+      run.existingThreads = [
+        { ...existingThread(), id: "thread-source", evidenceCount: 1 },
+        { ...existingThread(), id: "thread-target", evidenceCount: 2 },
+      ];
+      run.existingActions = [{
+        ...existingAction(),
+        id: "action-source",
+        threadId: "thread-source",
+      }];
+      const actionOperation = {
+        operation,
+        operationKey: `a:action:${operation}`,
+        confidence: 0.9,
+        evidenceMessageIds: ["message-1"],
+        evidenceSpan: "Launch planning",
+        actionId: "action-source",
+        expectedVersion: 1,
+        ...(operation === "resolve_owner"
+          ? { owner: { ownerType: "sender" as const, messageId: "message-1" } }
+          : {}),
+      } as ProposedActionOperation;
+
+      const result = validateConversationStateCandidates({
+        run,
+        response: {
+          runId: "run-1",
+          candidates: [],
+          threadOperations: [{
+            operation: "merge",
+            operationKey: "z:thread:merge",
+            confidence: 0.9,
+            evidenceMessageIds: ["message-1"],
+            evidenceSpan: "Launch planning",
+            sourceThreadId: "thread-source",
+            targetThreadId: "thread-target",
+            expectedVersion: 1,
+          }],
+          actionOperations: [actionOperation],
+        },
+        candidateFloor: 0.65,
+        applyConfidence: 0.85,
+      });
+
+      expect(result.threadOperations).toEqual([]);
+      expect(result.actionOperations).toEqual([]);
+      expect(result.diagnostics).toMatchObject({
+        proposedCount: 2,
+        acceptedCount: 0,
+        rejectedCount: 2,
+        rejectionCodes: ["merge_action_batch_conflict"],
+      });
+    },
+  );
+
   it.each(["create", "correct", "reopen"] as const)(
     "rejects %s action state that depends on a candidate thread",
     (operation) => {

@@ -858,6 +858,90 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
     )).resolves.toMatchObject({ rows: [] });
   });
 
+  it.each(["completed", "cancelled", "owner_resolved"] as const)(
+    "atomically rejects and stably replays merge plus source-action %s",
+    async (eventType) => {
+      const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+      const caseSuffix = `${eventType}-${suffix}`;
+      const target = integrationThreadOperation({
+        id: `batch-conflict-target-${caseSuffix}`,
+        status: "open",
+        eventType: "created",
+        operationKey: `batch-conflict-target-${caseSuffix}`,
+        evidenceMessageIds: [messageId, secondMessageId],
+      });
+      const source = integrationThreadOperation({
+        id: `batch-conflict-source-${caseSuffix}`,
+        status: "open",
+        eventType: "created",
+        operationKey: `batch-conflict-source-${caseSuffix}`,
+      });
+      const action = integrationActionOperation({
+        id: `batch-conflict-action-${caseSuffix}`,
+        operationKey: `batch-conflict-action-create-${caseSuffix}`,
+        threadId: source.thread!.id,
+      });
+      await repository.applyOperations({ groupId, operations: [target, source] });
+      await repository.applyOperations({ groupId, operations: [action] });
+
+      const merge = integrationThreadOperation({
+        id: source.thread!.id,
+        status: "merged",
+        eventType: "merged",
+        operationKey: `batch-conflict-merge-${caseSuffix}`,
+        expectedVersion: 1,
+        mergedIntoThreadId: target.thread!.id,
+      });
+      const actionMutation = integrationActionMutationOperation({
+        id: action.action!.id,
+        threadId: source.thread!.id,
+        eventType,
+        operationKey: `batch-conflict-action-${eventType}-${caseSuffix}`,
+      });
+      const conflictingBatch = [merge, actionMutation];
+
+      for (let replay = 0; replay < 2; replay += 1) {
+        await expect(repository.applyOperations({ groupId, operations: conflictingBatch }))
+          .rejects.toMatchObject({ code: "merge_action_batch_conflict" });
+      }
+
+      await expect(pool!.query(
+        `
+        SELECT thread.status AS thread_status, thread.version AS thread_version,
+          action.status AS action_status, action.version AS action_version,
+          action.thread_id,
+          (SELECT COUNT(*)::int FROM discussion_thread_events WHERE operation_key = $3) AS merge_event_count,
+          (SELECT COUNT(*)::int FROM action_item_events WHERE operation_key = $4) AS action_event_count,
+          (SELECT COUNT(*)::int FROM conversation_state_operation_claims WHERE operation_key = ANY($5::text[])) AS claim_count,
+          (SELECT COUNT(*)::int FROM conversation_state_projection_repairs
+            WHERE entity_type = 'action' AND entity_id = $2 AND entity_version > 1) AS new_repair_count
+        FROM discussion_threads thread
+        JOIN action_items action ON action.id = $2
+        WHERE thread.id = $1
+        `,
+        [
+          source.thread!.id,
+          action.action!.id,
+          merge.operationKey,
+          actionMutation.operationKey,
+          [merge.operationKey, actionMutation.operationKey],
+        ],
+      )).resolves.toMatchObject({
+        rows: [{
+          thread_status: "open",
+          thread_version: "1",
+          action_status: "open",
+          action_version: "1",
+          thread_id: source.thread!.id,
+          merge_event_count: 0,
+          action_event_count: 0,
+          claim_count: 0,
+          new_repair_count: 0,
+        }],
+      });
+    },
+  );
+
   it("rejects candidate-linked action writes before they can reach answer or extraction context", async () => {
     const repository = createPostgresConversationStateRepository({ dataSource: pool! });
     const candidate = integrationThreadOperation({
@@ -1765,5 +1849,50 @@ function integrationActionOperation(input: {
       createdAt: now,
     },
     evidenceMessageIds: input.evidenceMessageIds ?? [postgresMessageId],
+  };
+}
+
+function integrationActionMutationOperation(input: {
+  id: string;
+  threadId: string;
+  eventType: "completed" | "cancelled" | "owner_resolved";
+  operationKey: string;
+}): MutationConversationStateOperation {
+  const now = new Date("2026-07-16T00:05:00.000Z");
+  const status = input.eventType === "completed"
+    ? "completed" as const
+    : input.eventType === "cancelled"
+      ? "cancelled" as const
+      : "open" as const;
+  return {
+    kind: "mutation",
+    operationKey: input.operationKey,
+    expectedVersion: 1,
+    action: {
+      id: input.id,
+      groupId: postgresGroupId,
+      threadId: input.threadId,
+      description: `Action ${input.id}`,
+      ownerRefType: "feishu_user",
+      ownerRef: input.eventType === "owner_resolved" ? "bob" : "alice",
+      status,
+      confidence: 0.8,
+      version: 2,
+      ...(input.eventType === "completed" ? { completedAt: now } : {}),
+      ...(input.eventType === "cancelled" ? { cancelledAt: now } : {}),
+      createdAt: new Date("2026-07-16T00:00:00.000Z"),
+      updatedAt: now,
+    },
+    actionEvent: {
+      id: `event-${input.operationKey}`,
+      actionItemId: input.id,
+      groupId: postgresGroupId,
+      eventType: input.eventType,
+      fromVersion: 1,
+      toVersion: 2,
+      operationKey: input.operationKey,
+      createdAt: now,
+    },
+    evidenceMessageIds: [postgresMessageId],
   };
 }

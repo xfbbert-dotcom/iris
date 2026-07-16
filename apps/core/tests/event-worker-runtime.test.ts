@@ -79,6 +79,9 @@ describe("createEventWorkerRuntime", () => {
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
     };
+    const messageReplayGuard = {
+      runUnlessDeleted: vi.fn(),
+    };
     const documentSources = {
       registerGroupVisibleDocument: vi.fn(),
     };
@@ -109,6 +112,7 @@ describe("createEventWorkerRuntime", () => {
       createPostgresPool: vi.fn(() => pool),
       createRedisClient: vi.fn(() => redisClient),
       createConversationMessageRepository: vi.fn(() => messages),
+      createMessageReplayGuard: vi.fn(() => messageReplayGuard),
       createDocumentSourceRegistry: vi.fn(() => documentSources),
       createDocumentLinkExtractor: vi.fn(() => documentLinkExtractor),
       createDocumentSyncQueue: vi.fn(() => documentSyncQueue),
@@ -130,6 +134,7 @@ describe("createEventWorkerRuntime", () => {
     expect(dependencies.createConversationMessageRepository).toHaveBeenCalledWith({
       queryable: pool,
     });
+    expect(dependencies.createMessageReplayGuard).toHaveBeenCalledWith({ dataSource: pool });
     expect(dependencies.createDocumentSourceRegistry).toHaveBeenCalledWith(pool);
     expect(dependencies.createDocumentLinkExtractor).toHaveBeenCalledWith();
     expect(dependencies.createDocumentSyncQueue).toHaveBeenCalledWith({
@@ -150,6 +155,7 @@ describe("createEventWorkerRuntime", () => {
     });
     expect(dependencies.createProcessor).toHaveBeenCalledWith({
       messages,
+      messageReplayGuard,
       documentLinkExtractor,
       groupVisibleDocumentRegistrar,
       runtimeController,

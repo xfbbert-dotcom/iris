@@ -52,6 +52,15 @@ export class ConversationStateIdempotencyConflictError extends Error {
   }
 }
 
+export class ConversationStateBatchConflictError extends Error {
+  readonly code = "merge_action_batch_conflict";
+
+  constructor() {
+    super("merge_action_batch_conflict");
+    this.name = "ConversationStateBatchConflictError";
+  }
+}
+
 const MAX_IDENTIFIER_CHARS = 512;
 export const PROJECTION_REPAIR_PROCESSING_LEASE_MS = 5 * 60 * 1_000;
 const MAX_TITLE_CHARS = 512;
@@ -385,6 +394,7 @@ export async function applyConversationStateOperationsInTransaction(
       ? [[operation.thread.id, operation.thread] as const]
       : []));
   const evidenceCounts = new Map(lockedThreads.map((thread) => [thread.id, thread.evidenceCount]));
+  assertNoMergeActionBatchConflict(input.operations, actions);
   prevalidateOperations(input.operations, threads, actions, createdThreads, evidenceCounts);
   const evidenceIds = dedupe(input.operations.flatMap((operation) => operation.evidenceMessageIds));
   if (evidenceIds.length > 0) {
@@ -450,6 +460,24 @@ export async function applyConversationStateOperationsInTransaction(
     changedActionIds.push(action.id);
   }
   return { status: "applied", threadIds: changedThreadIds, actionItemIds: changedActionIds };
+}
+
+function assertNoMergeActionBatchConflict(
+  operations: ConversationStateOperation[],
+  actions: Map<string, ActionItem>,
+): void {
+  const mergeSourceIds = new Set(operations.flatMap((operation) =>
+    operation.thread?.status === "merged" ? [operation.thread.id] : []));
+  if (mergeSourceIds.size === 0) return;
+  const hasConflict = operations.some((operation) => {
+    const eventType = operation.actionEvent?.eventType;
+    if (eventType !== "completed" && eventType !== "cancelled" && eventType !== "owner_resolved") {
+      return false;
+    }
+    const action = operation.action === undefined ? undefined : actions.get(operation.action.id);
+    return action?.threadId !== undefined && mergeSourceIds.has(action.threadId);
+  });
+  if (hasConflict) throw new ConversationStateBatchConflictError();
 }
 
 export async function lockConversationStateWriteScope(input: {

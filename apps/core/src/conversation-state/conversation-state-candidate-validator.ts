@@ -22,6 +22,7 @@ const MAX_IDENTIFIER_CHARS = 512;
 const MAX_CONTENT_CHARS = 4000;
 const MAX_OPERATIONS_PER_FAMILY = 8;
 const MAX_EVIDENCE_IDS = 40;
+const MERGE_ACTION_BATCH_CONFLICT_CODE = "merge_action_batch_conflict";
 
 export type ConversationStateExtractionMessage = ExtractionMessage & {
   mentions?: Array<{ key: string; openId: string }>;
@@ -78,6 +79,15 @@ export function validateConversationStateCandidates(input: {
   const evidenceById = new Map(input.run.evidenceMessages.map((message) => [message.id, message]));
   const threadsById = new Map(input.run.existingThreads.map((thread) => [thread.id, { ...thread }]));
   const actionsById = new Map(input.run.existingActions.map((action) => [action.id, { ...action }]));
+  if (hasMergeActionBatchConflict(proposedThreads, proposedActions, actionsById)) {
+    return result(
+      [],
+      [],
+      proposedThreads.length,
+      proposedActions.length,
+      [MERGE_ACTION_BATCH_CONFLICT_CODE],
+    );
+  }
   const threadEvidenceChangedInBatch = new Set<string>();
   const duplicateKeys = duplicateOperationKeys([...proposedThreads, ...proposedActions]);
 
@@ -133,6 +143,28 @@ export function validateConversationStateCandidates(input: {
     proposedActions.length,
     [...rejected].sort(),
   );
+}
+
+function hasMergeActionBatchConflict(
+  threadOperations: ProposedThreadOperation[],
+  actionOperations: ProposedActionOperation[],
+  actionsById: Map<string, ExtractionExistingAction>,
+): boolean {
+  const mergeSourceIds = new Set(threadOperations.flatMap((operation) =>
+    isExactThreadOperation(operation) && operation.operation === "merge"
+      ? [operation.sourceThreadId]
+      : []));
+  if (mergeSourceIds.size === 0) return false;
+  return actionOperations.some((operation) => {
+    if (!isExactActionOperation(operation) ||
+      (operation.operation !== "complete" &&
+        operation.operation !== "cancel" &&
+        operation.operation !== "resolve_owner")) {
+      return false;
+    }
+    const action = actionsById.get(operation.actionId);
+    return action?.threadId !== undefined && mergeSourceIds.has(action.threadId);
+  });
 }
 
 function validateThreadOperation(input: {

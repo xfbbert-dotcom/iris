@@ -517,10 +517,13 @@ $deletion = Invoke-RestMethod -Method Delete -Headers $deleteHeaders `
   -Uri "http://localhost:3000/internal/conversation-state/groups/$pilotGroupId/messages/$messageId/evidence"
 ```
 
-The response contains only deletion counts. A second request must return `404`. Verify that the
-message row is physically absent, affected thread/action content is absent from the operator reads,
-and no projection-derived group memory is retrievable. Record only IDs, counts, and content-free
-`evidence_deleted` event metadata; never copy the deleted message or derived content into evidence.
+The response contains only deletion counts. A second request must return `200` with
+`status=already_deleted` and zero counts. Verify that the message row is physically absent, affected
+thread/action content is absent from the operator reads, and no projection-derived group memory is
+retrievable. The persistent replay tombstone may contain only provider/message/chat identity and the
+deletion time; it must not contain message text, derived content, or the operator hint. Record only
+IDs, counts, and content-free `evidence_deleted` event metadata; never copy the deleted message or
+derived content into evidence.
 
 ## Evidence And Exit
 

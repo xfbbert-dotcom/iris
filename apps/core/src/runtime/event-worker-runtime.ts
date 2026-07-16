@@ -14,6 +14,7 @@ import {
   type FeishuMentionAnswerResponder,
 } from "../conversation/feishu-mention-answer-responder.js";
 import { createFeishuMessageEventProcessor } from "../conversation/feishu-message-event-processor.js";
+import { createPostgresConversationMessageReplayGuard } from "../conversation/conversation-message-replay-guard.js";
 import {
   createPostgresConversationMessageRepository,
   type Queryable,
@@ -109,6 +110,7 @@ export type EventWorkerRuntimeDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => PostgresPool;
   createRedisClient?: (url: string) => RedisClient;
   createConversationMessageRepository?: typeof createPostgresConversationMessageRepository;
+  createMessageReplayGuard?: typeof createPostgresConversationMessageReplayGuard;
   createDocumentSourceRegistry?: (pool: PostgresPool) => GroupVisibleDocumentRegistry;
   createDocumentLinkExtractor?: typeof createFeishuDocumentLinkExtractor;
   createDocumentSyncQueue?: (
@@ -173,6 +175,8 @@ function createEnabledEventWorkerRuntime({
   const createMessages =
     dependencies.createConversationMessageRepository ??
     createPostgresConversationMessageRepository;
+  const createMessageReplayGuard =
+    dependencies.createMessageReplayGuard ?? createPostgresConversationMessageReplayGuard;
   const createDocumentSources =
     dependencies.createDocumentSourceRegistry ?? createDefaultDocumentSourceRegistry;
   const createDocumentLinkExtractor =
@@ -206,6 +210,7 @@ function createEnabledEventWorkerRuntime({
   const redis = createRedis(runtimeConfig.redisUrl);
   const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
   const messages = createMessages({ queryable: pool });
+  const messageReplayGuard = createMessageReplayGuard({ dataSource: pool as never });
   const documentSources = createDocumentSources(pool);
   const documentLinkExtractor = createDocumentLinkExtractor();
   const documentSyncQueue = createDocumentSyncQueue(
@@ -218,6 +223,7 @@ function createEnabledEventWorkerRuntime({
   });
   const processor = createProcessor({
     messages,
+    messageReplayGuard,
     documentLinkExtractor,
     groupVisibleDocumentRegistrar,
     ...(mentionAnswerResponder === undefined ? {} : { mentionAnswerResponder }),

@@ -13,6 +13,7 @@ import type {
 } from "../documents/feishu-document-link-extractor.js";
 import type { GroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
 import type { MemoryExtractionPlanner } from "../memory-extraction/memory-extraction-planner.js";
+import type { ConversationMessageReplayGuard } from "./conversation-message-replay-guard.js";
 
 type RuntimeGate = {
   canProcessIncomingEvent(input: { groupId?: string }): boolean;
@@ -35,6 +36,7 @@ export function createFeishuMessageEventProcessor({
   mentionAnswerResponder,
   memoryExtractionPlanner,
   runtimeController,
+  messageReplayGuard,
 }: {
   messages: Pick<ConversationMessageRepository, "upsertMessage">;
   documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
@@ -42,6 +44,7 @@ export function createFeishuMessageEventProcessor({
   mentionAnswerResponder?: Pick<FeishuMentionAnswerResponder, "maybeRespond">;
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   runtimeController?: RuntimeGate;
+  messageReplayGuard: ConversationMessageReplayGuard;
 }) {
   return {
     async process(event: RawEvent): Promise<void> {
@@ -59,13 +62,20 @@ export function createFeishuMessageEventProcessor({
         runtimeController !== undefined &&
         !runtimeController.canReadGroupContext(parsed.chatId)
       ) {
-        await maybeRespondToMention(parsed, mentionAnswerResponder);
+        await messageReplayGuard.runUnlessDeleted({
+          identity: parsed,
+          effect: () => maybeRespondToMention(parsed, mentionAnswerResponder),
+        });
         return;
       }
 
       let mentionResponseError: unknown;
       try {
-        await maybeRespondToMention(parsed, mentionAnswerResponder);
+        const mentionResult = await messageReplayGuard.runUnlessDeleted({
+          identity: parsed,
+          effect: () => maybeRespondToMention(parsed, mentionAnswerResponder),
+        });
+        if (mentionResult.status === "deleted") return;
       } catch (error) {
         mentionResponseError = error;
       }
@@ -87,15 +97,24 @@ export function createFeishuMessageEventProcessor({
         sentAt: parsed.sentAt,
         rawEventIdempotencyKey: parsed.rawEventIdempotencyKey,
       };
-      const persistedMessage = await messages.upsertMessage(messageFact);
+      const persistenceResult = await messageReplayGuard.runUnlessDeleted({
+        identity: parsed,
+        effect: () => messages.upsertMessage(messageFact),
+      });
+      if (persistenceResult.status === "deleted") return;
+      const persistedMessage = persistenceResult.value;
 
       let memoryExtractionPlannerError: unknown;
       if (memoryExtractionPlanner !== undefined) {
         try {
-          await memoryExtractionPlanner.registerMessage(
-            persistedMessage,
-            senderOpenId === undefined ? {} : { senderOpenId },
-          );
+          const plannerResult = await messageReplayGuard.runUnlessDeleted({
+            identity: parsed,
+            effect: () => memoryExtractionPlanner.registerMessage(
+              persistedMessage,
+              senderOpenId === undefined ? {} : { senderOpenId },
+            ),
+          });
+          if (plannerResult.status === "deleted") return;
         } catch (error) {
           memoryExtractionPlannerError = error;
         }
@@ -104,16 +123,22 @@ export function createFeishuMessageEventProcessor({
       let documentDiscoveryError: unknown;
       if (runtimeController === undefined || runtimeController.canReadDocuments()) {
         try {
-          const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
-          if (links.length > 0 && groupVisibleDocumentRegistrar !== undefined) {
-            await groupVisibleDocumentRegistrar.registerDiscoveredLinks({
-              chatId: parsed.chatId,
-              messageId: parsed.providerMessageId,
-              senderId: parsed.senderId,
-              observedAt: parsed.sentAt,
-              links,
-            });
-          }
+          const documentResult = await messageReplayGuard.runUnlessDeleted({
+            identity: parsed,
+            effect: async () => {
+              const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
+              if (links.length > 0 && groupVisibleDocumentRegistrar !== undefined) {
+                await groupVisibleDocumentRegistrar.registerDiscoveredLinks({
+                  chatId: parsed.chatId,
+                  messageId: parsed.providerMessageId,
+                  senderId: parsed.senderId,
+                  observedAt: parsed.sentAt,
+                  links,
+                });
+              }
+            },
+          });
+          if (documentResult.status === "deleted") return;
         } catch (error) {
           documentDiscoveryError = error;
         }

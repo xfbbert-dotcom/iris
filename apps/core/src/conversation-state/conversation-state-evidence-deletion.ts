@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { lockGroupMemoryWriteScope } from "../memory/postgres-group-memory-writer.js";
+import { lockConversationMessageIngestScope } from "../conversation/conversation-message-replay-guard.js";
 import {
   lockConversationStateWriteScope,
   type PostgresConversationStateDataSource,
@@ -13,7 +14,7 @@ const REDACTED_CONTENT = "[evidence deleted]";
 export type ConversationMessageEvidenceDeletionResult =
   | { status: "not_found" }
   | {
-      status: "deleted";
+      status: "deleted" | "already_deleted";
       affectedThreadCount: number;
       affectedActionCount: number;
       deletedMemoryCount: number;
@@ -21,6 +22,11 @@ export type ConversationMessageEvidenceDeletionResult =
 
 type VersionRow = { id: unknown; version: unknown };
 type IdRow = { id: unknown };
+type MessageIdentityRow = {
+  id: unknown;
+  provider: unknown;
+  provider_message_id: unknown;
+};
 type RunIdRow = { run_id: unknown };
 
 export async function deleteConversationMessageEvidence(input: {
@@ -34,11 +40,28 @@ export async function deleteConversationMessageEvidence(input: {
   requireIdentifier("operatorHint", input.operatorHint);
 
   return withTransaction(input.dataSource, async (client) => {
+    await lockConversationMessageIngestScope({ queryable: client, conversationMessageId: messageId });
+    const tombstone = await client.query(
+      `
+      SELECT 1
+      FROM conversation_message_deletion_tombstones
+      WHERE conversation_message_id = $1 AND chat_id = $2
+      `,
+      [messageId, groupId],
+    );
+    if (tombstone.rows.length > 0) {
+      return {
+        status: "already_deleted",
+        affectedThreadCount: 0,
+        affectedActionCount: 0,
+        deletedMemoryCount: 0,
+      };
+    }
     await lockGroupMemoryWriteScope({ queryable: client as never, groupId });
     await lockConversationStateWriteScope({ queryable: client, groupId });
-    const message = await client.query<IdRow>(
+    const message = await client.query<MessageIdentityRow>(
       `
-      SELECT id
+      SELECT id, provider, provider_message_id
       FROM conversation_messages
       WHERE id = $1 AND chat_id = $2
       FOR UPDATE
@@ -50,6 +73,24 @@ export async function deleteConversationMessageEvidence(input: {
     }
     if (message.rows.length !== 1) {
       throw new Error("conversation message lookup returned multiple rows");
+    }
+    const provider = requireIdentifier("message provider", message.rows[0]!.provider);
+    const providerMessageId = requireIdentifier(
+      "provider message id",
+      message.rows[0]!.provider_message_id,
+    );
+    const insertedTombstone = await client.query(
+      `
+      INSERT INTO conversation_message_deletion_tombstones (
+        provider, provider_message_id, conversation_message_id, chat_id
+      ) VALUES ($1, $2, $3, $4)
+      ON CONFLICT DO NOTHING
+      RETURNING conversation_message_id
+      `,
+      [provider, providerMessageId, messageId, groupId],
+    );
+    if (insertedTombstone.rows.length !== 1) {
+      throw new Error("conversation message deletion tombstone conflict");
     }
 
     const threadResult = await client.query<VersionRow>(
