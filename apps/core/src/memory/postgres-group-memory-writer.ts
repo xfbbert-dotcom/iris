@@ -425,20 +425,23 @@ function normalizeThreadKey(
   scope: GroupMemoryScope,
   threadKey: string | undefined,
 ): string | undefined {
-  if (scope === "thread") {
-    if (threadKey === undefined) {
+  if (scope === "group") {
+    if (threadKey !== undefined) {
+      throw new Error("threadKey is not allowed for group memory");
+    }
+    return undefined;
+  }
+  if (threadKey === undefined) {
+    if (scope === "thread") {
       throw new Error("threadKey is required for thread memory");
     }
-    return requireBoundedString(
-      "threadKey",
-      threadKey,
-      MAX_GROUP_MEMORY_IDENTIFIER_CHARS,
-    );
+    return undefined;
   }
-  if (threadKey !== undefined) {
-    throw new Error("threadKey is only allowed for thread memory");
-  }
-  return undefined;
+  return requireBoundedString(
+    "threadKey",
+    threadKey,
+    MAX_GROUP_MEMORY_IDENTIFIER_CHARS,
+  );
 }
 
 function requireEvidenceMessageIds(value: string[]): string[] {

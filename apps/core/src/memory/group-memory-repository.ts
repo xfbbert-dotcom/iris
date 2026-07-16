@@ -58,6 +58,7 @@ export type CreateGroupMemoryInput = {
 
 export type CorrectGroupMemoryInput = {
   memoryId: string;
+  threadKey?: string | null;
   content: string;
   importance?: number;
   confidence?: number;

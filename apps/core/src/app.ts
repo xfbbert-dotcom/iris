@@ -1729,6 +1729,10 @@ function toContentFreeMemoryExtractionStatus(
     rejectedCandidateCount: status.rejectedCandidateCount,
     duplicateCandidateCount: status.duplicateCandidateCount,
     conflictCandidateCount: status.conflictCandidateCount,
+    acceptedThreadOperationCount: status.acceptedThreadOperationCount,
+    rejectedThreadOperationCount: status.rejectedThreadOperationCount,
+    acceptedActionOperationCount: status.acceptedActionOperationCount,
+    rejectedActionOperationCount: status.rejectedActionOperationCount,
     skippedRequestCount: status.skippedRequestCount,
     failedRunCount: status.failedRunCount,
     ...(status.providerCooldownUntil === undefined

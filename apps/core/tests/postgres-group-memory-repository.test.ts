@@ -546,6 +546,46 @@ runIfDatabase("PostgresGroupMemoryRepository with Postgres", () => {
     await expect(repository.deleteById(correction.memory.id)).resolves.toBe("deleted");
     await expect(repository.getById(correction.memory.id)).resolves.toBeUndefined();
   });
+
+  it("round-trips an action memory thread key", async () => {
+    const repository = createPostgresGroupMemoryRepository({ dataSource: pool! });
+    const created = await repository.create({
+      groupId,
+      scope: "action",
+      category: "action",
+      threadKey: "thread-7",
+      content: "Ship the repair projector.",
+      importance: 4,
+      confidence: 0.9,
+      idempotencyKey: `action-thread-key-${suffix}`,
+      origin: "system",
+      createdBy: "conversation-state-projector",
+      evidenceMessageIds: [messageId],
+    });
+
+    expect(created.memory).toMatchObject({
+      scope: "action",
+      threadKey: "thread-7",
+    });
+    await expect(repository.getById(created.memory.id)).resolves.toMatchObject({
+      scope: "action",
+      threadKey: "thread-7",
+    });
+    const corrected = await repository.correct({
+      memoryId: created.memory.id,
+      threadKey: "thread-8",
+      content: "Ship the repair projector safely.",
+      idempotencyKey: `action-thread-key-correction-${suffix}`,
+      origin: "system",
+      createdBy: "conversation-state-projector",
+      evidenceMessageIds: [messageId],
+    });
+    expect(corrected.memory).toMatchObject({ scope: "action", threadKey: "thread-8" });
+    await expect(repository.getById(corrected.memory.id)).resolves.toMatchObject({
+      scope: "action",
+      threadKey: "thread-8",
+    });
+  });
 });
 
 type ScriptStep = {

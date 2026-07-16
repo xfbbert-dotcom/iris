@@ -149,11 +149,14 @@ export function createPostgresGroupMemoryRepository({
           ...original.evidenceMessageIds,
           ...(input.evidenceMessageIds ?? []),
         ]);
+        const replacementThreadKey = Object.hasOwn(input, "threadKey")
+          ? normalizeCorrectionThreadKey(original.scope, input.threadKey)
+          : original.threadKey;
         const replacementInput: CreateGroupMemoryInput = {
           groupId: original.groupId,
           scope: original.scope,
           category: original.category,
-          ...(original.threadKey === undefined ? {} : { threadKey: original.threadKey }),
+          ...(replacementThreadKey === undefined ? {} : { threadKey: replacementThreadKey }),
           content: input.content,
           importance: input.importance ?? original.importance,
           confidence: input.confidence ?? original.confidence,
@@ -241,6 +244,9 @@ function assertCorrectionReplayMatches(
   requestFingerprint: string,
 ): void {
   const memory = existing.memory;
+  const expectedThreadKey = Object.hasOwn(input, "threadKey")
+    ? normalizeCorrectionThreadKey(original.scope, input.threadKey)
+    : original.threadKey;
   const expectedEvidence = dedupeStrings([
     ...original.evidenceMessageIds,
     ...(input.evidenceMessageIds ?? []),
@@ -251,7 +257,7 @@ function assertCorrectionReplayMatches(
     memory.groupId !== original.groupId ||
     memory.scope !== original.scope ||
     memory.category !== original.category ||
-    memory.threadKey !== original.threadKey ||
+    memory.threadKey !== expectedThreadKey ||
     memory.content !== input.content ||
     memory.importance !== (input.importance ?? original.importance) ||
     memory.confidence !== (input.confidence ?? original.confidence) ||
@@ -268,6 +274,7 @@ function fingerprintCorrectionRequest(input: CorrectGroupMemoryInput): string {
     version: 1,
     operation: "correct",
     memoryId: input.memoryId,
+    ...(Object.hasOwn(input, "threadKey") ? { threadKey: input.threadKey } : {}),
     content: input.content,
     importance: input.importance ?? null,
     confidence: input.confidence ?? null,
@@ -397,6 +404,9 @@ function requireRequestFingerprint(value: unknown): string {
 function normalizeCorrectionInput(input: CorrectGroupMemoryInput): CorrectGroupMemoryInput {
   return {
     memoryId: requireBoundedString("memoryId", input.memoryId, MAX_IDENTIFIER_CHARS),
+    ...(Object.hasOwn(input, "threadKey")
+      ? { threadKey: normalizeOptionalCorrectionThreadKey(input.threadKey) }
+      : {}),
     content: requireBoundedString("content", input.content, MAX_CONTENT_CHARS),
     ...(input.importance === undefined
       ? {}
@@ -415,6 +425,29 @@ function normalizeCorrectionInput(input: CorrectGroupMemoryInput): CorrectGroupM
       ? {}
       : { evidenceMessageIds: normalizeOptionalEvidence(input.evidenceMessageIds) }),
   };
+}
+
+function normalizeOptionalCorrectionThreadKey(
+  value: string | null | undefined,
+): string | null {
+  if (value === null) {
+    return null;
+  }
+  return requireBoundedString("threadKey", value, MAX_IDENTIFIER_CHARS);
+}
+
+function normalizeCorrectionThreadKey(
+  scope: GroupMemory["scope"],
+  value: string | null | undefined,
+): string | undefined {
+  const threadKey = value === null ? undefined : value;
+  if (scope === "thread" && threadKey === undefined) {
+    throw new Error("threadKey is required for thread memory");
+  }
+  if (scope === "group" && threadKey !== undefined) {
+    throw new Error("threadKey is not allowed for group memory");
+  }
+  return threadKey;
 }
 
 function normalizeOptionalEvidence(value: string[]): string[] {

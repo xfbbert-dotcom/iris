@@ -12,6 +12,7 @@ import {
   type ActionItemEvent,
   type ApplyConversationStateOperationsInput,
   type ConversationStateOperation,
+  type ConversationStateProjectionTarget,
   type ConversationStateRepository,
   type ConversationStateStatusCounts,
   type DiscussionThread,
@@ -58,11 +59,13 @@ const MAX_DESCRIPTION_CHARS = 4000;
 const MAX_CLASSIFICATION_CHARS = 128;
 const MAX_LIST_LIMIT = 100;
 const MAX_PROJECTION_REPAIR_ATTEMPTS = 5;
+const MAX_PROJECTION_EVIDENCE_IDS = 40;
 const ADVISORY_LOCK_NAMESPACE = "conversation-state";
 
 type ThreadRow = Record<string, unknown>;
 type ActionRow = Record<string, unknown>;
 type RepairRow = Record<string, unknown>;
+type ProjectionTargetRow = Record<string, unknown>;
 type ThreadWithEvidence = DiscussionThread & { evidenceCount: number };
 type OperationClaim = {
   groupId: string;
@@ -122,6 +125,70 @@ export function createPostgresConversationStateRepository({
         ? undefined
         : input.statuses.map((status) => requireEnum("action status", status, ACTION_ITEM_STATUSES));
       return listActions(dataSource, groupId, input.limit, statuses, threadId, true);
+    },
+
+    async loadProjectionTarget(input) {
+      const entityType = requireEnum(
+        "projection entity type",
+        input.entityType,
+        CONVERSATION_STATE_ENTITY_TYPES,
+      );
+      const entityId = requireBoundedString("projection entity id", input.entityId, MAX_IDENTIFIER_CHARS);
+      const groupId = requireBoundedString("projection group id", input.groupId, MAX_IDENTIFIER_CHARS);
+      if (entityType === "thread") {
+        const result = await dataSource.query<ProjectionTargetRow>(
+          `
+          SELECT ${threadColumns},
+            (
+              SELECT projection.memory_id
+              FROM conversation_state_memory_projections projection
+              WHERE projection.entity_type = 'thread'
+                AND projection.entity_id = thread.id
+                AND projection.group_id = thread.group_id
+            ) AS memory_id,
+            ARRAY(
+              SELECT DISTINCT evidence.conversation_message_id
+              FROM discussion_thread_evidence evidence
+              WHERE evidence.thread_id = thread.id
+                AND evidence.group_id = thread.group_id
+              ORDER BY evidence.conversation_message_id
+              LIMIT $3
+            ) AS evidence_message_ids
+          FROM discussion_threads thread
+          WHERE thread.id = $1 AND thread.group_id = $2
+          `,
+          [entityId, groupId, MAX_PROJECTION_EVIDENCE_IDS + 1],
+        );
+        return mapProjectionTarget(result.rows, entityType);
+      }
+
+      const result = await dataSource.query<ProjectionTargetRow>(
+        `
+        SELECT ${actionColumns},
+          (
+            SELECT projection.memory_id
+            FROM conversation_state_memory_projections projection
+            WHERE projection.entity_type = 'action'
+              AND projection.entity_id = action.id
+              AND projection.group_id = action.group_id
+          ) AS memory_id,
+          ARRAY(
+            SELECT DISTINCT evidence.conversation_message_id
+            FROM action_item_events event
+            JOIN action_item_event_evidence evidence
+              ON evidence.event_id = event.id
+              AND evidence.group_id = event.group_id
+            WHERE event.action_item_id = action.id
+              AND event.group_id = action.group_id
+            ORDER BY evidence.conversation_message_id
+            LIMIT $3
+          ) AS evidence_message_ids
+        FROM action_items action
+        WHERE action.id = $1 AND action.group_id = $2
+        `,
+        [entityId, groupId, MAX_PROJECTION_EVIDENCE_IDS + 1],
+      );
+      return mapProjectionTarget(result.rows, entityType);
     },
 
     async claimProjectionRepairs(input) {
@@ -861,6 +928,48 @@ function mapActionRow(row: ActionRow): ActionItem {
 function mapRepairRow(row: RepairRow): ProjectionRepair {
   const failureClassification = row.failure_classification === null ? undefined : requireBoundedString("failureClassification", row.failure_classification, MAX_CLASSIFICATION_CHARS);
   return { id: requireBoundedString("repair id", row.id, MAX_IDENTIFIER_CHARS), entityType: requireEnum("repair entity type", row.entity_type, CONVERSATION_STATE_ENTITY_TYPES), entityId: requireBoundedString("repair entity id", row.entity_id, MAX_IDENTIFIER_CHARS), groupId: requireBoundedString("repair group id", row.group_id, MAX_IDENTIFIER_CHARS), entityVersion: requirePersistedVersion(row.entity_version), status: requireEnum("repair status", row.status, PROJECTION_REPAIR_STATUSES), attemptCount: requireNonNegativeInteger("repair attempt count", row.attempt_count), nextAttemptAt: requireDate("repair nextAttemptAt", row.next_attempt_at), ...(failureClassification === undefined ? {} : { failureClassification }), createdAt: requireDate("repair createdAt", row.created_at), updatedAt: requireDate("repair updatedAt", row.updated_at) };
+}
+
+function mapProjectionTarget(
+  rows: ProjectionTargetRow[],
+  entityType: "thread" | "action",
+): ConversationStateProjectionTarget | undefined {
+  if (rows.length > 1) {
+    throw new Error("projection target lookup returned multiple rows");
+  }
+  const row = rows[0];
+  if (row === undefined) {
+    return undefined;
+  }
+  const evidenceMessageIds = normalizeProjectionEvidence(row.evidence_message_ids);
+  const memoryId = row.memory_id === null || row.memory_id === undefined
+    ? undefined
+    : requireBoundedString("projection memory id", row.memory_id, MAX_IDENTIFIER_CHARS);
+  return entityType === "thread"
+    ? {
+        entityType,
+        entity: mapThreadRow(row),
+        evidenceMessageIds,
+        ...(memoryId === undefined ? {} : { memoryId }),
+      }
+    : {
+        entityType,
+        entity: mapActionRow(row),
+        evidenceMessageIds,
+        ...(memoryId === undefined ? {} : { memoryId }),
+      };
+}
+
+function normalizeProjectionEvidence(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error("projection evidence is invalid");
+  }
+  const evidence = [...new Set(value.map((id) =>
+    requireBoundedString("projection evidence message id", id, MAX_IDENTIFIER_CHARS)))];
+  if (evidence.length > MAX_PROJECTION_EVIDENCE_IDS) {
+    throw new Error(`projection evidence exceeds ${MAX_PROJECTION_EVIDENCE_IDS} messages`);
+  }
+  return evidence.sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
 }
 
 async function withTransaction<T>(dataSource: PostgresConversationStateDataSource, operation: (client: TransactionClient) => Promise<T>): Promise<T> {

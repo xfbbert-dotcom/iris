@@ -163,6 +163,12 @@ describe("validateConversationStateCandidates", () => {
       proposedCount: 2,
       acceptedCount: 1,
       rejectedCount: 1,
+      threadProposedCount: 2,
+      threadAcceptedCount: 1,
+      threadRejectedCount: 1,
+      actionProposedCount: 0,
+      actionAcceptedCount: 0,
+      actionRejectedCount: 0,
       rejectionCodes: ["stale_version"],
     });
   });

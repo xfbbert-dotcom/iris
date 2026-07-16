@@ -2,20 +2,24 @@ import { describe, expect, it, vi } from "vitest";
 
 import type {
   ActionItem,
+  ConversationStateProjectionTarget,
   ConversationStateRepository,
   DiscussionThread,
   ProjectionRepair,
 } from "../src/conversation-state/conversation-state-repository.js";
-import {
-  createConversationStateProjector,
-} from "../src/conversation-state/conversation-state-projector.js";
+import { createConversationStateProjector } from "../src/conversation-state/conversation-state-projector.js";
 import type { GroupMemoryService } from "../src/memory/group-memory-service.js";
 
 describe("conversation state projector", () => {
-  it("projects an exact open thread with a stable idempotency key and no candidate content", async () => {
+  it("projects an exact open thread with its durable evidence", async () => {
+    const target: ConversationStateProjectionTarget = {
+      entityType: "thread",
+      entity: thread({ id: "thread-open", version: 3 }),
+      evidenceMessageIds: ["message-1", "message-2"],
+    };
     const repository = repositoryFixture({
       repairs: [repair({ entityType: "thread", entityId: "thread-open", entityVersion: 3 })],
-      threads: [thread({ id: "thread-open", version: 3 })],
+      targets: [target],
     });
     const memories = memoryFixture();
     const projector = createConversationStateProjector({ repository, memories });
@@ -23,17 +27,19 @@ describe("conversation state projector", () => {
     const result = await projector.processBatch({ limit: 4, now: new Date("2026-07-16T00:00:00.000Z") });
 
     expect(result).toEqual({ claimedCount: 1, completedCount: 1, failedCount: 0 });
-    expect(repository.listRelevantThreads).toHaveBeenCalledWith({
+    expect(repository.loadProjectionTarget).toHaveBeenCalledWith({
+      entityType: "thread",
+      entityId: "thread-open",
       groupId: "group-1",
-      limit: 100,
-      statuses: ["open"],
     });
+    expect(memories.list).not.toHaveBeenCalled();
     expect(memories.create).toHaveBeenCalledWith(expect.objectContaining({
       groupId: "group-1",
       scope: "thread",
       category: "summary",
       threadKey: "thread-open",
       content: "Open summary.",
+      evidenceMessageIds: ["message-1", "message-2"],
       idempotencyKey: "projection:thread:thread-open:3",
       origin: "system",
     }));
@@ -41,26 +47,29 @@ describe("conversation state projector", () => {
       id: "repair-thread-open",
       memoryId: "memory-created",
     });
-    expect(JSON.stringify([memories.create.mock.calls, memories.correct.mock.calls])).not.toContain(
-      "candidate content must never escape",
-    );
   });
 
-  it("supersedes an open action projection and preserves its linked thread key", async () => {
+  it("corrects the exact mapped action projection with durable evidence", async () => {
+    const target: ConversationStateProjectionTarget = {
+      entityType: "action",
+      entity: action({ id: "action-open", version: 2, threadId: "thread-1" }),
+      evidenceMessageIds: ["message-1", "message-3"],
+      memoryId: "memory-previous",
+    };
     const repository = repositoryFixture({
       repairs: [repair({ entityType: "action", entityId: "action-open", entityVersion: 2 })],
-      actions: [action({ id: "action-open", version: 2, threadId: "thread-1" })],
+      targets: [target],
     });
-    const memories = memoryFixture({
-      listed: [memory({ id: "memory-previous", idempotencyKey: "projection:action:action-open:1" })],
-    });
+    const memories = memoryFixture();
     const projector = createConversationStateProjector({ repository, memories });
 
     await projector.processBatch({ limit: 1, now: new Date("2026-07-16T00:00:00.000Z") });
 
     expect(memories.correct).toHaveBeenCalledWith(expect.objectContaining({
       memoryId: "memory-previous",
+      threadKey: "thread-1",
       content: "Open action.",
+      evidenceMessageIds: ["message-1", "message-3"],
       idempotencyKey: "projection:action:action-open:2",
     }));
     expect(memories.create).not.toHaveBeenCalled();
@@ -70,14 +79,18 @@ describe("conversation state projector", () => {
     });
   });
 
-  it("deletes an active projection when the repaired entity is no longer active", async () => {
+  it("deletes the exact mapped projection for an inactive entity", async () => {
+    const target: ConversationStateProjectionTarget = {
+      entityType: "thread",
+      entity: thread({ id: "thread-resolved", status: "resolved", version: 4, resolvedAt: new Date() }),
+      evidenceMessageIds: ["message-1"],
+      memoryId: "memory-active",
+    };
     const repository = repositoryFixture({
       repairs: [repair({ entityType: "thread", entityId: "thread-resolved", entityVersion: 4 })],
-      threads: [],
+      targets: [target],
     });
-    const memories = memoryFixture({
-      listed: [memory({ id: "memory-active", idempotencyKey: "projection:thread:thread-resolved:3" })],
-    });
+    const memories = memoryFixture();
     const projector = createConversationStateProjector({ repository, memories });
 
     await projector.processBatch({ limit: 1, now: new Date("2026-07-16T00:00:00.000Z") });
@@ -86,11 +99,37 @@ describe("conversation state projector", () => {
     expect(repository.completeProjectionRepair).toHaveBeenCalledWith({ id: "repair-thread-resolved" });
   });
 
-  it("schedules a bounded exponential retry without exposing failure content", async () => {
+  it("safely completes a stale repair without changing the current projection", async () => {
+    const target: ConversationStateProjectionTarget = {
+      entityType: "thread",
+      entity: thread({ id: "thread-open", version: 5 }),
+      evidenceMessageIds: ["message-1"],
+      memoryId: "memory-current",
+    };
+    const repository = repositoryFixture({
+      repairs: [repair({ entityType: "thread", entityId: "thread-open", entityVersion: 4 })],
+      targets: [target],
+    });
+    const memories = memoryFixture();
+    const projector = createConversationStateProjector({ repository, memories });
+
+    await projector.processBatch({ limit: 1, now: new Date("2026-07-16T00:00:00.000Z") });
+
+    expect(memories.create).not.toHaveBeenCalled();
+    expect(memories.correct).not.toHaveBeenCalled();
+    expect(memories.delete).not.toHaveBeenCalled();
+    expect(repository.completeProjectionRepair).toHaveBeenCalledWith({ id: "repair-thread-open" });
+  });
+
+  it("schedules a bounded content-free retry when exact projection fails", async () => {
     const now = new Date("2026-07-16T00:00:00.000Z");
     const repository = repositoryFixture({
       repairs: [repair({ entityType: "thread", entityId: "thread-open", entityVersion: 3, attemptCount: 3 })],
-      threads: [thread({ id: "thread-open", version: 3 })],
+      targets: [{
+        entityType: "thread",
+        entity: thread({ id: "thread-open", version: 3 }),
+        evidenceMessageIds: ["message-1"],
+      }],
     });
     const memories = memoryFixture({ createError: new Error("candidate content must never escape") });
     const projector = createConversationStateProjector({ repository, memories });
@@ -111,43 +150,46 @@ describe("conversation state projector", () => {
 
 function repositoryFixture({
   repairs = [],
-  threads = [],
-  actions = [],
+  targets = [],
 }: {
   repairs?: ProjectionRepair[];
-  threads?: DiscussionThread[];
-  actions?: ActionItem[];
+  targets?: ConversationStateProjectionTarget[];
 } = {}) {
+  const targetByKey = new Map(targets.map((target) => [
+    `${target.entityType}:${target.entity.id}:${target.entity.groupId}`,
+    target,
+  ]));
   return {
     claimProjectionRepairs: vi.fn(async () => repairs),
     completeProjectionRepair: vi.fn(async () => undefined),
     failProjectionRepair: vi.fn(async () => undefined),
-    listRelevantThreads: vi.fn(async () => threads),
-    listRelevantActions: vi.fn(async () => actions),
-  } as unknown as ConversationStateRepository & {
-    claimProjectionRepairs: ReturnType<typeof vi.fn>;
-    completeProjectionRepair: ReturnType<typeof vi.fn>;
-    failProjectionRepair: ReturnType<typeof vi.fn>;
-    listRelevantThreads: ReturnType<typeof vi.fn>;
-    listRelevantActions: ReturnType<typeof vi.fn>;
-  };
+    loadProjectionTarget: vi.fn(async (input: {
+      entityType: "thread" | "action";
+      entityId: string;
+      groupId: string;
+    }) => targetByKey.get(`${input.entityType}:${input.entityId}:${input.groupId}`)),
+    listRelevantThreads: vi.fn(() => Promise.reject(new Error("bounded list must not be used"))),
+    listRelevantActions: vi.fn(() => Promise.reject(new Error("bounded list must not be used"))),
+  } as unknown as ConversationStateRepository & Record<
+    "claimProjectionRepairs" | "completeProjectionRepair" | "failProjectionRepair" |
+    "loadProjectionTarget" | "listRelevantThreads" | "listRelevantActions",
+    ReturnType<typeof vi.fn>
+  >;
 }
 
-function memoryFixture({ listed = [], createError }: { listed?: any[]; createError?: Error } = {}) {
+function memoryFixture({ createError }: { createError?: Error } = {}) {
   return {
-    list: vi.fn(async () => listed),
+    list: vi.fn(() => Promise.reject(new Error("memory list must not be used"))),
     create: vi.fn(async () => {
       if (createError !== undefined) throw createError;
       return { memory: memory({ id: "memory-created" }), created: true };
     }),
     correct: vi.fn(async () => ({ memory: memory({ id: "memory-corrected" }), created: true })),
     delete: vi.fn(async () => "deleted" as const),
-  } as unknown as GroupMemoryService & {
-    list: ReturnType<typeof vi.fn>;
-    create: ReturnType<typeof vi.fn>;
-    correct: ReturnType<typeof vi.fn>;
-    delete: ReturnType<typeof vi.fn>;
-  };
+  } as unknown as GroupMemoryService & Record<
+    "list" | "create" | "correct" | "delete",
+    ReturnType<typeof vi.fn>
+  >;
 }
 
 function repair(input: Partial<ProjectionRepair> & Pick<ProjectionRepair, "entityType" | "entityId" | "entityVersion">): ProjectionRepair {
@@ -199,7 +241,7 @@ function action(input: Partial<ActionItem> = {}): ActionItem {
   };
 }
 
-function memory(input: { id: string; idempotencyKey?: string }) {
+function memory(input: { id: string }) {
   const now = new Date("2026-07-15T00:00:00.000Z");
   return {
     id: input.id,
@@ -211,10 +253,10 @@ function memory(input: { id: string; idempotencyKey?: string }) {
     importance: 1,
     confidence: 0.9,
     status: "active" as const,
-    idempotencyKey: input.idempotencyKey ?? "projection:thread:thread-1:1",
+    idempotencyKey: "projection:thread:thread-1:1",
     origin: "system" as const,
     createdBy: "conversation-state-projector",
-    evidenceMessageIds: [],
+    evidenceMessageIds: ["message-1"],
     createdAt: now,
     updatedAt: now,
   };

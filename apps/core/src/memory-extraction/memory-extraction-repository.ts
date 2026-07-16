@@ -36,6 +36,23 @@ export type MemoryExtractionStatusCounts = {
   rejectedCandidates: number;
   duplicateCandidates: number;
   conflictCandidates: number;
+  acceptedThreadOperations: number;
+  rejectedThreadOperations: number;
+  acceptedActionOperations: number;
+  rejectedActionOperations: number;
+};
+
+export type ConversationStateDiagnostics = {
+  proposedCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  threadProposedCount: number;
+  threadAcceptedCount: number;
+  threadRejectedCount: number;
+  actionProposedCount: number;
+  actionAcceptedCount: number;
+  actionRejectedCount: number;
+  rejectionCodes: string[];
 };
 
 export type MemoryExtractionRequestRoute = {
@@ -164,12 +181,7 @@ export interface MemoryExtractionRepository {
     diagnostics: MemoryExtractionDiagnostics;
     threadOperations?: ValidatedThreadOperation[];
     actionOperations?: ValidatedActionOperation[];
-    conversationStateDiagnostics?: {
-      proposedCount: number;
-      acceptedCount: number;
-      rejectedCount: number;
-      rejectionCodes: string[];
-    };
+    conversationStateDiagnostics?: ConversationStateDiagnostics;
   }): Promise<{
     status: "completed" | "already_completed";
     memoryIds: string[];

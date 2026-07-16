@@ -5,9 +5,7 @@ import type {
   ProjectionRepair,
 } from "./conversation-state-repository.js";
 import type { GroupMemoryService } from "../memory/group-memory-service.js";
-import type { GroupMemory } from "../memory/group-memory-repository.js";
 
-const LOOKUP_LIMIT = 100;
 const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 60_000;
 
@@ -69,55 +67,50 @@ async function processRepair({
   repository: ConversationStateRepository;
   memories: GroupMemoryService;
 }): Promise<void> {
-  const existing = await findExistingProjection(memories, repair);
-  if (repair.entityType === "thread") {
-    const threads = await repository.listRelevantThreads({
-      groupId: repair.groupId,
-      limit: LOOKUP_LIMIT,
-      statuses: ["open"],
-    });
-    const current = threads.find((thread) => thread.id === repair.entityId);
-    if (current !== undefined && current.version === repair.entityVersion) {
-      const memoryId = await projectThread(memories, repair, current, existing);
-      await repository.completeProjectionRepair({ id: repair.id, memoryId });
-      return;
-    }
-    if (current !== undefined) {
-      await repository.completeProjectionRepair({ id: repair.id });
-      return;
-    }
-  } else {
-    const actions = await repository.listRelevantActions({
-      groupId: repair.groupId,
-      limit: LOOKUP_LIMIT,
-      statuses: ["open"],
-    });
-    const current = actions.find((action) => action.id === repair.entityId);
-    if (current !== undefined && current.version === repair.entityVersion) {
-      const memoryId = await projectAction(memories, repair, current, existing);
-      await repository.completeProjectionRepair({ id: repair.id, memoryId });
-      return;
-    }
-    if (current !== undefined) {
-      await repository.completeProjectionRepair({ id: repair.id });
-      return;
-    }
+  const target = await repository.loadProjectionTarget({
+    entityType: repair.entityType,
+    entityId: repair.entityId,
+    groupId: repair.groupId,
+  });
+  if (target === undefined || target.entity.version !== repair.entityVersion) {
+    await repository.completeProjectionRepair({ id: repair.id });
+    return;
   }
-
-  if (existing !== undefined) {
-    await memories.delete({ memoryId: existing.id });
+  const active = target.entity.status === "open";
+  if (!active) {
+    if (target.memoryId !== undefined) {
+      await memories.delete({ memoryId: target.memoryId });
+    }
+    await repository.completeProjectionRepair({ id: repair.id });
+    return;
   }
-  await repository.completeProjectionRepair({ id: repair.id });
+  const memoryId = target.entityType === "thread"
+    ? await projectThread(
+        memories,
+        repair,
+        target.entity,
+        target.evidenceMessageIds,
+        target.memoryId,
+      )
+    : await projectAction(
+        memories,
+        repair,
+        target.entity,
+        target.evidenceMessageIds,
+        target.memoryId,
+      );
+  await repository.completeProjectionRepair({ id: repair.id, memoryId });
 }
 
 async function projectThread(
   memories: GroupMemoryService,
   repair: ProjectionRepair,
   thread: DiscussionThread,
-  existing: GroupMemory | undefined,
+  evidenceMessageIds: string[],
+  memoryId: string | undefined,
 ): Promise<string> {
   const idempotencyKey = projectionKey(repair);
-  if (existing === undefined) {
+  if (memoryId === undefined) {
     const result = await memories.create({
       groupId: thread.groupId,
       scope: "thread",
@@ -129,18 +122,19 @@ async function projectThread(
       idempotencyKey,
       origin: "system",
       createdBy: "conversation-state-projector",
-      evidenceMessageIds: [],
+      evidenceMessageIds,
     });
     return result.memory.id;
   }
   const result = await memories.correct({
-    memoryId: existing.id,
+    memoryId,
     content: thread.summary,
     importance: 1,
     confidence: thread.confidence,
     idempotencyKey,
     origin: "system",
     createdBy: "conversation-state-projector",
+    evidenceMessageIds,
   });
   return result.memory.id;
 }
@@ -149,10 +143,11 @@ async function projectAction(
   memories: GroupMemoryService,
   repair: ProjectionRepair,
   action: ActionItem,
-  existing: GroupMemory | undefined,
+  evidenceMessageIds: string[],
+  memoryId: string | undefined,
 ): Promise<string> {
   const idempotencyKey = projectionKey(repair);
-  if (existing === undefined) {
+  if (memoryId === undefined) {
     const result = await memories.create({
       groupId: action.groupId,
       scope: "action",
@@ -164,31 +159,22 @@ async function projectAction(
       idempotencyKey,
       origin: "system",
       createdBy: "conversation-state-projector",
-      evidenceMessageIds: [],
+      evidenceMessageIds,
     });
     return result.memory.id;
   }
   const result = await memories.correct({
-    memoryId: existing.id,
+    memoryId,
+    threadKey: action.threadId ?? null,
     content: action.description,
     importance: 1,
     confidence: action.confidence,
     idempotencyKey,
     origin: "system",
     createdBy: "conversation-state-projector",
+    evidenceMessageIds,
   });
   return result.memory.id;
-}
-
-async function findExistingProjection(
-  memories: GroupMemoryService,
-  repair: ProjectionRepair,
-): Promise<GroupMemory | undefined> {
-  const prefix = `projection:${repair.entityType}:${repair.entityId}:`;
-  const projections = await memories.list({ groupId: repair.groupId, limit: LOOKUP_LIMIT });
-  return projections
-    .filter((memory) => memory.status === "active" && memory.idempotencyKey.startsWith(prefix))
-    .sort((left, right) => right.idempotencyKey.localeCompare(left.idempotencyKey))[0];
 }
 
 function projectionKey(repair: ProjectionRepair): string {

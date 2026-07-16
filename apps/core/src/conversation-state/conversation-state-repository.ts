@@ -132,6 +132,20 @@ export type ProjectionRepair = {
   updatedAt: Date;
 };
 
+export type ConversationStateProjectionTarget =
+  | {
+      entityType: "thread";
+      entity: DiscussionThread;
+      evidenceMessageIds: string[];
+      memoryId?: string;
+    }
+  | {
+      entityType: "action";
+      entity: ActionItem;
+      evidenceMessageIds: string[];
+      memoryId?: string;
+    };
+
 export type CreateDiscussionThreadEvent = DiscussionThreadEvent & {
   fromVersion?: undefined;
 };
@@ -211,6 +225,12 @@ export interface ConversationStateRepository {
   }>;
   listRelevantThreads(input: RelevantThreadQuery): Promise<DiscussionThread[]>;
   listRelevantActions(input: RelevantActionQuery): Promise<ActionItem[]>;
+  /** Privileged exact projection worker boundary; never expose to answering paths. */
+  loadProjectionTarget(input: {
+    entityType: ConversationStateEntityType;
+    entityId: string;
+    groupId: string;
+  }): Promise<ConversationStateProjectionTarget | undefined>;
   /** Privileged system-wide projection worker boundary; never expose to answering paths. */
   claimProjectionRepairs(input: { limit: number; now: Date }): Promise<ProjectionRepair[]>;
   /** Privileged system-wide projection worker boundary; never expose to answering paths. */

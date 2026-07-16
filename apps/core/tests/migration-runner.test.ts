@@ -17,6 +17,33 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("defines the named action-aware group-memory scope constraint in 0026", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0026_projection_rollout_contracts.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain(
+      "add constraint group_memories_scope_thread_key_check check",
+    );
+    expect(normalized).toContain("memory_scope = 'thread' and thread_key is not null");
+    expect(normalized).toContain("memory_scope = 'group' and thread_key is null");
+    expect(normalized).toContain("memory_scope = 'action'");
+    expect(normalized).toContain(
+      "add column thread_operation_rejected_count smallint not null default 0",
+    );
+    expect(normalized).toContain(
+      "check (thread_operation_rejected_count between 0 and 8)",
+    );
+    expect(normalized).toContain(
+      "add column action_operation_rejected_count smallint not null default 0",
+    );
+    expect(normalized).toContain(
+      "check (action_operation_rejected_count between 0 and 8)",
+    );
+  });
+
   it("defines durable Feishu mention identities for conversation facts", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0023_conversation_message_mentions.sql"),
@@ -541,6 +568,60 @@ describe("defaultMigrationsDir", () => {
 });
 
 runIfDatabase("conversation-state extraction migration upgrade with Postgres", () => {
+  it("upgrades the anonymous 0025 group-memory constraint to the named 0026 contract", async () => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    const schema = `task7_upgrade_${randomUUID().replaceAll("-", "")}`;
+    const migrationsDir = await mkdtemp(join(tmpdir(), "iris-task7-upgrade-"));
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await client.query(`
+        CREATE TABLE schema_migrations (
+          name TEXT PRIMARY KEY,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        INSERT INTO schema_migrations (name) VALUES ('0025_conversation_state_extraction.sql');
+        CREATE TABLE group_memories (
+          id TEXT PRIMARY KEY,
+          memory_scope TEXT NOT NULL,
+          thread_key TEXT,
+          CHECK (
+            (memory_scope = 'thread' AND thread_key IS NOT NULL)
+            OR (memory_scope <> 'thread' AND thread_key IS NULL)
+          )
+        );
+        CREATE TABLE group_memory_extraction_runs (id TEXT PRIMARY KEY);
+        INSERT INTO group_memories (id, memory_scope, thread_key)
+        VALUES ('existing-action', 'action', NULL);
+      `);
+      await writeFile(
+        join(migrationsDir, "0026_projection_rollout_contracts.sql"),
+        await readFile(
+          join(defaultMigrationsDir(), "0026_projection_rollout_contracts.sql"),
+          "utf8",
+        ),
+      );
+
+      await expect(runMigrations({ client, migrationsDir })).resolves.toMatchObject({
+        applied: ["0026_projection_rollout_contracts.sql"],
+      });
+      await expect(client.query(`
+        INSERT INTO group_memories (id, memory_scope, thread_key)
+        VALUES ('threaded-action', 'action', 'thread-7')
+      `)).resolves.toMatchObject({ rows: [] });
+      await expect(client.query(`
+        INSERT INTO group_memories (id, memory_scope, thread_key)
+        VALUES ('invalid-group', 'group', 'thread-7')
+      `)).rejects.toMatchObject({ constraint: "group_memories_scope_thread_key_check" });
+    } finally {
+      await client.query("RESET search_path").catch(() => undefined);
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      client.release();
+      await pool.end();
+    }
+  });
+
   it("upgrades an already-applied 0024 event constraint without rerunning 0024", async () => {
     const pool = new pg.Pool({ connectionString: databaseUrl });
     const client = await pool.connect();
@@ -610,8 +691,20 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         applied: expect.arrayContaining([
           "0024_semantic_thread_action_memory.sql",
           "0025_conversation_state_extraction.sql",
+          "0026_projection_rollout_contracts.sql",
         ]),
       });
+      await expect(client.query(`
+        INSERT INTO group_memories (
+          id, group_id, memory_scope, category, thread_key, content,
+          importance, confidence, status, idempotency_key, origin,
+          created_by, request_fingerprint
+        ) VALUES (
+          'fresh-threaded-action', 'fresh-group', 'action', 'action', 'thread-7',
+          'Ship the repair projector.', 4, 0.9, 'active', 'fresh-action-key',
+          'system', 'conversation-state-projector', repeat('a', 64)
+        )
+      `)).resolves.toMatchObject({ rows: [] });
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

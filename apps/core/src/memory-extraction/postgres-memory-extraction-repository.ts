@@ -15,6 +15,7 @@ import type {
   ExtractionExistingThread,
   ExtractionMessage,
   ExtractionMessageMention,
+  ConversationStateDiagnostics,
   MemoryExtractionRepository,
   MemoryExtractionRequest,
   MemoryExtractionRequestRoute,
@@ -146,6 +147,10 @@ type StatusCountsRow = {
   rejected_candidates: unknown;
   duplicate_candidates: unknown;
   conflict_candidates: unknown;
+  accepted_thread_operations: unknown;
+  rejected_thread_operations: unknown;
+  accepted_action_operations: unknown;
+  rejected_action_operations: unknown;
 };
 
 type ActiveMemoryContentRow = {
@@ -935,8 +940,10 @@ export function createPostgresMemoryExtractionRepository({
           UPDATE group_memory_extraction_runs
           SET status = 'completed', failure_classification = $3,
               thread_operation_count = $4, action_operation_count = $5,
-              conversation_state_rejected_count = $6,
-              conversation_state_rejection_codes = $7::text[],
+              thread_operation_rejected_count = $6,
+              action_operation_rejected_count = $7,
+              conversation_state_rejected_count = $8,
+              conversation_state_rejection_codes = $9::text[],
               completed_at = NOW(), updated_at = NOW()
           WHERE id = $1 AND input_fingerprint = $2 AND status = 'processing'
           RETURNING id
@@ -944,6 +951,8 @@ export function createPostgresMemoryExtractionRepository({
           [
             input.runId, input.inputFingerprint, completionMarker,
             input.threadOperations.length, input.actionOperations.length,
+            input.conversationStateDiagnostics.threadRejectedCount,
+            input.conversationStateDiagnostics.actionRejectedCount,
             input.conversationStateDiagnostics.rejectedCount,
             input.conversationStateDiagnostics.rejectionCodes,
           ],
@@ -979,10 +988,15 @@ export function createPostgresMemoryExtractionRepository({
           FROM group_memory_extraction_requests
         ),
         diagnostic_rows AS (
-          SELECT regexp_match(
-            r.failure_classification,
-            '^v3:p([0-8]):a([0-8]):r([0-8]):d([0-8]):c([0-8]):x([^:]*):h[A-Za-z0-9_-]{43}$'
-          ) AS marker
+          SELECT
+            regexp_match(
+              r.failure_classification,
+              '^v3:p([0-8]):a([0-8]):r([0-8]):d([0-8]):c([0-8]):x([^:]*):h[A-Za-z0-9_-]{43}$'
+            ) AS marker,
+            r.thread_operation_count,
+            r.thread_operation_rejected_count,
+            r.action_operation_count,
+            r.action_operation_rejected_count
           FROM group_memory_extraction_runs r
           WHERE r.status = 'completed'
             AND EXISTS (
@@ -994,6 +1008,10 @@ export function createPostgresMemoryExtractionRepository({
         parsed_diagnostics AS (
           SELECT
             marker,
+            thread_operation_count,
+            thread_operation_rejected_count,
+            action_operation_count,
+            action_operation_rejected_count,
             CASE
               WHEN marker IS NULL THEN FALSE
               ELSE marker[2]::int + marker[3]::int = marker[1]::int
@@ -1021,7 +1039,15 @@ export function createPostgresMemoryExtractionRepository({
             COALESCE(SUM(CASE WHEN valid THEN marker[4]::int ELSE 0 END), 0)::int
               AS duplicate_candidates,
             COALESCE(SUM(CASE WHEN valid THEN marker[5]::int ELSE 0 END), 0)::int
-              AS conflict_candidates
+              AS conflict_candidates,
+            COALESCE(SUM(thread_operation_count) FILTER (WHERE valid), 0)::int
+              AS accepted_thread_operations,
+            COALESCE(SUM(thread_operation_rejected_count) FILTER (WHERE valid), 0)::int
+              AS rejected_thread_operations,
+            COALESCE(SUM(action_operation_count) FILTER (WHERE valid), 0)::int
+              AS accepted_action_operations,
+            COALESCE(SUM(action_operation_rejected_count) FILTER (WHERE valid), 0)::int
+              AS rejected_action_operations
           FROM parsed_diagnostics
         )
         SELECT
@@ -1035,7 +1061,11 @@ export function createPostgresMemoryExtractionRepository({
           run_counts.accepted_candidates,
           run_counts.rejected_candidates,
           run_counts.duplicate_candidates,
-          run_counts.conflict_candidates
+          run_counts.conflict_candidates,
+          run_counts.accepted_thread_operations,
+          run_counts.rejected_thread_operations,
+          run_counts.accepted_action_operations,
+          run_counts.rejected_action_operations
         FROM request_counts CROSS JOIN run_counts
       `, [SORTED_COMPLETION_REJECTION_CODES]);
       const [row] = result.rows;
@@ -1075,6 +1105,22 @@ export function createPostgresMemoryExtractionRepository({
           "conflict candidate count",
           row.conflict_candidates,
         ),
+        acceptedThreadOperations: requireNumber(
+          "accepted thread operation count",
+          row.accepted_thread_operations,
+        ),
+        rejectedThreadOperations: requireNumber(
+          "rejected thread operation count",
+          row.rejected_thread_operations,
+        ),
+        acceptedActionOperations: requireNumber(
+          "accepted action operation count",
+          row.accepted_action_operations,
+        ),
+        rejectedActionOperations: requireNumber(
+          "rejected action operation count",
+          row.rejected_action_operations,
+        ),
       };
     },
   };
@@ -1088,12 +1134,7 @@ function normalizeCompletionInput(input: {
   diagnostics: MemoryExtractionDiagnostics;
   threadOperations?: ValidatedThreadOperation[];
   actionOperations?: ValidatedActionOperation[];
-  conversationStateDiagnostics?: {
-    proposedCount: number;
-    acceptedCount: number;
-    rejectedCount: number;
-    rejectionCodes: string[];
-  };
+  conversationStateDiagnostics?: ConversationStateDiagnostics;
 }): {
   runId: string;
   inputFingerprint: string;
@@ -1102,7 +1143,7 @@ function normalizeCompletionInput(input: {
   diagnostics: MemoryExtractionDiagnostics;
   threadOperations: ValidatedThreadOperation[];
   actionOperations: ValidatedActionOperation[];
-  conversationStateDiagnostics: { proposedCount: number; acceptedCount: number; rejectedCount: number; rejectionCodes: string[] };
+  conversationStateDiagnostics: ConversationStateDiagnostics;
 } {
   try {
     const runId = requireBoundedString("runId", input.runId, MAX_IDENTIFIER_CHARS);
@@ -1134,8 +1175,9 @@ function normalizeCompletionInput(input: {
     const threadOperations = normalizeConversationOperations(input.threadOperations ?? []);
     const actionOperations = normalizeConversationOperations(input.actionOperations ?? []);
     const conversationStateDiagnostics = normalizeConversationStateDiagnostics(
-      input.conversationStateDiagnostics ?? { proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] },
-      threadOperations.length + actionOperations.length,
+      input.conversationStateDiagnostics ?? emptyConversationStateDiagnostics(),
+      threadOperations.length,
+      actionOperations.length,
     );
     return {
       runId,
@@ -1166,25 +1208,73 @@ function normalizeConversationOperations<T extends { operationKey: string }>(val
 }
 
 function normalizeConversationStateDiagnostics(
-  value: { proposedCount: number; acceptedCount: number; rejectedCount: number; rejectionCodes: string[] },
-  acceptedCount: number,
-): { proposedCount: number; acceptedCount: number; rejectedCount: number; rejectionCodes: string[] } {
+  value: ConversationStateDiagnostics,
+  acceptedThreadCount: number,
+  acceptedActionCount: number,
+): ConversationStateDiagnostics {
   if (typeof value !== "object" || value === null) throw new Error("invalid conversation diagnostics");
   const proposedCount = boundedConversationStateCount(value.proposedCount);
   const normalizedAcceptedCount = boundedConversationStateCount(value.acceptedCount);
   const rejectedCount = boundedConversationStateCount(value.rejectedCount);
-  if (normalizedAcceptedCount !== acceptedCount || normalizedAcceptedCount + rejectedCount !== proposedCount) throw new Error("invalid conversation diagnostics");
+  const threadProposedCount = boundedConversationStateFamilyCount(value.threadProposedCount);
+  const threadAcceptedCount = boundedConversationStateFamilyCount(value.threadAcceptedCount);
+  const threadRejectedCount = boundedConversationStateFamilyCount(value.threadRejectedCount);
+  const actionProposedCount = boundedConversationStateFamilyCount(value.actionProposedCount);
+  const actionAcceptedCount = boundedConversationStateFamilyCount(value.actionAcceptedCount);
+  const actionRejectedCount = boundedConversationStateFamilyCount(value.actionRejectedCount);
+  if (
+    normalizedAcceptedCount !== acceptedThreadCount + acceptedActionCount ||
+    normalizedAcceptedCount + rejectedCount !== proposedCount ||
+    threadAcceptedCount !== acceptedThreadCount ||
+    threadAcceptedCount + threadRejectedCount !== threadProposedCount ||
+    actionAcceptedCount !== acceptedActionCount ||
+    actionAcceptedCount + actionRejectedCount !== actionProposedCount ||
+    threadProposedCount + actionProposedCount !== proposedCount ||
+    threadAcceptedCount + actionAcceptedCount !== normalizedAcceptedCount ||
+    threadRejectedCount + actionRejectedCount !== rejectedCount
+  ) throw new Error("invalid conversation diagnostics");
   if (!Array.isArray(value.rejectionCodes) || value.rejectionCodes.length > MAX_CONVERSATION_STATE_REJECTIONS) throw new Error("invalid conversation diagnostics");
   const rejectionCodes = value.rejectionCodes.map((code) => {
     if (typeof code !== "string" || !/^[a-z_]{1,128}$/u.test(code)) throw new Error("invalid conversation diagnostics");
     return code;
   }).sort(compareStrings);
   if (new Set(rejectionCodes).size !== rejectionCodes.length) throw new Error("invalid conversation diagnostics");
-  return { proposedCount, acceptedCount: normalizedAcceptedCount, rejectedCount, rejectionCodes };
+  return {
+    proposedCount,
+    acceptedCount: normalizedAcceptedCount,
+    rejectedCount,
+    threadProposedCount,
+    threadAcceptedCount,
+    threadRejectedCount,
+    actionProposedCount,
+    actionAcceptedCount,
+    actionRejectedCount,
+    rejectionCodes,
+  };
+}
+
+function emptyConversationStateDiagnostics(): ConversationStateDiagnostics {
+  return {
+    proposedCount: 0,
+    acceptedCount: 0,
+    rejectedCount: 0,
+    threadProposedCount: 0,
+    threadAcceptedCount: 0,
+    threadRejectedCount: 0,
+    actionProposedCount: 0,
+    actionAcceptedCount: 0,
+    actionRejectedCount: 0,
+    rejectionCodes: [],
+  };
 }
 
 function boundedConversationStateCount(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > MAX_CONVERSATION_STATE_REJECTIONS) throw new Error("invalid conversation diagnostics");
+  return value as number;
+}
+
+function boundedConversationStateFamilyCount(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > MAX_CONVERSATION_STATE_OPERATIONS) throw new Error("invalid conversation diagnostics");
   return value as number;
 }
 
@@ -1428,7 +1518,7 @@ function createCompletionReplayDigest(input: {
   diagnostics: MemoryExtractionDiagnostics;
   threadOperations: ValidatedThreadOperation[];
   actionOperations: ValidatedActionOperation[];
-  conversationStateDiagnostics: { proposedCount: number; acceptedCount: number; rejectedCount: number; rejectionCodes: string[] };
+  conversationStateDiagnostics: ConversationStateDiagnostics;
 }): string {
   const conversationState = input.threadOperations.length + input.actionOperations.length +
     input.conversationStateDiagnostics.proposedCount === 0

@@ -66,6 +66,24 @@ describe("createGroupMemoryService", () => {
     expect(auditLog.record).not.toHaveBeenCalled();
   });
 
+  it("preserves an optional thread key for action memory", async () => {
+    const memory = sampleMemory({ scope: "action", threadKey: "thread-7" });
+    const repository = fakeRepository({
+      create: vi.fn(async () => ({ memory, created: true })),
+    });
+    const service = createGroupMemoryService({ repository });
+
+    await service.create({
+      ...validCreateCommand(),
+      scope: "action",
+      threadKey: " thread-7 ",
+    });
+
+    expect(repository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "action", threadKey: "thread-7" }),
+    );
+  });
+
   it.each([
     ["blank group", { groupId: " " }],
     ["oversized content", { content: "x".repeat(4001) }],
@@ -124,6 +142,28 @@ describe("createGroupMemoryService", () => {
       operatorHint: "alice",
       message: "supersedes:memory-1",
     });
+  });
+
+  it("normalizes an explicit action thread key correction", async () => {
+    const replacement = sampleMemory({ scope: "action", threadKey: "thread-8" });
+    const repository = fakeRepository({
+      correct: vi.fn(async () => ({ memory: replacement, created: true })),
+    });
+    const service = createGroupMemoryService({ repository });
+
+    await service.correct({
+      memoryId: "memory-1",
+      threadKey: " thread-8 ",
+      content: "Ship the repair projector.",
+      idempotencyKey: "action-correction-1",
+      origin: "system",
+      createdBy: "conversation-state-projector",
+      evidenceMessageIds: ["msg-1"],
+    });
+
+    expect(repository.correct).toHaveBeenCalledWith(
+      expect.objectContaining({ threadKey: "thread-8" }),
+    );
   });
 
   it("hard deletes an existing memory and audits its evidence IDs", async () => {

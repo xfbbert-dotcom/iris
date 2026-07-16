@@ -178,6 +178,9 @@ function normalizeCorrectionCommand(
   );
   return {
     memoryId: requireBoundedString("memoryId", input.memoryId, MAX_IDENTIFIER_CHARS),
+    ...(Object.hasOwn(input, "threadKey")
+      ? { threadKey: normalizeCorrectionThreadKey(input.threadKey) }
+      : {}),
     content: requireBoundedString("content", input.content, MAX_CONTENT_CHARS),
     ...(input.importance === undefined
       ? {}
@@ -199,20 +202,30 @@ function normalizeCorrectionCommand(
   };
 }
 
+function normalizeCorrectionThreadKey(value: string | null | undefined): string | null {
+  if (value === null) {
+    return null;
+  }
+  return requireBoundedString("threadKey", value, MAX_IDENTIFIER_CHARS);
+}
+
 function normalizeThreadKey(
   scope: GroupMemoryScope,
   value: string | undefined,
 ): string | undefined {
-  if (scope === "thread") {
-    if (value === undefined) {
+  if (scope === "group") {
+    if (value !== undefined) {
+      throw new GroupMemoryInputError("threadKey is not allowed for group memory");
+    }
+    return undefined;
+  }
+  if (value === undefined) {
+    if (scope === "thread") {
       throw new GroupMemoryInputError("threadKey is required for thread memory");
     }
-    return requireBoundedString("threadKey", value, MAX_IDENTIFIER_CHARS);
+    return undefined;
   }
-  if (value !== undefined) {
-    throw new GroupMemoryInputError("threadKey is only allowed for thread memory");
-  }
-  return undefined;
+  return requireBoundedString("threadKey", value, MAX_IDENTIFIER_CHARS);
 }
 
 function requireEvidence(value: string[]): string[] {

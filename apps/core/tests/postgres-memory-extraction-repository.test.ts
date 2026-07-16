@@ -65,6 +65,10 @@ describe("createPostgresMemoryExtractionRepository", () => {
       expect(normalized).toContain("regexp_match");
       expect(normalized).toContain("group_memory_extraction_runs");
       expect(normalized).toContain("sum(failure_count)");
+      expect(normalized).toContain("sum(thread_operation_count)");
+      expect(normalized).toContain("sum(thread_operation_rejected_count)");
+      expect(normalized).toContain("sum(action_operation_count)");
+      expect(normalized).toContain("sum(action_operation_rejected_count)");
       expect(normalized).toContain("string_to_array");
       expect(normalized).not.toContain("conversation_messages");
       expect(normalized).not.toContain("rejection_codes");
@@ -97,6 +101,10 @@ describe("createPostgresMemoryExtractionRepository", () => {
           rejected_candidates: 7,
           duplicate_candidates: 2,
           conflict_candidates: 1,
+          accepted_thread_operations: 11,
+          rejected_thread_operations: 12,
+          accepted_action_operations: 13,
+          rejected_action_operations: 14,
         }],
       };
     });
@@ -112,6 +120,10 @@ describe("createPostgresMemoryExtractionRepository", () => {
       rejectedCandidates: 7,
       duplicateCandidates: 2,
       conflictCandidates: 1,
+      acceptedThreadOperations: 11,
+      rejectedThreadOperations: 12,
+      acceptedActionOperations: 13,
+      rejectedActionOperations: 14,
     });
     expect(source.query).toHaveBeenCalledOnce();
   });
@@ -2105,7 +2117,12 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
         evidenceMessageIds: [messageIds[4]!], evidenceSpan: "Atomic message 4", description: "Complete atomic work.",
         owner: { ownerType: "sender" as const, messageId: messageIds[4]! }, ownerRefType: "feishu_user" as const, ownerRef: "alice", ownerResolved: true,
       }],
-      conversationStateDiagnostics: { proposedCount: 2, acceptedCount: 2, rejectedCount: 0, rejectionCodes: [] },
+      conversationStateDiagnostics: {
+        proposedCount: 2, acceptedCount: 2, rejectedCount: 0,
+        threadProposedCount: 1, threadAcceptedCount: 1, threadRejectedCount: 0,
+        actionProposedCount: 1, actionAcceptedCount: 1, actionRejectedCount: 0,
+        rejectionCodes: [],
+      },
     };
 
     const completed = await repository.completeRun(completionInput);
@@ -2124,6 +2141,18 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
     await expect(repository.completeRun(completionInput)).resolves.toEqual({
       status: "already_completed", memoryIds: [], threadIds: completed.threadIds, actionItemIds: completed.actionItemIds,
     });
+    await expect(repository.completeRun({
+      ...completionInput,
+      conversationStateDiagnostics: {
+        ...completionInput.conversationStateDiagnostics,
+        threadProposedCount: 2,
+        threadAcceptedCount: 1,
+        threadRejectedCount: 1,
+        actionProposedCount: 0,
+        actionAcceptedCount: 0,
+        actionRejectedCount: 0,
+      },
+    })).rejects.toThrow("memory extraction completion conflicts with persisted run");
     await expect(pool!.query(
       "SELECT count(*)::int AS count FROM discussion_thread_events WHERE group_id = $1",
       [groupId],
@@ -2213,6 +2242,12 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
       proposedCount: 2,
       acceptedCount: 1,
       rejectedCount: 1,
+      threadProposedCount: 2,
+      threadAcceptedCount: 1,
+      threadRejectedCount: 1,
+      actionProposedCount: 0,
+      actionAcceptedCount: 0,
+      actionRejectedCount: 0,
       rejectionCodes: ["stale_version"],
     });
     await expect(pool!.query(
@@ -2601,6 +2636,9 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
     await expect(pool!.query(
       `
       SELECT status, thread_operation_count::int AS thread_operation_count,
+             thread_operation_rejected_count::int AS thread_operation_rejected_count,
+             action_operation_count::int AS action_operation_count,
+             action_operation_rejected_count::int AS action_operation_rejected_count,
              conversation_state_rejected_count::int AS rejected_count,
              conversation_state_rejection_codes
       FROM group_memory_extraction_runs
@@ -2610,6 +2648,9 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
     )).resolves.toMatchObject({ rows: [{
       status: "completed",
       thread_operation_count: 1,
+      thread_operation_rejected_count: 1,
+      action_operation_count: 0,
+      action_operation_rejected_count: 0,
       rejected_count: 1,
       conversation_state_rejection_codes: ["batch_evidence_dependency"],
     }] });

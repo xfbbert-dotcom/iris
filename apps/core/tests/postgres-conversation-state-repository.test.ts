@@ -466,6 +466,40 @@ describe("createPostgresConversationStateRepository", () => {
     );
   });
 
+  it("maps an exact projection target and fails closed above the evidence bound", async () => {
+    const source = {
+      connect: vi.fn(),
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [{
+          ...threadRow(),
+          memory_id: "memory-1",
+          evidence_message_ids: ["message-1", "message-2"],
+        }] })
+        .mockResolvedValueOnce({ rows: [{
+          ...threadRow(),
+          memory_id: null,
+          evidence_message_ids: Array.from({ length: 41 }, (_, index) => `message-${index}`),
+        }] }),
+    } as unknown as PostgresConversationStateDataSource;
+    const repository = createPostgresConversationStateRepository({ dataSource: source });
+
+    await expect(repository.loadProjectionTarget({
+      entityType: "thread",
+      entityId: "thread-1",
+      groupId: "chat-a",
+    })).resolves.toMatchObject({
+      entityType: "thread",
+      entity: { id: "thread-1", status: "open", version: 1 },
+      evidenceMessageIds: ["message-1", "message-2"],
+      memoryId: "memory-1",
+    });
+    await expect(repository.loadProjectionTarget({
+      entityType: "thread",
+      entityId: "thread-1",
+      groupId: "chat-a",
+    })).rejects.toThrow("projection evidence exceeds 40 messages");
+  });
+
   it("keeps projection versions monotonic when an older repair completes", async () => {
     const client = scriptedClient([
       step(/begin/u),
@@ -899,6 +933,131 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
       "SELECT projected_version FROM conversation_state_memory_projections WHERE entity_type = 'thread' AND entity_id = $1",
       [projectionEntityId],
     )).resolves.toMatchObject({ rows: [{ projected_version: "2" }] });
+  });
+
+  it("loads exact thread and action projection targets beyond the relevant-list cap", async () => {
+    const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+    const targetThreadId = `projection-target-${suffix}`;
+    const targetActionId = `projection-action-${suffix}`;
+    const mappedThreadMemoryId = `projection-thread-memory-${suffix}`;
+    const mappedActionMemoryId = `projection-action-memory-${suffix}`;
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at
+      )
+      SELECT $1 || series::text, $2, 'Filler', 'Filler summary', 'open', 0.9, 1, NOW(), NOW()
+      FROM generate_series(1, 101) AS series
+      `,
+      [`projection-filler-${suffix}-`, groupId],
+    );
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at
+      ) VALUES ($1, $2, 'Exact target', 'Exact summary', 'open', 0.95, 7, NOW(), NOW())
+      `,
+      [targetThreadId, groupId],
+    );
+    await pool!.query(
+      `
+      INSERT INTO discussion_thread_evidence (thread_id, group_id, conversation_message_id)
+      VALUES ($1, $2, $4), ($1, $2, $3)
+      `,
+      [targetThreadId, groupId, messageId, secondMessageId],
+    );
+    await pool!.query(
+      `
+      INSERT INTO action_items (
+        id, group_id, thread_id, description, owner_ref_type, owner_ref,
+        status, confidence, version
+      ) VALUES ($1, $2, $3, 'Exact action', 'text_label', 'Owner', 'open', 0.9, 2)
+      `,
+      [targetActionId, groupId, targetThreadId],
+    );
+    await pool!.query(
+      `
+      INSERT INTO action_item_events (
+        id, action_item_id, group_id, event_type, to_version, operation_key
+      ) VALUES
+        ($1, $3, $4, 'created', 1, $5),
+        ($2, $3, $4, 'corrected', 2, $6)
+      `,
+      [
+        `projection-action-event-1-${suffix}`,
+        `projection-action-event-2-${suffix}`,
+        targetActionId,
+        groupId,
+        `projection-action-op-1-${suffix}`,
+        `projection-action-op-2-${suffix}`,
+      ],
+    );
+    await pool!.query(
+      `
+      INSERT INTO action_item_event_evidence (event_id, group_id, conversation_message_id)
+      VALUES ($1, $3, $4), ($2, $3, $5), ($2, $3, $4)
+      `,
+      [
+        `projection-action-event-1-${suffix}`,
+        `projection-action-event-2-${suffix}`,
+        groupId,
+        messageId,
+        secondMessageId,
+      ],
+    );
+    await pool!.query(
+      `
+      INSERT INTO group_memories (
+        id, group_id, memory_scope, category, thread_key, content, importance,
+        confidence, status, idempotency_key, origin, created_by, request_fingerprint
+      ) VALUES
+        ($1, $3, 'thread', 'summary', $4, 'Old thread projection', 3, 0.9, 'active', $5, 'system', 'test', $6),
+        ($2, $3, 'action', 'action', NULL, 'Old action projection', 3, 0.9, 'active', $7, 'system', 'test', $8)
+      `,
+      [
+        mappedThreadMemoryId,
+        mappedActionMemoryId,
+        groupId,
+        targetThreadId,
+        `projection:thread:${targetThreadId}:6`,
+        "a".repeat(64),
+        `projection:action:${targetActionId}:1`,
+        "b".repeat(64),
+      ],
+    );
+    await pool!.query(
+      `
+      INSERT INTO conversation_state_memory_projections (
+        entity_type, entity_id, group_id, projected_version, memory_id
+      ) VALUES
+        ('thread', $1, $3, 6, $4),
+        ('action', $2, $3, 1, $5)
+      `,
+      [targetThreadId, targetActionId, groupId, mappedThreadMemoryId, mappedActionMemoryId],
+    );
+
+    await expect(repository.loadProjectionTarget({
+      entityType: "thread",
+      entityId: targetThreadId,
+      groupId,
+    })).resolves.toMatchObject({
+      entityType: "thread",
+      entity: { id: targetThreadId, status: "open", version: 7 },
+      evidenceMessageIds: [messageId, secondMessageId].sort(),
+      memoryId: mappedThreadMemoryId,
+    });
+    await expect(repository.loadProjectionTarget({
+      entityType: "action",
+      entityId: targetActionId,
+      groupId,
+    })).resolves.toMatchObject({
+      entityType: "action",
+      entity: { id: targetActionId, threadId: targetThreadId, status: "open", version: 2 },
+      evidenceMessageIds: [messageId, secondMessageId].sort(),
+      memoryId: mappedActionMemoryId,
+    });
   });
 });
 

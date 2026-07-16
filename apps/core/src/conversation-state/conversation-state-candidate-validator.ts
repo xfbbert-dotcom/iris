@@ -36,6 +36,12 @@ export type ConversationStateCandidateDiagnostics = {
   proposedCount: number;
   acceptedCount: number;
   rejectedCount: number;
+  threadProposedCount: number;
+  threadAcceptedCount: number;
+  threadRejectedCount: number;
+  actionProposedCount: number;
+  actionAcceptedCount: number;
+  actionRejectedCount: number;
   rejectionCodes: string[];
 };
 
@@ -57,17 +63,16 @@ export function validateConversationStateCandidates(input: {
   }
   const proposedThreads = boundedOperations(input.response.threadOperations);
   const proposedActions = boundedOperations(input.response.actionOperations);
-  const proposedCount = proposedThreads.length + proposedActions.length;
   const rejected = new Set<string>();
   const acceptedThreads: ValidatedThreadOperation[] = [];
   const acceptedActions: ValidatedActionOperation[] = [];
 
   if (!isValidRun(input.run) || input.response.runId !== input.run.id) {
-    return result([], [], proposedCount, proposedCount, ["invalid_run"]);
+    return result([], [], proposedThreads.length, proposedActions.length, ["invalid_run"]);
   }
   if ((input.response.threadOperations?.length ?? 0) > MAX_OPERATIONS_PER_FAMILY ||
     (input.response.actionOperations?.length ?? 0) > MAX_OPERATIONS_PER_FAMILY) {
-    return result([], [], proposedCount, proposedCount, ["operation_count"]);
+    return result([], [], proposedThreads.length, proposedActions.length, ["operation_count"]);
   }
 
   const evidenceById = new Map(input.run.evidenceMessages.map((message) => [message.id, message]));
@@ -121,12 +126,11 @@ export function validateConversationStateCandidates(input: {
     } else rejected.add(accepted.code);
   }
 
-  const acceptedCount = acceptedThreads.length + acceptedActions.length;
   return result(
     acceptedThreads.sort(compareOperationKeys),
     acceptedActions.sort(compareOperationKeys),
-    proposedCount,
-    proposedCount - acceptedCount,
+    proposedThreads.length,
+    proposedActions.length,
     [...rejected].sort(),
   );
 }
@@ -514,17 +518,27 @@ function reject(code: string): { ok: false; code: string } {
 function result(
   threadOperations: ValidatedThreadOperation[],
   actionOperations: ValidatedActionOperation[],
-  proposedCount: number,
-  rejectedCount: number,
+  threadProposedCount: number,
+  actionProposedCount: number,
   rejectionCodes: string[],
 ) {
+  const threadAcceptedCount = threadOperations.length;
+  const actionAcceptedCount = actionOperations.length;
+  const threadRejectedCount = threadProposedCount - threadAcceptedCount;
+  const actionRejectedCount = actionProposedCount - actionAcceptedCount;
   return {
     threadOperations,
     actionOperations,
     diagnostics: {
-      proposedCount,
-      acceptedCount: threadOperations.length + actionOperations.length,
-      rejectedCount,
+      proposedCount: threadProposedCount + actionProposedCount,
+      acceptedCount: threadAcceptedCount + actionAcceptedCount,
+      rejectedCount: threadRejectedCount + actionRejectedCount,
+      threadProposedCount,
+      threadAcceptedCount,
+      threadRejectedCount,
+      actionProposedCount,
+      actionAcceptedCount,
+      actionRejectedCount,
       rejectionCodes: [...new Set(rejectionCodes)].sort(),
     },
   };

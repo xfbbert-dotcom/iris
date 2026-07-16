@@ -85,6 +85,10 @@ export type MemoryExtractionRuntimeStatus = {
   rejectedCandidateCount: number;
   duplicateCandidateCount: number;
   conflictCandidateCount: number;
+  acceptedThreadOperationCount: number;
+  rejectedThreadOperationCount: number;
+  acceptedActionOperationCount: number;
+  rejectedActionOperationCount: number;
   skippedRequestCount: number;
   failedRunCount: number;
   providerCooldownUntil?: Date;
@@ -415,6 +419,10 @@ export function createMemoryExtractionRuntime({
         rejectedCandidateCount: repositoryStatus.rejectedCandidates,
         duplicateCandidateCount: repositoryStatus.duplicateCandidates,
         conflictCandidateCount: repositoryStatus.conflictCandidates,
+        acceptedThreadOperationCount: repositoryStatus.acceptedThreadOperations,
+        rejectedThreadOperationCount: repositoryStatus.rejectedThreadOperations,
+        acceptedActionOperationCount: repositoryStatus.acceptedActionOperations,
+        rejectedActionOperationCount: repositoryStatus.rejectedActionOperations,
         skippedRequestCount: repositoryStatus.skipped,
         failedRunCount: repositoryStatus.failedRuns,
         ...(providerCooldownUntil === undefined

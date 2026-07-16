@@ -61,7 +61,7 @@ describe("createMemoryExtractionWorker", () => {
       diagnostics: expect.objectContaining({ acceptedCount: 2, rejectedCount: 0 }),
       threadOperations: [],
       actionOperations: [],
-      conversationStateDiagnostics: { proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] },
+      conversationStateDiagnostics: expect.objectContaining({ proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] }),
     });
     expect(dependencies.queue.handleProcessedJob).toHaveBeenCalledTimes(2);
     expect(results).toEqual([
@@ -650,7 +650,7 @@ describe("createMemoryExtractionWorker", () => {
       },
       threadOperations: [],
       actionOperations: [],
-      conversationStateDiagnostics: { proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] },
+      conversationStateDiagnostics: expect.objectContaining({ proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] }),
     });
     expect(dependencies.auditLog.record).toHaveBeenCalledWith({
       type: "memory_extraction_completed",
@@ -699,9 +699,54 @@ describe("createMemoryExtractionWorker", () => {
         proposedCount: 2,
         acceptedCount: 2,
         rejectedCount: 0,
+        threadProposedCount: 1,
+        threadAcceptedCount: 1,
+        threadRejectedCount: 0,
+        actionProposedCount: 1,
+        actionAcceptedCount: 1,
+        actionRejectedCount: 0,
         rejectionCodes: [],
       },
     }));
+  });
+
+  it("does not count rollout-disabled response operations as proposed or rejected", async () => {
+    const dependencies = createDependencies({ jobs: [job("request-1")] });
+    Object.assign(dependencies, {
+      conversationStateRollout: {
+        candidateConfidenceFloor: 0.65,
+        applyConfidence: 0.85,
+        threadEnabledGroupIds: [],
+        actionEnabledGroupIds: [],
+      },
+    });
+    dependencies.client.extract.mockResolvedValue({
+      runId: "run-1",
+      candidates: [],
+      threadOperations: [{ operation: "untrusted-thread-shape" }],
+      actionOperations: [{ operation: "untrusted-action-shape" }],
+    } as any);
+
+    await createMemoryExtractionWorker(dependencies).processBatch({ limit: 20 });
+
+    expect(dependencies.repository.completeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadOperations: [],
+        actionOperations: [],
+        conversationStateDiagnostics: {
+          proposedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          threadProposedCount: 0,
+          threadAcceptedCount: 0,
+          threadRejectedCount: 0,
+          actionProposedCount: 0,
+          actionAcceptedCount: 0,
+          actionRejectedCount: 0,
+          rejectionCodes: [],
+        },
+      }),
+    );
   });
 
   it("isolates a stale second thread operation while preserving valid memory and state work", async () => {
@@ -762,12 +807,12 @@ describe("createMemoryExtractionWorker", () => {
         operationKey: "thread:update:a",
         summary: "Accepted sorted summary.",
       })],
-      conversationStateDiagnostics: {
+      conversationStateDiagnostics: expect.objectContaining({
         proposedCount: 2,
         acceptedCount: 1,
         rejectedCount: 1,
         rejectionCodes: ["stale_version"],
-      },
+      }),
     }));
   });
 
@@ -841,12 +886,12 @@ describe("createMemoryExtractionWorker", () => {
     expect(dependencies.repository.completeRun).toHaveBeenCalledWith(expect.objectContaining({
       acceptedCandidates: [expect.objectContaining({ content: "Launch on Thursday." })],
       threadOperations: [expect.objectContaining({ operationKey: "a:thread:attach-target" })],
-      conversationStateDiagnostics: {
+      conversationStateDiagnostics: expect.objectContaining({
         proposedCount: 2,
         acceptedCount: 1,
         rejectedCount: 1,
         rejectionCodes: ["batch_evidence_dependency"],
-      },
+      }),
     }));
   });
 
@@ -906,7 +951,7 @@ describe("createMemoryExtractionWorker", () => {
       },
       threadOperations: [],
       actionOperations: [],
-      conversationStateDiagnostics: { proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] },
+      conversationStateDiagnostics: expect.objectContaining({ proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] }),
     });
     expect(JSON.stringify(dependencies.repository.completeRun.mock.calls)).not.toContain(
       "Rejected private model text",
@@ -1092,6 +1137,10 @@ function createDependencies(input: {
       rejectedCandidates: 0,
       duplicateCandidates: 0,
       conflictCandidates: 0,
+      acceptedThreadOperations: 0,
+      rejectedThreadOperations: 0,
+      acceptedActionOperations: 0,
+      rejectedActionOperations: 0,
     })),
   };
   const client = {

@@ -216,6 +216,10 @@ describe("createMemoryExtractionRuntime", () => {
       rejectedCandidateCount: 7,
       duplicateCandidateCount: 3,
       conflictCandidateCount: 2,
+      acceptedThreadOperationCount: 11,
+      rejectedThreadOperationCount: 12,
+      acceptedActionOperationCount: 13,
+      rejectedActionOperationCount: 14,
       skippedRequestCount: 6,
       failedRunCount: 5,
       providerCooldownUntil: new Date("2026-07-15T02:00:00.000Z"),
@@ -1024,6 +1028,10 @@ function runtimeFixture({
       rejectedCandidates: 7,
       duplicateCandidates: 3,
       conflictCandidates: 2,
+      acceptedThreadOperations: 11,
+      rejectedThreadOperations: 12,
+      acceptedActionOperations: 13,
+      rejectedActionOperations: 14,
     })),
   } as unknown as MemoryExtractionRepository;
   const queue: MemoryExtractionQueue = {
