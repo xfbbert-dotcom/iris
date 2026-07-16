@@ -10,6 +10,79 @@ import { HttpAiWorkerMemoryExtractionClient } from "../src/memory-extraction/htt
 import type { ClaimedMemoryExtractionRun } from "../src/memory-extraction/memory-extraction-repository.js";
 
 describe("HttpAiWorkerMemoryExtractionClient", () => {
+  it("parses an exact v2 response with operation-specific fields", async () => {
+    const client = createClient(async () => jsonResponse({
+      schema_version: 2,
+      run_id: "run-1",
+      candidates: [],
+      thread_operations: [{
+        operation: "create",
+        operation_key: "thread:create:launch",
+        confidence: 0.9,
+        evidence_message_ids: ["message-1"],
+        evidence_span: "Launch is Thursday",
+        title: "Launch",
+        summary: "Launch is Thursday.",
+        initial_status: "open",
+      }],
+      action_operations: [],
+    }));
+
+    await expect(client.extract(runFixture())).resolves.toMatchObject({
+      runId: "run-1",
+      threadOperations: [expect.objectContaining({ operation: "create" })],
+      actionOperations: [],
+    });
+  });
+
+  it.each([
+    ["unknown operation key", { unknown: true }],
+    ["missing create summary", { summary: undefined }],
+    ["non-finite operation confidence", { confidence: Number.POSITIVE_INFINITY }],
+  ])("rejects a malformed v2 thread operation: %s", async (_name, override) => {
+    const operation = {
+      operation: "create",
+      operation_key: "thread:create:launch",
+      confidence: 0.9,
+      evidence_message_ids: ["message-1"],
+      evidence_span: "Launch is Thursday",
+      title: "Launch",
+      summary: "Launch is Thursday.",
+      initial_status: "open",
+      ...override,
+    };
+    const client = createClient(async () => jsonResponse({
+      schema_version: 2,
+      run_id: "run-1",
+      candidates: [],
+      thread_operations: [operation],
+      action_operations: [],
+    }));
+
+    await expect(client.extract(runFixture())).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects more than eight v2 operations in one family", async () => {
+    const operation = {
+      operation: "resolve",
+      operation_key: "thread:resolve:1",
+      confidence: 0.9,
+      evidence_message_ids: ["message-1"],
+      evidence_span: "Launch is Thursday",
+      thread_id: "thread-1",
+      expected_version: 1,
+    };
+    const client = createClient(async () => jsonResponse({
+      schema_version: 2,
+      run_id: "run-1",
+      candidates: [],
+      thread_operations: Array.from({ length: 9 }, (_, index) => ({ ...operation, operation_key: `thread:resolve:${index}` })),
+      action_operations: [],
+    }));
+
+    await expect(client.extract(runFixture())).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("sends the exact bounded v1 request and parses the exact v1 response", async () => {
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
       jsonResponse(responseFixture()),
