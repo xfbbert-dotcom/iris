@@ -62,3 +62,37 @@ Status: completed. Fix commit: `4c403074ea87771128dd7fb42f50fce9eda4b07d` (`fix:
 - `npm run typecheck`: passed.
 
 Updated concern: the previously unavailable PostgreSQL service gate is no longer a concern for this fix; it was exercised successfully. The only non-functional notice remains Git's LF-to-CRLF staging warning, while `git diff --cached --check` passed.
+
+## Review Blocker Remediation
+
+Status: completed. Implementation commit: `1395472605f5ca81ee880946d7784355f21ffec4` (`fix: harden conversation state transactions`).
+
+### Changes
+
+- Enforced thread/action event entity references before opening a transaction and prohibited creating a thread in `merged` state.
+- Added a group-scoped transaction advisory lock and exact cross-table operation replay checks. Only a same-type replay with matching event, entity, and evidence payload returns `already_applied`; partial, cross-type, and changed-payload replays raise `ConversationStateIdempotencyConflictError`.
+- Loaded thread evidence counts under the group row lock, followed existing target merge chains, invoked `selectCanonicalMergeTarget`, and rejected intermediate or non-canonical targets.
+- Made projection completion monotonic with an upsert version predicate.
+- Allowed due `failed` repairs to be reclaimed, capped claims at five attempts, and kept `retryAt` effective through `next_attempt_at`.
+- Excluded candidate-linked actions from answer-relevant reads while allowing candidate threads and actions in extraction context; added runtime thread-status validation.
+- Extended scripted tests to verify advisory-lock, operation-key, and evidence binding parameters.
+- Extended the real PostgreSQL suite with action writes, event/entity mismatch rejection, partial and cross-type conflicts, evidence-count canonical merges, candidate action visibility, retry limits, and out-of-order projection completion.
+
+### TDD And Verification
+
+| Command | Result |
+| --- | --- |
+| `npm exec --workspace apps/core -- vitest run tests/postgres-conversation-state-repository.test.ts` before implementation | RED: 11 expected failures, covering the review blockers; 10 existing tests passed and 1 PostgreSQL case was skipped. |
+| Same scripted test after implementation | PASS: 21 passed, 1 PostgreSQL case skipped. |
+| `$env:TEST_DATABASE_URL='postgresql://iris:iris@127.0.0.1:5432/iris'; npm exec --workspace apps/core -- vitest run tests/conversation-state-machine.test.ts tests/postgres-conversation-state-repository.test.ts` | Initial infrastructure attempt failed with `ECONNREFUSED`; Docker Desktop and the repository `postgres` Compose service were restored. Final result: 51 passed, 0 failed, 0 skipped. |
+| `npm run typecheck` | PASS. |
+| `npm --workspace apps/core test` | PASS: 87 files; 1688 passed, 38 service-gated tests skipped. |
+| `git diff --cached --check` | PASS; no whitespace errors. |
+
+### Self-Review And Concerns
+
+- Every accepted state operation has exactly one matching event; operation-key replay decisions are serialized and checked against both event tables in the same transaction.
+- Canonical merge selection is based on the locked source and terminal target rows plus persisted evidence counts; the repository no longer rewrites a non-canonical request.
+- Failed repair retry timing, attempt exhaustion, and projection downgrade protection were exercised against real PostgreSQL.
+- Scope remained limited to Task 3. No Task 4 answering or proactive-speaking path was added.
+- No functional concern remains. Docker Desktop had stopped during verification but was restarted, and the final real PostgreSQL gate passed. Git continued to emit the existing LF-to-CRLF staging notice.
