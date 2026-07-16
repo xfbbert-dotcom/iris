@@ -133,7 +133,7 @@ function Get-DrainSnapshot {
   if ($LASTEXITCODE -ne 0) { throw "Unable to read raw-event processing list" }
   [long]$documentSyncProcessing = & docker @compose exec -T redis redis-cli LLEN iris:documents:sync:processing
   if ($LASTEXITCODE -ne 0) { throw "Unable to read document-sync processing list" }
-  [long]$documentReindexProcessing = & docker @compose exec -T redis redis-cli LLEN iris:documents:reindex:processing
+  [long]$documentReindexProcessing = & docker @compose exec -T redis redis-cli LLEN iris:reindex:documents:processing
   if ($LASTEXITCODE -ne 0) { throw "Unable to read document-reindex processing list" }
 
   [ordered]@{
@@ -161,7 +161,7 @@ function Assert-ZeroDrain {
   [long]$documentSyncProcessing = $Snapshot.documentProcessing
   [long]$documentReindexProcessing = $Snapshot.reindexProcessing
   if ($documentSyncProcessing -ne 0) { throw "iris:documents:sync:processing is not empty" }
-  if ($documentReindexProcessing -ne 0) { throw "iris:documents:reindex:processing is not empty" }
+  if ($documentReindexProcessing -ne 0) { throw "iris:reindex:documents:processing is not empty" }
   $nonZero = @($Snapshot.GetEnumerator() | Where-Object { [long]$_.Value -ne 0 })
   if ($nonZero.Count -ne 0) {
     throw "Queue/DLQ/repair zero gate failed: $($Snapshot | ConvertTo-Json -Compress)"
@@ -501,7 +501,7 @@ the explicit @Iris question. Any unsolicited reminder, follow-up, status update,
 message fails acceptance. Require the drain snapshot to be all numeric zero, including pending,
 processing, delayed, DLQ, and projection-repair counts and the exact Redis processing lists
 `iris:events:raw:processing`, `iris:documents:sync:processing`, and
-`iris:documents:reindex:processing`.
+`iris:reindex:documents:processing`.
 
 ## Evidence And Exit
 

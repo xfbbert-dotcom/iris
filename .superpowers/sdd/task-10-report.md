@@ -165,7 +165,7 @@ node --test scripts/pilot-compose.test.mjs
 Result: exit 1; 12 tests, 9 passed, 3 failed, 0 skipped. The three failures proved the runbook lacked
 the marked global-enable boundary and exhaustive group/status gate, an executable fail-closed
 rollback helper, and exact `iris:documents:sync:processing` /
-`iris:documents:reindex:processing` LLEN gates.
+`iris:reindex:documents:processing` LLEN gates.
 
 Final GREEN command:
 
@@ -212,3 +212,45 @@ real Feishu message, push, or PR occurred. Docker inspection reported
 
 Real Feishu gray acceptance is still pending and remains controller-owned. IRIS-CORE-002/003 remain
 code implemented only; IRIS-CORE-005/006 remain missing, with proactive speech and follow-up disabled.
+
+## Reindex Processing-Key Review Fix
+
+Controller review found that the runbook and its static contract used a transposed namespace key,
+while the runtime source of truth in
+`apps/core/src/reindex/redis-document-reindex-queue.ts` declares
+`DEFAULT_PROCESSING_KEY = "iris:reindex:documents:processing"`. Redis `LLEN` on the former key could
+return zero without inspecting the real in-flight list, so this was a gray-release false-green risk.
+
+The contract was changed first to read the runtime source, extract `DEFAULT_PROCESSING_KEY`, assert
+its expected deployed value, and require the runbook's `LLEN` command to use that extracted value.
+
+RED command:
+
+```powershell
+node --test --test-name-pattern="requires zero conversation-state" scripts/pilot-compose.test.mjs
+```
+
+Result before the runbook edit: exit 1; 1 test, 0 passed, 1 failed, 0 skipped. The assertion failed
+because the runbook did not contain `LLEN iris:reindex:documents:processing`.
+
+GREEN command after replacing every runbook/report reference:
+
+```powershell
+node --test --test-name-pattern="requires zero conversation-state" scripts/pilot-compose.test.mjs
+```
+
+Result: exit 0; 1/1 passed, 0 skipped.
+
+Covering suite:
+
+```powershell
+node --test --test-concurrency=1 scripts/pilot-compose.test.mjs
+```
+
+Result: exit 0; 12/12 passed, 0 skipped. PowerShell parser verification inspected 8 runbook code
+fences with 0 syntax errors. No migration, runtime implementation, deployment, real Feishu message,
+push, or PR was performed.
+
+`git diff --check` exited 0 with CRLF checkout notices only. A scoped `rg` audit found no legacy
+transposed key in the runbook, contract, or report, and confirmed the corrected key against the
+runtime `DEFAULT_PROCESSING_KEY` declaration.

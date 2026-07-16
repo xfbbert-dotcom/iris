@@ -14,6 +14,10 @@ const conversationStateAcceptanceRunbook = readFileSync(
   conversationStateAcceptanceRunbookPath,
   "utf8",
 );
+const documentReindexQueueSource = readFileSync(
+  "apps/core/src/reindex/redis-document-reindex-queue.ts",
+  "utf8",
+);
 const caddyfile = readFileSync("deploy/pilot/Caddyfile", "utf8");
 const pilotCiEnv = readFileSync("deploy/pilot/ci.env", "utf8");
 const pilotEnvExample = readFileSync(".env.pilot.example", "utf8");
@@ -242,6 +246,11 @@ test("requires best-effort fail-closed rollback after every global-enable attemp
 
 test("requires zero conversation-state queues, exact processing lists, and repairs", () => {
   const runbook = conversationStateAcceptanceRunbook;
+  const defaultProcessingKeyMatch =
+    /const DEFAULT_PROCESSING_KEY = "([^"]+)";/u.exec(documentReindexQueueSource);
+  assert.ok(defaultProcessingKeyMatch, "reindex runtime must declare DEFAULT_PROCESSING_KEY");
+  const runtimeReindexProcessingKey = defaultProcessingKeyMatch[1];
+  assert.equal(runtimeReindexProcessingKey, "iris:reindex:documents:processing");
 
   for (const marker of [
     "/internal/status",
@@ -256,7 +265,11 @@ test("requires zero conversation-state queues, exact processing lists, and repai
     assert.match(runbook, new RegExp(escapeRegExp(marker), "u"), `${marker} gate is required`);
   }
   assert.match(runbook, /LLEN iris:documents:sync:processing/u);
-  assert.match(runbook, /LLEN iris:documents:reindex:processing/u);
+  assert.match(
+    runbook,
+    new RegExp(`LLEN ${escapeRegExp(runtimeReindexProcessingKey)}`, "u"),
+    "runbook must drain the runtime's exact document-reindex processing list",
+  );
   assert.match(runbook, /\$documentSyncProcessing\s+-ne\s+0/u);
   assert.match(runbook, /\$documentReindexProcessing\s+-ne\s+0/u);
 });
