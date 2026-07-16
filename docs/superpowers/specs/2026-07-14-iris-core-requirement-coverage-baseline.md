@@ -15,12 +15,12 @@
 
 | ID | 核心需求 | 当前状态 | 现有证据 | 缺口与完成标准 |
 |---|---|---|---|---|
-| IRIS-CORE-001 | 同一飞书群中的多人可以共同与 Iris 协作，并从前一个人的上下文继续 | 部分实现 | 所有已启用群消息进入 `conversation_messages`；回答读取最近群聊和当前群 active 长时记忆；普通非 @ 消息可异步形成同群共享记忆；飞书回复所有群成员可见 | 尚未实现自动主题聚合、thread 状态和行动历史 |
-| IRIS-CORE-002 | Iris 被拉入群后持续接收群消息，即使未被 @ 也理解讨论 | 部分实现 | Feishu Gateway ack-first；Raw Event Queue；消息事实持久化；`readGroupContext` 运行时边界；普通非 @ 文本消息可注册持久化抽取请求并通过独立队列异步处理 | 尚未实现主题聚合和讨论状态更新；当前自动抽取仅生成 group scope 记忆 |
-| IRIS-CORE-003 | Iris 随时间学习，用户不必重复解释业务背景 | 部分实现（群级自动记忆第一阶段） | Postgres `group_memories` 与消息证据表；同群证据校验；普通群聊异步抽取；置信度与候选校验；幂等、重试、冷却与 DLQ；版本化纠错；物理删除；当前群 active 记忆检索；运行时停用门禁；真实 Postgres/Redis/Python 自动化测试；本地可执行端到端验收 | 尚未实现自动主题/thread/action 聚合与持续状态更新；当前分支仍需真实飞书灰度后才能称为该阶段上线 |
+| IRIS-CORE-001 | 同一飞书群中的多人可以共同与 Iris 协作，并从前一个人的上下文继续 | 部分实现 | 所有已启用群消息进入 `conversation_messages`；回答读取最近群聊、当前群 active 长时记忆及相关 open thread/action；普通非 @ 消息可异步形成同群共享状态；飞书回复所有群成员可见 | 当前群 thread/action 代码已实现，但真实飞书灰度仍待验收；主动协作不在本阶段 |
+| IRIS-CORE-002 | Iris 被拉入群后持续接收群消息，即使未被 @ 也理解讨论 | 代码已实现（真实飞书灰度待验收） | Feishu Gateway ack-first；Raw Event Queue；消息事实持久化；普通非 @ 文本异步抽取；同群证据绑定；semantic thread 的 candidate/open/resolved/reopened/merged 生命周期；显式 commitment/action 生命周期；回答时当前群检索；本地端到端验收 | 尚未执行单群真实飞书灰度，不能称为已上线或完整 Iris |
+| IRIS-CORE-003 | Iris 随时间学习，用户不必重复解释业务背景 | 代码已实现（真实飞书灰度待验收） | Postgres `group_memories`、`discussion_threads`、`action_items` 与 append-only events/evidence；置信度与候选隔离；幂等、重试、冷却、DLQ 与 projection repair；版本化纠错；当前群 bounded retrieval；真实 Postgres/Redis/Python 自动化测试；本地可执行端到端验收 | 尚未执行单群真实飞书灰度；本阶段不包含主动提醒或沉寂跟进 |
 | IRIS-CORE-004 | 在授权后跨群和跨数据源学习 | 部分实现 | 当前群文档、授权知识库、用户手动提交文档已接入统一文档源和权限策略 | 没有跨群授权关系、跨群记忆共享策略和跨群检索审计；默认必须保持群隔离 |
 | IRIS-CORE-005 | Iris 主动发现需要关注的信息并更新群成员 | 缺失实现 | 仅存在 `proactiveSpeech` capability 和运行时开关 | 需要信号扫描、候选评分、解释、频率限制、群级暂停、发送记录和审计 |
-| IRIS-CORE-006 | Iris 跟进沉寂但未解决的讨论或任务 | 缺失实现 | 无 unresolved-thread 领域模型或调度器 | 需要线程状态、责任人/截止期候选、沉寂判断、重复抑制和确认流 |
+| IRIS-CORE-006 | Iris 跟进沉寂但未解决的讨论或任务 | 缺失实现 | 已有当前群 thread/action 状态与检索，但没有主动发言、沉寂扫描或跟进调度器 | 需要沉寂判断、候选评分、重复抑制、限频、确认流和主动发送审计 |
 | IRIS-CORE-007 | Iris 将讨论整理成内容，先发群里让用户确认 | 缺失实现 | 仅存在 `generateKnowledgeDrafts` capability；没有知识草稿实体 | 需要草稿、证据、风险等级、状态机、群内预览、确认/驳回/编辑和审计 |
 | IRIS-CORE-008 | 用户确认后同步到飞书知识库 | 缺失实现 | 仅存在 `writeKnowledgeBase` capability，默认关闭 | 需要 Approval & Action Layer、飞书写入适配器、幂等、版本、失败恢复和回滚；未经确认不得写入 |
 | IRIS-CORE-009 | Iris 回答时读取授权飞书知识库 | 已实现 | 授权 Wiki 注册、解析、同步、向量检索、实时权限二次校验、引用和真实飞书验收 | 后续补充知识冲突识别和知识更新草稿，不影响当前已实现判定 |
@@ -37,7 +37,7 @@
 
 但当前仍然主要是“安全的群聊知识助手基础”。以下白皮书核心尚未形成端到端产品闭环：
 
-1. 自动群级记忆抽取已经形成代码链路；仍需完成主题聚合、thread/action 记忆与持续状态更新，并经过真实飞书灰度；
+1. 自动群级记忆、semantic thread/action 聚合与持续状态更新已经形成代码链路，但仍需经过真实飞书单群灰度；
 2. 主动信号发现和未解决讨论跟进；
 3. 知识草稿、群内确认、管理员复核和知识库发布；
 4. 面向非工程管理员的轻量控制台；

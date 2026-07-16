@@ -1,11 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { UpsertConversationMessageInput } from "../src/conversation/conversation-message-repository.js";
 import {
   createPostgresConversationMessageRepository,
   type Queryable,
 } from "../src/conversation/postgres-conversation-message-repository.js";
+import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import { MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH } from "../src/events/raw-event-queue.js";
+
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
+const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("PostgresConversationMessageRepository", () => {
   it("upserts conversation messages", async () => {
@@ -431,6 +438,73 @@ describe("PostgresConversationMessageRepository", () => {
       }),
     ).rejects.toThrow("conversation message limit must be a finite safe-magnitude number");
     expect(queryable.query).not.toHaveBeenCalled();
+  });
+});
+
+runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
+  let pool: pg.Pool | undefined;
+  const suffix = randomUUID();
+  const providerMessageId = `mention-replacement-${suffix}`;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    try {
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+    } finally {
+      client.release();
+    }
+  });
+
+  afterAll(async () => {
+    if (pool === undefined) {
+      return;
+    }
+    try {
+      await pool.query(
+        "DELETE FROM conversation_messages WHERE provider = 'feishu' AND provider_message_id = $1",
+        [providerMessageId],
+      );
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("replaces one mention openId on a second write without duplicates", async () => {
+    const repository = createPostgresConversationMessageRepository({ queryable: pool! });
+    const input: UpsertConversationMessageInput = {
+      ...baseUpsertInput(),
+      providerMessageId,
+      chatId: `mention-chat-${suffix}`,
+      rawEventIdempotencyKey: `raw-event:mention-replacement-${suffix}`,
+    };
+
+    await repository.upsertMessage({
+      ...input,
+      mentions: [{ key: "@_owner", openId: "ou_original" }],
+    });
+    const replacement = await repository.upsertMessage({
+      ...input,
+      mentions: [{ key: "@_owner", openId: "ou_replacement" }],
+    });
+
+    expect(replacement.mentions).toEqual([{ key: "@_owner", openId: "ou_replacement" }]);
+    const persisted = await pool!.query<{
+      mention_key: string;
+      mentioned_open_id: string;
+    }>(
+      `
+      SELECT mention.mention_key, mention.mentioned_open_id
+      FROM conversation_message_mentions AS mention
+      JOIN conversation_messages AS message ON message.id = mention.conversation_message_id
+      WHERE message.provider = 'feishu' AND message.provider_message_id = $1
+      ORDER BY mention.mention_key, mention.mentioned_open_id
+      `,
+      [providerMessageId],
+    );
+    expect(persisted.rows).toEqual([
+      { mention_key: "@_owner", mentioned_open_id: "ou_replacement" },
+    ]);
   });
 });
 

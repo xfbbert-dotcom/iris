@@ -1,6 +1,6 @@
 # Iris Phase 3B: Semantic Thread and Action Memory
 
-Status: approved for implementation planning
+Status: code implemented and locally verified; real Feishu gray acceptance pending
 
 Date: 2026-07-16
 
@@ -295,6 +295,10 @@ The acceptance harness uses real Core HTTP, Event Worker, Postgres migrations, R
 
 ### 12.4 Real Feishu Acceptance
 
+The executable procedure is `docs/runbooks/iris-semantic-thread-action-memory-acceptance.md`.
+It has not been executed on real Feishu in this branch, so this section remains a pending release
+gate rather than implementation-acceptance evidence.
+
 In one approved group:
 
 1. participants discuss a topic without mentioning Iris;
@@ -312,8 +316,12 @@ This slice is complete only when:
 - the executable end-to-end harness passes from a clean environment;
 - independent requirement and code review find no release blocker;
 - one real Feishu group passes the acceptance flow;
-- queues and DLQs are empty after acceptance;
+- queues, DLQs, and projection repairs are empty after acceptance;
 - rollout remains reversible through capability disablement;
 - coverage baseline is updated without claiming proactive follow-up or the whole Iris product is complete.
 
-Once these gates pass, work moves to Phase 4A proactive-signal candidates. Additional hardening without a concrete failed gate is recorded as backlog rather than extending this phase indefinitely.
+The code and local executable gates do not complete this slice by themselves. Only after independent
+review and the real Feishu gate pass may the status move to implementation accepted. Phase 4A
+proactive-signal candidates, proactive speech, and follow-up remain outside this slice. Additional
+hardening without a concrete failed gate is recorded as backlog rather than extending this phase
+indefinitely.

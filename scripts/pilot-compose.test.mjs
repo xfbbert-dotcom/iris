@@ -8,6 +8,10 @@ const acceptanceRunbook = readFileSync(
   "docs/runbooks/iris-automatic-memory-extraction-acceptance.md",
   "utf8",
 );
+const conversationStateAcceptanceRunbookPath =
+  "docs/runbooks/iris-semantic-thread-action-memory-acceptance.md";
+const caddyfile = readFileSync("deploy/pilot/Caddyfile", "utf8");
+const pilotCiEnv = readFileSync("deploy/pilot/ci.env", "utf8");
 const pilotEnvExample = readFileSync(".env.pilot.example", "utf8");
 
 test("pins every third-party pilot image to an immutable digest", () => {
@@ -127,6 +131,49 @@ test("keeps automatic memory extraction private with dedicated model egress", ()
   assert.equal(core.depends_on["ai-worker"].condition, "service_started");
 });
 
+test("keeps semantic thread and action extraction disabled by default", () => {
+  const expectedValues = {
+    IRIS_THREAD_EXTRACTION_GROUP_IDS: "",
+    IRIS_ACTION_EXTRACTION_GROUP_IDS: "",
+    IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR: "0.65",
+    IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE: "0.85",
+  };
+
+  for (const [name, expected] of Object.entries(expectedValues)) {
+    assert.equal(readEnvAssignment(pilotCiEnv, name), expected, `${name} must match in CI env`);
+    assert.equal(
+      readEnvAssignment(pilotEnvExample, name),
+      expected,
+      `${name} must match in pilot example`,
+    );
+    assert.equal(compose.services.core.environment[name], expected);
+  }
+
+  assert.equal(compose.services["ai-worker"].ports, undefined);
+  assert.equal(compose.services["ai-worker"].networks.edge, undefined);
+  assert.doesNotMatch(caddyfile, /ai-worker/u);
+  assert.doesNotMatch(caddyfile, /@internal|path \/internal|reverse_proxy \/internal/u);
+  assert.equal(compose.services.core.environment.IRIS_PROACTIVE_SPEECH_ENABLED, undefined);
+});
+
+test("requires zero conversation-state queues, DLQs, and projection repairs before rollout", () => {
+  const runbook = readFileSync(conversationStateAcceptanceRunbookPath, "utf8");
+
+  for (const marker of [
+    "/internal/status",
+    "/internal/ingress-readiness",
+    "pendingJobCount",
+    "processingJobCount",
+    "delayedJobCount",
+    "deadLetterJobCount",
+    "pendingProjectionRepairCount",
+    "failedProjectionRepairCount",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"), `${marker} gate is required`);
+  }
+  assert.match(runbook, /proactiveSpeech[^\n]*false/u);
+});
+
 test("renders the pilot example with disabled extraction and placeholder secrets", () => {
   for (const name of [
     "IRIS_AI_WORKER_TOKEN",
@@ -220,4 +267,14 @@ function loadPilotCompose(envFile = "deploy/pilot/ci.env") {
     throw new Error(`Unable to render pilot Compose config: ${result.stderr || result.stdout}`);
   }
   return JSON.parse(result.stdout);
+}
+
+function readEnvAssignment(contents, name) {
+  const match = new RegExp(`^${escapeRegExp(name)}=(.*)$`, "mu").exec(contents);
+  assert.ok(match, `${name} must be present`);
+  return match[1].trim();
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }

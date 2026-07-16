@@ -75,6 +75,8 @@ describe("AnswerDraftOrchestrator", () => {
         content: "Launch Thursday.",
         evidenceMessageIds: ["msg-1"],
       }],
+      usedDiscussionThreads: [],
+      usedActionItems: [],
     });
   });
 

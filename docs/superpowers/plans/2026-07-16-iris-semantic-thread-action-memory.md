@@ -1008,7 +1008,7 @@ Expected: all eight gates PASS twice and no acceptance containers or volumes rem
 **Files:**
 - Modify: `deploy/pilot/docker-compose.yml`
 - Modify: `deploy/pilot/ci.env`
-- Modify: `deploy/pilot/.env.example`
+- Modify: `.env.pilot.example`
 - Modify: `scripts/pilot-compose.test.mjs`
 - Modify: `docs/superpowers/specs/2026-07-14-iris-core-requirement-coverage-baseline.md`
 - Modify: `docs/superpowers/specs/2026-07-16-iris-semantic-thread-action-memory-design.md`
@@ -1020,11 +1020,11 @@ Expected: all eight gates PASS twice and no acceptance containers or volumes rem
 - Produces: disabled-by-default pilot configuration and real-Feishu acceptance steps.
 - Produces: honest requirement coverage without claiming Phase 4 or complete Iris delivery.
 
-- [ ] **Step 1: Write failing deployment contract tests**
+- [x] **Step 1: Write failing deployment contract tests**
 
 Assert both group allowlists are blank in CI/example config, thresholds are `0.65` and `0.85`, AI Worker remains backend-only, proactive speech is not enabled by this feature, and status/readiness includes zero queue/DLQ/repair gates.
 
-- [ ] **Step 2: Wire disabled-by-default deployment configuration**
+- [x] **Step 2: Wire disabled-by-default deployment configuration**
 
 Add exact environment values:
 
@@ -1037,15 +1037,15 @@ IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE=0.85
 
 Do not expose AI Worker or internal operator routes through Caddy.
 
-- [ ] **Step 3: Update documentation and exit criteria**
+- [x] **Step 3: Update documentation and exit criteria**
 
 Mark IRIS-CORE-002 and IRIS-CORE-003 as implemented in code for current-group semantic thread/action state but still awaiting real Feishu gray acceptance until that gate passes. Keep IRIS-CORE-005 and IRIS-CORE-006 missing because Iris still does not proactively speak or follow up. Record the exact rollout procedure: one approved group, ordinary discussion, explicit commitment, mention question, completion, reopening, no unsolicited message, clean queues.
 
-- [ ] **Step 4: Run targeted real-service integration serially**
+- [x] **Step 4: Run targeted real-service integration serially**
 
 Start disposable Postgres and Redis, run all conversation-state and extraction integration files with file parallelism disabled, and remove containers/volumes. Expected: no service-gated skips in that run and no residue.
 
-- [ ] **Step 5: Run complete local verification**
+- [x] **Step 5: Run complete local verification**
 
 ```powershell
 npm run test:acceptance:conversation-state

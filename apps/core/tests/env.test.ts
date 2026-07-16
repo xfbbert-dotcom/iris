@@ -220,6 +220,10 @@ describe("readMemoryExtractionRuntimeConfig", () => {
       intervalMs: 1000,
       batchLimit: 20,
       minConfidence: 0.85,
+      threadEnabledGroupIds: [],
+      actionEnabledGroupIds: [],
+      candidateConfidenceFloor: 0.65,
+      applyConfidence: 0.85,
     });
     expect(
       readMemoryExtractionRuntimeConfig({

@@ -61,6 +61,8 @@ Never expose these endpoints directly to the public internet:
 - `/internal/document-sync/*`
 - `/internal/events/*`
 - `/internal/reindex/*`
+- `/internal/memory-extraction/*`
+- `/internal/conversation-state/*`
 - `/internal/audit/*`
 - `/internal/answer-drafts`
 
@@ -895,6 +897,26 @@ Recovery rule:
   longer be degraded for dead-letter reasons.
 - If a component is listed with `status: "stopped"`, treat it as an enabled worker that is not
   running. It appears in `degradedComponents` until the worker is started or intentionally disabled.
+
+## Semantic Thread And Action Gray Gate
+
+Semantic thread/action extraction is code implemented but remains disabled by default and has not
+passed real Feishu gray acceptance. The pilot environment must retain these defaults outside the
+single approved gray group:
+
+```text
+IRIS_THREAD_EXTRACTION_GROUP_IDS=
+IRIS_ACTION_EXTRACTION_GROUP_IDS=
+IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR=0.65
+IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE=0.85
+```
+
+Do not expose the AI Worker or any `/internal/*` operator route through Caddy. Do not enable
+proactive speech, reminders, or follow-up. After controller review, follow
+`docs/runbooks/iris-semantic-thread-action-memory-acceptance.md` for the one-group gray gate. It
+requires ordinary discussion, evidence promotion, one explicit commitment, an @Iris question,
+completion, reopening, no unsolicited reply, no cross-group state, and zero queue, DLQ, and
+projection-repair counts before rollback or expansion decisions.
 
 ## Verification Before Internal Use
 
