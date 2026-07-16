@@ -112,6 +112,30 @@ describe("createPostgresConversationStateRepository", () => {
     ]));
   });
 
+  it.each(["candidate", "open"] as const)("records an evidence_attached audit event for a %s thread", async (status) => {
+    const operation = attachEvidenceThreadOperation(status);
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/from conversation_state_operation_claims/u, []),
+      step(/from discussion_threads[\s\S]+for update/u, [threadRow({ status, version: "1" })]),
+      step(/from action_items[\s\S]+for update/u, []),
+      step(/from conversation_messages[\s\S]+chat_id = \$2/u, [{ id: "message-1" }]),
+      step(/update discussion_threads/u, [{ id: "thread-1" }]),
+      step(/insert into discussion_thread_evidence/u),
+      step(/insert into discussion_thread_events/u),
+      step(/insert into discussion_thread_event_evidence/u),
+      ...(status === "open" ? [step(/insert into conversation_state_projection_repairs/u)] : []),
+      step(/insert into conversation_state_operation_claims/u),
+      step(/commit/u),
+    ]);
+    const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.applyOperations({ groupId: "chat-a", operations: [operation] }))
+      .resolves.toEqual({ status: "applied", threadIds: ["thread-1"], actionItemIds: [] });
+    const eventCall = client.query.mock.calls.find(([sql]) => /insert into discussion_thread_events/iu.test(String(sql)));
+    expect(eventCall?.[1]?.[3]).toBe("evidence_attached");
+  });
+
   it("replays a historical create claim without reading the upgraded entity snapshot", async () => {
     const operation = createThreadOperation();
     const client = scriptedClient([
@@ -983,6 +1007,26 @@ function resolveThreadOperation() {
     },
     evidenceMessageIds: ["message-1"],
   };
+}
+
+function attachEvidenceThreadOperation(status: "candidate" | "open") {
+  const now = new Date("2026-07-16T00:00:00.000Z");
+  return {
+    kind: "mutation" as const,
+    operationKey: `thread-attach-${status}`,
+    expectedVersion: 1,
+    thread: {
+      id: "thread-1", groupId: "chat-a", title: "Launch", summary: "Launch scope",
+      status, confidence: 0.8, version: 2,
+      firstEvidenceAt: now, lastActivityAt: now, createdAt: now, updatedAt: now,
+    },
+    threadEvent: {
+      id: `thread-event-attach-${status}`, threadId: "thread-1", groupId: "chat-a",
+      eventType: "evidence_attached" as never, fromVersion: 1, toVersion: 2,
+      operationKey: `thread-attach-${status}`, createdAt: now,
+    },
+    evidenceMessageIds: ["message-1"],
+  } as MutationConversationStateOperation;
 }
 
 function mergeThreadOperation() {

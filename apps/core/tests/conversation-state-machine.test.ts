@@ -9,10 +9,12 @@ import {
 describe("conversation state machine", () => {
   it.each([
     ["candidate", "candidate", "corrected"],
+    ["candidate", "candidate", "evidence_attached"],
     ["candidate", "open", "promoted"],
     ["candidate", "merged", "merged"],
     ["open", "open", "summary_updated"],
     ["open", "open", "corrected"],
+    ["open", "open", "evidence_attached"],
     ["open", "resolved", "resolved"],
     ["open", "merged", "merged"],
     ["resolved", "resolved", "corrected"],
@@ -28,6 +30,14 @@ describe("conversation state machine", () => {
       to: "open",
       eventType: "reopened",
     })).toEqual({ ok: false, code: "merged_thread_immutable" });
+  });
+
+  it("requires a resolved thread to reopen before new evidence can be attached", () => {
+    expect(validateThreadTransition({
+      from: "resolved",
+      to: "resolved",
+      eventType: "evidence_attached" as never,
+    })).toEqual({ ok: false, code: "invalid_thread_transition" });
   });
 
   it("rejects thread event types which do not describe the requested transition", () => {

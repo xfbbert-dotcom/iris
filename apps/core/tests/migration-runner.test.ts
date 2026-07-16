@@ -232,6 +232,27 @@ describe("runMigrations", () => {
 });
 
 describe("defaultMigrationsDir", () => {
+  it("defines bounded durable conversation-state snapshots and content-free completion diagnostics", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0025_conversation_state_extraction.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table group_memory_extraction_run_threads");
+    expect(normalized).toContain("ordinal smallint not null check (ordinal between 0 and 11)");
+    expect(normalized).toContain("thread_version bigint not null check (thread_version >= 1)");
+    expect(normalized).toContain("thread_updated_at timestamptz not null");
+    expect(normalized).toContain("create table group_memory_extraction_run_actions");
+    expect(normalized).toContain("action_version bigint not null check (action_version >= 1)");
+    expect(normalized).toContain("action_updated_at timestamptz not null");
+    expect(normalized).toContain("create table group_memory_extraction_run_mentions");
+    expect(normalized).toContain("thread_operation_count smallint not null default 0");
+    expect(normalized).toContain("action_operation_count smallint not null default 0");
+    expect(normalized).toContain("conversation_state_rejected_count smallint not null default 0");
+    expect(normalized).toContain("conversation_state_rejection_codes text[] not null default array[]::text[]");
+  });
+
   it("defines authoritative semantic state, operation claim, and projection repair tables", async () => {
     const migration = await readFile(
       join(defaultMigrationsDir(), "0024_semantic_thread_action_memory.sql"),
@@ -267,6 +288,7 @@ describe("defaultMigrationsDir", () => {
       ),
     ).toHaveLength(3);
     expect(normalized).toContain("create table discussion_thread_events");
+    expect(normalized).toContain("'evidence_attached'");
     expect(normalized.match(/unique \(group_id, operation_key\)/g)).toHaveLength(2);
     expect(normalized).toContain("unique (id, group_id)");
     expect(normalized).toContain("create table discussion_thread_event_evidence");

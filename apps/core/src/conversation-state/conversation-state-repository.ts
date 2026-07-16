@@ -7,6 +7,7 @@ export const DISCUSSION_THREAD_EVENT_TYPES = [
   "reopened",
   "merged",
   "corrected",
+  "evidence_attached",
 ] as const;
 export const ACTION_ITEM_OWNER_REF_TYPES = ["feishu_user", "text_label"] as const;
 export const ACTION_ITEM_STATUSES = ["open", "completed", "cancelled"] as const;

@@ -143,7 +143,12 @@ function validateThreadOperation(input: {
     return transition.ok ? { ok: true, value: operation } : reject(transition.code);
   }
   if (operation.operation === "attach_evidence") {
-    return target.status === "merged" ? reject("merged_thread_immutable") : { ok: true, value: operation };
+    const transition = validateThreadTransition({
+      from: target.status,
+      to: target.status,
+      eventType: "evidence_attached",
+    });
+    return transition.ok ? { ok: true, value: operation } : reject(transition.code);
   }
   const transition = validateThreadTransition({
     from: target.status,
@@ -306,11 +311,11 @@ function isExactResponse(value: unknown): value is AiWorkerExtractionResponse & 
   actionOperations: ProposedActionOperation[];
 } {
   return isExactRecord(value) &&
-    exactKeys(value, ["runId", "candidates", "threadOperations", "actionOperations"]) &&
+    exactKeys(value, ["runId", "candidates", "threadOperations", "actionOperations"], ["threadOperations", "actionOperations"]) &&
     isIdentifier(value.runId) &&
     isExactArray(value.candidates) &&
-    isExactArray(value.threadOperations) &&
-    isExactArray(value.actionOperations);
+    (value.threadOperations === undefined || isExactArray(value.threadOperations)) &&
+    (value.actionOperations === undefined || isExactArray(value.actionOperations));
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[], optional: readonly string[] = []): boolean {

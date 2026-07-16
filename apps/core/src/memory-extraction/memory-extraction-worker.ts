@@ -4,6 +4,7 @@ import {
   type AiWorkerMemoryExtractionClient,
 } from "./ai-worker-memory-extraction-client.js";
 import { validateCandidates } from "./memory-candidate-validator.js";
+import { validateConversationStateCandidates } from "../conversation-state/conversation-state-candidate-validator.js";
 import {
   MAX_MEMORY_EXTRACTION_QUEUE_LIMIT,
   type MemoryExtractionJob,
@@ -380,6 +381,7 @@ async function processClaimedRun(input: {
   }
 
   let validation: ReturnType<typeof validateCandidates>;
+  let conversationStateValidation: ReturnType<typeof validateConversationStateCandidates>;
   try {
     validation = validateCandidates({
       run,
@@ -388,6 +390,15 @@ async function processClaimedRun(input: {
         ? {}
         : { minConfidence: dependencies.minConfidence }),
     });
+    conversationStateValidation = validateConversationStateCandidates({
+      run,
+      response,
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+    if (conversationStateValidation.diagnostics.rejectionCodes.includes("invalid_response")) {
+      throw new AiWorkerMemoryExtractionError("invalid_response", true);
+    }
   } catch {
     await handleModelFailure({
       dependencies,
@@ -456,6 +467,9 @@ async function processClaimedRun(input: {
         conflictCount: validation.conflictCount,
         rejectionCodes: [...validation.rejectionCodes],
       },
+      threadOperations: conversationStateValidation.threadOperations,
+      actionOperations: conversationStateValidation.actionOperations,
+      conversationStateDiagnostics: conversationStateValidation.diagnostics,
     });
   } catch (error) {
     const stale = error instanceof MemoryExtractionStaleRunError;

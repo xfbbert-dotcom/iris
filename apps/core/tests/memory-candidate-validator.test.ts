@@ -518,5 +518,9 @@ function runFixture(): ClaimedMemoryExtractionRun {
         updatedAt: new Date("2026-07-13T00:00:00.000Z"),
       },
     ],
+    mentions: [],
+    existingThreads: [],
+    existingActions: [],
+    enabledOperationFamilies: ["memory", "thread", "action"],
   };
 }

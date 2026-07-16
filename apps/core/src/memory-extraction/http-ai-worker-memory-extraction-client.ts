@@ -10,7 +10,9 @@ import {
 } from "./ai-worker-memory-extraction-client.js";
 import type {
   ClaimedMemoryExtractionRun,
+  ExtractionExistingAction,
   ExtractionExistingMemory,
+  ExtractionExistingThread,
   ExtractionMessage,
 } from "./memory-extraction-repository.js";
 
@@ -27,6 +29,7 @@ const MAX_CONTEXT_MESSAGES = 10;
 const MAX_CANDIDATES = 8;
 const MAX_EVIDENCE_IDS = 40;
 const MAX_EXISTING_MEMORIES = 8;
+const MAX_CONVERSATION_STATE_SNAPSHOTS = 12;
 const MAX_OPERATIONS_PER_FAMILY = 8;
 const MAX_RETRY_AFTER_SECONDS = 86_400;
 const CANDIDATE_RELATIONS = ["new", "duplicate", "conflict"] as const;
@@ -158,13 +161,16 @@ function buildRequest(run: ClaimedMemoryExtractionRun): Record<string, unknown> 
     .slice()
     .sort(compareMessages);
   return {
-    schema_version: 1,
+    schema_version: 2,
     run_id: run.id,
     group_id: run.groupId,
     input_fingerprint: run.inputFingerprint,
     messages: messages.map(mapMessage),
     evidence_message_ids: run.evidenceMessages.map((message) => message.id),
     existing_memories: run.existingMemories.map(mapExistingMemory),
+    existing_threads: run.existingThreads.map(mapExistingThread),
+    existing_actions: run.existingActions.map(mapExistingAction),
+    capabilities: [...run.enabledOperationFamilies].sort(),
   };
 }
 
@@ -175,6 +181,10 @@ function requireExactRun(run: ClaimedMemoryExtractionRun): void {
   if (!Array.isArray(run.evidenceMessages) ||
     !Array.isArray(run.contextMessages) ||
     !Array.isArray(run.existingMemories) ||
+    !Array.isArray(run.mentions) ||
+    !Array.isArray(run.existingThreads) ||
+    !Array.isArray(run.existingActions) ||
+    !Array.isArray(run.enabledOperationFamilies) ||
     run.evidenceMessages.length === 0 ||
     run.evidenceMessages.length > MAX_EVIDENCE_IDS ||
     run.contextMessages.length > MAX_CONTEXT_MESSAGES ||
@@ -199,6 +209,12 @@ function requireExactRun(run: ClaimedMemoryExtractionRun): void {
     throw invalidResponse();
   }
   if (run.existingMemories.length > MAX_EXISTING_MEMORIES) {
+    throw invalidResponse();
+  }
+  if (run.existingThreads.length > MAX_CONVERSATION_STATE_SNAPSHOTS ||
+    run.existingActions.length > MAX_CONVERSATION_STATE_SNAPSHOTS ||
+    new Set(run.enabledOperationFamilies).size !== run.enabledOperationFamilies.length ||
+    run.enabledOperationFamilies.some((family) => family !== "memory" && family !== "thread" && family !== "action")) {
     throw invalidResponse();
   }
   const memoryIds = new Set<string>();
@@ -226,6 +242,9 @@ function mapMessage(message: ExtractionMessage): Record<string, unknown> {
     ...(message.senderId === undefined ? {} : { sender_id: message.senderId }),
     sent_at: message.sentAt.toISOString(),
     text: message.text,
+    ...(message.mentions === undefined || message.mentions.length === 0 ? {} : {
+      mentions: message.mentions.map((mention) => ({ key: mention.key, open_id: mention.openId })),
+    }),
   };
 }
 
@@ -235,6 +254,21 @@ function mapExistingMemory(memory: ExtractionExistingMemory): Record<string, unk
     category: memory.category,
     content: memory.content,
     updated_at: memory.updatedAt.toISOString(),
+  };
+}
+
+function mapExistingThread(thread: ExtractionExistingThread): Record<string, unknown> {
+  return {
+    id: thread.id, title: thread.title, summary: thread.summary, status: thread.status,
+    version: thread.version, updated_at: thread.updatedAt.toISOString(),
+  };
+}
+
+function mapExistingAction(action: ExtractionExistingAction): Record<string, unknown> {
+  return {
+    id: action.id, ...(action.threadId === undefined ? {} : { thread_id: action.threadId }),
+    description: action.description, owner_ref_type: action.ownerRefType, owner_ref: action.ownerRef,
+    status: action.status, version: action.version, updated_at: action.updatedAt.toISOString(),
   };
 }
 

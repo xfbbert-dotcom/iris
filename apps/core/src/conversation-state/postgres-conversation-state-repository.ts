@@ -100,7 +100,7 @@ export function createPostgresConversationStateRepository({
 
     async applyOperations(rawInput) {
       const input = normalizeApplyInput(rawInput);
-      return withTransaction(dataSource, async (client) => applyOperations(client, input));
+      return withTransaction(dataSource, async (client) => applyConversationStateOperationsInTransaction(client, input));
     },
 
     async listRelevantThreads(input) {
@@ -234,14 +234,11 @@ export function createPostgresConversationStateRepository({
   };
 }
 
-async function applyOperations(
+export async function applyConversationStateOperationsInTransaction(
   client: TransactionClient,
   input: ApplyConversationStateOperationsInput,
 ): Promise<{ status: "applied" | "already_applied"; threadIds: string[]; actionItemIds: string[] }> {
-  await client.query(
-    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-    [`${ADVISORY_LOCK_NAMESPACE}:${input.groupId}`],
-  );
+  await lockConversationStateWriteScope({ queryable: client, groupId: input.groupId });
   const operationClaims = input.operations.map(createOperationClaim);
   const operationKeys = input.operations.map((operation) => operation.operationKey);
   const existingClaims = await client.query<OperationClaimRow>(
@@ -319,6 +316,17 @@ async function applyOperations(
     changedActionIds.push(action.id);
   }
   return { status: "applied", threadIds: changedThreadIds, actionItemIds: changedActionIds };
+}
+
+export async function lockConversationStateWriteScope(input: {
+  queryable: Queryable;
+  groupId: string;
+}): Promise<void> {
+  const groupId = requireBoundedString("groupId", input.groupId, MAX_IDENTIFIER_CHARS);
+  await input.queryable.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+    [`${ADVISORY_LOCK_NAMESPACE}:${groupId}`],
+  );
 }
 
 function classifyOperationClaims(expected: OperationClaim[], existing: OperationClaim[]): boolean {

@@ -3,13 +3,18 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   MEMORY_CANDIDATE_CATEGORIES,
   type MemoryExtractionDiagnostics,
+  type ValidatedActionOperation,
   type ValidatedMemoryCandidate,
   type ValidatedMemoryConflictCandidate,
+  type ValidatedThreadOperation,
 } from "./ai-worker-memory-extraction-client.js";
 import type {
   ClaimedMemoryExtractionRun,
+  ExtractionExistingAction,
   ExtractionExistingMemory,
+  ExtractionExistingThread,
   ExtractionMessage,
+  ExtractionMessageMention,
   MemoryExtractionRepository,
   MemoryExtractionRequest,
   MemoryExtractionRequestRoute,
@@ -23,6 +28,11 @@ import {
   insertGroupMemoryWithEvidence,
   lockGroupMemoryWriteScope,
 } from "../memory/postgres-group-memory-writer.js";
+import {
+  applyConversationStateOperationsInTransaction,
+  lockConversationStateWriteScope,
+} from "../conversation-state/postgres-conversation-state-repository.js";
+import type { ConversationStateOperation } from "../conversation-state/conversation-state-repository.js";
 
 export type Queryable = {
   query<T = unknown>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
@@ -142,6 +152,9 @@ type ActiveMemoryContentRow = {
   id: unknown;
   content: unknown;
 };
+type MentionRow = { conversation_message_id: unknown; mention_key: unknown; mentioned_open_id: unknown };
+type ThreadSnapshotRow = Record<string, unknown> & { stored_thread_version?: unknown; stored_thread_updated_at?: unknown };
+type ActionSnapshotRow = Record<string, unknown> & { stored_action_version?: unknown; stored_action_updated_at?: unknown };
 
 const MAX_IDENTIFIER_CHARS = 512;
 const MAX_ROUTE_REQUESTS = 100;
@@ -150,6 +163,9 @@ const MAX_EVIDENCE_MESSAGES = 40;
 const MAX_CONTEXT_MESSAGES = 10;
 const MAX_ACTIVE_MEMORIES = 8;
 const MAX_ACCEPTED_CANDIDATES = 8;
+const MAX_CONVERSATION_STATE_OPERATIONS = 8;
+const MAX_CONVERSATION_STATE_REJECTIONS = 16;
+const MAX_CONVERSATION_STATE_SNAPSHOTS = 12;
 const MAX_AUTHORITATIVE_ACTIVE_MEMORIES = 10_000;
 const MAX_CANDIDATE_EVIDENCE_IDS = 40;
 const EXTRACTION_MEMORY_CREATED_BY = "memory-extraction-worker";
@@ -380,7 +396,7 @@ export function createPostgresMemoryExtractionRepository({
           return undefined;
         }
         const evidenceRows = [...lockedRows].sort(compareClaimMessageRows);
-        const evidenceMessages = evidenceRows.map((row) => mapMessage(row, true));
+        let evidenceMessages = evidenceRows.map((row) => mapMessage(row, true));
         const requestIds = evidenceRows.map((row) =>
           requireString("request id", row.request_id),
         );
@@ -405,9 +421,12 @@ export function createPostgresMemoryExtractionRepository({
             contextMessageLimit,
           ],
         );
-        const contextMessages = contextResult.rows
+        let contextMessages = contextResult.rows
           .map((row) => mapMessage(row, false))
           .reverse();
+        const mentions = await loadRunMentions(client, [...evidenceMessages, ...contextMessages]);
+        evidenceMessages = attachMentions(evidenceMessages, mentions);
+        contextMessages = attachMentions(contextMessages, mentions);
 
         const memoryResult = await client.query<MemoryRow>(
           `
@@ -420,11 +439,41 @@ export function createPostgresMemoryExtractionRepository({
           [locked.groupId, activeMemoryLimit],
         );
         const existingMemories = memoryResult.rows.map(mapMemory);
+        const threadsResult = await client.query<ThreadSnapshotRow>(
+          `
+          SELECT id, group_id, title, summary, status, confidence, merged_into_thread_id,
+                 version, first_evidence_at, last_activity_at, resolved_at, created_at, updated_at
+          FROM discussion_threads
+          WHERE group_id = $1 AND status IN ('candidate', 'open', 'resolved')
+          ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
+                   last_activity_at DESC, id ASC
+          LIMIT $2
+          `,
+          [locked.groupId, MAX_CONVERSATION_STATE_SNAPSHOTS],
+        );
+        const existingThreads = threadsResult.rows.map(mapThreadSnapshot);
+        const actionsResult = await client.query<ActionSnapshotRow>(
+          `
+          SELECT id, group_id, thread_id, description, owner_ref_type, owner_ref, due_at,
+                 status, confidence, version, completed_at, cancelled_at, created_at, updated_at
+          FROM action_items
+          WHERE group_id = $1
+          ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC, id ASC
+          LIMIT $2
+          `,
+          [locked.groupId, MAX_CONVERSATION_STATE_SNAPSHOTS],
+        );
+        const existingActions = actionsResult.rows.map(mapActionSnapshot);
+        const enabledOperationFamilies: Array<"memory" | "thread" | "action"> = ["memory", "thread", "action"];
         const inputFingerprint = fingerprintInput({
           groupId: locked.groupId,
           evidenceMessages,
           contextMessages,
           existingMemories,
+          mentions,
+          existingThreads,
+          existingActions,
+          enabledOperationFamilies,
         });
         const runId = randomUUID();
         const runResult = await client.query<RunRow>(
@@ -475,6 +524,36 @@ export function createPostgresMemoryExtractionRepository({
             [runId, memory.id, ordinal, memory.updatedAt],
           );
         }
+        for (const mention of mentions) {
+          await client.query(
+            `
+            INSERT INTO group_memory_extraction_run_mentions (
+              run_id, conversation_message_id, mention_key, mentioned_open_id
+            ) VALUES ($1, $2, $3, $4)
+            `,
+            [runId, mention.conversationMessageId, mention.key, mention.openId],
+          );
+        }
+        for (const [ordinal, thread] of existingThreads.entries()) {
+          await client.query(
+            `
+            INSERT INTO group_memory_extraction_run_threads (
+              run_id, thread_id, ordinal, thread_version, thread_updated_at
+            ) VALUES ($1, $2, $3, $4, $5)
+            `,
+            [runId, thread.id, ordinal, thread.version, thread.updatedAt],
+          );
+        }
+        for (const [ordinal, action] of existingActions.entries()) {
+          await client.query(
+            `
+            INSERT INTO group_memory_extraction_run_actions (
+              run_id, action_item_id, ordinal, action_version, action_updated_at
+            ) VALUES ($1, $2, $3, $4, $5)
+            `,
+            [runId, action.id, ordinal, action.version, action.updatedAt],
+          );
+        }
         const requestUpdate = await client.query<{ id: unknown }>(
           `
           UPDATE group_memory_extraction_requests
@@ -494,6 +573,10 @@ export function createPostgresMemoryExtractionRepository({
           evidenceMessages,
           contextMessages,
           existingMemories,
+          mentions,
+          existingThreads,
+          existingActions,
+          enabledOperationFamilies,
         };
       });
       if (staleRunDetected) {
@@ -758,12 +841,22 @@ export function createPostgresMemoryExtractionRepository({
             ),
             allIdempotencyKeys,
           });
-          return { status: "already_completed" as const, memoryIds };
+          const conversationStateIds = await loadCompletedConversationStateIds({
+            queryable: client,
+            groupId,
+            operationKeys: [...input.threadOperations, ...input.actionOperations].map((operation) => operation.operationKey),
+          });
+          return {
+            status: "already_completed" as const,
+            memoryIds,
+            ...(input.threadOperations.length + input.actionOperations.length === 0 ? {} : conversationStateIds),
+          };
         }
         if (runStatus !== "processing") {
           throw new MemoryExtractionCompletionConflictError();
         }
 
+        await lockConversationStateWriteScope({ queryable: client as never, groupId });
         const current = await loadStoredRun(client, input.runId, { lockInputs: true });
         if (current.status === "stale") {
           await markRunStale(client, input.runId);
@@ -781,6 +874,10 @@ export function createPostgresMemoryExtractionRepository({
         validateCompletionConflictTargets(
           input.conflictCandidates,
           current.run.existingMemories,
+        );
+        validateOperationEvidence(
+          [...input.threadOperations, ...input.actionOperations],
+          claimed.evidenceMessageIds,
         );
 
         const admitted = await admitCandidatesAgainstActiveMemories({
@@ -818,6 +915,17 @@ export function createPostgresMemoryExtractionRepository({
           runId: input.runId,
           conflictCandidates: input.conflictCandidates,
         });
+        const conversationState = await applyConversationStateOperationsInTransaction(
+          client as never,
+          {
+            groupId,
+            operations: toConversationStateOperations({
+              run: current.run,
+              threadOperations: input.threadOperations,
+              actionOperations: input.actionOperations,
+            }),
+          },
+        );
 
         const requestUpdate = await client.query<{ id: unknown }>(
           `
@@ -836,15 +944,30 @@ export function createPostgresMemoryExtractionRepository({
           `
           UPDATE group_memory_extraction_runs
           SET status = 'completed', failure_classification = $3,
+              thread_operation_count = $4, action_operation_count = $5,
+              conversation_state_rejected_count = $6,
+              conversation_state_rejection_codes = $7::text[],
               completed_at = NOW(), updated_at = NOW()
           WHERE id = $1 AND input_fingerprint = $2 AND status = 'processing'
           RETURNING id
           `,
-          [input.runId, input.inputFingerprint, completionMarker],
+          [
+            input.runId, input.inputFingerprint, completionMarker,
+            input.threadOperations.length, input.actionOperations.length,
+            input.conversationStateDiagnostics.rejectedCount,
+            input.conversationStateDiagnostics.rejectionCodes,
+          ],
         );
         assertExactIds(runUpdate.rows.map((row) => row.id), [input.runId]);
 
-        return { status: "completed" as const, memoryIds };
+        return {
+          status: "completed" as const,
+          memoryIds,
+          ...(input.threadOperations.length + input.actionOperations.length === 0 ? {} : {
+            threadIds: conversationState.threadIds,
+            actionItemIds: conversationState.actionItemIds,
+          }),
+        };
       });
       if (staleRunDetected) {
         throw new MemoryExtractionStaleRunError();
@@ -973,12 +1096,23 @@ function normalizeCompletionInput(input: {
   acceptedCandidates: ValidatedMemoryCandidate[];
   conflictCandidates: ValidatedMemoryConflictCandidate[];
   diagnostics: MemoryExtractionDiagnostics;
+  threadOperations?: ValidatedThreadOperation[];
+  actionOperations?: ValidatedActionOperation[];
+  conversationStateDiagnostics?: {
+    proposedCount: number;
+    acceptedCount: number;
+    rejectedCount: number;
+    rejectionCodes: string[];
+  };
 }): {
   runId: string;
   inputFingerprint: string;
   acceptedCandidates: ValidatedMemoryCandidate[];
   conflictCandidates: ValidatedMemoryConflictCandidate[];
   diagnostics: MemoryExtractionDiagnostics;
+  threadOperations: ValidatedThreadOperation[];
+  actionOperations: ValidatedActionOperation[];
+  conversationStateDiagnostics: { proposedCount: number; acceptedCount: number; rejectedCount: number; rejectionCodes: string[] };
 } {
   try {
     const runId = requireBoundedString("runId", input.runId, MAX_IDENTIFIER_CHARS);
@@ -1007,12 +1141,21 @@ function normalizeCompletionInput(input: {
       acceptedCandidates.length,
       conflictCandidates.length,
     );
+    const threadOperations = normalizeConversationOperations(input.threadOperations ?? []);
+    const actionOperations = normalizeConversationOperations(input.actionOperations ?? []);
+    const conversationStateDiagnostics = normalizeConversationStateDiagnostics(
+      input.conversationStateDiagnostics ?? { proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] },
+      threadOperations.length + actionOperations.length,
+    );
     return {
       runId,
       inputFingerprint,
       acceptedCandidates,
       conflictCandidates,
       diagnostics,
+      threadOperations: threadOperations as ValidatedThreadOperation[],
+      actionOperations: actionOperations as ValidatedActionOperation[],
+      conversationStateDiagnostics,
     };
   } catch (error) {
     if (error instanceof MemoryExtractionCompletionConflictError) {
@@ -1020,6 +1163,141 @@ function normalizeCompletionInput(input: {
     }
     throw new MemoryExtractionCompletionConflictError();
   }
+}
+
+function normalizeConversationOperations<T extends { operationKey: string }>(value: T[]): T[] {
+  if (!Array.isArray(value) || value.length > MAX_CONVERSATION_STATE_OPERATIONS) throw new Error("invalid conversation operations");
+  const normalized = value.map((operation) => {
+    if (typeof operation !== "object" || operation === null) throw new Error("invalid conversation operation");
+    return { ...operation, operationKey: requireBoundedString("operation key", operation.operationKey, MAX_IDENTIFIER_CHARS) } as T;
+  }).sort((left, right) => compareStrings(left.operationKey, right.operationKey));
+  if (new Set(normalized.map((operation) => operation.operationKey)).size !== normalized.length) throw new Error("duplicate conversation operation key");
+  return normalized;
+}
+
+function normalizeConversationStateDiagnostics(
+  value: { proposedCount: number; acceptedCount: number; rejectedCount: number; rejectionCodes: string[] },
+  acceptedCount: number,
+): { proposedCount: number; acceptedCount: number; rejectedCount: number; rejectionCodes: string[] } {
+  if (typeof value !== "object" || value === null) throw new Error("invalid conversation diagnostics");
+  const proposedCount = boundedConversationStateCount(value.proposedCount);
+  const normalizedAcceptedCount = boundedConversationStateCount(value.acceptedCount);
+  const rejectedCount = boundedConversationStateCount(value.rejectedCount);
+  if (normalizedAcceptedCount !== acceptedCount || normalizedAcceptedCount + rejectedCount !== proposedCount) throw new Error("invalid conversation diagnostics");
+  if (!Array.isArray(value.rejectionCodes) || value.rejectionCodes.length > MAX_CONVERSATION_STATE_REJECTIONS) throw new Error("invalid conversation diagnostics");
+  const rejectionCodes = value.rejectionCodes.map((code) => {
+    if (typeof code !== "string" || !/^[a-z_]{1,128}$/u.test(code)) throw new Error("invalid conversation diagnostics");
+    return code;
+  }).sort(compareStrings);
+  if (new Set(rejectionCodes).size !== rejectionCodes.length) throw new Error("invalid conversation diagnostics");
+  return { proposedCount, acceptedCount: normalizedAcceptedCount, rejectedCount, rejectionCodes };
+}
+
+function boundedConversationStateCount(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > MAX_CONVERSATION_STATE_REJECTIONS) throw new Error("invalid conversation diagnostics");
+  return value as number;
+}
+
+function validateOperationEvidence(
+  operations: Array<{ evidenceMessageIds: string[] }>,
+  availableEvidenceIds: Set<string>,
+): void {
+  for (const operation of operations) {
+    if (!Array.isArray(operation.evidenceMessageIds) || operation.evidenceMessageIds.length === 0 ||
+      operation.evidenceMessageIds.some((id) => !availableEvidenceIds.has(id))) {
+      throw new MemoryExtractionCompletionConflictError();
+    }
+  }
+}
+
+async function loadCompletedConversationStateIds(input: {
+  queryable: Queryable;
+  groupId: string;
+  operationKeys: string[];
+}): Promise<{ threadIds: string[]; actionItemIds: string[] }> {
+  if (input.operationKeys.length === 0) return { threadIds: [], actionItemIds: [] };
+  const result = await input.queryable.query<{ entity_type: unknown; entity_id: unknown }>(
+    `
+    SELECT entity_type, entity_id
+    FROM conversation_state_operation_claims
+    WHERE group_id = $1 AND operation_key = ANY($2::text[])
+    ORDER BY operation_key ASC
+    `,
+    [input.groupId, input.operationKeys],
+  );
+  if (result.rows.length !== input.operationKeys.length) throw new MemoryExtractionCompletionConflictError();
+  const threadIds: string[] = [];
+  const actionItemIds: string[] = [];
+  for (const row of result.rows) {
+    const id = requireExactIdentifier(row.entity_id);
+    if (row.entity_type === "thread") threadIds.push(id);
+    else if (row.entity_type === "action") actionItemIds.push(id);
+    else throw new MemoryExtractionCompletionConflictError();
+  }
+  return { threadIds, actionItemIds };
+}
+
+function toConversationStateOperations(input: {
+  run: ClaimedMemoryExtractionRun;
+  threadOperations: ValidatedThreadOperation[];
+  actionOperations: ValidatedActionOperation[];
+}): ConversationStateOperation[] {
+  const now = new Date();
+  const threads = new Map(input.run.existingThreads.map((thread) => [thread.id, thread]));
+  const actions = new Map(input.run.existingActions.map((action) => [action.id, action]));
+  const operations: ConversationStateOperation[] = [];
+  for (const operation of input.threadOperations) {
+    if (operation.operation === "create") {
+      const id = randomUUID();
+      const thread = { id, groupId: input.run.groupId, title: operation.title, summary: operation.summary,
+        status: operation.initialStatus, confidence: operation.confidence, version: 1, firstEvidenceAt: now,
+        lastActivityAt: now, createdAt: now, updatedAt: now };
+      operations.push({ kind: "create", operationKey: operation.operationKey, thread,
+        threadEvent: { id: randomUUID(), threadId: id, groupId: input.run.groupId, eventType: "created", toVersion: 1, operationKey: operation.operationKey, createdAt: now },
+        evidenceMessageIds: operation.evidenceMessageIds });
+      threads.set(id, thread);
+      continue;
+    }
+    const current = threads.get(operation.operation === "merge" ? operation.sourceThreadId : operation.threadId);
+    if (current === undefined || current.version !== operation.expectedVersion) throw new MemoryExtractionCompletionConflictError();
+    let thread: ExtractionExistingThread;
+    let eventType: "evidence_attached" | "promoted" | "merged" | "resolved" | "reopened" | "summary_updated" | "corrected";
+    if (operation.operation === "attach_evidence") { thread = { ...current, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "evidence_attached"; }
+    else if (operation.operation === "promote") { thread = { ...current, status: "open", summary: operation.summary, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "promoted"; }
+    else if (operation.operation === "merge") { thread = { ...current, status: "merged", mergedIntoThreadId: operation.targetThreadId, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "merged"; }
+    else if (operation.operation === "resolve") { thread = { ...current, status: "resolved", resolvedAt: now, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "resolved"; }
+    else if (operation.operation === "reopen") { const { resolvedAt: _resolvedAt, ...reopened } = current; thread = { ...reopened, status: "open", version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "reopened"; }
+    else if (operation.operation === "update_summary") { thread = { ...current, summary: operation.summary, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "summary_updated"; }
+    else { thread = { ...current, ...(operation.title === undefined ? {} : { title: operation.title }), ...(operation.summary === undefined ? {} : { summary: operation.summary }), version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "corrected"; }
+    operations.push({ kind: "mutation", operationKey: operation.operationKey, expectedVersion: current.version, thread,
+      threadEvent: { id: randomUUID(), threadId: thread.id, groupId: input.run.groupId, eventType, fromVersion: current.version, toVersion: thread.version, operationKey: operation.operationKey, createdAt: now }, evidenceMessageIds: operation.evidenceMessageIds });
+    threads.set(thread.id, thread);
+  }
+  for (const operation of input.actionOperations) {
+    if (operation.operation === "create") {
+      const id = randomUUID();
+      const dueAt = operation.dueAt === undefined ? undefined : requireDate("action due at", operation.dueAt);
+      const action = { id, groupId: input.run.groupId, ...(operation.threadId == null ? {} : { threadId: operation.threadId }), description: operation.description,
+        ownerRefType: operation.ownerRefType!, ownerRef: operation.ownerRef!, ...(dueAt === undefined ? {} : { dueAt }), status: "open" as const, confidence: operation.confidence, version: 1, createdAt: now, updatedAt: now };
+      operations.push({ kind: "create", operationKey: operation.operationKey, action,
+        actionEvent: { id: randomUUID(), actionItemId: id, groupId: input.run.groupId, eventType: "created", toVersion: 1, operationKey: operation.operationKey, createdAt: now }, evidenceMessageIds: operation.evidenceMessageIds });
+      actions.set(id, action);
+      continue;
+    }
+    const current = actions.get(operation.actionId);
+    if (current === undefined || current.version !== operation.expectedVersion) throw new MemoryExtractionCompletionConflictError();
+    let action: ExtractionExistingAction;
+    let eventType: "completed" | "cancelled" | "reopened" | "owner_resolved" | "corrected";
+    if (operation.operation === "complete") { action = { ...current, status: "completed", completedAt: now, version: current.version + 1, updatedAt: now }; eventType = "completed"; }
+    else if (operation.operation === "cancel") { action = { ...current, status: "cancelled", cancelledAt: now, version: current.version + 1, updatedAt: now }; eventType = "cancelled"; }
+    else if (operation.operation === "reopen") { const { completedAt: _completedAt, cancelledAt: _cancelledAt, ...reopened } = current; action = { ...reopened, status: "open", version: current.version + 1, updatedAt: now }; eventType = "reopened"; }
+    else if (operation.operation === "resolve_owner") { action = { ...current, ownerRefType: operation.ownerRefType!, ownerRef: operation.ownerRef!, version: current.version + 1, updatedAt: now }; eventType = "owner_resolved"; }
+    else { const { threadId: _threadId, ...unlinked } = current; action = { ...unlinked, ...(operation.description === undefined ? {} : { description: operation.description }), ...(operation.ownerRefType === undefined ? {} : { ownerRefType: operation.ownerRefType, ownerRef: operation.ownerRef! }), ...(Object.hasOwn(operation, "threadId") ? (operation.threadId == null ? {} : { threadId: operation.threadId }) : { ...(current.threadId === undefined ? {} : { threadId: current.threadId }) }), version: current.version + 1, updatedAt: now }; eventType = "corrected"; }
+    operations.push({ kind: "mutation", operationKey: operation.operationKey, expectedVersion: current.version, action,
+      actionEvent: { id: randomUUID(), actionItemId: action.id, groupId: input.run.groupId, eventType, fromVersion: current.version, toVersion: action.version, operationKey: operation.operationKey, createdAt: now }, evidenceMessageIds: operation.evidenceMessageIds });
+    actions.set(action.id, action);
+  }
+  return operations;
 }
 
 function normalizeCompletionConflictCandidate(
@@ -1142,16 +1420,29 @@ function createCompletionReplayDigest(input: {
   acceptedCandidates: ValidatedMemoryCandidate[];
   conflictCandidates: ValidatedMemoryConflictCandidate[];
   diagnostics: MemoryExtractionDiagnostics;
+  threadOperations: ValidatedThreadOperation[];
+  actionOperations: ValidatedActionOperation[];
+  conversationStateDiagnostics: { proposedCount: number; acceptedCount: number; rejectedCount: number; rejectionCodes: string[] };
 }): string {
+  const conversationState = input.threadOperations.length + input.actionOperations.length +
+    input.conversationStateDiagnostics.proposedCount === 0
+    ? {}
+    : {
+        threadOperations: input.threadOperations,
+        actionOperations: input.actionOperations,
+        conversationStateDiagnostics: input.conversationStateDiagnostics,
+      };
   const replayPayload = input.conflictCandidates.length === 0
     ? {
         acceptedCandidates: input.acceptedCandidates,
         diagnostics: input.diagnostics,
+        ...conversationState,
       }
     : {
         acceptedCandidates: input.acceptedCandidates,
         conflictCandidates: input.conflictCandidates,
         diagnostics: input.diagnostics,
+        ...conversationState,
       };
   return createHash("sha256")
     .update(JSON.stringify(replayPayload), "utf8")
@@ -1527,6 +1818,30 @@ async function markRunStale(queryable: Queryable, runId: string): Promise<void> 
     `,
     [runId],
   );
+  await queryable.query(
+    `
+    SELECT t.id
+    FROM discussion_threads t
+    WHERE t.id IN (
+      SELECT rt.thread_id FROM group_memory_extraction_run_threads rt WHERE rt.run_id = $1
+    )
+    ORDER BY t.id ASC
+    FOR SHARE
+    `,
+    [runId],
+  );
+  await queryable.query(
+    `
+    SELECT a.id
+    FROM action_items a
+    WHERE a.id IN (
+      SELECT ra.action_item_id FROM group_memory_extraction_run_actions ra WHERE ra.run_id = $1
+    )
+    ORDER BY a.id ASC
+    FOR SHARE
+    `,
+    [runId],
+  );
 }
 
 async function lockStoredRunInputs(queryable: Queryable, runId: string): Promise<void> {
@@ -1659,24 +1974,80 @@ async function loadStoredRun(
     `,
     [runId],
   );
+  const mentionResult = await queryable.query<MentionRow>(
+    `
+    SELECT conversation_message_id, mention_key, mentioned_open_id
+    FROM group_memory_extraction_run_mentions
+    WHERE run_id = $1
+    ORDER BY conversation_message_id ASC, mention_key ASC
+    `,
+    [runId],
+  );
+  const threadResult = await queryable.query<ThreadSnapshotRow>(
+    `
+    SELECT rt.thread_version AS stored_thread_version,
+           rt.thread_updated_at AS stored_thread_updated_at,
+           t.id, t.group_id, t.title, t.summary, t.status, t.confidence,
+           t.merged_into_thread_id, t.version, t.first_evidence_at, t.last_activity_at,
+           t.resolved_at, t.created_at, t.updated_at
+    FROM group_memory_extraction_run_threads rt
+    LEFT JOIN discussion_threads t ON t.id = rt.thread_id
+    WHERE rt.run_id = $1
+    ORDER BY rt.ordinal ASC
+    `,
+    [runId],
+  );
+  const actionResult = await queryable.query<ActionSnapshotRow>(
+    `
+    SELECT ra.action_version AS stored_action_version,
+           ra.action_updated_at AS stored_action_updated_at,
+           a.id, a.group_id, a.thread_id, a.description, a.owner_ref_type, a.owner_ref,
+           a.due_at, a.status, a.confidence, a.version, a.completed_at, a.cancelled_at,
+           a.created_at, a.updated_at
+    FROM group_memory_extraction_run_actions ra
+    LEFT JOIN action_items a ON a.id = ra.action_item_id
+    WHERE ra.run_id = $1
+    ORDER BY ra.ordinal ASC
+    `,
+    [runId],
+  );
 
   if (
     evidenceResult.rows.length === 0 ||
     evidenceResult.rows.some((row) => !messageRowIsCurrent(row, groupId, true)) ||
     contextResult.rows.some((row) => !messageRowIsCurrent(row, groupId, false)) ||
-    memoryResult.rows.some((row) => !memoryRowIsCurrent(row, groupId))
+    memoryResult.rows.some((row) => !memoryRowIsCurrent(row, groupId)) ||
+    threadResult.rows.some((row) => !threadSnapshotRowIsCurrent(row, groupId)) ||
+    actionResult.rows.some((row) => !actionSnapshotRowIsCurrent(row, groupId))
   ) {
     return { status: "stale", groupId, requestIds };
   }
 
-  const evidenceMessages = evidenceResult.rows.map((row) => mapMessage(row, true));
-  const contextMessages = contextResult.rows.map((row) => mapMessage(row, false));
+  const mentions = mentionResult.rows.map(mapMention);
+  const evidenceMessagesWithoutMentions = evidenceResult.rows.map((row) => mapMessage(row, true));
+  const contextMessagesWithoutMentions = contextResult.rows.map((row) => mapMessage(row, false));
+  const currentMentions = await loadRunMentions(
+    queryable,
+    [...evidenceMessagesWithoutMentions, ...contextMessagesWithoutMentions],
+  );
+  if (!sameMentions(mentions, currentMentions)) {
+    return { status: "stale", groupId, requestIds };
+  }
+  const evidenceMessages = attachMentions(evidenceMessagesWithoutMentions, mentions);
+  const contextMessages = attachMentions(contextMessagesWithoutMentions, mentions);
   const existingMemories = memoryResult.rows.map(mapMemory);
+  const existingThreads = threadResult.rows.map(mapThreadSnapshot);
+  const existingActions = actionResult.rows.map(mapActionSnapshot);
+  const enabledOperationFamilies: Array<"memory" | "thread" | "action"> = ["memory", "thread", "action"];
   const currentFingerprint = fingerprintInput({
     groupId,
     evidenceMessages,
     contextMessages,
     existingMemories,
+    mentions,
+    existingThreads,
+    existingActions,
+    enabledOperationFamilies,
   });
   if (currentFingerprint !== inputFingerprint) {
     return { status: "stale", groupId, requestIds };
@@ -1691,6 +2062,10 @@ async function loadStoredRun(
       evidenceMessages,
       contextMessages,
       existingMemories,
+      mentions,
+      existingThreads,
+      existingActions,
+      enabledOperationFamilies,
       ...(previousFailureClassification === undefined
         ? {}
         : { previousFailureClassification }),
@@ -1840,6 +2215,10 @@ function fingerprintInput(input: {
   evidenceMessages: ExtractionMessage[];
   contextMessages: ExtractionMessage[];
   existingMemories: ExtractionExistingMemory[];
+  mentions: ExtractionMessageMention[];
+  existingThreads: ExtractionExistingThread[];
+  existingActions: ExtractionExistingAction[];
+  enabledOperationFamilies: Array<"memory" | "thread" | "action">;
 }): string {
   return sha256(
     JSON.stringify({
@@ -1856,6 +2235,22 @@ function fingerprintInput(input: {
         id: memory.id,
         updatedAt: memory.updatedAt.toISOString(),
       })),
+      mentions: [...input.mentions].sort(compareMentions).map((mention) => ({
+        conversationMessageId: mention.conversationMessageId,
+        key: mention.key,
+        openId: mention.openId,
+      })),
+      existingThreads: [...input.existingThreads].sort((left, right) => compareStrings(left.id, right.id)).map((thread) => ({
+        id: thread.id,
+        version: thread.version,
+        updatedAt: thread.updatedAt.toISOString(),
+      })),
+      existingActions: [...input.existingActions].sort((left, right) => compareStrings(left.id, right.id)).map((action) => ({
+        id: action.id,
+        version: action.version,
+        updatedAt: action.updatedAt.toISOString(),
+      })),
+      enabledOperationFamilies: [...input.enabledOperationFamilies].sort(compareStrings),
     }),
   );
 }
@@ -1921,6 +2316,126 @@ function mapMemory(row: MemoryRow): ExtractionExistingMemory {
     content: requireString("memory content", row.content, true),
     updatedAt: requireDate("memory updated at", row.updated_at),
   };
+}
+
+function mapMention(row: MentionRow): ExtractionMessageMention {
+  return {
+    conversationMessageId: requireExactIdentifier(row.conversation_message_id),
+    key: requireBoundedString("mention key", row.mention_key, MAX_IDENTIFIER_CHARS),
+    openId: requireBoundedString("mentioned open id", row.mentioned_open_id, MAX_IDENTIFIER_CHARS),
+  };
+}
+
+async function loadRunMentions(
+  queryable: Queryable,
+  messages: ExtractionMessage[],
+): Promise<ExtractionMessageMention[]> {
+  if (messages.length === 0) return [];
+  const messageIds = messages.map((message) => message.id).sort(compareStrings);
+  const result = await queryable.query<MentionRow>(
+    `
+    SELECT conversation_message_id, mention_key, mentioned_open_id
+    FROM conversation_message_mentions
+    WHERE conversation_message_id = ANY($1::text[])
+    ORDER BY conversation_message_id ASC, mention_key ASC
+    `,
+    [messageIds],
+  );
+  const mentions = result.rows.map(mapMention);
+  if (mentions.some((mention) => !messageIds.includes(mention.conversationMessageId))) {
+    throw new Error("mention does not belong to extraction run message");
+  }
+  return mentions;
+}
+
+function attachMentions(
+  messages: ExtractionMessage[],
+  mentions: ExtractionMessageMention[],
+): ExtractionMessage[] {
+  const byMessage = new Map<string, Array<{ key: string; openId: string }>>();
+  for (const mention of mentions) {
+    const values = byMessage.get(mention.conversationMessageId) ?? [];
+    values.push({ key: mention.key, openId: mention.openId });
+    byMessage.set(mention.conversationMessageId, values);
+  }
+  return messages.map((message) => ({
+    ...message,
+    mentions: (byMessage.get(message.id) ?? []).sort((left, right) =>
+      compareStrings(left.key, right.key) || compareStrings(left.openId, right.openId),
+    ),
+  }));
+}
+
+function compareMentions(left: ExtractionMessageMention, right: ExtractionMessageMention): number {
+  return compareStrings(left.conversationMessageId, right.conversationMessageId) ||
+    compareStrings(left.key, right.key) || compareStrings(left.openId, right.openId);
+}
+
+function sameMentions(
+  left: ExtractionMessageMention[],
+  right: ExtractionMessageMention[],
+): boolean {
+  const canonicalLeft = [...left].sort(compareMentions);
+  const canonicalRight = [...right].sort(compareMentions);
+  return canonicalLeft.length === canonicalRight.length && canonicalLeft.every((mention, index) => {
+    const other = canonicalRight[index]!;
+    return mention.conversationMessageId === other.conversationMessageId &&
+      mention.key === other.key && mention.openId === other.openId;
+  });
+}
+
+function mapThreadSnapshot(row: ThreadSnapshotRow): ExtractionExistingThread {
+  const status = requireThreadStatus(row.status);
+  const mergedIntoThreadId = row.merged_into_thread_id === null || row.merged_into_thread_id === undefined
+    ? undefined : requireExactIdentifier(row.merged_into_thread_id);
+  const resolvedAt = row.resolved_at === null || row.resolved_at === undefined
+    ? undefined : requireDate("thread resolved at", row.resolved_at);
+  if ((status === "merged") !== (mergedIntoThreadId !== undefined) || (status === "resolved") !== (resolvedAt !== undefined)) {
+    throw new Error("persisted discussion thread is invalid");
+  }
+  return {
+    id: requireExactIdentifier(row.id), groupId: requireExactIdentifier(row.group_id),
+    title: requireBoundedString("thread title", row.title, MAX_IDENTIFIER_CHARS),
+    summary: requireBoundedString("thread summary", row.summary, 4000), status,
+    confidence: requireConfidence(row.confidence), ...(mergedIntoThreadId === undefined ? {} : { mergedIntoThreadId }),
+    version: requirePersistedVersion(row.version), firstEvidenceAt: requireDate("thread first evidence at", row.first_evidence_at),
+    lastActivityAt: requireDate("thread last activity at", row.last_activity_at),
+    ...(resolvedAt === undefined ? {} : { resolvedAt }), createdAt: requireDate("thread created at", row.created_at),
+    updatedAt: requireDate("thread updated at", row.updated_at),
+  };
+}
+
+function mapActionSnapshot(row: ActionSnapshotRow): ExtractionExistingAction {
+  const status = requireActionStatus(row.status);
+  const threadId = row.thread_id === null || row.thread_id === undefined ? undefined : requireExactIdentifier(row.thread_id);
+  const dueAt = row.due_at === null || row.due_at === undefined ? undefined : requireDate("action due at", row.due_at);
+  const completedAt = row.completed_at === null || row.completed_at === undefined ? undefined : requireDate("action completed at", row.completed_at);
+  const cancelledAt = row.cancelled_at === null || row.cancelled_at === undefined ? undefined : requireDate("action cancelled at", row.cancelled_at);
+  if ((status === "completed") !== (completedAt !== undefined) || (status === "cancelled") !== (cancelledAt !== undefined)) throw new Error("persisted action item is invalid");
+  return {
+    id: requireExactIdentifier(row.id), groupId: requireExactIdentifier(row.group_id), ...(threadId === undefined ? {} : { threadId }),
+    description: requireBoundedString("action description", row.description, 4000),
+    ownerRefType: requireOwnerRefType(row.owner_ref_type), ownerRef: requireExactIdentifier(row.owner_ref),
+    ...(dueAt === undefined ? {} : { dueAt }), status, confidence: requireConfidence(row.confidence), version: requirePersistedVersion(row.version),
+    ...(completedAt === undefined ? {} : { completedAt }), ...(cancelledAt === undefined ? {} : { cancelledAt }),
+    createdAt: requireDate("action created at", row.created_at), updatedAt: requireDate("action updated at", row.updated_at),
+  };
+}
+
+function threadSnapshotRowIsCurrent(row: ThreadSnapshotRow, groupId: string): boolean {
+  try {
+    const thread = mapThreadSnapshot(row);
+    return thread.groupId === groupId && thread.version === requirePersistedVersion(row.stored_thread_version) &&
+      thread.updatedAt.getTime() === requireDate("stored thread updated at", row.stored_thread_updated_at).getTime();
+  } catch { return false; }
+}
+
+function actionSnapshotRowIsCurrent(row: ActionSnapshotRow, groupId: string): boolean {
+  try {
+    const action = mapActionSnapshot(row);
+    return action.groupId === groupId && action.version === requirePersistedVersion(row.stored_action_version) &&
+      action.updatedAt.getTime() === requireDate("stored action updated at", row.stored_action_updated_at).getTime();
+  } catch { return false; }
 }
 
 function mapRequestRoute(row: RequestRouteRow): MemoryExtractionRequestRoute {
@@ -1995,7 +2510,7 @@ function isReadableText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function requireBoundedString(fieldName: string, value: string, maxChars: number): string {
+function requireBoundedString(fieldName: string, value: unknown, maxChars: number): string {
   const normalized = requireString(fieldName, value);
   if (normalized.length > maxChars) {
     throw new Error(`${fieldName} must be at most ${maxChars} characters`);
@@ -2024,6 +2539,33 @@ function requireNumber(fieldName: string, value: unknown): number {
     throw new Error(`${fieldName} must be a non-negative safe integer`);
   }
   return number;
+}
+
+function requirePersistedVersion(value: unknown): number {
+  const version = Number(value);
+  if (!Number.isSafeInteger(version) || version < 1) throw new Error("persisted version is invalid");
+  return version;
+}
+
+function requireConfidence(value: unknown): number {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new Error("confidence is invalid");
+  return confidence;
+}
+
+function requireThreadStatus(value: unknown): ExtractionExistingThread["status"] {
+  if (value === "candidate" || value === "open" || value === "resolved" || value === "merged") return value;
+  throw new Error("thread status is invalid");
+}
+
+function requireActionStatus(value: unknown): ExtractionExistingAction["status"] {
+  if (value === "open" || value === "completed" || value === "cancelled") return value;
+  throw new Error("action status is invalid");
+}
+
+function requireOwnerRefType(value: unknown): ExtractionExistingAction["ownerRefType"] {
+  if (value === "feishu_user" || value === "text_label") return value;
+  throw new Error("action owner type is invalid");
 }
 
 function boundedLimit(fieldName: string, value: number, maximum: number): number {

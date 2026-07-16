@@ -217,6 +217,40 @@ describe("validateConversationStateCandidates", () => {
   });
 
   it.each([
+    ["candidate", true],
+    ["open", true],
+    ["resolved", false],
+    ["merged", false],
+  ] as const)("%s threads %s attach-evidence validation", (status, accepted) => {
+    const run = claimedRun() as any;
+    run.existingThreads = [{ ...existingThread(), status }];
+    const result = validateConversationStateCandidates({
+      run,
+      response: {
+        runId: "run-1",
+        candidates: [],
+        threadOperations: [{
+          operation: "attach_evidence",
+          operationKey: `thread:attach:${status}`,
+          confidence: 0.9,
+          evidenceMessageIds: ["message-1"],
+          evidenceSpan: "Launch planning",
+          threadId: "thread-1",
+          expectedVersion: 1,
+        }],
+        actionOperations: [],
+      },
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+
+    expect(result.threadOperations).toHaveLength(accepted ? 1 : 0);
+    expect(result.diagnostics.rejectionCodes).toEqual(
+      accepted ? [] : [status === "merged" ? "merged_thread_immutable" : "invalid_thread_transition"],
+    );
+  });
+
+  it.each([
     [0.85, 0.85],
     [0.9, 0.85],
     [-0.01, 0.85],
@@ -249,6 +283,7 @@ function claimedRun(): ConversationStateExtractionRun {
     }],
     contextMessages: [],
     existingMemories: [],
+    mentions: [],
     existingThreads: [],
     existingActions: [],
     enabledOperationFamilies: ["thread", "action"] as Array<"thread" | "action">,

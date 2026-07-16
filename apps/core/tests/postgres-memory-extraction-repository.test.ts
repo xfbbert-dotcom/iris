@@ -1516,6 +1516,65 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
     });
   });
 
+  it("rejects a run as stale when a snapshotted mention changes", async () => {
+    const messageId = `feishu:extraction-mention-${suffix}`;
+    await pool!.query(
+      `
+      INSERT INTO conversation_messages (
+        id, provider, provider_message_id, chat_id, sender_id,
+        message_type, text, sent_at, raw_event_idempotency_key, created_at
+      ) VALUES ($1, 'feishu', $2, $3, 'alice', 'text', 'Mention @owner', $4, $5, $4)
+      `,
+      [
+        messageId,
+        `provider-${messageId}`,
+        groupA,
+        new Date("2026-07-14T01:30:00.000Z"),
+        `event-${messageId}`,
+      ],
+    );
+    await pool!.query(
+      `
+      INSERT INTO conversation_message_mentions (
+        conversation_message_id, mention_key, mentioned_open_id
+      ) VALUES ($1, '@owner', 'ou-original')
+      `,
+      [messageId],
+    );
+    const repository = createRepository(pool);
+    const registered = await repository.registerRequest({
+      groupId: groupA,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const pending = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+
+    expect(pending?.mentions).toEqual([{
+      conversationMessageId: messageId,
+      key: "@owner",
+      openId: "ou-original",
+    }]);
+    await pool!.query(
+      `
+      UPDATE conversation_message_mentions
+      SET mentioned_open_id = 'ou-reassigned'
+      WHERE conversation_message_id = $1 AND mention_key = '@owner'
+      `,
+      [messageId],
+    );
+
+    await expect(repository.loadRunInput(pending!.id)).resolves.toEqual({
+      status: "stale",
+      groupId: groupA,
+      requestIds: pending!.requestIds,
+    });
+  });
+
   it("skips and fails runs with bounded status counts", async () => {
     const repository = createRepository(pool);
     const remainingRequest = await repository.registerRequest({
@@ -1557,7 +1616,7 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
   const suffix = randomUUID();
   const groupId = `extraction-complete-${suffix}`;
   const messageIds = Array.from(
-    { length: 4 },
+    { length: 6 },
     (_, index) => `feishu:extraction-complete-${index}-${suffix}`,
   );
 
@@ -1595,6 +1654,13 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
       return;
     }
     try {
+      const stateEvents = await pool.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM discussion_thread_events WHERE group_id = $1",
+        [groupId],
+      );
+      if (stateEvents.rows[0]!.count > 0) {
+        return;
+      }
       await pool.query(
         `
         DELETE FROM group_memory_extraction_run_evidence
@@ -1609,6 +1675,8 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
       ]);
       await pool.query("DELETE FROM group_memory_extraction_runs WHERE group_id = $1", [groupId]);
       await pool.query("DELETE FROM group_memories WHERE group_id = $1", [groupId]);
+      await pool.query("DELETE FROM action_items WHERE group_id = $1", [groupId]);
+      await pool.query("DELETE FROM discussion_threads WHERE group_id = $1", [groupId]);
       await pool.query("DELETE FROM conversation_messages WHERE chat_id = $1", [groupId]);
     } finally {
       await pool.end();
@@ -1733,6 +1801,124 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
     expect(runRow.rows[0]!.completed_at).toBeInstanceOf(Date);
     expect(runRow.rows[0]!.failure_classification.length).toBeLessThanOrEqual(128);
     expect(runRow.rows[0]!.failure_classification).not.toContain("Launch atomically");
+  });
+
+  it("applies conversation state in the memory transaction and replays its original ids", async () => {
+    const repository = createRepository(pool);
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageIds[4]!,
+      providerMessageId: `provider-${messageIds[4]!}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id], maxEvidenceMessages: 40, contextMessageLimit: 0, activeMemoryLimit: 0,
+    });
+    const completionInput = {
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [],
+      conflictCandidates: [],
+      diagnostics: diagnostics({ proposedCount: 0, acceptedCount: 0 }),
+      threadOperations: [{
+        operation: "create" as const, operationKey: `thread:create:${claimed!.id}`, confidence: 0.9,
+        evidenceMessageIds: [messageIds[4]!], evidenceSpan: "Atomic message 4", title: "Atomic thread",
+        summary: "Created with memory completion.", initialStatus: "open" as const,
+      }],
+      actionOperations: [{
+        operation: "create" as const, operationKey: `action:create:${claimed!.id}`, confidence: 0.9,
+        evidenceMessageIds: [messageIds[4]!], evidenceSpan: "Atomic message 4", description: "Complete atomic work.",
+        owner: { ownerType: "sender" as const, messageId: messageIds[4]! }, ownerRefType: "feishu_user" as const, ownerRef: "alice", ownerResolved: true,
+      }],
+      conversationStateDiagnostics: { proposedCount: 2, acceptedCount: 2, rejectedCount: 0, rejectionCodes: [] },
+    };
+
+    const completed = await repository.completeRun(completionInput);
+    expect(completed).toMatchObject({ status: "completed", memoryIds: [] });
+    expect(completed.threadIds).toHaveLength(1);
+    expect(completed.actionItemIds).toHaveLength(1);
+    await expect(pool!.query(
+      "SELECT count(*)::int AS count FROM discussion_thread_events WHERE group_id = $1",
+      [groupId],
+    )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    await expect(pool!.query(
+      "SELECT count(*)::int AS count FROM conversation_state_operation_claims WHERE group_id = $1",
+      [groupId],
+    )).resolves.toMatchObject({ rows: [{ count: 2 }] });
+
+    await expect(repository.completeRun(completionInput)).resolves.toEqual({
+      status: "already_completed", memoryIds: [], threadIds: completed.threadIds, actionItemIds: completed.actionItemIds,
+    });
+    await expect(pool!.query(
+      "SELECT count(*)::int AS count FROM discussion_thread_events WHERE group_id = $1",
+      [groupId],
+    )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it("serializes snapshot freshness with conversation-state writers", async () => {
+    const threadId = `atomic-thread-${suffix}`;
+    const timestamp = new Date("2026-07-15T00:00:00.000Z");
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, created_at, updated_at
+      ) VALUES ($1, $2, 'Snapshot lock', 'Snapshot lock test.', 'open', 0.9, 1,
+        $3, $3, $3, $3)
+      `,
+      [threadId, groupId, timestamp],
+    );
+    const repository = createRepository(pool);
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageIds[5]!,
+      providerMessageId: `provider-${messageIds[5]!}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    expect(claimed?.existingThreads).toContainEqual(expect.objectContaining({ id: threadId, version: 1 }));
+
+    const writer = await pool!.connect();
+    try {
+      await writer.query("BEGIN");
+      await writer.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`conversation-state:${groupId}`],
+      );
+      const completion = repository.completeRun({
+        runId: claimed!.id,
+        inputFingerprint: claimed!.inputFingerprint,
+        acceptedCandidates: [],
+        conflictCandidates: [],
+        diagnostics: diagnostics({ proposedCount: 0, acceptedCount: 0 }),
+      });
+      await vi.waitFor(async () => {
+        const waiting = await pool!.query<{ count: number }>(
+          `
+          SELECT count(*)::int AS count
+          FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event_type = 'Lock'
+            AND wait_event = 'advisory'
+            AND query ILIKE '%pg_advisory_xact_lock%'
+          `,
+        );
+        expect(waiting.rows[0]!.count).toBeGreaterThan(0);
+      }, { timeout: 2_000, interval: 10 });
+      await writer.query(
+        "UPDATE discussion_threads SET version = version + 1, updated_at = updated_at + INTERVAL '1 second' WHERE id = $1",
+        [threadId],
+      );
+      await writer.query("COMMIT");
+
+      await expect(completion).rejects.toBeInstanceOf(MemoryExtractionStaleRunError);
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      writer.release();
+    }
   });
 
   it("completes an accepted-empty run without inserting a memory", async () => {
@@ -2980,6 +3166,10 @@ function storedInputFingerprint(
       id: memory.id,
       updatedAt: memory.updated_at.toISOString(),
     })),
+    mentions: [],
+    existingThreads: [],
+    existingActions: [],
+    enabledOperationFamilies: ["action", "memory", "thread"],
   }));
 }
 

@@ -59,6 +59,9 @@ describe("createMemoryExtractionWorker", () => {
       ],
       conflictCandidates: [],
       diagnostics: expect.objectContaining({ acceptedCount: 2, rejectedCount: 0 }),
+      threadOperations: [],
+      actionOperations: [],
+      conversationStateDiagnostics: { proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] },
     });
     expect(dependencies.queue.handleProcessedJob).toHaveBeenCalledTimes(2);
     expect(results).toEqual([
@@ -645,6 +648,9 @@ describe("createMemoryExtractionWorker", () => {
         conflictCount: 0,
         rejectionCodes: ["low_confidence"],
       },
+      threadOperations: [],
+      actionOperations: [],
+      conversationStateDiagnostics: { proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] },
     });
     expect(dependencies.auditLog.record).toHaveBeenCalledWith({
       type: "memory_extraction_completed",
@@ -655,6 +661,47 @@ describe("createMemoryExtractionWorker", () => {
     expect(JSON.stringify(dependencies.auditLog.record.mock.calls)).not.toContain(
       "Rejected model text",
     );
+  });
+
+  it("passes validated v2 thread and action operations with their content-free diagnostics into atomic completion", async () => {
+    const dependencies = createDependencies({ jobs: [job("request-1")] });
+    dependencies.client.extract.mockResolvedValue({
+      runId: "run-1",
+      candidates: [],
+      threadOperations: [{
+        operation: "create",
+        operationKey: "thread:create:launch",
+        confidence: 0.9,
+        evidenceMessageIds: ["feishu:msg-1"],
+        evidenceSpan: "Launch on Thursday.",
+        title: "Launch",
+        summary: "Track launch work.",
+        initialStatus: "open",
+      }],
+      actionOperations: [{
+        operation: "create",
+        operationKey: "action:create:launch",
+        confidence: 0.9,
+        evidenceMessageIds: ["feishu:msg-1"],
+        evidenceSpan: "Launch on Thursday.",
+        description: "Ship launch work.",
+        owner: { ownerType: "sender", messageId: "feishu:msg-1" },
+      }],
+    } as any);
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await worker.processBatch({ limit: 20 });
+
+    expect(dependencies.repository.completeRun).toHaveBeenCalledWith(expect.objectContaining({
+      threadOperations: [expect.objectContaining({ operationKey: "thread:create:launch" })],
+      actionOperations: [expect.objectContaining({ operationKey: "action:create:launch" })],
+      conversationStateDiagnostics: {
+        proposedCount: 2,
+        acceptedCount: 2,
+        rejectedCount: 0,
+        rejectionCodes: [],
+      },
+    }));
   });
 
   it("passes only fully validated conflict candidates into atomic completion", async () => {
@@ -711,6 +758,9 @@ describe("createMemoryExtractionWorker", () => {
         conflictCount: 1,
         rejectionCodes: ["low_confidence", "conflict_relation"],
       },
+      threadOperations: [],
+      actionOperations: [],
+      conversationStateDiagnostics: { proposedCount: 0, acceptedCount: 0, rejectedCount: 0, rejectionCodes: [] },
     });
     expect(JSON.stringify(dependencies.repository.completeRun.mock.calls)).not.toContain(
       "Rejected private model text",
@@ -947,6 +997,10 @@ function run(overrides: Partial<ClaimedMemoryExtractionRun> = {}): ClaimedMemory
     ],
     contextMessages: [],
     existingMemories: [],
+    mentions: [],
+    existingThreads: [],
+    existingActions: [],
+    enabledOperationFamilies: ["memory", "thread", "action"],
     ...overrides,
   };
 }

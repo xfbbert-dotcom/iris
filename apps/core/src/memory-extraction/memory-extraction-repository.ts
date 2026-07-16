@@ -1,7 +1,9 @@
 import type {
   MemoryExtractionDiagnostics,
+  ValidatedActionOperation,
   ValidatedMemoryCandidate,
   ValidatedMemoryConflictCandidate,
+  ValidatedThreadOperation,
 } from "./ai-worker-memory-extraction-client.js";
 
 export type MemoryExtractionRequestStatus =
@@ -51,6 +53,13 @@ export type ExtractionMessage = {
   sentAt: Date;
   createdAt: Date;
   evidenceEligible: boolean;
+  mentions?: Array<{ key: string; openId: string }>;
+};
+
+export type ExtractionMessageMention = {
+  conversationMessageId: string;
+  key: string;
+  openId: string;
 };
 
 export type ExtractionExistingMemory = {
@@ -68,7 +77,44 @@ export type ClaimedMemoryExtractionRun = {
   evidenceMessages: ExtractionMessage[];
   contextMessages: ExtractionMessage[];
   existingMemories: ExtractionExistingMemory[];
+  mentions: ExtractionMessageMention[];
+  existingThreads: ExtractionExistingThread[];
+  existingActions: ExtractionExistingAction[];
+  enabledOperationFamilies: Array<"memory" | "thread" | "action">;
   previousFailureClassification?: string;
+};
+
+export type ExtractionExistingThread = {
+  id: string;
+  groupId: string;
+  title: string;
+  summary: string;
+  status: "candidate" | "open" | "resolved" | "merged";
+  confidence: number;
+  mergedIntoThreadId?: string;
+  version: number;
+  firstEvidenceAt: Date;
+  lastActivityAt: Date;
+  resolvedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type ExtractionExistingAction = {
+  id: string;
+  groupId: string;
+  threadId?: string;
+  description: string;
+  ownerRefType: "feishu_user" | "text_label";
+  ownerRef: string;
+  dueAt?: Date;
+  status: "open" | "completed" | "cancelled";
+  confidence: number;
+  version: number;
+  completedAt?: Date;
+  cancelledAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export class MemoryExtractionCompletionConflictError extends Error {
@@ -115,6 +161,19 @@ export interface MemoryExtractionRepository {
     acceptedCandidates: ValidatedMemoryCandidate[];
     conflictCandidates: ValidatedMemoryConflictCandidate[];
     diagnostics: MemoryExtractionDiagnostics;
-  }): Promise<{ status: "completed" | "already_completed"; memoryIds: string[] }>;
+    threadOperations?: ValidatedThreadOperation[];
+    actionOperations?: ValidatedActionOperation[];
+    conversationStateDiagnostics?: {
+      proposedCount: number;
+      acceptedCount: number;
+      rejectedCount: number;
+      rejectionCodes: string[];
+    };
+  }): Promise<{
+    status: "completed" | "already_completed";
+    memoryIds: string[];
+    threadIds?: string[];
+    actionItemIds?: string[];
+  }>;
   getStatusCounts(): Promise<MemoryExtractionStatusCounts>;
 }

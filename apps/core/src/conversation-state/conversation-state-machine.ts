@@ -9,10 +9,12 @@ type TransitionResult = { ok: true } | { ok: false; code: string };
 
 const THREAD_TRANSITIONS = new Set([
   "candidate:candidate:corrected",
+  "candidate:candidate:evidence_attached",
   "candidate:open:promoted",
   "candidate:merged:merged",
   "open:open:summary_updated",
   "open:open:corrected",
+  "open:open:evidence_attached",
   "open:resolved:resolved",
   "open:merged:merged",
   "resolved:resolved:corrected",

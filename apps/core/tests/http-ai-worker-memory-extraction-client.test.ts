@@ -135,7 +135,7 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
       },
     });
     expect(JSON.parse(String(init!.body))).toEqual({
-      schema_version: 1,
+      schema_version: 2,
       run_id: "run-1",
       group_id: "group-1",
       input_fingerprint: "a".repeat(64),
@@ -162,6 +162,9 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
           updated_at: "2026-07-13T00:00:00.000Z",
         },
       ],
+      existing_threads: [],
+      existing_actions: [],
+      capabilities: ["action", "memory", "thread"],
     });
     expect(Object.keys(JSON.parse(String(init!.body)))).toEqual([
       "schema_version",
@@ -171,6 +174,9 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
       "messages",
       "evidence_message_ids",
       "existing_memories",
+      "existing_threads",
+      "existing_actions",
+      "capabilities",
     ]);
   });
 
@@ -645,6 +651,10 @@ function runFixture(): ClaimedMemoryExtractionRun {
         updatedAt: new Date("2026-07-13T00:00:00.000Z"),
       },
     ],
+    mentions: [],
+    existingThreads: [],
+    existingActions: [],
+    enabledOperationFamilies: ["memory", "thread", "action"],
   };
 }
 
