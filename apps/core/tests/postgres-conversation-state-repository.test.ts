@@ -1,15 +1,17 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
+  ConversationStateIdempotencyConflictError,
   ConversationStateVersionConflictError,
   createPostgresConversationStateRepository,
   type PostgresConversationStateDataSource,
   type TransactionClient,
 } from "../src/conversation-state/postgres-conversation-state-repository.js";
 import type {
+  ConversationStateOperation,
   CreateConversationStateOperation,
   MutationConversationStateOperation,
 } from "../src/conversation-state/conversation-state-repository.js";
@@ -60,25 +62,28 @@ describe("createPostgresConversationStateRepository", () => {
   });
 
   it("writes same-group evidence, one event, and one repair in one transaction", async () => {
+    const operation = createThreadOperation();
     const client = scriptedClient([
       step(/begin/u),
+      step(/from conversation_state_operation_claims/u, [], ["chat-a", ["thread-create-1"]]),
       step(/from discussion_threads[\s\S]+for update/u, []),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, [], ["chat-a", ["thread-create-1"]]),
-      step(/from action_item_events[\s\S]+operation_key/u, [], ["chat-a", ["thread-create-1"]]),
       step(/from conversation_messages[\s\S]+chat_id = \$2/u, [{ id: "message-1" }], [["message-1"], "chat-a"]),
       step(/insert into discussion_threads/u),
       step(/insert into discussion_thread_evidence/u),
       step(/insert into discussion_thread_events/u),
       step(/insert into discussion_thread_event_evidence/u),
       step(/insert into conversation_state_projection_repairs/u),
+      step(/insert into conversation_state_operation_claims/u, [], [
+        "chat-a", "thread-create-1", "thread", "thread-1", operationFingerprint(operation),
+      ]),
       step(/commit/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
 
     await expect(repository.applyOperations({
       groupId: "chat-a",
-      operations: [createThreadOperation()],
+      operations: [operation],
     })).resolves.toEqual({ status: "applied", threadIds: ["thread-1"], actionItemIds: [] });
     expect(client.release).toHaveBeenCalledOnce();
     expect(client.query).toHaveBeenCalledWith(
@@ -90,10 +95,9 @@ describe("createPostgresConversationStateRepository", () => {
   it("rejects cross-group evidence and rolls back before writing state", async () => {
     const client = scriptedClient([
       step(/begin/u),
+      step(/from conversation_state_operation_claims/u, []),
       step(/from discussion_threads[\s\S]+for update/u, []),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
       step(/from conversation_messages[\s\S]+chat_id = \$2/u, []),
       step(/rollback/u),
     ]);
@@ -108,21 +112,68 @@ describe("createPostgresConversationStateRepository", () => {
     ]));
   });
 
-  it("returns already_applied only for an exact same-type replay", async () => {
+  it("replays a historical create claim without reading the upgraded entity snapshot", async () => {
+    const operation = createThreadOperation();
     const client = scriptedClient([
       step(/begin/u),
-      step(/from discussion_threads[\s\S]+for update/u, [threadRow()]),
-      step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, [threadEventRow()], ["chat-a", ["thread-create-1"]]),
-      step(/from action_item_events[\s\S]+operation_key/u, [], ["chat-a", ["thread-create-1"]]),
+      step(
+        /from conversation_state_operation_claims[\s\S]+operation_key/u,
+        [operationClaimRow(operation)],
+        ["chat-a", ["thread-create-1"]],
+      ),
       step(/commit/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
 
     await expect(repository.applyOperations({
       groupId: "chat-a",
-      operations: [createThreadOperation()],
+      operations: [operation],
     })).resolves.toEqual({ status: "already_applied", threadIds: [], actionItemIds: [] });
+    expect(calls(client)).not.toEqual(expect.arrayContaining([
+      expect.stringMatching(/from discussion_threads|from action_items/u),
+    ]));
+  });
+
+  it("uses sorted unique evidence ids in the operation fingerprint", async () => {
+    const persisted = createThreadOperation();
+    persisted.evidenceMessageIds = ["message-1", "message-2"];
+    const replay = createThreadOperation();
+    replay.evidenceMessageIds = ["message-2", "message-1", "message-2"];
+    const client = scriptedClient([
+      step(/begin/u),
+      step(
+        /from conversation_state_operation_claims[\s\S]+operation_key/u,
+        [operationClaimRow(persisted)],
+        ["chat-a", ["thread-create-1"]],
+      ),
+      step(/commit/u),
+    ]);
+    const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.applyOperations({ groupId: "chat-a", operations: [replay] }))
+      .resolves.toEqual({ status: "already_applied", threadIds: [], actionItemIds: [] });
+  });
+
+  it("replays a complete batch containing consecutive versions of one entity", async () => {
+    const create = createThreadOperation();
+    const resolve = resolveThreadOperation();
+    resolve.expectedVersion = 1;
+    resolve.thread.version = 2;
+    resolve.threadEvent.fromVersion = 1;
+    resolve.threadEvent.toVersion = 2;
+    const client = scriptedClient([
+      step(/begin/u),
+      step(
+        /from conversation_state_operation_claims[\s\S]+operation_key/u,
+        [operationClaimRow(create), operationClaimRow(resolve)],
+        ["chat-a", ["thread-create-1", "thread-resolve-1"]],
+      ),
+      step(/commit/u),
+    ]);
+    const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.applyOperations({ groupId: "chat-a", operations: [create, resolve] }))
+      .resolves.toEqual({ status: "already_applied", threadIds: [], actionItemIds: [] });
   });
 
   it("rejects a partially replayed batch", async () => {
@@ -130,10 +181,9 @@ describe("createPostgresConversationStateRepository", () => {
     const actionOperation = createActionOperation();
     const client = scriptedClient([
       step(/begin/u),
-      step(/from discussion_threads[\s\S]+for update/u, [threadRow()]),
-      step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, [threadEventRow()], ["chat-a", ["thread-create-1", "action-create-1"]]),
-      step(/from action_item_events[\s\S]+operation_key/u, [], ["chat-a", ["thread-create-1", "action-create-1"]]),
+      step(/from conversation_state_operation_claims/u, [operationClaimRow(threadOperation)], [
+        "chat-a", ["thread-create-1", "action-create-1"],
+      ]),
       step(/rollback/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
@@ -145,36 +195,37 @@ describe("createPostgresConversationStateRepository", () => {
   });
 
   it("rejects an operation key already used by the other event type", async () => {
+    const operation = createThreadOperation();
     const client = scriptedClient([
       step(/begin/u),
-      step(/from discussion_threads[\s\S]+for update/u, []),
-      step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
-      step(/from action_item_events[\s\S]+operation_key/u, [actionEventRow({ operation_key: "thread-create-1" })]),
+      step(/from conversation_state_operation_claims/u, [operationClaimRow(operation, {
+        entity_type: "action",
+        entity_id: "action-1",
+      })]),
       step(/rollback/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
 
     await expect(repository.applyOperations({
       groupId: "chat-a",
-      operations: [createThreadOperation()],
+      operations: [operation],
     })).rejects.toThrow("conversation state operation key conflict");
   });
 
   it("rejects an operation key replayed with a different event payload", async () => {
+    const operation = createThreadOperation();
     const client = scriptedClient([
       step(/begin/u),
-      step(/from discussion_threads[\s\S]+for update/u, [threadRow()]),
-      step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, [threadEventRow({ id: "different-event" })]),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
+      step(/from conversation_state_operation_claims/u, [operationClaimRow(operation, {
+        operation_fingerprint: "f".repeat(64),
+      })]),
       step(/rollback/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
 
     await expect(repository.applyOperations({
       groupId: "chat-a",
-      operations: [createThreadOperation()],
+      operations: [operation],
     })).rejects.toThrow("conversation state operation key conflict");
   });
 
@@ -191,10 +242,9 @@ describe("createPostgresConversationStateRepository", () => {
   it("rejects a stale mutation version before appending an event", async () => {
     const client = scriptedClient([
       step(/begin/u),
+      step(/from conversation_state_operation_claims/u, []),
       step(/from discussion_threads[\s\S]+for update/u, [threadRow({ version: "3" })]),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
       step(/rollback/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
@@ -206,26 +256,28 @@ describe("createPostgresConversationStateRepository", () => {
   });
 
   it("applies a version-matched mutation exactly once", async () => {
+    const operation = resolveThreadOperation();
+    operation.expectedVersion = 1;
+    operation.thread.version = 2;
+    operation.threadEvent.fromVersion = 1;
+    operation.threadEvent.toVersion = 2;
     const client = scriptedClient([
       step(/begin/u),
+      step(/from conversation_state_operation_claims/u, []),
       step(/from discussion_threads[\s\S]+for update/u, [threadRow({ version: "1" })]),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
       step(/from conversation_messages[\s\S]+chat_id = \$2/u, [{ id: "message-1" }]),
       step(/update discussion_threads/u, [{ id: "thread-1" }]),
       step(/insert into discussion_thread_evidence/u),
       step(/insert into discussion_thread_events/u),
       step(/insert into discussion_thread_event_evidence/u),
       step(/insert into conversation_state_projection_repairs/u),
+      step(/insert into conversation_state_operation_claims/u, [], [
+        "chat-a", "thread-resolve-1", "thread", "thread-1", operationFingerprint(operation),
+      ]),
       step(/commit/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
-    const operation = resolveThreadOperation();
-    operation.expectedVersion = 1;
-    operation.thread.version = 2;
-    operation.threadEvent.fromVersion = 1;
-    operation.threadEvent.toVersion = 2;
 
     await expect(repository.applyOperations({ groupId: "chat-a", operations: [operation] })).resolves.toEqual({
       status: "applied", threadIds: ["thread-1"], actionItemIds: [],
@@ -235,13 +287,12 @@ describe("createPostgresConversationStateRepository", () => {
   it("rejects a merge cycle atomically", async () => {
     const client = scriptedClient([
       step(/begin/u),
+      step(/from conversation_state_operation_claims/u, []),
       step(/from discussion_threads[\s\S]+for update/u, [
         threadRow({ id: "thread-1", status: "open", version: "1" }),
         threadRow({ id: "thread-2", status: "merged", version: "2", merged_into_thread_id: "thread-1" }),
       ]),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
       step(/rollback/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
@@ -253,27 +304,28 @@ describe("createPostgresConversationStateRepository", () => {
   });
 
   it("locks the group and accepts the terminal canonical merge target", async () => {
+    const operation = mergeThreadOperation();
     const client = scriptedClient([
       step(/begin/u),
+      step(/from conversation_state_operation_claims/u, []),
       step(/from discussion_threads thread[\s\S]+where thread\.group_id = \$1[\s\S]+for update/u, [
         threadRow({ id: "thread-1", status: "candidate", version: "1" }),
         threadRow({ id: "thread-2", status: "merged", version: "2", merged_into_thread_id: "thread-3" }),
         threadRow({ id: "thread-3", status: "open", version: "1" }),
       ]),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
       step(/from conversation_messages[\s\S]+chat_id = \$2/u, [{ id: "message-1" }]),
       step(/update discussion_threads/u, [{ id: "thread-1" }]),
       step(/insert into discussion_thread_evidence/u),
       step(/insert into discussion_thread_events/u),
       step(/insert into discussion_thread_event_evidence/u),
       step(/insert into conversation_state_projection_repairs/u),
+      step(/insert into conversation_state_operation_claims/u, [], [
+        "chat-a", "thread-merge-1", "thread", "thread-1", operationFingerprint(operation),
+      ]),
       step(/commit/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
-    const operation = mergeThreadOperation();
-    operation.thread.mergedIntoThreadId = "thread-3";
 
     await expect(repository.applyOperations({ groupId: "chat-a", operations: [operation] }))
       .resolves.toMatchObject({ status: "applied" });
@@ -284,13 +336,12 @@ describe("createPostgresConversationStateRepository", () => {
   it("rejects a requested merge target when the source is canonical", async () => {
     const client = scriptedClient([
       step(/begin/u),
+      step(/from conversation_state_operation_claims/u, []),
       step(/from discussion_threads[\s\S]+for update/u, [
         threadRow({ id: "thread-1", status: "open", evidence_count: "5" }),
         threadRow({ id: "thread-2", status: "candidate", evidence_count: "1" }),
       ]),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
       step(/rollback/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
@@ -303,10 +354,9 @@ describe("createPostgresConversationStateRepository", () => {
     const insertionError = new Error("insert failed");
     const client = scriptedClient([
       step(/begin/u),
+      step(/from conversation_state_operation_claims/u, []),
       step(/from discussion_threads[\s\S]+for update/u, []),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
       step(/from conversation_messages[\s\S]+chat_id = \$2/u, [{ id: "message-1" }]),
       failingStep(/insert into discussion_threads/u, insertionError),
       step(/rollback/u),
@@ -468,6 +518,9 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
         expectedVersion: 1,
       })],
     })).resolves.toMatchObject({ status: "applied" });
+    await expect(repository.applyOperations({ groupId, operations: [candidate] })).resolves.toEqual({
+      status: "already_applied", threadIds: [], actionItemIds: [],
+    });
     await expect(repository.applyOperations({
       groupId,
       operations: [integrationThreadOperation({
@@ -513,14 +566,7 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
         id: chained.thread!.id, status: "merged", eventType: "merged", operationKey: `chained-merge-${suffix}`,
         expectedVersion: 1, mergedIntoThreadId: leaf.thread!.id,
       })],
-    })).rejects.toThrow("merge target is not canonical");
-    await repository.applyOperations({
-      groupId,
-      operations: [integrationThreadOperation({
-        id: chained.thread!.id, status: "merged", eventType: "merged", operationKey: `chained-merge-root-${suffix}`,
-        expectedVersion: 1, mergedIntoThreadId: root.thread!.id,
-      })],
-    });
+    })).resolves.toMatchObject({ status: "applied" });
     await expect(pool!.query(
       "SELECT merged_into_thread_id FROM discussion_threads WHERE id = $1",
       [chained.thread!.id],
@@ -544,6 +590,29 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
     await expect(repository.applyOperations({ groupId, operations: [rollbackOne, rollbackTwo] })).rejects.toMatchObject({ code: "23505" });
     await expect(pool!.query("SELECT id FROM discussion_threads WHERE id = $1", [rollbackOne.thread!.id]))
       .resolves.toMatchObject({ rows: [] });
+  });
+
+  it("replays a complete same-entity batch after consecutive versions were committed", async () => {
+    const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+    const create = integrationThreadOperation({
+      id: `batch-thread-${suffix}`,
+      status: "candidate",
+      eventType: "created",
+      operationKey: `batch-create-${suffix}`,
+    });
+    const promote = integrationThreadOperation({
+      id: create.thread!.id,
+      status: "open",
+      eventType: "promoted",
+      operationKey: `batch-promote-${suffix}`,
+      expectedVersion: 1,
+    });
+
+    await expect(repository.applyOperations({ groupId, operations: [create, promote] }))
+      .resolves.toMatchObject({ status: "applied", threadIds: [create.thread!.id, create.thread!.id] });
+    await expect(repository.applyOperations({ groupId, operations: [create, promote] })).resolves.toEqual({
+      status: "already_applied", threadIds: [], actionItemIds: [],
+    });
   });
 
   it("writes actions and rejects mismatched, partial, and cross-type operation replays", async () => {
@@ -664,6 +733,91 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
     expect(extraction.actions.map((item) => item.id)).toContain(action.action!.id);
   });
 
+  it("serializes concurrent identical operations across independent pool clients", async () => {
+    const operation = integrationThreadOperation({
+      id: `concurrent-same-${suffix}`,
+      status: "open",
+      eventType: "created",
+      operationKey: `concurrent-same-${suffix}`,
+    });
+    const firstClient = await pool!.connect();
+    const secondClient = await pool!.connect();
+    const firstRepository = createPostgresConversationStateRepository({
+      dataSource: connectedClientDataSource(firstClient),
+    });
+    const secondRepository = createPostgresConversationStateRepository({
+      dataSource: connectedClientDataSource(secondClient),
+    });
+
+    const results = await Promise.all([
+      firstRepository.applyOperations({ groupId, operations: [operation] }),
+      secondRepository.applyOperations({ groupId, operations: [operation] }),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(["already_applied", "applied"]);
+    await expect(pool!.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM discussion_threads WHERE id = $1) AS entity_count,
+        (SELECT COUNT(*)::int FROM discussion_thread_events WHERE operation_key = $2 AND group_id = $3) AS event_count,
+        (SELECT COUNT(*)::int FROM conversation_state_projection_repairs WHERE entity_type = 'thread' AND entity_id = $1) AS repair_count,
+        (SELECT COUNT(*)::int FROM conversation_state_operation_claims WHERE operation_key = $2 AND group_id = $3) AS claim_count
+      `,
+      [operation.thread!.id, operation.operationKey, groupId],
+    )).resolves.toMatchObject({
+      rows: [{ entity_count: 1, event_count: 1, repair_count: 1, claim_count: 1 }],
+    });
+  });
+
+  it("allows exactly one concurrent payload for the same operation key", async () => {
+    const operationKey = `concurrent-conflict-${suffix}`;
+    const firstOperation = integrationThreadOperation({
+      id: `concurrent-conflict-a-${suffix}`,
+      status: "open",
+      eventType: "created",
+      operationKey,
+    });
+    const secondOperation = integrationThreadOperation({
+      id: `concurrent-conflict-b-${suffix}`,
+      status: "open",
+      eventType: "created",
+      operationKey,
+    });
+    const firstClient = await pool!.connect();
+    const secondClient = await pool!.connect();
+    const firstRepository = createPostgresConversationStateRepository({
+      dataSource: connectedClientDataSource(firstClient),
+    });
+    const secondRepository = createPostgresConversationStateRepository({
+      dataSource: connectedClientDataSource(secondClient),
+    });
+
+    const results = await Promise.allSettled([
+      firstRepository.applyOperations({ groupId, operations: [firstOperation] }),
+      secondRepository.applyOperations({ groupId, operations: [secondOperation] }),
+    ]);
+    const applied = results.find((result) => result.status === "fulfilled");
+    const conflicted = results.find((result) => result.status === "rejected");
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(applied?.status === "fulfilled" ? applied.value.status : undefined).toBe("applied");
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(conflicted?.status === "rejected" ? conflicted.reason : undefined)
+      .toBeInstanceOf(ConversationStateIdempotencyConflictError);
+    await expect(pool!.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM discussion_threads WHERE id = ANY($1::text[])) AS entity_count,
+        (SELECT COUNT(*)::int FROM discussion_thread_events WHERE operation_key = $2 AND group_id = $3) AS event_count,
+        (SELECT COUNT(*)::int FROM conversation_state_projection_repairs WHERE entity_type = 'thread' AND entity_id = ANY($1::text[])) AS repair_count,
+        (SELECT COUNT(*)::int FROM conversation_state_operation_claims WHERE operation_key = $2 AND group_id = $3) AS claim_count
+      `,
+      [[firstOperation.thread!.id, secondOperation.thread!.id], operationKey, groupId],
+    )).resolves.toMatchObject({
+      rows: [{ entity_count: 1, event_count: 1, repair_count: 1, claim_count: 1 }],
+    });
+  });
+
   it("retries due failed repairs, stops at the attempt limit, and completes projections monotonically", async () => {
     const repository = createPostgresConversationStateRepository({ dataSource: pool! });
     const retryRepairId = `retry-repair-${suffix}`;
@@ -760,6 +914,13 @@ function scriptedClient(steps: ScriptStep[]): MockClient {
 
 function dataSource(client: MockClient): PostgresConversationStateDataSource {
   return { connect: vi.fn(async () => client), query: vi.fn(async () => ({ rows: [] })) };
+}
+
+function connectedClientDataSource(client: pg.PoolClient): PostgresConversationStateDataSource {
+  return {
+    connect: async () => client,
+    query: async (sql: string, values?: unknown[]) => client.query(sql, values),
+  } as unknown as PostgresConversationStateDataSource;
 }
 
 function calls(client: MockClient): string[] {
@@ -874,22 +1035,43 @@ function repairRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function threadEventRow(overrides: Record<string, unknown> = {}) {
+function operationClaimRow(
+  operation: ConversationStateOperation,
+  overrides: Record<string, unknown> = {},
+) {
+  const entityType = operation.thread === undefined ? "action" : "thread";
+  const entityId = operation.thread?.id ?? operation.action!.id;
   return {
-    id: "thread-event-1", thread_id: "thread-1", group_id: "chat-a", event_type: "created",
-    from_version: null, to_version: "1", operation_key: "thread-create-1",
-    created_at: new Date("2026-07-16T00:00:00.000Z"), evidence_message_ids: ["message-1"],
+    group_id: "chat-a",
+    operation_key: operation.operationKey,
+    entity_type: entityType,
+    entity_id: entityId,
+    operation_fingerprint: operationFingerprint(operation),
+    created_at: new Date("2026-07-16T00:00:00.000Z"),
     ...overrides,
   };
 }
 
-function actionEventRow(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "action-event-1", action_item_id: "action-1", group_id: "chat-a", event_type: "created",
-    from_version: null, to_version: "1", operation_key: "action-create-1",
-    created_at: new Date("2026-07-16T00:00:00.000Z"), evidence_message_ids: ["message-1"],
-    ...overrides,
+function operationFingerprint(operation: ConversationStateOperation): string {
+  const payload = {
+    ...operation,
+    evidenceMessageIds: [...new Set(operation.evidenceMessageIds)].sort(),
   };
+  return createHash("sha256").update(JSON.stringify(orderFingerprintValue(payload))).digest("hex");
+}
+
+function orderFingerprintValue(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(orderFingerprintValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([key, item]) => [key, orderFingerprintValue(item)]),
+    );
+  }
+  return value;
 }
 
 type IntegrationThreadOperationInput = {

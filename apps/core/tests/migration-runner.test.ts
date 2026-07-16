@@ -232,7 +232,7 @@ describe("runMigrations", () => {
 });
 
 describe("defaultMigrationsDir", () => {
-  it("defines authoritative semantic thread, action, event, and projection repair tables", async () => {
+  it("defines authoritative semantic state, operation claim, and projection repair tables", async () => {
     const migration = await readFile(
       join(defaultMigrationsDir(), "0024_semantic_thread_action_memory.sql"),
       "utf8",
@@ -286,6 +286,18 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain(
       "foreign key (event_id, group_id) references action_item_events(id, group_id) on delete cascade",
     );
+    expect(normalized).toContain("create table conversation_state_operation_claims");
+    expect(normalized).toContain("primary key (group_id, operation_key)");
+    expect(normalized).toContain("entity_type text not null check (entity_type in ('thread', 'action'))");
+    expect(normalized).toContain(
+      "operation_fingerprint text not null check (operation_fingerprint ~ '^[0-9a-f]{64}$')",
+    );
+    expect(normalized).toContain(
+      "entity_id text not null check (char_length(entity_id) between 1 and 512)",
+    );
+    expect(normalized).toContain(
+      "operation_key text not null check (char_length(operation_key) between 1 and 512)",
+    );
     expect(normalized).toContain("create table conversation_state_memory_projections");
     expect(normalized).toContain("primary key (entity_type, entity_id)");
     expect(normalized).toContain(
@@ -307,10 +319,10 @@ describe("defaultMigrationsDir", () => {
       "create or replace function conversation_state_event_append_only_guard()",
     );
     expect(normalized).not.toContain("iris.allow_conversation_state_event_delete");
-    expect(normalized.match(/before update or delete on/g)).toHaveLength(4);
-    expect(normalized.match(/before truncate on/g)).toHaveLength(4);
+    expect(normalized.match(/before update or delete on/g)).toHaveLength(5);
+    expect(normalized.match(/before truncate on/g)).toHaveLength(5);
     expect(normalized.match(/for each statement execute function conversation_state_event_append_only_guard\(\)/g)).toHaveLength(
-      4,
+      5,
     );
     expect(normalized).toContain("create trigger discussion_thread_events_append_only");
     expect(normalized).toContain(
@@ -320,6 +332,7 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain(
       "create trigger action_item_event_evidence_append_only",
     );
+    expect(normalized).toContain("create trigger conversation_state_operation_claims_append_only");
     expect(normalized).toContain(
       "create trigger discussion_thread_events_truncate_guard",
     );
@@ -329,6 +342,9 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("create trigger action_item_events_truncate_guard");
     expect(normalized).toContain(
       "create trigger action_item_event_evidence_truncate_guard",
+    );
+    expect(normalized).toContain(
+      "create trigger conversation_state_operation_claims_truncate_guard",
     );
   });
 

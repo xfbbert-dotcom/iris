@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   ACTION_ITEM_EVENT_TYPES,
@@ -64,18 +64,14 @@ type ThreadRow = Record<string, unknown>;
 type ActionRow = Record<string, unknown>;
 type RepairRow = Record<string, unknown>;
 type ThreadWithEvidence = DiscussionThread & { evidenceCount: number };
-type ExistingEvent = {
-  kind: "thread" | "action";
-  id: string;
-  entityId: string;
+type OperationClaim = {
   groupId: string;
-  eventType: string;
-  fromVersion?: number;
-  toVersion: number;
   operationKey: string;
-  createdAt: Date;
-  evidenceMessageIds: string[];
+  entityType: "thread" | "action";
+  entityId: string;
+  operationFingerprint: string;
 };
+type OperationClaimRow = Record<string, unknown>;
 
 const threadColumns = `
   id, group_id, title, summary, status, confidence, merged_into_thread_id,
@@ -246,55 +242,27 @@ async function applyOperations(
     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
     [`${ADVISORY_LOCK_NAMESPACE}:${input.groupId}`],
   );
+  const operationClaims = input.operations.map(createOperationClaim);
+  const operationKeys = input.operations.map((operation) => operation.operationKey);
+  const existingClaims = await client.query<OperationClaimRow>(
+    `
+    SELECT group_id, operation_key, entity_type, entity_id, operation_fingerprint, created_at
+    FROM conversation_state_operation_claims
+    WHERE group_id = $1 AND operation_key = ANY($2::text[])
+    `,
+    [input.groupId, operationKeys],
+  );
+  if (classifyOperationClaims(operationClaims, existingClaims.rows.map(mapOperationClaimRow))) {
+    return { status: "already_applied", threadIds: [], actionItemIds: [] };
+  }
   const actionIds = input.operations.flatMap((operation) => operation.action === undefined
     ? []
     : [operation.action.id]);
   const lockedThreads = await lockThreads(client, input.groupId);
   const lockedActions = await lockActions(client, input.groupId, dedupe(actionIds));
-  const operationKeys = input.operations.map((operation) => operation.operationKey);
-  const existingThreadEvents = await client.query<Record<string, unknown>>(
-    `
-    SELECT event.id, event.thread_id, event.group_id, event.event_type,
-           event.from_version, event.to_version, event.operation_key, event.created_at,
-           COALESCE((
-             SELECT array_agg(evidence.conversation_message_id ORDER BY evidence.conversation_message_id)
-             FROM discussion_thread_event_evidence evidence
-             WHERE evidence.event_id = event.id AND evidence.group_id = event.group_id
-           ), ARRAY[]::text[]) AS evidence_message_ids
-    FROM discussion_thread_events event
-    WHERE event.group_id = $1 AND event.operation_key = ANY($2::text[])
-    `,
-    [input.groupId, operationKeys],
-  );
-  const existingActionEvents = await client.query<Record<string, unknown>>(
-    `
-    SELECT event.id, event.action_item_id, event.group_id, event.event_type,
-           event.from_version, event.to_version, event.operation_key, event.created_at,
-           COALESCE((
-             SELECT array_agg(evidence.conversation_message_id ORDER BY evidence.conversation_message_id)
-             FROM action_item_event_evidence evidence
-             WHERE evidence.event_id = event.id AND evidence.group_id = event.group_id
-           ), ARRAY[]::text[]) AS evidence_message_ids
-    FROM action_item_events event
-    WHERE event.group_id = $1 AND event.operation_key = ANY($2::text[])
-    `,
-    [input.groupId, operationKeys],
-  );
 
   const threads = new Map<string, DiscussionThread>(lockedThreads.map((thread) => [thread.id, thread]));
   const actions = new Map(lockedActions.map((action) => [action.id, action]));
-  const replayed = classifyOperationReplays(
-    input.operations,
-    [
-      ...existingThreadEvents.rows.map((row) => mapExistingEvent(row, "thread")),
-      ...existingActionEvents.rows.map((row) => mapExistingEvent(row, "action")),
-    ],
-    threads,
-    actions,
-  );
-  if (replayed) {
-    return { status: "already_applied", threadIds: [], actionItemIds: [] };
-  }
   const createdThreadIds = new Set(input.operations.flatMap((operation) => operation.kind === "create" && operation.thread !== undefined
     ? [operation.thread.id]
     : []));
@@ -321,6 +289,10 @@ async function applyOperations(
     if (thread.status !== "candidate") {
       await insertProjectionRepair(client, "thread", thread.id, input.groupId, thread.version);
     }
+    await insertOperationClaim(
+      client,
+      operationClaims.find((claim) => claim.operationKey === operation.operationKey)!,
+    );
     threads.set(thread.id, thread);
     changedThreadIds.push(thread.id);
   }
@@ -339,134 +311,94 @@ async function applyOperations(
     await insertActionEvent(client, event);
     await insertActionEventEvidence(client, event.id, input.groupId, operation.evidenceMessageIds);
     await insertProjectionRepair(client, "action", action.id, input.groupId, action.version);
+    await insertOperationClaim(
+      client,
+      operationClaims.find((claim) => claim.operationKey === operation.operationKey)!,
+    );
     actions.set(action.id, action);
     changedActionIds.push(action.id);
   }
   return { status: "applied", threadIds: changedThreadIds, actionItemIds: changedActionIds };
 }
 
-function classifyOperationReplays(
-  operations: ConversationStateOperation[],
-  existingEvents: ExistingEvent[],
-  threads: Map<string, DiscussionThread>,
-  actions: Map<string, ActionItem>,
-): boolean {
-  let replayCount = 0;
-  for (const operation of operations) {
-    const matches = existingEvents.filter((event) => event.operationKey === operation.operationKey);
-    if (matches.length === 0) continue;
-    if (matches.length !== 1 || !isExactReplay(operation, matches[0]!, threads, actions)) {
+function classifyOperationClaims(expected: OperationClaim[], existing: OperationClaim[]): boolean {
+  const existingByKey = new Map(existing.map((claim) => [claim.operationKey, claim]));
+  let matched = 0;
+  for (const claim of expected) {
+    const persisted = existingByKey.get(claim.operationKey);
+    if (persisted === undefined) continue;
+    if (
+      persisted.groupId !== claim.groupId
+      || persisted.entityType !== claim.entityType
+      || persisted.entityId !== claim.entityId
+      || persisted.operationFingerprint !== claim.operationFingerprint
+    ) {
       throw new ConversationStateIdempotencyConflictError();
     }
-    replayCount += 1;
+    matched += 1;
   }
-  if (replayCount > 0 && replayCount !== operations.length) {
+  if (matched > 0 && matched !== expected.length) {
     throw new ConversationStateIdempotencyConflictError();
   }
-  return replayCount === operations.length;
+  return matched === expected.length;
 }
 
-function isExactReplay(
-  operation: ConversationStateOperation,
-  existing: ExistingEvent,
-  threads: Map<string, DiscussionThread>,
-  actions: Map<string, ActionItem>,
-): boolean {
-  const evidenceMatches = haveSameStrings(existing.evidenceMessageIds, operation.evidenceMessageIds);
-  if (operation.thread !== undefined && operation.threadEvent !== undefined) {
-    const event = operation.threadEvent;
-    const current = threads.get(operation.thread.id);
-    return existing.kind === "thread"
-      && existing.id === event.id
-      && existing.entityId === operation.thread.id
-      && existing.groupId === event.groupId
-      && existing.eventType === event.eventType
-      && existing.fromVersion === event.fromVersion
-      && existing.toVersion === event.toVersion
-      && existing.createdAt.getTime() === event.createdAt.getTime()
-      && evidenceMatches
-      && current !== undefined
-      && haveSameThread(current, operation.thread);
-  }
-  if (operation.action !== undefined && operation.actionEvent !== undefined) {
-    const event = operation.actionEvent;
-    const current = actions.get(operation.action.id);
-    return existing.kind === "action"
-      && existing.id === event.id
-      && existing.entityId === operation.action.id
-      && existing.groupId === event.groupId
-      && existing.eventType === event.eventType
-      && existing.fromVersion === event.fromVersion
-      && existing.toVersion === event.toVersion
-      && existing.createdAt.getTime() === event.createdAt.getTime()
-      && evidenceMatches
-      && current !== undefined
-      && haveSameAction(current, operation.action);
-  }
-  return false;
-}
-
-function mapExistingEvent(row: Record<string, unknown>, kind: "thread" | "action"): ExistingEvent {
-  const fromVersion = row.from_version === null
-    ? undefined
-    : requirePersistedVersion(row.from_version);
+function createOperationClaim(operation: ConversationStateOperation): OperationClaim {
+  const entityType = operation.thread === undefined ? "action" : "thread";
+  const entity = operation.thread ?? operation.action!;
   return {
-    kind,
-    id: requireBoundedString("event id", row.id, MAX_IDENTIFIER_CHARS),
-    entityId: requireBoundedString(
-      "event entity id",
-      kind === "thread" ? row.thread_id : row.action_item_id,
-      MAX_IDENTIFIER_CHARS,
-    ),
-    groupId: requireBoundedString("event group id", row.group_id, MAX_IDENTIFIER_CHARS),
-    eventType: requireBoundedString("event type", row.event_type, MAX_IDENTIFIER_CHARS),
-    ...(fromVersion === undefined ? {} : { fromVersion }),
-    toVersion: requirePersistedVersion(row.to_version),
-    operationKey: requireBoundedString("operation key", row.operation_key, MAX_IDENTIFIER_CHARS),
-    createdAt: requireDate("event createdAt", row.created_at),
-    evidenceMessageIds: requirePersistedStringArray("event evidence", row.evidence_message_ids),
+    groupId: entity.groupId,
+    operationKey: operation.operationKey,
+    entityType,
+    entityId: entity.id,
+    operationFingerprint: fingerprintOperation(operation),
   };
 }
 
-function haveSameThread(left: DiscussionThread, right: DiscussionThread): boolean {
-  return left.id === right.id
-    && left.groupId === right.groupId
-    && left.title === right.title
-    && left.summary === right.summary
-    && left.status === right.status
-    && left.confidence === right.confidence
-    && left.mergedIntoThreadId === right.mergedIntoThreadId
-    && left.version === right.version
-    && sameDate(left.firstEvidenceAt, right.firstEvidenceAt)
-    && sameDate(left.lastActivityAt, right.lastActivityAt)
-    && sameOptionalDate(left.resolvedAt, right.resolvedAt)
-    && sameDate(left.createdAt, right.createdAt)
-    && sameDate(left.updatedAt, right.updatedAt);
+function mapOperationClaimRow(row: OperationClaimRow): OperationClaim {
+  requireDate("operation claim createdAt", row.created_at);
+  return {
+    groupId: requireBoundedString("operation claim group id", row.group_id, MAX_IDENTIFIER_CHARS),
+    operationKey: requireBoundedString(
+      "operation claim operation key",
+      row.operation_key,
+      MAX_IDENTIFIER_CHARS,
+    ),
+    entityType: requireEnum(
+      "operation claim entity type",
+      row.entity_type,
+      CONVERSATION_STATE_ENTITY_TYPES,
+    ),
+    entityId: requireBoundedString(
+      "operation claim entity id",
+      row.entity_id,
+      MAX_IDENTIFIER_CHARS,
+    ),
+    operationFingerprint: requireOperationFingerprint(row.operation_fingerprint),
+  };
 }
 
-function haveSameAction(left: ActionItem, right: ActionItem): boolean {
-  return left.id === right.id
-    && left.groupId === right.groupId
-    && left.threadId === right.threadId
-    && left.description === right.description
-    && left.ownerRefType === right.ownerRefType
-    && left.ownerRef === right.ownerRef
-    && sameOptionalDate(left.dueAt, right.dueAt)
-    && left.status === right.status
-    && left.confidence === right.confidence
-    && left.version === right.version
-    && sameOptionalDate(left.completedAt, right.completedAt)
-    && sameOptionalDate(left.cancelledAt, right.cancelledAt)
-    && sameDate(left.createdAt, right.createdAt)
-    && sameDate(left.updatedAt, right.updatedAt);
+function fingerprintOperation(operation: ConversationStateOperation): string {
+  const payload = {
+    ...operation,
+    evidenceMessageIds: [...operation.evidenceMessageIds].sort(),
+  };
+  const canonicalJson = JSON.stringify(orderFingerprintValue(payload));
+  return createHash("sha256").update(canonicalJson).digest("hex");
 }
 
-function sameDate(left: Date, right: Date): boolean {
-  return left.getTime() === right.getTime();
-}
-
-function sameOptionalDate(left: Date | undefined, right: Date | undefined): boolean {
-  return left === undefined ? right === undefined : right !== undefined && sameDate(left, right);
+function orderFingerprintValue(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(orderFingerprintValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([key, item]) => [key, orderFingerprintValue(item)]),
+    );
+  }
+  return value;
 }
 
 function prevalidateOperations(
@@ -487,13 +419,14 @@ function prevalidateOperations(
       }
       const current = threads.get(operation.thread.id);
       if (current === undefined) throw new Error("discussion thread not found");
-      validateThreadMutation(
+      const validatedThread = validateThreadMutation(
         operation as Extract<ConversationStateOperation, { kind: "mutation" }> & { thread: DiscussionThread },
         current,
         threads,
         evidenceCounts,
       );
-      threads.set(operation.thread.id, operation.thread);
+      operation.thread = validatedThread;
+      threads.set(validatedThread.id, validatedThread);
       continue;
     }
     const action = operation.action!;
@@ -518,7 +451,7 @@ function validateThreadMutation(
   current: DiscussionThread,
   threads: Map<string, DiscussionThread>,
   evidenceCounts: Map<string, number>,
-): void {
+): DiscussionThread {
   if (current.version !== operation.expectedVersion) throw new ConversationStateVersionConflictError();
   const event = operation.threadEvent!;
   const transition = validateThreadTransition({
@@ -544,10 +477,12 @@ function validateThreadMutation(
         createdAt: terminalTarget.createdAt,
       },
     ]);
-    if (terminalTarget.id !== target || canonicalTargetId !== target) {
+    if (canonicalTargetId !== terminalTarget.id) {
       throw new Error("merge target is not canonical");
     }
+    return { ...operation.thread, mergedIntoThreadId: terminalTarget.id };
   }
+  return operation.thread;
 }
 
 function validateActionMutation(
@@ -820,6 +755,26 @@ async function insertActionEventEvidence(client: TransactionClient, eventId: str
   );
 }
 
+async function insertOperationClaim(
+  client: TransactionClient,
+  claim: OperationClaim,
+): Promise<void> {
+  await client.query(
+    `
+    INSERT INTO conversation_state_operation_claims (
+      group_id, operation_key, entity_type, entity_id, operation_fingerprint
+    ) VALUES ($1, $2, $3, $4, $5)
+    `,
+    [
+      claim.groupId,
+      claim.operationKey,
+      claim.entityType,
+      claim.entityId,
+      claim.operationFingerprint,
+    ],
+  );
+}
+
 async function insertProjectionRepair(
   client: TransactionClient,
   entityType: "thread" | "action",
@@ -920,18 +875,6 @@ function normalizeEvidence(value: string[]): string[] {
   return dedupe(value.map((id) => requireBoundedString("evidenceMessageId", id, MAX_IDENTIFIER_CHARS)));
 }
 
-function requirePersistedStringArray(field: string, value: unknown): string[] {
-  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
-  return value.map((item) => requireBoundedString(field, item, MAX_IDENTIFIER_CHARS));
-}
-
-function haveSameStrings(left: string[], right: string[]): boolean {
-  const leftValues = [...new Set(left)].sort();
-  const rightValues = [...new Set(right)].sort();
-  return leftValues.length === rightValues.length
-    && leftValues.every((value, index) => value === rightValues[index]);
-}
-
 function dedupe(values: string[]): string[] { return [...new Set(values)]; }
 
 function requireSameGroup(value: unknown, groupId: string): string {
@@ -969,6 +912,13 @@ function requireVersion(value: unknown): number {
 
 function requirePersistedVersion(value: unknown): number {
   return requireVersion(Number(value));
+}
+
+function requireOperationFingerprint(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new Error("operation fingerprint must be a SHA-256 hex digest");
+  }
+  return value;
 }
 
 function requireNonNegativeInteger(field: string, value: unknown): number {

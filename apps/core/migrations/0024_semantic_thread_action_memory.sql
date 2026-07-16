@@ -117,6 +117,16 @@ CREATE TABLE action_item_event_evidence (
     REFERENCES conversation_messages(id, chat_id) ON DELETE RESTRICT
 );
 
+CREATE TABLE conversation_state_operation_claims (
+  group_id TEXT NOT NULL CHECK (char_length(group_id) BETWEEN 1 AND 512),
+  operation_key TEXT NOT NULL CHECK (char_length(operation_key) BETWEEN 1 AND 512),
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('thread', 'action')),
+  entity_id TEXT NOT NULL CHECK (char_length(entity_id) BETWEEN 1 AND 512),
+  operation_fingerprint TEXT NOT NULL CHECK (operation_fingerprint ~ '^[0-9a-f]{64}$'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (group_id, operation_key)
+);
+
 CREATE TABLE conversation_state_memory_projections (
   entity_type TEXT NOT NULL CHECK (entity_type IN ('thread', 'action')),
   entity_id TEXT NOT NULL CHECK (char_length(entity_id) BETWEEN 1 AND 512),
@@ -191,6 +201,10 @@ CREATE TRIGGER action_item_event_evidence_append_only
 BEFORE UPDATE OR DELETE ON action_item_event_evidence
 FOR EACH ROW EXECUTE FUNCTION conversation_state_event_append_only_guard();
 
+CREATE TRIGGER conversation_state_operation_claims_append_only
+BEFORE UPDATE OR DELETE ON conversation_state_operation_claims
+FOR EACH ROW EXECUTE FUNCTION conversation_state_event_append_only_guard();
+
 CREATE TRIGGER discussion_thread_events_truncate_guard
 BEFORE TRUNCATE ON discussion_thread_events
 FOR EACH STATEMENT EXECUTE FUNCTION conversation_state_event_append_only_guard();
@@ -205,4 +219,8 @@ FOR EACH STATEMENT EXECUTE FUNCTION conversation_state_event_append_only_guard()
 
 CREATE TRIGGER action_item_event_evidence_truncate_guard
 BEFORE TRUNCATE ON action_item_event_evidence
+FOR EACH STATEMENT EXECUTE FUNCTION conversation_state_event_append_only_guard();
+
+CREATE TRIGGER conversation_state_operation_claims_truncate_guard
+BEFORE TRUNCATE ON conversation_state_operation_claims
 FOR EACH STATEMENT EXECUTE FUNCTION conversation_state_event_append_only_guard();
