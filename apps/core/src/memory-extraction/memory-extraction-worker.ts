@@ -85,6 +85,12 @@ export type MemoryExtractionWorkerDependencies = {
   auditLog?: AuditLog;
   runtimeController: RuntimeController;
   minConfidence?: number;
+  conversationStateRollout?: {
+    threadEnabledGroupIds: string[];
+    actionEnabledGroupIds: string[];
+    candidateConfidenceFloor: number;
+    applyConfidence: number;
+  };
   now?: () => Date;
   onAuditError?: (error: unknown) => void;
 };
@@ -390,11 +396,16 @@ async function processClaimedRun(input: {
         ? {}
         : { minConfidence: dependencies.minConfidence }),
     });
+    const conversationStateResponse = restrictConversationStateResponse(
+      response,
+      run.groupId,
+      dependencies.conversationStateRollout,
+    );
     conversationStateValidation = validateConversationStateCandidates({
       run,
-      response,
-      candidateFloor: 0.65,
-      applyConfidence: 0.85,
+      response: conversationStateResponse,
+      candidateFloor: dependencies.conversationStateRollout?.candidateConfidenceFloor ?? 0.65,
+      applyConfidence: dependencies.conversationStateRollout?.applyConfidence ?? 0.85,
     });
     if (conversationStateValidation.diagnostics.rejectionCodes.includes("invalid_response")) {
       throw new AiWorkerMemoryExtractionError("invalid_response", true);
@@ -505,6 +516,27 @@ async function processClaimedRun(input: {
       memoryIds: [...completion.memoryIds],
     }),
   });
+}
+
+function restrictConversationStateResponse<
+  Response extends { threadOperations?: unknown[]; actionOperations?: unknown[] },
+>(
+  response: Response,
+  groupId: string,
+  rollout: MemoryExtractionWorkerDependencies["conversationStateRollout"],
+): Response {
+  if (rollout === undefined) {
+    return response;
+  }
+  return {
+    ...response,
+    ...(rollout.threadEnabledGroupIds.includes(groupId)
+      ? {}
+      : { threadOperations: [] }),
+    ...(rollout.actionEnabledGroupIds.includes(groupId)
+      ? {}
+      : { actionOperations: [] }),
+  };
 }
 
 async function skipBeforeLoad(input: {

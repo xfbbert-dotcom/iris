@@ -157,9 +157,15 @@ describe("createMemoryExtractionRuntime", () => {
       auditLog,
       runtimeController: controller,
       minConfidence: 0.85,
+      conversationStateRollout: {
+        threadEnabledGroupIds: [],
+        actionEnabledGroupIds: [],
+        candidateConfidenceFloor: 0.65,
+        applyConfidence: 0.85,
+      },
     });
     expect(fixture.dependencies.createWorkerLoop).toHaveBeenCalledWith({
-      worker: fixture.worker,
+      worker: expect.objectContaining({ processBatch: expect.any(Function) }),
       intervalMs: 1000,
       batchLimit: 20,
       onError: expect.any(Function),
@@ -196,6 +202,12 @@ describe("createMemoryExtractionRuntime", () => {
       intervalMs: 1000,
       batchLimit: 20,
       minConfidence: 0.85,
+      candidateConfidenceFloor: 0.65,
+      threadEnabledGroupCount: 0,
+      actionEnabledGroupCount: 0,
+      pendingProjectionRepairCount: 0,
+      failedProjectionRepairCount: 0,
+      projectionRepairHealthy: true,
       pendingJobCount: 3,
       processingJobCount: 2,
       delayedJobCount: 1,
@@ -306,6 +318,91 @@ describe("createMemoryExtractionRuntime", () => {
     await vi.waitFor(() => expect(fixture.loop.start).toHaveBeenCalledOnce());
     await expect(runtime?.getStatus()).resolves.toMatchObject({ minConfidence: 1 });
     await runtime?.close();
+  });
+
+  it("wires fail-closed conversation state rollout controls into the worker", () => {
+    const fixture = runtimeFixture();
+
+    createMemoryExtractionRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_THREAD_EXTRACTION_GROUP_IDS: "group-a,group-b",
+        IRIS_ACTION_EXTRACTION_GROUP_IDS: "group-b",
+        IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR: "0.7",
+        IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE: "0.9",
+      },
+      runtimeController: runtimeController(),
+      dependencies: fixture.dependencies,
+    });
+
+    expect(fixture.dependencies.createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      conversationStateRollout: {
+        threadEnabledGroupIds: ["group-a", "group-b"],
+        actionEnabledGroupIds: ["group-b"],
+        candidateConfidenceFloor: 0.7,
+        applyConfidence: 0.9,
+      },
+    }));
+  });
+
+  it("reports rollout controls and repair counts without candidate content", async () => {
+    const fixture = runtimeFixture();
+    const projector = {
+      processBatch: vi.fn(async () => ({ claimedCount: 0, completedCount: 0, failedCount: 0 })),
+      getStatusCounts: vi.fn(async () => ({ pending: 3, failed: 2 })),
+    };
+    const runtime = createMemoryExtractionRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_THREAD_EXTRACTION_GROUP_IDS: "group-a, group-b",
+        IRIS_ACTION_EXTRACTION_GROUP_IDS: "group-b",
+        IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR: "0.7",
+      },
+      runtimeController: runtimeController(),
+      dependencies: {
+        ...fixture.dependencies,
+        createConversationStateProjector: vi.fn(() => projector),
+      } as any,
+    });
+
+    const status = await runtime?.getStatus();
+
+    expect(status).toMatchObject({
+      candidateConfidenceFloor: 0.7,
+      threadEnabledGroupCount: 2,
+      actionEnabledGroupCount: 1,
+      pendingProjectionRepairCount: 3,
+      failedProjectionRepairCount: 2,
+    });
+    expect(JSON.stringify(status)).not.toContain("candidate content must never escape");
+  });
+
+  it("records a projection repair failure without blocking extraction", async () => {
+    const fixture = runtimeFixture();
+    let loopWorker: { processBatch(input: { limit: number }): Promise<unknown[]> } | undefined;
+    const projector = {
+      processBatch: vi.fn(async () => {
+        throw new Error("candidate content must never escape");
+      }),
+      getStatusCounts: vi.fn(async () => ({ pending: 1, failed: 0 })),
+    };
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: {
+        ...fixture.dependencies,
+        createConversationStateProjector: vi.fn(() => projector),
+        createWorkerLoop: vi.fn((input: any) => {
+          loopWorker = input.worker;
+          return fixture.loop;
+        }),
+      } as any,
+    });
+
+    await loopWorker?.processBatch({ limit: 1 });
+
+    expect(fixture.worker.processBatch).toHaveBeenCalledWith({ limit: 1 });
+    await expect(runtime?.getStatus()).resolves.toMatchObject({ projectionRepairHealthy: false });
   });
 
   it("prevents Redis connect when close begins during a pending database probe", async () => {
@@ -957,6 +1054,10 @@ function runtimeFixture({
     extract: vi.fn(),
   };
   const worker = { processBatch: vi.fn(async () => []) };
+  const projector = {
+    processBatch: vi.fn(async () => ({ claimedCount: 0, completedCount: 0, failedCount: 0 })),
+    getStatusCounts: vi.fn(async () => ({ pending: 0, failed: 0 })),
+  };
   const loop = {
     start: vi.fn(),
     stop: vi.fn(async () => {
@@ -989,6 +1090,7 @@ function runtimeFixture({
     createWorker: vi.fn(() => worker),
     createWorkerLoop: vi.fn(() => loop),
     createPlanner: vi.fn(() => planner),
+    createConversationStateProjector: vi.fn(() => projector),
   };
   const dependencies = rawDependencies as typeof rawDependencies &
     MemoryExtractionRuntimeDependencies;
@@ -1000,6 +1102,7 @@ function runtimeFixture({
     emitRedisTransportConnect: () => emitRedisEvent("connect"),
     loop,
     planner,
+    projector,
     pool,
     poolQuery,
     queue,

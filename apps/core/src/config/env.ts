@@ -66,6 +66,10 @@ export type MemoryExtractionRuntimeConfig =
       intervalMs: number;
       batchLimit: number;
       minConfidence: number;
+      threadEnabledGroupIds: string[];
+      actionEnabledGroupIds: string[];
+      candidateConfidenceFloor: number;
+      applyConfidence: number;
     };
 
 export type FeishuOpenApiConfig = {
@@ -264,6 +268,34 @@ export function readMemoryExtractionRuntimeConfig(
   if (irisBotOpenId === undefined) {
     throw new Error("IRIS_FEISHU_BOT_OPEN_ID is required when memory extraction is enabled");
   }
+  const threadEnabledGroupIds = readGroupIdListEnv(
+    "IRIS_THREAD_EXTRACTION_GROUP_IDS",
+    env.IRIS_THREAD_EXTRACTION_GROUP_IDS,
+  );
+  const actionEnabledGroupIds = readGroupIdListEnv(
+    "IRIS_ACTION_EXTRACTION_GROUP_IDS",
+    env.IRIS_ACTION_EXTRACTION_GROUP_IDS,
+  );
+  if (actionEnabledGroupIds.some((groupId) => !threadEnabledGroupIds.includes(groupId))) {
+    throw new Error(
+      "IRIS_ACTION_EXTRACTION_GROUP_IDS must be a subset of IRIS_THREAD_EXTRACTION_GROUP_IDS",
+    );
+  }
+  const candidateConfidenceFloor = readConfidenceEnv(
+    "IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR",
+    env.IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR,
+    0.65,
+  );
+  const applyConfidence = readConfidenceEnv(
+    "IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE",
+    env.IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE,
+    0.85,
+  );
+  if (candidateConfidenceFloor >= applyConfidence) {
+    throw new Error(
+      "IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR must be less than IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE",
+    );
+  }
 
   return {
     enabled: true,
@@ -289,11 +321,11 @@ export function readMemoryExtractionRuntimeConfig(
       20,
       100,
     ),
-    minConfidence: readConfidenceEnv(
-      "IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE",
-      env.IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE,
-      0.85,
-    ),
+    minConfidence: applyConfidence,
+    threadEnabledGroupIds,
+    actionEnabledGroupIds,
+    candidateConfidenceFloor,
+    applyConfidence,
   };
 }
 
@@ -461,6 +493,20 @@ function readConfidenceEnv(
     throw new Error(`${name} must be between 0 and 1`);
   }
   return parsed;
+}
+
+function readGroupIdListEnv(name: string, value: string | undefined): string[] {
+  if (value === undefined || value.trim() === "") {
+    return [];
+  }
+  const groupIds = [...new Set(value.split(",").map((part) => part.trim()).filter(Boolean))];
+  if (groupIds.length > 100) {
+    throw new Error(`${name} must contain at most 100 groups`);
+  }
+  if (groupIds.some((groupId) => groupId.length > 512)) {
+    throw new Error(`${name} group IDs must be at most 512 characters`);
+  }
+  return groupIds;
 }
 
 function readOptionalPositiveIntegerEnv(

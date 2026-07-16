@@ -29,6 +29,13 @@ import {
 } from "../memory-extraction/postgres-memory-extraction-repository.js";
 import { createMemoryExtractionWorker } from "../memory-extraction/memory-extraction-worker.js";
 import {
+  createConversationStateProjector,
+  type ConversationStateProjector,
+} from "../conversation-state/conversation-state-projector.js";
+import { createPostgresConversationStateRepository } from "../conversation-state/postgres-conversation-state-repository.js";
+import { createGroupMemoryService } from "../memory/group-memory-service.js";
+import { createPostgresGroupMemoryRepository } from "../memory/postgres-group-memory-repository.js";
+import {
   createMemoryExtractionWorkerLoop,
   type MemoryExtractionWorkerBatchSnapshot,
   type MemoryExtractionWorkerLoop,
@@ -64,6 +71,12 @@ export type MemoryExtractionRuntimeStatus = {
   intervalMs: number;
   batchLimit: number;
   minConfidence: number;
+  candidateConfidenceFloor?: number;
+  threadEnabledGroupCount?: number;
+  actionEnabledGroupCount?: number;
+  pendingProjectionRepairCount?: number;
+  failedProjectionRepairCount?: number;
+  projectionRepairHealthy?: boolean;
   pendingJobCount: number;
   processingJobCount: number;
   delayedJobCount: number;
@@ -97,6 +110,7 @@ export type MemoryExtractionRuntimeDependencies = {
   createWorker?: typeof createMemoryExtractionWorker;
   createWorkerLoop?: typeof createMemoryExtractionWorkerLoop;
   createPlanner?: typeof createMemoryExtractionPlanner;
+  createConversationStateProjector?: typeof createConversationStateProjector;
 };
 
 export function createMemoryExtractionRuntime({
@@ -141,6 +155,7 @@ export function createMemoryExtractionRuntime({
   const createWorker = dependencies.createWorker ?? createMemoryExtractionWorker;
   const createLoop = dependencies.createWorkerLoop ?? createMemoryExtractionWorkerLoop;
   const createPlanner = dependencies.createPlanner ?? createMemoryExtractionPlanner;
+  const createProjector = dependencies.createConversationStateProjector ?? createConversationStateProjector;
 
   const client = createAiWorkerClient({
     baseUrl: runtimeConfig.aiWorkerBaseUrl,
@@ -169,9 +184,40 @@ export function createMemoryExtractionRuntime({
     ...(auditLog === undefined ? {} : { auditLog }),
     runtimeController,
     minConfidence: runtimeConfig.minConfidence,
+    conversationStateRollout: {
+      threadEnabledGroupIds: runtimeConfig.threadEnabledGroupIds,
+      actionEnabledGroupIds: runtimeConfig.actionEnabledGroupIds,
+      candidateConfidenceFloor: runtimeConfig.candidateConfidenceFloor,
+      applyConfidence: runtimeConfig.applyConfidence,
+    },
   });
+  const conversationStateRepository = createPostgresConversationStateRepository({
+    dataSource: createLazyPostgresDataSource(() => requirePostgresPool(ownedPool)) as never,
+  });
+  const projectionMemories = createGroupMemoryService({
+    repository: createPostgresGroupMemoryRepository({
+      dataSource: createLazyPostgresDataSource(() => requirePostgresPool(ownedPool)) as never,
+    }),
+    ...(auditLog === undefined ? {} : { auditLog }),
+  });
+  const projector: ConversationStateProjector = createProjector({
+    repository: conversationStateRepository,
+    memories: projectionMemories,
+  });
+  let latestProjectionRepairFailed = false;
+  const workerWithProjectionRepair = {
+    async processBatch(input: { limit: number }) {
+      try {
+        await projector.processBatch({ limit: input.limit, now: new Date() });
+        latestProjectionRepairFailed = false;
+      } catch {
+        latestProjectionRepairFailed = true;
+      }
+      return worker.processBatch(input);
+    },
+  };
   const loop: MemoryExtractionWorkerLoop = createLoop({
-    worker,
+    worker: workerWithProjectionRepair,
     intervalMs: runtimeConfig.intervalMs,
     batchLimit: runtimeConfig.batchLimit,
     onError: () => undefined,
@@ -336,6 +382,7 @@ export function createMemoryExtractionRuntime({
         deadLetterJobCount,
         providerCooldownUntil,
         repositoryStatus,
+        projectionStatus,
       ] = await Promise.all([
         readWorkerHealth(client),
         queue.getPendingCount(),
@@ -344,6 +391,7 @@ export function createMemoryExtractionRuntime({
         queue.getDeadLetterCount(),
         queue.getProviderCooldown(),
         repository.getStatusCounts(),
+        projector.getStatusCounts(),
       ]);
 
       return {
@@ -353,6 +401,12 @@ export function createMemoryExtractionRuntime({
         intervalMs: loopSnapshot.intervalMs,
         batchLimit: loopSnapshot.batchLimit,
         minConfidence: runtimeConfig.minConfidence,
+        candidateConfidenceFloor: runtimeConfig.candidateConfidenceFloor,
+        threadEnabledGroupCount: runtimeConfig.threadEnabledGroupIds.length,
+        actionEnabledGroupCount: runtimeConfig.actionEnabledGroupIds.length,
+        pendingProjectionRepairCount: projectionStatus.pending,
+        failedProjectionRepairCount: projectionStatus.failed,
+        projectionRepairHealthy: !latestProjectionRepairFailed,
         pendingJobCount,
         processingJobCount,
         delayedJobCount,
