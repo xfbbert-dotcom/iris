@@ -1252,9 +1252,9 @@ function toConversationStateOperations(input: {
     if (current === undefined || current.version !== operation.expectedVersion) throw new MemoryExtractionCompletionConflictError();
     let thread: ExtractionExistingThread;
     let eventType: "evidence_attached" | "promoted" | "merged" | "resolved" | "reopened" | "summary_updated" | "corrected";
-    if (operation.operation === "attach_evidence") { thread = { ...current, evidenceCount: current.evidenceCount + operation.evidenceMessageIds.length, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "evidence_attached"; }
+    if (operation.operation === "attach_evidence") { thread = { ...current, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "evidence_attached"; }
     else if (operation.operation === "promote") { thread = { ...current, status: "open", summary: operation.summary, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "promoted"; }
-    else if (operation.operation === "merge") { thread = { ...current, status: "merged", mergedIntoThreadId: operation.targetThreadId, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "merged"; }
+    else if (operation.operation === "merge") { thread = mapMergedThreadForCompletion(current, operation.targetThreadId, now); eventType = "merged"; }
     else if (operation.operation === "resolve") { thread = { ...current, status: "resolved", resolvedAt: now, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "resolved"; }
     else if (operation.operation === "reopen") { const { resolvedAt: _resolvedAt, ...reopened } = current; thread = { ...reopened, status: "open", version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "reopened"; }
     else if (operation.operation === "update_summary") { thread = { ...current, summary: operation.summary, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "summary_updated"; }
@@ -1288,6 +1288,22 @@ function toConversationStateOperations(input: {
     actions.set(action.id, action);
   }
   return operations;
+}
+
+export function mapMergedThreadForCompletion(
+  current: ExtractionExistingThread,
+  targetThreadId: string,
+  now: Date,
+): ExtractionExistingThread {
+  const { resolvedAt: _resolvedAt, ...mergeable } = current;
+  return {
+    ...mergeable,
+    status: "merged",
+    mergedIntoThreadId: targetThreadId,
+    version: current.version + 1,
+    lastActivityAt: now,
+    updatedAt: now,
+  };
 }
 
 function normalizeCompletionConflictCandidate(

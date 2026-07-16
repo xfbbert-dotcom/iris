@@ -14,16 +14,51 @@ import {
 } from "../src/memory/postgres-group-memory-writer.js";
 import {
   createPostgresMemoryExtractionRepository,
+  mapMergedThreadForCompletion,
   type PostgresMemoryExtractionDataSource,
   type TransactionClient,
 } from "../src/memory-extraction/postgres-memory-extraction-repository.js";
 import { createPostgresGroupMemoryRepository } from "../src/memory/postgres-group-memory-repository.js";
 import { validateConversationStateCandidates } from "../src/conversation-state/conversation-state-candidate-validator.js";
+import { createMemoryExtractionWorker } from "../src/memory-extraction/memory-extraction-worker.js";
+import type { MemoryExtractionJob, MemoryExtractionQueue } from "../src/memory-extraction/memory-extraction-queue.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("createPostgresMemoryExtractionRepository", () => {
+  it.each(["candidate", "open", "resolved"] as const)(
+    "maps a %s source to merged state without a resolved timestamp",
+    (status) => {
+      const original = new Date("2026-07-15T00:00:00.000Z");
+      const mergedAt = new Date("2026-07-15T01:00:00.000Z");
+      const merged = mapMergedThreadForCompletion({
+        id: "thread-source",
+        groupId: "chat-a",
+        title: "Source",
+        summary: "Source",
+        status,
+        confidence: 0.9,
+        version: 1,
+        evidenceCount: 1,
+        firstEvidenceAt: original,
+        lastActivityAt: original,
+        ...(status === "resolved" ? { resolvedAt: original } : {}),
+        createdAt: original,
+        updatedAt: original,
+      }, "thread-target", mergedAt);
+
+      expect(merged).toMatchObject({
+        status: "merged",
+        mergedIntoThreadId: "thread-target",
+        version: 2,
+        lastActivityAt: mergedAt,
+        updatedAt: mergedAt,
+      });
+      expect(Object.hasOwn(merged, "resolvedAt")).toBe(false);
+    },
+  );
+
   it("aggregates durable content-free request, run, and candidate diagnostics in one query", async () => {
     const source = fakeDataSource((sql, params) => {
       const normalized = normalizeSql(sql);
@@ -2471,6 +2506,229 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
       [top12Group],
     )).resolves.toMatchObject({ rows: [{ count: 0 }] });
   });
+
+  it("commits worker memory and attach while rejecting a merge with reused batch evidence", async () => {
+    const workerGroup = `${groupId}-worker-batch-evidence`;
+    const messageId = `feishu:worker-batch-evidence-${suffix}`;
+    const sourceId = `worker-batch-source-${suffix}`;
+    const targetId = `worker-batch-target-${suffix}`;
+    const timestamp = new Date("2026-07-15T05:00:00.000Z");
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId: workerGroup,
+      text: "Worker batch evidence is durable.",
+      createdAt: timestamp,
+    });
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, created_at, updated_at
+      ) VALUES
+        ($1, $3, 'Source', 'Source', 'candidate', 0.9, 1, $4, $4, $4, $4),
+        ($2, $3, 'Target', 'Target', 'open', 0.9, 1, $4, $4, $4, $4)
+      `,
+      [sourceId, targetId, workerGroup, timestamp],
+    );
+    await pool!.query(
+      `
+      INSERT INTO discussion_thread_evidence (thread_id, group_id, conversation_message_id)
+      VALUES ($1, $2, $3)
+      `,
+      [targetId, workerGroup, messageId],
+    );
+    const realRepository = createRepository(pool);
+    const registered = await realRepository.registerRequest({
+      groupId: workerGroup,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const completeRun = vi.fn(realRepository.completeRun.bind(realRepository));
+    const queue = successfulWorkerQueue({
+      requestId: registered.request.id,
+      groupId: workerGroup,
+      now: timestamp,
+    });
+    const worker = createMemoryExtractionWorker({
+      queue,
+      repository: { ...realRepository, completeRun },
+      client: {
+        checkHealth: vi.fn(async () => true),
+        extract: vi.fn(async (run) => ({
+          runId: run.id,
+          candidates: [{
+            category: "decision" as const,
+            content: "Worker batch evidence is durable.",
+            importance: 4,
+            confidence: 0.9,
+            evidenceMessageIds: [messageId],
+            relation: "new" as const,
+          }],
+          threadOperations: [
+            {
+              operation: "attach_evidence" as const,
+              operationKey: `a:attach:${suffix}`,
+              confidence: 0.9,
+              evidenceMessageIds: [messageId],
+              evidenceSpan: "Worker batch evidence is durable.",
+              threadId: targetId,
+              expectedVersion: 1,
+            },
+            {
+              operation: "merge" as const,
+              operationKey: `b:merge:${suffix}`,
+              confidence: 0.9,
+              evidenceMessageIds: [messageId],
+              evidenceSpan: "Worker batch evidence is durable.",
+              sourceThreadId: sourceId,
+              targetThreadId: targetId,
+              expectedVersion: 1,
+            },
+          ],
+          actionOperations: [],
+        })),
+      },
+      runtimeController: {
+        canProcessIncomingEvent: () => true,
+        canReadGroupContext: () => true,
+      },
+      now: () => timestamp,
+    });
+
+    await expect(worker.processBatch({ limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ status: "completed", memoryIds: [expect.any(String)] }),
+    ]);
+    await expect(pool!.query(
+      `
+      SELECT status, thread_operation_count::int AS thread_operation_count,
+             conversation_state_rejected_count::int AS rejected_count,
+             conversation_state_rejection_codes
+      FROM group_memory_extraction_runs
+      WHERE group_id = $1
+      `,
+      [workerGroup],
+    )).resolves.toMatchObject({ rows: [{
+      status: "completed",
+      thread_operation_count: 1,
+      rejected_count: 1,
+      conversation_state_rejection_codes: ["batch_evidence_dependency"],
+    }] });
+    await expect(pool!.query(
+      "SELECT status, version::int AS version FROM discussion_threads WHERE id = $1",
+      [sourceId],
+    )).resolves.toMatchObject({ rows: [{ status: "candidate", version: 1 }] });
+    await expect(pool!.query(
+      "SELECT status, version::int AS version FROM discussion_threads WHERE id = $1",
+      [targetId],
+    )).resolves.toMatchObject({ rows: [{ status: "open", version: 2 }] });
+    await expect(pool!.query(
+      "SELECT event_type FROM discussion_thread_events WHERE group_id = $1 ORDER BY operation_key",
+      [workerGroup],
+    )).resolves.toMatchObject({ rows: [{ event_type: "evidence_attached" }] });
+  });
+
+  it("completes and replay-protects a worker merge from a resolved source", async () => {
+    const workerGroup = `${groupId}-worker-resolved-merge`;
+    const messageId = `feishu:worker-resolved-merge-${suffix}`;
+    const sourceId = `worker-resolved-source-${suffix}`;
+    const targetId = `worker-resolved-target-${suffix}`;
+    const timestamp = new Date("2026-07-15T06:00:00.000Z");
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId: workerGroup,
+      text: "Resolved work belongs in the target.",
+      createdAt: timestamp,
+    });
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, resolved_at, created_at, updated_at
+      ) VALUES
+        ($1, $3, 'Resolved source', 'Resolved source', 'resolved', 0.9, 1,
+          $4, $4, $4, $4, $4),
+        ($2, $3, 'Open target', 'Open target', 'open', 0.9, 1,
+          $4, $4, NULL, $4, $4)
+      `,
+      [sourceId, targetId, workerGroup, timestamp],
+    );
+    const realRepository = createRepository(pool);
+    const registered = await realRepository.registerRequest({
+      groupId: workerGroup,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const completeRun = vi.fn(realRepository.completeRun.bind(realRepository));
+    const queue = successfulWorkerQueue({
+      requestId: registered.request.id,
+      groupId: workerGroup,
+      now: timestamp,
+    });
+    const worker = createMemoryExtractionWorker({
+      queue,
+      repository: { ...realRepository, completeRun },
+      client: {
+        checkHealth: vi.fn(async () => true),
+        extract: vi.fn(async (run) => ({
+          runId: run.id,
+          candidates: [],
+          threadOperations: [{
+            operation: "merge" as const,
+            operationKey: `merge:resolved:${suffix}`,
+            confidence: 0.9,
+            evidenceMessageIds: [messageId],
+            evidenceSpan: "Resolved work belongs in the target.",
+            sourceThreadId: sourceId,
+            targetThreadId: targetId,
+            expectedVersion: 1,
+          }],
+          actionOperations: [],
+        })),
+      },
+      runtimeController: {
+        canProcessIncomingEvent: () => true,
+        canReadGroupContext: () => true,
+      },
+      now: () => timestamp,
+    });
+
+    await expect(worker.processBatch({ limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ status: "completed" }),
+    ]);
+    expect(completeRun).toHaveBeenCalledOnce();
+    await expect(pool!.query(
+      "SELECT status, merged_into_thread_id, resolved_at, version::int AS version FROM discussion_threads WHERE id = $1",
+      [sourceId],
+    )).resolves.toMatchObject({ rows: [{
+      status: "merged",
+      merged_into_thread_id: targetId,
+      resolved_at: null,
+      version: 2,
+    }] });
+    const beforeReplay = await pool!.query<{ events: number; claims: number; repairs: number }>(
+      `
+      SELECT
+        (SELECT count(*)::int FROM discussion_thread_events WHERE group_id = $1) AS events,
+        (SELECT count(*)::int FROM conversation_state_operation_claims WHERE group_id = $1) AS claims,
+        (SELECT count(*)::int FROM conversation_state_projection_repairs WHERE group_id = $1) AS repairs
+      `,
+      [workerGroup],
+    );
+    const replayInput = completeRun.mock.calls[0]![0];
+
+    await expect(realRepository.completeRun(replayInput)).resolves.toMatchObject({
+      status: "already_completed",
+    });
+    await expect(pool!.query(
+      `
+      SELECT
+        (SELECT count(*)::int FROM discussion_thread_events WHERE group_id = $1) AS events,
+        (SELECT count(*)::int FROM conversation_state_operation_claims WHERE group_id = $1) AS claims,
+        (SELECT count(*)::int FROM conversation_state_projection_repairs WHERE group_id = $1) AS repairs
+      `,
+      [workerGroup],
+    )).resolves.toMatchObject({ rows: beforeReplay.rows });
+  });
 });
 
 runIfDatabase("PostgresMemoryExtractionRepository review invariants with Postgres", () => {
@@ -3355,6 +3613,29 @@ function createRepository(pool: pg.Pool | undefined) {
     throw new Error("Expected Postgres pool to be initialized");
   }
   return createPostgresMemoryExtractionRepository({ dataSource: pool });
+}
+
+function successfulWorkerQueue(input: {
+  requestId: string;
+  groupId: string;
+  now: Date;
+}): MemoryExtractionQueue {
+  const job: MemoryExtractionJob = {
+    schemaVersion: 1,
+    idempotencyKey: `memory-extraction:${input.requestId}`,
+    requestId: input.requestId,
+    groupId: input.groupId,
+    enqueuedAt: input.now,
+    notBefore: input.now,
+    attempts: 0,
+  };
+  return {
+    recoverProcessing: vi.fn(async () => ({ recoveredCount: 0, remainingCount: 0 })),
+    dequeueBatch: vi.fn(async () => [job]),
+    getProviderCooldown: vi.fn(async () => undefined),
+    handleProcessedJob: vi.fn(async () => undefined),
+    handleFailedJob: vi.fn(async () => ({ action: "requeued" as const, attempts: 1 })),
+  } as unknown as MemoryExtractionQueue;
 }
 
 function fakeDataSource(handler: (sql: string, params?: unknown[]) => { rows: unknown[] }) {

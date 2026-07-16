@@ -73,6 +73,7 @@ export function validateConversationStateCandidates(input: {
   const evidenceById = new Map(input.run.evidenceMessages.map((message) => [message.id, message]));
   const threadsById = new Map(input.run.existingThreads.map((thread) => [thread.id, { ...thread }]));
   const actionsById = new Map(input.run.existingActions.map((action) => [action.id, { ...action }]));
+  const threadEvidenceChangedInBatch = new Set<string>();
   const duplicateKeys = duplicateOperationKeys([...proposedThreads, ...proposedActions]);
 
   const operations = [
@@ -86,6 +87,7 @@ export function validateConversationStateCandidates(input: {
         operation: entry.operation,
         evidenceById,
         threadsById,
+        threadEvidenceChangedInBatch,
         duplicateKeys,
         enabled: input.run.enabledOperationFamilies.includes("thread"),
         candidateFloor: input.candidateFloor,
@@ -93,6 +95,13 @@ export function validateConversationStateCandidates(input: {
       });
       if (accepted.ok) {
         acceptedThreads.push(accepted.value);
+        if (accepted.value.operation !== "create") {
+          threadEvidenceChangedInBatch.add(
+            accepted.value.operation === "merge"
+              ? accepted.value.sourceThreadId
+              : accepted.value.threadId,
+          );
+        }
         advanceThreadState(accepted.value, threadsById);
       } else rejected.add(accepted.code);
       continue;
@@ -126,6 +135,7 @@ function validateThreadOperation(input: {
   operation: ProposedThreadOperation;
   evidenceById: Map<string, ConversationStateExtractionMessage>;
   threadsById: Map<string, ExtractionExistingThread>;
+  threadEvidenceChangedInBatch: Set<string>;
   duplicateKeys: Set<string>;
   enabled: boolean;
   candidateFloor: number;
@@ -155,9 +165,16 @@ function validateThreadOperation(input: {
     if (mergeTarget.status === "merged") return reject("invalid_dependency");
     const transition = validateThreadTransition({ from: target.status, to: "merged", eventType: "merged" });
     if (!transition.ok) return reject(transition.code);
-    return selectCanonicalMergeTarget([target, mergeTarget]) === mergeTarget.id
-      ? { ok: true, value: operation }
-      : reject("noncanonical_merge_target");
+    if (selectCanonicalMergeTarget([target, mergeTarget]) !== mergeTarget.id) {
+      return reject("noncanonical_merge_target");
+    }
+    if (
+      input.threadEvidenceChangedInBatch.has(target.id) ||
+      input.threadEvidenceChangedInBatch.has(mergeTarget.id)
+    ) {
+      return reject("batch_evidence_dependency");
+    }
+    return { ok: true, value: operation };
   }
   if (operation.operation === "attach_evidence") {
     const transition = validateThreadTransition({
@@ -445,8 +462,9 @@ function advanceThreadState(
   const current = threadsById.get(threadId);
   if (current === undefined) return;
   const next = { ...current, version: current.version + 1 };
-  if (operation.operation === "attach_evidence") next.evidenceCount += operation.evidenceMessageIds.length;
-  else if (operation.operation === "promote") {
+  if (operation.operation === "attach_evidence") {
+    // Count-only snapshots cannot reveal whether these evidence links already exist.
+  } else if (operation.operation === "promote") {
     next.status = "open";
     next.summary = operation.summary;
   } else if (operation.operation === "merge") {

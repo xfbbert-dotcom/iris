@@ -771,6 +771,85 @@ describe("createMemoryExtractionWorker", () => {
     }));
   });
 
+  it("keeps valid memory and attach work when a later merge depends on batch evidence", async () => {
+    const dependencies = createDependencies({
+      jobs: [job("request-1")],
+      claimedRun: run({
+        requestIds: ["request-1"],
+        existingThreads: [
+          {
+            id: "thread-source",
+            groupId: "chat-a",
+            title: "Source",
+            summary: "Launch on Thursday.",
+            status: "candidate",
+            confidence: 0.9,
+            version: 1,
+            evidenceCount: 1,
+            firstEvidenceAt: new Date("2026-07-14T23:59:00.000Z"),
+            lastActivityAt: new Date("2026-07-14T23:59:00.000Z"),
+            createdAt: new Date("2026-07-14T23:59:00.000Z"),
+            updatedAt: new Date("2026-07-14T23:59:00.000Z"),
+          },
+          {
+            id: "thread-target",
+            groupId: "chat-a",
+            title: "Target",
+            summary: "Launch on Thursday.",
+            status: "open",
+            confidence: 0.9,
+            version: 1,
+            evidenceCount: 1,
+            firstEvidenceAt: new Date("2026-07-14T23:59:00.000Z"),
+            lastActivityAt: new Date("2026-07-14T23:59:00.000Z"),
+            createdAt: new Date("2026-07-14T23:59:00.000Z"),
+            updatedAt: new Date("2026-07-14T23:59:00.000Z"),
+          },
+        ],
+      }),
+    });
+    dependencies.client.extract.mockResolvedValue({
+      runId: "run-1",
+      candidates: [candidate()],
+      threadOperations: [
+        {
+          operation: "attach_evidence",
+          operationKey: "a:thread:attach-target",
+          confidence: 0.9,
+          evidenceMessageIds: ["feishu:msg-1"],
+          evidenceSpan: "Launch on Thursday.",
+          threadId: "thread-target",
+          expectedVersion: 1,
+        },
+        {
+          operation: "merge",
+          operationKey: "b:thread:merge",
+          confidence: 0.9,
+          evidenceMessageIds: ["feishu:msg-1"],
+          evidenceSpan: "Launch on Thursday.",
+          sourceThreadId: "thread-source",
+          targetThreadId: "thread-target",
+          expectedVersion: 1,
+        },
+      ],
+      actionOperations: [],
+    } as any);
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await worker.processBatch({ limit: 20 });
+
+    expect(dependencies.repository.completeRun).toHaveBeenCalledWith(expect.objectContaining({
+      acceptedCandidates: [expect.objectContaining({ content: "Launch on Thursday." })],
+      threadOperations: [expect.objectContaining({ operationKey: "a:thread:attach-target" })],
+      conversationStateDiagnostics: {
+        proposedCount: 2,
+        acceptedCount: 1,
+        rejectedCount: 1,
+        rejectionCodes: ["batch_evidence_dependency"],
+      },
+    }));
+  });
+
   it("passes only fully validated conflict candidates into atomic completion", async () => {
     const dependencies = createDependencies({
       jobs: [job("request-1")],

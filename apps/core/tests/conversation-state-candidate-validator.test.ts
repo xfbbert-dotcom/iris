@@ -218,6 +218,81 @@ describe("validateConversationStateCandidates", () => {
     expect(result.diagnostics.rejectionCodes).toEqual(["stale_version"]);
   });
 
+  it("rejects a merge that depends on target evidence touched earlier in the batch", () => {
+    const run = claimedRun();
+    run.existingThreads = [
+      { ...existingThread(), id: "thread-source", status: "candidate", evidenceCount: 1 },
+      { ...existingThread(), id: "thread-target", evidenceCount: 1 },
+    ];
+    const response = responseWithExistingThreadOperation();
+    response.threadOperations = [
+      {
+        operation: "attach_evidence",
+        operationKey: "a:thread:attach-target",
+        confidence: 0.9,
+        evidenceMessageIds: ["message-1"],
+        evidenceSpan: "Launch planning",
+        threadId: "thread-target",
+        expectedVersion: 1,
+      },
+      {
+        operation: "merge",
+        operationKey: "b:thread:merge",
+        confidence: 0.9,
+        evidenceMessageIds: ["message-1"],
+        evidenceSpan: "Launch planning",
+        sourceThreadId: "thread-source",
+        targetThreadId: "thread-target",
+        expectedVersion: 1,
+      },
+    ];
+
+    const result = validateConversationStateCandidates({ run, response, candidateFloor: 0.65, applyConfidence: 0.85 });
+
+    expect(result.threadOperations.map((operation) => operation.operationKey)).toEqual([
+      "a:thread:attach-target",
+    ]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["batch_evidence_dependency"]);
+  });
+
+  it("rejects a merge that depends on source evidence touched earlier in the batch", () => {
+    const run = claimedRun();
+    run.existingThreads = [
+      { ...existingThread(), id: "thread-source", evidenceCount: 1 },
+      { ...existingThread(), id: "thread-target", evidenceCount: 5 },
+    ];
+    const response = responseWithExistingThreadOperation();
+    response.threadOperations = [
+      {
+        operation: "update_summary",
+        operationKey: "a:thread:update-source",
+        confidence: 0.9,
+        evidenceMessageIds: ["message-1"],
+        evidenceSpan: "Launch planning",
+        threadId: "thread-source",
+        expectedVersion: 1,
+        summary: "Updated launch planning.",
+      },
+      {
+        operation: "merge",
+        operationKey: "b:thread:merge",
+        confidence: 0.9,
+        evidenceMessageIds: ["message-1"],
+        evidenceSpan: "Launch planning",
+        sourceThreadId: "thread-source",
+        targetThreadId: "thread-target",
+        expectedVersion: 2,
+      },
+    ];
+
+    const result = validateConversationStateCandidates({ run, response, candidateFloor: 0.65, applyConfidence: 0.85 });
+
+    expect(result.threadOperations.map((operation) => operation.operationKey)).toEqual([
+      "a:thread:update-source",
+    ]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["batch_evidence_dependency"]);
+  });
+
   it("rejects an action dependency after an earlier sorted operation merges its thread", () => {
     const run = claimedRun();
     run.existingThreads = [
