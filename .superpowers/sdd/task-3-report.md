@@ -96,3 +96,50 @@ Status: completed. Implementation commit: `1395472605f5ca81ee880946d7784355f21ff
 - Failed repair retry timing, attempt exhaustion, and projection downgrade protection were exercised against real PostgreSQL.
 - Scope remained limited to Task 3. No Task 4 answering or proactive-speaking path was added.
 - No functional concern remains. Docker Desktop had stopped during verification but was restarted, and the final real PostgreSQL gate passed. Git continued to emit the existing LF-to-CRLF staging notice.
+
+## Final Operation-Claim Remediation
+
+Status: completed. Implementation commit: `9b07665de15eea082854b00ff34f5f9df7f09421` (`fix: persist conversation state operation claims`).
+
+### Changes
+
+- Added the immutable `conversation_state_operation_claims` fact table to migration 0024, keyed by `(group_id, operation_key)` and bounded by entity type, identifier length, and SHA-256 format checks. Update, delete, and truncate operations are blocked by triggers.
+- Replaced event/current-snapshot replay classification with claims read immediately after the group advisory lock. A full matching claim set returns `already_applied` before entity reads; partial sets or any type/entity/fingerprint mismatch raise `ConversationStateIdempotencyConflictError`.
+- Generated deterministic SHA-256 fingerprints from normalized operations using stable field ordering, ISO date strings, and sorted unique evidence IDs. The fingerprint is captured before merge target rewriting, and each new claim is inserted in the same transaction as its entity, event, evidence, and projection repair.
+- Resolved requested merge targets through merged intermediates. Canonical validation compares the locked source with the terminal target, while the persisted `merged_into_thread_id` is rewritten to that terminal target.
+- Added scripted and real PostgreSQL regressions for historical create replay after mutation, complete same-entity consecutive-version batch replay, intermediate merge resolution, claim payload bindings, and true two-client concurrency for matching and conflicting payloads.
+
+### Commands And Results
+
+| Command | Result |
+| --- | --- |
+| `Get-Content .../receiving-code-review/SKILL.md`, `Get-Content .superpowers/sdd/task-3-report.md`, and targeted `rg`/`Get-Content` inspection of migration, repository, and tests | Read and verified the review requirements against the current implementation before editing. |
+| `npm exec --workspace apps/core -- vitest run tests/migration-runner.test.ts` before migration implementation | RED: 1 expected failure, 18 passed; `conversation_state_operation_claims` was absent. |
+| `npm exec --workspace apps/core -- vitest run tests/postgres-conversation-state-repository.test.ts` before repository implementation | RED: 3 expected failures, 19 passed, 8 service-gated tests skipped; historical replay, consecutive-version replay, and intermediate merge resolution failed. |
+| `$env:TEST_DATABASE_URL='postgresql://iris:iris@127.0.0.1:5432/iris'; npm exec --workspace apps/core -- vitest run tests/postgres-conversation-state-repository.test.ts` before implementation | RED: 7 expected failures, 23 passed; real PostgreSQL reproduced historical replay, consecutive-version replay, missing claims, and merge failures. |
+| `npm exec --workspace apps/core -- vitest run tests/migration-runner.test.ts` after migration implementation | PASS: 19 passed. |
+| `npm exec --workspace apps/core -- vitest run tests/postgres-conversation-state-repository.test.ts` after repository implementation | PASS: 22 passed, 8 service-gated tests skipped. |
+| `docker compose ps postgres` | PASS: repository PostgreSQL service was running and healthy enough to accept connections. |
+| `docker compose exec -T postgres psql ...` targeted 0024 reset | PASS: removed only 0024-owned semantic-state tables/constraints/function and its migration record, preserving earlier migration data so the modified 0024 could run fresh. |
+| First post-reset real focused command | PASS: 55 passed, 0 skipped. |
+| `npm exec --workspace apps/core -- vitest run tests/migration-runner.test.ts tests/postgres-conversation-state-repository.test.ts` after the evidence-order regression | PASS: 42 passed, 8 service-gated tests skipped. |
+| `npm run typecheck --workspace apps/core` | PASS: `tsc --noEmit`. |
+| `$env:TEST_DATABASE_URL='postgresql://iris:iris@127.0.0.1:5432/iris'; npm exec --workspace apps/core -- vitest run tests/conversation-state-machine.test.ts tests/postgres-conversation-state-repository.test.ts` | PASS: 56 passed, 0 skipped; both true-concurrency cases executed against PostgreSQL. |
+| `$env:TEST_DATABASE_URL='postgresql://iris:iris@127.0.0.1:5432/iris'; npm test --workspace apps/core` | PASS: 87 files; 1698 passed, 33 service-gated tests skipped. Task 3 PostgreSQL tests executed. |
+| Final `npm run typecheck --workspace apps/core` | PASS. |
+| `git diff --check` and `git diff --cached --check` | PASS; only the existing LF-to-CRLF working-copy notices were emitted. |
+| `git commit -m "fix: persist conversation state operation claims"` | Created implementation commit `9b07665de15eea082854b00ff34f5f9df7f09421`. |
+
+### Self-Review
+
+- The fingerprint is computed from the fully normalized raw operation before merge validation mutates the in-memory target, so replay identity remains tied to the caller's original intermediate target.
+- Claim classification has only three outcomes required by the brief: all exact claims return `already_applied`, no claims proceeds to apply, and partial or mismatched claims fail closed. Historical replay never reads the current entity snapshot.
+- The group-scoped transaction advisory lock precedes claim lookup. Independent-client integration tests prove one matching concurrent request applies while the other replays, and one conflicting concurrent payload applies while the other receives the typed idempotency conflict.
+- New claims are inserted after their corresponding event/repair writes but before commit; any later batch failure rolls back claims and state together. The migration prevents later mutation or removal of claim facts.
+- Merge chains remain group-locked and cycle checked. Canonical selection uses persisted source/terminal evidence counts, and successful intermediate requests write the terminal ID without changing the original operation fingerprint.
+- Scope stayed within the three final Task 3 items. No Task 4, answering-path, or proactive-speaking behavior was added.
+
+### Concerns
+
+- Migration 0024 is intentionally edited in place per the task boundary. Any local database that already recorded the prior 0024 must rebuild/reset that migration before use; the supplied test database was reset only for 0024-owned objects and then passed the full migration-backed suite. No 0025 compatibility migration was added.
+- Git continues to report the repository's existing LF-to-CRLF working-copy notice; both diff checks pass and no content defect was found.
