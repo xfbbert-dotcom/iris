@@ -40,6 +40,7 @@ export function createConversationStateProjector({
           failedCount += 1;
           await repository.failProjectionRepair({
             id: repair.id,
+            attemptCount: repair.attemptCount,
             retryAt: retryAt(now, repair.attemptCount),
             classification: "projection_repair_failed",
           });
@@ -73,7 +74,10 @@ async function processRepair({
     groupId: repair.groupId,
   });
   if (target === undefined || target.entity.version !== repair.entityVersion) {
-    await repository.completeProjectionRepair({ id: repair.id });
+    await repository.completeProjectionRepair({
+      id: repair.id,
+      attemptCount: repair.attemptCount,
+    });
     return;
   }
   const active = target.entity.status === "open";
@@ -81,7 +85,10 @@ async function processRepair({
     if (target.memoryId !== undefined) {
       await memories.delete({ memoryId: target.memoryId });
     }
-    await repository.completeProjectionRepair({ id: repair.id });
+    await repository.completeProjectionRepair({
+      id: repair.id,
+      attemptCount: repair.attemptCount,
+    });
     return;
   }
   const memoryId = target.entityType === "thread"
@@ -99,7 +106,11 @@ async function processRepair({
         target.evidenceMessageIds,
         target.memoryId,
       );
-  await repository.completeProjectionRepair({ id: repair.id, memoryId });
+  await repository.completeProjectionRepair({
+    id: repair.id,
+    attemptCount: repair.attemptCount,
+    memoryId,
+  });
 }
 
 async function projectThread(

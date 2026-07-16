@@ -200,7 +200,25 @@ export function createPostgresConversationStateRepository({
       );
       const result = await dataSource.query<RepairRow>(
         `
-        WITH claimed AS (
+        WITH exhausted_candidates AS (
+          SELECT id
+          FROM conversation_state_projection_repairs
+          WHERE status = 'processing'
+            AND next_attempt_at <= $1
+            AND attempt_count >= $3
+          ORDER BY next_attempt_at ASC, created_at ASC, id ASC
+          LIMIT $2
+          FOR UPDATE SKIP LOCKED
+        ), exhausted AS (
+          UPDATE conversation_state_projection_repairs repair
+          SET status = 'failed',
+              next_attempt_at = $1,
+              failure_classification = 'projection_repair_attempts_exhausted',
+              updated_at = $1
+          FROM exhausted_candidates
+          WHERE repair.id = exhausted_candidates.id
+          RETURNING repair.id
+        ), claimed AS (
           SELECT id
           FROM conversation_state_projection_repairs
           WHERE (
@@ -208,6 +226,7 @@ export function createPostgresConversationStateRepository({
               OR (status = 'processing' AND next_attempt_at <= $1)
             )
             AND attempt_count < $3
+            AND id NOT IN (SELECT id FROM exhausted)
           ORDER BY next_attempt_at ASC, created_at ASC, id ASC
           LIMIT $2
           FOR UPDATE SKIP LOCKED
@@ -229,6 +248,7 @@ export function createPostgresConversationStateRepository({
 
     async completeProjectionRepair(input) {
       const id = requireBoundedString("repair id", input.id, MAX_IDENTIFIER_CHARS);
+      const attemptCount = requireProjectionRepairAttempt(input.attemptCount);
       const memoryId = input.memoryId === undefined
         ? undefined
         : requireBoundedString("memoryId", input.memoryId, MAX_IDENTIFIER_CHARS);
@@ -237,10 +257,10 @@ export function createPostgresConversationStateRepository({
           `
           UPDATE conversation_state_projection_repairs
           SET status = 'completed', updated_at = NOW()
-          WHERE id = $1 AND status = 'processing'
+          WHERE id = $1 AND status = 'processing' AND attempt_count = $2
           RETURNING *
           `,
-          [id],
+          [id, attemptCount],
         );
         const repair = onlyRow(result.rows, "projection repair not claimed");
         await client.query(
@@ -269,6 +289,7 @@ export function createPostgresConversationStateRepository({
 
     async failProjectionRepair(input) {
       const id = requireBoundedString("repair id", input.id, MAX_IDENTIFIER_CHARS);
+      const attemptCount = requireProjectionRepairAttempt(input.attemptCount);
       const retryAt = requireDate("retryAt", input.retryAt);
       const classification = requireBoundedString(
         "classification",
@@ -278,11 +299,11 @@ export function createPostgresConversationStateRepository({
       const result = await dataSource.query<{ id: unknown }>(
         `
         UPDATE conversation_state_projection_repairs
-        SET status = 'failed', next_attempt_at = $2, failure_classification = $3, updated_at = NOW()
-        WHERE id = $1 AND status = 'processing'
+        SET status = 'failed', next_attempt_at = $3, failure_classification = $4, updated_at = NOW()
+        WHERE id = $1 AND status = 'processing' AND attempt_count = $2
         RETURNING id
         `,
-        [id, retryAt, classification],
+        [id, attemptCount, retryAt, classification],
       );
       onlyRow(result.rows, "projection repair not claimed");
     },
@@ -1048,6 +1069,14 @@ function requireOperationFingerprint(value: unknown): string {
 function requireNonNegativeInteger(field: string, value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error(`${field} must be a non-negative safe integer`);
   return value;
+}
+
+function requireProjectionRepairAttempt(value: unknown): number {
+  const attemptCount = requireNonNegativeInteger("repair attempt count", value);
+  if (attemptCount < 1 || attemptCount > MAX_PROJECTION_REPAIR_ATTEMPTS) {
+    throw new Error(`repair attempt count must be from 1 to ${MAX_PROJECTION_REPAIR_ATTEMPTS}`);
+  }
+  return attemptCount;
 }
 
 function requireDate(field: string, value: unknown): Date {

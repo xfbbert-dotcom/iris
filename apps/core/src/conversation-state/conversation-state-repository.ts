@@ -234,10 +234,15 @@ export interface ConversationStateRepository {
   /** Privileged system-wide projection worker boundary; never expose to answering paths. */
   claimProjectionRepairs(input: { limit: number; now: Date }): Promise<ProjectionRepair[]>;
   /** Privileged system-wide projection worker boundary; never expose to answering paths. */
-  completeProjectionRepair(input: { id: string; memoryId?: string }): Promise<void>;
+  completeProjectionRepair(input: {
+    id: string;
+    attemptCount: number;
+    memoryId?: string;
+  }): Promise<void>;
   /** Privileged system-wide projection worker boundary; never expose to answering paths. */
   failProjectionRepair(input: {
     id: string;
+    attemptCount: number;
     retryAt: Date;
     classification: string;
   }): Promise<void>;

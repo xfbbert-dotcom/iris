@@ -45,6 +45,7 @@ describe("conversation state projector", () => {
     }));
     expect(repository.completeProjectionRepair).toHaveBeenCalledWith({
       id: "repair-thread-open",
+      attemptCount: 1,
       memoryId: "memory-created",
     });
   });
@@ -75,6 +76,7 @@ describe("conversation state projector", () => {
     expect(memories.create).not.toHaveBeenCalled();
     expect(repository.completeProjectionRepair).toHaveBeenCalledWith({
       id: "repair-action-open",
+      attemptCount: 1,
       memoryId: "memory-corrected",
     });
   });
@@ -96,7 +98,10 @@ describe("conversation state projector", () => {
     await projector.processBatch({ limit: 1, now: new Date("2026-07-16T00:00:00.000Z") });
 
     expect(memories.delete).toHaveBeenCalledWith({ memoryId: "memory-active" });
-    expect(repository.completeProjectionRepair).toHaveBeenCalledWith({ id: "repair-thread-resolved" });
+    expect(repository.completeProjectionRepair).toHaveBeenCalledWith({
+      id: "repair-thread-resolved",
+      attemptCount: 1,
+    });
   });
 
   it("safely completes a stale repair without changing the current projection", async () => {
@@ -118,7 +123,10 @@ describe("conversation state projector", () => {
     expect(memories.create).not.toHaveBeenCalled();
     expect(memories.correct).not.toHaveBeenCalled();
     expect(memories.delete).not.toHaveBeenCalled();
-    expect(repository.completeProjectionRepair).toHaveBeenCalledWith({ id: "repair-thread-open" });
+    expect(repository.completeProjectionRepair).toHaveBeenCalledWith({
+      id: "repair-thread-open",
+      attemptCount: 1,
+    });
   });
 
   it("schedules a bounded content-free retry when exact projection fails", async () => {
@@ -139,6 +147,7 @@ describe("conversation state projector", () => {
     expect(result).toEqual({ claimedCount: 1, completedCount: 0, failedCount: 1 });
     expect(repository.failProjectionRepair).toHaveBeenCalledWith({
       id: "repair-thread-open",
+      attemptCount: 3,
       retryAt: new Date("2026-07-16T00:00:04.000Z"),
       classification: "projection_repair_failed",
     });

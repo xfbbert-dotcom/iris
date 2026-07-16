@@ -510,7 +510,10 @@ describe("createPostgresConversationStateRepository", () => {
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
 
-    await expect(repository.completeProjectionRepair({ id: "repair-1" })).resolves.toBeUndefined();
+    await expect(repository.completeProjectionRepair({
+      id: "repair-1",
+      attemptCount: 1,
+    })).resolves.toBeUndefined();
   });
 });
 
@@ -898,6 +901,7 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
     ]));
     await repository.failProjectionRepair({
       id: retryRepairId,
+      attemptCount: 1,
       retryAt: new Date("2101-01-01T00:00:00.000Z"),
       classification: "transient",
     });
@@ -928,13 +932,78 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
       `,
       [oldRepairId, newRepairId, projectionEntityId, groupId],
     );
-    await repository.completeProjectionRepair({ id: newRepairId });
-    await repository.completeProjectionRepair({ id: oldRepairId });
+    await repository.completeProjectionRepair({ id: newRepairId, attemptCount: 1 });
+    await repository.completeProjectionRepair({ id: oldRepairId, attemptCount: 1 });
     await expect(pool!.query(
       "SELECT projected_version FROM conversation_state_memory_projections WHERE entity_type = 'thread' AND entity_id = $1",
       [projectionEntityId],
     )).resolves.toMatchObject({ rows: [{ projected_version: "2" }] });
   });
+
+  it("terminalizes an interrupted fifth claim when its processing lease expires", async () => {
+    const client = await pool!.connect();
+    const schema = `projection_exhaustion_${randomUUID().replaceAll("-", "")}`;
+    let scopedPool: pg.Pool | undefined;
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+      scopedPool = new pg.Pool({
+        connectionString: databaseUrl,
+        options: `-c search_path=${schema},public`,
+      });
+      const repository = createPostgresConversationStateRepository({
+        dataSource: scopedPool,
+      });
+      const repairId = `exhausted-interrupted-${suffix}`;
+      const claimedAt = new Date("2000-01-01T00:00:00.000Z");
+      const leaseExpiresAt = new Date(
+        claimedAt.getTime() + PROJECTION_REPAIR_PROCESSING_LEASE_MS,
+      );
+      await scopedPool.query(
+        `
+        INSERT INTO conversation_state_projection_repairs (
+          id, entity_type, entity_id, group_id, entity_version, status,
+          attempt_count, next_attempt_at, created_at, updated_at
+        ) VALUES ($1, 'thread', $2, $3, 1, 'pending', 4, $4, $4, $4)
+        `,
+        [repairId, `exhausted-entity-${suffix}`, groupId, claimedAt],
+      );
+
+      const fifthClaim = await repository.claimProjectionRepairs({ limit: 1, now: claimedAt });
+      expect(fifthClaim).toEqual([
+        expect.objectContaining({ id: repairId, attemptCount: 5, status: "processing" }),
+      ]);
+
+      const afterExpiry = await repository.claimProjectionRepairs({
+        limit: 1,
+        now: leaseExpiresAt,
+      });
+      expect(afterExpiry).toEqual([]);
+      await expect(scopedPool.query(
+        `
+        SELECT status, attempt_count, next_attempt_at, failure_classification
+        FROM conversation_state_projection_repairs
+        WHERE id = $1
+        `,
+        [repairId],
+      )).resolves.toMatchObject({
+        rows: [{
+          status: "failed",
+          attempt_count: 5,
+          next_attempt_at: leaseExpiresAt,
+          failure_classification: "projection_repair_attempts_exhausted",
+        }],
+      });
+      await expect(repository.getStatusCounts()).resolves.toMatchObject({
+        projectionRepairs: { failed: 1, processing: 0 },
+      });
+    } finally {
+      await scopedPool?.end();
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      client.release();
+    }
+  }, 30_000);
 
   it("reclaims interrupted processing repairs exactly at the five-minute lease boundary", async () => {
     const repository = createPostgresConversationStateRepository({ dataSource: pool! });
@@ -1009,6 +1078,7 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
     expect(batch.map((repair) => repair.id)).toEqual([failWriteId, unprocessedId].sort());
     await expect(repository.failProjectionRepair({
       id: failWriteId,
+      attemptCount: 1,
       retryAt: new Date("2002-01-01T00:00:00.000Z"),
       classification: "x".repeat(129),
     })).rejects.toThrow("classification must be at most 128 characters");
@@ -1030,6 +1100,173 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
       [[failWriteId, unprocessedId]],
     );
   });
+
+  it("fences stale claimants after a processing lease is reclaimed", async () => {
+    const client = await pool!.connect();
+    const schema = `projection_fencing_${randomUUID().replaceAll("-", "")}`;
+    let scopedPool: pg.Pool | undefined;
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+      scopedPool = new pg.Pool({
+        connectionString: databaseUrl,
+        options: `-c search_path=${schema},public`,
+      });
+      const repository = createPostgresConversationStateRepository({ dataSource: scopedPool });
+      const completeId = `fenced-complete-${suffix}`;
+      const failId = `fenced-fail-${suffix}`;
+      const unclaimedId = `fenced-unclaimed-${suffix}`;
+      const firstClaimedAt = new Date("2005-01-01T00:00:00.000Z");
+      const firstLeaseExpiresAt = new Date(
+        firstClaimedAt.getTime() + PROJECTION_REPAIR_PROCESSING_LEASE_MS,
+      );
+      const secondLeaseExpiresAt = new Date(
+        firstLeaseExpiresAt.getTime() + PROJECTION_REPAIR_PROCESSING_LEASE_MS,
+      );
+      await scopedPool.query(
+        `
+        INSERT INTO conversation_state_projection_repairs (
+          id, entity_type, entity_id, group_id, entity_version, status,
+          attempt_count, next_attempt_at, created_at, updated_at
+        ) VALUES
+          ($1, 'thread', $1, $4, 1, 'pending', 0, $5, $5, $5),
+          ($2, 'action', $2, $4, 1, 'pending', 0, $5, $5, $5),
+          ($3, 'thread', $3, $4, 1, 'pending', 0, $6, $5, $5)
+        `,
+        [
+          completeId,
+          failId,
+          unclaimedId,
+          groupId,
+          firstClaimedAt,
+          new Date("2100-01-01T00:00:00.000Z"),
+        ],
+      );
+
+      const firstClaims = await repository.claimProjectionRepairs({
+        limit: 2,
+        now: firstClaimedAt,
+      });
+      expect(firstClaims.map((repair) => repair.id)).toEqual([completeId, failId].sort());
+      const secondClaims = await repository.claimProjectionRepairs({
+        limit: 2,
+        now: firstLeaseExpiresAt,
+      });
+      expect(secondClaims).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: completeId, attemptCount: 2 }),
+        expect.objectContaining({ id: failId, attemptCount: 2 }),
+      ]));
+
+      await expect(repository.completeProjectionRepair({
+        id: completeId,
+        attemptCount: 1,
+      })).rejects.toThrow("projection repair not claimed");
+      const staleRetryAt = new Date("2006-01-01T00:00:00.000Z");
+      await expect(repository.failProjectionRepair({
+        id: failId,
+        attemptCount: 1,
+        retryAt: staleRetryAt,
+        classification: "stale_claim",
+      })).rejects.toThrow("projection repair not claimed");
+      await expect(scopedPool.query(
+        `
+        SELECT id, status, attempt_count, next_attempt_at, failure_classification
+        FROM conversation_state_projection_repairs
+        WHERE id = ANY($1::text[])
+        ORDER BY id
+        `,
+        [[completeId, failId]],
+      )).resolves.toMatchObject({
+        rows: [
+          {
+            id: completeId,
+            status: "processing",
+            attempt_count: 2,
+            next_attempt_at: secondLeaseExpiresAt,
+            failure_classification: null,
+          },
+          {
+            id: failId,
+            status: "processing",
+            attempt_count: 2,
+            next_attempt_at: secondLeaseExpiresAt,
+            failure_classification: null,
+          },
+        ].sort((left, right) => left.id.localeCompare(right.id)),
+      });
+
+      await expect(repository.completeProjectionRepair({
+        id: unclaimedId,
+        attemptCount: 1,
+      })).rejects.toThrow("projection repair not claimed");
+      await expect(repository.failProjectionRepair({
+        id: unclaimedId,
+        attemptCount: 1,
+        retryAt: staleRetryAt,
+        classification: "unclaimed",
+      })).rejects.toThrow("projection repair not claimed");
+
+      await repository.completeProjectionRepair({ id: completeId, attemptCount: 2 });
+      const retryAt = new Date("2007-01-01T00:00:00.000Z");
+      await repository.failProjectionRepair({
+        id: failId,
+        attemptCount: 2,
+        retryAt,
+        classification: "transient",
+      });
+      await expect(scopedPool.query(
+        `
+        SELECT id, status, attempt_count, next_attempt_at, failure_classification
+        FROM conversation_state_projection_repairs
+        WHERE id = ANY($1::text[])
+        ORDER BY id
+        `,
+        [[completeId, failId]],
+      )).resolves.toMatchObject({
+        rows: [
+          {
+            id: completeId,
+            status: "completed",
+            attempt_count: 2,
+            next_attempt_at: secondLeaseExpiresAt,
+            failure_classification: null,
+          },
+          {
+            id: failId,
+            status: "failed",
+            attempt_count: 2,
+            next_attempt_at: retryAt,
+            failure_classification: "transient",
+          },
+        ].sort((left, right) => left.id.localeCompare(right.id)),
+      });
+      await expect(repository.completeProjectionRepair({
+        id: completeId,
+        attemptCount: 2,
+      })).rejects.toThrow("projection repair not claimed");
+      await expect(repository.failProjectionRepair({
+        id: completeId,
+        attemptCount: 2,
+        retryAt,
+        classification: "terminal",
+      })).rejects.toThrow("projection repair not claimed");
+      await expect(repository.completeProjectionRepair({
+        id: failId,
+        attemptCount: 2,
+      })).rejects.toThrow("projection repair not claimed");
+      await expect(repository.failProjectionRepair({
+        id: failId,
+        attemptCount: 2,
+        retryAt,
+        classification: "terminal",
+      })).rejects.toThrow("projection repair not claimed");
+    } finally {
+      await scopedPool?.end();
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      client.release();
+    }
+  }, 30_000);
 
   it("loads exact thread and action projection targets beyond the relevant-list cap", async () => {
     const repository = createPostgresConversationStateRepository({ dataSource: pool! });
