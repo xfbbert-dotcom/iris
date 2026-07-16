@@ -22,6 +22,20 @@ const DEFAULT_LIMIT = 6;
 const MAX_LIMIT = 6;
 const MAX_IDENTIFIER_CHARS = 512;
 const MAX_QUERY_TERMS = 24;
+const MAX_MERGE_DEPTH = 8;
+const QUERY_SEGMENT_PATTERN = /[\p{Script=Han}]+|[\p{Script=Latin}\p{N}_%]+/gu;
+const LATIN_STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "is",
+  "it", "no", "of", "on", "or", "please", "the", "to", "was", "what", "when", "where", "who", "with",
+]);
+const CJK_STOPWORDS = new Set([
+  "的", "了", "和", "是", "在", "有", "请", "请问", "帮", "我", "你", "他", "她", "它", "我们", "你们",
+  "他们", "这个", "那个", "什么", "怎么", "如何", "吗", "呢", "吧", "啊", "呀", "将", "已", "能", "可以",
+  "需要", "关于", "以及", "与", "或", "并", "而", "但", "从", "到", "对", "把", "被", "给", "就", "都",
+  "也", "很", "再", "还",
+]);
+const CJK_EDGE_STOPWORDS = [...CJK_STOPWORDS].sort((left, right) => right.length - left.length);
+const VALID_SINGLE_CJK_TERMS = new Set(["人", "税", "钱", "票", "码", "号", "款"]);
 
 type ContextRow = Record<string, unknown>;
 
@@ -41,24 +55,14 @@ export function createConversationStateContextProvider({
         return { threads: [], actions: [] };
       }
 
-      const queryTerms = normalizeQueryTerms(input.queryText);
+      const queryTerms = normalizeConversationStateQueryTerms(input.queryText);
       const threadResult = await dataSource.query<ContextRow>(
         `
-        WITH merged_sources AS (
-          SELECT merged.id AS source_thread_id,
-                 canonical.id AS canonical_thread_id,
-                 LOWER(CONCAT_WS(' ', merged.title, merged.summary)) AS source_text
-          FROM discussion_threads merged
-          JOIN discussion_threads canonical
-            ON canonical.id = merged.merged_into_thread_id
-           AND canonical.group_id = merged.group_id
-          WHERE merged.group_id = $1
-            AND merged.status = 'merged'
-            AND canonical.status IN ('open', 'resolved')
-        ), canonical_threads AS (
+        WITH RECURSIVE canonical_threads AS (
           SELECT thread.id,
                  thread.group_id,
                  thread.status,
+                 thread.title,
                  thread.summary,
                  thread.last_activity_at,
                  thread.id AS canonical_thread_id,
@@ -66,6 +70,42 @@ export function createConversationStateContextProvider({
           FROM discussion_threads thread
           WHERE thread.group_id = $1
             AND thread.status IN ('open', 'resolved')
+        ), merge_walk AS (
+          SELECT source.id AS source_thread_id,
+                 source.group_id,
+                 source.merged_into_thread_id AS next_thread_id,
+                 ARRAY[source.id]::text[] AS visited_thread_ids,
+                 1 AS depth,
+                 LOWER(CONCAT_WS(' ', source.title, source.summary)) AS source_text
+          FROM discussion_threads source
+          WHERE source.group_id = $1
+            AND source.status = 'merged'
+          UNION ALL
+          SELECT walk.source_thread_id,
+                 walk.group_id,
+                 next_thread.merged_into_thread_id AS next_thread_id,
+                 walk.visited_thread_ids || next_thread.id,
+                 walk.depth + 1,
+                 CONCAT_WS(' ', walk.source_text, LOWER(CONCAT_WS(' ', next_thread.title, next_thread.summary)))
+          FROM merge_walk walk
+          JOIN discussion_threads next_thread
+            ON next_thread.id = walk.next_thread_id
+           AND next_thread.group_id = walk.group_id
+          WHERE walk.depth < ${MAX_MERGE_DEPTH}
+            AND next_thread.status = 'merged'
+            AND NOT next_thread.id = ANY(walk.visited_thread_ids)
+        ), merge_terminals AS (
+          SELECT terminal.id,
+                 terminal.group_id,
+                 terminal.status,
+                 terminal.summary,
+                 terminal.last_activity_at,
+                 terminal.id AS canonical_thread_id,
+                 CONCAT_WS(' ', walk.source_text, LOWER(CONCAT_WS(' ', terminal.title, terminal.summary))) AS source_text
+          FROM merge_walk walk
+          JOIN canonical_threads terminal
+            ON terminal.id = walk.next_thread_id
+           AND terminal.group_id = walk.group_id
         ), thread_sources AS (
           SELECT canonical.id,
                  canonical.group_id,
@@ -76,17 +116,14 @@ export function createConversationStateContextProvider({
                  canonical.source_text
           FROM canonical_threads canonical
           UNION ALL
-          SELECT canonical.id,
-                 canonical.group_id,
-                 canonical.status,
-                 canonical.summary,
-                 canonical.last_activity_at,
-                 merged.canonical_thread_id,
-                 merged.source_text
-          FROM merged_sources merged
-          JOIN canonical_threads canonical
-            ON canonical.id = merged.canonical_thread_id
-           AND canonical.group_id = $1
+          SELECT terminal.id,
+                 terminal.group_id,
+                 terminal.status,
+                 terminal.summary,
+                 terminal.last_activity_at,
+                 terminal.canonical_thread_id,
+                 terminal.source_text
+          FROM merge_terminals terminal
         ), ranked_threads AS (
           SELECT source.id,
                  source.group_id,
@@ -97,7 +134,7 @@ export function createConversationStateContextProvider({
                  MAX(CARDINALITY(ARRAY(
                    SELECT term
                    FROM UNNEST($2::text[]) AS term
-                   WHERE source.source_text LIKE '%' || term || '%'
+                   WHERE strpos(source.source_text, term) > 0
                  ))) AS lexical_overlap
           FROM thread_sources source
           GROUP BY source.id, source.group_id, source.status, source.summary,
@@ -142,7 +179,7 @@ export function createConversationStateContextProvider({
                  CARDINALITY(ARRAY(
                    SELECT term
                    FROM UNNEST($2::text[]) AS term
-                   WHERE LOWER(action.description) LIKE '%' || term || '%'
+                   WHERE strpos(LOWER(action.description), term) > 0
                  )) AS lexical_overlap,
                  (action.thread_id = ANY($3::text[])) AS selected_thread_match,
                  ($4::text IS NOT NULL AND LOWER(action.owner_ref) = LOWER($4::text)) AS owner_match
@@ -239,9 +276,72 @@ function normalizeIdentifier(field: string, value: string): string {
   return normalized;
 }
 
-function normalizeQueryTerms(value: string): string[] {
-  return [...new Set(value.toLocaleLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [])]
-    .slice(0, MAX_QUERY_TERMS);
+export function normalizeConversationStateQueryTerms(value: string): string[] {
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  const normalized = value.toLocaleLowerCase();
+  for (const match of normalized.matchAll(QUERY_SEGMENT_PATTERN)) {
+    const segment = match[0];
+    if (segment === undefined) {
+      continue;
+    }
+    const segmentTerms = isCjkSegment(segment)
+      ? cjkNgrams(trimCjkStopwordEdges(segment))
+      : LATIN_STOPWORDS.has(segment) ? [] : [segment];
+    for (const term of segmentTerms) {
+      if (seen.has(term)) {
+        continue;
+      }
+      seen.add(term);
+      terms.push(term);
+      if (terms.length === MAX_QUERY_TERMS) {
+        return terms;
+      }
+    }
+  }
+  return terms;
+}
+
+function isCjkSegment(value: string): boolean {
+  return /^\p{Script=Han}+$/u.test(value);
+}
+
+function trimCjkStopwordEdges(value: string): string {
+  let trimmed = value;
+  let changed = true;
+  while (changed && trimmed.length > 0) {
+    changed = false;
+    for (const stopword of CJK_EDGE_STOPWORDS) {
+      if (trimmed.startsWith(stopword)) {
+        trimmed = trimmed.slice(stopword.length);
+        changed = true;
+        break;
+      }
+      if (trimmed.endsWith(stopword)) {
+        trimmed = trimmed.slice(0, -stopword.length);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return trimmed;
+}
+
+function cjkNgrams(value: string): string[] {
+  if (value.length === 1) {
+    return VALID_SINGLE_CJK_TERMS.has(value) ? [value] : [];
+  }
+  if (CJK_STOPWORDS.has(value)) {
+    return [];
+  }
+  const terms: string[] = [];
+  for (let index = 0; index < value.length - 1; index += 1) {
+    const term = value.slice(index, index + 2);
+    if (!CJK_STOPWORDS.has(term)) {
+      terms.push(term);
+    }
+  }
+  return terms;
 }
 
 function sanitizeLimit(value: number | undefined): number {

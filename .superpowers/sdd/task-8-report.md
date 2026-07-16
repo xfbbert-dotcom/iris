@@ -61,5 +61,55 @@ set, including this report)
 
 ## Concerns
 
-None. Focused tests use a queryable mock for deterministic SQL-contract checks;
-the existing database-gated integration suite was intentionally not expanded.
+None. Mock SQL-contract checks are now supplemented by the real PostgreSQL
+provider coverage recorded below.
+
+## Task 8 Read Correctness Follow-up
+
+### RED
+
+Commands:
+
+```powershell
+$env:IRIS_TEST_DATABASE_URL = 'postgres://iris:iris@localhost:5432/iris'
+npm exec --workspace apps/core -- vitest run tests/conversation-state-context-provider.test.ts
+```
+
+Results: the new tokenizer contract failed because the prior implementation
+emitted one full CJK string, retained `the`, and reduced `100%` to `100`.
+The real PostgreSQL test also failed because an A -> B -> C merge chain did
+not return C when only A matched. A later RED exposed `吗` becoming a trailing
+CJK n-gram, and the explicit resolved no-match assertion exposed `no` matching
+the word `canonical`.
+
+### GREEN
+
+Commands:
+
+```powershell
+$env:IRIS_TEST_DATABASE_URL = 'postgres://iris:iris@localhost:5432/iris'
+npm exec --workspace apps/core -- vitest run tests/conversation-state-context-provider.test.ts
+npm exec --workspace apps/core -- vitest run tests/conversation-state-context-provider.test.ts tests/context-assembly.test.ts tests/document-retrieval-context.test.ts tests/answer-draft-runtime.test.ts
+npm run typecheck
+git diff --check
+```
+
+Results: real PostgreSQL provider tests passed (5/5); all four Task 8 focused
+files passed (78/78); typecheck passed; `git diff --check` passed.
+
+### PostgreSQL Coverage
+
+The real integration section uses `IRIS_TEST_DATABASE_URL`, runs migrations,
+and verifies current-group isolation, candidate and merged-source exclusion,
+A -> B -> C terminal resolution, CJK n-gram overlap, case/punctuation-stable
+English terms, literal underscore and percent matching, resolved no-match
+exclusion, selected-thread/owner/description action routes, unrelated action
+exclusion, deterministic open-thread ties, and fail-closed cycle, overdeep,
+and cross-group merge chains.
+
+### Follow-up Scope
+
+The provider now uses bounded deterministic Latin/digit and CJK-bigram query
+terms with stopword filtering. Thread and action lexical overlap use `strpos`
+for literal PostgreSQL matching; no document permission guard, live-chat
+anchor, Task 9 API, or deployment behavior changed.
