@@ -10,6 +10,10 @@ const acceptanceRunbook = readFileSync(
 );
 const conversationStateAcceptanceRunbookPath =
   "docs/runbooks/iris-semantic-thread-action-memory-acceptance.md";
+const conversationStateAcceptanceRunbook = readFileSync(
+  conversationStateAcceptanceRunbookPath,
+  "utf8",
+);
 const caddyfile = readFileSync("deploy/pilot/Caddyfile", "utf8");
 const pilotCiEnv = readFileSync("deploy/pilot/ci.env", "utf8");
 const pilotEnvExample = readFileSync(".env.pilot.example", "utf8");
@@ -153,11 +157,91 @@ test("keeps semantic thread and action extraction disabled by default", () => {
   assert.equal(compose.services["ai-worker"].networks.edge, undefined);
   assert.doesNotMatch(caddyfile, /ai-worker/u);
   assert.doesNotMatch(caddyfile, /@internal|path \/internal|reverse_proxy \/internal/u);
-  assert.equal(compose.services.core.environment.IRIS_PROACTIVE_SPEECH_ENABLED, undefined);
 });
 
-test("requires zero conversation-state queues, DLQs, and projection repairs before rollout", () => {
-  const runbook = readFileSync(conversationStateAcceptanceRunbookPath, "utf8");
+test("requires exhaustive group isolation and a real proactive-speech status gate", () => {
+  const globalEnableIndex = conversationStateAcceptanceRunbook.indexOf("# GLOBAL_ENABLE");
+  assert.notEqual(globalEnableIndex, -1, "runbook must mark the global-enable boundary");
+  const beforeGlobalEnable = conversationStateAcceptanceRunbook.slice(0, globalEnableIndex);
+
+  for (const marker of [
+    "conversation_messages",
+    "group_memories",
+    "discussion_threads",
+    "action_items",
+    "$currentBotGroupIds",
+    "$databaseGroupIds",
+    "$knownGroupIds",
+    "$nonPilotGroupIds",
+    "foreach ($groupId in $nonPilotGroupIds)",
+    "$statusBeforeGlobalEnable",
+  ]) {
+    assert.match(
+      beforeGlobalEnable,
+      new RegExp(escapeRegExp(marker), "u"),
+      `${marker} must be established before global enable`,
+    );
+  }
+  assert.match(
+    beforeGlobalEnable,
+    /Assert-ExactDisabledGroupSet -Status \$statusBeforeGlobalEnable -ExpectedGroupIds \$nonPilotGroupIds/u,
+  );
+  assert.match(
+    beforeGlobalEnable,
+    /Assert-ProactiveSpeechDisabled -Status \$statusBeforeGlobalEnable/u,
+  );
+
+  const afterGlobalEnable = conversationStateAcceptanceRunbook.slice(globalEnableIndex);
+  for (const marker of [
+    "## Control-Group Negative Test",
+    "$controlBefore",
+    "ordinary message",
+    "mention",
+    "$controlAfter",
+    "Assert-ControlSnapshotUnchanged",
+    "no Feishu reply",
+    "uninventoried group",
+  ]) {
+    assert.match(afterGlobalEnable, new RegExp(escapeRegExp(marker), "ui"));
+  }
+});
+
+test("requires best-effort fail-closed rollback after every global-enable attempt", () => {
+  const rollbackStart = conversationStateAcceptanceRunbook.indexOf(
+    "function Invoke-FailClosedRollback",
+  );
+  const rollbackEnd = conversationStateAcceptanceRunbook.indexOf("## Gray Execution Wrapper");
+  assert.ok(rollbackStart >= 0 && rollbackEnd > rollbackStart, "rollback helper must be executable");
+  const rollback = conversationStateAcceptanceRunbook.slice(rollbackStart, rollbackEnd);
+
+  assertMarkersInOrder(rollback, [
+    "/internal/runtime-control/global",
+    "groups/$pilotGroupId",
+    "stop caddy",
+    "foreach ($groupId in $nonPilotGroupIds)",
+    "Wait-ConversationDrain",
+    "IRIS_THREAD_EXTRACTION_GROUP_IDS=",
+    "IRIS_ACTION_EXTRACTION_GROUP_IDS=",
+    "IRIS_MEMORY_EXTRACTION_ENABLED=false",
+    "--force-recreate --wait --wait-timeout 120 core",
+    "Assert-FailClosedState",
+    "Assert-QueuesNotGrowing",
+  ]);
+  const rollbackSupport = conversationStateAcceptanceRunbook.slice(
+    conversationStateAcceptanceRunbook.indexOf("function Invoke-RollbackStep"),
+    rollbackEnd,
+  );
+  assert.match(rollbackSupport, /catch\s*\{[\s\S]*RollbackErrors/u);
+
+  const wrapper = conversationStateAcceptanceRunbook.slice(rollbackEnd);
+  assert.match(wrapper, /\$controllerKeepEnabled\s*=\s*\$false/u);
+  assert.match(wrapper, /try\s*\{/u);
+  assert.match(wrapper, /finally\s*\{[\s\S]*Invoke-FailClosedRollback/u);
+  assert.match(wrapper, /AggregateException/u);
+});
+
+test("requires zero conversation-state queues, exact processing lists, and repairs", () => {
+  const runbook = conversationStateAcceptanceRunbook;
 
   for (const marker of [
     "/internal/status",
@@ -171,7 +255,10 @@ test("requires zero conversation-state queues, DLQs, and projection repairs befo
   ]) {
     assert.match(runbook, new RegExp(escapeRegExp(marker), "u"), `${marker} gate is required`);
   }
-  assert.match(runbook, /proactiveSpeech[^\n]*false/u);
+  assert.match(runbook, /LLEN iris:documents:sync:processing/u);
+  assert.match(runbook, /LLEN iris:documents:reindex:processing/u);
+  assert.match(runbook, /\$documentSyncProcessing\s+-ne\s+0/u);
+  assert.match(runbook, /\$documentReindexProcessing\s+-ne\s+0/u);
 });
 
 test("renders the pilot example with disabled extraction and placeholder secrets", () => {
@@ -273,6 +360,15 @@ function readEnvAssignment(contents, name) {
   const match = new RegExp(`^${escapeRegExp(name)}=(.*)$`, "mu").exec(contents);
   assert.ok(match, `${name} must be present`);
   return match[1].trim();
+}
+
+function assertMarkersInOrder(contents, markers) {
+  let previousIndex = -1;
+  for (const marker of markers) {
+    const markerIndex = contents.indexOf(marker);
+    assert.ok(markerIndex > previousIndex, `${marker} must appear in order`);
+    previousIndex = markerIndex;
+  }
 }
 
 function escapeRegExp(value) {

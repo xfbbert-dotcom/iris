@@ -148,3 +148,67 @@ triage:
    every other allowlist blank and proactive speech disabled.
 3. Record the real gray result, update final status without claiming IRIS-CORE-005/006 or complete
    Iris, then perform the controller-owned commit/push/Draft PR steps.
+
+## First-Stage Review Fixes
+
+The first-stage review identified three Important findings and one gray-safety Minor. They were
+closed with a docs/static-contract-only change; no migration or runtime implementation was changed.
+
+### Review Contract RED And GREEN
+
+RED command, run before changing the semantic thread/action acceptance runbook:
+
+```powershell
+node --test scripts/pilot-compose.test.mjs
+```
+
+Result: exit 1; 12 tests, 9 passed, 3 failed, 0 skipped. The three failures proved the runbook lacked
+the marked global-enable boundary and exhaustive group/status gate, an executable fail-closed
+rollback helper, and exact `iris:documents:sync:processing` /
+`iris:documents:reindex:processing` LLEN gates.
+
+Final GREEN command:
+
+```powershell
+node --test --test-concurrency=1 scripts/pilot-compose.test.mjs
+```
+
+Result: exit 0; 12/12 passed, 0 skipped. The new contracts require:
+
+- authoritative current bot membership plus deduplicated PostgreSQL history/current-state inventory
+  from `conversation_messages`, `group_memories`, `discussion_threads`, and `action_items`;
+- durable disable of every known non-pilot group and exact `disabledGroupIds` comparison before
+  global enable;
+- PATCH `proactiveSpeech=false`, followed by a fresh runtime-control status GET and strict false gate;
+- a post-enable control-group ordinary-message plus mention negative test with unchanged
+  message/state/memory/projection counts and no reply;
+- best-effort ordered rollback in `finally`, aggregate primary/cleanup errors, and normal-success
+  cleanup unless the controller explicitly keeps the accepted runtime live;
+- exact Redis LLEN zero gates for document-sync and document-reindex processing lists.
+
+Focused runbook/static command:
+
+```powershell
+node --test --test-name-pattern="requires exhaustive|requires best-effort|requires zero conversation-state" scripts/pilot-compose.test.mjs
+```
+
+Result: exit 0; 3/3 passed, 0 skipped. Node selected only the three named contracts; there were no
+service-gated skips. A PowerShell parser pass inspected all runbook code fences: 8 blocks parsed,
+0 syntax errors.
+
+### Review Verification
+
+```powershell
+npm run typecheck
+```
+
+Result: exit 0; Core `tsc --noEmit` passed.
+
+The review scope changed only the runbook and its static deployment contract, so `npm run verify`
+was intentionally not rerun per the review instruction. `git diff --check` exited 0 with CRLF
+checkout notices only and no whitespace errors. No production/VPS deployment, allowlist mutation,
+real Feishu message, push, or PR occurred. Docker inspection reported
+`task10_container_residue=0` and `task10_volume_residue=0`.
+
+Real Feishu gray acceptance is still pending and remains controller-owned. IRIS-CORE-002/003 remain
+code implemented only; IRIS-CORE-005/006 remain missing, with proactive speech and follow-up disabled.

@@ -1,173 +1,516 @@
 # Iris Semantic Thread And Action Memory Acceptance
 
-This runbook is an unexecuted real-Feishu gray gate for one approved group. It does not authorize a
-production rollout. Run it only after the controller's two-stage review. Keep every other group
-outside both extraction allowlists, and do not send automated setup or acceptance messages.
+This is an unexecuted real-Feishu gray-acceptance runbook for one approved group. It does not
+authorize production rollout. Run it only after the controller's two-stage review. The default is
+fail closed: global Iris is disabled, every known group is disabled, Caddy is stopped, proactive
+speech is disabled, and thread/action allowlists are blank.
 
-## Preconditions
+IRIS-CORE-002 and IRIS-CORE-003 are code implemented, but real Feishu gray acceptance remains
+pending. IRIS-CORE-005 and IRIS-CORE-006 remain missing; this runbook must not enable proactive
+speech, reminders, or follow-up messages.
 
-Record an approved group ID as `$pilotGroupId` and a different non-allowlisted group as
-`$controlGroupId`. Use unique acceptance text that is not present in either group's existing state.
-Before changing the allowlists, keep global Iris and both groups durably disabled. Explicitly persist
-`proactiveSpeech=false` and verify the returned mutation says `durable: true`:
+## Operator Inputs
+
+Work in one PowerShell 7 session. Do not put tokens, message text, or secrets in the transcript.
+Create a fresh UTF-8 text export containing one Feishu group ID per line for every group where the
+bot is currently a member. Obtain it from the authoritative Feishu bot membership/admin inventory
+immediately before preflight. An incomplete, stale, empty, or placeholder export is a hard stop.
 
 ```powershell
-$irisHeaders=@{Authorization="Bearer $env:IRIS_INTERNAL_API_TOKEN"}
-$irisOperatorHeaders=@{
-  Authorization="Bearer $env:IRIS_INTERNAL_API_TOKEN"
-  "X-Iris-Operator"="iris-semantic-gray"
+$pilotGroupId = "<approved-group-id>"
+$controlGroupId = "<non-approved-control-group-id>"
+$botGroupInventoryPath = ".\artifacts\feishu-bot-current-groups.txt"
+$publicBaseUrl = "https://<pilot-host>"
+$compose = @("compose", "--env-file", ".env.pilot", "--file", "deploy/pilot/docker-compose.yml")
+
+$irisHeaders = @{ Authorization = "Bearer $env:IRIS_INTERNAL_API_TOKEN" }
+$irisOperatorHeaders = @{
+  Authorization = "Bearer $env:IRIS_INTERNAL_API_TOKEN"
+  "X-Iris-Operator" = "iris-semantic-gray"
+}
+```
+
+`$controllerKeepEnabled` stays `$false` for normal acceptance, so successful acceptance uses the
+same fail-closed cleanup as a failed run. Only an explicit controller decision made after all gates
+pass may set it to `$true`.
+
+## Required Helpers
+
+Run these definitions before preflight.
+
+```powershell
+function Get-PilotEnv {
+  $entries = Get-Content -LiteralPath ".env.pilot" |
+    Where-Object { $_ -match '^\s*[^#][^=]*=' }
+  ConvertFrom-StringData ($entries -join "`n")
 }
 
-Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
-  -Uri http://localhost:3000/internal/runtime-control/global `
-  -ContentType "application/json" -Body '{"enabled":false}'
-Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
-  -Uri "http://localhost:3000/internal/runtime-control/groups/$pilotGroupId" `
-  -ContentType "application/json" -Body '{"enabled":false}'
-Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
-  -Uri "http://localhost:3000/internal/runtime-control/groups/$controlGroupId" `
-  -ContentType "application/json" -Body '{"enabled":false}'
-Invoke-RestMethod -Method Patch -Headers $irisOperatorHeaders `
-  -Uri http://localhost:3000/internal/runtime-control/capabilities `
-  -ContentType "application/json" -Body '{"proactiveSpeech":false}'
+function Set-PilotEnvValues {
+  param([hashtable]$Values)
+  $path = ".env.pilot"
+  $lines = [Collections.Generic.List[string]](Get-Content -LiteralPath $path)
+  foreach ($name in $Values.Keys) {
+    $matches = @(0..($lines.Count - 1) | Where-Object { $lines[$_] -match "^$([regex]::Escape($name))=" })
+    if ($matches.Count -ne 1) { throw "Expected exactly one $name assignment in .env.pilot" }
+    $lines[$matches[0]] = "$name=$($Values[$name])"
+  }
+  Set-Content -LiteralPath $path -Value $lines -Encoding utf8NoBOM
+}
+
+function Invoke-PilotSql {
+  param([Parameter(Mandatory)][string]$Sql)
+  $pilotEnv = Get-PilotEnv
+  $result = & docker @compose exec -T postgres psql -v ON_ERROR_STOP=1 `
+    -U $pilotEnv.POSTGRES_USER -d $pilotEnv.POSTGRES_DB -Atc $Sql
+  if ($LASTEXITCODE -ne 0) { throw "Pilot PostgreSQL query failed" }
+  @($result)
+}
+
+function Get-CurrentBotGroupIds {
+  if (-not (Test-Path -LiteralPath $botGroupInventoryPath)) {
+    throw "Authoritative Feishu bot membership inventory is unavailable"
+  }
+  $ids = @(Get-Content -LiteralPath $botGroupInventoryPath |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | Sort-Object -Unique)
+  if ($ids.Count -eq 0 -or $ids -match '<|>') {
+    throw "Feishu bot membership inventory is empty or contains placeholders"
+  }
+  $ids
+}
+
+function Assert-ExactDisabledGroupSet {
+  param($Status, [string[]]$ExpectedGroupIds)
+  $expected = @($ExpectedGroupIds | Sort-Object -Unique)
+  $actual = @($Status.disabledGroupIds | Sort-Object -Unique)
+  $difference = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual)
+  if ($difference.Count -ne 0) {
+    throw "Persisted disabledGroupIds differs from the exact expected set: $($difference | ConvertTo-Json -Compress)"
+  }
+}
+
+function Assert-ProactiveSpeechDisabled {
+  param($Status)
+  if ($Status.capabilities.proactiveSpeech -ne $false) {
+    throw "Persisted capabilities.proactiveSpeech is not strictly false"
+  }
+}
+
+function Assert-DurableMutation {
+  param($Mutation, [string]$Name)
+  if ($Mutation.durable -ne $true) { throw "$Name was not durably persisted" }
+}
+
+function Get-ControlSnapshot {
+  $sql = @"
+SELECT json_build_object(
+  'messages', (SELECT count(*) FROM conversation_messages WHERE chat_id = '$controlGroupId'),
+  'memories', (SELECT count(*) FROM group_memories WHERE group_id = '$controlGroupId'),
+  'threads', (SELECT count(*) FROM discussion_threads WHERE group_id = '$controlGroupId'),
+  'actions', (SELECT count(*) FROM action_items WHERE group_id = '$controlGroupId'),
+  'projections', (SELECT count(*) FROM conversation_state_memory_projections WHERE group_id = '$controlGroupId'),
+  'repairs', (SELECT count(*) FROM conversation_state_projection_repairs WHERE group_id = '$controlGroupId')
+)::text;
+"@
+  ((Invoke-PilotSql -Sql $sql) -join "") | ConvertFrom-Json
+}
+
+function Assert-ControlSnapshotUnchanged {
+  param($Before, $After)
+  if (($Before | ConvertTo-Json -Compress) -cne ($After | ConvertTo-Json -Compress)) {
+    throw "Disabled control group gained message/state/memory/projection data"
+  }
+}
+
+function Get-DrainSnapshot {
+  $status = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/status
+  $events = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/events/status
+  $extraction = Invoke-RestMethod -Headers $irisHeaders `
+    -Uri http://localhost:3000/internal/memory-extraction/status
+  $state = Invoke-RestMethod -Headers $irisHeaders `
+    -Uri http://localhost:3000/internal/conversation-state/status
+
+  [long]$eventProcessing = & docker @compose exec -T redis redis-cli LLEN iris:events:raw:processing
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read raw-event processing list" }
+  [long]$documentSyncProcessing = & docker @compose exec -T redis redis-cli LLEN iris:documents:sync:processing
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read document-sync processing list" }
+  [long]$documentReindexProcessing = & docker @compose exec -T redis redis-cli LLEN iris:documents:reindex:processing
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read document-reindex processing list" }
+
+  [ordered]@{
+    eventPending = [long]$events.pendingEventCount
+    eventProcessing = $eventProcessing
+    eventDlq = [long]$events.deadLetterEventCount
+    documentPending = [long]$status.components.documentSync.pendingJobCount
+    documentProcessing = $documentSyncProcessing
+    documentDlq = [long]$status.components.documentSync.deadLetterJobCount
+    reindexPending = [long]$status.components.reindex.pendingJobCount
+    reindexProcessing = $documentReindexProcessing
+    reindexDlq = [long]$status.components.reindex.deadLetterJobCount
+    pendingJobCount = [long]$extraction.pendingJobCount
+    processingJobCount = [long]$extraction.processingJobCount
+    delayedJobCount = [long]$extraction.delayedJobCount
+    deadLetterJobCount = [long]$extraction.deadLetterJobCount
+    pendingProjectionRepairCount = [long]$extraction.pendingProjectionRepairCount
+    failedProjectionRepairCount = [long]$extraction.failedProjectionRepairCount
+    projectionProcessing = [long]$state.projectionRepairs.processing
+  }
+}
+
+function Assert-ZeroDrain {
+  param($Snapshot)
+  [long]$documentSyncProcessing = $Snapshot.documentProcessing
+  [long]$documentReindexProcessing = $Snapshot.reindexProcessing
+  if ($documentSyncProcessing -ne 0) { throw "iris:documents:sync:processing is not empty" }
+  if ($documentReindexProcessing -ne 0) { throw "iris:documents:reindex:processing is not empty" }
+  $nonZero = @($Snapshot.GetEnumerator() | Where-Object { [long]$_.Value -ne 0 })
+  if ($nonZero.Count -ne 0) {
+    throw "Queue/DLQ/repair zero gate failed: $($Snapshot | ConvertTo-Json -Compress)"
+  }
+}
+
+function Wait-ConversationDrain {
+  param([int]$TimeoutSeconds = 120)
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    $snapshot = Get-DrainSnapshot
+    if (@($snapshot.GetEnumerator() | Where-Object { [long]$_.Value -ne 0 }).Count -eq 0) {
+      return $snapshot
+    }
+    Start-Sleep -Seconds 5
+  } while ((Get-Date) -lt $deadline)
+  throw "In-flight work did not drain while ingress remained disabled"
+}
+
+function Assert-QueuesNotGrowing {
+  $before = Get-DrainSnapshot
+  Start-Sleep -Seconds 10
+  $after = Get-DrainSnapshot
+  foreach ($name in $before.Keys) {
+    if ([long]$after[$name] -gt [long]$before[$name]) {
+      throw "$name grew after fail-closed cleanup"
+    }
+  }
+}
+
+function Assert-FailClosedState {
+  param([string[]]$ExpectedDisabledGroupIds)
+  $closed = Invoke-RestMethod -Headers $irisHeaders `
+    -Uri http://localhost:3000/internal/runtime-control/status
+  if ($closed.globalEnabled -ne $false -or $closed.desiredGlobalEnabled -ne $false) {
+    throw "Runtime-control global state is not persistently disabled"
+  }
+  Assert-ExactDisabledGroupSet -Status $closed -ExpectedGroupIds $ExpectedDisabledGroupIds
+  Assert-ProactiveSpeechDisabled -Status $closed
+  $runningServices = @(& docker @compose ps --status running --services)
+  if ($LASTEXITCODE -ne 0 -or $runningServices -contains "caddy") {
+    throw "Caddy is not stopped"
+  }
+}
+
+function Invoke-RollbackStep {
+  param([string]$Name, [scriptblock]$Action, [Collections.Generic.List[Exception]]$RollbackErrors)
+  try { & $Action } catch {
+    $RollbackErrors.Add([Exception]::new("Rollback step '$Name' failed", $_.Exception))
+  }
+}
+
+function Invoke-FailClosedRollback {
+  param([string[]]$KnownGroupIds, [string[]]$NonPilotGroupIds)
+  $rollbackErrors = [Collections.Generic.List[Exception]]::new()
+
+  Invoke-RollbackStep "disable global" {
+    $mutation = Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
+      -Uri http://localhost:3000/internal/runtime-control/global `
+      -ContentType "application/json" -Body '{"enabled":false}'
+    Assert-DurableMutation $mutation "global disable"
+  } $rollbackErrors
+  Invoke-RollbackStep "disable pilot" {
+    $mutation = Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
+      -Uri "http://localhost:3000/internal/runtime-control/groups/$pilotGroupId" `
+      -ContentType "application/json" -Body '{"enabled":false}'
+    Assert-DurableMutation $mutation "pilot disable"
+  } $rollbackErrors
+  Invoke-RollbackStep "stop caddy" {
+    $dockerOutput = & docker @compose stop caddy
+    if ($LASTEXITCODE -ne 0) { throw "docker compose stop caddy failed: $dockerOutput" }
+  } $rollbackErrors
+  foreach ($groupId in $nonPilotGroupIds) {
+    Invoke-RollbackStep "disable group $groupId" {
+      $mutation = Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
+        -Uri "http://localhost:3000/internal/runtime-control/groups/$groupId" `
+        -ContentType "application/json" -Body '{"enabled":false}'
+      Assert-DurableMutation $mutation "group disable $groupId"
+    } $rollbackErrors
+  }
+  Invoke-RollbackStep "persist proactive false" {
+    $mutation = Invoke-RestMethod -Method Patch -Headers $irisOperatorHeaders `
+      -Uri http://localhost:3000/internal/runtime-control/capabilities `
+      -ContentType "application/json" -Body '{"proactiveSpeech":false}'
+    Assert-DurableMutation $mutation "proactiveSpeech disable"
+  } $rollbackErrors
+  Invoke-RollbackStep "wait for in-flight work" {
+    $null = Wait-ConversationDrain
+  } $rollbackErrors
+  Invoke-RollbackStep "restore disabled extraction env" {
+    Set-PilotEnvValues ([ordered]@{
+      IRIS_THREAD_EXTRACTION_GROUP_IDS=""
+      IRIS_ACTION_EXTRACTION_GROUP_IDS=""
+      IRIS_MEMORY_EXTRACTION_ENABLED="false"
+    })
+    # Persisted rollback target: IRIS_MEMORY_EXTRACTION_ENABLED=false
+  } $rollbackErrors
+  Invoke-RollbackStep "rebuild private Core" {
+    $dockerOutput = & docker @compose up --detach --build --force-recreate --wait --wait-timeout 120 core
+    if ($LASTEXITCODE -ne 0) { throw "Core rebuild failed: $dockerOutput" }
+  } $rollbackErrors
+  Invoke-RollbackStep "verify persisted fail-closed state" {
+    Assert-FailClosedState -ExpectedDisabledGroupIds $KnownGroupIds
+  } $rollbackErrors
+  Invoke-RollbackStep "verify queues no longer grow" {
+    Assert-QueuesNotGrowing
+  } $rollbackErrors
+
+  $rollbackErrors.ToArray()
+}
 ```
 
-Set exactly one group in the private pilot environment, retain the exact thresholds, and enable the
-existing extraction runtime:
+If the drain wait fails, the helper records that failure, continues every later cleanup step, and
+leaves global/group ingress disabled. Rollback failures are aggregated with the primary acceptance
+failure instead of replacing it.
 
-```text
-IRIS_MEMORY_EXTRACTION_ENABLED=true
-IRIS_THREAD_EXTRACTION_GROUP_IDS=<approved-group-id>
-IRIS_ACTION_EXTRACTION_GROUP_IDS=<approved-group-id>
-IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR=0.65
-IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE=0.85
-```
+## Exhaustive Group Inventory
 
-Restart Core privately with Caddy stopped. Run migrations, `npm run readiness -- --env-file
-.env.pilot`, and query `GET /internal/readiness`; require `ok: true` with no failed check. Query
-`GET /internal/ingress-readiness` with the operator bearer and require `ok: true`, `status: "ready"`.
-Query `GET /internal/status` and require every enabled runtime healthy. Confirm public `/internal/*`
-AI Worker has no published port, and Caddy configuration routes only `/health` and `/feishu/events`
-to Core. Then start Caddy, require public `/health` to return `200`, and require public
-`/internal/status`, `/internal/readiness`, and `/internal/ingress-readiness` to return `404`.
-
-Only after those checks, durably enable `$pilotGroupId` and then global Iris. Keep `$controlGroupId`
-disabled:
+Keep global Iris disabled while building the union of current bot memberships and historical/current
+database state. The SQL inventory includes conversation messages, group memory, threads, and actions.
 
 ```powershell
-Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
-  -Uri "http://localhost:3000/internal/runtime-control/groups/$pilotGroupId" `
-  -ContentType "application/json" -Body '{"enabled":true}'
-Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
+if ($pilotGroupId -eq $controlGroupId -or $pilotGroupId -match '<|>' -or $controlGroupId -match '<|>') {
+  throw "Pilot/control group IDs must be distinct real IDs"
+}
+
+$globalOff = Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
   -Uri http://localhost:3000/internal/runtime-control/global `
-  -ContentType "application/json" -Body '{"enabled":true}'
+  -ContentType "application/json" -Body '{"enabled":false}'
+Assert-DurableMutation $globalOff "preflight global disable"
+
+$currentBotGroupIds = @(Get-CurrentBotGroupIds)
+$databaseGroupIds = @(Invoke-PilotSql -Sql @"
+SELECT group_id FROM (
+  SELECT chat_id AS group_id FROM conversation_messages
+  UNION SELECT group_id FROM group_memories
+  UNION SELECT group_id FROM discussion_threads
+  UNION SELECT group_id FROM action_items
+) known_database_groups
+WHERE group_id IS NOT NULL AND group_id <> ''
+ORDER BY group_id;
+"@ | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | Sort-Object -Unique)
+$knownGroupIds = @($currentBotGroupIds + $databaseGroupIds | Sort-Object -Unique)
+$nonPilotGroupIds = @($knownGroupIds | Where-Object { $_ -ne $pilotGroupId })
+
+if ($currentBotGroupIds -notcontains $pilotGroupId) { throw "Pilot group is not in current bot membership" }
+if ($currentBotGroupIds -notcontains $controlGroupId) { throw "Control group is not in current bot membership" }
+
+$pilotOff = Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
+  -Uri "http://localhost:3000/internal/runtime-control/groups/$pilotGroupId" `
+  -ContentType "application/json" -Body '{"enabled":false}'
+Assert-DurableMutation $pilotOff "preflight pilot disable"
+foreach ($groupId in $nonPilotGroupIds) {
+  $groupOff = Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
+    -Uri "http://localhost:3000/internal/runtime-control/groups/$groupId" `
+    -ContentType "application/json" -Body '{"enabled":false}'
+  Assert-DurableMutation $groupOff "preflight disable $groupId"
+}
+
+$proactiveOff = Invoke-RestMethod -Method Patch -Headers $irisOperatorHeaders `
+  -Uri http://localhost:3000/internal/runtime-control/capabilities `
+  -ContentType "application/json" -Body '{"proactiveSpeech":false}'
+Assert-DurableMutation $proactiveOff "preflight proactiveSpeech disable"
 ```
 
-Require both responses to say `durable: true`. Re-read runtime-control status and require
-`proactiveSpeech=false` before asking a human participant to send the acceptance conversation.
+Any failed inventory query or group-disable mutation prohibits global enable. Do not assume the
+control group represents all non-approved groups.
+
+## Private Deployment And Boundary Gates
+
+Set exactly the approved group in both allowlists. Every other group remains blank/disabled. Retain
+the exact pilot thresholds.
+
+```powershell
+Set-PilotEnvValues ([ordered]@{
+  IRIS_MEMORY_EXTRACTION_ENABLED = "true"
+  IRIS_THREAD_EXTRACTION_GROUP_IDS = $pilotGroupId
+  IRIS_ACTION_EXTRACTION_GROUP_IDS = $pilotGroupId
+  IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR = "0.65"
+  IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE = "0.85"
+})
+& docker @compose stop caddy
+if ($LASTEXITCODE -ne 0) { throw "Unable to stop Caddy" }
+& docker @compose up --detach --build --force-recreate postgres redis migrate ai-worker core
+if ($LASTEXITCODE -ne 0) { throw "Private runtime deployment failed" }
+```
+
+Run `npm run readiness -- --env-file .env.pilot`. Require `GET /internal/readiness` to return
+`ok: true`, `GET /internal/ingress-readiness` to return `ok: true` and `status: "ready"`, and every
+enabled component in `GET /internal/status` to be healthy. Confirm AI Worker has no published port,
+Caddy contains no `/internal/*` route, and Caddy routes only public `/health` and `/feishu/events` to
+Core. Start Caddy; require public `/health` `200`, public `/internal/*` `404`, and the callback
+boundary to reject invalid verification/signature requests without processing an event.
+
+```powershell
+$dockerOutput = & docker @compose up --detach caddy
+if ($LASTEXITCODE -ne 0) { throw "Unable to start Caddy: $dockerOutput" }
+```
+
+Immediately before global enable, create a second fresh authoritative Feishu membership export at
+the same path, then run this gate. If the bot is in any uninventoried group, the run fails closed and
+does not continue.
+
+```powershell
+$freshBotGroupIds = @(Get-CurrentBotGroupIds)
+$membershipDelta = @(Compare-Object -ReferenceObject $currentBotGroupIds -DifferenceObject $freshBotGroupIds)
+if ($membershipDelta.Count -ne 0) { throw "Bot membership changed; rebuild the complete group inventory" }
+$uninventoried = @($freshBotGroupIds | Where-Object { $knownGroupIds -notcontains $_ })
+if ($uninventoried.Count -ne 0) { throw "Bot remains in an uninventoried group; global enable prohibited" }
+
+$pilotOn = Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
+  -Uri "http://localhost:3000/internal/runtime-control/groups/$pilotGroupId" `
+  -ContentType "application/json" -Body '{"enabled":true}'
+Assert-DurableMutation $pilotOn "pilot enable"
+
+$statusBeforeGlobalEnable = Invoke-RestMethod -Headers $irisHeaders `
+  -Uri http://localhost:3000/internal/runtime-control/status
+Assert-ExactDisabledGroupSet -Status $statusBeforeGlobalEnable -ExpectedGroupIds $nonPilotGroupIds
+Assert-ProactiveSpeechDisabled -Status $statusBeforeGlobalEnable
+```
+
+The strict disabled-set comparison catches stale or unknown persisted group state. Any mismatch,
+including an extra or missing ID, prohibits global enable and requires inventory reconciliation.
+
+## Gray Execution Wrapper
+
+Keep the remaining enable and acceptance commands inside this wrapper. Set the attempt flag before
+the mutation because a timeout can hide a successful durable write.
+
+```powershell
+$controllerKeepEnabled = $false
+$globalEnableAttempted = $false
+$acceptancePassed = $false
+$primaryError = $null
+$rollbackErrors = @()
+
+try {
+  # GLOBAL_ENABLE
+  $globalEnableAttempted = $true
+  $globalOn = Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
+    -Uri http://localhost:3000/internal/runtime-control/global `
+    -ContentType "application/json" -Body '{"enabled":true}'
+  Assert-DurableMutation $globalOn "global enable"
+
+  $statusAfterGlobalEnable = Invoke-RestMethod -Headers $irisHeaders `
+    -Uri http://localhost:3000/internal/runtime-control/status
+  Assert-ExactDisabledGroupSet -Status $statusAfterGlobalEnable -ExpectedGroupIds $nonPilotGroupIds
+  Assert-ProactiveSpeechDisabled -Status $statusAfterGlobalEnable
+
+  # Run the control-group negative test and human acceptance conversation below in this try block.
+  $controlBefore = Get-ControlSnapshot
+  $null = Read-Host "Send one ordinary message and one @Iris mention in the control group; press Enter after two extraction intervals"
+  $controlAfter = Get-ControlSnapshot
+  Assert-ControlSnapshotUnchanged -Before $controlBefore -After $controlAfter
+  $replyObservation = Read-Host "Confirm no Feishu reply appeared in the control group by typing NO_REPLY"
+  if ($replyObservation -cne "NO_REPLY") { throw "Control group reply observation failed" }
+
+  $postEnableBotGroups = @(Get-CurrentBotGroupIds)
+  $postEnableUnknown = @($postEnableBotGroups | Where-Object { $knownGroupIds -notcontains $_ })
+  if ($postEnableUnknown.Count -ne 0) { throw "Bot is in an uninventoried group after global enable" }
+
+  $null = Read-Host "Complete the six approved-group human steps and evidence checks below; press Enter to drain"
+  $drained = Wait-ConversationDrain
+  Assert-ZeroDrain -Snapshot $drained
+
+  $readiness = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/readiness
+  $ingress = Invoke-RestMethod -Headers $irisHeaders `
+    -Uri http://localhost:3000/internal/ingress-readiness
+  if ($readiness.ok -ne $true -or $ingress.ok -ne $true -or $ingress.status -ne "ready") {
+    throw "Final readiness gate failed"
+  }
+  $acceptancePassed = $true
+} catch {
+  $primaryError = $_.Exception
+} finally {
+  if ($globalEnableAttempted -and ((-not $acceptancePassed) -or (-not $controllerKeepEnabled))) {
+    $rollbackErrors = @(Invoke-FailClosedRollback `
+      -KnownGroupIds $knownGroupIds -NonPilotGroupIds $nonPilotGroupIds)
+  }
+}
+
+$allErrors = [Collections.Generic.List[Exception]]::new()
+if ($null -ne $primaryError) { $allErrors.Add($primaryError) }
+foreach ($rollbackError in $rollbackErrors) { $allErrors.Add($rollbackError) }
+if ($allErrors.Count -ne 0) {
+  throw [AggregateException]::new("Gray acceptance and/or fail-closed cleanup failed", $allErrors.ToArray())
+}
+```
+
+Any failure after global enable therefore attempts, in order: global disable; pilot and all other
+known group disables; proactive disable; Caddy stop; bounded in-flight drain; blank thread/action
+allowlists; memory-extraction disable; private Core rebuild; persisted fail-closed verification; and
+queue/DLQ/repair no-growth verification. A primary failure never skips cleanup.
+
+## Control-Group Negative Test
+
+The wrapper selects the non-approved `$controlGroupId` and captures `$controlBefore` after global
+enable. A human sends one ordinary message and one mention question in that control group. After at
+least two extraction intervals, `$controlAfter` must be byte-for-byte equivalent by field: no new
+conversation message, thread/action state, group memory, memory projection, or projection repair.
+There must be no Feishu reply. Existing unrelated historical rows are allowed only because the test
+compares before and after counts.
+
+If a refreshed membership inventory reveals any uninventoried group, or the control snapshot or
+no-reply observation changes, acceptance fails and the wrapper runs fail-closed cleanup.
 
 ## Human Acceptance Conversation
 
-Use a unique topic marker such as `IRIS-GRAY-<date>-ALPHA`. Human participants send these in the
-approved group; the operator does not send them through an API.
+Use a unique marker such as `IRIS-GRAY-<date>-ALPHA`. Humans send these messages in the approved
+group; the operator does not send them through an API.
 
-1. Ordinary discussion, without mentioning Iris: introduce the marker, a concrete decision still
-   under discussion, and one relevant fact.
-2. Evidence promotion, still without mentioning Iris: add a second message that clearly continues
-   the same topic. Poll the approved group's thread endpoint until the same evidence-bound thread is
-   `open`, not `candidate`.
-3. Explicit commitment: one participant states that they personally commit to one concrete action;
-   a due date is optional. Poll until exactly one matching `open` action has the correct Feishu owner
-   and evidence message ID.
-4. Mention question: mention Iris and ask for the current topic decision and commitment. Require an
-   accurate answer grounded only in the approved group's open thread/action state.
-5. Completion: the owner explicitly states the action is complete and the discussion is resolved.
-   Poll until the action is `completed` and the thread is `resolved`.
-6. Reopening: without mentioning Iris, add explicit new evidence that reopens the same topic. Poll
-   until the same canonical thread is `open` at a higher version; no duplicate thread/action may be
-   created.
+1. Ordinary discussion without mentioning Iris: introduce the marker, a decision still under
+   discussion, and one relevant fact.
+2. Evidence promotion without mentioning Iris: continue the same topic. Poll until the same
+   evidence-bound thread is `open`, not `candidate`.
+3. Explicit commitment: one participant personally commits to one concrete action. Poll until
+   exactly one matching `open` action has the correct Feishu owner and evidence message ID.
+4. Mention question: mention Iris and ask for the current decision and commitment. Require one
+   accurate answer grounded only in this group's open thread/action state.
+5. Completion: the owner explicitly completes the action and resolves the discussion. Poll until the
+   action is `completed` and the thread is `resolved`.
+6. Reopening without mentioning Iris: add explicit new evidence. Poll until the same canonical
+   thread is `open` at a higher version with no duplicate thread/action.
 
-Inspect state only through loopback operator routes:
+Inspect only loopback operator routes:
 
 ```powershell
 $pilotThreads = Invoke-RestMethod -Headers $irisHeaders `
   -Uri "http://localhost:3000/internal/conversation-state/groups/$pilotGroupId/threads?limit=20"
 $pilotActions = Invoke-RestMethod -Headers $irisHeaders `
   -Uri "http://localhost:3000/internal/conversation-state/groups/$pilotGroupId/actions?limit=20"
-$controlThreads = Invoke-RestMethod -Headers $irisHeaders `
-  -Uri "http://localhost:3000/internal/conversation-state/groups/$controlGroupId/threads?limit=20"
-$controlActions = Invoke-RestMethod -Headers $irisHeaders `
-  -Uri "http://localhost:3000/internal/conversation-state/groups/$controlGroupId/actions?limit=20"
 ```
 
-Require append-only events and exact evidence IDs for every transition. Require that none of the
-approved-group thread/action IDs or evidence IDs appear in `$controlThreads` or `$controlActions`.
-Do not expect the control group to be empty if it already has unrelated historical state.
+Require append-only events and exact evidence IDs for every transition. From the first ordinary
+message through at least two extraction intervals after reopening, allow only the direct answer to
+the explicit @Iris question. Any unsolicited reminder, follow-up, status update, or other Iris
+message fails acceptance. Require the drain snapshot to be all numeric zero, including pending,
+processing, delayed, DLQ, and projection-repair counts and the exact Redis processing lists
+`iris:events:raw:processing`, `iris:documents:sync:processing`, and
+`iris:documents:reindex:processing`.
 
-## No-Send And Drain Gates
+## Evidence And Exit
 
-From the first ordinary message through at least two extraction intervals after reopening, require
-no Iris message except the single direct answer to the explicit @Iris question. Any reminder,
-follow-up, status update, or other unsolicited message fails the gate.
+Record the deployed commit, complete inventory source/timestamps, pilot/control IDs, state and event
+IDs, count-only status JSON, readiness results, and observed Feishu messages. Do not record message
+content or secrets. Unless the controller explicitly chose to keep the accepted runtime enabled,
+successful cleanup must prove persisted global false, every known group including the pilot in the
+exact disabled set, proactive false, Caddy stopped, blank thread/action allowlists,
+`IRIS_MEMORY_EXTRACTION_ENABLED=false`, and queues/DLQs/repairs no longer growing.
 
-Read the private status endpoints and require every listed count to be numeric zero:
-
-```powershell
-$status = Invoke-RestMethod -Headers $irisHeaders `
-  -Uri http://localhost:3000/internal/status
-$events = Invoke-RestMethod -Headers $irisHeaders `
-  -Uri http://localhost:3000/internal/events/status
-$extraction = Invoke-RestMethod -Headers $irisHeaders `
-  -Uri http://localhost:3000/internal/memory-extraction/status
-$state = Invoke-RestMethod -Headers $irisHeaders `
-  -Uri http://localhost:3000/internal/conversation-state/status
-
-$zeroGates = [ordered]@{
-  eventPending = $events.pendingEventCount
-  eventDlq = $events.deadLetterEventCount
-  documentPending = $status.components.documentSync.pendingJobCount
-  documentDlq = $status.components.documentSync.deadLetterJobCount
-  reindexPending = $status.components.reindex.pendingJobCount
-  reindexDlq = $status.components.reindex.deadLetterJobCount
-  pendingJobCount = $extraction.pendingJobCount
-  processingJobCount = $extraction.processingJobCount
-  delayedJobCount = $extraction.delayedJobCount
-  deadLetterJobCount = $extraction.deadLetterJobCount
-  pendingProjectionRepairCount = $extraction.pendingProjectionRepairCount
-  failedProjectionRepairCount = $extraction.failedProjectionRepairCount
-  projectionProcessing = $state.projectionRepairs.processing
-}
-if ($zeroGates.Values | Where-Object { $_ -ne 0 }) {
-  throw "Conversation-state drain gate failed: $($zeroGates | ConvertTo-Json -Compress)"
-}
-```
-
-Also require Redis raw-event processing to be zero:
-
-```powershell
-docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml `
-  exec -T redis redis-cli LLEN iris:events:raw:processing
-```
-
-The command must print `0`. Recheck `/internal/readiness`, `/internal/ingress-readiness`, and
-`/internal/status` after drain. Any queue, DLQ, failed repair, permission violation, duplicate,
-cross-group state, unsolicited message, or unhealthy readiness result fails acceptance.
-
-## Cleanup And Evidence
-
-Record the deployed commit, group IDs, timestamps, state entity/event IDs, status JSON with counts
-only, readiness results, and the observed Feishu messages. Do not put message content or secrets in
-operator logs. After evidence capture, durably disable global Iris first and then the pilot group:
-
-```powershell
-Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
-  -Uri http://localhost:3000/internal/runtime-control/global `
-  -ContentType "application/json" -Body '{"enabled":false}'
-Invoke-RestMethod -Method Post -Headers $irisOperatorHeaders `
-  -Uri "http://localhost:3000/internal/runtime-control/groups/$pilotGroupId" `
-  -ContentType "application/json" -Body '{"enabled":false}'
-```
-
-Require both responses to say `durable: true`, stop Caddy, restore both thread/action allowlists to
-blank, restart Core privately, prove the disabled state, and only then restore Caddy. Real gray
-acceptance remains pending until the controller records every gate as pass.
+Do not restart Caddy after cleanup. Real Feishu gray acceptance and the final release decision remain
+controller actions; this runbook does not claim complete Iris delivery.
