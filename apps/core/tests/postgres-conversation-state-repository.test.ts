@@ -21,17 +21,52 @@ const postgresSuffix = randomUUID();
 const postgresGroupId = `state-group-${postgresSuffix}`;
 const postgresOtherGroupId = `state-other-group-${postgresSuffix}`;
 const postgresMessageId = `feishu:state-message-${postgresSuffix}`;
+const postgresSecondMessageId = `feishu:state-message-2-${postgresSuffix}`;
 const postgresOtherMessageId = `feishu:state-other-message-${postgresSuffix}`;
 
 describe("createPostgresConversationStateRepository", () => {
+  it("rejects a thread event which references a different thread before connecting", async () => {
+    const source = dataSource(scriptedClient([]));
+    const repository = createPostgresConversationStateRepository({ dataSource: source });
+    const operation = createThreadOperation();
+    operation.threadEvent.threadId = "thread-2";
+
+    await expect(repository.applyOperations({ groupId: "chat-a", operations: [operation] }))
+      .rejects.toThrow("thread event must reference operation thread");
+    expect(source.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects an action event which references a different action before connecting", async () => {
+    const source = dataSource(scriptedClient([]));
+    const repository = createPostgresConversationStateRepository({ dataSource: source });
+    const operation = createActionOperation();
+    operation.actionEvent.actionItemId = "action-2";
+
+    await expect(repository.applyOperations({ groupId: "chat-a", operations: [operation] }))
+      .rejects.toThrow("action event must reference operation action");
+    expect(source.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects creation of an already merged thread before connecting", async () => {
+    const source = dataSource(scriptedClient([]));
+    const repository = createPostgresConversationStateRepository({ dataSource: source });
+    const operation = createThreadOperation() as unknown as CreateConversationStateOperation;
+    operation.thread!.status = "merged";
+    operation.thread!.mergedIntoThreadId = "thread-2";
+
+    await expect(repository.applyOperations({ groupId: "chat-a", operations: [operation] }))
+      .rejects.toThrow("new discussion thread must not be merged");
+    expect(source.connect).not.toHaveBeenCalled();
+  });
+
   it("writes same-group evidence, one event, and one repair in one transaction", async () => {
     const client = scriptedClient([
       step(/begin/u),
       step(/from discussion_threads[\s\S]+for update/u, []),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
-      step(/from conversation_messages[\s\S]+chat_id = \$2/u, [{ id: "message-1" }]),
+      step(/from discussion_thread_events[\s\S]+operation_key/u, [], ["chat-a", ["thread-create-1"]]),
+      step(/from action_item_events[\s\S]+operation_key/u, [], ["chat-a", ["thread-create-1"]]),
+      step(/from conversation_messages[\s\S]+chat_id = \$2/u, [{ id: "message-1" }], [["message-1"], "chat-a"]),
       step(/insert into discussion_threads/u),
       step(/insert into discussion_thread_evidence/u),
       step(/insert into discussion_thread_events/u),
@@ -46,6 +81,10 @@ describe("createPostgresConversationStateRepository", () => {
       operations: [createThreadOperation()],
     })).resolves.toEqual({ status: "applied", threadIds: ["thread-1"], actionItemIds: [] });
     expect(client.release).toHaveBeenCalledOnce();
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringMatching(/pg_advisory_xact_lock/iu),
+      ["conversation-state:chat-a"],
+    );
   });
 
   it("rejects cross-group evidence and rolls back before writing state", async () => {
@@ -69,13 +108,13 @@ describe("createPostgresConversationStateRepository", () => {
     ]));
   });
 
-  it("returns already_applied when every operation key has already been appended", async () => {
+  it("returns already_applied only for an exact same-type replay", async () => {
     const client = scriptedClient([
       step(/begin/u),
-      step(/from discussion_threads[\s\S]+for update/u, []),
+      step(/from discussion_threads[\s\S]+for update/u, [threadRow()]),
       step(/from action_items[\s\S]+for update/u, []),
-      step(/from discussion_thread_events[\s\S]+operation_key/u, [{ operation_key: "thread-create-1" }]),
-      step(/from action_item_events[\s\S]+operation_key/u, []),
+      step(/from discussion_thread_events[\s\S]+operation_key/u, [threadEventRow()], ["chat-a", ["thread-create-1"]]),
+      step(/from action_item_events[\s\S]+operation_key/u, [], ["chat-a", ["thread-create-1"]]),
       step(/commit/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
@@ -84,6 +123,69 @@ describe("createPostgresConversationStateRepository", () => {
       groupId: "chat-a",
       operations: [createThreadOperation()],
     })).resolves.toEqual({ status: "already_applied", threadIds: [], actionItemIds: [] });
+  });
+
+  it("rejects a partially replayed batch", async () => {
+    const threadOperation = createThreadOperation();
+    const actionOperation = createActionOperation();
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/from discussion_threads[\s\S]+for update/u, [threadRow()]),
+      step(/from action_items[\s\S]+for update/u, []),
+      step(/from discussion_thread_events[\s\S]+operation_key/u, [threadEventRow()], ["chat-a", ["thread-create-1", "action-create-1"]]),
+      step(/from action_item_events[\s\S]+operation_key/u, [], ["chat-a", ["thread-create-1", "action-create-1"]]),
+      step(/rollback/u),
+    ]);
+    const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.applyOperations({
+      groupId: "chat-a",
+      operations: [threadOperation, actionOperation],
+    })).rejects.toThrow("conversation state operation key conflict");
+  });
+
+  it("rejects an operation key already used by the other event type", async () => {
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/from discussion_threads[\s\S]+for update/u, []),
+      step(/from action_items[\s\S]+for update/u, []),
+      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
+      step(/from action_item_events[\s\S]+operation_key/u, [actionEventRow({ operation_key: "thread-create-1" })]),
+      step(/rollback/u),
+    ]);
+    const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.applyOperations({
+      groupId: "chat-a",
+      operations: [createThreadOperation()],
+    })).rejects.toThrow("conversation state operation key conflict");
+  });
+
+  it("rejects an operation key replayed with a different event payload", async () => {
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/from discussion_threads[\s\S]+for update/u, [threadRow()]),
+      step(/from action_items[\s\S]+for update/u, []),
+      step(/from discussion_thread_events[\s\S]+operation_key/u, [threadEventRow({ id: "different-event" })]),
+      step(/from action_item_events[\s\S]+operation_key/u, []),
+      step(/rollback/u),
+    ]);
+    const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.applyOperations({
+      groupId: "chat-a",
+      operations: [createThreadOperation()],
+    })).rejects.toThrow("conversation state operation key conflict");
+  });
+
+  it("rejects a state operation without its audit event", async () => {
+    const source = dataSource(scriptedClient([]));
+    const repository = createPostgresConversationStateRepository({ dataSource: source });
+    const operation = { ...createThreadOperation(), threadEvent: undefined };
+
+    await expect(repository.applyOperations({ groupId: "chat-a", operations: [operation as never] }))
+      .rejects.toThrow("operation must contain exactly one entity and matching event");
+    expect(source.connect).not.toHaveBeenCalled();
   });
 
   it("rejects a stale mutation version before appending an event", async () => {
@@ -150,10 +252,10 @@ describe("createPostgresConversationStateRepository", () => {
     })).rejects.toThrow("merge chain contains a cycle");
   });
 
-  it("locks the group and resolves a merge chain to its terminal target", async () => {
+  it("locks the group and accepts the terminal canonical merge target", async () => {
     const client = scriptedClient([
       step(/begin/u),
-      step(/from discussion_threads[\s\S]+where group_id = \$1 for update/u, [
+      step(/from discussion_threads thread[\s\S]+where thread\.group_id = \$1[\s\S]+for update/u, [
         threadRow({ id: "thread-1", status: "candidate", version: "1" }),
         threadRow({ id: "thread-2", status: "merged", version: "2", merged_into_thread_id: "thread-3" }),
         threadRow({ id: "thread-3", status: "open", version: "1" }),
@@ -170,11 +272,31 @@ describe("createPostgresConversationStateRepository", () => {
       step(/commit/u),
     ]);
     const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+    const operation = mergeThreadOperation();
+    operation.thread.mergedIntoThreadId = "thread-3";
 
-    await expect(repository.applyOperations({ groupId: "chat-a", operations: [mergeThreadOperation()] }))
+    await expect(repository.applyOperations({ groupId: "chat-a", operations: [operation] }))
       .resolves.toMatchObject({ status: "applied" });
     const updateCall = client.query.mock.calls.find(([sql]) => /update discussion_threads/iu.test(String(sql)));
     expect(updateCall?.[1]?.[6]).toBe("thread-3");
+  });
+
+  it("rejects a requested merge target when the source is canonical", async () => {
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/from discussion_threads[\s\S]+for update/u, [
+        threadRow({ id: "thread-1", status: "open", evidence_count: "5" }),
+        threadRow({ id: "thread-2", status: "candidate", evidence_count: "1" }),
+      ]),
+      step(/from action_items[\s\S]+for update/u, []),
+      step(/from discussion_thread_events[\s\S]+operation_key/u, []),
+      step(/from action_item_events[\s\S]+operation_key/u, []),
+      step(/rollback/u),
+    ]);
+    const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.applyOperations({ groupId: "chat-a", operations: [mergeThreadOperation()] }))
+      .rejects.toThrow("merge target is not canonical");
   });
 
   it("rolls back an entire batch when an accepted operation fails", async () => {
@@ -201,11 +323,11 @@ describe("createPostgresConversationStateRepository", () => {
     const source = {
       connect: vi.fn(),
       query: vi.fn(async (sql: string) => ({
-        rows: /from discussion_threads/iu.test(sql)
-          ? [threadRow()]
-          : /from action_items/iu.test(sql)
+        rows: /from action_items/iu.test(sql)
             ? [actionRow()]
-            : [repairRow()],
+            : /from discussion_threads/iu.test(sql)
+              ? [threadRow()]
+              : [repairRow()],
       })),
     } as unknown as PostgresConversationStateDataSource;
     const repository = createPostgresConversationStateRepository({ dataSource: source });
@@ -217,6 +339,70 @@ describe("createPostgresConversationStateRepository", () => {
     await expect(repository.claimProjectionRepairs({ limit: 1, now: new Date("2026-07-16T00:00:00.000Z") }))
       .resolves.toMatchObject([{ entityVersion: 2 }]);
   });
+
+  it("validates relevant thread statuses before querying", async () => {
+    const source = dataSource(scriptedClient([]));
+    const repository = createPostgresConversationStateRepository({ dataSource: source });
+
+    await expect(repository.listRelevantThreads({
+      groupId: "chat-a",
+      limit: 1,
+      statuses: ["invalid" as never],
+    })).rejects.toThrow("thread status is invalid");
+    expect(source.query).not.toHaveBeenCalled();
+  });
+
+  it("excludes candidate-linked actions only from answer-relevant reads", async () => {
+    const source = {
+      connect: vi.fn(),
+      query: vi.fn(async () => ({ rows: [] })),
+    } as unknown as PostgresConversationStateDataSource;
+    const repository = createPostgresConversationStateRepository({ dataSource: source });
+
+    await repository.listRelevantActions({ groupId: "chat-a", limit: 3 });
+    expect(source.query).toHaveBeenLastCalledWith(
+      expect.stringMatching(/not exists[\s\S]+discussion_threads[\s\S]+status = 'candidate'/iu),
+      ["chat-a", null, null, 3],
+    );
+
+    await repository.loadExtractionContext({ groupId: "chat-a", threadLimit: 2, actionLimit: 3 });
+    expect(source.query).toHaveBeenCalledWith(
+      expect.stringMatching(/from discussion_threads/iu),
+      ["chat-a", ["candidate", "open", "resolved"], 2],
+    );
+    expect(source.query).toHaveBeenCalledWith(
+      expect.not.stringMatching(/not exists[\s\S]+status = 'candidate'/iu),
+      ["chat-a", ["open"], null, 3],
+    );
+  });
+
+  it("claims due failed repairs below the bounded attempt limit", async () => {
+    const now = new Date("2026-07-16T00:00:00.000Z");
+    const source = {
+      connect: vi.fn(),
+      query: vi.fn(async () => ({ rows: [] })),
+    } as unknown as PostgresConversationStateDataSource;
+    const repository = createPostgresConversationStateRepository({ dataSource: source });
+
+    await repository.claimProjectionRepairs({ limit: 4, now });
+
+    expect(source.query).toHaveBeenCalledWith(
+      expect.stringMatching(/status in \('pending', 'failed'\)[\s\S]+next_attempt_at <= \$1[\s\S]+attempt_count < \$3/iu),
+      [now, 4, 5],
+    );
+  });
+
+  it("keeps projection versions monotonic when an older repair completes", async () => {
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/update conversation_state_projection_repairs/u, [repairRow()]),
+      step(/insert into conversation_state_memory_projections[\s\S]+do update[\s\S]+where[\s\S]+projected_version < excluded\.projected_version/u),
+      step(/commit/u),
+    ]);
+    const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.completeProjectionRepair({ id: "repair-1" })).resolves.toBeUndefined();
+  });
 });
 
 runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
@@ -225,6 +411,7 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
   const groupId = postgresGroupId;
   const otherGroupId = postgresOtherGroupId;
   const messageId = postgresMessageId;
+  const secondMessageId = postgresSecondMessageId;
   const otherMessageId = postgresOtherMessageId;
 
   beforeAll(async () => {
@@ -242,10 +429,12 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
         message_type, text, sent_at, raw_event_idempotency_key
       ) VALUES
         ($1, 'feishu', $2, $3, 'alice', 'text', 'State evidence.', NOW(), $4),
-        ($5, 'feishu', $6, $7, 'bob', 'text', 'Other state evidence.', NOW(), $8)
+        ($5, 'feishu', $6, $3, 'alice', 'text', 'More state evidence.', NOW(), $7),
+        ($8, 'feishu', $9, $10, 'bob', 'text', 'Other state evidence.', NOW(), $11)
       `,
       [
         messageId, `provider-${messageId}`, groupId, `event-${messageId}`,
+        secondMessageId, `provider-${secondMessageId}`, `event-${secondMessageId}`,
         otherMessageId, `provider-${otherMessageId}`, otherGroupId, `event-${otherMessageId}`,
       ],
     );
@@ -318,11 +507,18 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
       id: `chained-${suffix}`, status: "candidate", eventType: "created", operationKey: `chained-create-${suffix}`,
     });
     await repository.applyOperations({ groupId, operations: [chained] });
-    await repository.applyOperations({
+    await expect(repository.applyOperations({
       groupId,
       operations: [integrationThreadOperation({
         id: chained.thread!.id, status: "merged", eventType: "merged", operationKey: `chained-merge-${suffix}`,
         expectedVersion: 1, mergedIntoThreadId: leaf.thread!.id,
+      })],
+    })).rejects.toThrow("merge target is not canonical");
+    await repository.applyOperations({
+      groupId,
+      operations: [integrationThreadOperation({
+        id: chained.thread!.id, status: "merged", eventType: "merged", operationKey: `chained-merge-root-${suffix}`,
+        expectedVersion: 1, mergedIntoThreadId: root.thread!.id,
       })],
     });
     await expect(pool!.query(
@@ -349,12 +545,189 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
     await expect(pool!.query("SELECT id FROM discussion_threads WHERE id = $1", [rollbackOne.thread!.id]))
       .resolves.toMatchObject({ rows: [] });
   });
+
+  it("writes actions and rejects mismatched, partial, and cross-type operation replays", async () => {
+    const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+    const action = integrationActionOperation({
+      id: `action-${suffix}`,
+      operationKey: `action-create-${suffix}`,
+    });
+
+    await expect(repository.applyOperations({ groupId, operations: [action] })).resolves.toMatchObject({
+      status: "applied", actionItemIds: [action.action!.id],
+    });
+    await expect(repository.applyOperations({ groupId, operations: [action] })).resolves.toEqual({
+      status: "already_applied", threadIds: [], actionItemIds: [],
+    });
+    await expect(pool!.query(
+      `
+      SELECT action.id, event.id AS event_id, evidence.conversation_message_id, repair.entity_version
+      FROM action_items action
+      JOIN action_item_events event ON event.action_item_id = action.id AND event.group_id = action.group_id
+      JOIN action_item_event_evidence evidence ON evidence.event_id = event.id AND evidence.group_id = event.group_id
+      JOIN conversation_state_projection_repairs repair
+        ON repair.entity_type = 'action' AND repair.entity_id = action.id AND repair.group_id = action.group_id
+      WHERE action.id = $1
+      `,
+      [action.action!.id],
+    )).resolves.toMatchObject({
+      rows: [{ id: action.action!.id, event_id: action.actionEvent!.id, conversation_message_id: messageId, entity_version: "1" }],
+    });
+
+    const mismatchedAction = integrationActionOperation({
+      id: `mismatched-action-${suffix}`,
+      operationKey: `mismatched-action-${suffix}`,
+    });
+    mismatchedAction.actionEvent!.actionItemId = `other-action-${suffix}`;
+    await expect(repository.applyOperations({ groupId, operations: [mismatchedAction] }))
+      .rejects.toThrow("action event must reference operation action");
+
+    const mismatchedThread = integrationThreadOperation({
+      id: `mismatched-thread-${suffix}`,
+      status: "open",
+      eventType: "created",
+      operationKey: `mismatched-thread-${suffix}`,
+    });
+    mismatchedThread.threadEvent!.threadId = `other-thread-${suffix}`;
+    await expect(repository.applyOperations({ groupId, operations: [mismatchedThread] }))
+      .rejects.toThrow("thread event must reference operation thread");
+
+    const partialThread = integrationThreadOperation({
+      id: `partial-thread-${suffix}`,
+      status: "open",
+      eventType: "created",
+      operationKey: `partial-thread-${suffix}`,
+    });
+    await expect(repository.applyOperations({ groupId, operations: [action, partialThread] }))
+      .rejects.toThrow("conversation state operation key conflict");
+    await expect(pool!.query("SELECT id FROM discussion_threads WHERE id = $1", [partialThread.thread!.id]))
+      .resolves.toMatchObject({ rows: [] });
+
+    const crossType = integrationThreadOperation({
+      id: `cross-type-${suffix}`,
+      status: "open",
+      eventType: "created",
+      operationKey: action.operationKey,
+    });
+    await expect(repository.applyOperations({ groupId, operations: [crossType] }))
+      .rejects.toThrow("conversation state operation key conflict");
+  });
+
+  it("uses persisted evidence counts to enforce the canonical merge direction", async () => {
+    const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+    const richTarget = integrationThreadOperation({
+      id: `rich-target-${suffix}`, status: "open", eventType: "created", operationKey: `rich-target-${suffix}`,
+      evidenceMessageIds: [messageId, secondMessageId],
+    });
+    const poorSource = integrationThreadOperation({
+      id: `poor-source-${suffix}`, status: "open", eventType: "created", operationKey: `poor-source-${suffix}`,
+    });
+    const richSource = integrationThreadOperation({
+      id: `rich-source-${suffix}`, status: "open", eventType: "created", operationKey: `rich-source-${suffix}`,
+      evidenceMessageIds: [messageId, secondMessageId],
+    });
+    const poorTarget = integrationThreadOperation({
+      id: `poor-target-${suffix}`, status: "open", eventType: "created", operationKey: `poor-target-${suffix}`,
+    });
+    await repository.applyOperations({ groupId, operations: [richTarget, poorSource, richSource, poorTarget] });
+
+    await expect(repository.applyOperations({
+      groupId,
+      operations: [integrationThreadOperation({
+        id: poorSource.thread!.id, status: "merged", eventType: "merged", operationKey: `poor-merge-${suffix}`,
+        expectedVersion: 1, mergedIntoThreadId: richTarget.thread!.id,
+      })],
+    })).resolves.toMatchObject({ status: "applied" });
+    await expect(repository.applyOperations({
+      groupId,
+      operations: [integrationThreadOperation({
+        id: richSource.thread!.id, status: "merged", eventType: "merged", operationKey: `rich-merge-${suffix}`,
+        expectedVersion: 1, mergedIntoThreadId: poorTarget.thread!.id,
+      })],
+    })).rejects.toThrow("merge target is not canonical");
+  });
+
+  it("hides candidate-linked actions from relevant reads but keeps them in extraction context", async () => {
+    const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+    const candidate = integrationThreadOperation({
+      id: `hidden-candidate-${suffix}`, status: "candidate", eventType: "created", operationKey: `hidden-candidate-${suffix}`,
+    });
+    const action = integrationActionOperation({
+      id: `hidden-action-${suffix}`, operationKey: `hidden-action-${suffix}`, threadId: candidate.thread!.id,
+    });
+    await repository.applyOperations({ groupId, operations: [candidate, action] });
+
+    const relevant = await repository.listRelevantActions({ groupId, limit: 100 });
+    expect(relevant.map((item) => item.id)).not.toContain(action.action!.id);
+    const extraction = await repository.loadExtractionContext({ groupId, threadLimit: 100, actionLimit: 100 });
+    expect(extraction.threads.map((thread) => thread.id)).toContain(candidate.thread!.id);
+    expect(extraction.actions.map((item) => item.id)).toContain(action.action!.id);
+  });
+
+  it("retries due failed repairs, stops at the attempt limit, and completes projections monotonically", async () => {
+    const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+    const retryRepairId = `retry-repair-${suffix}`;
+    await pool!.query(
+      `
+      INSERT INTO conversation_state_projection_repairs (
+        id, entity_type, entity_id, group_id, entity_version, status,
+        attempt_count, next_attempt_at, created_at, updated_at
+      ) VALUES ($1, 'thread', $2, $3, 1, 'pending', 0, $4, $5, $5)
+      `,
+      [retryRepairId, `retry-entity-${suffix}`, groupId, new Date("2100-01-01T00:00:00.000Z"), new Date("1900-01-01T00:00:00.000Z")],
+    );
+
+    const beforeDue = await repository.claimProjectionRepairs({ limit: 100, now: new Date("2099-12-31T00:00:00.000Z") });
+    expect(beforeDue.map((repair) => repair.id)).not.toContain(retryRepairId);
+    const firstClaim = await repository.claimProjectionRepairs({ limit: 100, now: new Date("2100-01-01T00:00:00.000Z") });
+    expect(firstClaim).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: retryRepairId, status: "processing", attemptCount: 1 }),
+    ]));
+    await repository.failProjectionRepair({
+      id: retryRepairId,
+      retryAt: new Date("2101-01-01T00:00:00.000Z"),
+      classification: "transient",
+    });
+    const beforeRetry = await repository.claimProjectionRepairs({ limit: 100, now: new Date("2100-06-01T00:00:00.000Z") });
+    expect(beforeRetry.map((repair) => repair.id)).not.toContain(retryRepairId);
+    const secondClaim = await repository.claimProjectionRepairs({ limit: 100, now: new Date("2101-01-01T00:00:00.000Z") });
+    expect(secondClaim).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: retryRepairId, status: "processing", attemptCount: 2 }),
+    ]));
+    await pool!.query(
+      "UPDATE conversation_state_projection_repairs SET status = 'failed', attempt_count = 5, next_attempt_at = $2 WHERE id = $1",
+      [retryRepairId, new Date("2101-01-01T00:00:00.000Z")],
+    );
+    const exhausted = await repository.claimProjectionRepairs({ limit: 100, now: new Date("2200-01-01T00:00:00.000Z") });
+    expect(exhausted.map((repair) => repair.id)).not.toContain(retryRepairId);
+
+    const projectionEntityId = `projection-entity-${suffix}`;
+    const oldRepairId = `projection-old-${suffix}`;
+    const newRepairId = `projection-new-${suffix}`;
+    await pool!.query(
+      `
+      INSERT INTO conversation_state_projection_repairs (
+        id, entity_type, entity_id, group_id, entity_version, status,
+        attempt_count, next_attempt_at, created_at, updated_at
+      ) VALUES
+        ($1, 'thread', $3, $4, 1, 'processing', 1, NOW(), NOW(), NOW()),
+        ($2, 'thread', $3, $4, 2, 'processing', 1, NOW(), NOW(), NOW())
+      `,
+      [oldRepairId, newRepairId, projectionEntityId, groupId],
+    );
+    await repository.completeProjectionRepair({ id: newRepairId });
+    await repository.completeProjectionRepair({ id: oldRepairId });
+    await expect(pool!.query(
+      "SELECT projected_version FROM conversation_state_memory_projections WHERE entity_type = 'thread' AND entity_id = $1",
+      [projectionEntityId],
+    )).resolves.toMatchObject({ rows: [{ projected_version: "2" }] });
+  });
 });
 
-type ScriptStep = { pattern: RegExp; rows?: unknown[]; error?: Error };
+type ScriptStep = { pattern: RegExp; rows?: unknown[]; error?: Error; values?: unknown[] };
 
-function step(pattern: RegExp, rows: unknown[] = []): ScriptStep {
-  return { pattern, rows };
+function step(pattern: RegExp, rows: unknown[] = [], values?: unknown[]): ScriptStep {
+  return { pattern, rows, values };
 }
 
 function failingStep(pattern: RegExp, error: Error): ScriptStep {
@@ -369,10 +742,15 @@ type MockClient = TransactionClient & {
 function scriptedClient(steps: ScriptStep[]): MockClient {
   const queue = [...steps];
   return {
-    query: vi.fn(async (sql: string) => {
+    query: vi.fn(async (sql: string, values?: unknown[]) => {
+      if (/pg_advisory_xact_lock/iu.test(sql)) {
+        expect(values).toEqual(["conversation-state:chat-a"]);
+        return { rows: [] };
+      }
       const next = queue.shift();
       if (next === undefined) throw new Error(`unexpected query: ${normalize(sql)}`);
       expect(normalize(sql)).toMatch(next.pattern);
+      if (next.values !== undefined) expect(values).toEqual(next.values);
       if (next.error !== undefined) throw next.error;
       return { rows: next.rows ?? [] };
     }),
@@ -405,6 +783,24 @@ function createThreadOperation() {
     threadEvent: {
       id: "thread-event-1", threadId: "thread-1", groupId: "chat-a", eventType: "created" as const,
       toVersion: 1, operationKey: "thread-create-1", createdAt: now,
+    },
+    evidenceMessageIds: ["message-1"],
+  };
+}
+
+function createActionOperation() {
+  const now = new Date("2026-07-16T00:00:00.000Z");
+  return {
+    kind: "create" as const,
+    operationKey: "action-create-1",
+    action: {
+      id: "action-1", groupId: "chat-a", description: "Follow up", ownerRefType: "feishu_user" as const,
+      ownerRef: "alice", status: "open" as const, confidence: 0.8, version: 1,
+      createdAt: now, updatedAt: now,
+    },
+    actionEvent: {
+      id: "action-event-1", actionItemId: "action-1", groupId: "chat-a", eventType: "created" as const,
+      toVersion: 1, operationKey: "action-create-1", createdAt: now,
     },
     evidenceMessageIds: ["message-1"],
   };
@@ -452,6 +848,7 @@ function threadRow(overrides: Record<string, unknown> = {}) {
     id: "thread-1", group_id: "chat-a", title: "Launch", summary: "Launch scope",
     status: "open", confidence: 0.8, merged_into_thread_id: null, version: "1",
     first_evidence_at: now, last_activity_at: now, resolved_at: null, created_at: now, updated_at: now,
+    evidence_count: "0",
     ...overrides,
   };
 }
@@ -473,6 +870,24 @@ function repairRow(overrides: Record<string, unknown> = {}) {
     id: "repair-1", entity_type: "thread", entity_id: "thread-1", group_id: "chat-a",
     entity_version: "2", status: "processing", attempt_count: 1, next_attempt_at: now,
     failure_classification: null, created_at: now, updated_at: now,
+    ...overrides,
+  };
+}
+
+function threadEventRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "thread-event-1", thread_id: "thread-1", group_id: "chat-a", event_type: "created",
+    from_version: null, to_version: "1", operation_key: "thread-create-1",
+    created_at: new Date("2026-07-16T00:00:00.000Z"), evidence_message_ids: ["message-1"],
+    ...overrides,
+  };
+}
+
+function actionEventRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "action-event-1", action_item_id: "action-1", group_id: "chat-a", event_type: "created",
+    from_version: null, to_version: "1", operation_key: "action-create-1",
+    created_at: new Date("2026-07-16T00:00:00.000Z"), evidence_message_ids: ["message-1"],
     ...overrides,
   };
 }
@@ -520,4 +935,40 @@ function integrationThreadOperation(
     kind: "create", operationKey: input.operationKey, thread, threadEvent: event,
     evidenceMessageIds: input.evidenceMessageIds ?? [postgresMessageId],
   } as CreateConversationStateOperation;
+}
+
+function integrationActionOperation(input: {
+  id: string;
+  operationKey: string;
+  threadId?: string;
+  evidenceMessageIds?: string[];
+}): CreateConversationStateOperation {
+  const now = new Date("2026-07-16T00:00:00.000Z");
+  return {
+    kind: "create",
+    operationKey: input.operationKey,
+    action: {
+      id: input.id,
+      groupId: postgresGroupId,
+      ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+      description: `Action ${input.id}`,
+      ownerRefType: "feishu_user",
+      ownerRef: "alice",
+      status: "open",
+      confidence: 0.8,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    },
+    actionEvent: {
+      id: `event-${input.operationKey}`,
+      actionItemId: input.id,
+      groupId: postgresGroupId,
+      eventType: "created",
+      toVersion: 1,
+      operationKey: input.operationKey,
+      createdAt: now,
+    },
+    evidenceMessageIds: input.evidenceMessageIds ?? [postgresMessageId],
+  };
 }
