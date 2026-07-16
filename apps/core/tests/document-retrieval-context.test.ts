@@ -153,6 +153,66 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.promptContext.trim().endsWith("</live_chat_context>")).toBe(true);
   });
 
+  it("loads discussion state independently of document retrieval and keeps live chat last", async () => {
+    const conversationStateContextProvider = {
+      loadRelevant: vi.fn(async () => ({
+        threads: [{
+          id: "thread-1",
+          status: "open" as const,
+          summary: "Launch remains Thursday.",
+          evidenceMessageIds: ["thread-message-1"],
+        }],
+        actions: [{
+          id: "action-1",
+          threadId: "thread-1",
+          status: "open" as const,
+          description: "Publish the announcement.",
+          ownerRef: "user-1",
+          evidenceMessageIds: ["action-message-1"],
+        }],
+      })),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: { searchSimilarFragments: vi.fn(async () => []) },
+      conversationStateGroupId: "chat-current",
+      conversationStateContextProvider,
+      canReadDocument: vi.fn(),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "When is launch?",
+      askerId: "user-1",
+      fragmentLimit: 0,
+      liveChatMessages: Array.from({ length: 22 }, (_, index) => ({
+        speaker: "Alice",
+        text: `live-${index + 1}`,
+      })),
+    });
+
+    expect(conversationStateContextProvider.loadRelevant).toHaveBeenCalledWith({
+      groupId: "chat-current",
+      queryText: "When is launch?",
+      askerId: "user-1",
+      limit: 6,
+    });
+    expect((result.usedDiscussionThreads ?? []).map((thread) => thread.id)).toEqual(["thread-1"]);
+    expect((result.usedActionItems ?? []).map((action) => action.id)).toEqual(["action-1"]);
+    expect(result.promptContext.indexOf("<background_documents>")).toBeLessThan(
+      result.promptContext.indexOf("<group_memories>"),
+    );
+    expect(result.promptContext.indexOf("<group_memories>")).toBeLessThan(
+      result.promptContext.indexOf("<discussion_threads>"),
+    );
+    expect(result.promptContext.indexOf("<discussion_threads>")).toBeLessThan(
+      result.promptContext.indexOf("<action_items>"),
+    );
+    expect(result.promptContext.trim().endsWith("</live_chat_context>")).toBe(true);
+    expect(result.promptContext).not.toContain("live-1</message>");
+    expect(result.promptContext).toContain("live-3</message>");
+  });
+
   it("loads group memories independently when document retrieval is disabled", async () => {
     const groupMemoryContextProvider = {
       loadActiveMemories: vi.fn(async () => [{

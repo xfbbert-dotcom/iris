@@ -21,9 +21,28 @@ export type PromptGroupMemory = {
   evidenceMessageIds: string[];
 };
 
+export type PromptDiscussionThread = {
+  id: string;
+  status: "open" | "resolved";
+  summary: string;
+  evidenceMessageIds: string[];
+};
+
+export type PromptActionItem = {
+  id: string;
+  threadId?: string;
+  status: "open";
+  description: string;
+  ownerRef: string;
+  dueAt?: Date;
+  evidenceMessageIds: string[];
+};
+
 export type PromptContextInput = {
   backgroundDocuments: BackgroundDocument[];
   groupMemories?: PromptGroupMemory[];
+  discussionThreads?: PromptDiscussionThread[];
+  actionItems?: PromptActionItem[];
   liveChatMessages: LiveChatMessage[];
   liveChatLimit?: number;
 };
@@ -37,6 +56,15 @@ const MAX_GROUP_MEMORY_LIMIT = 8;
 const MAX_GROUP_MEMORY_ID_ATTRIBUTE_CHARS = 512;
 const MAX_GROUP_MEMORY_EVIDENCE_ATTRIBUTE_CHARS = 1024;
 const MAX_GROUP_MEMORY_TEXT_CHARS = 600;
+const MAX_DISCUSSION_THREAD_LIMIT = 6;
+const MAX_ACTION_ITEM_LIMIT = 6;
+const MAX_STATE_ID_ATTRIBUTE_CHARS = 512;
+const MAX_STATE_STATUS_ATTRIBUTE_CHARS = 32;
+const MAX_STATE_EVIDENCE_ATTRIBUTE_CHARS = 1024;
+const MAX_THREAD_SUMMARY_CHARS = 1200;
+const MAX_ACTION_DESCRIPTION_CHARS = 1200;
+const MAX_ACTION_OWNER_ATTRIBUTE_CHARS = 512;
+const MAX_ACTION_DUE_ATTRIBUTE_CHARS = 64;
 const MAX_LIVE_CHAT_SPEAKER_ATTRIBUTE_CHARS = 256;
 const MAX_LIVE_CHAT_MESSAGE_TEXT_CHARS = 2000;
 const TRUNCATION_MARKER = " ... [truncated]";
@@ -57,6 +85,16 @@ export function assemblePromptContext(input: PromptContextInput): string {
   const groupMemories = (input.groupMemories ?? [])
     .filter((memory) => memory.id.trim().length > 0 && memory.content.trim().length > 0)
     .slice(0, MAX_GROUP_MEMORY_LIMIT);
+  const discussionThreads = (input.discussionThreads ?? [])
+    .filter((thread) => thread.id.trim().length > 0 && thread.summary.trim().length > 0)
+    .slice(0, MAX_DISCUSSION_THREAD_LIMIT);
+  const actionItems = (input.actionItems ?? [])
+    .filter((action) => (
+      action.id.trim().length > 0 &&
+      action.description.trim().length > 0 &&
+      action.ownerRef.trim().length > 0
+    ))
+    .slice(0, MAX_ACTION_ITEM_LIMIT);
 
   return [
     "<background_documents>",
@@ -67,10 +105,36 @@ export function assemblePromptContext(input: PromptContextInput): string {
     ...groupMemories.map(formatGroupMemory),
     "</group_memories>",
     "",
+    "<discussion_threads>",
+    ...discussionThreads.map(formatDiscussionThread),
+    "</discussion_threads>",
+    "",
+    "<action_items>",
+    ...actionItems.map(formatActionItem),
+    "</action_items>",
+    "",
     "<live_chat_context>",
     ...liveMessages.map(formatLiveChatMessage),
     "</live_chat_context>"
   ].join("\n");
+}
+
+function formatDiscussionThread(thread: PromptDiscussionThread): string {
+  return `<discussion_thread id="${formatCappedXmlAttribute(thread.id, MAX_STATE_ID_ATTRIBUTE_CHARS)}" status="${formatCappedXmlAttribute(thread.status, MAX_STATE_STATUS_ATTRIBUTE_CHARS)}" evidence_message_ids="${formatCappedXmlAttribute(joinEvidenceIds(thread.evidenceMessageIds), MAX_STATE_EVIDENCE_ATTRIBUTE_CHARS)}">${formatCappedXmlText(thread.summary, MAX_THREAD_SUMMARY_CHARS)}</discussion_thread>`;
+}
+
+function formatActionItem(action: PromptActionItem): string {
+  const threadId = action.threadId === undefined
+    ? ""
+    : ` thread_id="${formatCappedXmlAttribute(action.threadId, MAX_STATE_ID_ATTRIBUTE_CHARS)}"`;
+  const dueAt = action.dueAt === undefined
+    ? ""
+    : ` due_at="${formatCappedXmlAttribute(action.dueAt.toISOString(), MAX_ACTION_DUE_ATTRIBUTE_CHARS)}"`;
+  return `<action_item id="${formatCappedXmlAttribute(action.id, MAX_STATE_ID_ATTRIBUTE_CHARS)}"${threadId} status="${formatCappedXmlAttribute(action.status, MAX_STATE_STATUS_ATTRIBUTE_CHARS)}" owner_ref="${formatCappedXmlAttribute(action.ownerRef, MAX_ACTION_OWNER_ATTRIBUTE_CHARS)}"${dueAt} evidence_message_ids="${formatCappedXmlAttribute(joinEvidenceIds(action.evidenceMessageIds), MAX_STATE_EVIDENCE_ATTRIBUTE_CHARS)}">${formatCappedXmlText(action.description, MAX_ACTION_DESCRIPTION_CHARS)}</action_item>`;
+}
+
+function joinEvidenceIds(ids: string[]): string {
+  return ids.map((id) => id.trim()).filter((id) => id.length > 0).join(",");
 }
 
 function formatGroupMemory(memory: PromptGroupMemory): string {
@@ -149,6 +213,22 @@ function formatXmlAttribute(value: string, maxChars: number): string {
   }
 
   return best;
+}
+
+function formatCappedXmlText(value: string, maxChars: number): string {
+  return escapeXml(truncateRawXmlField(value.trim(), maxChars));
+}
+
+function formatCappedXmlAttribute(value: string, maxChars: number): string {
+  return escapeXml(truncateRawXmlField(value.trim(), maxChars));
+}
+
+function truncateRawXmlField(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  const prefixChars = Math.max(0, maxChars - TRUNCATION_MARKER.length);
+  return `${value.slice(0, prefixChars).trimEnd()}${TRUNCATION_MARKER}`;
 }
 
 function sanitizeLiveChatLimit(value: number | undefined): number {

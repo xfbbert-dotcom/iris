@@ -44,6 +44,64 @@ describe("assemblePromptContext", () => {
     expect(context.trim().endsWith("</live_chat_context>")).toBe(true);
   });
 
+  it("places bounded escaped discussions and actions before the fixed live-chat anchor", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [{ source: "doc-a", text: "Document evidence" }],
+      groupMemories: [{
+        id: "memory-1",
+        scope: "group",
+        category: "decision",
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1"],
+      }],
+      discussionThreads: Array.from({ length: 7 }, (_, index) => ({
+        id: `thread-${index + 1}`,
+        status: "open" as const,
+        summary: index === 0 ? `${"<&\"".repeat(700)} trailing thread` : `summary-${index + 1}`,
+        evidenceMessageIds: [`thread-message-${index + 1}`],
+      })),
+      actionItems: Array.from({ length: 7 }, (_, index) => ({
+        id: `action-${index + 1}`,
+        threadId: "thread-1",
+        status: "open" as const,
+        description: index === 0 ? `${"<&\"".repeat(700)} trailing action` : `description-${index + 1}`,
+        ownerRef: `owner-${index + 1}`,
+        dueAt: index === 0 ? new Date("2026-07-20T00:00:00.000Z") : undefined,
+        evidenceMessageIds: [`action-message-${index + 1}`],
+      })),
+      liveChatMessages: Array.from({ length: 24 }, (_, index) => ({
+        speaker: "Alice",
+        text: `message-${index + 1}`,
+      })),
+    });
+
+    expect(context.indexOf("<background_documents>")).toBeLessThan(
+      context.indexOf("<group_memories>"),
+    );
+    expect(context.indexOf("<group_memories>")).toBeLessThan(
+      context.indexOf("<discussion_threads>"),
+    );
+    expect(context.indexOf("<discussion_threads>")).toBeLessThan(
+      context.indexOf("<action_items>"),
+    );
+    expect(context.indexOf("<action_items>")).toBeLessThan(
+      context.indexOf("<live_chat_context>"),
+    );
+    expect(context.match(/<discussion_thread /g)).toHaveLength(6);
+    expect(context.match(/<action_item /g)).toHaveLength(6);
+    expect(context).toContain('due_at="2026-07-20T00:00:00.000Z"');
+    expect(context).toContain("&lt;");
+    expect(context).toContain("&amp;");
+    expect(context).not.toContain("trailing thread");
+    expect(context).not.toContain("trailing action");
+    expect(context).not.toContain("thread-7");
+    expect(context).not.toContain("action-7");
+    expect(context).not.toContain("message-1</message>");
+    expect(context).toContain("message-5</message>");
+    expect(context).toContain("message-24</message>");
+    expect(context.trim().endsWith("</live_chat_context>")).toBe(true);
+  });
+
   it("filters blank memories and caps them at eight items", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [],

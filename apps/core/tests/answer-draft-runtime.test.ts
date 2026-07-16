@@ -169,6 +169,59 @@ describe("createAnswerDraftRuntime", () => {
     );
   });
 
+  it("retrieves conversation state only from Postgres for groups allowed to read context", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn(),
+      end: vi.fn(async () => undefined),
+    };
+    const createConversationStateContextProvider = vi.fn(() => ({
+      loadRelevant: vi.fn(async () => ({ threads: [], actions: [] })),
+    }));
+    const runtime = createAnswerDraftRuntime({
+      env: enabledEnv(),
+      runtimeController: {
+        canReadDocuments: vi.fn(() => true),
+        canRetrieveKnowledgeBase: vi.fn(() => true),
+        canReadGroupContext: vi.fn((groupId: string) => groupId === "chat-a"),
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createConversationStateContextProvider,
+        createDocumentFragmentRepository: vi.fn(() => ({ searchSimilarFragments: vi.fn(async () => []) })),
+        createModelProvider: vi.fn(() => ({ generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })) })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What is open?",
+      chatId: "chat-a",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What is open?",
+      chatId: "chat-blocked",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What is open?",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(createConversationStateContextProvider).toHaveBeenCalledWith({ dataSource: pool });
+    const provider = createConversationStateContextProvider.mock.results[0]?.value;
+    expect(provider.loadRelevant).toHaveBeenCalledTimes(1);
+    expect(provider.loadRelevant).toHaveBeenCalledWith(expect.objectContaining({ groupId: "chat-a" }));
+  });
+
   it.each([
     ["group context reading", false, true],
     ["group processing", true, false],
@@ -1304,7 +1357,7 @@ function createMemoryEnabledRuntime({
     runtimeController,
     dependencies: {
       createPostgresPool: vi.fn(() => ({
-        query: vi.fn(),
+        query: vi.fn(async () => ({ rows: [] })),
         connect: vi.fn(),
         end: vi.fn(async () => undefined),
       })),

@@ -3,7 +3,12 @@ import type {
   DocumentRetrievalContextBuilder,
   DocumentRetrievalContextResult,
 } from "../memory/document-retrieval-context.js";
-import type { LiveChatMessage, PromptGroupMemory } from "../memory/context-assembly.js";
+import type {
+  LiveChatMessage,
+  PromptActionItem,
+  PromptDiscussionThread,
+  PromptGroupMemory,
+} from "../memory/context-assembly.js";
 
 export type GenerateAnswerDraftInput = {
   question: string;
@@ -21,6 +26,7 @@ export interface ModelProvider {
 export type AnswerDraftInput = {
   question: string;
   chatId?: string;
+  askerId?: string;
   liveChatMessages: LiveChatMessage[];
   fragmentLimit?: number;
   liveChatLimit?: number;
@@ -33,6 +39,8 @@ export type AnswerDraftResult = {
   deniedDocumentIds: string[];
   retrievedFragmentCount: number;
   usedGroupMemories: PromptGroupMemory[];
+  usedDiscussionThreads?: PromptDiscussionThread[];
+  usedActionItems?: PromptActionItem[];
 };
 
 export interface AnswerDraftOrchestrator {
@@ -94,6 +102,7 @@ export function createAnswerDraftOrchestrator({
         liveChatMessages,
         fragmentLimit: input.fragmentLimit,
         liveChatLimit,
+        ...(input.askerId === undefined ? {} : { askerId: input.askerId }),
       });
 
       const modelResult = await model.generateAnswerDraft({
@@ -232,6 +241,15 @@ function toAnswerDraftResult(
     usedGroupMemories: context.usedGroupMemories.map((memory) => ({
       ...memory,
       evidenceMessageIds: [...memory.evidenceMessageIds],
+    })),
+    usedDiscussionThreads: (context.usedDiscussionThreads ?? []).map((thread) => ({
+      ...thread,
+      evidenceMessageIds: [...thread.evidenceMessageIds],
+    })),
+    usedActionItems: (context.usedActionItems ?? []).map((action) => ({
+      ...action,
+      ...(action.dueAt === undefined ? {} : { dueAt: new Date(action.dueAt) }),
+      evidenceMessageIds: [...action.evidenceMessageIds],
     })),
   };
 }

@@ -67,6 +67,11 @@ import {
   createGroupMemoryContextProvider,
   type GroupMemoryContextProvider,
 } from "../memory/group-memory-context-provider.js";
+import {
+  createConversationStateContextProvider,
+  type ConversationStateContextProvider,
+} from "../conversation-state/conversation-state-context-provider.js";
+import type { PostgresConversationStateDataSource } from "../conversation-state/postgres-conversation-state-repository.js";
 
 export type AnswerDraftRuntime = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">;
@@ -110,6 +115,9 @@ export type AnswerDraftRuntimeDependencies = {
     repository: GroupMemoryRepository;
     auditLog?: AuditLog;
   }) => GroupMemoryService;
+  createConversationStateContextProvider?: (dependencies: {
+    dataSource: PostgresConversationStateDataSource;
+  }) => ConversationStateContextProvider;
   auditLog?: AuditLog;
 };
 
@@ -174,6 +182,8 @@ export function createAnswerDraftRuntime({
     dependencies.createGroupMemoryRepository ?? createPostgresGroupMemoryRepository;
   const createMemoryService =
     dependencies.createGroupMemoryService ?? createGroupMemoryService;
+  const createConversationState =
+    dependencies.createConversationStateContextProvider ?? createConversationStateContextProvider;
 
   const livePermissionChecker =
     runtimeConfig.permissionMode === "source-policy"
@@ -193,6 +203,12 @@ export function createAnswerDraftRuntime({
         repository: groupMemoryRepository,
         ...(dependencies.auditLog === undefined ? {} : { auditLog: dependencies.auditLog }),
       });
+  const conversationStateContextProvider = isPostgresConversationStateDataSource(pool)
+    ? createRuntimeGatedConversationStateContextProvider({
+        delegate: createConversationState({ dataSource: pool }),
+        runtimeController,
+      })
+    : undefined;
   const profiles = createProfiles({ queryable: pool });
   const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
   const sourceRegistry =
@@ -243,6 +259,12 @@ export function createAnswerDraftRuntime({
                 runtimeController,
               }),
             }),
+        ...(currentGroupId === undefined || conversationStateContextProvider === undefined
+          ? {}
+          : {
+              conversationStateGroupId: currentGroupId,
+              conversationStateContextProvider,
+            }),
         canReadDocument: createCanReadDocument({
           permissionMode: runtimeConfig.permissionMode,
           sourceRegistry,
@@ -274,6 +296,29 @@ function isPostgresGroupMemoryDataSource(
   value: Queryable,
 ): value is Queryable & PostgresGroupMemoryDataSource {
   return "connect" in value && typeof value.connect === "function";
+}
+
+function isPostgresConversationStateDataSource(
+  value: Queryable,
+): value is Queryable & PostgresConversationStateDataSource {
+  return "connect" in value && typeof value.connect === "function";
+}
+
+function createRuntimeGatedConversationStateContextProvider({
+  delegate,
+  runtimeController,
+}: {
+  delegate: ConversationStateContextProvider;
+  runtimeController?: RuntimeRetrievalGate;
+}): ConversationStateContextProvider {
+  return {
+    async loadRelevant(input) {
+      if (runtimeController?.canReadGroupContext?.(input.groupId) !== true) {
+        return { threads: [], actions: [] };
+      }
+      return delegate.loadRelevant(input);
+    },
+  };
 }
 
 function createRuntimeGatedGroupMemoryContextProvider({
