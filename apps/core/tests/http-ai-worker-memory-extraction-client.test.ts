@@ -83,6 +83,34 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
     await expect(client.extract(runFixture())).rejects.toMatchObject({ code: "invalid_response" });
   });
 
+  it("preserves an explicit null action-correction thread link from the v2 wire", async () => {
+    const client = createClient(async () => jsonResponse({
+      schema_version: 2,
+      run_id: "run-1",
+      candidates: [],
+      thread_operations: [],
+      action_operations: [{
+        operation: "correct",
+        operation_key: "action:correct:unlink",
+        confidence: 0.9,
+        evidence_message_ids: ["message-1"],
+        evidence_span: "Launch is Thursday",
+        action_id: "action-1",
+        expected_version: 1,
+        corrected_fields: ["thread_id"],
+        thread_id: null,
+      }],
+    }));
+
+    await expect(client.extract(runFixture())).resolves.toMatchObject({
+      actionOperations: [{
+        operation: "correct",
+        correctedFields: ["thread_id"],
+        threadId: null,
+      }],
+    });
+  });
+
   it("sends the exact bounded v1 request and parses the exact v1 response", async () => {
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
       jsonResponse(responseFixture()),

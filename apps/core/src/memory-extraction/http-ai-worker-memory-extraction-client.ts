@@ -448,7 +448,11 @@ function parseActionOperation(value: unknown): ProposedActionOperation {
       requireExistingActionFields(base, "owner");
       return { ...base.common, operation: "resolve_owner", actionId: base.action_id, expectedVersion: base.expected_version, owner: parseActionOwner(base.owner) };
     case "correct": {
-      requireExistingActionFields(base, "corrected_fields");
+      requireExactOperationFields(base, [
+        "operation", "operation_key", "confidence", "evidence_message_ids", "evidence_span",
+        "action_id", "expected_version", "corrected_fields", "description", "thread_id", "owner",
+      ], ["description", "thread_id", "owner"]);
+      if (!isIdentifier(base.action_id) || !isPositiveSafeInteger(base.expected_version)) throw invalidResponse();
       const correctedFields = parseCorrectedFields(base.corrected_fields, ["description", "thread_id", "owner"]);
       const supplied = [base.description === undefined ? undefined : "description", Object.hasOwn(base.record, "thread_id") ? "thread_id" : undefined, base.owner === undefined ? undefined : "owner"].filter((field): field is "description" | "thread_id" | "owner" => field !== undefined);
       if (!sameSortedValues(correctedFields, supplied) || (base.description !== undefined && !isContent(base.description)) || (Object.hasOwn(base.record, "thread_id") && base.thread_id !== null && !isIdentifier(base.thread_id))) throw invalidResponse();

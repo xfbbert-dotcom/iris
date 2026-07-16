@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, Response
 
 from .config import Settings
 from .contracts import (
+    ActionCorrectOperation,
     MemoryExtractionRequest,
     MemoryExtractionRequestV2,
     MemoryExtractionResponse,
@@ -132,10 +133,34 @@ def create_app(
     )
     async def extract(
         request: MemoryExtractionRequest | MemoryExtractionRequestV2,
-    ) -> MemoryExtractionResponse | MemoryExtractionResponseV2:
-        return await service.extract(request)
+    ) -> Response:
+        return JSONResponse(
+            _serialize_extraction_response(await service.extract(request))
+        )
 
     return app
+
+
+def _serialize_extraction_response(
+    response: MemoryExtractionResponse | MemoryExtractionResponseV2,
+) -> dict[str, object]:
+    serialized = response.model_dump(mode="json", exclude_none=True)
+    if not isinstance(response, MemoryExtractionResponseV2):
+        return serialized
+
+    action_operations = serialized["action_operations"]
+    assert isinstance(action_operations, list)
+    for serialized_operation, operation in zip(
+        action_operations, response.action_operations, strict=True
+    ):
+        if (
+            isinstance(operation, ActionCorrectOperation)
+            and "thread_id" in operation.model_fields_set
+            and operation.thread_id is None
+        ):
+            assert isinstance(serialized_operation, dict)
+            serialized_operation["thread_id"] = None
+    return serialized
 
 
 def _is_extraction_request(scope: dict[str, Any]) -> bool:

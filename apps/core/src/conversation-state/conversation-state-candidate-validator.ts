@@ -46,6 +46,9 @@ export function validateConversationStateCandidates(input: {
   actionOperations: ValidatedActionOperation[];
   diagnostics: ConversationStateCandidateDiagnostics;
 } {
+  if (!isThreshold(input.candidateFloor) || !isThreshold(input.applyConfidence) || input.candidateFloor >= input.applyConfidence) {
+    throw new Error("conversation state confidence thresholds are invalid");
+  }
   if (!isExactResponse(input.response)) {
     return result([], [], 0, 0, ["invalid_response"]);
   }
@@ -56,8 +59,7 @@ export function validateConversationStateCandidates(input: {
   const acceptedThreads: ValidatedThreadOperation[] = [];
   const acceptedActions: ValidatedActionOperation[] = [];
 
-  if (!isThreshold(input.candidateFloor) || !isThreshold(input.applyConfidence) || input.candidateFloor > input.applyConfidence ||
-    !isValidRun(input.run) || input.response.runId !== input.run.id) {
+  if (!isValidRun(input.run) || input.response.runId !== input.run.id) {
     return result([], [], proposedCount, proposedCount, ["invalid_run"]);
   }
   if ((input.response.threadOperations?.length ?? 0) > MAX_OPERATIONS_PER_FAMILY ||
@@ -180,6 +182,10 @@ function validateActionOperation(input: {
   const action = input.actionsById.get(operation.actionId);
   if (action === undefined) return reject("unknown_action");
   if (action.version !== operation.expectedVersion) return reject("stale_version");
+  if (operation.operation === "correct" && Object.hasOwn(operation, "threadId") &&
+    operation.threadId !== null && !input.threadsById.has(operation.threadId!)) {
+    return reject("unknown_thread");
+  }
   let owner: { ownerRefType: "feishu_user" | "text_label"; ownerRef: string; ownerResolved: boolean } | undefined;
   if (operation.operation === "resolve_owner" || (operation.operation === "correct" && operation.owner !== undefined)) {
     const proposedOwner = operation.owner;
@@ -256,7 +262,11 @@ function isExactActionOperation(value: unknown): value is ProposedActionOperatio
     case "cancel":
     case "reopen": return exactExistingKeys(operation, ["actionId"]);
     case "resolve_owner": return exactExistingKeys(operation, ["actionId", "owner"]) && isExactOwner(operation.owner);
-    case "correct": return exactExistingKeys(operation, ["actionId", "correctedFields", "description", "threadId", "owner"], ["description", "threadId", "owner"]) && correctedFieldsMatch(operation, ["description", "threadId", "owner"]);
+    case "correct": return exactExistingKeys(operation, ["actionId", "correctedFields", "description", "threadId", "owner"], ["description", "threadId", "owner"]) && correctedFieldsMatch(operation, [
+      { property: "description", corrected: "description" },
+      { property: "threadId", corrected: "thread_id" },
+      { property: "owner", corrected: "owner" },
+    ]);
     default: return false;
   }
 }
@@ -272,10 +282,14 @@ function exactExistingKeys(value: Record<string, unknown>, extras: string[], opt
   return exactKeys(value, ["operation", ...baseKeys, ...extras, "expectedVersion"], optional) && isIdentifier(value[extras[0]!]) && Number.isSafeInteger(value.expectedVersion) && (value.expectedVersion as number) >= 1;
 }
 
-function correctedFieldsMatch(value: Record<string, unknown>, fields: string[]): boolean {
+function correctedFieldsMatch(
+  value: Record<string, unknown>,
+  fields: Array<{ property: string; corrected: string }> | string[],
+): boolean {
+  const mappings = fields.map((field) => typeof field === "string" ? { property: field, corrected: field } : field);
   const correctedFields = value.correctedFields;
-  if (!isExactStringArray(correctedFields, fields.length) || correctedFields.length === 0 || !correctedFields.every((field) => fields.includes(field)) || new Set(correctedFields).size !== correctedFields.length) return false;
-  const supplied = fields.filter((field) => Object.hasOwn(value, field));
+  if (!isExactStringArray(correctedFields, mappings.length) || correctedFields.length === 0 || !correctedFields.every((field) => mappings.some((mapping) => mapping.corrected === field)) || new Set(correctedFields).size !== correctedFields.length) return false;
+  const supplied = mappings.filter((mapping) => Object.hasOwn(value, mapping.property)).map((mapping) => mapping.corrected);
   if (supplied.length !== correctedFields.length || !supplied.every((field) => correctedFields.includes(field))) return false;
   return (!Object.hasOwn(value, "description") || isContent(value.description)) && (!Object.hasOwn(value, "threadId") || value.threadId === null || isIdentifier(value.threadId)) && (!Object.hasOwn(value, "title") || isContent(value.title)) && (!Object.hasOwn(value, "summary") || isContent(value.summary)) && (!Object.hasOwn(value, "owner") || isExactOwner(value.owner));
 }

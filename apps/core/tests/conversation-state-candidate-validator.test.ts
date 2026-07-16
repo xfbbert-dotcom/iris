@@ -155,6 +155,80 @@ describe("validateConversationStateCandidates", () => {
       applyConfidence: 0.85,
     })).not.toThrow();
   });
+
+  it("rejects action corrections that name a thread outside the current run", () => {
+    const run = claimedRun() as any;
+    run.existingActions = [existingAction()];
+    const result = validateConversationStateCandidates({
+      run,
+      response: {
+        runId: "run-1",
+        candidates: [],
+        threadOperations: [],
+        actionOperations: [{
+          operation: "correct",
+          operationKey: "action:correct:1",
+          confidence: 0.9,
+          evidenceMessageIds: ["message-1"],
+          evidenceSpan: "Launch planning",
+          actionId: "action-1",
+          expectedVersion: 1,
+          correctedFields: ["thread_id"],
+          threadId: "thread-not-in-run",
+        }],
+      },
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+
+    expect(result.actionOperations).toEqual([]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["unknown_thread"]);
+  });
+
+  it("accepts an explicit null action-correction thread link as unlink", () => {
+    const run = claimedRun() as any;
+    run.existingActions = [existingAction()];
+    const result = validateConversationStateCandidates({
+      run,
+      response: {
+        runId: "run-1",
+        candidates: [],
+        threadOperations: [],
+        actionOperations: [{
+          operation: "correct",
+          operationKey: "action:correct:unlink",
+          confidence: 0.9,
+          evidenceMessageIds: ["message-1"],
+          evidenceSpan: "Launch planning",
+          actionId: "action-1",
+          expectedVersion: 1,
+          correctedFields: ["thread_id"],
+          threadId: null,
+        }],
+      },
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+
+    expect(result.actionOperations).toEqual([
+      expect.objectContaining({ correctedFields: ["thread_id"], threadId: null }),
+    ]);
+    expect(result.diagnostics.rejectionCodes).toEqual([]);
+  });
+
+  it.each([
+    [0.85, 0.85],
+    [0.9, 0.85],
+    [-0.01, 0.85],
+    [0.65, Number.POSITIVE_INFINITY],
+  ])("rejects invalid confidence threshold configuration before diagnostics: %s / %s", (candidateFloor, applyConfidence) => {
+    expect(() => validateConversationStateCandidates({
+      run: claimedRun(),
+      response: responseWithThreadCreate(),
+      candidateFloor,
+      applyConfidence,
+    })).toThrow("conversation state confidence thresholds are invalid");
+  });
 });
 
 function claimedRun(): ConversationStateExtractionRun {
@@ -251,6 +325,21 @@ function existingThread() {
     version: 1,
     firstEvidenceAt: new Date("2026-07-14T00:01:00.000Z"),
     lastActivityAt: new Date("2026-07-14T00:01:00.000Z"),
+    createdAt: new Date("2026-07-14T00:01:00.000Z"),
+    updatedAt: new Date("2026-07-14T00:01:00.000Z"),
+  };
+}
+
+function existingAction() {
+  return {
+    id: "action-1",
+    groupId: "group-1",
+    description: "Ship launch notes.",
+    ownerRefType: "feishu_user" as const,
+    ownerRef: "sender-1",
+    status: "open" as const,
+    confidence: 0.9,
+    version: 1,
     createdAt: new Date("2026-07-14T00:01:00.000Z"),
     updatedAt: new Date("2026-07-14T00:01:00.000Z"),
   };

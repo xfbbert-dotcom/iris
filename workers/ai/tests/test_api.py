@@ -225,6 +225,48 @@ def test_extract_accepts_schema_v2_without_regressing_v1_route():
     assert service.calls[0].schema_version == 2
 
 
+def test_extract_v2_preserves_explicit_null_thread_id_for_action_correction():
+    from iris_worker.contracts import MemoryExtractionResponseV2
+
+    response_model = MemoryExtractionResponseV2.model_validate(
+        {
+            "schema_version": 2,
+            "run_id": "run-2",
+            "candidates": [],
+            "thread_operations": [],
+            "action_operations": [
+                {
+                    "operation": "correct",
+                    "operation_key": "action:correct:unlink",
+                    "confidence": 0.9,
+                    "evidence_message_ids": ["message-1"],
+                    "evidence_span": "Remove the thread link.",
+                    "action_id": "action-1",
+                    "expected_version": 1,
+                    "corrected_fields": ["thread_id"],
+                    "thread_id": None,
+                }
+            ],
+        }
+    )
+    service = FakeService(response_model)
+
+    with make_test_client(service) as client:
+        response = client.post(
+            "/v1/memory/extract",
+            json=valid_v2_request(),
+            headers={"Authorization": "Bearer exact-internal-token"},
+        )
+
+    assert response.status_code == 200
+    operation = response.json()["action_operations"][0]
+    assert operation["corrected_fields"] == ["thread_id"]
+    assert "thread_id" in operation
+    assert operation["thread_id"] is None
+    assert "description" not in operation
+    assert "owner" not in operation
+
+
 @pytest.mark.parametrize(
     ("code", "retry_after", "status", "expected_body"),
     [
