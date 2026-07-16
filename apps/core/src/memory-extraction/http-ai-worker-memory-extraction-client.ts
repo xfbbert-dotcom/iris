@@ -170,7 +170,7 @@ function buildRequest(run: ClaimedMemoryExtractionRun): Record<string, unknown> 
     existing_memories: run.existingMemories.map(mapExistingMemory),
     existing_threads: run.existingThreads.map(mapExistingThread),
     existing_actions: run.existingActions.map(mapExistingAction),
-    capabilities: [...run.enabledOperationFamilies].sort(),
+    enabled_operation_families: [...run.enabledOperationFamilies].sort(),
   };
 }
 
@@ -242,9 +242,10 @@ function mapMessage(message: ExtractionMessage): Record<string, unknown> {
     ...(message.senderId === undefined ? {} : { sender_id: message.senderId }),
     sent_at: message.sentAt.toISOString(),
     text: message.text,
-    ...(message.mentions === undefined || message.mentions.length === 0 ? {} : {
-      mentions: message.mentions.map((mention) => ({ key: mention.key, open_id: mention.openId })),
-    }),
+    mentions: (message.mentions ?? []).map((mention) => ({
+      key: mention.key,
+      open_id: mention.openId,
+    })),
   };
 }
 
@@ -450,7 +451,11 @@ function parseThreadOperation(value: unknown): ProposedThreadOperation {
       if (!isContent(base.summary)) throw invalidResponse();
       return { ...base.common, operation: "update_summary", threadId: base.thread_id, expectedVersion: base.expected_version, summary: base.summary };
     case "correct": {
-      requireExistingThreadFields(base, "thread_id", "corrected_fields");
+      requireExactOperationFields(base, [
+        "operation", "operation_key", "confidence", "evidence_message_ids", "evidence_span",
+        "thread_id", "expected_version", "corrected_fields", "title", "summary",
+      ], ["title", "summary"]);
+      if (!isIdentifier(base.thread_id) || !isPositiveSafeInteger(base.expected_version)) throw invalidResponse();
       const correctedFields = parseCorrectedFields(base.corrected_fields, ["title", "summary"]);
       const supplied = [base.title === undefined ? undefined : "title", base.summary === undefined ? undefined : "summary"].filter((field): field is "title" | "summary" => field !== undefined);
       if (!sameSortedValues(correctedFields, supplied) || (base.title !== undefined && !isContent(base.title)) || (base.summary !== undefined && !isContent(base.summary))) throw invalidResponse();

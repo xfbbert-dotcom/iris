@@ -73,6 +73,12 @@ import { buildInternalStatusSnapshot } from "./admin/internal-status-snapshot.js
 import { buildInternalRolloutReadinessReport } from "./admin/internal-rollout-readiness.js";
 import { registerGroupMemoryApi } from "./memory/group-memory-api.js";
 import type { GroupMemoryService } from "./memory/group-memory-service.js";
+import {
+  createConversationStateInspectionRuntime,
+  registerConversationStateApi,
+  type ConversationStateInspectionRuntime,
+  type ConversationStateInspectionStore,
+} from "./conversation-state/conversation-state-api.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
@@ -117,6 +123,8 @@ export type BuildAppDependencies = {
   ingressHealthToken?: string;
   readinessEnv?: EnvLike;
   groupMemoryService?: GroupMemoryService;
+  conversationStateInspectionStore?: ConversationStateInspectionStore;
+  createConversationStateInspectionRuntime?: () => ConversationStateInspectionRuntime | undefined;
 };
 
 export type StartServerOptions = {
@@ -259,6 +267,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let memoryExtractionRuntime: MemoryExtractionRuntime | undefined;
   let eventWorkerRuntime: EventWorkerRuntime | undefined;
   let documentSyncRuntime: DocumentSyncRuntime | undefined;
+  let conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   let startupApp: FastifyInstance | undefined;
   let appOwnsRuntimeResources = false;
@@ -282,6 +291,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         auditLog,
       });
     memoryExtractionRuntime?.start();
+    conversationStateInspectionRuntime = dependencies.conversationStateInspectionStore === undefined
+      ? (dependencies.createConversationStateInspectionRuntime ?? createConversationStateInspectionRuntime)()
+      : undefined;
     eventWorkerRuntime =
       (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
         runtimeController,
@@ -362,6 +374,11 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   registerGroupMemoryApi(app, groupMemoryService, {
     authenticationConfigured: internalApiToken !== undefined,
   });
+  registerConversationStateApi(
+    app,
+    dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
+    { authenticationConfigured: internalApiToken !== undefined },
+  );
 
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
@@ -1434,6 +1451,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => memoryExtractionRuntime?.close(),
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
+      () => conversationStateInspectionRuntime?.close(),
       () => dependencies.closeRuntimeControl?.(),
     ]);
   });
@@ -1449,6 +1467,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       memoryExtractionRuntime,
       eventWorkerRuntime,
       documentSyncRuntime,
+      conversationStateInspectionRuntime,
     });
     dependencies.onRuntimeStartupCleanup?.(cleanup);
     throw error;
@@ -1582,6 +1601,7 @@ function scheduleRuntimeStartupCleanup({
   memoryExtractionRuntime,
   eventWorkerRuntime,
   documentSyncRuntime,
+  conversationStateInspectionRuntime,
 }: {
   app: Pick<FastifyInstance, "close"> | undefined;
   gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
@@ -1590,6 +1610,7 @@ function scheduleRuntimeStartupCleanup({
   memoryExtractionRuntime: MemoryExtractionRuntime | undefined;
   eventWorkerRuntime: EventWorkerRuntime | undefined;
   documentSyncRuntime: DocumentSyncRuntime | undefined;
+  conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
 }): Promise<void> {
   const cleanup = closeRuntimeResources([
     () => gateway?.close(),
@@ -1598,6 +1619,7 @@ function scheduleRuntimeStartupCleanup({
     () => memoryExtractionRuntime?.close(),
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
+    () => conversationStateInspectionRuntime?.close(),
     () => app?.close(),
   ]);
   void cleanup.catch(() => undefined);

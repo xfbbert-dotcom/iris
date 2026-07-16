@@ -111,6 +111,36 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
     });
   });
 
+  it("parses an exact v2 thread summary correction", async () => {
+    const client = createClient(async () => jsonResponse({
+      schema_version: 2,
+      run_id: "run-1",
+      candidates: [],
+      thread_operations: [{
+        operation: "correct",
+        operation_key: "thread:correct:summary",
+        confidence: 0.98,
+        evidence_message_ids: ["message-1"],
+        evidence_span: "Launch is Thursday.",
+        thread_id: "thread-1",
+        expected_version: 4,
+        corrected_fields: ["summary"],
+        summary: "Launch is Friday.",
+      }],
+      action_operations: [],
+    }));
+
+    await expect(client.extract(runFixture())).resolves.toMatchObject({
+      threadOperations: [{
+        operation: "correct",
+        threadId: "thread-1",
+        expectedVersion: 4,
+        correctedFields: ["summary"],
+        summary: "Launch is Friday.",
+      }],
+    });
+  });
+
   it("sends the exact bounded v1 request and parses the exact v1 response", async () => {
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
       jsonResponse(responseFixture()),
@@ -145,12 +175,14 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
           sender_id: "sender-0",
           sent_at: "2026-07-14T00:00:00.000Z",
           text: "Earlier context.",
+          mentions: [],
         },
         {
           id: "message-1",
           sender_id: "sender-1",
           sent_at: "2026-07-14T00:01:00.000Z",
           text: "Launch is Thursday.",
+          mentions: [],
         },
       ],
       evidence_message_ids: ["message-1"],
@@ -164,7 +196,7 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
       ],
       existing_threads: [],
       existing_actions: [],
-      capabilities: ["action", "memory", "thread"],
+      enabled_operation_families: ["action", "memory", "thread"],
     });
     expect(Object.keys(JSON.parse(String(init!.body)))).toEqual([
       "schema_version",
@@ -176,7 +208,7 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
       "existing_memories",
       "existing_threads",
       "existing_actions",
-      "capabilities",
+      "enabled_operation_families",
     ]);
   });
 

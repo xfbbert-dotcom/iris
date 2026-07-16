@@ -11,6 +11,7 @@
     "pilot:smoke": "node scripts/pilot-smoke.mjs",
     "test:pilot": "node --test --test-concurrency=1 scripts/pilot-smoke-lib.test.mjs scripts/pilot-compose.test.mjs scripts/pilot-operations.test.mjs scripts/pilot-backup-behavior.test.mjs scripts/pilot-restore-behavior.test.mjs",
     "test:acceptance:memory": "npm exec --workspace apps/core -- tsx tests/memory-extraction-acceptance.ts",
+    "test:acceptance:conversation-state": "npm exec --workspace apps/core -- tsx tests/conversation-state-acceptance.ts",
     "readiness": "npm --workspace apps/core run readiness --",
     "test": "npm --workspace apps/core test",
     "test:python": "cd workers/ai && python -m pytest",
