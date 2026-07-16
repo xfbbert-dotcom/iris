@@ -165,14 +165,14 @@ function validateThreadOperation(input: {
     if (mergeTarget.status === "merged") return reject("invalid_dependency");
     const transition = validateThreadTransition({ from: target.status, to: "merged", eventType: "merged" });
     if (!transition.ok) return reject(transition.code);
-    if (selectCanonicalMergeTarget([target, mergeTarget]) !== mergeTarget.id) {
-      return reject("noncanonical_merge_target");
-    }
     if (
       input.threadEvidenceChangedInBatch.has(target.id) ||
       input.threadEvidenceChangedInBatch.has(mergeTarget.id)
     ) {
       return reject("batch_evidence_dependency");
+    }
+    if (selectCanonicalMergeTarget([target, mergeTarget]) !== mergeTarget.id) {
+      return reject("noncanonical_merge_target");
     }
     return { ok: true, value: operation };
   }

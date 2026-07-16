@@ -255,6 +255,53 @@ describe("validateConversationStateCandidates", () => {
     expect(result.diagnostics.rejectionCodes).toEqual(["batch_evidence_dependency"]);
   });
 
+  it("prefers batch evidence dependency when target evidence could flip canonical selection", () => {
+    const run = claimedRun();
+    run.existingThreads = [
+      {
+        ...existingThread(),
+        id: "thread-source",
+        evidenceCount: 2,
+        createdAt: new Date("2026-07-14T00:02:00.000Z"),
+      },
+      {
+        ...existingThread(),
+        id: "thread-target",
+        evidenceCount: 1,
+        createdAt: new Date("2026-07-14T00:01:00.000Z"),
+      },
+    ];
+    const response = responseWithExistingThreadOperation();
+    response.threadOperations = [
+      {
+        operation: "attach_evidence",
+        operationKey: "a:thread:attach-target",
+        confidence: 0.9,
+        evidenceMessageIds: ["message-1"],
+        evidenceSpan: "Launch planning",
+        threadId: "thread-target",
+        expectedVersion: 1,
+      },
+      {
+        operation: "merge",
+        operationKey: "b:thread:merge",
+        confidence: 0.9,
+        evidenceMessageIds: ["message-1"],
+        evidenceSpan: "Launch planning",
+        sourceThreadId: "thread-source",
+        targetThreadId: "thread-target",
+        expectedVersion: 1,
+      },
+    ];
+
+    const result = validateConversationStateCandidates({ run, response, candidateFloor: 0.65, applyConfidence: 0.85 });
+
+    expect(result.threadOperations.map((operation) => operation.operationKey)).toEqual([
+      "a:thread:attach-target",
+    ]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["batch_evidence_dependency"]);
+  });
+
   it("rejects a merge that depends on source evidence touched earlier in the batch", () => {
     const run = claimedRun();
     run.existingThreads = [
