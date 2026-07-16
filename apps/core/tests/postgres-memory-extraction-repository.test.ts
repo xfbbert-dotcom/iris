@@ -18,6 +18,7 @@ import {
   type TransactionClient,
 } from "../src/memory-extraction/postgres-memory-extraction-repository.js";
 import { createPostgresGroupMemoryRepository } from "../src/memory/postgres-group-memory-repository.js";
+import { validateConversationStateCandidates } from "../src/conversation-state/conversation-state-candidate-validator.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
@@ -1272,6 +1273,8 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
       await pool.query("DELETE FROM group_memories WHERE group_id = ANY($1::text[])", [
         groupIds,
       ]);
+      await pool.query("DELETE FROM action_items WHERE group_id = ANY($1::text[])", [groupIds]);
+      await pool.query("DELETE FROM discussion_threads WHERE group_id = ANY($1::text[])", [groupIds]);
       await pool.query("DELETE FROM conversation_messages WHERE chat_id = ANY($1::text[])", [
         [...groupIds, unreadableGroup, identityGroup],
       ]);
@@ -1575,6 +1578,244 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
     });
   });
 
+  it("rejects a run as stale when persisted thread evidence count changes", async () => {
+    const repository = createRepository(pool);
+    const messageId = `feishu:extraction-thread-evidence-${suffix}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId: groupA,
+      text: "Thread evidence-count fact",
+      createdAt: new Date("2026-07-14T04:00:00.000Z"),
+    });
+    const threadId = `evidence-count-thread-${suffix}`;
+    const timestamp = new Date("2026-07-14T04:00:00.000Z");
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, created_at, updated_at
+      ) VALUES ($1, $2, 'Evidence count', 'Evidence count', 'open', 0.9, 1,
+        $3, $3, $3, $3)
+      `,
+      [threadId, groupA, timestamp],
+    );
+    const registered = await repository.registerRequest({
+      groupId: groupA,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    expect(claimed?.existingThreads).toContainEqual(expect.objectContaining({
+      id: threadId,
+      version: 1,
+      evidenceCount: 0,
+    }));
+
+    await pool!.query(
+      `
+      INSERT INTO discussion_thread_evidence (thread_id, group_id, conversation_message_id)
+      VALUES ($1, $2, $3)
+      `,
+      [threadId, groupA, messageId],
+    );
+
+    await expect(repository.loadRunInput(claimed!.id)).resolves.toEqual({
+      status: "stale",
+      groupId: groupA,
+      requestIds: claimed!.requestIds,
+    });
+  });
+
+  it("rejects a run as stale when a new thread enters the current Top-12", async () => {
+    const repository = createRepository(pool);
+    const messageId = `feishu:extraction-thread-top12-${suffix}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId: groupA,
+      text: "Thread Top-12 evidence",
+      createdAt: new Date("2026-07-14T01:31:00.000Z"),
+    });
+    for (let index = 0; index < 12; index += 1) {
+      const timestamp = new Date(Date.UTC(2026, 6, 14, 1, index));
+      await pool!.query(
+        `
+        INSERT INTO discussion_threads (
+          id, group_id, title, summary, status, confidence, version,
+          first_evidence_at, last_activity_at, created_at, updated_at
+        ) VALUES ($1, $2, $3, $3, 'open', 0.9, 1, $4, $4, $4, $4)
+        `,
+        [`top12-thread-${index}-${suffix}`, groupA, `Top-12 thread ${index}`, timestamp],
+      );
+    }
+    const registered = await repository.registerRequest({
+      groupId: groupA,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    expect(claimed?.existingThreads).toHaveLength(12);
+
+    const newest = new Date("2026-07-14T02:00:00.000Z");
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, created_at, updated_at
+      ) VALUES ($1, $2, 'New Top-12 thread', 'New Top-12 thread', 'open', 0.9, 1,
+        $3, $3, $3, $3)
+      `,
+      [`top12-thread-new-${suffix}`, groupA, newest],
+    );
+
+    await expect(repository.loadRunInput(claimed!.id)).resolves.toEqual({
+      status: "stale",
+      groupId: groupA,
+      requestIds: claimed!.requestIds,
+    });
+  });
+
+  it("rejects a run as stale when a new action enters the current Top-12", async () => {
+    const repository = createRepository(pool);
+    const messageId = `feishu:extraction-action-top12-${suffix}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId: groupA,
+      text: "Action Top-12 evidence",
+      createdAt: new Date("2026-07-14T01:32:00.000Z"),
+    });
+    for (let index = 0; index < 12; index += 1) {
+      const timestamp = new Date(Date.UTC(2026, 6, 14, 2, index));
+      await pool!.query(
+        `
+        INSERT INTO action_items (
+          id, group_id, description, owner_ref_type, owner_ref, status,
+          confidence, version, created_at, updated_at
+        ) VALUES ($1, $2, $3, 'feishu_user', 'alice', 'open', 0.9, 1, $4, $4)
+        `,
+        [`top12-action-${index}-${suffix}`, groupA, `Top-12 action ${index}`, timestamp],
+      );
+    }
+    const registered = await repository.registerRequest({
+      groupId: groupA,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    expect(claimed?.existingActions).toHaveLength(12);
+
+    await pool!.query(
+      `
+      INSERT INTO action_items (
+        id, group_id, description, owner_ref_type, owner_ref, status,
+        confidence, version, created_at, updated_at
+      ) VALUES ($1, $2, 'New Top-12 action', 'feishu_user', 'alice', 'open', 0.9, 1,
+        $3, $3)
+      `,
+      [`top12-action-new-${suffix}`, groupA, new Date("2026-07-14T03:00:00.000Z")],
+    );
+
+    await expect(repository.loadRunInput(claimed!.id)).resolves.toEqual({
+      status: "stale",
+      groupId: groupA,
+      requestIds: claimed!.requestIds,
+    });
+  });
+
+  it("serializes loadRunInput freshness with conversation-state writers", async () => {
+    const repository = createRepository(pool);
+    const messageId = `feishu:extraction-reload-lock-${suffix}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId: groupA,
+      text: "Reload lock evidence",
+      createdAt: new Date("2026-07-14T01:33:00.000Z"),
+    });
+    const threadId = `reload-lock-thread-${suffix}`;
+    const threadTimestamp = new Date("2026-07-14T01:33:00.000Z");
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, created_at, updated_at
+      ) VALUES ($1, $2, 'Reload lock', 'Reload lock', 'open', 0.9, 1,
+        $3, $3, $3, $3)
+      `,
+      [threadId, groupA, threadTimestamp],
+    );
+    const registered = await repository.registerRequest({
+      groupId: groupA,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    expect(claimed!.existingThreads.map((thread) => thread.id)).toContain(threadId);
+    const writer = await pool!.connect();
+    let reload: ReturnType<typeof repository.loadRunInput> | undefined;
+    try {
+      await writer.query("BEGIN");
+      await writer.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`conversation-state:${groupA}`],
+      );
+      reload = repository.loadRunInput(claimed!.id);
+      let observedAdvisoryWait = false;
+      try {
+        await vi.waitFor(async () => {
+          const waiting = await pool!.query<{ count: number }>(
+            `
+            SELECT count(*)::int AS count
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND wait_event = 'advisory'
+              AND query ILIKE '%pg_advisory_xact_lock%'
+            `,
+          );
+          expect(waiting.rows[0]!.count).toBeGreaterThan(0);
+        }, { timeout: 300, interval: 10 });
+        observedAdvisoryWait = true;
+      } catch {
+        // The assertion below records the missing lock without stranding the writer transaction.
+      }
+      await writer.query(
+        "UPDATE discussion_threads SET version = version + 1, updated_at = updated_at + INTERVAL '1 second' WHERE id = $1",
+        [threadId],
+      );
+      await writer.query("COMMIT");
+
+      expect(observedAdvisoryWait).toBe(true);
+      await expect(reload).resolves.toEqual({
+        status: "stale",
+        groupId: groupA,
+        requestIds: claimed!.requestIds,
+      });
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      writer.release();
+      await reload?.catch(() => undefined);
+    }
+  });
+
   it("skips and fails runs with bounded status counts", async () => {
     const repository = createRepository(pool);
     const remainingRequest = await repository.registerRequest({
@@ -1616,7 +1857,7 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
   const suffix = randomUUID();
   const groupId = `extraction-complete-${suffix}`;
   const messageIds = Array.from(
-    { length: 6 },
+    { length: 8 },
     (_, index) => `feishu:extraction-complete-${index}-${suffix}`,
   );
 
@@ -1854,6 +2095,109 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
     )).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });
 
+  it("commits valid memory and the first sorted same-version thread operation", async () => {
+    const repository = createRepository(pool);
+    const threadId = `batch-thread-${suffix}`;
+    const timestamp = new Date("2026-07-15T02:00:00.000Z");
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, created_at, updated_at
+      ) VALUES ($1, $2, 'Batch thread', 'Before batch.', 'open', 0.9, 1,
+        $3, $3, $3, $3)
+      `,
+      [threadId, groupId, timestamp],
+    );
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageIds[6]!,
+      providerMessageId: `provider-${messageIds[6]!}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    expect(claimed?.existingThreads).toContainEqual(expect.objectContaining({
+      id: threadId,
+      version: 1,
+      evidenceCount: 0,
+    }));
+    const response = {
+      runId: claimed!.id,
+      candidates: [],
+      threadOperations: [
+        {
+          operation: "update_summary" as const,
+          operationKey: `thread:update:z:${suffix}`,
+          confidence: 0.9,
+          evidenceMessageIds: [messageIds[6]!],
+          evidenceSpan: "Atomic message 6",
+          threadId,
+          expectedVersion: 1,
+          summary: "Rejected later summary.",
+        },
+        {
+          operation: "update_summary" as const,
+          operationKey: `thread:update:a:${suffix}`,
+          confidence: 0.9,
+          evidenceMessageIds: [messageIds[6]!],
+          evidenceSpan: "Atomic message 6",
+          threadId,
+          expectedVersion: 1,
+          summary: "Accepted sorted summary.",
+        },
+      ],
+      actionOperations: [],
+    };
+    const stateValidation = validateConversationStateCandidates({
+      run: claimed!,
+      response,
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+
+    const completed = await repository.completeRun({
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [validatedCandidate({
+        content: "Atomic message 6 is durable.",
+        evidenceMessageIds: [messageIds[6]!],
+      })],
+      conflictCandidates: [],
+      diagnostics: diagnostics({ proposedCount: 1, acceptedCount: 1 }),
+      threadOperations: stateValidation.threadOperations,
+      actionOperations: stateValidation.actionOperations,
+      conversationStateDiagnostics: stateValidation.diagnostics,
+    });
+
+    expect(completed).toMatchObject({ status: "completed", memoryIds: [expect.any(String)] });
+    expect(stateValidation.diagnostics).toEqual({
+      proposedCount: 2,
+      acceptedCount: 1,
+      rejectedCount: 1,
+      rejectionCodes: ["stale_version"],
+    });
+    await expect(pool!.query(
+      "SELECT summary, version::int AS version FROM discussion_threads WHERE id = $1",
+      [threadId],
+    )).resolves.toMatchObject({ rows: [{ summary: "Accepted sorted summary.", version: 2 }] });
+    await expect(pool!.query(
+      "SELECT count(*)::int AS count FROM discussion_thread_events WHERE thread_id = $1",
+      [threadId],
+    )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    await expect(pool!.query(
+      "SELECT status FROM group_memory_extraction_runs WHERE id = $1",
+      [claimed!.id],
+    )).resolves.toMatchObject({ rows: [{ status: "completed" }] });
+    await expect(pool!.query(
+      "SELECT status FROM group_memory_extraction_requests WHERE id = $1",
+      [registered.request.id],
+    )).resolves.toMatchObject({ rows: [{ status: "completed" }] });
+  });
+
   it("serializes snapshot freshness with conversation-state writers", async () => {
     const threadId = `atomic-thread-${suffix}`;
     const timestamp = new Date("2026-07-15T00:00:00.000Z");
@@ -2059,6 +2403,73 @@ runIfDatabase("PostgresMemoryExtractionRepository atomic completion with Postgre
     ).resolves.toMatchObject({
       rows: [{ status: "skipped", skip_reason: "runtime_disabled_before_load" }],
     });
+  });
+
+  it("rejects completion when a new thread enters the current Top-12", async () => {
+    const repository = createRepository(pool);
+    const top12Group = `${groupId}-complete-top12`;
+    const messageId = messageIds[7]!;
+    await pool!.query("UPDATE conversation_messages SET chat_id = $2 WHERE id = $1", [
+      messageId,
+      top12Group,
+    ]);
+    for (let index = 0; index < 12; index += 1) {
+      const timestamp = new Date(Date.UTC(2026, 6, 15, 3, index));
+      await pool!.query(
+        `
+        INSERT INTO discussion_threads (
+          id, group_id, title, summary, status, confidence, version,
+          first_evidence_at, last_activity_at, created_at, updated_at
+        ) VALUES ($1, $2, $3, $3, 'open', 0.9, 1, $4, $4, $4, $4)
+        `,
+        [`complete-top12-${index}-${suffix}`, top12Group, `Complete Top-12 ${index}`, timestamp],
+      );
+    }
+    const registered = await repository.registerRequest({
+      groupId: top12Group,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+    });
+    expect(claimed?.existingThreads).toHaveLength(12);
+    const newest = new Date("2026-07-15T04:00:00.000Z");
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, created_at, updated_at
+      ) VALUES ($1, $2, 'Complete new Top-12', 'Complete new Top-12', 'open', 0.9, 1,
+        $3, $3, $3, $3)
+      `,
+      [`complete-top12-new-${suffix}`, top12Group, newest],
+    );
+
+    await expect(repository.completeRun({
+      runId: claimed!.id,
+      inputFingerprint: claimed!.inputFingerprint,
+      acceptedCandidates: [],
+      conflictCandidates: [],
+      diagnostics: diagnostics({ proposedCount: 0, acceptedCount: 0 }),
+    })).rejects.toBeInstanceOf(MemoryExtractionStaleRunError);
+    await expect(pool!.query(
+      "SELECT status, failure_classification FROM group_memory_extraction_runs WHERE id = $1",
+      [claimed!.id],
+    )).resolves.toMatchObject({
+      rows: [{ status: "failed", failure_classification: "input_stale" }],
+    });
+    await expect(pool!.query(
+      "SELECT status, run_id FROM group_memory_extraction_requests WHERE id = $1",
+      [registered.request.id],
+    )).resolves.toMatchObject({ rows: [{ status: "pending", run_id: null }] });
+    await expect(pool!.query(
+      "SELECT count(*)::int AS count FROM group_memories WHERE group_id = $1",
+      [top12Group],
+    )).resolves.toMatchObject({ rows: [{ count: 0 }] });
   });
 });
 
@@ -2950,6 +3361,12 @@ function fakeDataSource(handler: (sql: string, params?: unknown[]) => { rows: un
   const sql: string[] = [];
   const query = vi.fn(async (statement: string, params?: unknown[]) => {
     sql.push(statement);
+    if (
+      normalizeSql(statement) ===
+      "select group_id from group_memory_extraction_runs where id = $1"
+    ) {
+      return { rows: [{ group_id: "chat-a" }] };
+    }
     return handler(statement, params);
   });
   const client = { query, release: vi.fn() } as unknown as TransactionClient;

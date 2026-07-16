@@ -93,6 +93,7 @@ export type ExtractionExistingThread = {
   confidence: number;
   mergedIntoThreadId?: string;
   version: number;
+  evidenceCount: number;
   firstEvidenceAt: Date;
   lastActivityAt: Date;
   resolvedAt?: Date;

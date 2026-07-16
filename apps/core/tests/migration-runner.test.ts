@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
 
+import pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -10,6 +12,9 @@ import {
   runMigrations,
   type MigrationClient,
 } from "../src/database/migrate.js";
+
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
+const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
   it("defines durable Feishu mention identities for conversation facts", async () => {
@@ -243,10 +248,17 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("ordinal smallint not null check (ordinal between 0 and 11)");
     expect(normalized).toContain("thread_version bigint not null check (thread_version >= 1)");
     expect(normalized).toContain("thread_updated_at timestamptz not null");
+    expect(normalized).toContain("thread_evidence_count bigint not null check (thread_evidence_count >= 0)");
     expect(normalized).toContain("create table group_memory_extraction_run_actions");
     expect(normalized).toContain("action_version bigint not null check (action_version >= 1)");
     expect(normalized).toContain("action_updated_at timestamptz not null");
     expect(normalized).toContain("create table group_memory_extraction_run_mentions");
+    expect(normalized).toContain(
+      "alter table discussion_thread_events drop constraint discussion_thread_events_event_type_check",
+    );
+    expect(normalized).toContain(
+      "add constraint discussion_thread_events_event_type_check check (event_type in ( 'created', 'promoted', 'summary_updated', 'resolved', 'reopened', 'merged', 'corrected', 'evidence_attached' ))",
+    );
     expect(normalized).toContain("thread_operation_count smallint not null default 0");
     expect(normalized).toContain("action_operation_count smallint not null default 0");
     expect(normalized).toContain("conversation_state_rejected_count smallint not null default 0");
@@ -288,7 +300,7 @@ describe("defaultMigrationsDir", () => {
       ),
     ).toHaveLength(3);
     expect(normalized).toContain("create table discussion_thread_events");
-    expect(normalized).toContain("'evidence_attached'");
+    expect(normalized).not.toContain("'evidence_attached'");
     expect(normalized.match(/unique \(group_id, operation_key\)/g)).toHaveLength(2);
     expect(normalized).toContain("unique (id, group_id)");
     expect(normalized).toContain("create table discussion_thread_event_evidence");
@@ -525,5 +537,86 @@ describe("defaultMigrationsDir", () => {
       "request_id text not null references group_memory_extraction_requests(id) on delete restrict",
     );
     expect(normalized).toContain("content_hash ~ '^[0-9a-f]{64}$'");
+  });
+});
+
+runIfDatabase("conversation-state extraction migration upgrade with Postgres", () => {
+  it("upgrades an already-applied 0024 event constraint without rerunning 0024", async () => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    const schema = `task6_upgrade_${randomUUID().replaceAll("-", "")}`;
+    const migrationsDir = await mkdtemp(join(tmpdir(), "iris-task6-upgrade-"));
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await client.query(`
+        CREATE TABLE schema_migrations (
+          name TEXT PRIMARY KEY,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        INSERT INTO schema_migrations (name) VALUES ('0024_semantic_thread_action_memory.sql');
+        CREATE TABLE group_memory_extraction_runs (
+          id TEXT PRIMARY KEY,
+          status TEXT NOT NULL DEFAULT 'processing'
+        );
+        CREATE TABLE conversation_messages (id TEXT PRIMARY KEY);
+        CREATE TABLE discussion_threads (id TEXT PRIMARY KEY);
+        CREATE TABLE action_items (id TEXT PRIMARY KEY);
+        CREATE TABLE discussion_thread_events (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES discussion_threads(id),
+          event_type TEXT NOT NULL CHECK (event_type IN (
+            'created', 'promoted', 'summary_updated', 'resolved', 'reopened',
+            'merged', 'corrected'
+          ))
+        );
+        INSERT INTO discussion_threads (id) VALUES ('thread-1');
+        INSERT INTO discussion_thread_events (id, thread_id, event_type)
+        VALUES ('event-before-0025', 'thread-1', 'corrected');
+      `);
+      await writeFile(
+        join(migrationsDir, "0025_conversation_state_extraction.sql"),
+        await readFile(join(defaultMigrationsDir(), "0025_conversation_state_extraction.sql"), "utf8"),
+      );
+
+      await expect(runMigrations({ client, migrationsDir })).resolves.toMatchObject({
+        applied: ["0025_conversation_state_extraction.sql"],
+      });
+      await expect(client.query(`
+        INSERT INTO discussion_thread_events (id, thread_id, event_type)
+        VALUES ('event-after-0025', 'thread-1', 'evidence_attached')
+      `)).resolves.toMatchObject({ rows: [] });
+      await expect(client.query(
+        "SELECT event_type FROM discussion_thread_events ORDER BY id",
+      )).resolves.toMatchObject({
+        rows: [{ event_type: "evidence_attached" }, { event_type: "corrected" }],
+      });
+    } finally {
+      await client.query("RESET search_path").catch(() => undefined);
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      client.release();
+      await pool.end();
+    }
+  });
+
+  it("applies the full migration set to a fresh schema", async () => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    const schema = `task6_fresh_${randomUUID().replaceAll("-", "")}`;
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await expect(runMigrations({ client, migrationsDir: defaultMigrationsDir() })).resolves.toMatchObject({
+        applied: expect.arrayContaining([
+          "0024_semantic_thread_action_memory.sql",
+          "0025_conversation_state_extraction.sql",
+        ]),
+      });
+    } finally {
+      await client.query("RESET search_path").catch(() => undefined);
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      client.release();
+      await pool.end();
+    }
   });
 });

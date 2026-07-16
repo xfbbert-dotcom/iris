@@ -1,9 +1,17 @@
+ALTER TABLE discussion_thread_events
+  DROP CONSTRAINT discussion_thread_events_event_type_check,
+  ADD CONSTRAINT discussion_thread_events_event_type_check CHECK (event_type IN (
+    'created', 'promoted', 'summary_updated', 'resolved', 'reopened',
+    'merged', 'corrected', 'evidence_attached'
+  ));
+
 CREATE TABLE group_memory_extraction_run_threads (
   run_id TEXT NOT NULL REFERENCES group_memory_extraction_runs(id) ON DELETE CASCADE,
   thread_id TEXT NOT NULL REFERENCES discussion_threads(id) ON DELETE RESTRICT,
   ordinal SMALLINT NOT NULL CHECK (ordinal BETWEEN 0 AND 11),
   thread_version BIGINT NOT NULL CHECK (thread_version >= 1),
   thread_updated_at TIMESTAMPTZ NOT NULL,
+  thread_evidence_count BIGINT NOT NULL CHECK (thread_evidence_count >= 0),
   PRIMARY KEY (run_id, thread_id),
   UNIQUE (run_id, ordinal)
 );

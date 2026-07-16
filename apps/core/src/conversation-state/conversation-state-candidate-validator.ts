@@ -6,12 +6,17 @@ import {
   type ValidatedActionOperation,
   type ValidatedThreadOperation,
 } from "../memory-extraction/ai-worker-memory-extraction-client.js";
-import type { ClaimedMemoryExtractionRun, ExtractionMessage } from "../memory-extraction/memory-extraction-repository.js";
+import type {
+  ClaimedMemoryExtractionRun,
+  ExtractionExistingAction,
+  ExtractionExistingThread,
+  ExtractionMessage,
+} from "../memory-extraction/memory-extraction-repository.js";
 import {
-  type ActionItem,
-  type DiscussionThread,
-} from "./conversation-state-repository.js";
-import { validateActionTransition, validateThreadTransition } from "./conversation-state-machine.js";
+  selectCanonicalMergeTarget,
+  validateActionTransition,
+  validateThreadTransition,
+} from "./conversation-state-machine.js";
 
 const MAX_IDENTIFIER_CHARS = 512;
 const MAX_CONTENT_CHARS = 4000;
@@ -24,8 +29,6 @@ export type ConversationStateExtractionMessage = ExtractionMessage & {
 
 export type ConversationStateExtractionRun = ClaimedMemoryExtractionRun & {
   evidenceMessages: ConversationStateExtractionMessage[];
-  existingThreads: DiscussionThread[];
-  existingActions: ActionItem[];
   enabledOperationFamilies: Array<"memory" | "thread" | "action">;
 };
 
@@ -68,26 +71,34 @@ export function validateConversationStateCandidates(input: {
   }
 
   const evidenceById = new Map(input.run.evidenceMessages.map((message) => [message.id, message]));
-  const threadsById = new Map(input.run.existingThreads.map((thread) => [thread.id, thread]));
-  const actionsById = new Map(input.run.existingActions.map((action) => [action.id, action]));
+  const threadsById = new Map(input.run.existingThreads.map((thread) => [thread.id, { ...thread }]));
+  const actionsById = new Map(input.run.existingActions.map((action) => [action.id, { ...action }]));
   const duplicateKeys = duplicateOperationKeys([...proposedThreads, ...proposedActions]);
 
-  for (const operation of proposedThreads) {
-    const accepted = validateThreadOperation({
-      operation,
-      evidenceById,
-      threadsById,
-      duplicateKeys,
-      enabled: input.run.enabledOperationFamilies.includes("thread"),
-      candidateFloor: input.candidateFloor,
-      applyConfidence: input.applyConfidence,
-    });
-    if (accepted.ok) acceptedThreads.push(accepted.value);
-    else rejected.add(accepted.code);
-  }
-  for (const operation of proposedActions) {
+  const operations = [
+    ...proposedThreads.map((operation) => ({ family: "thread" as const, operation })),
+    ...proposedActions.map((operation) => ({ family: "action" as const, operation })),
+  ].sort((left, right) => compareOperationKeys(left.operation, right.operation));
+
+  for (const entry of operations) {
+    if (entry.family === "thread") {
+      const accepted = validateThreadOperation({
+        operation: entry.operation,
+        evidenceById,
+        threadsById,
+        duplicateKeys,
+        enabled: input.run.enabledOperationFamilies.includes("thread"),
+        candidateFloor: input.candidateFloor,
+        applyConfidence: input.applyConfidence,
+      });
+      if (accepted.ok) {
+        acceptedThreads.push(accepted.value);
+        advanceThreadState(accepted.value, threadsById);
+      } else rejected.add(accepted.code);
+      continue;
+    }
     const accepted = validateActionOperation({
-      operation,
+      operation: entry.operation,
       evidenceById,
       actionsById,
       threadsById,
@@ -95,8 +106,10 @@ export function validateConversationStateCandidates(input: {
       enabled: input.run.enabledOperationFamilies.includes("action"),
       applyConfidence: input.applyConfidence,
     });
-    if (accepted.ok) acceptedActions.push(accepted.value);
-    else rejected.add(accepted.code);
+    if (accepted.ok) {
+      acceptedActions.push(accepted.value);
+      advanceActionState(accepted.value, actionsById);
+    } else rejected.add(accepted.code);
   }
 
   const acceptedCount = acceptedThreads.length + acceptedActions.length;
@@ -112,7 +125,7 @@ export function validateConversationStateCandidates(input: {
 function validateThreadOperation(input: {
   operation: ProposedThreadOperation;
   evidenceById: Map<string, ConversationStateExtractionMessage>;
-  threadsById: Map<string, DiscussionThread>;
+  threadsById: Map<string, ExtractionExistingThread>;
   duplicateKeys: Set<string>;
   enabled: boolean;
   candidateFloor: number;
@@ -139,8 +152,12 @@ function validateThreadOperation(input: {
   if (operation.operation === "merge") {
     const mergeTarget = input.threadsById.get(operation.targetThreadId);
     if (mergeTarget === undefined || mergeTarget.id === target.id) return reject("unknown_thread");
+    if (mergeTarget.status === "merged") return reject("invalid_dependency");
     const transition = validateThreadTransition({ from: target.status, to: "merged", eventType: "merged" });
-    return transition.ok ? { ok: true, value: operation } : reject(transition.code);
+    if (!transition.ok) return reject(transition.code);
+    return selectCanonicalMergeTarget([target, mergeTarget]) === mergeTarget.id
+      ? { ok: true, value: operation }
+      : reject("noncanonical_merge_target");
   }
   if (operation.operation === "attach_evidence") {
     const transition = validateThreadTransition({
@@ -161,8 +178,8 @@ function validateThreadOperation(input: {
 function validateActionOperation(input: {
   operation: ProposedActionOperation;
   evidenceById: Map<string, ConversationStateExtractionMessage>;
-  actionsById: Map<string, ActionItem>;
-  threadsById: Map<string, DiscussionThread>;
+  actionsById: Map<string, ExtractionExistingAction>;
+  threadsById: Map<string, ExtractionExistingThread>;
   duplicateKeys: Set<string>;
   enabled: boolean;
   applyConfidence: number;
@@ -176,7 +193,7 @@ function validateActionOperation(input: {
   if (operation.confidence < input.applyConfidence) return reject("low_confidence");
 
   if (operation.operation === "create") {
-    if (operation.threadId !== undefined && operation.threadId !== null && !input.threadsById.has(operation.threadId)) return reject("unknown_thread");
+    if (!isValidThreadDependency(operation.threadId, input.threadsById)) return reject("invalid_dependency");
     if (isSuggestion(operation, evidence)) return reject("non_commitment_action");
     const owner = validateOwner(operation.owner, evidence, input.evidenceById);
     if (!owner.ok) return owner;
@@ -188,8 +205,8 @@ function validateActionOperation(input: {
   if (action === undefined) return reject("unknown_action");
   if (action.version !== operation.expectedVersion) return reject("stale_version");
   if (operation.operation === "correct" && Object.hasOwn(operation, "threadId") &&
-    operation.threadId !== null && !input.threadsById.has(operation.threadId!)) {
-    return reject("unknown_thread");
+    !isValidThreadDependency(operation.threadId, input.threadsById)) {
+    return reject("invalid_dependency");
   }
   let owner: { ownerRefType: "feishu_user" | "text_label"; ownerRef: string; ownerResolved: boolean } | undefined;
   if (operation.operation === "resolve_owner" || (operation.operation === "correct" && operation.owner !== undefined)) {
@@ -348,7 +365,7 @@ function isExactStringArray(value: unknown, maximum: number): value is string[] 
 
 function isValidRun(run: ConversationStateExtractionRun): boolean {
   const messages = run.evidenceMessages as ConversationStateExtractionMessage[];
-  return isIdentifier(run.id) && isIdentifier(run.groupId) && Array.isArray(messages) && Array.isArray(run.existingThreads) && Array.isArray(run.existingActions) && Array.isArray(run.enabledOperationFamilies) && messages.length > 0 && messages.length <= MAX_EVIDENCE_IDS && run.existingThreads.length <= 12 && run.existingActions.length <= 12 && new Set(messages.map((message) => message.id)).size === messages.length && new Set(run.existingThreads.map((thread) => thread.id)).size === run.existingThreads.length && new Set(run.existingActions.map((action) => action.id)).size === run.existingActions.length && messages.every((message) => message.evidenceEligible === true && message.groupId === run.groupId && isIdentifier(message.id) && isContent(message.text) && (message.senderId === undefined || isIdentifier(message.senderId)) && (message.mentions ?? []).every((mention: { key: string; openId: string }) => isIdentifier(mention.key) && isIdentifier(mention.openId))) && run.existingThreads.every((thread) => thread.groupId === run.groupId && isIdentifier(thread.id) && Number.isSafeInteger(thread.version) && thread.version >= 1) && run.existingActions.every((action) => action.groupId === run.groupId && isIdentifier(action.id) && Number.isSafeInteger(action.version) && action.version >= 1) && new Set(run.enabledOperationFamilies).size === run.enabledOperationFamilies.length;
+  return isIdentifier(run.id) && isIdentifier(run.groupId) && Array.isArray(messages) && Array.isArray(run.existingThreads) && Array.isArray(run.existingActions) && Array.isArray(run.enabledOperationFamilies) && messages.length > 0 && messages.length <= MAX_EVIDENCE_IDS && run.existingThreads.length <= 12 && run.existingActions.length <= 12 && new Set(messages.map((message) => message.id)).size === messages.length && new Set(run.existingThreads.map((thread) => thread.id)).size === run.existingThreads.length && new Set(run.existingActions.map((action) => action.id)).size === run.existingActions.length && messages.every((message) => message.evidenceEligible === true && message.groupId === run.groupId && isIdentifier(message.id) && isContent(message.text) && (message.senderId === undefined || isIdentifier(message.senderId)) && (message.mentions ?? []).every((mention: { key: string; openId: string }) => isIdentifier(mention.key) && isIdentifier(mention.openId))) && run.existingThreads.every((thread) => thread.groupId === run.groupId && isIdentifier(thread.id) && Number.isSafeInteger(thread.version) && thread.version >= 1 && Number.isSafeInteger(thread.evidenceCount) && thread.evidenceCount >= 0) && run.existingActions.every((action) => action.groupId === run.groupId && isIdentifier(action.id) && Number.isSafeInteger(action.version) && action.version >= 1) && new Set(run.enabledOperationFamilies).size === run.enabledOperationFamilies.length;
 }
 
 function duplicateOperationKeys(operations: Array<{ operationKey: string }>): Set<string> {
@@ -361,7 +378,7 @@ function boundedOperations<T>(operations: T[] | undefined): T[] {
   return Array.isArray(operations) ? operations.slice(0, MAX_OPERATIONS_PER_FAMILY) : [];
 }
 
-function threadTargetStatus(operation: Exclude<ProposedThreadOperation, { operation: "create" | "attach_evidence" | "merge" }>, status: DiscussionThread["status"]): DiscussionThread["status"] {
+function threadTargetStatus(operation: Exclude<ProposedThreadOperation, { operation: "create" | "attach_evidence" | "merge" }>, status: ExtractionExistingThread["status"]): ExtractionExistingThread["status"] {
   if (operation.operation === "promote" || operation.operation === "reopen") return "open";
   if (operation.operation === "resolve") return "resolved";
   return status;
@@ -371,7 +388,7 @@ function threadEventType(operation: Exclude<ProposedThreadOperation, { operation
   return operation.operation === "promote" ? "promoted" : operation.operation === "resolve" ? "resolved" : operation.operation === "reopen" ? "reopened" : operation.operation === "update_summary" ? "summary_updated" : "corrected";
 }
 
-function actionTargetStatus(operation: Exclude<ProposedActionOperation, { operation: "create" }>, status: ActionItem["status"]): ActionItem["status"] {
+function actionTargetStatus(operation: Exclude<ProposedActionOperation, { operation: "create" }>, status: ExtractionExistingAction["status"]): ExtractionExistingAction["status"] {
   if (operation.operation === "complete") return "completed";
   if (operation.operation === "cancel") return "cancelled";
   if (operation.operation === "reopen") return "open";
@@ -417,6 +434,59 @@ function isThreshold(value: unknown): value is number {
 
 function compareOperationKeys(left: { operationKey: string }, right: { operationKey: string }): number {
   return left.operationKey < right.operationKey ? -1 : left.operationKey > right.operationKey ? 1 : 0;
+}
+
+function advanceThreadState(
+  operation: ValidatedThreadOperation,
+  threadsById: Map<string, ExtractionExistingThread>,
+): void {
+  if (operation.operation === "create") return;
+  const threadId = operation.operation === "merge" ? operation.sourceThreadId : operation.threadId;
+  const current = threadsById.get(threadId);
+  if (current === undefined) return;
+  const next = { ...current, version: current.version + 1 };
+  if (operation.operation === "attach_evidence") next.evidenceCount += operation.evidenceMessageIds.length;
+  else if (operation.operation === "promote") {
+    next.status = "open";
+    next.summary = operation.summary;
+  } else if (operation.operation === "merge") {
+    next.status = "merged";
+    next.mergedIntoThreadId = operation.targetThreadId;
+  } else if (operation.operation === "resolve") next.status = "resolved";
+  else if (operation.operation === "reopen") next.status = "open";
+  else if (operation.operation === "update_summary") next.summary = operation.summary;
+  else {
+    if (operation.title !== undefined) next.title = operation.title;
+    if (operation.summary !== undefined) next.summary = operation.summary;
+  }
+  threadsById.set(threadId, next);
+}
+
+function advanceActionState(
+  operation: ValidatedActionOperation,
+  actionsById: Map<string, ExtractionExistingAction>,
+): void {
+  if (operation.operation === "create") return;
+  const current = actionsById.get(operation.actionId);
+  if (current === undefined) return;
+  const next = { ...current, version: current.version + 1 };
+  if (operation.operation === "complete") next.status = "completed";
+  else if (operation.operation === "cancel") next.status = "cancelled";
+  else if (operation.operation === "reopen") next.status = "open";
+  else if (operation.operation === "correct") {
+    if (operation.description !== undefined) next.description = operation.description;
+    if (Object.hasOwn(operation, "threadId")) next.threadId = operation.threadId ?? undefined;
+  }
+  actionsById.set(operation.actionId, next);
+}
+
+function isValidThreadDependency(
+  threadId: string | null | undefined,
+  threadsById: Map<string, ExtractionExistingThread>,
+): boolean {
+  if (threadId === undefined || threadId === null) return true;
+  const thread = threadsById.get(threadId);
+  return thread !== undefined && thread.status !== "merged";
 }
 
 function reject(code: string): { ok: false; code: string } {

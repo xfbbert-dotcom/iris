@@ -153,7 +153,11 @@ type ActiveMemoryContentRow = {
   content: unknown;
 };
 type MentionRow = { conversation_message_id: unknown; mention_key: unknown; mentioned_open_id: unknown };
-type ThreadSnapshotRow = Record<string, unknown> & { stored_thread_version?: unknown; stored_thread_updated_at?: unknown };
+type ThreadSnapshotRow = Record<string, unknown> & {
+  stored_thread_version?: unknown;
+  stored_thread_updated_at?: unknown;
+  stored_thread_evidence_count?: unknown;
+};
 type ActionSnapshotRow = Record<string, unknown> & { stored_action_version?: unknown; stored_action_updated_at?: unknown };
 
 const MAX_IDENTIFIER_CHARS = 512;
@@ -439,31 +443,10 @@ export function createPostgresMemoryExtractionRepository({
           [locked.groupId, activeMemoryLimit],
         );
         const existingMemories = memoryResult.rows.map(mapMemory);
-        const threadsResult = await client.query<ThreadSnapshotRow>(
-          `
-          SELECT id, group_id, title, summary, status, confidence, merged_into_thread_id,
-                 version, first_evidence_at, last_activity_at, resolved_at, created_at, updated_at
-          FROM discussion_threads
-          WHERE group_id = $1 AND status IN ('candidate', 'open', 'resolved')
-          ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
-                   last_activity_at DESC, id ASC
-          LIMIT $2
-          `,
-          [locked.groupId, MAX_CONVERSATION_STATE_SNAPSHOTS],
+        const { existingThreads, existingActions } = await selectCurrentConversationState(
+          client,
+          locked.groupId,
         );
-        const existingThreads = threadsResult.rows.map(mapThreadSnapshot);
-        const actionsResult = await client.query<ActionSnapshotRow>(
-          `
-          SELECT id, group_id, thread_id, description, owner_ref_type, owner_ref, due_at,
-                 status, confidence, version, completed_at, cancelled_at, created_at, updated_at
-          FROM action_items
-          WHERE group_id = $1
-          ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC, id ASC
-          LIMIT $2
-          `,
-          [locked.groupId, MAX_CONVERSATION_STATE_SNAPSHOTS],
-        );
-        const existingActions = actionsResult.rows.map(mapActionSnapshot);
         const enabledOperationFamilies: Array<"memory" | "thread" | "action"> = ["memory", "thread", "action"];
         const inputFingerprint = fingerprintInput({
           groupId: locked.groupId,
@@ -538,10 +521,11 @@ export function createPostgresMemoryExtractionRepository({
           await client.query(
             `
             INSERT INTO group_memory_extraction_run_threads (
-              run_id, thread_id, ordinal, thread_version, thread_updated_at
-            ) VALUES ($1, $2, $3, $4, $5)
+              run_id, thread_id, ordinal, thread_version, thread_updated_at,
+              thread_evidence_count
+            ) VALUES ($1, $2, $3, $4, $5, $6)
             `,
-            [runId, thread.id, ordinal, thread.version, thread.updatedAt],
+            [runId, thread.id, ordinal, thread.version, thread.updatedAt, thread.evidenceCount],
           );
         }
         for (const [ordinal, action] of existingActions.entries()) {
@@ -588,7 +572,12 @@ export function createPostgresMemoryExtractionRepository({
     async loadRunInput(runIdValue) {
       const runId = requireBoundedString("runId", runIdValue, MAX_IDENTIFIER_CHARS);
       return withTransaction(dataSource, async (client) => {
-        const loaded = await loadStoredRun(client, runId);
+        const groupId = await lockRunFreshnessScopes(client, runId);
+        if (groupId === undefined) return { status: "not_found" as const };
+        const loaded = await loadStoredRun(client, runId, { lockInputs: true });
+        if (loaded.status === "ready" && loaded.run.groupId !== groupId) {
+          throw new Error("memory extraction run group changed while locking freshness scope");
+        }
         if (loaded.status !== "stale") {
           return loaded;
         }
@@ -766,6 +755,10 @@ export function createPostgresMemoryExtractionRepository({
 
       let staleRunDetected = false;
       const completion = await withTransaction(dataSource, async (client) => {
+        const lockedGroupId = await lockRunFreshnessScopes(client, input.runId);
+        if (lockedGroupId === undefined) {
+          throw new MemoryExtractionCompletionConflictError();
+        }
         const runResult = await client.query<RunRow>(
           `
           SELECT id, group_id, input_fingerprint, status, failure_classification
@@ -786,11 +779,9 @@ export function createPostgresMemoryExtractionRepository({
         );
         const persistedFingerprint = requireFingerprint(runRow.input_fingerprint);
         const runStatus = requireRunStatus(runRow.status);
-        if (persistedFingerprint !== input.inputFingerprint) {
+        if (groupId !== lockedGroupId || persistedFingerprint !== input.inputFingerprint) {
           throw new MemoryExtractionCompletionConflictError();
         }
-
-        await lockGroupMemoryWriteScope({ queryable: client, groupId });
 
         const evidenceResult = await client.query<CompletionEvidenceRow>(
           `
@@ -856,7 +847,6 @@ export function createPostgresMemoryExtractionRepository({
           throw new MemoryExtractionCompletionConflictError();
         }
 
-        await lockConversationStateWriteScope({ queryable: client as never, groupId });
         const current = await loadStoredRun(client, input.runId, { lockInputs: true });
         if (current.status === "stale") {
           await markRunStale(client, input.runId);
@@ -1250,7 +1240,7 @@ function toConversationStateOperations(input: {
     if (operation.operation === "create") {
       const id = randomUUID();
       const thread = { id, groupId: input.run.groupId, title: operation.title, summary: operation.summary,
-        status: operation.initialStatus, confidence: operation.confidence, version: 1, firstEvidenceAt: now,
+        status: operation.initialStatus, confidence: operation.confidence, version: 1, evidenceCount: 0, firstEvidenceAt: now,
         lastActivityAt: now, createdAt: now, updatedAt: now };
       operations.push({ kind: "create", operationKey: operation.operationKey, thread,
         threadEvent: { id: randomUUID(), threadId: id, groupId: input.run.groupId, eventType: "created", toVersion: 1, operationKey: operation.operationKey, createdAt: now },
@@ -1262,7 +1252,7 @@ function toConversationStateOperations(input: {
     if (current === undefined || current.version !== operation.expectedVersion) throw new MemoryExtractionCompletionConflictError();
     let thread: ExtractionExistingThread;
     let eventType: "evidence_attached" | "promoted" | "merged" | "resolved" | "reopened" | "summary_updated" | "corrected";
-    if (operation.operation === "attach_evidence") { thread = { ...current, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "evidence_attached"; }
+    if (operation.operation === "attach_evidence") { thread = { ...current, evidenceCount: current.evidenceCount + operation.evidenceMessageIds.length, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "evidence_attached"; }
     else if (operation.operation === "promote") { thread = { ...current, status: "open", summary: operation.summary, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "promoted"; }
     else if (operation.operation === "merge") { thread = { ...current, status: "merged", mergedIntoThreadId: operation.targetThreadId, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "merged"; }
     else if (operation.operation === "resolve") { thread = { ...current, status: "resolved", resolvedAt: now, version: current.version + 1, lastActivityAt: now, updatedAt: now }; eventType = "resolved"; }
@@ -1844,6 +1834,22 @@ async function markRunStale(queryable: Queryable, runId: string): Promise<void> 
   );
 }
 
+async function lockRunFreshnessScopes(
+  client: TransactionClient,
+  runId: string,
+): Promise<string | undefined> {
+  const result = await client.query<{ group_id: unknown }>(
+    "SELECT group_id FROM group_memory_extraction_runs WHERE id = $1",
+    [runId],
+  );
+  if (result.rows.length === 0) return undefined;
+  if (result.rows.length !== 1) throw new Error("memory extraction run query returned multiple rows");
+  const groupId = requireExactIdentifier(result.rows[0]!.group_id);
+  await lockGroupMemoryWriteScope({ queryable: client, groupId });
+  await lockConversationStateWriteScope({ queryable: client as never, groupId });
+  return groupId;
+}
+
 async function lockStoredRunInputs(queryable: Queryable, runId: string): Promise<void> {
   await queryable.query(
     `
@@ -1987,9 +1993,12 @@ async function loadStoredRun(
     `
     SELECT rt.thread_version AS stored_thread_version,
            rt.thread_updated_at AS stored_thread_updated_at,
+           rt.thread_evidence_count AS stored_thread_evidence_count,
            t.id, t.group_id, t.title, t.summary, t.status, t.confidence,
            t.merged_into_thread_id, t.version, t.first_evidence_at, t.last_activity_at,
-           t.resolved_at, t.created_at, t.updated_at
+           t.resolved_at, t.created_at, t.updated_at,
+           (SELECT COUNT(*)::bigint FROM discussion_thread_evidence evidence
+            WHERE evidence.thread_id = t.id AND evidence.group_id = t.group_id) AS evidence_count
     FROM group_memory_extraction_run_threads rt
     LEFT JOIN discussion_threads t ON t.id = rt.thread_id
     WHERE rt.run_id = $1
@@ -2038,6 +2047,13 @@ async function loadStoredRun(
   const existingMemories = memoryResult.rows.map(mapMemory);
   const existingThreads = threadResult.rows.map(mapThreadSnapshot);
   const existingActions = actionResult.rows.map(mapActionSnapshot);
+  const currentConversationState = await selectCurrentConversationState(queryable, groupId);
+  if (
+    !sameThreadSnapshots(existingThreads, currentConversationState.existingThreads) ||
+    !sameActionSnapshots(existingActions, currentConversationState.existingActions)
+  ) {
+    return { status: "stale", groupId, requestIds };
+  }
   const enabledOperationFamilies: Array<"memory" | "thread" | "action"> = ["memory", "thread", "action"];
   const currentFingerprint = fingerprintInput({
     groupId,
@@ -2244,6 +2260,7 @@ function fingerprintInput(input: {
         id: thread.id,
         version: thread.version,
         updatedAt: thread.updatedAt.toISOString(),
+        evidenceCount: thread.evidenceCount,
       })),
       existingActions: [...input.existingActions].sort((left, right) => compareStrings(left.id, right.id)).map((action) => ({
         id: action.id,
@@ -2384,6 +2401,70 @@ function sameMentions(
   });
 }
 
+async function selectCurrentConversationState(
+  queryable: Queryable,
+  groupId: string,
+): Promise<{
+  existingThreads: ExtractionExistingThread[];
+  existingActions: ExtractionExistingAction[];
+}> {
+  const threadsResult = await queryable.query<ThreadSnapshotRow>(
+    `
+    SELECT t.id, t.group_id, t.title, t.summary, t.status, t.confidence,
+           t.merged_into_thread_id, t.version, t.first_evidence_at,
+           t.last_activity_at, t.resolved_at, t.created_at, t.updated_at,
+           COUNT(evidence.conversation_message_id)::bigint AS evidence_count
+    FROM discussion_threads t
+    LEFT JOIN discussion_thread_evidence evidence
+      ON evidence.thread_id = t.id AND evidence.group_id = t.group_id
+    WHERE t.group_id = $1 AND t.status IN ('candidate', 'open', 'resolved')
+    GROUP BY t.id
+    ORDER BY CASE t.status WHEN 'open' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
+             t.last_activity_at DESC, t.id ASC
+    LIMIT $2
+    `,
+    [groupId, MAX_CONVERSATION_STATE_SNAPSHOTS],
+  );
+  const actionsResult = await queryable.query<ActionSnapshotRow>(
+    `
+    SELECT id, group_id, thread_id, description, owner_ref_type, owner_ref, due_at,
+           status, confidence, version, completed_at, cancelled_at, created_at, updated_at
+    FROM action_items
+    WHERE group_id = $1
+    ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC, id ASC
+    LIMIT $2
+    `,
+    [groupId, MAX_CONVERSATION_STATE_SNAPSHOTS],
+  );
+  return {
+    existingThreads: threadsResult.rows.map(mapThreadSnapshot),
+    existingActions: actionsResult.rows.map(mapActionSnapshot),
+  };
+}
+
+function sameThreadSnapshots(
+  stored: ExtractionExistingThread[],
+  current: ExtractionExistingThread[],
+): boolean {
+  return stored.length === current.length && stored.every((thread, index) => {
+    const selected = current[index]!;
+    return thread.id === selected.id && thread.version === selected.version &&
+      thread.updatedAt.getTime() === selected.updatedAt.getTime() &&
+      thread.evidenceCount === selected.evidenceCount;
+  });
+}
+
+function sameActionSnapshots(
+  stored: ExtractionExistingAction[],
+  current: ExtractionExistingAction[],
+): boolean {
+  return stored.length === current.length && stored.every((action, index) => {
+    const selected = current[index]!;
+    return action.id === selected.id && action.version === selected.version &&
+      action.updatedAt.getTime() === selected.updatedAt.getTime();
+  });
+}
+
 function mapThreadSnapshot(row: ThreadSnapshotRow): ExtractionExistingThread {
   const status = requireThreadStatus(row.status);
   const mergedIntoThreadId = row.merged_into_thread_id === null || row.merged_into_thread_id === undefined
@@ -2398,7 +2479,8 @@ function mapThreadSnapshot(row: ThreadSnapshotRow): ExtractionExistingThread {
     title: requireBoundedString("thread title", row.title, MAX_IDENTIFIER_CHARS),
     summary: requireBoundedString("thread summary", row.summary, 4000), status,
     confidence: requireConfidence(row.confidence), ...(mergedIntoThreadId === undefined ? {} : { mergedIntoThreadId }),
-    version: requirePersistedVersion(row.version), firstEvidenceAt: requireDate("thread first evidence at", row.first_evidence_at),
+    version: requirePersistedVersion(row.version), evidenceCount: requireNumber("thread evidence count", row.evidence_count),
+    firstEvidenceAt: requireDate("thread first evidence at", row.first_evidence_at),
     lastActivityAt: requireDate("thread last activity at", row.last_activity_at),
     ...(resolvedAt === undefined ? {} : { resolvedAt }), createdAt: requireDate("thread created at", row.created_at),
     updatedAt: requireDate("thread updated at", row.updated_at),
@@ -2426,7 +2508,8 @@ function threadSnapshotRowIsCurrent(row: ThreadSnapshotRow, groupId: string): bo
   try {
     const thread = mapThreadSnapshot(row);
     return thread.groupId === groupId && thread.version === requirePersistedVersion(row.stored_thread_version) &&
-      thread.updatedAt.getTime() === requireDate("stored thread updated at", row.stored_thread_updated_at).getTime();
+      thread.updatedAt.getTime() === requireDate("stored thread updated at", row.stored_thread_updated_at).getTime() &&
+      thread.evidenceCount === requireNumber("stored thread evidence count", row.stored_thread_evidence_count);
   } catch { return false; }
 }
 

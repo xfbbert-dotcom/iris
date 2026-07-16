@@ -44,7 +44,7 @@ CREATE TABLE discussion_thread_events (
   group_id TEXT NOT NULL,
   event_type TEXT NOT NULL CHECK (event_type IN (
     'created', 'promoted', 'summary_updated', 'resolved', 'reopened',
-    'merged', 'corrected', 'evidence_attached'
+    'merged', 'corrected'
   )),
   from_version BIGINT CHECK (from_version IS NULL OR from_version >= 1),
   to_version BIGINT NOT NULL CHECK (to_version >= 1),

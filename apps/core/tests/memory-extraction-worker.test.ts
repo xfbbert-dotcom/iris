@@ -704,6 +704,73 @@ describe("createMemoryExtractionWorker", () => {
     }));
   });
 
+  it("isolates a stale second thread operation while preserving valid memory and state work", async () => {
+    const dependencies = createDependencies({
+      jobs: [job("request-1")],
+      claimedRun: run({
+        requestIds: ["request-1"],
+        existingThreads: [{
+          id: "thread-1",
+          groupId: "chat-a",
+          title: "Launch",
+          summary: "Launch on Thursday.",
+          status: "open",
+          confidence: 0.9,
+          version: 1,
+          evidenceCount: 1,
+          firstEvidenceAt: new Date("2026-07-14T23:59:00.000Z"),
+          lastActivityAt: new Date("2026-07-14T23:59:00.000Z"),
+          createdAt: new Date("2026-07-14T23:59:00.000Z"),
+          updatedAt: new Date("2026-07-14T23:59:00.000Z"),
+        }],
+      }),
+    });
+    dependencies.client.extract.mockResolvedValue({
+      runId: "run-1",
+      candidates: [candidate()],
+      threadOperations: [
+        {
+          operation: "update_summary",
+          operationKey: "thread:update:z",
+          confidence: 0.9,
+          evidenceMessageIds: ["feishu:msg-1"],
+          evidenceSpan: "Launch on Thursday.",
+          threadId: "thread-1",
+          expectedVersion: 1,
+          summary: "Rejected later summary.",
+        },
+        {
+          operation: "update_summary",
+          operationKey: "thread:update:a",
+          confidence: 0.9,
+          evidenceMessageIds: ["feishu:msg-1"],
+          evidenceSpan: "Launch on Thursday.",
+          threadId: "thread-1",
+          expectedVersion: 1,
+          summary: "Accepted sorted summary.",
+        },
+      ],
+      actionOperations: [],
+    } as any);
+    const worker = createMemoryExtractionWorker(dependencies);
+
+    await worker.processBatch({ limit: 20 });
+
+    expect(dependencies.repository.completeRun).toHaveBeenCalledWith(expect.objectContaining({
+      acceptedCandidates: [expect.objectContaining({ content: "Launch on Thursday." })],
+      threadOperations: [expect.objectContaining({
+        operationKey: "thread:update:a",
+        summary: "Accepted sorted summary.",
+      })],
+      conversationStateDiagnostics: {
+        proposedCount: 2,
+        acceptedCount: 1,
+        rejectedCount: 1,
+        rejectionCodes: ["stale_version"],
+      },
+    }));
+  });
+
   it("passes only fully validated conflict candidates into atomic completion", async () => {
     const dependencies = createDependencies({
       jobs: [job("request-1")],

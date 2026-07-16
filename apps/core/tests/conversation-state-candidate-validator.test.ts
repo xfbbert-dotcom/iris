@@ -139,6 +139,113 @@ describe("validateConversationStateCandidates", () => {
     expect(result.actionOperations[1]).toMatchObject({ ownerRefType: "text_label", ownerRef: "Launch", ownerResolved: false });
   });
 
+  it("accepts only the first sorted operation that consumes an existing thread version", () => {
+    const run = claimedRun();
+    run.existingThreads = [existingThread()];
+    const response = responseWithExistingThreadOperation();
+    const update = response.threadOperations[0] as Extract<ProposedThreadOperation, { operation: "update_summary" }>;
+    response.threadOperations = [
+      { ...update, operationKey: "thread:update:z", summary: "Launch planning z." },
+      { ...update, operationKey: "thread:update:a", summary: "Launch planning a." },
+    ];
+
+    const result = validateConversationStateCandidates({
+      run,
+      response,
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+
+    expect(result.threadOperations).toEqual([
+      expect.objectContaining({ operationKey: "thread:update:a", summary: "Launch planning a." }),
+    ]);
+    expect(result.diagnostics).toEqual({
+      proposedCount: 2,
+      acceptedCount: 1,
+      rejectedCount: 1,
+      rejectionCodes: ["stale_version"],
+    });
+  });
+
+  it("rejects a noncanonical merge target using persisted evidence counts", () => {
+    const run = claimedRun();
+    run.existingThreads = [
+      { ...existingThread(), id: "thread-source", evidenceCount: 5 },
+      { ...existingThread(), id: "thread-target", evidenceCount: 1 },
+    ];
+    const response = responseWithExistingThreadOperation();
+    response.threadOperations = [{
+      operation: "merge",
+      operationKey: "thread:merge:noncanonical",
+      confidence: 0.9,
+      evidenceMessageIds: ["message-1"],
+      evidenceSpan: "Launch planning",
+      sourceThreadId: "thread-source",
+      targetThreadId: "thread-target",
+      expectedVersion: 1,
+    }];
+
+    const result = validateConversationStateCandidates({ run, response, candidateFloor: 0.65, applyConfidence: 0.85 });
+
+    expect(result.threadOperations).toEqual([]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["noncanonical_merge_target"]);
+  });
+
+  it("rejects later conflicting merges after the first sorted merge advances simulated state", () => {
+    const run = claimedRun();
+    run.existingThreads = [
+      { ...existingThread(), id: "thread-source", status: "candidate", evidenceCount: 1 },
+      { ...existingThread(), id: "thread-target-a", evidenceCount: 2 },
+      { ...existingThread(), id: "thread-target-z", evidenceCount: 1 },
+    ];
+    const merge = {
+      operation: "merge" as const,
+      confidence: 0.9,
+      evidenceMessageIds: ["message-1"],
+      evidenceSpan: "Launch planning",
+      sourceThreadId: "thread-source",
+      expectedVersion: 1,
+    };
+    const response = responseWithExistingThreadOperation();
+    response.threadOperations = [
+      { ...merge, operationKey: "thread:merge:z", targetThreadId: "thread-target-z" },
+      { ...merge, operationKey: "thread:merge:a", targetThreadId: "thread-target-a" },
+    ];
+
+    const result = validateConversationStateCandidates({ run, response, candidateFloor: 0.65, applyConfidence: 0.85 });
+
+    expect(result.threadOperations.map((operation) => operation.operationKey)).toEqual(["thread:merge:a"]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["stale_version"]);
+  });
+
+  it("rejects an action dependency after an earlier sorted operation merges its thread", () => {
+    const run = claimedRun();
+    run.existingThreads = [
+      { ...existingThread(), id: "thread-source", status: "candidate", evidenceCount: 1 },
+      { ...existingThread(), id: "thread-target", evidenceCount: 2 },
+    ];
+    const response = responseWithActionCreate({
+      operationKey: "z:action:create",
+      threadId: "thread-source",
+    });
+    response.threadOperations = [{
+      operation: "merge",
+      operationKey: "a:thread:merge",
+      confidence: 0.9,
+      evidenceMessageIds: ["message-1"],
+      evidenceSpan: "Launch planning",
+      sourceThreadId: "thread-source",
+      targetThreadId: "thread-target",
+      expectedVersion: 1,
+    }];
+
+    const result = validateConversationStateCandidates({ run, response, candidateFloor: 0.65, applyConfidence: 0.85 });
+
+    expect(result.threadOperations).toHaveLength(1);
+    expect(result.actionOperations).toEqual([]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["invalid_dependency"]);
+  });
+
   it("fails closed without reading an accessor-backed worker response", () => {
     const response = responseWithThreadCreate() as Record<string, unknown>;
     Object.defineProperty(response, "threadOperations", {
@@ -182,7 +289,7 @@ describe("validateConversationStateCandidates", () => {
     });
 
     expect(result.actionOperations).toEqual([]);
-    expect(result.diagnostics.rejectionCodes).toEqual(["unknown_thread"]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["invalid_dependency"]);
   });
 
   it("accepts an explicit null action-correction thread link as unlink", () => {
@@ -358,6 +465,7 @@ function existingThread() {
     status: "open" as const,
     confidence: 0.9,
     version: 1,
+    evidenceCount: 1,
     firstEvidenceAt: new Date("2026-07-14T00:01:00.000Z"),
     lastActivityAt: new Date("2026-07-14T00:01:00.000Z"),
     createdAt: new Date("2026-07-14T00:01:00.000Z"),
