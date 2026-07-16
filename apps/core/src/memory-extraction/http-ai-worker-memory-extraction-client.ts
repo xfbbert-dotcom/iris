@@ -26,6 +26,7 @@ const MAX_MESSAGE_TEXT_CHARS = 8000;
 const MAX_MEMORY_CONTENT_CHARS = 4000;
 const MAX_MESSAGES = 50;
 const MAX_CONTEXT_MESSAGES = 10;
+const MAX_MENTIONS_PER_MESSAGE = 20;
 const MAX_CANDIDATES = 8;
 const MAX_EVIDENCE_IDS = 40;
 const MAX_EXISTING_MEMORIES = 8;
@@ -200,6 +201,17 @@ function requireExactRun(run: ClaimedMemoryExtractionRun): void {
     if (message.senderId !== undefined && !isIdentifier(message.senderId)) {
       throw invalidResponse();
     }
+    const mentions = message.mentions ?? [];
+    if (!Array.isArray(mentions) || mentions.length > MAX_MENTIONS_PER_MESSAGE) {
+      throw invalidResponse();
+    }
+    const mentionKeys = new Set<string>();
+    for (const mention of mentions) {
+      if (!isExactMention(mention) || mentionKeys.has(mention.key)) {
+        throw invalidResponse();
+      }
+      mentionKeys.add(mention.key);
+    }
     if (messageIds.has(message.id)) {
       throw invalidResponse();
     }
@@ -228,6 +240,13 @@ function requireExactRun(run: ClaimedMemoryExtractionRun): void {
     }
     memoryIds.add(memory.id);
   }
+}
+
+function isExactMention(value: unknown): value is { key: string; openId: string } {
+  return typeof value === "object" && value !== null && !Array.isArray(value) &&
+    Object.keys(value).length === 2 && Object.hasOwn(value, "key") && Object.hasOwn(value, "openId") &&
+    isIdentifier((value as { key?: unknown }).key) &&
+    isIdentifier((value as { openId?: unknown }).openId);
 }
 
 function compareMessages(left: ExtractionMessage, right: ExtractionMessage): number {

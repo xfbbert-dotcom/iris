@@ -74,3 +74,27 @@ Command for both runs: `npm run test:acceptance:conversation-state`.
 - Idempotency: replay, concurrent delivery, 429 retry, and runtime disablement assert exact projection deltas rather than merely asserting no exception.
 - Cleanup: every path has `finally` teardown, and successful runs assert both containers and volumes are absent.
 - Public-edge `/internal/*` Caddy rejection remains a Task 10 deployment verification boundary as required by the brief; no Caddy change was made here.
+
+## Independent Review Fixes
+
+The four accepted Important findings were fixed without entering Task 10.
+
+### RED
+
+- Raw-event drain: focused helper test failed because `eventWaiting=0` and `eventProcessing=1` incorrectly returned drained (`true`).
+- Closed count delta: focused helper test failed because an unexpected `actions +1` was ignored when the caller listed only another field.
+- Cleanup visibility: focused helper tests failed because `compose ps -q` did not detect an injected stopped container and a primary error hid the injected cleanup error. Helper RED result: 4/4 failed.
+- Mention boundary: 20 unique mentions already serialized successfully as the valid boundary; 21 mentions and duplicate mention keys both reached HTTP instead of failing closed. HTTP client RED result: 102 passed, 2 failed.
+
+### GREEN
+
+- Every acceptance drain now reads `LLEN iris:events:raw:processing` from the real Redis instance. Drain completion requires all ten counts to be zero: raw-event waiting/processing/DLQ, extraction pending/processing/delayed/DLQ, and projection pending/processing/failed. Drain errors serialize counts only.
+- Gate 7 now deep-compares the complete ten-field conversation-state count object for replay, concurrent delivery, 429 cooldown, cross-group isolation, disable-before-apply, and no-backfill. Every expected object explicitly includes zero deltas for unauthorized action/action-event/action-evidence writes.
+- Core accepts exactly 20 unique mention keys per message, rejects 21, rejects duplicate keys even when open IDs differ, validates exact mention shape/identifiers, performs no truncation or deduplication, and returns only content-free `invalid_response` before HTTP. Messages without mentions still serialize `mentions: []`.
+- Cleanup audits use project-label `docker ps -aq` and project-label volume listing. All cleanup steps are attempted, and primary plus cleanup failures are returned together in one `AggregateError`.
+- Focused GREEN: acceptance helpers 4/4, operator API 9/9, HTTP client 104/104, typecheck PASS, compose config PASS, and diff-check PASS.
+
+### Review-Fix Acceptance Runs
+
+- Run 1: `npm run test:acceptance:conversation-state`, exit 0, gates 1-8 PASS, 28.8s; independent audit `containers=0 volumes=0`.
+- Run 2: `npm run test:acceptance:conversation-state`, exit 0, gates 1-8 PASS, 29.4s; independent audit `containers=0 volumes=0`.

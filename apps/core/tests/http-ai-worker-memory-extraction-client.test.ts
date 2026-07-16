@@ -212,6 +212,64 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
     ]);
   });
 
+  it("sends exactly twenty unique mentions on one message", async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
+      jsonResponse(responseFixture()),
+    );
+    const client = createClient(fetchImpl);
+    const run = runFixture();
+    run.evidenceMessages[0] = {
+      ...run.evidenceMessages[0]!,
+      mentions: Array.from({ length: 20 }, (_, index) => ({
+        key: `@_user_${index}`,
+        openId: `ou_user_${index}`,
+      })),
+    };
+
+    await expect(client.extract(run)).resolves.toMatchObject({ runId: "run-1" });
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as {
+      messages: Array<{ id: string; mentions: Array<{ key: string; open_id: string }> }>;
+    };
+    expect(body.messages.find((message) => message.id === "message-1")?.mentions).toHaveLength(20);
+  });
+
+  it("rejects twenty-one mentions before HTTP with a content-free error", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(responseFixture()));
+    const client = createClient(fetchImpl);
+    const run = runFixture();
+    run.evidenceMessages[0] = {
+      ...run.evidenceMessages[0]!,
+      mentions: Array.from({ length: 21 }, (_, index) => ({
+        key: `secret-key-${index}`,
+        openId: `secret-open-id-${index}`,
+      })),
+    };
+
+    const error = await client.extract(run).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "invalid_response", message: "invalid_response" });
+    expect(String(error)).not.toContain("secret-key");
+    expect(String(error)).not.toContain("secret-open-id");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects duplicate mention keys before HTTP even when open ids differ", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(responseFixture()));
+    const client = createClient(fetchImpl);
+    const run = runFixture();
+    run.evidenceMessages[0] = {
+      ...run.evidenceMessages[0]!,
+      mentions: [
+        { key: "duplicate-secret-key", openId: "ou_first" },
+        { key: "duplicate-secret-key", openId: "ou_second" },
+      ],
+    };
+
+    const error = await client.extract(run).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "invalid_response", message: "invalid_response" });
+    expect(String(error)).not.toContain("duplicate-secret-key");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("rejects an oversized serialized request before calling fetch", async () => {
     const fetchImpl = vi.fn();
     const client = createClient(fetchImpl, { maxRequestBytes: 1024 });

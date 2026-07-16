@@ -22,6 +22,14 @@ import { createAnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js
 import { createEventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import { createMemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
 import { createPostgresConversationStateInspectionStore } from "../src/conversation-state/conversation-state-api.js";
+import {
+  assertClosedCountDelta,
+  assertProjectResourcesRemoved,
+  combineAcceptanceErrors,
+  isAcceptanceDrainComplete,
+  type AcceptanceDrainCounts,
+  type ConversationStateCounts,
+} from "./conversation-state-acceptance-helpers.js";
 
 const { Pool } = pg;
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -451,7 +459,18 @@ try {
   const replaySnapshot = await readConversationStateCounts(pool, groupA);
   const replayCalls = fakeProvider.extractionCallCount();
   await sendAndDrain(coreBaseUrl, candidateEvent);
-  assert.deepEqual(await readConversationStateCounts(pool, groupA), replaySnapshot);
+  assertClosedCountDelta(await readConversationStateCounts(pool, groupA), replaySnapshot, {
+    messages: 0,
+    requests: 0,
+    runs: 0,
+    threads: 0,
+    threadEvents: 0,
+    threadEvidence: 0,
+    actions: 0,
+    actionEvents: 0,
+    actionEvidence: 0,
+    operationClaims: 0,
+  });
   assert.equal(fakeProvider.extractionCallCount(), replayCalls);
 
   fakeProvider.setScenario("concurrent_candidate_create");
@@ -472,20 +491,34 @@ try {
     (await readRunOutcome(pool!, "conversation-message-concurrent"))?.requestStatus === "completed",
   );
   await drainAndAssert(coreBaseUrl);
-  assertCountDeltas(await readConversationStateCounts(pool, groupA), beforeConcurrent, {
+  assertClosedCountDelta(await readConversationStateCounts(pool, groupA), beforeConcurrent, {
     messages: 1,
     requests: 1,
     runs: 1,
     threads: 1,
     threadEvents: 1,
     threadEvidence: 1,
+    actions: 0,
+    actionEvents: 0,
+    actionEvidence: 0,
     operationClaims: 1,
   });
   assert.equal(fakeProvider.extractionCallCount(), concurrentCalls + 1);
   const afterConcurrent = await readConversationStateCounts(pool, groupA);
   const callsAfterConcurrent = fakeProvider.extractionCallCount();
   await sendAndDrain(coreBaseUrl, concurrentEvent);
-  assert.deepEqual(await readConversationStateCounts(pool, groupA), afterConcurrent);
+  assertClosedCountDelta(await readConversationStateCounts(pool, groupA), afterConcurrent, {
+    messages: 0,
+    requests: 0,
+    runs: 0,
+    threads: 0,
+    threadEvents: 0,
+    threadEvidence: 0,
+    actions: 0,
+    actionEvents: 0,
+    actionEvidence: 0,
+    operationClaims: 0,
+  });
   assert.equal(fakeProvider.extractionCallCount(), callsAfterConcurrent);
 
   const beforeCooldownA = await readConversationStateCounts(pool, groupA);
@@ -582,21 +615,35 @@ try {
   await drainAndAssert(coreBaseUrl);
   assert.equal(fakeProvider.extractionCallCount(), callsBeforeRateLimit + 3);
   const afterCooldownA = await readConversationStateCounts(pool, groupA);
-  assertCountDeltas(afterCooldownA, beforeCooldownA, {
+  const cooldownRunDelta = afterCooldownA.runs - beforeCooldownA.runs;
+  assert.ok(cooldownRunDelta === 2 || cooldownRunDelta === 3, "bounded cooldown run delta");
+  assertClosedCountDelta(afterCooldownA, beforeCooldownA, {
     messages: 2,
     requests: 2,
+    runs: cooldownRunDelta,
     threads: 2,
     threadEvents: 2,
     threadEvidence: 2,
+    actions: 0,
+    actionEvents: 0,
+    actionEvidence: 0,
     operationClaims: 2,
   });
-  const cooldownRunDelta = requireNumber(afterCooldownA.runs, "runs after cooldown") -
-    requireNumber(beforeCooldownA.runs, "runs before cooldown");
-  assert.ok(cooldownRunDelta === 2 || cooldownRunDelta === 3, "bounded cooldown run delta");
-  assert.deepEqual(await readConversationStateCounts(pool, groupB), beforeCooldownB);
+  assertClosedCountDelta(await readConversationStateCounts(pool, groupB), beforeCooldownB, {
+    messages: 0,
+    requests: 0,
+    runs: 0,
+    threads: 0,
+    threadEvents: 0,
+    threadEvidence: 0,
+    actions: 0,
+    actionEvents: 0,
+    actionEvidence: 0,
+    operationClaims: 0,
+  });
 
-  const beforeDisabledA = await readProjectionCounts(pool, groupA);
-  const beforeDisabledB = await readProjectionCounts(pool, groupB);
+  const beforeDisabledA = await readConversationStateCounts(pool, groupA);
+  const beforeDisabledB = await readConversationStateCounts(pool, groupB);
   const held = fakeProvider.armHeldScenario("disabled_candidate_create");
   await postFeishuEvent(coreBaseUrl, feishuMessageEvent({
     eventId: "conversation-event-disabled",
@@ -613,14 +660,49 @@ try {
     return outcome?.requestStatus === "skipped" ? outcome : undefined;
   });
   assert.equal(disabledOutcome.skipReason, "runtime_disabled_before_apply");
+  assert.equal(disabledOutcome.runStatus, "completed");
   assert.equal(disabledOutcome.failureClassification, "runtime_disabled_before_apply");
   await drainAndAssert(coreBaseUrl);
-  assert.deepEqual(await readProjectionCounts(pool, groupA), beforeDisabledA);
-  assert.deepEqual(await readProjectionCounts(pool, groupB), beforeDisabledB);
+  const afterDisabledA = await readConversationStateCounts(pool, groupA);
+  assertClosedCountDelta(afterDisabledA, beforeDisabledA, {
+    messages: 1,
+    requests: 1,
+    runs: 1,
+    threads: 0,
+    threadEvents: 0,
+    threadEvidence: 0,
+    actions: 0,
+    actionEvents: 0,
+    actionEvidence: 0,
+    operationClaims: 0,
+  });
+  assertClosedCountDelta(await readConversationStateCounts(pool, groupB), beforeDisabledB, {
+    messages: 0,
+    requests: 0,
+    runs: 0,
+    threads: 0,
+    threadEvents: 0,
+    threadEvidence: 0,
+    actions: 0,
+    actionEvents: 0,
+    actionEvidence: 0,
+    operationClaims: 0,
+  });
   await setGroupEnabled(coreBaseUrl, groupA, true);
   await delay(120);
   await drainAndAssert(coreBaseUrl);
-  assert.deepEqual(await readProjectionCounts(pool, groupA), beforeDisabledA);
+  assertClosedCountDelta(await readConversationStateCounts(pool, groupA), afterDisabledA, {
+    messages: 0,
+    requests: 0,
+    runs: 0,
+    threads: 0,
+    threadEvents: 0,
+    threadEvidence: 0,
+    actions: 0,
+    actionEvents: 0,
+    actionEvidence: 0,
+    operationClaims: 0,
+  });
 
   logGate("8/8 correction updates canonical state and preserves prior event evidence");
   const atlasId = requireString(atlas.id, "Atlas thread id");
@@ -671,7 +753,6 @@ try {
   console.log(`[acceptance] PASS: gates 1-8 in ${formatSeconds(Date.now() - startedAt)}`);
 } catch (error) {
   primaryError = error;
-  throw error;
 } finally {
   const cleanupErrors: unknown[] = [];
   await cleanupStep(cleanupErrors, async () => app?.close());
@@ -688,22 +769,10 @@ try {
     );
   });
   await cleanupStep(cleanupErrors, async () => {
-    const remaining = await runCommand("docker", compose("ps", "-q"));
-    assert.equal(remaining.trim(), "", "acceptance containers were not removed");
+    await assertProjectResourcesRemoved({ projectName, runCommand });
   });
-  await cleanupStep(cleanupErrors, async () => {
-    const remaining = await runCommand("docker", [
-      "volume",
-      "ls",
-      "--filter",
-      `label=com.docker.compose.project=${projectName}`,
-      "-q",
-    ]);
-    assert.equal(remaining.trim(), "", "acceptance volumes were not removed");
-  });
-  if (primaryError === undefined && cleanupErrors.length > 0) {
-    throw new AggregateError(cleanupErrors, "conversation state acceptance cleanup failed");
-  }
+  const combinedError = combineAcceptanceErrors(primaryError, cleanupErrors);
+  if (combinedError !== undefined) throw combinedError;
 }
 
 async function sendAndDrain(baseUrl: string, event: JsonRecord): Promise<void> {
@@ -724,29 +793,26 @@ async function sendAndDrain(baseUrl: string, event: JsonRecord): Promise<void> {
 
 async function drainAndAssert(baseUrl: string): Promise<void> {
   await waitFor("all conversation-state queues and repairs to drain", async () => {
-    const [events, extraction, state] = await Promise.all([
+    const [events, eventProcessing, extraction, state] = await Promise.all([
       getJson(baseUrl, "/internal/events/status"),
+      redisInspector!.lLen("iris:events:raw:processing"),
       readQueueStatus(baseUrl),
       getJson(baseUrl, "/internal/conversation-state/status"),
     ]);
     const repairs = requireRecord(state.projectionRepairs, "projection repairs");
-    const drained = events.pendingEventCount === 0 &&
-      events.deadLetterEventCount === 0 &&
-      extraction.pendingJobCount === 0 &&
-      extraction.processingJobCount === 0 &&
-      extraction.delayedJobCount === 0 &&
-      extraction.deadLetterJobCount === 0 &&
-      repairs.pending === 0 &&
-      repairs.processing === 0 &&
-      repairs.failed === 0;
-    if (!drained) {
-      const diagnostics = pool === undefined
-        ? []
-        : (await pool.query(
-            "SELECT status, failure_classification, failure_count FROM group_memory_extraction_runs ORDER BY created_at DESC LIMIT 1",
-          )).rows;
-      throw new Error(JSON.stringify({ events, extraction, repairs, diagnostics }));
-    }
+    const counts: AcceptanceDrainCounts = {
+      eventWaiting: requireNumber(events.pendingEventCount, "event waiting count"),
+      eventProcessing,
+      eventDeadLetter: requireNumber(events.deadLetterEventCount, "event DLQ count"),
+      extractionPending: extraction.pendingJobCount,
+      extractionProcessing: extraction.processingJobCount,
+      extractionDelayed: extraction.delayedJobCount,
+      extractionDeadLetter: extraction.deadLetterJobCount,
+      projectionPending: requireNumber(repairs.pending, "projection pending count"),
+      projectionProcessing: requireNumber(repairs.processing, "projection processing count"),
+      projectionFailed: requireNumber(repairs.failed, "projection failed count"),
+    };
+    if (!isAcceptanceDrainComplete(counts)) throw new Error(JSON.stringify(counts));
     return true;
   });
 }
@@ -1316,7 +1382,10 @@ async function readRunOutcome(
       };
 }
 
-async function readConversationStateCounts(pool: pg.Pool, groupId: string): Promise<JsonRecord> {
+async function readConversationStateCounts(
+  pool: pg.Pool,
+  groupId: string,
+): Promise<ConversationStateCounts> {
   const result = await pool.query<JsonRecord>(
     `
     SELECT
@@ -1333,27 +1402,19 @@ async function readConversationStateCounts(pool: pg.Pool, groupId: string): Prom
     `,
     [groupId],
   );
-  return requireRecord(result.rows[0], "conversation state counts");
-}
-
-async function readProjectionCounts(pool: pg.Pool, groupId: string): Promise<JsonRecord> {
-  const counts = await readConversationStateCounts(pool, groupId);
-  const { messages: _messages, requests: _requests, runs: _runs, ...projectionCounts } = counts;
-  return projectionCounts;
-}
-
-function assertCountDeltas(
-  actual: JsonRecord,
-  before: JsonRecord,
-  expectedDeltas: Record<string, number>,
-): void {
-  for (const [field, expectedDelta] of Object.entries(expectedDeltas)) {
-    assert.equal(
-      requireNumber(actual[field], `${field} after`),
-      requireNumber(before[field], `${field} before`) + expectedDelta,
-      `${field} delta`,
-    );
-  }
+  const counts = requireRecord(result.rows[0], "conversation state counts");
+  return {
+    messages: requireNumber(counts.messages, "message count"),
+    requests: requireNumber(counts.requests, "request count"),
+    runs: requireNumber(counts.runs, "run count"),
+    threads: requireNumber(counts.threads, "thread count"),
+    threadEvents: requireNumber(counts.threadEvents, "thread event count"),
+    threadEvidence: requireNumber(counts.threadEvidence, "thread evidence count"),
+    actions: requireNumber(counts.actions, "action count"),
+    actionEvents: requireNumber(counts.actionEvents, "action event count"),
+    actionEvidence: requireNumber(counts.actionEvidence, "action evidence count"),
+    operationClaims: requireNumber(counts.operationClaims, "operation claim count"),
+  };
 }
 
 async function readQueueStatus(baseUrl: string): Promise<QueueStatus> {
