@@ -409,6 +409,40 @@ describe("createMemoryExtractionRuntime", () => {
     await expect(runtime?.getStatus()).resolves.toMatchObject({ projectionRepairHealthy: false });
   });
 
+  it("tracks resolved projection batches with failures and recovers on a clean batch", async () => {
+    const fixture = runtimeFixture();
+    let loopWorker: { processBatch(input: { limit: number }): Promise<unknown[]> } | undefined;
+    const projector = {
+      processBatch: vi.fn()
+        .mockResolvedValueOnce({ claimedCount: 2, completedCount: 1, failedCount: 1 })
+        .mockResolvedValueOnce({ claimedCount: 1, completedCount: 1, failedCount: 0 }),
+      getStatusCounts: vi.fn(async () => ({ pending: 0, failed: 0 })),
+    };
+    const runtime = createMemoryExtractionRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      dependencies: {
+        ...fixture.dependencies,
+        createConversationStateProjector: vi.fn(() => projector),
+        createWorkerLoop: vi.fn((input: any) => {
+          loopWorker = input.worker;
+          return fixture.loop;
+        }),
+      } as any,
+    });
+
+    await loopWorker?.processBatch({ limit: 2 });
+    await expect(runtime?.getStatus()).resolves.toMatchObject({
+      projectionRepairHealthy: false,
+    });
+
+    await loopWorker?.processBatch({ limit: 2 });
+    await expect(runtime?.getStatus()).resolves.toMatchObject({
+      projectionRepairHealthy: true,
+    });
+    expect(fixture.worker.processBatch).toHaveBeenCalledTimes(2);
+  });
+
   it("prevents Redis connect when close begins during a pending database probe", async () => {
     const fixture = runtimeFixture({ deferDatabaseProbe: true });
     const runtime = createMemoryExtractionRuntime({

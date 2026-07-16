@@ -53,6 +53,7 @@ export class ConversationStateIdempotencyConflictError extends Error {
 }
 
 const MAX_IDENTIFIER_CHARS = 512;
+export const PROJECTION_REPAIR_PROCESSING_LEASE_MS = 5 * 60 * 1_000;
 const MAX_TITLE_CHARS = 512;
 const MAX_SUMMARY_CHARS = 4000;
 const MAX_DESCRIPTION_CHARS = 4000;
@@ -194,13 +195,18 @@ export function createPostgresConversationStateRepository({
     async claimProjectionRepairs(input) {
       const limit = sanitizeLimit(input.limit);
       const now = requireDate("now", input.now);
+      const leaseExpiresAt = new Date(
+        now.getTime() + PROJECTION_REPAIR_PROCESSING_LEASE_MS,
+      );
       const result = await dataSource.query<RepairRow>(
         `
         WITH claimed AS (
           SELECT id
           FROM conversation_state_projection_repairs
-          WHERE status IN ('pending', 'failed')
-            AND next_attempt_at <= $1
+          WHERE (
+              (status IN ('pending', 'failed') AND next_attempt_at <= $1)
+              OR (status = 'processing' AND next_attempt_at <= $1)
+            )
             AND attempt_count < $3
           ORDER BY next_attempt_at ASC, created_at ASC, id ASC
           LIMIT $2
@@ -209,13 +215,14 @@ export function createPostgresConversationStateRepository({
         UPDATE conversation_state_projection_repairs repair
         SET status = 'processing',
             attempt_count = repair.attempt_count + 1,
+            next_attempt_at = $4,
             failure_classification = NULL,
-            updated_at = NOW()
+            updated_at = $1
         FROM claimed
         WHERE repair.id = claimed.id
         RETURNING repair.*
         `,
-        [now, limit, MAX_PROJECTION_REPAIR_ATTEMPTS],
+        [now, limit, MAX_PROJECTION_REPAIR_ATTEMPTS, leaseExpiresAt],
       );
       return result.rows.map(mapRepairRow);
     },

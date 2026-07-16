@@ -589,6 +589,9 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           CHECK (
             (memory_scope = 'thread' AND thread_key IS NOT NULL)
             OR (memory_scope <> 'thread' AND thread_key IS NULL)
+          ),
+          CONSTRAINT group_memories_business_thread_key_check CHECK (
+            memory_scope <> 'action' OR thread_key IS NULL OR thread_key <> 'blocked'
           )
         );
         CREATE TABLE group_memory_extraction_runs (id TEXT PRIMARY KEY);
@@ -614,6 +617,77 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         INSERT INTO group_memories (id, memory_scope, thread_key)
         VALUES ('invalid-group', 'group', 'thread-7')
       `)).rejects.toMatchObject({ constraint: "group_memories_scope_thread_key_check" });
+      await expect(client.query(`
+        INSERT INTO group_memories (id, memory_scope, thread_key)
+        VALUES ('blocked-action', 'action', 'blocked')
+      `)).rejects.toMatchObject({ constraint: "group_memories_business_thread_key_check" });
+      await expect(client.query<{ conname: string }>(`
+        SELECT conname
+        FROM pg_constraint
+        WHERE conrelid = 'group_memories'::regclass AND contype = 'c'
+        ORDER BY conname
+      `)).resolves.toMatchObject({
+        rows: [
+          { conname: "group_memories_business_thread_key_check" },
+          { conname: "group_memories_scope_thread_key_check" },
+        ],
+      });
+    } finally {
+      await client.query("RESET search_path").catch(() => undefined);
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      client.release();
+      await pool.end();
+    }
+  });
+
+  it.each([
+    ["zero", ""],
+    ["multiple", `
+      ALTER TABLE group_memories ADD CONSTRAINT duplicate_legacy_scope_check CHECK (
+        (memory_scope = 'thread' AND thread_key IS NOT NULL)
+        OR (memory_scope <> 'thread' AND thread_key IS NULL)
+      );
+    `],
+  ])("fails closed when the legacy 0017 constraint match count is %s", async (_label, extraSql) => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    const schema = `task7_constraint_count_${randomUUID().replaceAll("-", "")}`;
+    const migrationsDir = await mkdtemp(join(tmpdir(), "iris-task7-constraint-count-"));
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await client.query(`
+        CREATE TABLE schema_migrations (
+          name TEXT PRIMARY KEY,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        INSERT INTO schema_migrations (name) VALUES ('0025_conversation_state_extraction.sql');
+        CREATE TABLE group_memories (
+          id TEXT PRIMARY KEY,
+          memory_scope TEXT NOT NULL,
+          thread_key TEXT
+        );
+        CREATE TABLE group_memory_extraction_runs (id TEXT PRIMARY KEY);
+        ${_label === "multiple" ? `
+          ALTER TABLE group_memories ADD CONSTRAINT first_legacy_scope_check CHECK (
+            (memory_scope = 'thread' AND thread_key IS NOT NULL)
+            OR (memory_scope <> 'thread' AND thread_key IS NULL)
+          );
+        ` : ""}
+        ${extraSql}
+      `);
+      await writeFile(
+        join(migrationsDir, "0026_projection_rollout_contracts.sql"),
+        await readFile(
+          join(defaultMigrationsDir(), "0026_projection_rollout_contracts.sql"),
+          "utf8",
+        ),
+      );
+
+      await expect(runMigrations({ client, migrationsDir })).rejects.toThrow();
+      await expect(client.query(
+        "SELECT name FROM schema_migrations WHERE name = '0026_projection_rollout_contracts.sql'",
+      )).resolves.toMatchObject({ rows: [] });
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

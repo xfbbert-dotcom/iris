@@ -7,6 +7,7 @@ import {
   ConversationStateIdempotencyConflictError,
   ConversationStateVersionConflictError,
   createPostgresConversationStateRepository,
+  PROJECTION_REPAIR_PROCESSING_LEASE_MS,
   type PostgresConversationStateDataSource,
   type TransactionClient,
 } from "../src/conversation-state/postgres-conversation-state-repository.js";
@@ -461,8 +462,8 @@ describe("createPostgresConversationStateRepository", () => {
     await repository.claimProjectionRepairs({ limit: 4, now });
 
     expect(source.query).toHaveBeenCalledWith(
-      expect.stringMatching(/status in \('pending', 'failed'\)[\s\S]+next_attempt_at <= \$1[\s\S]+attempt_count < \$3/iu),
-      [now, 4, 5],
+      expect.stringMatching(/status in \('pending', 'failed'\)[\s\S]+status = 'processing'[\s\S]+attempt_count < \$3[\s\S]+next_attempt_at = \$4/iu),
+      [now, 4, 5, new Date(now.getTime() + PROJECTION_REPAIR_PROCESSING_LEASE_MS)],
     );
   });
 
@@ -933,6 +934,101 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
       "SELECT projected_version FROM conversation_state_memory_projections WHERE entity_type = 'thread' AND entity_id = $1",
       [projectionEntityId],
     )).resolves.toMatchObject({ rows: [{ projected_version: "2" }] });
+  });
+
+  it("reclaims interrupted processing repairs exactly at the five-minute lease boundary", async () => {
+    const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+    const claimedAt = new Date("2000-01-01T00:00:00.000Z");
+    const leaseExpiresAt = new Date(
+      claimedAt.getTime() + PROJECTION_REPAIR_PROCESSING_LEASE_MS,
+    );
+    const interruptedId = `lease-interrupted-${suffix}`;
+    const exhaustedId = `lease-exhausted-${suffix}`;
+    await pool!.query(
+      `
+      INSERT INTO conversation_state_projection_repairs (
+        id, entity_type, entity_id, group_id, entity_version, status,
+        attempt_count, next_attempt_at, created_at, updated_at
+      ) VALUES
+        ($1, 'thread', $2, $5, 1, 'pending', 0, $4, $4, $4),
+        ($3, 'thread', $3, $5, 1, 'processing', 5, $4, $4, $4)
+      `,
+      [interruptedId, `lease-entity-${suffix}`, exhaustedId, claimedAt, groupId],
+    );
+
+    const firstClaim = await repository.claimProjectionRepairs({ limit: 10, now: claimedAt });
+    expect(firstClaim).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: interruptedId, attemptCount: 1, status: "processing" }),
+    ]));
+    expect(firstClaim.map((repair) => repair.id)).not.toContain(exhaustedId);
+    await expect(pool!.query(
+      "SELECT next_attempt_at, updated_at FROM conversation_state_projection_repairs WHERE id = $1",
+      [interruptedId],
+    )).resolves.toMatchObject({
+      rows: [{ next_attempt_at: leaseExpiresAt, updated_at: claimedAt }],
+    });
+
+    const beforeExpiry = await repository.claimProjectionRepairs({
+      limit: 10,
+      now: new Date(leaseExpiresAt.getTime() - 1),
+    });
+    expect(beforeExpiry.map((repair) => repair.id)).not.toContain(interruptedId);
+
+    const reclaimed = await repository.claimProjectionRepairs({ limit: 10, now: leaseExpiresAt });
+    expect(reclaimed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: interruptedId, attemptCount: 2, status: "processing" }),
+    ]));
+    expect(reclaimed.map((repair) => repair.id)).not.toContain(exhaustedId);
+    await pool!.query(
+      "UPDATE conversation_state_projection_repairs SET status = 'completed' WHERE id = $1",
+      [interruptedId],
+    );
+  });
+
+  it("leases batch claims so fail-write errors and unprocessed records both recover", async () => {
+    const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+    const claimedAt = new Date("2001-01-01T00:00:00.000Z");
+    const leaseExpiresAt = new Date(
+      claimedAt.getTime() + PROJECTION_REPAIR_PROCESSING_LEASE_MS,
+    );
+    const failWriteId = `lease-fail-write-${suffix}`;
+    const unprocessedId = `lease-unprocessed-${suffix}`;
+    await pool!.query(
+      `
+      INSERT INTO conversation_state_projection_repairs (
+        id, entity_type, entity_id, group_id, entity_version, status,
+        attempt_count, next_attempt_at, created_at, updated_at
+      ) VALUES
+        ($1, 'action', $1, $3, 1, 'pending', 0, $4, $4, $4),
+        ($2, 'action', $2, $3, 1, 'pending', 0, $4, $4, $4)
+      `,
+      [failWriteId, unprocessedId, groupId, claimedAt],
+    );
+
+    const batch = await repository.claimProjectionRepairs({ limit: 2, now: claimedAt });
+    expect(batch.map((repair) => repair.id)).toEqual([failWriteId, unprocessedId].sort());
+    await expect(repository.failProjectionRepair({
+      id: failWriteId,
+      retryAt: new Date("2002-01-01T00:00:00.000Z"),
+      classification: "x".repeat(129),
+    })).rejects.toThrow("classification must be at most 128 characters");
+
+    const beforeExpiry = await repository.claimProjectionRepairs({
+      limit: 10,
+      now: new Date(leaseExpiresAt.getTime() - 1),
+    });
+    expect(beforeExpiry.map((repair) => repair.id)).not.toContain(failWriteId);
+    expect(beforeExpiry.map((repair) => repair.id)).not.toContain(unprocessedId);
+
+    const recovered = await repository.claimProjectionRepairs({ limit: 10, now: leaseExpiresAt });
+    expect(recovered).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: failWriteId, attemptCount: 2 }),
+      expect.objectContaining({ id: unprocessedId, attemptCount: 2 }),
+    ]));
+    await pool!.query(
+      "UPDATE conversation_state_projection_repairs SET status = 'completed' WHERE id = ANY($1::text[])",
+      [[failWriteId, unprocessedId]],
+    );
   });
 
   it("loads exact thread and action projection targets beyond the relevant-list cap", async () => {

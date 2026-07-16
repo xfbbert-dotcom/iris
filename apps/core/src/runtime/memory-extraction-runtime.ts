@@ -212,8 +212,8 @@ export function createMemoryExtractionRuntime({
   const workerWithProjectionRepair = {
     async processBatch(input: { limit: number }) {
       try {
-        await projector.processBatch({ limit: input.limit, now: new Date() });
-        latestProjectionRepairFailed = false;
+        const result = await projector.processBatch({ limit: input.limit, now: new Date() });
+        latestProjectionRepairFailed = result.failedCount > 0;
       } catch {
         latestProjectionRepairFailed = true;
       }
