@@ -17,7 +17,7 @@ export type MemoryExtractionRunStatus = "processing" | "completed" | "failed";
 export type MemoryExtractionRequest = {
   id: string;
   groupId: string;
-  conversationMessageId: string;
+  conversationMessageId?: string;
   providerMessageId: string;
   status: MemoryExtractionRequestStatus;
   runId?: string;
@@ -66,6 +66,9 @@ export type ExtractionMessage = {
   id: string;
   groupId: string;
   senderId?: string;
+  senderOpenId?: string;
+  senderUnionId?: string;
+  senderUserId?: string;
   text: string;
   sentAt: Date;
   createdAt: Date;
@@ -163,6 +166,7 @@ export interface MemoryExtractionRepository {
     maxEvidenceMessages: number;
     contextMessageLimit: number;
     activeMemoryLimit: number;
+    enabledOperationFamilies?: Array<"memory" | "thread" | "action">;
   }): Promise<ClaimedMemoryExtractionRun | undefined>;
   loadRunInput(runId: string): Promise<
     | { status: "ready"; run: ClaimedMemoryExtractionRun }

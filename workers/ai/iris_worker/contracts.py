@@ -209,8 +209,29 @@ class ExtractionMention(BaseModel):
     open_id: Identifier
 
 
-class ExtractionMessageV2(ExtractionMessage):
+class ExtractionMessageV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: Identifier
+    sender_open_id: Identifier | None = None
+    sender_union_id: Identifier | None = None
+    sender_user_id: Identifier | None = None
+    sent_at: Timestamp
+    text: MessageText
     mentions: Annotated[list[ExtractionMention], Field(max_length=MAX_MENTIONS_PER_MESSAGE)]
+
+    @field_validator("sent_at")
+    @classmethod
+    def validate_sent_at(cls, value: str) -> str:
+        _parse_timezone_timestamp(value)
+        return value
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text must be nonblank")
+        return value
 
     @field_validator("mentions")
     @classmethod

@@ -96,6 +96,46 @@ describe("validateConversationStateCandidates", () => {
     ]);
   });
 
+  it.each([
+    ["union-only", { senderId: "on_union", senderUnionId: "on_union" }],
+    ["user-only", { senderId: "user_legacy", senderUserId: "user_legacy" }],
+  ])("rejects a sender owner backed by a %s identity", (_name, identity) => {
+    const run = claimedRun() as any;
+    Object.assign(run.evidenceMessages[0], identity);
+    delete run.evidenceMessages[0].senderOpenId;
+
+    const result = validateConversationStateCandidates({
+      run,
+      response: responseWithActionCreate(),
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+
+    expect(result.actionOperations).toEqual([]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["invalid_owner"]);
+  });
+
+  it("binds a sender owner only to the persisted Feishu open ID", () => {
+    const run = claimedRun() as any;
+    run.evidenceMessages[0].senderId = "generic-attribution";
+    run.evidenceMessages[0].senderOpenId = "ou_trusted";
+
+    const result = validateConversationStateCandidates({
+      run,
+      response: responseWithActionCreate(),
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+
+    expect(result.actionOperations).toEqual([
+      expect.objectContaining({
+        ownerRefType: "feishu_user",
+        ownerRef: "ou_trusted",
+        ownerResolved: true,
+      }),
+    ]);
+  });
+
   it("requires exact due-date evidence and rejects duplicate operation keys globally", () => {
     const response = responseWithActionCreate({
       dueAt: "2026-07-20T09:00:00.000Z",
@@ -374,6 +414,61 @@ describe("validateConversationStateCandidates", () => {
     expect(result.diagnostics.rejectionCodes).toEqual(["invalid_dependency"]);
   });
 
+  it.each(["create", "correct", "reopen"] as const)(
+    "rejects %s action state that depends on a candidate thread",
+    (operation) => {
+      const run = claimedRun() as any;
+      run.existingThreads = [{ ...existingThread(), status: "candidate" }];
+      if (operation !== "create") {
+        run.existingActions = [{
+          ...existingAction(),
+          threadId: "thread-1",
+          ...(operation === "reopen"
+            ? { status: "completed", completedAt: new Date("2026-07-14T00:02:00.000Z") }
+            : {}),
+        }];
+      }
+      const actionOperation = operation === "create"
+        ? responseWithActionCreate({ threadId: "thread-1" }).actionOperations[0]!
+        : operation === "correct"
+          ? {
+              operation: "correct",
+              operationKey: "action:correct:candidate",
+              confidence: 0.9,
+              evidenceMessageIds: ["message-1"],
+              evidenceSpan: "Launch planning",
+              actionId: "action-1",
+              expectedVersion: 1,
+              correctedFields: ["description"],
+              description: "Ship corrected launch notes.",
+            }
+          : {
+              operation: "reopen",
+              operationKey: "action:reopen:candidate",
+              confidence: 0.9,
+              evidenceMessageIds: ["message-1"],
+              evidenceSpan: "Launch planning",
+              actionId: "action-1",
+              expectedVersion: 1,
+            };
+
+      const result = validateConversationStateCandidates({
+        run,
+        response: {
+          runId: "run-1",
+          candidates: [],
+          threadOperations: [],
+          actionOperations: [actionOperation as ProposedActionOperation],
+        },
+        candidateFloor: 0.65,
+        applyConfidence: 0.85,
+      });
+
+      expect(result.actionOperations).toEqual([]);
+      expect(result.diagnostics.rejectionCodes).toEqual(["invalid_dependency"]);
+    },
+  );
+
   it("fails closed without reading an accessor-backed worker response", () => {
     const response = responseWithThreadCreate() as Record<string, unknown>;
     Object.defineProperty(response, "threadOperations", {
@@ -510,6 +605,7 @@ function claimedRun(): ConversationStateExtractionRun {
       id: "message-1",
       groupId: "group-1",
       senderId: "sender-1",
+      senderOpenId: "sender-1",
       text: "Launch planning is underway.",
       sentAt: new Date("2026-07-14T00:01:00.000Z"),
       createdAt: new Date("2026-07-14T00:01:01.000Z"),

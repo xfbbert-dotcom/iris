@@ -32,6 +32,7 @@ describe("FeishuMessageEventProcessor", () => {
       providerMessageId: "message-1",
       chatId: "chat-1",
       senderId: "open-1",
+      senderOpenId: "open-1",
       messageType: "text",
       text: "Hello",
       mentions: [],
@@ -56,6 +57,7 @@ describe("FeishuMessageEventProcessor", () => {
       providerMessageId: "message-1",
       chatId: "chat-1",
       senderId: "open-1",
+      senderOpenId: "open-1",
       messageType: "text",
       text: "Hello",
       mentions: [],
@@ -143,21 +145,31 @@ describe("FeishuMessageEventProcessor", () => {
         messageId: "union-message",
         senderIds: { union_id: "union-iris-fallback" },
         persistedSenderId: "union-iris-fallback",
+        persistedTypedIds: { senderUnionId: "union-iris-fallback" },
       },
       {
         messageId: "user-message",
         senderIds: { user_id: "user-iris-fallback" },
         persistedSenderId: "user-iris-fallback",
+        persistedTypedIds: { senderUserId: "user-iris-fallback" },
       },
       {
         messageId: "iris-message",
         senderIds: { open_id: "iris-bot-open-id", union_id: "union-iris" },
         persistedSenderId: "iris-bot-open-id",
+        persistedTypedIds: {
+          senderOpenId: "iris-bot-open-id",
+          senderUnionId: "union-iris",
+        },
       },
       {
         messageId: "human-message",
         senderIds: { open_id: "human-open-id", union_id: "union-human" },
         persistedSenderId: "human-open-id",
+        persistedTypedIds: {
+          senderOpenId: "human-open-id",
+          senderUnionId: "union-human",
+        },
       },
     ];
 
@@ -188,6 +200,11 @@ describe("FeishuMessageEventProcessor", () => {
     expect(messages.upsertMessage.mock.calls.map(([input]) => input.senderId)).toEqual(
       senderCases.map((senderCase) => senderCase.persistedSenderId),
     );
+    expect(messages.upsertMessage.mock.calls.map(([input]) => ({
+      ...(input.senderOpenId === undefined ? {} : { senderOpenId: input.senderOpenId }),
+      ...(input.senderUnionId === undefined ? {} : { senderUnionId: input.senderUnionId }),
+      ...(input.senderUserId === undefined ? {} : { senderUserId: input.senderUserId }),
+    }))).toEqual(senderCases.map((senderCase) => senderCase.persistedTypedIds));
     expect(repository.registerRequest).toHaveBeenCalledOnce();
     expect(repository.registerRequest).toHaveBeenCalledWith({
       groupId: "chat-1",

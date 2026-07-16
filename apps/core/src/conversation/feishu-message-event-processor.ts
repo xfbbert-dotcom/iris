@@ -21,7 +21,6 @@ type RuntimeGate = {
 };
 type ParsedFeishuMessageEvent = Omit<UpsertConversationMessageInput, "mentions"> & {
   mentions: FeishuMessageMention[];
-  senderOpenId?: string;
 };
 
 const MAX_FEISHU_IDENTIFIER_CHARS = 512;
@@ -77,6 +76,9 @@ export function createFeishuMessageEventProcessor({
         providerMessageId: parsed.providerMessageId,
         chatId: parsed.chatId,
         ...(parsed.senderId === undefined ? {} : { senderId: parsed.senderId }),
+        ...(parsed.senderOpenId === undefined ? {} : { senderOpenId: parsed.senderOpenId }),
+        ...(parsed.senderUnionId === undefined ? {} : { senderUnionId: parsed.senderUnionId }),
+        ...(parsed.senderUserId === undefined ? {} : { senderUserId: parsed.senderUserId }),
         messageType: parsed.messageType,
         ...(parsed.text === undefined ? {} : { text: parsed.text }),
         mentions: parsed.mentions.flatMap(({ key, openId }) =>
@@ -179,6 +181,8 @@ function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | un
     return undefined;
   }
   const senderOpenId = readSenderOpenId(eventBody.sender);
+  const senderUnionId = readSenderTypedId(eventBody.sender, "union_id");
+  const senderUserId = readSenderTypedId(eventBody.sender, "user_id");
 
   return {
     provider: "feishu",
@@ -186,6 +190,8 @@ function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | un
     chatId,
     senderId: readSenderId(eventBody.sender),
     ...(senderOpenId === undefined ? {} : { senderOpenId }),
+    ...(senderUnionId === undefined ? {} : { senderUnionId }),
+    ...(senderUserId === undefined ? {} : { senderUserId }),
     messageType,
     text: truncateMessageText(readText(messageType, message.content)),
     mentions: readMentions(message.mentions),
@@ -247,11 +253,18 @@ function readSenderId(sender: unknown): string | undefined {
 }
 
 function readSenderOpenId(sender: unknown): string | undefined {
+  return readSenderTypedId(sender, "open_id");
+}
+
+function readSenderTypedId(
+  sender: unknown,
+  field: "open_id" | "union_id" | "user_id",
+): string | undefined {
   if (!isRecord(sender) || !isRecord(sender.sender_id)) {
     return undefined;
   }
 
-  return readOptionalIdentifier(sender.sender_id.open_id);
+  return readOptionalIdentifier(sender.sender_id[field]);
 }
 
 function readText(messageType: string, content: unknown): string | undefined {

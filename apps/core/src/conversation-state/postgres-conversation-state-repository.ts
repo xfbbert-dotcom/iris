@@ -140,6 +140,7 @@ export function createPostgresConversationStateRepository({
         const result = await dataSource.query<ProjectionTargetRow>(
           `
           SELECT ${threadColumns},
+            (thread.retrieval_state = 'visible') AS retrieval_visible,
             (
               SELECT projection.memory_id
               FROM conversation_state_memory_projections projection
@@ -166,6 +167,20 @@ export function createPostgresConversationStateRepository({
       const result = await dataSource.query<ProjectionTargetRow>(
         `
         SELECT ${actionColumns},
+          (
+            action.retrieval_state = 'visible'
+            AND (
+              action.thread_id IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM discussion_threads dependency
+                WHERE dependency.id = action.thread_id
+                  AND dependency.group_id = action.group_id
+                  AND dependency.status IN ('open', 'resolved')
+                  AND dependency.retrieval_state = 'visible'
+              )
+            )
+          ) AS retrieval_visible,
           (
             SELECT projection.memory_id
             FROM conversation_state_memory_projections projection
@@ -249,9 +264,9 @@ export function createPostgresConversationStateRepository({
     async completeProjectionRepair(input) {
       const id = requireBoundedString("repair id", input.id, MAX_IDENTIFIER_CHARS);
       const attemptCount = requireProjectionRepairAttempt(input.attemptCount);
-      const memoryId = input.memoryId === undefined
+      const memoryId = input.projection?.memoryId === undefined
         ? undefined
-        : requireBoundedString("memoryId", input.memoryId, MAX_IDENTIFIER_CHARS);
+        : requireBoundedString("memoryId", input.projection.memoryId, MAX_IDENTIFIER_CHARS);
       await withTransaction(dataSource, async (client) => {
         const result = await client.query<RepairRow>(
           `
@@ -263,6 +278,9 @@ export function createPostgresConversationStateRepository({
           [id, attemptCount],
         );
         const repair = onlyRow(result.rows, "projection repair not claimed");
+        if (input.projection === undefined) {
+          return;
+        }
         await client.query(
           `
           INSERT INTO conversation_state_memory_projections (
@@ -350,16 +368,24 @@ export async function applyConversationStateOperationsInTransaction(
   const actionIds = input.operations.flatMap((operation) => operation.action === undefined
     ? []
     : [operation.action.id]);
+  const mergeSourceIds = input.operations.flatMap((operation) =>
+    operation.thread?.status === "merged" ? [operation.thread.id] : []);
   const lockedThreads = await lockThreads(client, input.groupId);
-  const lockedActions = await lockActions(client, input.groupId, dedupe(actionIds));
+  const lockedActions = await lockActions(
+    client,
+    input.groupId,
+    dedupe(actionIds),
+    dedupe(mergeSourceIds),
+  );
 
   const threads = new Map<string, DiscussionThread>(lockedThreads.map((thread) => [thread.id, thread]));
   const actions = new Map(lockedActions.map((action) => [action.id, action]));
-  const createdThreadIds = new Set(input.operations.flatMap((operation) => operation.kind === "create" && operation.thread !== undefined
-    ? [operation.thread.id]
-    : []));
+  const createdThreads = new Map(input.operations.flatMap((operation) =>
+    operation.kind === "create" && operation.thread !== undefined
+      ? [[operation.thread.id, operation.thread] as const]
+      : []));
   const evidenceCounts = new Map(lockedThreads.map((thread) => [thread.id, thread.evidenceCount]));
-  prevalidateOperations(input.operations, threads, actions, createdThreadIds, evidenceCounts);
+  prevalidateOperations(input.operations, threads, actions, createdThreads, evidenceCounts);
   const evidenceIds = dedupe(input.operations.flatMap((operation) => operation.evidenceMessageIds));
   if (evidenceIds.length > 0) {
     await verifyEvidence(client, input.groupId, evidenceIds);
@@ -387,12 +413,25 @@ export async function applyConversationStateOperationsInTransaction(
     );
     threads.set(thread.id, thread);
     changedThreadIds.push(thread.id);
+    if (thread.status === "merged") {
+      const rebound = await rebindDependentActions({
+        client,
+        groupId: input.groupId,
+        sourceThreadId: thread.id,
+        targetThreadId: thread.mergedIntoThreadId!,
+        mergeOperationKey: operation.operationKey,
+        evidenceMessageIds: operation.evidenceMessageIds,
+        createdAt: event.createdAt,
+        actions,
+      });
+      changedActionIds.push(...rebound);
+    }
   }
 
   for (const operation of input.operations.filter((candidate) => candidate.action !== undefined)) {
     const action = operation.action!;
     const event = operation.actionEvent!;
-    if (action.threadId !== undefined && !threads.has(action.threadId) && !createdThreadIds.has(action.threadId)) {
+    if (action.threadId !== undefined && !threads.has(action.threadId) && !createdThreads.has(action.threadId)) {
       throw new Error("action item thread not found");
     }
     if (operation.kind === "create") {
@@ -508,7 +547,7 @@ function prevalidateOperations(
   operations: ConversationStateOperation[],
   threads: Map<string, DiscussionThread>,
   actions: Map<string, ActionItem>,
-  createdThreadIds: Set<string>,
+  createdThreads: Map<string, DiscussionThread>,
   evidenceCounts: Map<string, number>,
 ): void {
   const createdActionIds = new Set<string>();
@@ -533,8 +572,18 @@ function prevalidateOperations(
       continue;
     }
     const action = operation.action!;
-    if (action.threadId !== undefined && !threads.has(action.threadId) && !createdThreadIds.has(action.threadId)) {
+    const dependency = action.threadId === undefined
+      ? undefined
+      : threads.get(action.threadId) ?? createdThreads.get(action.threadId);
+    const requiresVisibleDependency = operation.kind === "create"
+      || operation.actionEvent?.eventType === "corrected"
+      || operation.actionEvent?.eventType === "reopened";
+    if (action.threadId !== undefined && dependency === undefined) {
       throw new Error("action item thread not found");
+    }
+    if (requiresVisibleDependency && dependency !== undefined &&
+      dependency.status !== "open" && dependency.status !== "resolved") {
+      throw new Error("action item thread is not retrieval-visible");
     }
     if (operation.kind === "create") {
       if (actions.has(action.id) || createdActionIds.has(action.id)) throw new Error("action item already exists");
@@ -762,12 +811,82 @@ async function lockThreads(client: TransactionClient, groupId: string): Promise<
   }));
 }
 
-async function lockActions(client: TransactionClient, groupId: string, ids: string[]): Promise<ActionItem[]> {
+async function lockActions(
+  client: TransactionClient,
+  groupId: string,
+  ids: string[],
+  mergeSourceIds: string[],
+): Promise<ActionItem[]> {
   const result = await client.query<ActionRow>(
-    `SELECT ${actionColumns} FROM action_items WHERE group_id = $1 AND id = ANY($2::text[]) FOR UPDATE`,
-    [groupId, ids],
+    `
+    SELECT ${actionColumns}
+    FROM action_items
+    WHERE group_id = $1
+      AND (id = ANY($2::text[]) OR thread_id = ANY($3::text[]))
+    FOR UPDATE
+    `,
+    [groupId, ids, mergeSourceIds],
   );
   return result.rows.map(mapActionRow);
+}
+
+async function rebindDependentActions(input: {
+  client: TransactionClient;
+  groupId: string;
+  sourceThreadId: string;
+  targetThreadId: string;
+  mergeOperationKey: string;
+  evidenceMessageIds: string[];
+  createdAt: Date;
+  actions: Map<string, ActionItem>;
+}): Promise<string[]> {
+  const dependentActions = [...input.actions.values()]
+    .filter((action) => action.threadId === input.sourceThreadId)
+    .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  const reboundIds: string[] = [];
+  for (const action of dependentActions) {
+    const rebound: ActionItem = {
+      ...action,
+      threadId: input.targetThreadId,
+      version: action.version + 1,
+      updatedAt: new Date(input.createdAt),
+    };
+    await updateAction(input.client, rebound, action.version);
+    const event: ActionItemEvent = {
+      id: randomUUID(),
+      actionItemId: action.id,
+      groupId: input.groupId,
+      eventType: "corrected",
+      fromVersion: action.version,
+      toVersion: rebound.version,
+      operationKey: derivedActionRebindKey(input.mergeOperationKey, action.id),
+      createdAt: new Date(input.createdAt),
+    };
+    await insertActionEvent(input.client, event);
+    await insertActionEventEvidence(
+      input.client,
+      event.id,
+      input.groupId,
+      input.evidenceMessageIds,
+    );
+    await insertProjectionRepair(
+      input.client,
+      "action",
+      action.id,
+      input.groupId,
+      rebound.version,
+    );
+    input.actions.set(action.id, rebound);
+    reboundIds.push(action.id);
+  }
+  return reboundIds;
+}
+
+function derivedActionRebindKey(mergeOperationKey: string, actionId: string): string {
+  const digest = createHash("sha256")
+    .update(`${mergeOperationKey}\u0000${actionId}`, "utf8")
+    .digest("hex");
+  return `merge-action-rebind:${digest}`;
 }
 
 async function verifyEvidence(client: TransactionClient, groupId: string, messageIds: string[]): Promise<void> {
@@ -790,7 +909,8 @@ async function updateThread(client: TransactionClient, thread: DiscussionThread,
     `
     UPDATE discussion_threads
     SET title = $3, summary = $4, status = $5, confidence = $6, merged_into_thread_id = $7,
-        version = $8, first_evidence_at = $9, last_activity_at = $10, resolved_at = $11, updated_at = $12
+        version = $8, first_evidence_at = $9, last_activity_at = $10, resolved_at = $11,
+        retrieval_state = 'visible', updated_at = $12
     WHERE id = $1 AND group_id = $2 AND version = $13
     RETURNING id
     `,
@@ -811,7 +931,8 @@ async function updateAction(client: TransactionClient, action: ActionItem, expec
     `
     UPDATE action_items
     SET thread_id = $3, description = $4, owner_ref_type = $5, owner_ref = $6, due_at = $7,
-        status = $8, confidence = $9, version = $10, completed_at = $11, cancelled_at = $12, updated_at = $13
+        status = $8, confidence = $9, version = $10, completed_at = $11, cancelled_at = $12,
+        retrieval_state = 'visible', updated_at = $13
     WHERE id = $1 AND group_id = $2 AND version = $14
     RETURNING id
     `,
@@ -895,7 +1016,7 @@ async function listThreads(queryable: Queryable, groupId: string, rawLimit: numb
   const limit = sanitizeLimit(rawLimit);
   if (statuses.length === 0 || limit === 0) return [];
   const result = await queryable.query<ThreadRow>(
-    `SELECT ${threadColumns} FROM discussion_threads WHERE group_id = $1 AND status = ANY($2::text[]) ORDER BY last_activity_at DESC, id ASC LIMIT $3`,
+    `SELECT ${threadColumns} FROM discussion_threads WHERE group_id = $1 AND retrieval_state = 'visible' AND status = ANY($2::text[]) ORDER BY last_activity_at DESC, id ASC LIMIT $3`,
     [groupId, statuses, limit],
   );
   return result.rows.map(mapThreadRow);
@@ -916,6 +1037,7 @@ async function listActions(
     SELECT ${actionColumns}
     FROM action_items action
     WHERE action.group_id = $1
+      AND action.retrieval_state = 'visible'
       AND ($2::text[] IS NULL OR action.status = ANY($2::text[]))
       AND ($3::text IS NULL OR action.thread_id = $3)
       ${excludeCandidateThreads ? `AND NOT EXISTS (
@@ -923,7 +1045,10 @@ async function listActions(
         FROM discussion_threads thread
         WHERE thread.id = action.thread_id
           AND thread.group_id = action.group_id
-          AND thread.status = 'candidate'
+          AND (
+            thread.status IN ('candidate', 'merged')
+            OR thread.retrieval_state <> 'visible'
+          )
       )` : ""}
     ORDER BY action.updated_at DESC, action.id ASC
     LIMIT $4
@@ -973,17 +1098,20 @@ function mapProjectionTarget(
   const memoryId = row.memory_id === null || row.memory_id === undefined
     ? undefined
     : requireBoundedString("projection memory id", row.memory_id, MAX_IDENTIFIER_CHARS);
+  const retrievalVisible = requireBoolean("projection retrieval visibility", row.retrieval_visible);
   return entityType === "thread"
     ? {
         entityType,
         entity: mapThreadRow(row),
         evidenceMessageIds,
+        retrievalVisible,
         ...(memoryId === undefined ? {} : { memoryId }),
       }
     : {
         entityType,
         entity: mapActionRow(row),
         evidenceMessageIds,
+        retrievalVisible,
         ...(memoryId === undefined ? {} : { memoryId }),
       };
 }
@@ -1043,6 +1171,11 @@ function requireBoundedString(field: string, value: unknown, maxChars: number): 
 function requireEnum<T extends string>(field: string, value: unknown, allowed: readonly T[]): T {
   if (typeof value !== "string" || !allowed.includes(value as T)) throw new Error(`${field} is invalid`);
   return value as T;
+}
+
+function requireBoolean(field: string, value: unknown): boolean {
+  if (typeof value !== "boolean") throw new Error(`${field} is invalid`);
+  return value;
 }
 
 function requireConfidence(value: unknown): number {

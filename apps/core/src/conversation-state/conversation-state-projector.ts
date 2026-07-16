@@ -80,7 +80,7 @@ async function processRepair({
     });
     return;
   }
-  const active = target.entity.status === "open";
+  const active = target.retrievalVisible && target.entity.status === "open";
   if (!active) {
     if (target.memoryId !== undefined) {
       await memories.delete({ memoryId: target.memoryId });
@@ -88,6 +88,7 @@ async function processRepair({
     await repository.completeProjectionRepair({
       id: repair.id,
       attemptCount: repair.attemptCount,
+      projection: {},
     });
     return;
   }
@@ -109,7 +110,7 @@ async function processRepair({
   await repository.completeProjectionRepair({
     id: repair.id,
     attemptCount: repair.attemptCount,
-    memoryId,
+    projection: { memoryId },
   });
 }
 

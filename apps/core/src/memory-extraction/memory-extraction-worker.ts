@@ -228,6 +228,10 @@ async function processGroup(input: {
   const runJobs = scopedJobs.slice(0, MAX_EVIDENCE_MESSAGES);
   const runJobIndexes = new Set(runJobs.map(({ index }) => index));
   const deferredJobs = jobs.filter(({ index }) => !runJobIndexes.has(index));
+  const enabledOperationFamilies = resolveEnabledOperationFamilies(
+    groupId,
+    dependencies.conversationStateRollout,
+  );
   let claimedRun: ClaimedMemoryExtractionRun | undefined;
   try {
     claimedRun = await dependencies.repository.claimRun({
@@ -235,6 +239,7 @@ async function processGroup(input: {
       maxEvidenceMessages: MAX_EVIDENCE_MESSAGES,
       contextMessageLimit: MAX_CONTEXT_MESSAGES,
       activeMemoryLimit: MAX_ACTIVE_MEMORIES,
+      enabledOperationFamilies,
     });
   } catch (error) {
     const stale = error instanceof MemoryExtractionStaleRunError;
@@ -259,7 +264,8 @@ async function processGroup(input: {
   const expectedRequestIds = runJobs.map(({ route }) => route.requestId);
   if (
     claimedRun.groupId !== groupId ||
-    !claimedRunMatchesRoutes(claimedRun, runJobs, expectedRequestIds)
+    !claimedRunMatchesRoutes(claimedRun, runJobs, expectedRequestIds) ||
+    !sameStrings(claimedRun.enabledOperationFamilies, enabledOperationFamilies)
   ) {
     await failIndexedJobs({
       queue: dependencies.queue,
@@ -398,8 +404,7 @@ async function processClaimedRun(input: {
     });
     const conversationStateResponse = restrictConversationStateResponse(
       response,
-      run.groupId,
-      dependencies.conversationStateRollout,
+      run.enabledOperationFamilies,
     );
     conversationStateValidation = validateConversationStateCandidates({
       run,
@@ -423,7 +428,14 @@ async function processClaimedRun(input: {
     return;
   }
 
-  if (!runtimeAllows(dependencies.runtimeController, run.groupId)) {
+  const currentOperationFamilies = resolveEnabledOperationFamilies(
+    run.groupId,
+    dependencies.conversationStateRollout,
+  );
+  if (
+    !runtimeAllows(dependencies.runtimeController, run.groupId) ||
+    !sameStrings(run.enabledOperationFamilies, currentOperationFamilies)
+  ) {
     try {
       await dependencies.repository.skipRun({
         runId: run.id,
@@ -522,21 +534,34 @@ function restrictConversationStateResponse<
   Response extends { threadOperations?: unknown[]; actionOperations?: unknown[] },
 >(
   response: Response,
-  groupId: string,
-  rollout: MemoryExtractionWorkerDependencies["conversationStateRollout"],
+  enabledOperationFamilies: ClaimedMemoryExtractionRun["enabledOperationFamilies"],
 ): Response {
-  if (rollout === undefined) {
-    return response;
-  }
   return {
     ...response,
-    ...(rollout.threadEnabledGroupIds.includes(groupId)
+    ...(enabledOperationFamilies.includes("thread")
       ? {}
       : { threadOperations: [] }),
-    ...(rollout.actionEnabledGroupIds.includes(groupId)
+    ...(enabledOperationFamilies.includes("action")
       ? {}
       : { actionOperations: [] }),
   };
+}
+
+function resolveEnabledOperationFamilies(
+  groupId: string,
+  rollout: MemoryExtractionWorkerDependencies["conversationStateRollout"],
+): ClaimedMemoryExtractionRun["enabledOperationFamilies"] {
+  if (rollout === undefined) {
+    return ["memory", "thread", "action"];
+  }
+  const families: ClaimedMemoryExtractionRun["enabledOperationFamilies"] = ["memory"];
+  if (rollout.threadEnabledGroupIds.includes(groupId)) {
+    families.push("thread");
+    if (rollout.actionEnabledGroupIds.includes(groupId)) {
+      families.push("action");
+    }
+  }
+  return families;
 }
 
 async function skipBeforeLoad(input: {
@@ -972,7 +997,8 @@ function sameRun(
   return claimed.id === loaded.id &&
     claimed.groupId === loaded.groupId &&
     claimed.inputFingerprint === loaded.inputFingerprint &&
-    sameStrings(claimed.requestIds, loaded.requestIds);
+    sameStrings(claimed.requestIds, loaded.requestIds) &&
+    sameStrings(claimed.enabledOperationFamilies, loaded.enabledOperationFamilies);
 }
 
 function sameDurableRunScope(

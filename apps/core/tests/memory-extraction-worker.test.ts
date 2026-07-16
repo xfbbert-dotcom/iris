@@ -45,6 +45,7 @@ describe("createMemoryExtractionWorker", () => {
       maxEvidenceMessages: 40,
       contextMessageLimit: 10,
       activeMemoryLimit: 8,
+      enabledOperationFamilies: ["memory", "thread", "action"],
     });
     expect(dependencies.client.extract).toHaveBeenCalledOnce();
     expect(dependencies.repository.completeRun).toHaveBeenCalledWith({
@@ -711,7 +712,13 @@ describe("createMemoryExtractionWorker", () => {
   });
 
   it("does not count rollout-disabled response operations as proposed or rejected", async () => {
-    const dependencies = createDependencies({ jobs: [job("request-1")] });
+    const dependencies = createDependencies({
+      jobs: [job("request-1")],
+      claimedRun: run({
+        requestIds: ["request-1"],
+        enabledOperationFamilies: ["memory"],
+      }),
+    });
     Object.assign(dependencies, {
       conversationStateRollout: {
         candidateConfidenceFloor: 0.65,
@@ -729,6 +736,14 @@ describe("createMemoryExtractionWorker", () => {
 
     await createMemoryExtractionWorker(dependencies).processBatch({ limit: 20 });
 
+    expect(dependencies.repository.claimRun).toHaveBeenCalledWith(
+      expect.objectContaining({ enabledOperationFamilies: ["memory"] }),
+    );
+    expect(dependencies.client.extract).toHaveBeenCalledWith(expect.objectContaining({
+      existingThreads: [],
+      existingActions: [],
+      enabledOperationFamilies: ["memory"],
+    }));
     expect(dependencies.repository.completeRun).toHaveBeenCalledWith(
       expect.objectContaining({
         threadOperations: [],
@@ -747,6 +762,36 @@ describe("createMemoryExtractionWorker", () => {
         },
       }),
     );
+  });
+
+  it("skips the whole run when enabled operation families change during model inference", async () => {
+    const dependencies = createDependencies({ jobs: [job("request-1")] });
+    const rollout = {
+      candidateConfidenceFloor: 0.65,
+      applyConfidence: 0.85,
+      threadEnabledGroupIds: ["chat-a"],
+      actionEnabledGroupIds: ["chat-a"],
+    };
+    Object.assign(dependencies, { conversationStateRollout: rollout });
+    dependencies.client.extract.mockImplementation(async () => {
+      rollout.threadEnabledGroupIds.splice(0);
+      rollout.actionEnabledGroupIds.splice(0);
+      return { runId: "run-1", candidates: [candidate()] };
+    });
+
+    await expect(createMemoryExtractionWorker(dependencies).processBatch({ limit: 20 }))
+      .resolves.toEqual([
+        expect.objectContaining({
+          status: "skipped",
+          reason: "runtime_disabled_before_apply",
+        }),
+      ]);
+
+    expect(dependencies.repository.skipRun).toHaveBeenCalledWith({
+      runId: "run-1",
+      reason: "runtime_disabled_before_apply",
+    });
+    expect(dependencies.repository.completeRun).not.toHaveBeenCalled();
   });
 
   it("isolates a stale second thread operation while preserving valid memory and state work", async () => {
@@ -1205,6 +1250,7 @@ function extractionMessage(id: string, text: string) {
     id,
     groupId: "chat-a",
     senderId: "alice",
+    senderOpenId: "alice",
     text,
     sentAt: new Date("2026-07-14T23:59:00.000Z"),
     createdAt: new Date("2026-07-14T23:59:00.000Z"),

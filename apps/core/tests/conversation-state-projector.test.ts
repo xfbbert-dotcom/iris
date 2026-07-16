@@ -16,6 +16,7 @@ describe("conversation state projector", () => {
       entityType: "thread",
       entity: thread({ id: "thread-open", version: 3 }),
       evidenceMessageIds: ["message-1", "message-2"],
+      retrievalVisible: true,
     };
     const repository = repositoryFixture({
       repairs: [repair({ entityType: "thread", entityId: "thread-open", entityVersion: 3 })],
@@ -46,7 +47,7 @@ describe("conversation state projector", () => {
     expect(repository.completeProjectionRepair).toHaveBeenCalledWith({
       id: "repair-thread-open",
       attemptCount: 1,
-      memoryId: "memory-created",
+      projection: { memoryId: "memory-created" },
     });
   });
 
@@ -55,6 +56,7 @@ describe("conversation state projector", () => {
       entityType: "action",
       entity: action({ id: "action-open", version: 2, threadId: "thread-1" }),
       evidenceMessageIds: ["message-1", "message-3"],
+      retrievalVisible: true,
       memoryId: "memory-previous",
     };
     const repository = repositoryFixture({
@@ -77,7 +79,7 @@ describe("conversation state projector", () => {
     expect(repository.completeProjectionRepair).toHaveBeenCalledWith({
       id: "repair-action-open",
       attemptCount: 1,
-      memoryId: "memory-corrected",
+      projection: { memoryId: "memory-corrected" },
     });
   });
 
@@ -86,6 +88,7 @@ describe("conversation state projector", () => {
       entityType: "thread",
       entity: thread({ id: "thread-resolved", status: "resolved", version: 4, resolvedAt: new Date() }),
       evidenceMessageIds: ["message-1"],
+      retrievalVisible: true,
       memoryId: "memory-active",
     };
     const repository = repositoryFixture({
@@ -101,6 +104,7 @@ describe("conversation state projector", () => {
     expect(repository.completeProjectionRepair).toHaveBeenCalledWith({
       id: "repair-thread-resolved",
       attemptCount: 1,
+      projection: {},
     });
   });
 
@@ -109,6 +113,7 @@ describe("conversation state projector", () => {
       entityType: "thread",
       entity: thread({ id: "thread-open", version: 5 }),
       evidenceMessageIds: ["message-1"],
+      retrievalVisible: true,
       memoryId: "memory-current",
     };
     const repository = repositoryFixture({
@@ -137,6 +142,7 @@ describe("conversation state projector", () => {
         entityType: "thread",
         entity: thread({ id: "thread-open", version: 3 }),
         evidenceMessageIds: ["message-1"],
+        retrievalVisible: true,
       }],
     });
     const memories = memoryFixture({ createError: new Error("candidate content must never escape") });

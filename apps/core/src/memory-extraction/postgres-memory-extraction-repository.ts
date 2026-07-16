@@ -85,6 +85,9 @@ type MessageRow = {
   id: unknown;
   chat_id: unknown;
   sender_id: unknown;
+  sender_open_id?: unknown;
+  sender_union_id?: unknown;
+  sender_user_id?: unknown;
   text: unknown;
   sent_at: unknown;
   created_at: unknown;
@@ -107,6 +110,7 @@ type RunRow = {
   input_fingerprint: unknown;
   status: unknown;
   failure_classification?: unknown;
+  enabled_operation_families?: unknown;
 };
 
 type CompletionEvidenceRow = {
@@ -326,6 +330,9 @@ export function createPostgresMemoryExtractionRepository({
         rawInput.activeMemoryLimit,
         MAX_ACTIVE_MEMORIES,
       );
+      const enabledOperationFamilies = normalizeOperationFamilies(
+        rawInput.enabledOperationFamilies,
+      );
       if (
         requestedIds.length === 0 ||
         maxEvidenceMessages === 0 ||
@@ -353,6 +360,41 @@ export function createPostgresMemoryExtractionRepository({
         if (reference.status === "processing") {
           if (reference.runId === undefined) {
             throw new Error("processing extraction requests have no run");
+          }
+          const storedFamiliesResult = await client.query<RunRow>(
+            `
+            SELECT enabled_operation_families
+            FROM group_memory_extraction_runs
+            WHERE id = $1
+            FOR UPDATE
+            `,
+            [reference.runId],
+          );
+          if (storedFamiliesResult.rows.length !== 1) {
+            return undefined;
+          }
+          const storedFamilies = readPersistedOperationFamilies(
+            storedFamiliesResult.rows[0]!.enabled_operation_families,
+          );
+          if (!sameStrings(storedFamilies, enabledOperationFamilies)) {
+            await client.query(
+              `
+              UPDATE group_memory_extraction_requests
+              SET status = 'skipped', skip_reason = 'runtime_disabled_before_apply', updated_at = NOW()
+              WHERE run_id = $1 AND status = 'processing'
+              `,
+              [reference.runId],
+            );
+            await client.query(
+              `
+              UPDATE group_memory_extraction_runs
+              SET status = 'completed', failure_classification = 'runtime_disabled_before_apply',
+                  completed_at = NOW(), updated_at = NOW()
+              WHERE id = $1 AND status <> 'completed'
+              `,
+              [reference.runId],
+            );
+            return undefined;
           }
           const loaded = await loadStoredRun(client, reference.runId);
           const lockedRows = await loadClaimRows(client, requestedIds);
@@ -413,7 +455,8 @@ export function createPostgresMemoryExtractionRepository({
 
         const contextResult = await client.query<MessageRow>(
           `
-          SELECT cm.id, cm.chat_id, cm.sender_id, cm.text, cm.sent_at, cm.created_at
+          SELECT cm.id, cm.chat_id, cm.sender_id, cm.sender_open_id,
+                 cm.sender_union_id, cm.sender_user_id, cm.text, cm.sent_at, cm.created_at
           FROM conversation_messages cm
           WHERE cm.chat_id = $1
             AND ${READABLE_MESSAGE_TEXT_SQL}
@@ -433,7 +476,9 @@ export function createPostgresMemoryExtractionRepository({
         let contextMessages = contextResult.rows
           .map((row) => mapMessage(row, false))
           .reverse();
-        const mentions = await loadRunMentions(client, [...evidenceMessages, ...contextMessages]);
+        const mentions = enabledOperationFamilies.includes("action")
+          ? await loadRunMentions(client, [...evidenceMessages, ...contextMessages])
+          : [];
         evidenceMessages = attachMentions(evidenceMessages, mentions);
         contextMessages = attachMentions(contextMessages, mentions);
 
@@ -451,8 +496,8 @@ export function createPostgresMemoryExtractionRepository({
         const { existingThreads, existingActions } = await selectCurrentConversationState(
           client,
           locked.groupId,
+          enabledOperationFamilies,
         );
-        const enabledOperationFamilies: Array<"memory" | "thread" | "action"> = ["memory", "thread", "action"];
         const inputFingerprint = fingerprintInput({
           groupId: locked.groupId,
           evidenceMessages,
@@ -467,12 +512,12 @@ export function createPostgresMemoryExtractionRepository({
         const runResult = await client.query<RunRow>(
           `
           INSERT INTO group_memory_extraction_runs (
-            id, group_id, input_fingerprint, status
+            id, group_id, input_fingerprint, status, enabled_operation_families
           )
-          VALUES ($1, $2, $3, 'processing')
+          VALUES ($1, $2, $3, 'processing', $4::text[])
           RETURNING id, group_id, input_fingerprint, status
           `,
-          [runId, locked.groupId, inputFingerprint],
+          [runId, locked.groupId, inputFingerprint, enabledOperationFamilies],
         );
         if (runResult.rows.length !== 1) {
           throw new Error("memory extraction run insert returned no rows");
@@ -2003,7 +2048,8 @@ async function loadStoredRun(
 > {
   const runResult = await queryable.query<RunRow>(
     `
-    SELECT id, group_id, input_fingerprint, status, failure_classification
+    SELECT id, group_id, input_fingerprint, status, failure_classification,
+           enabled_operation_families
     FROM group_memory_extraction_runs
     WHERE id = $1
     FOR UPDATE
@@ -2020,6 +2066,9 @@ async function loadStoredRun(
   }
   const groupId = requireString("run group id", runRow.group_id);
   const inputFingerprint = requireString("input fingerprint", runRow.input_fingerprint);
+  const enabledOperationFamilies = readPersistedOperationFamilies(
+    runRow.enabled_operation_families,
+  );
   const previousFailureClassification = status === "failed" || status === "processing"
     ? requireOptionalClassification(runRow.failure_classification)
     : undefined;
@@ -2037,6 +2086,9 @@ async function loadStoredRun(
       cm.id,
       cm.chat_id,
       cm.sender_id,
+      cm.sender_open_id,
+      cm.sender_union_id,
+      cm.sender_user_id,
       cm.text,
       cm.sent_at,
       cm.created_at
@@ -2058,6 +2110,9 @@ async function loadStoredRun(
       cm.id,
       cm.chat_id,
       cm.sender_id,
+      cm.sender_open_id,
+      cm.sender_union_id,
+      cm.sender_user_id,
       cm.text,
       cm.sent_at,
       cm.created_at
@@ -2141,10 +2196,12 @@ async function loadStoredRun(
   const mentions = mentionResult.rows.map(mapMention);
   const evidenceMessagesWithoutMentions = evidenceResult.rows.map((row) => mapMessage(row, true));
   const contextMessagesWithoutMentions = contextResult.rows.map((row) => mapMessage(row, false));
-  const currentMentions = await loadRunMentions(
-    queryable,
-    [...evidenceMessagesWithoutMentions, ...contextMessagesWithoutMentions],
-  );
+  const currentMentions = enabledOperationFamilies.includes("action")
+    ? await loadRunMentions(
+      queryable,
+      [...evidenceMessagesWithoutMentions, ...contextMessagesWithoutMentions],
+    )
+    : [];
   if (!sameMentions(mentions, currentMentions)) {
     return { status: "stale", groupId, requestIds };
   }
@@ -2153,14 +2210,17 @@ async function loadStoredRun(
   const existingMemories = memoryResult.rows.map(mapMemory);
   const existingThreads = threadResult.rows.map(mapThreadSnapshot);
   const existingActions = actionResult.rows.map(mapActionSnapshot);
-  const currentConversationState = await selectCurrentConversationState(queryable, groupId);
+  const currentConversationState = await selectCurrentConversationState(
+    queryable,
+    groupId,
+    enabledOperationFamilies,
+  );
   if (
     !sameThreadSnapshots(existingThreads, currentConversationState.existingThreads) ||
     !sameActionSnapshots(existingActions, currentConversationState.existingActions)
   ) {
     return { status: "stale", groupId, requestIds };
   }
-  const enabledOperationFamilies: Array<"memory" | "thread" | "action"> = ["memory", "thread", "action"];
   const currentFingerprint = fingerprintInput({
     groupId,
     evidenceMessages,
@@ -2210,6 +2270,9 @@ async function loadClaimRows(
       cm.id,
       cm.chat_id,
       cm.sender_id,
+      cm.sender_open_id,
+      cm.sender_union_id,
+      cm.sender_user_id,
       cm.text,
       cm.sent_at,
       cm.created_at
@@ -2384,6 +2447,9 @@ function fingerprintMessage(message: ExtractionMessage): string {
       id: message.id,
       groupId: message.groupId,
       senderId: message.senderId ?? null,
+      ...(message.senderOpenId === undefined ? {} : { senderOpenId: message.senderOpenId }),
+      ...(message.senderUnionId === undefined ? {} : { senderUnionId: message.senderUnionId }),
+      ...(message.senderUserId === undefined ? {} : { senderUserId: message.senderUserId }),
       text: message.text,
       sentAt: message.sentAt.toISOString(),
       createdAt: message.createdAt.toISOString(),
@@ -2401,10 +2467,14 @@ function mapRequest(row: RequestRow): MemoryExtractionRequest {
   return {
     id: requireString("request id", row.id),
     groupId: requireString("request group id", row.group_id),
-    conversationMessageId: requireString(
-      "request conversation message id",
-      row.conversation_message_id,
-    ),
+    ...(row.conversation_message_id === null || row.conversation_message_id === undefined
+      ? {}
+      : {
+          conversationMessageId: requireString(
+            "request conversation message id",
+            row.conversation_message_id,
+          ),
+        }),
     providerMessageId: requireString("request provider message id", row.provider_message_id),
     status,
     ...(row.run_id === null || row.run_id === undefined
@@ -2425,6 +2495,15 @@ function mapMessage(row: MessageRow, evidenceEligible: boolean): ExtractionMessa
     ...(row.sender_id === null || row.sender_id === undefined
       ? {}
       : { senderId: requireString("message sender id", row.sender_id) }),
+    ...(row.sender_open_id === null || row.sender_open_id === undefined
+      ? {}
+      : { senderOpenId: requireString("message sender open id", row.sender_open_id) }),
+    ...(row.sender_union_id === null || row.sender_union_id === undefined
+      ? {}
+      : { senderUnionId: requireString("message sender union id", row.sender_union_id) }),
+    ...(row.sender_user_id === null || row.sender_user_id === undefined
+      ? {}
+      : { senderUserId: requireString("message sender user id", row.sender_user_id) }),
     text: requireString("message text", row.text, true),
     sentAt: requireDate("message sent at", row.sent_at),
     createdAt: requireDate("message created at", row.created_at),
@@ -2510,11 +2589,13 @@ function sameMentions(
 async function selectCurrentConversationState(
   queryable: Queryable,
   groupId: string,
+  enabledOperationFamilies: ClaimedMemoryExtractionRun["enabledOperationFamilies"],
 ): Promise<{
   existingThreads: ExtractionExistingThread[];
   existingActions: ExtractionExistingAction[];
 }> {
-  const threadsResult = await queryable.query<ThreadSnapshotRow>(
+  const threadsResult = enabledOperationFamilies.includes("thread")
+    ? await queryable.query<ThreadSnapshotRow>(
     `
     SELECT t.id, t.group_id, t.title, t.summary, t.status, t.confidence,
            t.merged_into_thread_id, t.version, t.first_evidence_at,
@@ -2523,25 +2604,41 @@ async function selectCurrentConversationState(
     FROM discussion_threads t
     LEFT JOIN discussion_thread_evidence evidence
       ON evidence.thread_id = t.id AND evidence.group_id = t.group_id
-    WHERE t.group_id = $1 AND t.status IN ('candidate', 'open', 'resolved')
+    WHERE t.group_id = $1
+      AND t.status IN ('candidate', 'open', 'resolved')
+      AND t.retrieval_state = 'visible'
     GROUP BY t.id
     ORDER BY CASE t.status WHEN 'open' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
              t.last_activity_at DESC, t.id ASC
     LIMIT $2
     `,
     [groupId, MAX_CONVERSATION_STATE_SNAPSHOTS],
-  );
-  const actionsResult = await queryable.query<ActionSnapshotRow>(
+    )
+    : { rows: [] };
+  const actionsResult = enabledOperationFamilies.includes("action")
+    ? await queryable.query<ActionSnapshotRow>(
     `
     SELECT id, group_id, thread_id, description, owner_ref_type, owner_ref, due_at,
            status, confidence, version, completed_at, cancelled_at, created_at, updated_at
     FROM action_items
     WHERE group_id = $1
+      AND retrieval_state = 'visible'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM discussion_threads dependency
+        WHERE dependency.id = action_items.thread_id
+          AND dependency.group_id = action_items.group_id
+          AND (
+            dependency.status IN ('candidate', 'merged')
+            OR dependency.retrieval_state <> 'visible'
+          )
+      )
     ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC, id ASC
     LIMIT $2
     `,
     [groupId, MAX_CONVERSATION_STATE_SNAPSHOTS],
-  );
+    )
+    : { rows: [] };
   return {
     existingThreads: threadsResult.rows.map(mapThreadSnapshot),
     existingActions: actionsResult.rows.map(mapActionSnapshot),
@@ -2669,6 +2766,39 @@ function normalizeIdentifierSet(fieldName: string, value: unknown, maximum: numb
     throw new Error(`${fieldName} must not contain duplicate identifiers`);
   }
   return identifiers.sort(compareStrings);
+}
+
+function normalizeOperationFamilies(
+  value: unknown,
+): ClaimedMemoryExtractionRun["enabledOperationFamilies"] {
+  if (value === undefined) {
+    return ["memory", "thread", "action"];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("enabledOperationFamilies must be an array");
+  }
+  const families = value.map((family) => requireString("operation family", family));
+  const canonical = ["memory", "thread", "action"].filter((family) =>
+    families.includes(family)
+  ) as ClaimedMemoryExtractionRun["enabledOperationFamilies"];
+  if (
+    canonical.length !== families.length ||
+    !canonical.includes("memory") ||
+    (canonical.includes("action") && !canonical.includes("thread"))
+  ) {
+    throw new Error("enabledOperationFamilies is invalid");
+  }
+  return canonical;
+}
+
+function readPersistedOperationFamilies(
+  value: unknown,
+): ClaimedMemoryExtractionRun["enabledOperationFamilies"] {
+  return normalizeOperationFamilies(value);
+}
+
+function sameStrings(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function sameIdentifierSet(left: string[], right: string[]): boolean {

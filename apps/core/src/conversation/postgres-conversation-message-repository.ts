@@ -15,6 +15,9 @@ type ConversationMessageRow = {
   provider_message_id: string;
   chat_id: string;
   sender_id: string | null;
+  sender_open_id: string | null;
+  sender_union_id: string | null;
+  sender_user_id: string | null;
   message_type: string;
   text: string | null;
   sent_at: Date;
@@ -44,6 +47,9 @@ export function createPostgresConversationMessageRepository({
         input.senderId === undefined
           ? null
           : requireBoundedIdentifier("senderId", input.senderId);
+      const senderOpenId = normalizeOptionalIdentifier("senderOpenId", input.senderOpenId);
+      const senderUnionId = normalizeOptionalIdentifier("senderUnionId", input.senderUnionId);
+      const senderUserId = normalizeOptionalIdentifier("senderUserId", input.senderUserId);
       const messageType = requireBoundedIdentifier("messageType", input.messageType);
       const rawEventIdempotencyKey = requireBoundedRawEventIdempotencyKey(
         "rawEventIdempotencyKey",
@@ -61,16 +67,22 @@ export function createPostgresConversationMessageRepository({
             provider_message_id,
             chat_id,
             sender_id,
+            sender_open_id,
+            sender_union_id,
+            sender_user_id,
             message_type,
             text,
             sent_at,
             raw_event_idempotency_key
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           ON CONFLICT (provider, provider_message_id)
           DO UPDATE SET
             chat_id = EXCLUDED.chat_id,
             sender_id = EXCLUDED.sender_id,
+            sender_open_id = EXCLUDED.sender_open_id,
+            sender_union_id = EXCLUDED.sender_union_id,
+            sender_user_id = EXCLUDED.sender_user_id,
             message_type = EXCLUDED.message_type,
             text = EXCLUDED.text,
             sent_at = EXCLUDED.sent_at,
@@ -92,7 +104,7 @@ export function createPostgresConversationMessageRepository({
             (SELECT id FROM upserted_message),
             mention_key,
             mentioned_open_id
-          FROM unnest($10::text[], $11::text[]) AS mention(mention_key, mentioned_open_id)
+          FROM unnest($13::text[], $14::text[]) AS mention(mention_key, mentioned_open_id)
           WHERE (SELECT count(*) FROM cleared_mentions) >= 0
           RETURNING mention_key, mentioned_open_id
         )
@@ -116,6 +128,9 @@ export function createPostgresConversationMessageRepository({
           providerMessageId,
           chatId,
           senderId,
+          senderOpenId,
+          senderUnionId,
+          senderUserId,
           messageType,
           normalizeMessageText(input.text),
           sentAt,
@@ -169,6 +184,13 @@ function requireBoundedIdentifier(fieldName: string, value: string): string {
   return requireBoundedString(fieldName, value, MAX_CONVERSATION_MESSAGE_ID_CHARS);
 }
 
+function normalizeOptionalIdentifier(
+  fieldName: string,
+  value: string | undefined,
+): string | null {
+  return value === undefined ? null : requireBoundedIdentifier(fieldName, value);
+}
+
 function requireBoundedRawEventIdempotencyKey(fieldName: string, value: string): string {
   return requireBoundedString(fieldName, value, MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH);
 }
@@ -210,6 +232,9 @@ function mapRow(row: ConversationMessageRow): ConversationMessage {
     providerMessageId: row.provider_message_id,
     chatId: row.chat_id,
     senderId: row.sender_id ?? undefined,
+    senderOpenId: row.sender_open_id ?? undefined,
+    senderUnionId: row.sender_union_id ?? undefined,
+    senderUserId: row.sender_user_id ?? undefined,
     messageType: row.message_type,
     text: normalizeMessageText(row.text ?? undefined) ?? undefined,
     ...(mentions === undefined ? {} : { mentions }),

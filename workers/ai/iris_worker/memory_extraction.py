@@ -137,8 +137,12 @@ def _build_v2_extraction_prompt(request: MemoryExtractionRequestV2) -> str:
     for item in request.messages:
         message = ElementTree.SubElement(messages, "message")
         _add_text(message, "id", item.id)
-        if item.sender_id is not None:
-            _add_text(message, "sender_id", item.sender_id)
+        if item.sender_open_id is not None:
+            _add_text(message, "sender_open_id", item.sender_open_id)
+        if item.sender_union_id is not None:
+            _add_text(message, "sender_union_id", item.sender_union_id)
+        if item.sender_user_id is not None:
+            _add_text(message, "sender_user_id", item.sender_user_id)
         _add_text(message, "sent_at", item.sent_at)
         _add_text(
             message,
@@ -266,7 +270,7 @@ def _owner_candidate_is_request_bound(
         label = getattr(owner, "label", "")
         return bool(label.strip()) and label in getattr(message, "text", "")
     if owner_type == "sender":
-        return getattr(message, "sender_id", None) is not None
+        return getattr(message, "sender_open_id", None) is not None
     if owner_type == "mention":
         mention_key = getattr(owner, "mention_key", None)
         return any(

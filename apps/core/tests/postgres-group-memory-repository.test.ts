@@ -5,10 +5,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import { GroupMemoryIdempotencyConflictError } from "../src/memory/group-memory-repository.js";
+import { createGroupMemoryService } from "../src/memory/group-memory-service.js";
+import { createGroupMemoryContextProvider } from "../src/memory/group-memory-context-provider.js";
 import {
   insertGroupMemoryWithEvidence,
   lockGroupMemoryWriteScope,
 } from "../src/memory/postgres-group-memory-writer.js";
+import { createConversationStateProjector } from "../src/conversation-state/conversation-state-projector.js";
+import { createPostgresConversationStateRepository } from "../src/conversation-state/postgres-conversation-state-repository.js";
 
 import {
   createPostgresGroupMemoryRepository,
@@ -545,6 +549,276 @@ runIfDatabase("PostgresGroupMemoryRepository with Postgres", () => {
 
     await expect(repository.deleteById(correction.memory.id)).resolves.toBe("deleted");
     await expect(repository.getById(correction.memory.id)).resolves.toBeUndefined();
+  });
+
+  it.each(["open", "resolved"] as const)(
+    "fails closed through a stale repair before an exact v3 %s projection",
+    async (finalStatus) => {
+      const testSuffix = randomUUID();
+      const testGroupId = `projection-visibility-group-${testSuffix}`;
+      const testMessageId = `projection-visibility-message-${testSuffix}`;
+      const threadId = `projection-visibility-thread-${testSuffix}`;
+      const staleRepairId = `projection-visibility-stale-${testSuffix}`;
+      const exactRepairId = `projection-visibility-exact-${testSuffix}`;
+      const repository = createPostgresGroupMemoryRepository({ dataSource: pool! });
+      const stateRepository = createPostgresConversationStateRepository({ dataSource: pool! });
+      const projector = createConversationStateProjector({
+        repository: stateRepository,
+        memories: createGroupMemoryService({ repository }),
+      });
+
+      await pool!.query(
+        `
+        INSERT INTO conversation_messages (
+          id, provider, provider_message_id, chat_id, sender_id,
+          message_type, text, sent_at, raw_event_idempotency_key
+        ) VALUES ($1, 'feishu', $2, $3, 'alice', 'text', 'Projection evidence.', NOW(), $4)
+        `,
+        [testMessageId, `provider-${testMessageId}`, testGroupId, `event-${testMessageId}`],
+      );
+      await pool!.query(
+        `
+        INSERT INTO discussion_threads (
+          id, group_id, title, summary, status, confidence, version,
+          first_evidence_at, last_activity_at
+        ) VALUES ($1, $2, 'Projection visibility', 'Version one.', 'open', 0.9, 1, NOW(), NOW())
+        `,
+        [threadId, testGroupId],
+      );
+      await pool!.query(
+        `
+        INSERT INTO discussion_thread_evidence (thread_id, group_id, conversation_message_id)
+        VALUES ($1, $2, $3)
+        `,
+        [threadId, testGroupId, testMessageId],
+      );
+      const v1 = await repository.create({
+        groupId: testGroupId,
+        scope: "thread",
+        category: "summary",
+        threadKey: threadId,
+        content: "Version one.",
+        importance: 1,
+        confidence: 0.9,
+        idempotencyKey: `projection:thread:${threadId}:1`,
+        origin: "system",
+        createdBy: "conversation-state-projector",
+        evidenceMessageIds: [testMessageId],
+      });
+      await pool!.query(
+        `
+        INSERT INTO conversation_state_projection_repairs (
+          id, entity_type, entity_id, group_id, entity_version, status,
+          attempt_count, next_attempt_at
+        ) VALUES ($1, 'thread', $2, $3, 1, 'completed', 1, NOW())
+        `,
+        [`projection-visibility-v1-${testSuffix}`, threadId, testGroupId],
+      );
+      await pool!.query(
+        `
+        INSERT INTO conversation_state_memory_projections (
+          entity_type, entity_id, group_id, projected_version, memory_id
+        ) VALUES ('thread', $1, $2, 1, $3)
+        `,
+        [threadId, testGroupId, v1.memory.id],
+      );
+
+      try {
+        await expect(repository.listActiveByGroup({ groupId: testGroupId, limit: 8 }))
+          .resolves.toEqual([expect.objectContaining({ id: v1.memory.id })]);
+
+        await pool!.query(
+          `UPDATE discussion_threads SET summary = 'Version two.', version = 2, updated_at = NOW() WHERE id = $1`,
+          [threadId],
+        );
+        await pool!.query(
+          `
+          INSERT INTO conversation_state_projection_repairs (
+            id, entity_type, entity_id, group_id, entity_version, status,
+            attempt_count, next_attempt_at
+          ) VALUES ($1, 'thread', $2, $3, 2, 'pending', 0, NOW())
+          `,
+          [staleRepairId, threadId, testGroupId],
+        );
+        await pool!.query(
+          `
+          UPDATE discussion_threads
+          SET summary = 'Version three.', status = $2, version = 3,
+              resolved_at = CASE WHEN $2 = 'resolved' THEN NOW() ELSE NULL END,
+              updated_at = NOW()
+          WHERE id = $1
+          `,
+          [threadId, finalStatus],
+        );
+
+        await projector.processBatch({ limit: 1, now: new Date(Date.now() + 60_000) });
+
+        await expect(repository.listActiveByGroup({ groupId: testGroupId, limit: 8 }))
+          .resolves.toEqual([]);
+        await expect(pool!.query(
+          `
+          SELECT projected_version, memory_id
+          FROM conversation_state_memory_projections
+          WHERE entity_type = 'thread' AND entity_id = $1
+          `,
+          [threadId],
+        )).resolves.toMatchObject({
+          rows: [{ projected_version: "1", memory_id: v1.memory.id }],
+        });
+
+        await pool!.query(
+          `
+          INSERT INTO conversation_state_projection_repairs (
+            id, entity_type, entity_id, group_id, entity_version, status,
+            attempt_count, next_attempt_at
+          ) VALUES ($1, 'thread', $2, $3, 3, 'pending', 0, NOW())
+          `,
+          [exactRepairId, threadId, testGroupId],
+        );
+        await projector.processBatch({ limit: 1, now: new Date(Date.now() + 60_000) });
+
+        const active = await repository.listActiveByGroup({ groupId: testGroupId, limit: 8 });
+        if (finalStatus === "open") {
+          expect(active).toEqual([
+            expect.objectContaining({ content: "Version three.", status: "active" }),
+          ]);
+          await expect(repository.getById(v1.memory.id)).resolves.toMatchObject({
+            status: "superseded",
+          });
+        } else {
+          expect(active).toEqual([]);
+          await expect(repository.getById(v1.memory.id)).resolves.toBeUndefined();
+        }
+        await expect(pool!.query(
+          `
+          SELECT projected_version, memory_id
+          FROM conversation_state_memory_projections
+          WHERE entity_type = 'thread' AND entity_id = $1
+          `,
+          [threadId],
+        )).resolves.toMatchObject({
+          rows: [{
+            projected_version: "3",
+            memory_id: finalStatus === "open" ? active[0]!.id : null,
+          }],
+        });
+      } finally {
+        await pool!.query(
+          "DELETE FROM conversation_state_projection_repairs WHERE entity_type = 'thread' AND entity_id = $1",
+          [threadId],
+        );
+        await pool!.query(
+          "DELETE FROM conversation_state_memory_projections WHERE entity_type = 'thread' AND entity_id = $1",
+          [threadId],
+        );
+        await pool!.query("DELETE FROM group_memories WHERE group_id = $1", [testGroupId]);
+        await pool!.query("DELETE FROM discussion_thread_evidence WHERE thread_id = $1", [threadId]);
+        await pool!.query("DELETE FROM discussion_threads WHERE id = $1", [threadId]);
+        await pool!.query("DELETE FROM conversation_messages WHERE id = $1", [testMessageId]);
+      }
+    },
+  );
+
+  it("keeps candidate- and merged-thread action projections out of answer memory", async () => {
+    const testSuffix = randomUUID();
+    const testGroupId = `action-dependency-visibility-${testSuffix}`;
+    const testMessageId = `action-dependency-message-${testSuffix}`;
+    const candidateThreadId = `action-candidate-thread-${testSuffix}`;
+    const mergedThreadId = `action-merged-thread-${testSuffix}`;
+    const targetThreadId = `action-target-thread-${testSuffix}`;
+    const candidateActionId = `candidate-action-${testSuffix}`;
+    const mergedActionId = `merged-action-${testSuffix}`;
+    const repository = createPostgresGroupMemoryRepository({ dataSource: pool! });
+    const provider = createGroupMemoryContextProvider({ repository });
+
+    await pool!.query(
+      `
+      INSERT INTO conversation_messages (
+        id, provider, provider_message_id, chat_id, sender_id,
+        message_type, text, sent_at, raw_event_idempotency_key
+      ) VALUES ($1, 'feishu', $2, $3, 'alice', 'text', 'Action dependency evidence.', NOW(), $4)
+      `,
+      [testMessageId, `provider-${testMessageId}`, testGroupId, `event-${testMessageId}`],
+    );
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, merged_into_thread_id,
+        version, first_evidence_at, last_activity_at
+      ) VALUES
+        ($1, $4, 'Candidate', 'Candidate summary', 'candidate', 0.9, NULL, 1, NOW(), NOW()),
+        ($2, $4, 'Target', 'Target summary', 'open', 0.9, NULL, 1, NOW(), NOW()),
+        ($3, $4, 'Merged', 'Merged summary', 'merged', 0.9, $2, 2, NOW(), NOW())
+      `,
+      [candidateThreadId, targetThreadId, mergedThreadId, testGroupId],
+    );
+    await pool!.query(
+      `
+      INSERT INTO action_items (
+        id, group_id, thread_id, description, owner_ref_type, owner_ref,
+        status, confidence, version
+      ) VALUES
+        ($1, $3, $4, 'Candidate action content', 'text_label', 'Alice', 'open', 0.9, 1),
+        ($2, $3, $5, 'Merged action content', 'text_label', 'Alice', 'open', 0.9, 1)
+      `,
+      [candidateActionId, mergedActionId, testGroupId, candidateThreadId, mergedThreadId],
+    );
+    const candidateMemory = await repository.create({
+      groupId: testGroupId,
+      scope: "action",
+      category: "action",
+      threadKey: candidateThreadId,
+      content: "Candidate action content",
+      importance: 1,
+      confidence: 0.9,
+      idempotencyKey: `projection:action:${candidateActionId}:1`,
+      origin: "system",
+      createdBy: "conversation-state-projector",
+      evidenceMessageIds: [testMessageId],
+    });
+    const mergedMemory = await repository.create({
+      groupId: testGroupId,
+      scope: "action",
+      category: "action",
+      threadKey: mergedThreadId,
+      content: "Merged action content",
+      importance: 1,
+      confidence: 0.9,
+      idempotencyKey: `projection:action:${mergedActionId}:1`,
+      origin: "system",
+      createdBy: "conversation-state-projector",
+      evidenceMessageIds: [testMessageId],
+    });
+    await pool!.query(
+      `
+      INSERT INTO conversation_state_projection_repairs (
+        id, entity_type, entity_id, group_id, entity_version, status,
+        attempt_count, next_attempt_at
+      ) VALUES
+        ($1, 'action', $3, $5, 1, 'completed', 1, NOW()),
+        ($2, 'action', $4, $5, 1, 'completed', 1, NOW())
+      `,
+      [
+        `candidate-action-repair-${testSuffix}`,
+        `merged-action-repair-${testSuffix}`,
+        candidateActionId,
+        mergedActionId,
+        testGroupId,
+      ],
+    );
+    await pool!.query(
+      `
+      INSERT INTO conversation_state_memory_projections (
+        entity_type, entity_id, group_id, projected_version, memory_id
+      ) VALUES
+        ('action', $1, $3, 1, $4),
+        ('action', $2, $3, 1, $5)
+      `,
+      [candidateActionId, mergedActionId, testGroupId, candidateMemory.memory.id, mergedMemory.memory.id],
+    );
+
+    await expect(provider.loadActiveMemories({ groupId: testGroupId, limit: 8 }))
+      .resolves.toEqual([]);
   });
 
   it("round-trips an action memory thread key", async () => {

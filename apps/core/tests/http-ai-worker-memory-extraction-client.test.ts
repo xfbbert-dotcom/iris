@@ -172,14 +172,16 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
       messages: [
         {
           id: "context-1",
-          sender_id: "sender-0",
+          sender_open_id: "sender-0",
+          sender_union_id: "union-0",
           sent_at: "2026-07-14T00:00:00.000Z",
           text: "Earlier context.",
           mentions: [],
         },
         {
           id: "message-1",
-          sender_id: "sender-1",
+          sender_open_id: "sender-1",
+          sender_user_id: "user-1",
           sent_at: "2026-07-14T00:01:00.000Z",
           text: "Launch is Thursday.",
           mentions: [],
@@ -210,6 +212,24 @@ describe("HttpAiWorkerMemoryExtractionClient", () => {
       "existing_actions",
       "enabled_operation_families",
     ]);
+  });
+
+  it("sends no conversation-state snapshot when only memory operations are enabled", async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
+      jsonResponse(responseFixture()),
+    );
+    const client = createClient(fetchImpl);
+    const run = runFixture();
+    run.enabledOperationFamilies = ["memory"];
+
+    await client.extract(run);
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      existing_threads: [],
+      existing_actions: [],
+      enabled_operation_families: ["memory"],
+    });
   });
 
   it("sends exactly twenty unique mentions on one message", async () => {
@@ -716,6 +736,8 @@ function runFixture(): ClaimedMemoryExtractionRun {
         id: "context-1",
         groupId: "group-1",
         senderId: "sender-0",
+        senderOpenId: "sender-0",
+        senderUnionId: "union-0",
         text: "Earlier context.",
         sentAt: new Date("2026-07-14T00:00:00.000Z"),
         createdAt: new Date("2026-07-14T00:00:01.000Z"),
@@ -727,6 +749,8 @@ function runFixture(): ClaimedMemoryExtractionRun {
         id: "message-1",
         groupId: "group-1",
         senderId: "sender-1",
+        senderOpenId: "sender-1",
+        senderUserId: "user-1",
         text: "Launch is Thursday.",
         sentAt: new Date("2026-07-14T00:01:00.000Z"),
         createdAt: new Date("2026-07-14T00:01:01.000Z"),

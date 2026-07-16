@@ -198,7 +198,12 @@ function requireExactRun(run: ClaimedMemoryExtractionRun): void {
     if (!isIdentifier(message.id) || message.groupId !== run.groupId || !isValidDate(message.sentAt) || !isValidDate(message.createdAt) || !isMessageText(message.text)) {
       throw invalidResponse();
     }
-    if (message.senderId !== undefined && !isIdentifier(message.senderId)) {
+    if (
+      (message.senderId !== undefined && !isIdentifier(message.senderId)) ||
+      (message.senderOpenId !== undefined && !isIdentifier(message.senderOpenId)) ||
+      (message.senderUnionId !== undefined && !isIdentifier(message.senderUnionId)) ||
+      (message.senderUserId !== undefined && !isIdentifier(message.senderUserId))
+    ) {
       throw invalidResponse();
     }
     const mentions = message.mentions ?? [];
@@ -258,7 +263,9 @@ function compareMessages(left: ExtractionMessage, right: ExtractionMessage): num
 function mapMessage(message: ExtractionMessage): Record<string, unknown> {
   return {
     id: message.id,
-    ...(message.senderId === undefined ? {} : { sender_id: message.senderId }),
+    ...(message.senderOpenId === undefined ? {} : { sender_open_id: message.senderOpenId }),
+    ...(message.senderUnionId === undefined ? {} : { sender_union_id: message.senderUnionId }),
+    ...(message.senderUserId === undefined ? {} : { sender_user_id: message.senderUserId }),
     sent_at: message.sentAt.toISOString(),
     text: message.text,
     mentions: (message.mentions ?? []).map((mention) => ({

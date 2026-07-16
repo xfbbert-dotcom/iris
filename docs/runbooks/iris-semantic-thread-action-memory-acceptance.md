@@ -503,6 +503,25 @@ processing, delayed, DLQ, and projection-repair counts and the exact Redis proce
 `iris:events:raw:processing`, `iris:documents:sync:processing`, and
 `iris:reindex:documents:processing`.
 
+### Physical Evidence Deletion
+
+Only a named operator may invoke the loopback deletion route. It requires both the existing internal
+Bearer token and a bounded `x-iris-operator` value; do not expose it through Caddy or a public route.
+
+```powershell
+$deleteHeaders = @{
+  Authorization = "Bearer $env:IRIS_INTERNAL_API_TOKEN"
+  'x-iris-operator' = $env:IRIS_OPERATOR_ID
+}
+$deletion = Invoke-RestMethod -Method Delete -Headers $deleteHeaders `
+  -Uri "http://localhost:3000/internal/conversation-state/groups/$pilotGroupId/messages/$messageId/evidence"
+```
+
+The response contains only deletion counts. A second request must return `404`. Verify that the
+message row is physically absent, affected thread/action content is absent from the operator reads,
+and no projection-derived group memory is retrievable. Record only IDs, counts, and content-free
+`evidence_deleted` event metadata; never copy the deleted message or derived content into evidence.
+
 ## Evidence And Exit
 
 Record the deployed commit, complete inventory source/timestamps, pilot/control IDs, state and event

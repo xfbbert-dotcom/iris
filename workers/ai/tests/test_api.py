@@ -49,7 +49,7 @@ def valid_v2_request() -> dict[str, object]:
         "messages": [
             {
                 "id": "message-1",
-                "sender_id": "sender-1",
+                "sender_open_id": "sender-1",
                 "sent_at": "2026-07-14T00:00:00.000Z",
                 "text": "I will ship the API.",
                 "mentions": [],

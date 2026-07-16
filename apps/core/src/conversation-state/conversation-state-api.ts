@@ -15,6 +15,11 @@ import {
 } from "./conversation-state-repository.js";
 import { readDatabaseConfig, type DatabaseEnv } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
+import {
+  deleteConversationMessageEvidence,
+  type ConversationMessageEvidenceDeletionResult,
+} from "./conversation-state-evidence-deletion.js";
+import type { PostgresConversationStateDataSource } from "./postgres-conversation-state-repository.js";
 
 const MAX_IDENTIFIER_CHARS = 512;
 const MAX_LIST_LIMIT = 100;
@@ -55,6 +60,11 @@ export interface ConversationStateInspectionStore {
     actionItemId: string;
     limit: number;
   }): Promise<InspectedActionItemEvent[]>;
+  deleteMessageEvidence(input: {
+    groupId: string;
+    messageId: string;
+    operatorHint: string;
+  }): Promise<ConversationMessageEvidenceDeletionResult>;
 }
 
 export type ConversationStateInspectionRuntime = {
@@ -161,6 +171,32 @@ export function registerConversationStateApi(
       }
     },
   );
+
+  app.delete<{ Params: { groupId: string; messageId: string } }>(
+    "/internal/conversation-state/groups/:groupId/messages/:messageId/evidence",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (store === undefined) return unavailable(reply);
+      const groupId = readBoundedId(request.params.groupId);
+      const messageId = readBoundedId(request.params.messageId);
+      const operatorHint = readBoundedId(request.headers["x-iris-operator"]);
+      if (groupId === undefined || messageId === undefined || operatorHint === undefined) {
+        return invalidRequest(reply);
+      }
+      try {
+        const result = await store.deleteMessageEvidence({ groupId, messageId, operatorHint });
+        if (result.status === "not_found") {
+          return reply.code(404).send({ ok: false, error: "conversation_message_not_found" });
+        }
+        return { ok: true, ...result };
+      } catch {
+        return reply.code(500).send({
+          ok: false,
+          error: "conversation_evidence_deletion_failed",
+        });
+      }
+    },
+  );
 }
 
 export function createPostgresConversationStateInspectionStore({
@@ -204,6 +240,7 @@ export function createPostgresConversationStateInspectionStore({
           ) AS evidence_message_ids
         FROM discussion_threads thread
         WHERE thread.group_id = $1
+          AND thread.retrieval_state = 'visible'
           AND thread.status = ANY($3::text[])
         ORDER BY thread.last_activity_at DESC, thread.id ASC
         LIMIT $2
@@ -232,6 +269,7 @@ export function createPostgresConversationStateInspectionStore({
           ) AS evidence_message_ids
         FROM action_items action
         WHERE action.group_id = $1
+          AND action.retrieval_state = 'visible'
           AND action.status = ANY($3::text[])
         ORDER BY action.updated_at DESC, action.id ASC
         LIMIT $2
@@ -287,6 +325,16 @@ export function createPostgresConversationStateInspectionStore({
         [actionItemId, limit],
       );
       return result.rows.map(mapActionEvent);
+    },
+
+    async deleteMessageEvidence(input) {
+      if (typeof (dataSource as { connect?: unknown }).connect !== "function") {
+        throw new Error("conversation evidence deletion requires a transactional data source");
+      }
+      return deleteConversationMessageEvidence({
+        dataSource: dataSource as PostgresConversationStateDataSource,
+        ...input,
+      });
     },
   };
 }

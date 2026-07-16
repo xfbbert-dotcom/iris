@@ -73,6 +73,7 @@ export function createConversationStateContextProvider({
           FROM discussion_threads thread
           WHERE thread.group_id = $1
             AND thread.status IN ('open', 'resolved')
+            AND thread.retrieval_state = 'visible'
         ), merge_walk AS (
           SELECT source.id AS source_thread_id,
                  source.group_id,
@@ -83,6 +84,7 @@ export function createConversationStateContextProvider({
           FROM discussion_threads source
           WHERE source.group_id = $1
             AND source.status = 'merged'
+            AND source.retrieval_state = 'visible'
           UNION ALL
           SELECT walk.source_thread_id,
                  walk.group_id,
@@ -96,6 +98,7 @@ export function createConversationStateContextProvider({
            AND next_thread.group_id = walk.group_id
           WHERE walk.depth < ${MAX_MERGE_DEPTH}
             AND next_thread.status = 'merged'
+            AND next_thread.retrieval_state = 'visible'
             AND NOT next_thread.id = ANY(walk.visited_thread_ids)
         ), merge_terminals AS (
           SELECT terminal.id,
@@ -189,12 +192,16 @@ export function createConversationStateContextProvider({
           FROM action_items action
           WHERE action.group_id = $1
             AND action.status = 'open'
+            AND action.retrieval_state = 'visible'
             AND NOT EXISTS (
               SELECT 1
               FROM discussion_threads thread
               WHERE thread.id = action.thread_id
                 AND thread.group_id = action.group_id
-                AND thread.status IN ('candidate', 'merged')
+                AND (
+                  thread.status IN ('candidate', 'merged')
+                  OR thread.retrieval_state <> 'visible'
+                )
             )
         )
         SELECT action.id,

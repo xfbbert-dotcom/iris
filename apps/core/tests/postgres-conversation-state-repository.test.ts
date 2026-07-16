@@ -427,7 +427,7 @@ describe("createPostgresConversationStateRepository", () => {
     expect(source.query).not.toHaveBeenCalled();
   });
 
-  it("excludes candidate-linked actions only from answer-relevant reads", async () => {
+  it("excludes candidate- and merged-thread actions only from answer-relevant reads", async () => {
     const source = {
       connect: vi.fn(),
       query: vi.fn(async () => ({ rows: [] })),
@@ -436,7 +436,7 @@ describe("createPostgresConversationStateRepository", () => {
 
     await repository.listRelevantActions({ groupId: "chat-a", limit: 3 });
     expect(source.query).toHaveBeenLastCalledWith(
-      expect.stringMatching(/not exists[\s\S]+discussion_threads[\s\S]+status = 'candidate'/iu),
+      expect.stringMatching(/not exists[\s\S]+discussion_threads[\s\S]+status in \('candidate', 'merged'\)/iu),
       ["chat-a", null, null, 3],
     );
 
@@ -474,11 +474,13 @@ describe("createPostgresConversationStateRepository", () => {
         .mockResolvedValueOnce({ rows: [{
           ...threadRow(),
           memory_id: "memory-1",
+          retrieval_visible: true,
           evidence_message_ids: ["message-1", "message-2"],
         }] })
         .mockResolvedValueOnce({ rows: [{
           ...threadRow(),
           memory_id: null,
+          retrieval_visible: true,
           evidence_message_ids: Array.from({ length: 41 }, (_, index) => `message-${index}`),
         }] }),
     } as unknown as PostgresConversationStateDataSource;
@@ -513,6 +515,7 @@ describe("createPostgresConversationStateRepository", () => {
     await expect(repository.completeProjectionRepair({
       id: "repair-1",
       attemptCount: 1,
+      projection: {},
     })).resolves.toBeUndefined();
   });
 });
@@ -778,7 +781,84 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
     })).rejects.toThrow("merge target is not canonical");
   });
 
-  it("hides candidate-linked actions from relevant reads but keeps them in extraction context", async () => {
+  it("rebinds source-thread actions to the canonical merge target with exact audit and repair", async () => {
+    const repository = createPostgresConversationStateRepository({ dataSource: pool! });
+    const target = integrationThreadOperation({
+      id: `action-merge-target-${suffix}`,
+      status: "open",
+      eventType: "created",
+      operationKey: `action-merge-target-${suffix}`,
+      evidenceMessageIds: [messageId, secondMessageId],
+    });
+    const source = integrationThreadOperation({
+      id: `action-merge-source-${suffix}`,
+      status: "open",
+      eventType: "created",
+      operationKey: `action-merge-source-${suffix}`,
+    });
+    await repository.applyOperations({ groupId, operations: [target, source] });
+    const action = integrationActionOperation({
+      id: `action-rebound-${suffix}`,
+      operationKey: `action-rebound-create-${suffix}`,
+      threadId: source.thread!.id,
+    });
+    await repository.applyOperations({ groupId, operations: [action] });
+
+    await repository.applyOperations({
+      groupId,
+      operations: [integrationThreadOperation({
+        id: source.thread!.id,
+        status: "merged",
+        eventType: "merged",
+        operationKey: `action-source-merge-${suffix}`,
+        expectedVersion: 1,
+        mergedIntoThreadId: target.thread!.id,
+      })],
+    });
+
+    await expect(pool!.query(
+      `
+      SELECT action.id, action.thread_id, action.version,
+        (SELECT COUNT(*)::int FROM action_items duplicate WHERE duplicate.id = action.id) AS entity_count,
+        ARRAY(
+          SELECT event.event_type || ':' || COALESCE(event.from_version::text, 'null') || ':' || event.to_version::text
+          FROM action_item_events event
+          WHERE event.action_item_id = action.id AND event.group_id = action.group_id
+          ORDER BY event.to_version
+        ) AS events,
+        ARRAY(
+          SELECT repair.entity_version::text
+          FROM conversation_state_projection_repairs repair
+          WHERE repair.entity_type = 'action'
+            AND repair.entity_id = action.id
+            AND repair.group_id = action.group_id
+          ORDER BY repair.entity_version
+        ) AS repair_versions
+      FROM action_items action
+      WHERE action.id = $1
+      `,
+      [action.action!.id],
+    )).resolves.toMatchObject({
+      rows: [{
+        id: action.action!.id,
+        thread_id: target.thread!.id,
+        version: "2",
+        entity_count: 1,
+        events: ["created:null:1", "corrected:1:2"],
+        repair_versions: ["1", "2"],
+      }],
+    });
+    await expect(repository.listRelevantActions({ groupId, limit: 100 }))
+      .resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: action.action!.id, threadId: target.thread!.id, version: 2 }),
+      ]));
+    await expect(pool!.query(
+      "SELECT id FROM action_items WHERE group_id = $1 AND thread_id = $2",
+      [groupId, source.thread!.id],
+    )).resolves.toMatchObject({ rows: [] });
+  });
+
+  it("rejects candidate-linked action writes before they can reach answer or extraction context", async () => {
     const repository = createPostgresConversationStateRepository({ dataSource: pool! });
     const candidate = integrationThreadOperation({
       id: `hidden-candidate-${suffix}`, status: "candidate", eventType: "created", operationKey: `hidden-candidate-${suffix}`,
@@ -786,13 +866,10 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
     const action = integrationActionOperation({
       id: `hidden-action-${suffix}`, operationKey: `hidden-action-${suffix}`, threadId: candidate.thread!.id,
     });
-    await repository.applyOperations({ groupId, operations: [candidate, action] });
-
-    const relevant = await repository.listRelevantActions({ groupId, limit: 100 });
-    expect(relevant.map((item) => item.id)).not.toContain(action.action!.id);
-    const extraction = await repository.loadExtractionContext({ groupId, threadLimit: 100, actionLimit: 100 });
-    expect(extraction.threads.map((thread) => thread.id)).toContain(candidate.thread!.id);
-    expect(extraction.actions.map((item) => item.id)).toContain(action.action!.id);
+    await expect(repository.applyOperations({ groupId, operations: [candidate, action] }))
+      .rejects.toThrow("action item thread is not retrieval-visible");
+    await expect(pool!.query("SELECT id FROM action_items WHERE id = $1", [action.action!.id]))
+      .resolves.toMatchObject({ rows: [] });
   });
 
   it("serializes concurrent identical operations across independent pool clients", async () => {
@@ -932,8 +1009,8 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
       `,
       [oldRepairId, newRepairId, projectionEntityId, groupId],
     );
-    await repository.completeProjectionRepair({ id: newRepairId, attemptCount: 1 });
-    await repository.completeProjectionRepair({ id: oldRepairId, attemptCount: 1 });
+    await repository.completeProjectionRepair({ id: newRepairId, attemptCount: 1, projection: {} });
+    await repository.completeProjectionRepair({ id: oldRepairId, attemptCount: 1, projection: {} });
     await expect(pool!.query(
       "SELECT projected_version FROM conversation_state_memory_projections WHERE entity_type = 'thread' AND entity_id = $1",
       [projectionEntityId],

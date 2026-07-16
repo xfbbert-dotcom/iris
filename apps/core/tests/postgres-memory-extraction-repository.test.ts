@@ -1136,7 +1136,8 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
   const suffix = randomUUID();
   const groupA = `extraction-group-a-${suffix}`;
   const groupB = `extraction-group-b-${suffix}`;
-  const groupIds = [groupA, groupB];
+  const memoryOnlyGroup = `extraction-memory-only-${suffix}`;
+  const groupIds = [groupA, groupB, memoryOnlyGroup];
   const contextIds = Array.from(
     { length: 12 },
     (_, index) => `feishu:extraction-context-${index.toString().padStart(2, "0")}-${suffix}`,
@@ -1675,6 +1676,142 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
       status: "stale",
       groupId: groupA,
       requestIds: claimed!.requestIds,
+    });
+  });
+
+  it("does not load, fingerprint, or persist disabled conversation-state families", async () => {
+    const repository = createRepository(pool);
+    const groupId = memoryOnlyGroup;
+    const messageId = `feishu:${groupId}`;
+    const timestamp = new Date("2026-07-14T04:10:00.000Z");
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId,
+      text: "Memory-only extraction evidence",
+      createdAt: timestamp,
+    });
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, created_at, updated_at
+      ) VALUES ($1, $2, 'Hidden thread', 'Must not be loaded', 'open', 0.9, 1,
+        $3, $3, $3, $3)
+      `,
+      [`memory-only-thread-${suffix}`, groupId, timestamp],
+    );
+    await pool!.query(
+      `
+      INSERT INTO action_items (
+        id, group_id, description, owner_ref_type, owner_ref, status,
+        confidence, version, created_at, updated_at
+      ) VALUES ($1, $2, 'Hidden action', 'text_label', 'owner', 'open', 0.9, 1, $3, $3)
+      `,
+      [`memory-only-action-${suffix}`, groupId, timestamp],
+    );
+    const registered = await repository.registerRequest({
+      groupId,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+      enabledOperationFamilies: ["memory"],
+    });
+
+    expect(claimed).toMatchObject({
+      existingThreads: [],
+      existingActions: [],
+      enabledOperationFamilies: ["memory"],
+    });
+    await pool!.query(
+      "UPDATE discussion_threads SET version = 2, updated_at = $2 WHERE id = $1",
+      [`memory-only-thread-${suffix}`, new Date("2026-07-14T04:11:00.000Z")],
+    );
+    await pool!.query(
+      "UPDATE action_items SET version = 2, updated_at = $2 WHERE id = $1",
+      [`memory-only-action-${suffix}`, new Date("2026-07-14T04:11:00.000Z")],
+    );
+
+    await expect(repository.loadRunInput(claimed!.id)).resolves.toMatchObject({
+      status: "ready",
+      run: {
+        existingThreads: [],
+        existingActions: [],
+        enabledOperationFamilies: ["memory"],
+      },
+    });
+    await expect(pool!.query<{
+      enabled_operation_families: string[];
+      thread_count: number;
+      action_count: number;
+    }>(
+      `
+      SELECT run.enabled_operation_families,
+             (SELECT COUNT(*)::int FROM group_memory_extraction_run_threads WHERE run_id = run.id) AS thread_count,
+             (SELECT COUNT(*)::int FROM group_memory_extraction_run_actions WHERE run_id = run.id) AS action_count
+      FROM group_memory_extraction_runs run
+      WHERE run.id = $1
+      `,
+      [claimed!.id],
+    )).resolves.toMatchObject({
+      rows: [{
+        enabled_operation_families: ["memory"],
+        thread_count: 0,
+        action_count: 0,
+      }],
+    });
+  });
+
+  it("preserves typed Feishu sender identities in extraction evidence", async () => {
+    const repository = createRepository(pool);
+    const messageId = `feishu:typed-sender-${suffix}`;
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId: groupA,
+      text: "I will own the typed identity work",
+      createdAt: new Date("2026-07-14T04:12:00.000Z"),
+    });
+    await pool!.query(
+      `
+      UPDATE conversation_messages
+      SET sender_id = 'ou_typed', sender_open_id = 'ou_typed',
+          sender_union_id = 'on_typed', sender_user_id = 'user_typed'
+      WHERE id = $1
+      `,
+      [messageId],
+    );
+    const registered = await repository.registerRequest({
+      groupId: groupA,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+      enabledOperationFamilies: ["memory", "thread", "action"],
+    });
+
+    expect(claimed?.evidenceMessages).toEqual([
+      expect.objectContaining({
+        senderId: "ou_typed",
+        senderOpenId: "ou_typed",
+        senderUnionId: "on_typed",
+        senderUserId: "user_typed",
+      }),
+    ]);
+    await expect(repository.loadRunInput(claimed!.id)).resolves.toMatchObject({
+      status: "ready",
+      run: {
+        evidenceMessages: [expect.objectContaining({ senderOpenId: "ou_typed" })],
+      },
     });
   });
 

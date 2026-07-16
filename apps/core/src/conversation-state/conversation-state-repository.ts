@@ -8,6 +8,7 @@ export const DISCUSSION_THREAD_EVENT_TYPES = [
   "merged",
   "corrected",
   "evidence_attached",
+  "evidence_deleted",
 ] as const;
 export const ACTION_ITEM_OWNER_REF_TYPES = ["feishu_user", "text_label"] as const;
 export const ACTION_ITEM_STATUSES = ["open", "completed", "cancelled"] as const;
@@ -18,6 +19,7 @@ export const ACTION_ITEM_EVENT_TYPES = [
   "reopened",
   "owner_resolved",
   "corrected",
+  "evidence_deleted",
 ] as const;
 export const CONVERSATION_STATE_ENTITY_TYPES = ["thread", "action"] as const;
 export const PROJECTION_REPAIR_STATUSES = [
@@ -137,12 +139,14 @@ export type ConversationStateProjectionTarget =
       entityType: "thread";
       entity: DiscussionThread;
       evidenceMessageIds: string[];
+      retrievalVisible: boolean;
       memoryId?: string;
     }
   | {
       entityType: "action";
       entity: ActionItem;
       evidenceMessageIds: string[];
+      retrievalVisible: boolean;
       memoryId?: string;
     };
 
@@ -237,7 +241,8 @@ export interface ConversationStateRepository {
   completeProjectionRepair(input: {
     id: string;
     attemptCount: number;
-    memoryId?: string;
+    /** Omit for a stale acknowledgement that must not advance the authoritative projection row. */
+    projection?: { memoryId?: string };
   }): Promise<void>;
   /** Privileged system-wide projection worker boundary; never expose to answering paths. */
   failProjectionRepair(input: {

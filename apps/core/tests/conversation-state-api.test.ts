@@ -61,6 +61,48 @@ describe("conversation state operator API", () => {
     await app.close();
   });
 
+  it("exposes evidence deletion only to an authenticated named operator", async () => {
+    const store = createStore();
+    store.deleteMessageEvidence.mockResolvedValue({
+      status: "deleted",
+      affectedThreadCount: 1,
+      affectedActionCount: 1,
+      deletedMemoryCount: 2,
+    });
+    const app = createApp(store);
+    const url = "/internal/conversation-state/groups/group-a/messages/message-a/evidence";
+
+    const unauthorized = await app.inject({
+      method: "DELETE",
+      url,
+      headers: { "x-iris-operator": "privacy-reviewer" },
+    });
+    const unnamed = await app.inject({ method: "DELETE", url, headers: authorization });
+    const deleted = await app.inject({
+      method: "DELETE",
+      url,
+      headers: { ...authorization, "x-iris-operator": "privacy-reviewer" },
+    });
+
+    expect(unauthorized.statusCode).toBe(401);
+    expect(unnamed.statusCode).toBe(400);
+    expect(deleted.statusCode).toBe(200);
+    expect(store.deleteMessageEvidence).toHaveBeenCalledOnce();
+    expect(store.deleteMessageEvidence).toHaveBeenCalledWith({
+      groupId: "group-a",
+      messageId: "message-a",
+      operatorHint: "privacy-reviewer",
+    });
+    expect(deleted.json()).toEqual({
+      ok: true,
+      status: "deleted",
+      affectedThreadCount: 1,
+      affectedActionCount: 1,
+      deletedMemoryCount: 2,
+    });
+    await app.close();
+  });
+
   it("lists current-group threads including candidates with bounded evidence IDs", async () => {
     const store = createStore();
     store.listThreads.mockResolvedValue([
@@ -345,5 +387,6 @@ function createStore() {
     listActions: vi.fn<ConversationStateInspectionStore["listActions"]>().mockResolvedValue([]),
     listThreadEvents: vi.fn<ConversationStateInspectionStore["listThreadEvents"]>().mockResolvedValue([]),
     listActionEvents: vi.fn<ConversationStateInspectionStore["listActionEvents"]>().mockResolvedValue([]),
+    deleteMessageEvidence: vi.fn().mockResolvedValue({ status: "not_found" }),
   };
 }

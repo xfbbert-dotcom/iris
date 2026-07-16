@@ -225,8 +225,13 @@ function validateActionOperation(input: {
   const action = input.actionsById.get(operation.actionId);
   if (action === undefined) return reject("unknown_action");
   if (action.version !== operation.expectedVersion) return reject("stale_version");
-  if (operation.operation === "correct" && Object.hasOwn(operation, "threadId") &&
-    !isValidThreadDependency(operation.threadId, input.threadsById)) {
+  if ((operation.operation === "correct" || operation.operation === "reopen") &&
+    !isValidThreadDependency(
+      operation.operation === "correct" && Object.hasOwn(operation, "threadId")
+        ? operation.threadId
+        : action.threadId,
+      input.threadsById,
+    )) {
     return reject("invalid_dependency");
   }
   let owner: { ownerRefType: "feishu_user" | "text_label"; ownerRef: string; ownerResolved: boolean } | undefined;
@@ -263,7 +268,7 @@ function validateOwner(
   const message = evidenceById.get(owner.messageId);
   if (message === undefined || !evidence.includes(message)) return reject("invalid_owner");
   if (owner.ownerType === "sender") {
-    return message.senderId === undefined ? reject("invalid_owner") : { ok: true, value: { ownerRefType: "feishu_user", ownerRef: message.senderId, ownerResolved: true } };
+    return message.senderOpenId === undefined ? reject("invalid_owner") : { ok: true, value: { ownerRefType: "feishu_user", ownerRef: message.senderOpenId, ownerResolved: true } };
   }
   if (owner.ownerType === "mention") {
     const mention = message.mentions?.find((entry) => entry.key === owner.mentionKey);
@@ -386,7 +391,7 @@ function isExactStringArray(value: unknown, maximum: number): value is string[] 
 
 function isValidRun(run: ConversationStateExtractionRun): boolean {
   const messages = run.evidenceMessages as ConversationStateExtractionMessage[];
-  return isIdentifier(run.id) && isIdentifier(run.groupId) && Array.isArray(messages) && Array.isArray(run.existingThreads) && Array.isArray(run.existingActions) && Array.isArray(run.enabledOperationFamilies) && messages.length > 0 && messages.length <= MAX_EVIDENCE_IDS && run.existingThreads.length <= 12 && run.existingActions.length <= 12 && new Set(messages.map((message) => message.id)).size === messages.length && new Set(run.existingThreads.map((thread) => thread.id)).size === run.existingThreads.length && new Set(run.existingActions.map((action) => action.id)).size === run.existingActions.length && messages.every((message) => message.evidenceEligible === true && message.groupId === run.groupId && isIdentifier(message.id) && isContent(message.text) && (message.senderId === undefined || isIdentifier(message.senderId)) && (message.mentions ?? []).every((mention: { key: string; openId: string }) => isIdentifier(mention.key) && isIdentifier(mention.openId))) && run.existingThreads.every((thread) => thread.groupId === run.groupId && isIdentifier(thread.id) && Number.isSafeInteger(thread.version) && thread.version >= 1 && Number.isSafeInteger(thread.evidenceCount) && thread.evidenceCount >= 0) && run.existingActions.every((action) => action.groupId === run.groupId && isIdentifier(action.id) && Number.isSafeInteger(action.version) && action.version >= 1) && new Set(run.enabledOperationFamilies).size === run.enabledOperationFamilies.length;
+  return isIdentifier(run.id) && isIdentifier(run.groupId) && Array.isArray(messages) && Array.isArray(run.existingThreads) && Array.isArray(run.existingActions) && Array.isArray(run.enabledOperationFamilies) && messages.length > 0 && messages.length <= MAX_EVIDENCE_IDS && run.existingThreads.length <= 12 && run.existingActions.length <= 12 && new Set(messages.map((message) => message.id)).size === messages.length && new Set(run.existingThreads.map((thread) => thread.id)).size === run.existingThreads.length && new Set(run.existingActions.map((action) => action.id)).size === run.existingActions.length && messages.every((message) => message.evidenceEligible === true && message.groupId === run.groupId && isIdentifier(message.id) && isContent(message.text) && (message.senderId === undefined || isIdentifier(message.senderId)) && (message.senderOpenId === undefined || isIdentifier(message.senderOpenId)) && (message.senderUnionId === undefined || isIdentifier(message.senderUnionId)) && (message.senderUserId === undefined || isIdentifier(message.senderUserId)) && (message.mentions ?? []).every((mention: { key: string; openId: string }) => isIdentifier(mention.key) && isIdentifier(mention.openId))) && run.existingThreads.every((thread) => thread.groupId === run.groupId && isIdentifier(thread.id) && Number.isSafeInteger(thread.version) && thread.version >= 1 && Number.isSafeInteger(thread.evidenceCount) && thread.evidenceCount >= 0) && run.existingActions.every((action) => action.groupId === run.groupId && isIdentifier(action.id) && Number.isSafeInteger(action.version) && action.version >= 1) && new Set(run.enabledOperationFamilies).size === run.enabledOperationFamilies.length;
 }
 
 function duplicateOperationKeys(operations: Array<{ operationKey: string }>): Set<string> {
@@ -508,7 +513,7 @@ function isValidThreadDependency(
 ): boolean {
   if (threadId === undefined || threadId === null) return true;
   const thread = threadsById.get(threadId);
-  return thread !== undefined && thread.status !== "merged";
+  return thread !== undefined && (thread.status === "open" || thread.status === "resolved");
 }
 
 function reject(code: string): { ok: false; code: string } {

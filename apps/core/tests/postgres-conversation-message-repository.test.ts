@@ -94,7 +94,7 @@ describe("PostgresConversationMessageRepository", () => {
 
     expect(firstQueryText(queryable)).toContain("conversation_message_mentions");
     expect(firstQueryText(queryable)).toContain("DELETE FROM conversation_message_mentions");
-    expect(firstQueryText(queryable)).toContain("unnest($10::text[], $11::text[])");
+    expect(firstQueryText(queryable)).toContain("unnest($13::text[], $14::text[])");
     expect(firstQueryParams(queryable)).toEqual(
       expect.arrayContaining([
         ["@_user_1", "@_user_2"],
@@ -129,8 +129,8 @@ describe("PostgresConversationMessageRepository", () => {
       ],
     });
 
-    expect(firstQueryParams(queryable)[9]).toEqual(["@_user_a"]);
-    expect(firstQueryParams(queryable)[10]).toEqual(["ou_owner"]);
+    expect(firstQueryParams(queryable)[12]).toEqual(["@_user_a"]);
+    expect(firstQueryParams(queryable)[13]).toEqual(["ou_owner"]);
   });
 
   it.each([
@@ -187,7 +187,7 @@ describe("PostgresConversationMessageRepository", () => {
       rawEventIdempotencyKey: "raw-event:feishu:event-1",
     });
     const params = firstQueryParams(queryable);
-    const storedText = params[6];
+    const storedText = params[9];
 
     expect(typeof storedText).toBe("string");
     expect((storedText as string).length).toBeLessThanOrEqual(8000);
@@ -221,7 +221,7 @@ describe("PostgresConversationMessageRepository", () => {
     ).resolves.toMatchObject({ rawEventIdempotencyKey });
 
     expect(rawEventIdempotencyKey).toHaveLength(MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH);
-    expect(firstQueryParams(queryable)[8]).toBe(rawEventIdempotencyKey);
+    expect(firstQueryParams(queryable)[11]).toBe(rawEventIdempotencyKey);
   });
 
   it("rejects invalid sentAt values before upsert", async () => {
@@ -445,6 +445,7 @@ runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
   let pool: pg.Pool | undefined;
   const suffix = randomUUID();
   const providerMessageId = `mention-replacement-${suffix}`;
+  const typedIdentityProviderMessageId = `typed-identity-${suffix}`;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: databaseUrl });
@@ -462,8 +463,8 @@ runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
     }
     try {
       await pool.query(
-        "DELETE FROM conversation_messages WHERE provider = 'feishu' AND provider_message_id = $1",
-        [providerMessageId],
+        "DELETE FROM conversation_messages WHERE provider = 'feishu' AND provider_message_id = ANY($1::text[])",
+        [[providerMessageId, typedIdentityProviderMessageId]],
       );
     } finally {
       await pool.end();
@@ -505,6 +506,46 @@ runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
     expect(persisted.rows).toEqual([
       { mention_key: "@_owner", mentioned_open_id: "ou_replacement" },
     ]);
+  });
+
+  it("persists Feishu open, union, and user sender identities in separate columns", async () => {
+    const repository = createPostgresConversationMessageRepository({ queryable: pool! });
+
+    const persisted = await repository.upsertMessage({
+      ...baseUpsertInput(),
+      providerMessageId: typedIdentityProviderMessageId,
+      chatId: `typed-identity-chat-${suffix}`,
+      senderId: "ou_sender",
+      senderOpenId: "ou_sender",
+      senderUnionId: "on_sender",
+      senderUserId: "user_sender",
+      rawEventIdempotencyKey: `raw-event:typed-identity-${suffix}`,
+    });
+
+    expect(persisted).toMatchObject({
+      senderId: "ou_sender",
+      senderOpenId: "ou_sender",
+      senderUnionId: "on_sender",
+      senderUserId: "user_sender",
+    });
+    await expect(pool!.query<{
+      sender_open_id: string;
+      sender_union_id: string;
+      sender_user_id: string;
+    }>(
+      `
+      SELECT sender_open_id, sender_union_id, sender_user_id
+      FROM conversation_messages
+      WHERE provider = 'feishu' AND provider_message_id = $1
+      `,
+      [typedIdentityProviderMessageId],
+    )).resolves.toMatchObject({
+      rows: [{
+        sender_open_id: "ou_sender",
+        sender_union_id: "on_sender",
+        sender_user_id: "user_sender",
+      }],
+    });
   });
 });
 

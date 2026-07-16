@@ -9,6 +9,9 @@ export type ConversationMessage = {
   providerMessageId: string;
   chatId: string;
   senderId?: string;
+  senderOpenId?: string;
+  senderUnionId?: string;
+  senderUserId?: string;
   messageType: string;
   text?: string;
   mentions?: ConversationMessageMention[];
@@ -22,6 +25,9 @@ export type UpsertConversationMessageInput = {
   providerMessageId: string;
   chatId: string;
   senderId?: string;
+  senderOpenId?: string;
+  senderUnionId?: string;
+  senderUserId?: string;
   messageType: string;
   text?: string;
   mentions?: ConversationMessageMention[];

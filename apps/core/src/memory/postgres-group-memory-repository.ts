@@ -385,7 +385,52 @@ async function listByGroup(
     `
     SELECT ${selectMemoryColumns}
     FROM group_memories gm
-    WHERE gm.group_id = $1${activeOnly ? " AND gm.status = 'active'" : ""}
+    WHERE gm.group_id = $1${activeOnly ? `
+      AND gm.status = 'active'
+      AND (
+        gm.origin <> 'system'
+        OR gm.created_by <> 'conversation-state-projector'
+        OR EXISTS (
+          SELECT 1
+          FROM conversation_state_memory_projections projection
+          JOIN conversation_state_projection_repairs repair
+            ON repair.entity_type = projection.entity_type
+           AND repair.entity_id = projection.entity_id
+           AND repair.group_id = projection.group_id
+           AND repair.entity_version = projection.projected_version
+           AND repair.status = 'completed'
+          LEFT JOIN discussion_threads thread
+            ON projection.entity_type = 'thread'
+           AND thread.id = projection.entity_id
+           AND thread.group_id = projection.group_id
+          LEFT JOIN action_items action
+            ON projection.entity_type = 'action'
+           AND action.id = projection.entity_id
+           AND action.group_id = projection.group_id
+          WHERE projection.memory_id = gm.id
+            AND projection.group_id = gm.group_id
+            AND projection.projected_version = CASE projection.entity_type
+              WHEN 'thread' THEN thread.version
+              WHEN 'action' THEN action.version
+            END
+            AND CASE projection.entity_type
+              WHEN 'thread' THEN thread.status = 'open' AND thread.retrieval_state = 'visible'
+              WHEN 'action' THEN action.status = 'open' AND action.retrieval_state = 'visible' AND (
+                action.thread_id IS NULL
+                OR EXISTS (
+                  SELECT 1
+                  FROM discussion_threads dependency
+                  WHERE dependency.id = action.thread_id
+                    AND dependency.group_id = action.group_id
+                    AND dependency.status IN ('open', 'resolved')
+                    AND dependency.retrieval_state = 'visible'
+                )
+              )
+              ELSE FALSE
+            END
+        )
+      )
+    ` : ""}
     ORDER BY gm.importance DESC, gm.updated_at DESC, gm.id ASC
     LIMIT $2
     `,

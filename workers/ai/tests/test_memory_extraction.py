@@ -55,7 +55,9 @@ def valid_v2_request(**overrides: object) -> dict[str, object]:
         "messages": [
             {
                 "id": "message-1",
-                "sender_id": "sender-1",
+                "sender_open_id": "sender-1",
+                "sender_union_id": "union-1",
+                "sender_user_id": "user-1",
                 "sent_at": "2026-07-14T00:00:00.000Z",
                 "text": "@Alice I will ship the API by Friday.",
                 "mentions": [{"key": "mention-1", "open_id": "alice-open-id"}],
@@ -531,7 +533,7 @@ def test_v2_prompt_keeps_group_data_untrusted_and_escapes_injection() -> None:
             messages=[
                 {
                     "id": "message-1",
-                    "sender_id": "sender-1",
+                    "sender_open_id": "sender-1",
                     "sent_at": "2026-07-14T00:00:00.000Z",
                     "text": hostile,
                     "mentions": [{"key": "mention-1", "open_id": "alice-open-id"}],
@@ -933,7 +935,7 @@ async def test_v2_owner_reviewer_probes_reject_context_only_or_missing_sender() 
                 valid_v2_request()["messages"][0],
                 {
                     "id": "message-2",
-                    "sender_id": "sender-2",
+                    "sender_open_id": "sender-2",
                     "sent_at": "2026-07-14T00:00:01.000Z",
                     "text": "@Bob I can own this.",
                     "mentions": [{"key": "mention-2", "open_id": "bob-open-id"}],
@@ -972,3 +974,54 @@ async def test_v2_owner_reviewer_probes_reject_context_only_or_missing_sender() 
         await MemoryExtractionService(
             FakeModel(v2_model_response(action_operations=[sender_without_sender]))
         ).extract(missing_sender_request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("typed_identity", [
+    {"sender_union_id": "on_sender"},
+    {"sender_user_id": "user_sender"},
+])
+async def test_v2_sender_owner_requires_open_id(typed_identity: dict[str, str]) -> None:
+    from iris_worker.contracts import MemoryExtractionRequestV2
+    from iris_worker.memory_extraction import InvalidModelResponse, MemoryExtractionService
+
+    request = MemoryExtractionRequestV2.model_validate(
+        valid_v2_request(messages=[{
+            "id": "message-1",
+            **typed_identity,
+            "sent_at": "2026-07-14T00:00:00.000Z",
+            "text": "I will ship the API by Friday.",
+            "mentions": [],
+        }])
+    )
+    sender_owner = valid_action_create(
+        owner={"owner_type": "sender", "message_id": "message-1"}
+    )
+
+    with pytest.raises(InvalidModelResponse, match="invalid_model_response"):
+        await MemoryExtractionService(
+            FakeModel(v2_model_response(action_operations=[sender_owner]))
+        ).extract(request)
+
+
+@pytest.mark.asyncio
+async def test_v2_sender_owner_accepts_open_id() -> None:
+    from iris_worker.contracts import MemoryExtractionRequestV2
+    from iris_worker.memory_extraction import MemoryExtractionService
+
+    request = MemoryExtractionRequestV2.model_validate(valid_v2_request(messages=[{
+        "id": "message-1",
+        "sender_open_id": "ou_sender",
+        "sent_at": "2026-07-14T00:00:00.000Z",
+        "text": "I will ship the API by Friday.",
+        "mentions": [],
+    }]))
+    sender_owner = valid_action_create(
+        owner={"owner_type": "sender", "message_id": "message-1"}
+    )
+
+    response = await MemoryExtractionService(
+        FakeModel(v2_model_response(action_operations=[sender_owner]))
+    ).extract(request)
+
+    assert len(response.action_operations) == 1
