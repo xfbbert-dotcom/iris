@@ -40,6 +40,43 @@ def valid_response():
     )
 
 
+def valid_v2_request() -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "run_id": "run-2",
+        "group_id": "group-1",
+        "input_fingerprint": "b" * 64,
+        "messages": [
+            {
+                "id": "message-1",
+                "sender_id": "sender-1",
+                "sent_at": "2026-07-14T00:00:00.000Z",
+                "text": "I will ship the API.",
+                "mentions": [],
+            }
+        ],
+        "evidence_message_ids": ["message-1"],
+        "existing_memories": [],
+        "existing_threads": [],
+        "existing_actions": [],
+        "enabled_operation_families": ["memory", "thread", "action"],
+    }
+
+
+def valid_v2_response():
+    from iris_worker.contracts import MemoryExtractionResponseV2
+
+    return MemoryExtractionResponseV2.model_validate(
+        {
+            "schema_version": 2,
+            "run_id": "run-2",
+            "candidates": [],
+            "thread_operations": [],
+            "action_operations": [],
+        }
+    )
+
+
 def settings():
     from iris_worker.config import Settings
 
@@ -165,6 +202,27 @@ def test_extract_accepts_valid_authenticated_request():
         "candidates": [],
     }
     assert len(service.calls) == 1
+
+
+def test_extract_accepts_schema_v2_without_regressing_v1_route():
+    service = FakeService(valid_v2_response())
+    with make_test_client(service) as client:
+        response = client.post(
+            "/v1/memory/extract",
+            json=valid_v2_request(),
+            headers={"Authorization": "Bearer exact-internal-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": 2,
+        "run_id": "run-2",
+        "candidates": [],
+        "thread_operations": [],
+        "action_operations": [],
+    }
+    assert len(service.calls) == 1
+    assert service.calls[0].schema_version == 2
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
 from .config import Settings
-from .contracts import MemoryExtractionRequest, MemoryExtractionResponse
+from .contracts import (
+    MemoryExtractionRequest,
+    MemoryExtractionRequestV2,
+    MemoryExtractionResponse,
+    MemoryExtractionResponseV2,
+)
 from .memory_extraction import MemoryExtractionService
 from .model_client import ModelClientError, OpenAICompatibleModelClient
 
@@ -20,8 +25,8 @@ ASGISend = Callable[[dict[str, Any]], Awaitable[None]]
 
 class ExtractionService(Protocol):
     async def extract(
-        self, request: MemoryExtractionRequest
-    ) -> MemoryExtractionResponse: ...
+        self, request: MemoryExtractionRequest | MemoryExtractionRequestV2
+    ) -> MemoryExtractionResponse | MemoryExtractionResponseV2: ...
 
 
 class _ExtractionBoundaryMiddleware:
@@ -122,10 +127,12 @@ def create_app(
 
     @app.post(
         "/v1/memory/extract",
-        response_model=MemoryExtractionResponse,
+        response_model=MemoryExtractionResponse | MemoryExtractionResponseV2,
         response_model_exclude_none=True,
     )
-    async def extract(request: MemoryExtractionRequest) -> MemoryExtractionResponse:
+    async def extract(
+        request: MemoryExtractionRequest | MemoryExtractionRequestV2,
+    ) -> MemoryExtractionResponse | MemoryExtractionResponseV2:
         return await service.extract(request)
 
     return app
