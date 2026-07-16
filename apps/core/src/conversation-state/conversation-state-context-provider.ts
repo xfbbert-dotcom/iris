@@ -25,16 +25,19 @@ const MAX_QUERY_TERMS = 24;
 const MAX_MERGE_DEPTH = 8;
 const QUERY_SEGMENT_PATTERN = /[\p{Script=Han}]+|[\p{Script=Latin}\p{N}_%]+/gu;
 const LATIN_STOPWORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "is",
-  "it", "no", "of", "on", "or", "please", "the", "to", "was", "what", "when", "where", "who", "with",
+  "a", "an", "and", "are", "as", "at", "be", "by", "can", "could", "did", "do", "does", "for",
+  "from", "has", "have", "how", "in", "is", "it", "no", "not", "of", "on", "or", "please", "should",
+  "that", "the", "this", "to", "was", "we", "what", "when", "where", "who", "with", "would",
 ]);
+const CONTRACTION_SUFFIXES = new Set(["d", "ll", "m", "re", "s", "t", "ve"]);
 const CJK_STOPWORDS = new Set([
   "的", "了", "和", "是", "在", "有", "请", "请问", "帮", "我", "你", "他", "她", "它", "我们", "你们",
   "他们", "这个", "那个", "什么", "怎么", "如何", "吗", "呢", "吧", "啊", "呀", "将", "已", "能", "可以",
   "需要", "关于", "以及", "与", "或", "并", "而", "但", "从", "到", "对", "把", "被", "给", "就", "都",
   "也", "很", "再", "还",
 ]);
-const CJK_EDGE_STOPWORDS = [...CJK_STOPWORDS].sort((left, right) => right.length - left.length);
+const CJK_QUESTION_PREFIXES = ["请问"];
+const CJK_QUESTION_SUFFIXES = ["吗", "呢", "吧"];
 const VALID_SINGLE_CJK_TERMS = new Set(["人", "税", "钱", "票", "码", "号", "款"]);
 
 type ContextRow = Record<string, unknown>;
@@ -279,15 +282,15 @@ function normalizeIdentifier(field: string, value: string): string {
 export function normalizeConversationStateQueryTerms(value: string): string[] {
   const terms: string[] = [];
   const seen = new Set<string>();
-  const normalized = value.toLocaleLowerCase();
+  const normalized = value.toLowerCase();
   for (const match of normalized.matchAll(QUERY_SEGMENT_PATTERN)) {
     const segment = match[0];
     if (segment === undefined) {
       continue;
     }
     const segmentTerms = isCjkSegment(segment)
-      ? cjkNgrams(trimCjkStopwordEdges(segment))
-      : LATIN_STOPWORDS.has(segment) ? [] : [segment];
+      ? cjkNgrams(stripExplicitCjkQuestionAffixes(segment))
+      : normalizeLatinSegment(segment);
     for (const term of segmentTerms) {
       if (seen.has(term)) {
         continue;
@@ -306,25 +309,32 @@ function isCjkSegment(value: string): boolean {
   return /^\p{Script=Han}+$/u.test(value);
 }
 
-function trimCjkStopwordEdges(value: string): string {
-  let trimmed = value;
-  let changed = true;
-  while (changed && trimmed.length > 0) {
-    changed = false;
-    for (const stopword of CJK_EDGE_STOPWORDS) {
-      if (trimmed.startsWith(stopword)) {
-        trimmed = trimmed.slice(stopword.length);
-        changed = true;
-        break;
-      }
-      if (trimmed.endsWith(stopword)) {
-        trimmed = trimmed.slice(0, -stopword.length);
-        changed = true;
-        break;
-      }
+function normalizeLatinSegment(value: string): string[] {
+  if (
+    LATIN_STOPWORDS.has(value) ||
+    CONTRACTION_SUFFIXES.has(value) ||
+    /^\p{Script=Latin}$/u.test(value)
+  ) {
+    return [];
+  }
+  return [value];
+}
+
+function stripExplicitCjkQuestionAffixes(value: string): string {
+  let normalized = value;
+  for (const prefix of CJK_QUESTION_PREFIXES) {
+    if (normalized.startsWith(prefix)) {
+      normalized = normalized.slice(prefix.length);
+      break;
     }
   }
-  return trimmed;
+  for (const suffix of CJK_QUESTION_SUFFIXES) {
+    if (normalized.endsWith(suffix)) {
+      normalized = normalized.slice(0, -suffix.length);
+      break;
+    }
+  }
+  return normalized;
 }
 
 function cjkNgrams(value: string): string[] {

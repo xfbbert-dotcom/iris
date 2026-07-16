@@ -113,3 +113,41 @@ The provider now uses bounded deterministic Latin/digit and CJK-bigram query
 terms with stopword filtering. Thread and action lexical overlap use `strpos`
 for literal PostgreSQL matching; no document permission guard, live-chat
 anchor, Task 9 API, or deployment behavior changed.
+
+## Task 8 Tokenizer Correctness Follow-up 2
+
+### RED
+
+Command:
+
+```powershell
+$env:IRIS_TEST_DATABASE_URL = 'postgres://iris:iris@localhost:5432/iris'
+npm exec --workspace apps/core -- vitest run tests/conversation-state-context-provider.test.ts
+```
+
+Result: failed as expected (2 failures). The old CJK edge-stopword crop
+removed the leading characters from the meaningful `和平` and `对接` bigrams;
+the real PostgreSQL resolved-thread assertion for `和平` consequently failed.
+
+### GREEN
+
+Commands:
+
+```powershell
+$env:IRIS_TEST_DATABASE_URL = 'postgres://iris:iris@localhost:5432/iris'
+npm exec --workspace apps/core -- vitest run tests/conversation-state-context-provider.test.ts tests/context-assembly.test.ts tests/document-retrieval-context.test.ts tests/answer-draft-runtime.test.ts
+npm run typecheck
+git diff --check
+```
+
+Result: all four focused files passed (80/80), including the real PostgreSQL
+provider section (7/7); `tsc --noEmit` and `git diff --check` passed.
+
+### Scope
+
+The tokenizer now uses `toLowerCase()`, preserves CJK business bigrams without
+single-character edge cropping, and removes English contraction fragments,
+single-letter Latin terms, and base function words. Terms remain deduplicated
+and capped at 24. PostgreSQL literal `strpos` matching, recursive canonical
+merge behavior, document permission guard, and final live-chat anchor were
+unchanged; no Task 9 work was performed.

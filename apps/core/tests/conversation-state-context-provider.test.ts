@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createConversationStateContextProvider } from "../src/conversation-state/conversation-state-context-provider.js";
+import {
+  createConversationStateContextProvider,
+  normalizeConversationStateQueryTerms,
+} from "../src/conversation-state/conversation-state-context-provider.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
@@ -125,6 +128,28 @@ describe("createConversationStateContextProvider", () => {
     ]);
     expect(query.mock.calls[0]?.[0]).not.toContain("LIKE '%' || term || '%'");
     expect(query.mock.calls[1]?.[0]).toContain("strpos");
+  });
+
+  it("preserves business CJK bigrams while dropping contraction fragments and Latin singletons", () => {
+    const cjkTerms = normalizeConversationStateQueryTerms(
+      "合作 和平 对接 请问合作进度 这个对接怎么推进",
+    );
+
+    expect(cjkTerms).toEqual(expect.arrayContaining(["合作", "和平", "对接", "进度", "推进"]));
+    expect(cjkTerms).not.toContain("和");
+    expect(cjkTerms).not.toContain("对");
+    expect(new Set(cjkTerms).size).toBe(cjkTerms.length);
+    expect(normalizeConversationStateQueryTerms("WHAT'S / We're / Can't / I'd, Launch!")).toEqual([
+      "launch",
+    ]);
+    expect(normalizeConversationStateQueryTerms(
+      "what we can do does did the a an to of for on in and or this that it please could would should be have has not",
+    )).toEqual([]);
+    expect(normalizeConversationStateQueryTerms("LAUNCH, launch!")).toEqual(["launch"]);
+    expect(normalizeConversationStateQueryTerms("a z 7")).toEqual(["7"]);
+    expect(normalizeConversationStateQueryTerms(
+      Array.from({ length: 30 }, (_, index) => `term${index}`).join(" "),
+    )).toHaveLength(24);
   });
 });
 
@@ -272,6 +297,47 @@ runIfDatabase("ConversationStateContextProvider with Postgres", () => {
     for (const hiddenThreadId of [ids.crossSource, ids.otherTerminal]) {
       expect(crossGroup.threads.map((thread) => thread.id)).not.toContain(hiddenThreadId);
     }
+  });
+
+  it("keeps Chinese business terms and ignores English contraction function words", async () => {
+    const ids = {
+      businessResolved: `business-resolved-${suffix}`,
+      businessAction: `business-action-${suffix}`,
+      contractionResolved: `contraction-resolved-${suffix}`,
+    };
+    await insertThread(pool!, {
+      id: ids.businessResolved,
+      groupId,
+      status: "resolved",
+      title: "合作 和平 对接",
+      summary: "合作进度",
+    });
+    await insertAction(pool!, {
+      id: ids.businessAction,
+      groupId,
+      description: "合作对接进度",
+      ownerRef: "other",
+    });
+    await insertThread(pool!, {
+      id: ids.contractionResolved,
+      groupId,
+      status: "resolved",
+      title: "what we can do",
+      summary: "function words only",
+    });
+    const provider = createConversationStateContextProvider({ dataSource: pool! });
+
+    const cooperation = await provider.loadRelevant({ groupId, queryText: "请问合作进度" });
+    expect(cooperation.threads.map((thread) => thread.id)).toContain(ids.businessResolved);
+    const peace = await provider.loadRelevant({ groupId, queryText: "和平" });
+    expect(peace.threads.map((thread) => thread.id)).toContain(ids.businessResolved);
+    const handoff = await provider.loadRelevant({ groupId, queryText: "这个对接怎么推进" });
+    expect(handoff.actions.map((action) => action.id)).toContain(ids.businessAction);
+    const contractions = await provider.loadRelevant({
+      groupId,
+      queryText: "What's / We're / Can't / I'd",
+    });
+    expect(contractions.threads.map((thread) => thread.id)).not.toContain(ids.contractionResolved);
   });
 });
 
