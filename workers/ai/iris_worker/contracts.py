@@ -321,6 +321,7 @@ class TextLabelOwnerCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     owner_type: Literal["text_label"]
+    message_id: Identifier
     label: MemoryText
 
     @field_validator("label")
@@ -452,13 +453,15 @@ class ThreadCorrectOperation(EvidenceBoundOperation):
     def validate_corrected_fields(self) -> ThreadCorrectOperation:
         if len(self.corrected_fields) != len(set(self.corrected_fields)):
             raise ValueError("corrected fields must be unique")
-        supplied = {
-            name
-            for name, value in (("title", self.title), ("summary", self.summary))
-            if value is not None and value.strip()
-        }
+        supplied = self.model_fields_set & {"title", "summary"}
         if supplied != set(self.corrected_fields):
             raise ValueError("corrected fields must exactly match supplied values")
+        if any(
+            not isinstance(getattr(self, field_name), str)
+            or not getattr(self, field_name).strip()
+            for field_name in supplied
+        ):
+            raise ValueError("corrected thread values must be nonblank")
         return self
 
 
@@ -543,17 +546,15 @@ class ActionCorrectOperation(ExistingActionOperation):
     def validate_corrected_fields(self) -> ActionCorrectOperation:
         if len(self.corrected_fields) != len(set(self.corrected_fields)):
             raise ValueError("corrected fields must be unique")
-        supplied = {
-            name
-            for name, value in (
-                ("description", self.description),
-                ("thread_id", self.thread_id),
-                ("owner", self.owner),
-            )
-            if value is not None and (not isinstance(value, str) or value.strip())
-        }
+        supplied = self.model_fields_set & {"description", "thread_id", "owner"}
         if supplied != set(self.corrected_fields):
             raise ValueError("corrected fields must exactly match supplied values")
+        if "description" in supplied and (
+            not isinstance(self.description, str) or not self.description.strip()
+        ):
+            raise ValueError("corrected description must be nonblank")
+        if "owner" in supplied and self.owner is None:
+            raise ValueError("corrected owner cannot be null")
         return self
 
 
