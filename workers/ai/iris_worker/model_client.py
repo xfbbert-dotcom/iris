@@ -30,13 +30,19 @@ _MODEL_ERROR_CODES = {
     "invalid_model_response",
 }
 _RETRY_AFTER_PATTERN = re.compile(r"^(0|[1-9][0-9]{0,4})$")
+_RESPONSE_SCHEMA_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_RETRY_AFTER_SECONDS = 86_400
 _MAX_CONTENT_LENGTH_DIGITS = 20
 
 
 class ModelClient(Protocol):
     async def complete_json_object(
-        self, *, system_instruction: str, user_content: str
+        self,
+        *,
+        system_instruction: str,
+        user_content: str,
+        response_schema: dict[str, object] | None = None,
+        response_schema_name: str | None = None,
     ) -> str: ...
 
 
@@ -64,6 +70,8 @@ class _ProviderMessage(BaseModel):
     role: Literal["assistant"]
     content: BoundedProviderString
     refusal: Annotated[str, StringConstraints(max_length=4096)] | None = None
+    # Gemini's OpenAI-compatible endpoint returns its bounded thought signature here.
+    extra_content: dict[str, object] | None = None
 
 
 class _ProviderChoice(BaseModel):
@@ -133,27 +141,52 @@ class OpenAICompatibleModelClient:
         self._transport = transport
 
     async def complete_json_object(
-        self, *, system_instruction: str, user_content: str
+        self,
+        *,
+        system_instruction: str,
+        user_content: str,
+        response_schema: dict[str, object] | None = None,
+        response_schema_name: str | None = None,
     ) -> str:
+        _validate_response_schema_options(response_schema, response_schema_name)
         try:
             async with asyncio.timeout(self._wall_timeout_seconds):
                 return await self._complete_json_object(
                     system_instruction=system_instruction,
                     user_content=user_content,
+                    response_schema=response_schema,
+                    response_schema_name=response_schema_name,
                 )
         except TimeoutError:
             raise ModelClientError("provider_timeout") from None
 
     async def _complete_json_object(
-        self, *, system_instruction: str, user_content: str
+        self,
+        *,
+        system_instruction: str,
+        user_content: str,
+        response_schema: dict[str, object] | None,
+        response_schema_name: str | None,
     ) -> str:
+        response_format: dict[str, object]
+        if response_schema is None:
+            response_format = {"type": "json_object"}
+        else:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": response_schema_name,
+                    "strict": True,
+                    "schema": response_schema,
+                },
+            }
         payload = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": user_content},
             ],
-            "response_format": {"type": "json_object"},
+            "response_format": response_format,
             "temperature": 0,
         }
         try:
@@ -202,6 +235,17 @@ class OpenAICompatibleModelClient:
             raise ModelClientError("provider_unavailable") from None
 
         return _parse_completion_content(body)
+
+
+def _validate_response_schema_options(
+    response_schema: dict[str, object] | None, response_schema_name: str | None
+) -> None:
+    if (response_schema is None) != (response_schema_name is None):
+        raise ValueError("response schema and name must be supplied together")
+    if response_schema_name is not None and _RESPONSE_SCHEMA_NAME_PATTERN.fullmatch(
+        response_schema_name
+    ) is None:
+        raise ValueError("invalid response schema name")
 
 
 async def _read_bounded_body(response: httpx.Response, limit: int) -> bytes:

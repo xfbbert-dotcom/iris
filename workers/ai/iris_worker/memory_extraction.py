@@ -6,6 +6,11 @@ from xml.etree import ElementTree
 from pydantic import ValidationError
 
 from .contracts import (
+    MAX_CANDIDATES,
+    MAX_EVIDENCE_MESSAGE_IDS,
+    MAX_IDENTIFIER_CHARS,
+    MAX_MEMORY_CONTENT_CHARS,
+    MAX_OPERATIONS_PER_FAMILY,
     MemoryExtractionRequest,
     MemoryExtractionRequestV2,
     MemoryExtractionResponse,
@@ -38,12 +43,24 @@ V2_SYSTEM_INSTRUCTION = (
     "Suggestions, questions, and brainstorming are not commitments.\n"
     "Resolve, reopen, merge, complete, or cancel only with an exact supporting text span.\n"
     "Return schema_version=2 and echo run_id exactly. Include exactly candidates, "
-    "thread_operations, and action_operations arrays. Thread operations are create, "
-    "attach_evidence, promote, merge, resolve, reopen, update_summary, or correct; "
-    "action operations are create, complete, cancel, reopen, resolve_owner, or correct. "
-    "Use only eligible evidence message ids.\n"
+    "thread_operations, and action_operations arrays. Every operation needs a unique "
+    "operation_key, confidence, eligible evidence_message_ids, and an exact evidence_span.\n"
+    "Thread create needs title, summary, and initial_status. Existing-thread operations "
+    "use thread_id and expected_version; promote and update_summary also need summary; "
+    "merge uses source_thread_id, target_thread_id, and expected_version; correct uses "
+    "corrected_fields and exactly those replacement fields.\n"
+    "Action create needs description and owner. Existing-action operations use action_id "
+    "and expected_version; resolve_owner also needs owner; correct uses corrected_fields "
+    "and exactly those replacement fields. An owner is sender with message_id, mention "
+    "with message_id and mention_key, or text_label with message_id and label. Do not "
+    "invent existing thread, action, memory, message, or mention ids.\n"
+    "Thread operations are create, attach_evidence, promote, merge, resolve, reopen, "
+    "update_summary, or correct; action operations are create, complete, cancel, reopen, "
+    "resolve_owner, or correct. Use only eligible evidence message ids.\n"
     "Return one JSON object and no surrounding text."
 )
+
+_V2_RESPONSE_SCHEMA_NAME = "iris_memory_extraction_v2"
 
 
 class InvalidModelResponse(ModelClientError):
@@ -58,13 +75,14 @@ class MemoryExtractionService:
     async def extract(
         self, request: MemoryExtractionRequest | MemoryExtractionRequestV2
     ) -> MemoryExtractionResponse | MemoryExtractionResponseV2:
+        is_v2 = isinstance(request, MemoryExtractionRequestV2)
         content = await self._model_client.complete_json_object(
             system_instruction=(
-                V2_SYSTEM_INSTRUCTION
-                if isinstance(request, MemoryExtractionRequestV2)
-                else SYSTEM_INSTRUCTION
+                V2_SYSTEM_INSTRUCTION if is_v2 else SYSTEM_INSTRUCTION
             ),
             user_content=build_extraction_prompt(request),
+            response_schema=_v2_response_schema() if is_v2 else None,
+            response_schema_name=_V2_RESPONSE_SCHEMA_NAME if is_v2 else None,
         )
         response = _parse_response(content, request.schema_version)
         if response.run_id != request.run_id:
@@ -85,6 +103,260 @@ class MemoryExtractionService:
                 raise InvalidModelResponse()
             _validate_v2_response_ownership(request, response)
         return response
+
+
+def _v2_response_schema() -> dict[str, object]:
+    identifier = _string_schema(MAX_IDENTIFIER_CHARS)
+    memory_text = _string_schema(MAX_MEMORY_CONTENT_CHARS)
+    confidence = {"type": "number", "minimum": 0, "maximum": 1}
+    evidence_ids = {
+        "type": "array",
+        "items": identifier,
+        "minItems": 1,
+        "maxItems": MAX_EVIDENCE_MESSAGE_IDS,
+    }
+    common_operation_properties = {
+        "operation_key": identifier,
+        "confidence": confidence,
+        "evidence_message_ids": evidence_ids,
+        "evidence_span": memory_text,
+    }
+    common_operation_required = [
+        "operation",
+        "operation_key",
+        "confidence",
+        "evidence_message_ids",
+        "evidence_span",
+    ]
+
+    owner = {
+        "anyOf": [
+            _closed_object(
+                {"owner_type": _enum("sender"), "message_id": identifier},
+                ["owner_type", "message_id"],
+            ),
+            _closed_object(
+                {
+                    "owner_type": _enum("mention"),
+                    "message_id": identifier,
+                    "mention_key": identifier,
+                },
+                ["owner_type", "message_id", "mention_key"],
+            ),
+            _closed_object(
+                {
+                    "owner_type": _enum("text_label"),
+                    "message_id": identifier,
+                    "label": memory_text,
+                },
+                ["owner_type", "message_id", "label"],
+            ),
+        ]
+    }
+
+    def thread_operation(
+        operation: str,
+        fields: dict[str, object],
+        required: list[str],
+    ) -> dict[str, object]:
+        return _closed_object(
+            {
+                **common_operation_properties,
+                "operation": _enum(operation),
+                **fields,
+            },
+            [*common_operation_required, *required],
+        )
+
+    expected_thread = {"thread_id": identifier, "expected_version": _positive_integer()}
+    thread_operations = [
+        thread_operation(
+            "create",
+            {
+                "title": memory_text,
+                "summary": memory_text,
+                "initial_status": _enum("candidate", "open"),
+            },
+            ["title", "summary", "initial_status"],
+        ),
+        thread_operation(
+            "attach_evidence",
+            expected_thread,
+            ["thread_id", "expected_version"],
+        ),
+        thread_operation(
+            "promote",
+            {**expected_thread, "summary": memory_text},
+            ["thread_id", "expected_version", "summary"],
+        ),
+        thread_operation(
+            "merge",
+            {
+                "source_thread_id": identifier,
+                "target_thread_id": identifier,
+                "expected_version": _positive_integer(),
+            },
+            ["source_thread_id", "target_thread_id", "expected_version"],
+        ),
+        thread_operation(
+            "resolve", expected_thread, ["thread_id", "expected_version"]
+        ),
+        thread_operation(
+            "reopen", expected_thread, ["thread_id", "expected_version"]
+        ),
+        thread_operation(
+            "update_summary",
+            {**expected_thread, "summary": memory_text},
+            ["thread_id", "expected_version", "summary"],
+        ),
+        thread_operation(
+            "correct",
+            {
+                **expected_thread,
+                "corrected_fields": {
+                    "type": "array",
+                    "items": _enum("title", "summary"),
+                    "minItems": 1,
+                    "maxItems": 2,
+                },
+                "title": memory_text,
+                "summary": memory_text,
+            },
+            ["thread_id", "expected_version", "corrected_fields"],
+        ),
+    ]
+
+    def action_operation(
+        operation: str,
+        fields: dict[str, object],
+        required: list[str],
+    ) -> dict[str, object]:
+        return _closed_object(
+            {
+                **common_operation_properties,
+                "operation": _enum(operation),
+                **fields,
+            },
+            [*common_operation_required, *required],
+        )
+
+    existing_action = {"action_id": identifier, "expected_version": _positive_integer()}
+    action_operations = [
+        action_operation(
+            "create",
+            {
+                "thread_id": identifier,
+                "description": memory_text,
+                "owner": owner,
+                "due_at": _string_schema(64),
+                "due_evidence_span": memory_text,
+            },
+            ["description", "owner"],
+        ),
+        action_operation(
+            "complete", existing_action, ["action_id", "expected_version"]
+        ),
+        action_operation(
+            "cancel", existing_action, ["action_id", "expected_version"]
+        ),
+        action_operation(
+            "reopen", existing_action, ["action_id", "expected_version"]
+        ),
+        action_operation(
+            "resolve_owner",
+            {**existing_action, "owner": owner},
+            ["action_id", "expected_version", "owner"],
+        ),
+        action_operation(
+            "correct",
+            {
+                **existing_action,
+                "corrected_fields": {
+                    "type": "array",
+                    "items": _enum("description", "thread_id", "owner"),
+                    "minItems": 1,
+                    "maxItems": 3,
+                },
+                "description": memory_text,
+                "thread_id": {"anyOf": [identifier, {"type": "null"}]},
+                "owner": owner,
+            },
+            ["action_id", "expected_version", "corrected_fields"],
+        ),
+    ]
+
+    candidate = _closed_object(
+        {
+            "category": _enum(
+                "project", "preference", "person", "term", "workflow", "decision"
+            ),
+            "content": memory_text,
+            "importance": {"type": "integer", "minimum": 1, "maximum": 5},
+            "confidence": confidence,
+            "evidence_message_ids": evidence_ids,
+            "relation": _enum("new", "duplicate", "conflict"),
+            "existing_memory_id": identifier,
+        },
+        [
+            "category",
+            "content",
+            "importance",
+            "confidence",
+            "evidence_message_ids",
+            "relation",
+        ],
+    )
+    return _closed_object(
+        {
+            "schema_version": {"type": "integer", "enum": [2]},
+            "run_id": identifier,
+            "candidates": {
+                "type": "array",
+                "items": candidate,
+                "maxItems": MAX_CANDIDATES,
+            },
+            "thread_operations": {
+                "type": "array",
+                "items": {"anyOf": thread_operations},
+                "maxItems": MAX_OPERATIONS_PER_FAMILY,
+            },
+            "action_operations": {
+                "type": "array",
+                "items": {"anyOf": action_operations},
+                "maxItems": MAX_OPERATIONS_PER_FAMILY,
+            },
+        },
+        [
+            "schema_version",
+            "run_id",
+            "candidates",
+            "thread_operations",
+            "action_operations",
+        ],
+    )
+
+
+def _closed_object(
+    properties: dict[str, object], required: list[str]
+) -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def _string_schema(max_length: int) -> dict[str, object]:
+    return {"type": "string", "minLength": 1, "maxLength": max_length}
+
+
+def _enum(*values: str) -> dict[str, object]:
+    return {"type": "string", "enum": list(values)}
+
+
+def _positive_integer() -> dict[str, object]:
+    return {"type": "integer", "minimum": 1}
 
 
 def build_extraction_prompt(

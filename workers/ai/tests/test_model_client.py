@@ -131,6 +131,59 @@ async def test_calls_chat_completions_with_json_object_mode_and_explicit_timeout
 
 
 @pytest.mark.asyncio
+async def test_accepts_gemini_extra_content_without_relaxing_other_message_fields():
+    provider_response = completion_response('{"schema_version":2}')
+    message = provider_response["choices"][0]["message"]
+    message["extra_content"] = {
+        "google": {"thought_signature": "bounded-provider-metadata"}
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return streaming_json_response(provider_response)
+
+    result = await client_for(handler).complete_json_object(
+        system_instruction="trusted instruction",
+        user_content="untrusted data",
+    )
+
+    assert result == '{"schema_version":2}'
+
+
+@pytest.mark.asyncio
+async def test_calls_chat_completions_with_explicit_json_schema_mode():
+    captured: dict[str, object] = {}
+    response_schema = {
+        "type": "object",
+        "properties": {"schema_version": {"type": "integer", "enum": [2]}},
+        "required": ["schema_version"],
+        "additionalProperties": False,
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return streaming_json_response(completion_response('{"schema_version":2}'))
+
+    result = await client_for(handler).complete_json_object(
+        system_instruction="trusted instruction",
+        user_content="untrusted data",
+        response_schema=response_schema,
+        response_schema_name="iris_memory_extraction_v2",
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "iris_memory_extraction_v2",
+            "strict": True,
+            "schema": response_schema,
+        },
+    }
+    assert result == '{"schema_version":2}'
+
+
+@pytest.mark.asyncio
 async def test_accepts_large_structured_content_within_configured_byte_budget():
     content = json.dumps({"candidates": [{"content": "x" * 5000}]})
 
