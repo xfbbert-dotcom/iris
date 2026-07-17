@@ -1057,7 +1057,7 @@ docker ps -a --filter "name=iris" --format "{{.Names}} {{.Status}}"
 
 Expected: acceptance PASS, full Core/Python/pilot verification PASS, no diff errors, clean worktree after the final documentation commit, and no disposable containers.
 
-- [ ] **Step 6: Request two-stage independent review**
+- [x] **Step 6: Request two-stage independent review**
 
 First review checks requirements against the approved design. Second review checks implementation quality, migrations, security boundaries, idempotency, and test evidence. Fix every blocker and important issue with a failing regression test before implementation changes, rerun focused tests, and commit each coherent fix.
 
