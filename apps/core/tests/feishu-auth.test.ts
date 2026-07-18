@@ -135,6 +135,9 @@ describe("Feishu auth primitives", () => {
     const nonce = "nonce-1";
     const verifier = createFeishuRequestVerifier({
       encryptKey
+    }, {
+      now: () => new Date("2026-07-01T00:00:00.000Z"),
+      maxTimestampSkewSeconds: 300,
     });
 
     expect(
@@ -169,6 +172,9 @@ describe("Feishu auth primitives", () => {
     const verifier = createFeishuRequestVerifier({
       verificationToken,
       encryptKey
+    }, {
+      now: () => new Date("2026-07-01T00:00:00.000Z"),
+      maxTimestampSkewSeconds: 300,
     });
 
     expect(
@@ -214,6 +220,43 @@ describe("Feishu auth primitives", () => {
         rawBody
       })
     ).toBe(true);
+  });
+
+  it("requires a current integer epoch timestamp before accepting a signature", () => {
+    const rawBody = JSON.stringify({ header: { token: verificationToken } });
+    const nonce = "nonce-1";
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const verifier = createFeishuRequestVerifier({
+      verificationToken,
+      encryptKey,
+    }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 300,
+    });
+
+    const requestForTimestamp = (timestamp: string) => ({
+      headers: {
+        "x-lark-request-timestamp": timestamp,
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(timestamp, nonce, rawBody),
+      },
+      body: { header: { token: verificationToken } },
+      rawBody,
+    });
+
+    expect(verifier(requestForTimestamp(String(nowSeconds - 300)))).toBe(true);
+    expect(verifier(requestForTimestamp(String(nowSeconds - 301)))).toBe(false);
+    expect(verifier(requestForTimestamp(String(nowSeconds + 301)))).toBe(false);
+    expect(verifier(requestForTimestamp("1784419200.5"))).toBe(false);
+    expect(verifier({
+      headers: {
+        "x-lark-request-timestamp": String(nowSeconds),
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(String(nowSeconds), nonce, rawBody),
+      },
+      body: { header: { token: verificationToken } },
+    })).toBe(false);
   });
 });
 

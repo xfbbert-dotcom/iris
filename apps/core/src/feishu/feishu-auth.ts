@@ -7,10 +7,15 @@ export type FeishuAuthConfig = {
 
 export type FeishuRequestVerifier = (request: FeishuAuthRequest) => boolean;
 
-type FeishuAuthRequest = {
+export type FeishuAuthRequest = {
   headers: Record<string, string | undefined>;
   body: unknown;
   rawBody?: string;
+};
+
+export type FeishuRequestVerifierOptions = {
+  now?: () => Date;
+  maxTimestampSkewSeconds?: number;
 };
 
 type FeishuSignatureInput = {
@@ -48,7 +53,13 @@ export function verifyFeishuSignature(input: FeishuSignatureInput): boolean {
   return safeEqual(signature, expectedSignature);
 }
 
-export function createFeishuRequestVerifier(config: FeishuAuthConfig): FeishuRequestVerifier {
+export function createFeishuRequestVerifier(
+  config: FeishuAuthConfig,
+  options: FeishuRequestVerifierOptions = {},
+): FeishuRequestVerifier {
+  const now = options.now ?? (() => new Date());
+  const maxTimestampSkewSeconds = options.maxTimestampSkewSeconds ?? 300;
+
   return (request) => {
     const verificationToken = config.verificationToken;
     const encryptKey = config.encryptKey;
@@ -62,6 +73,11 @@ export function createFeishuRequestVerifier(config: FeishuAuthConfig): FeishuReq
     const signatureVerified =
       encryptKey === undefined ||
       (request.rawBody !== undefined &&
+        hasValidFeishuTimestamp({
+          headers: request.headers,
+          now: now(),
+          maxTimestampSkewSeconds,
+        }) &&
         verifyFeishuSignature({
           headers: request.headers,
           rawBody: request.rawBody,
@@ -70,6 +86,30 @@ export function createFeishuRequestVerifier(config: FeishuAuthConfig): FeishuReq
 
     return tokenVerified && signatureVerified;
   };
+}
+
+function hasValidFeishuTimestamp(input: {
+  headers: Record<string, string | undefined>;
+  now: Date;
+  maxTimestampSkewSeconds: number;
+}): boolean {
+  const timestamp = getHeader(input.headers, "x-lark-request-timestamp");
+  if (timestamp === undefined || !/^\d+$/u.test(timestamp)) {
+    return false;
+  }
+
+  const timestampSeconds = Number(timestamp);
+  const nowSeconds = Math.floor(input.now.getTime() / 1_000);
+  if (
+    !Number.isSafeInteger(timestampSeconds) ||
+    !Number.isFinite(nowSeconds) ||
+    !Number.isFinite(input.maxTimestampSkewSeconds) ||
+    input.maxTimestampSkewSeconds < 0
+  ) {
+    return false;
+  }
+
+  return Math.abs(nowSeconds - timestampSeconds) <= input.maxTimestampSkewSeconds;
 }
 
 function resolveVerificationToken(body: unknown): string | undefined {
