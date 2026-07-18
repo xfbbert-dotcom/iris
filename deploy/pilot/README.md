@@ -17,6 +17,14 @@ Core waits only for `ai-worker` to start. An unhealthy extraction worker degrade
 but must not prevent Feishu callback, document-sync, or mention-reply startup. Never expose the
 worker on the edge network and never use live provider quota to manufacture an acceptance 429.
 
+## Proactive Signal Candidates
+
+Phase 4A runs entirely inside Core and does not call a model or send a Feishu message. Keep
+`IRIS_PROACTIVE_CANDIDATE_SCANNING_ENABLED=false` and
+`IRIS_PROACTIVE_CANDIDATE_GROUP_IDS=` until the semantic thread/action gray acceptance has passed.
+Then follow `docs/runbooks/iris-proactive-signal-candidates-acceptance.md` with one explicitly
+allowlisted pilot group. An empty allowlist is intentionally idle and never means all groups.
+
 ## Planned Restart And Reactivation
 
 Run the sequence in this exact order:

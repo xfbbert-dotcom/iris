@@ -1,6 +1,6 @@
 # Iris 核心需求覆盖基线
 
-> 基线日期：2026-07-14
+> 基线日期：2026-07-18
 > 最高架构依据：`2026-06-30-iris-architecture-whitepaper.md`
 > 判定规则：只有存在可运行代码路径和自动化/真实验收证据时才标记为“已实现”。仅有配置项、类型、接口或 capability 开关不算实现。
 
@@ -19,8 +19,8 @@
 | IRIS-CORE-002 | Iris 被拉入群后持续接收群消息，即使未被 @ 也理解讨论 | 代码已实现（真实飞书灰度待验收） | Feishu Gateway ack-first；Raw Event Queue；消息事实持久化；普通非 @ 文本异步抽取；同群证据绑定；semantic thread 的 candidate/open/resolved/reopened/merged 生命周期；显式 commitment/action 生命周期；回答时当前群检索；本地端到端验收 | 尚未执行单群真实飞书灰度，不能称为已上线或完整 Iris |
 | IRIS-CORE-003 | Iris 随时间学习，用户不必重复解释业务背景 | 代码已实现（真实飞书灰度待验收） | Postgres `group_memories`、`discussion_threads`、`action_items` 与 append-only events/evidence；置信度与候选隔离；幂等、重试、冷却、DLQ 与 projection repair；版本化纠错；当前群 bounded retrieval；真实 Postgres/Redis/Python 自动化测试；本地可执行端到端验收 | 尚未执行单群真实飞书灰度；本阶段不包含主动提醒或沉寂跟进 |
 | IRIS-CORE-004 | 在授权后跨群和跨数据源学习 | 部分实现 | 当前群文档、授权知识库、用户手动提交文档已接入统一文档源和权限策略 | 没有跨群授权关系、跨群记忆共享策略和跨群检索审计；默认必须保持群隔离 |
-| IRIS-CORE-005 | Iris 主动发现需要关注的信息并更新群成员 | 缺失实现 | 仅存在 `proactiveSpeech` capability 和运行时开关 | 需要信号扫描、候选评分、解释、频率限制、群级暂停、发送记录和审计 |
-| IRIS-CORE-006 | Iris 跟进沉寂但未解决的讨论或任务 | 缺失实现 | 已有当前群 thread/action 状态与检索，但没有主动发言、沉寂扫描或跟进调度器 | 需要沉寂判断、候选评分、重复抑制、限频、确认流和主动发送审计 |
+| IRIS-CORE-005 | Iris 主动发现需要关注的信息并更新群成员 | 部分实现（4A 代码完成，待真实候选验收） | 确定性信号扫描器；独立候选事实层和 append-only events；评分、解释、群白名单、全局/群/`proactiveSpeech` 门禁；有界定时/手动扫描；内部审查和版本化驳回 API；真实 Postgres 与自动化测试 | 先完成 PR #8 后的单群真实候选质量验收；Phase 4B 仍需主动发送、频率限制、发送记录、暂停/恢复和反馈闭环 |
+| IRIS-CORE-006 | Iris 跟进沉寂但未解决的讨论或任务 | 部分实现（4A 代码完成，待真实候选验收） | 基于 current open thread/action 的沉寂与逾期检测；action/thread 和 overdue/quiet 优先级；source version 幂等、替代过期和驳回抑制；控制群隔离 | 尚未完成真实群候选准确率验收，也没有群内主动跟进发送；通过 4A 后进入 Phase 4B |
 | IRIS-CORE-007 | Iris 将讨论整理成内容，先发群里让用户确认 | 缺失实现 | 仅存在 `generateKnowledgeDrafts` capability；没有知识草稿实体 | 需要草稿、证据、风险等级、状态机、群内预览、确认/驳回/编辑和审计 |
 | IRIS-CORE-008 | 用户确认后同步到飞书知识库 | 缺失实现 | 仅存在 `writeKnowledgeBase` capability，默认关闭 | 需要 Approval & Action Layer、飞书写入适配器、幂等、版本、失败恢复和回滚；未经确认不得写入 |
 | IRIS-CORE-009 | Iris 回答时读取授权飞书知识库 | 已实现 | 授权 Wiki 注册、解析、同步、向量检索、实时权限二次校验、引用和真实飞书验收 | 后续补充知识冲突识别和知识更新草稿，不影响当前已实现判定 |
@@ -38,7 +38,7 @@
 但当前仍然主要是“安全的群聊知识助手基础”。以下白皮书核心尚未形成端到端产品闭环：
 
 1. 自动群级记忆、semantic thread/action 聚合与持续状态更新已经形成代码链路，但仍需经过真实飞书单群灰度；
-2. 主动信号发现和未解决讨论跟进；
+2. 主动信号候选和未解决讨论检测已形成 4A 代码链路，但仍需真实候选质量验收；群内主动跟进属于尚未实现的 4B；
 3. 知识草稿、群内确认、管理员复核和知识库发布；
 4. 面向非工程管理员的轻量控制台；
 5. 多公司自助安装和租户产品化。

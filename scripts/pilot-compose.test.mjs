@@ -14,6 +14,10 @@ const conversationStateAcceptanceRunbook = readFileSync(
   conversationStateAcceptanceRunbookPath,
   "utf8",
 );
+const proactiveCandidateAcceptanceRunbook = readFileSync(
+  "docs/runbooks/iris-proactive-signal-candidates-acceptance.md",
+  "utf8",
+);
 const documentReindexQueueSource = readFileSync(
   "apps/core/src/reindex/redis-document-reindex-queue.ts",
   "utf8",
@@ -161,6 +165,46 @@ test("keeps semantic thread and action extraction disabled by default", () => {
   assert.equal(compose.services["ai-worker"].networks.edge, undefined);
   assert.doesNotMatch(caddyfile, /ai-worker/u);
   assert.doesNotMatch(caddyfile, /@internal|path \/internal|reverse_proxy \/internal/u);
+});
+
+test("keeps proactive candidate scanning disabled with an empty group allowlist", () => {
+  const expectedValues = {
+    IRIS_PROACTIVE_CANDIDATE_SCANNING_ENABLED: "false",
+    IRIS_PROACTIVE_CANDIDATE_GROUP_IDS: "",
+    IRIS_PROACTIVE_CANDIDATE_INTERVAL_MS: "300000",
+    IRIS_PROACTIVE_CANDIDATE_BATCH_LIMIT: "50",
+    IRIS_PROACTIVE_CANDIDATE_MIN_CONFIDENCE: "0.7",
+    IRIS_PROACTIVE_CANDIDATE_QUIET_THREAD_MS: "86400000",
+    IRIS_PROACTIVE_CANDIDATE_QUIET_ACTION_MS: "86400000",
+    IRIS_PROACTIVE_CANDIDATE_OVERDUE_GRACE_MS: "1800000",
+  };
+
+  for (const [name, expected] of Object.entries(expectedValues)) {
+    assert.equal(readEnvAssignment(pilotCiEnv, name), expected, `${name} must match in CI env`);
+    assert.equal(
+      readEnvAssignment(pilotEnvExample, name),
+      expected,
+      `${name} must match in pilot example`,
+    );
+    assert.equal(compose.services.core.environment[name], expected);
+  }
+
+  for (const marker of [
+    "PR #8",
+    "IRIS_PROACTIVE_CANDIDATE_SCANNING_ENABLED=false",
+    "IRIS_PROACTIVE_CANDIDATE_GROUP_IDS=",
+    "proactiveSpeech=false",
+    "/internal/proactive/status",
+    "/internal/proactive/scans",
+    "不得发送飞书消息",
+    "Phase 4B",
+  ]) {
+    assert.match(
+      proactiveCandidateAcceptanceRunbook,
+      new RegExp(escapeRegExp(marker), "u"),
+      `proactive acceptance runbook must contain ${marker}`,
+    );
+  }
 });
 
 test("requires exhaustive group isolation and a real proactive-speech status gate", () => {
