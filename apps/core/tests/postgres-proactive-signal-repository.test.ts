@@ -9,7 +9,11 @@ import {
   type ProactiveSignalTransactionClient,
 } from "../src/proactive/postgres-proactive-signal-repository.js";
 import type { ProactiveSignalCandidateProposal } from "../src/proactive/proactive-signal-candidate.js";
-import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
+import {
+  defaultMigrationsDir,
+  runMigrations,
+  type MigrationClient,
+} from "../src/database/migrate.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
@@ -252,7 +256,10 @@ runIfDatabase("PostgresProactiveSignalRepository with Postgres", () => {
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: databaseUrl });
-    await runMigrations({ client: pool, migrationsDir: defaultMigrationsDir() });
+    await runMigrations({
+      client: pool as unknown as MigrationClient,
+      migrationsDir: defaultMigrationsDir(),
+    });
     await pool.query(
       `
       INSERT INTO discussion_threads (
