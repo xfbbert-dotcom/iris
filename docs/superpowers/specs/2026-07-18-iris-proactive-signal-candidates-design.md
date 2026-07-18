@@ -43,7 +43,7 @@ The deterministic scanner is selected because it follows the roadmap, is testabl
 - reason: `quiet_unresolved_thread`, `quiet_open_action`, or `overdue_action`;
 - ranking: `score` in `[0,1]`, stable `policy_version`, structured `score_factors`;
 - explanation: bounded operator-facing text generated from deterministic templates;
-- lifecycle: `pending`, `dismissed`, or `expired`;
+- lifecycle: `pending`, `dismissed`, or `expired`, with compare-and-swap `version`;
 - timestamps: source activity, eligibility, observation, dismissal, expiry, creation, update;
 - optional bounded dismissal reason and actor.
 

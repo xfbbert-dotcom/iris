@@ -17,6 +17,25 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("defines durable proactive candidates with exact source and lifecycle constraints", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0029_proactive_signal_candidates.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table proactive_signal_candidates");
+    expect(normalized).toContain("source_type text not null check (source_type in ('thread', 'action'))");
+    expect(normalized).toContain("foreign key (thread_id, group_id) references discussion_threads(id, group_id)");
+    expect(normalized).toContain("foreign key (action_item_id, group_id) references action_items(id, group_id)");
+    expect(normalized).toContain("status text not null check (status in ('pending', 'dismissed', 'expired'))");
+    expect(normalized).toContain("score double precision not null check (score between 0 and 1)");
+    expect(normalized).toContain("create unique index proactive_signal_candidates_idempotency_idx");
+    expect(normalized).toContain("create unique index proactive_signal_candidates_one_pending_idx");
+    expect(normalized).toContain("where status = 'pending'");
+    expect(normalized).toContain("create table proactive_signal_scan_runs");
+  });
+
   it("defines the named action-aware group-memory scope constraint in 0026", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0026_projection_rollout_contracts.sql"),
