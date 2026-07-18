@@ -80,6 +80,36 @@ describe("FeishuCardActionGateway", () => {
     }
   });
 
+  it("contains a late enqueue rejection after the one-second timeout", async () => {
+    vi.useFakeTimers();
+    const unhandledRejection = vi.fn();
+    process.on("unhandledRejection", unhandledRejection);
+    try {
+      const deferred = createDeferred<"enqueued" | "duplicate">();
+      const queue = { enqueue: vi.fn(() => deferred.promise) };
+      const gateway = createFeishuCardActionGateway({ queue, verifyRequest: () => true });
+      const response = gateway.handleCallback({ headers: {}, body: cardAction() });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(response).resolves.toEqual({
+        statusCode: 200,
+        body: { toast: { type: "error", content: "\u64cd\u4f5c\u672a\u63d0\u4ea4\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5" } },
+      });
+      expect(vi.getTimerCount()).toBe(0);
+
+      deferred.reject(new Error("late queue rejection"));
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+
+      expect(queue.enqueue).toHaveBeenCalledTimes(1);
+      expect(unhandledRejection).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      process.off("unhandledRejection", unhandledRejection);
+      vi.useRealTimers();
+    }
+  });
+
   it("returns an error toast when its one enqueue attempt rejects", async () => {
     const queue = { enqueue: vi.fn(async () => { throw new Error("queue unavailable"); }) };
     const gateway = createFeishuCardActionGateway({ queue, verifyRequest: () => true });
@@ -122,4 +152,14 @@ function cardAction(): Record<string, unknown> {
       context: { open_message_id: "om_approval", open_chat_id: "oc_approval" },
     },
   };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

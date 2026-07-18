@@ -258,6 +258,52 @@ describe("Feishu auth primitives", () => {
       body: { header: { token: verificationToken } },
     })).toBe(false);
   });
+
+  it("caps configured timestamp skew at the 300-second anti-replay maximum", () => {
+    const rawBody = JSON.stringify({ event: { message: "hello" } });
+    const nonce = "nonce-1";
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 301,
+    });
+    const requestForTimestamp = (timestamp: number) => ({
+      headers: {
+        "x-lark-request-timestamp": String(timestamp),
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(String(timestamp), nonce, rawBody),
+      },
+      body: { event: { message: "hello" } },
+      rawBody,
+    });
+
+    expect(verifier(requestForTimestamp(nowSeconds - 300))).toBe(true);
+    expect(verifier(requestForTimestamp(nowSeconds - 301))).toBe(false);
+  });
+
+  it("honors a smaller positive safe timestamp skew", () => {
+    const rawBody = JSON.stringify({ event: { message: "hello" } });
+    const nonce = "nonce-1";
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 1,
+    });
+    const requestForTimestamp = (timestamp: number) => ({
+      headers: {
+        "x-lark-request-timestamp": String(timestamp),
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(String(timestamp), nonce, rawBody),
+      },
+      body: { event: { message: "hello" } },
+      rawBody,
+    });
+
+    expect(verifier(requestForTimestamp(nowSeconds - 1))).toBe(true);
+    expect(verifier(requestForTimestamp(nowSeconds - 2))).toBe(false);
+  });
 });
 
 function sign(timestamp: string, nonce: string, rawBody: string): string {

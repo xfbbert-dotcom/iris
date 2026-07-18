@@ -58,7 +58,7 @@ export function createFeishuRequestVerifier(
   options: FeishuRequestVerifierOptions = {},
 ): FeishuRequestVerifier {
   const now = options.now ?? (() => new Date());
-  const maxTimestampSkewSeconds = options.maxTimestampSkewSeconds ?? 300;
+  const maxTimestampSkewSeconds = resolveMaxTimestampSkewSeconds(options.maxTimestampSkewSeconds);
 
   return (request) => {
     const verificationToken = config.verificationToken;
@@ -73,6 +73,7 @@ export function createFeishuRequestVerifier(
     const signatureVerified =
       encryptKey === undefined ||
       (request.rawBody !== undefined &&
+        maxTimestampSkewSeconds !== undefined &&
         hasValidFeishuTimestamp({
           headers: request.headers,
           now: now(),
@@ -86,6 +87,12 @@ export function createFeishuRequestVerifier(
 
     return tokenVerified && signatureVerified;
   };
+}
+
+function resolveMaxTimestampSkewSeconds(value: number | undefined): number | undefined {
+  if (value === undefined) return 300;
+  if (!Number.isSafeInteger(value) || value < 1) return undefined;
+  return Math.min(value, 300);
 }
 
 function hasValidFeishuTimestamp(input: {
