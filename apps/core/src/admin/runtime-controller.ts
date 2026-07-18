@@ -144,8 +144,15 @@ export class RuntimeController {
     return this.config.globalEnabled && this.config.capabilities.retrieveKnowledgeBase;
   }
 
-  canGenerateKnowledgeDrafts(): boolean {
-    return this.config.globalEnabled && this.config.capabilities.generateKnowledgeDrafts;
+  canGenerateKnowledgeDrafts(input: { sourceGroupId?: string } = {}): boolean {
+    if (!this.config.globalEnabled || !this.config.capabilities.generateKnowledgeDrafts) {
+      return false;
+    }
+    if (input.sourceGroupId === undefined) {
+      return true;
+    }
+
+    return this.canProcessGroupMessage(input.sourceGroupId);
   }
 
   canWriteKnowledgeBase(): boolean {

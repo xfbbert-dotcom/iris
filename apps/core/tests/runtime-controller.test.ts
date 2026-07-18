@@ -229,4 +229,20 @@ describe("RuntimeController", () => {
     expect(controller.canGenerateAnswerDraft({ groupId: "chat-a" })).toBe(false);
     expect(controller.canGenerateAnswerDraft({ groupId: "chat-b" })).toBe(true);
   });
+
+  it("gates knowledge draft creation by capability and optional source group", () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+
+    expect(controller.canGenerateKnowledgeDrafts({ sourceGroupId: "chat-a" })).toBe(true);
+    expect(controller.canGenerateKnowledgeDrafts({})).toBe(true);
+
+    controller.disableGroup("chat-a");
+    expect(controller.canGenerateKnowledgeDrafts({ sourceGroupId: "chat-a" })).toBe(false);
+    expect(controller.canGenerateKnowledgeDrafts({ sourceGroupId: "chat-b" })).toBe(true);
+    expect(controller.canGenerateKnowledgeDrafts({})).toBe(true);
+
+    controller.setCapability("generateKnowledgeDrafts", false);
+    expect(controller.canGenerateKnowledgeDrafts({ sourceGroupId: "chat-b" })).toBe(false);
+    expect(controller.canGenerateKnowledgeDrafts({})).toBe(false);
+  });
 });

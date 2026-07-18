@@ -79,6 +79,11 @@ import {
   type ConversationStateInspectionRuntime,
   type ConversationStateInspectionStore,
 } from "./conversation-state/conversation-state-api.js";
+import { registerKnowledgeDraftApi } from "./knowledge-governance/knowledge-draft-api.js";
+import {
+  createKnowledgeDraftRuntime as createDefaultKnowledgeDraftRuntime,
+  type KnowledgeDraftRuntime,
+} from "./runtime/knowledge-draft-runtime.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
@@ -125,6 +130,9 @@ export type BuildAppDependencies = {
   groupMemoryService?: GroupMemoryService;
   conversationStateInspectionStore?: ConversationStateInspectionStore;
   createConversationStateInspectionRuntime?: () => ConversationStateInspectionRuntime | undefined;
+  createKnowledgeDraftRuntime?: (
+    input?: Parameters<typeof createDefaultKnowledgeDraftRuntime>[0],
+  ) => KnowledgeDraftRuntime | undefined;
 };
 
 export type StartServerOptions = {
@@ -268,6 +276,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let eventWorkerRuntime: EventWorkerRuntime | undefined;
   let documentSyncRuntime: DocumentSyncRuntime | undefined;
   let conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
+  let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   let startupApp: FastifyInstance | undefined;
   let appOwnsRuntimeResources = false;
@@ -294,6 +303,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     conversationStateInspectionRuntime = dependencies.conversationStateInspectionStore === undefined
       ? (dependencies.createConversationStateInspectionRuntime ?? createConversationStateInspectionRuntime)()
       : undefined;
+    knowledgeDraftRuntime = (
+      dependencies.createKnowledgeDraftRuntime ?? createDefaultKnowledgeDraftRuntime
+    )({ runtimeController });
     eventWorkerRuntime =
       (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
         runtimeController,
@@ -379,6 +391,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
     { authenticationConfigured: internalApiToken !== undefined },
   );
+  registerKnowledgeDraftApi(app, knowledgeDraftRuntime, {
+    authenticationConfigured: internalApiToken !== undefined,
+    now,
+  });
 
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
@@ -1452,6 +1468,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
       () => conversationStateInspectionRuntime?.close(),
+      () => knowledgeDraftRuntime?.close(),
       () => dependencies.closeRuntimeControl?.(),
     ]);
   });
@@ -1468,6 +1485,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       eventWorkerRuntime,
       documentSyncRuntime,
       conversationStateInspectionRuntime,
+      knowledgeDraftRuntime,
     });
     dependencies.onRuntimeStartupCleanup?.(cleanup);
     throw error;
@@ -1602,6 +1620,7 @@ function scheduleRuntimeStartupCleanup({
   eventWorkerRuntime,
   documentSyncRuntime,
   conversationStateInspectionRuntime,
+  knowledgeDraftRuntime,
 }: {
   app: Pick<FastifyInstance, "close"> | undefined;
   gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
@@ -1611,6 +1630,7 @@ function scheduleRuntimeStartupCleanup({
   eventWorkerRuntime: EventWorkerRuntime | undefined;
   documentSyncRuntime: DocumentSyncRuntime | undefined;
   conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
+  knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
 }): Promise<void> {
   const cleanup = closeRuntimeResources([
     () => gateway?.close(),
@@ -1620,6 +1640,7 @@ function scheduleRuntimeStartupCleanup({
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
     () => conversationStateInspectionRuntime?.close(),
+    () => knowledgeDraftRuntime?.close(),
     () => app?.close(),
   ]);
   void cleanup.catch(() => undefined);
