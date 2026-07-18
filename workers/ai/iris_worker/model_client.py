@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from typing import Annotated, Literal, Protocol
 
@@ -21,18 +22,21 @@ ModelErrorCode = Literal[
     "provider_timeout",
     "provider_rate_limited",
     "provider_unavailable",
+    "provider_unauthorized",
     "invalid_model_response",
 ]
 _MODEL_ERROR_CODES = {
     "provider_timeout",
     "provider_rate_limited",
     "provider_unavailable",
+    "provider_unauthorized",
     "invalid_model_response",
 }
 _RETRY_AFTER_PATTERN = re.compile(r"^(0|[1-9][0-9]{0,4})$")
 _RESPONSE_SCHEMA_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_RETRY_AFTER_SECONDS = 86_400
 _MAX_CONTENT_LENGTH_DIGITS = 20
+_LOGGER = logging.getLogger(__name__)
 
 
 class ModelClient(Protocol):
@@ -211,6 +215,9 @@ class OpenAICompatibleModelClient:
                     raise ModelClientError("invalid_model_response") from None
                 try:
                     if response.status_code == 429:
+                        _log_provider_failure(
+                            response.status_code, "provider_rate_limited"
+                        )
                         raise ModelClientError(
                             "provider_rate_limited",
                             retry_after_seconds=_parse_retry_after(
@@ -218,7 +225,9 @@ class OpenAICompatibleModelClient:
                             ),
                         )
                     if response.status_code < 200 or response.status_code >= 300:
-                        raise ModelClientError("provider_unavailable")
+                        error_code = _classify_provider_status(response.status_code)
+                        _log_provider_failure(response.status_code, error_code)
+                        raise ModelClientError(error_code)
                     _require_identity_content_encoding(response)
                     body = await _read_bounded_body(
                         response, self._max_response_bytes
@@ -235,6 +244,22 @@ class OpenAICompatibleModelClient:
             raise ModelClientError("provider_unavailable") from None
 
         return _parse_completion_content(body)
+
+
+def _classify_provider_status(status_code: int) -> ModelErrorCode:
+    if status_code in {401, 403}:
+        return "provider_unauthorized"
+    if status_code < 500:
+        return "invalid_model_response"
+    return "provider_unavailable"
+
+
+def _log_provider_failure(status_code: int, classification: ModelErrorCode) -> None:
+    _LOGGER.warning(
+        "model provider request failed: upstream_status=%d classification=%s",
+        status_code,
+        classification,
+    )
 
 
 def _validate_response_schema_options(

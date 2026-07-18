@@ -284,6 +284,12 @@ def test_extract_v2_preserves_explicit_null_thread_id_for_action_correction():
             {"error": "provider_unavailable"},
         ),
         (
+            "provider_unauthorized",
+            None,
+            401,
+            {"error": "provider_unauthorized"},
+        ),
+        (
             "invalid_model_response",
             None,
             502,

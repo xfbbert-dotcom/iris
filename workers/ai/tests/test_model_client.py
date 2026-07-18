@@ -315,12 +315,30 @@ async def test_retry_after_must_be_a_safe_bounded_integer(header: str, expected:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [400, 401, 403, 500, 502, 503])
-async def test_maps_non_success_provider_status_without_response_body(status: int):
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [
+        (400, "invalid_model_response"),
+        (401, "provider_unauthorized"),
+        (403, "provider_unauthorized"),
+        (404, "invalid_model_response"),
+        (422, "invalid_model_response"),
+        (500, "provider_unavailable"),
+        (502, "provider_unavailable"),
+        (503, "provider_unavailable"),
+    ],
+)
+async def test_classifies_non_success_provider_status_without_reading_response_body(
+    caplog: pytest.LogCaptureFixture,
+    status: int,
+    expected_code: str,
+):
     from iris_worker.model_client import ModelClientError
 
+    stream = TrackingStream(b"provider-body-secret")
+
     async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status, text="provider-body-secret")
+        return httpx.Response(status, stream=stream)
 
     with pytest.raises(ModelClientError) as caught:
         await client_for(handler).complete_json_object(
@@ -328,9 +346,15 @@ async def test_maps_non_success_provider_status_without_response_body(status: in
             user_content="message-secret",
         )
 
-    assert caught.value.code == "provider_unavailable"
-    assert str(caught.value) == "provider_unavailable"
+    assert caught.value.code == expected_code
+    assert str(caught.value) == expected_code
     assert "secret" not in repr(caught.value)
+    assert stream.iterated is False
+    assert (
+        f"model provider request failed: upstream_status={status} "
+        f"classification={expected_code}"
+    ) in caplog.text
+    assert "provider-body-secret" not in caplog.text
 
 
 @pytest.mark.asyncio

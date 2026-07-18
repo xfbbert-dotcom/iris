@@ -110,6 +110,7 @@ def create_app(
             "provider_timeout": 504,
             "provider_rate_limited": 429,
             "provider_unavailable": 503,
+            "provider_unauthorized": 401,
             "invalid_model_response": 502,
         }
         body: dict[str, object] = {"error": error.code}
