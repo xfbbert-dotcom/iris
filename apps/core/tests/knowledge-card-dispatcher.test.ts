@@ -35,6 +35,9 @@ describe("KnowledgeCardDispatcher", () => {
         order.push("gate");
         return true;
       },
+      beginExternalAttempt: async () => {
+        order.push("begin");
+      },
       sendCard: async () => {
         order.push("send");
         return { messageId: "om_sent" };
@@ -47,7 +50,7 @@ describe("KnowledgeCardDispatcher", () => {
     await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([
       { status: "sent", presentationId: "presentation-1", code: "send_succeeded" },
     ]);
-    expect(order).toEqual(["claim", "context", "render", "gate", "send", "complete"]);
+    expect(order).toEqual(["claim", "context", "render", "gate", "begin", "send", "complete"]);
     expect(harness.cardClient.sendCard).toHaveBeenCalledWith({
       chatId: "oc_group",
       cardJson: rendered().json,
@@ -68,13 +71,26 @@ describe("KnowledgeCardDispatcher", () => {
       { status: "permanent_failure", presentationId: "presentation-1", code: "runtime_disabled" },
     ]);
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
-    expect(harness.repository.failPresentationSend).toHaveBeenCalledWith({
+    expect(harness.repository.failPresentationPreparation).toHaveBeenCalledWith({
       presentationId: "presentation-1",
       workerId: "dispatcher-1",
-      classification: "permanent",
       errorCode: "runtime_disabled",
       at,
     });
+  });
+
+  it("does not call Feishu when the durable external-attempt transition fails", async () => {
+    const harness = createHarness({
+      beginExternalAttempt: async () => {
+        throw new Error("repository unavailable before external call");
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).rejects.toThrow(
+      "repository unavailable before external call",
+    );
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+    expect(harness.cardClient.updateCard).not.toHaveBeenCalled();
   });
 
   it("permanently closes invalidated evidence without rendering or sending", async () => {
@@ -138,6 +154,28 @@ describe("KnowledgeCardDispatcher", () => {
       at,
     });
     expect(JSON.stringify(results)).not.toContain("private_remote_code");
+  });
+
+  it("makes a retryable result from external attempt five permanently failed", async () => {
+    const harness = createHarness({
+      claim: claim({ attempts: 5 }),
+      sendCard: async () => {
+        throw new FeishuInteractiveCardClientError("retryable_remote_failure", "rate_limited");
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      presentationId: "presentation-1",
+      code: "max_attempts_exhausted",
+    }]);
+    expect(harness.repository.failPresentationSend).toHaveBeenCalledWith({
+      presentationId: "presentation-1",
+      workerId: "dispatcher-1",
+      classification: "permanent",
+      errorCode: "max_attempts_exhausted",
+      at,
+    });
   });
 
   it("never automatically resends an outcome-unknown claim", async () => {
@@ -255,6 +293,7 @@ type HarnessOverrides = {
   claimPresentationSend?: () => Promise<KnowledgeCardSendClaim | undefined>;
   getPresentationContext?: () => Promise<KnowledgeCardPresentationContext | undefined>;
   completePresentationSend?: () => Promise<void>;
+  beginExternalAttempt?: () => Promise<void>;
   renderer?: () => ReturnType<typeof rendered> | { status: "review_required"; reason: "body_too_large" };
   canUseKnowledgeCards?: () => boolean;
   sendCard?: () => Promise<{ messageId: string }>;
@@ -267,6 +306,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
     claimPresentationSend: overrides.claimPresentationSend,
     getPresentationContext: overrides.getPresentationContext,
     completePresentationSend: overrides.completePresentationSend,
+    beginExternalAttempt: overrides.beginExternalAttempt,
   });
   const cardClient = {
     sendCard: vi.fn(overrides.sendCard ?? (async () => ({ messageId: "om_sent" }))),
@@ -297,11 +337,14 @@ function repositoryMock(input: {
   claimPresentationSend?: () => Promise<KnowledgeCardSendClaim | undefined>;
   getPresentationContext?: () => Promise<KnowledgeCardPresentationContext | undefined>;
   completePresentationSend?: () => Promise<void>;
+  beginExternalAttempt?: () => Promise<void>;
 } = {}) {
   const claims = [...(input.claims ?? [claim(), undefined])];
   return {
     claimPresentationSend: vi.fn(input.claimPresentationSend ?? (async () => claims.shift())),
     getPresentationContext: vi.fn(input.getPresentationContext ?? (async () => input.context ?? context())),
+    beginExternalAttempt: vi.fn(input.beginExternalAttempt ?? (async () => undefined)),
+    failPresentationPreparation: vi.fn(async () => undefined),
     completePresentationSend: vi.fn(input.completePresentationSend ?? (async () => undefined)),
     failPresentationSend: vi.fn(async () => undefined),
   };
@@ -312,6 +355,7 @@ function claim(overrides: Partial<KnowledgeCardSendClaim> = {}): KnowledgeCardSe
     presentation: presentation(),
     workerId: "dispatcher-1",
     leaseUntil: new Date(at.getTime() + 30_000),
+    attempts: 1,
     ...overrides,
   };
 }

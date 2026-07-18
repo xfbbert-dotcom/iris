@@ -61,9 +61,9 @@ describe("KnowledgeCardDispatcherLoop", () => {
     await stopping;
   });
 
-  it("bounds batch errors, isolates observers, and continues", async () => {
+  it("uses a content-free error category, isolates observers, and continues", async () => {
     vi.useFakeTimers();
-    const error = new Error(`${"X".repeat(1200)} secret tail`);
+    const error = new Error("draft body ou_actor rejection reason bearer_token_secret");
     const worker = { processBatch: vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce([]) };
     const onError = vi.fn(() => { throw new Error("observer failed"); });
     const loop = createKnowledgeCardDispatcherLoop({
@@ -79,9 +79,9 @@ describe("KnowledgeCardDispatcherLoop", () => {
     const failed = loop.getSnapshot().latestBatch;
     expect(failed?.status).toBe("failed");
     if (failed?.status !== "failed") throw new Error("expected failed snapshot");
-    expect(failed.errorMessage.length).toBeLessThanOrEqual(1000);
-    expect(failed.errorMessage).toContain("[truncated]");
-    expect(failed.errorMessage).not.toContain("secret tail");
+    expect(failed).toMatchObject({ errorCode: "worker_failed" });
+    expect(failed).not.toHaveProperty("errorMessage");
+    expect(JSON.stringify(failed)).not.toMatch(/draft body|ou_actor|rejection reason|bearer_token/iu);
     expect(onError).toHaveBeenCalledWith(error);
 
     await vi.advanceTimersByTimeAsync(1000);

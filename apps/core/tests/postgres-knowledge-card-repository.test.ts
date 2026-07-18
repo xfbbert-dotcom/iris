@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { createKnowledgeCardDispatcher } from "../src/knowledge-cards/knowledge-card-dispatcher.js";
 import {
   KnowledgeCardMembershipProofError,
   KnowledgeCardOperationConflictError,
@@ -283,22 +284,32 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       messageId: "om-wrong-worker",
       at: plusSeconds(1),
     })).rejects.toBeInstanceOf(KnowledgeCardPersistenceConflictError);
+    await repository.beginExternalAttempt({
+      presentationId: first.presentation.id,
+      workerId: "worker-1",
+      at: plusSeconds(1),
+    });
     await repository.completePresentationSend({
       presentationId: first.presentation.id,
       workerId: "worker-1",
       messageId: "om-card-sent",
-      at: plusSeconds(1),
+      at: plusSeconds(2),
     });
     await expect(repository.getPresentation(first.presentation.id)).resolves.toMatchObject({
       state: "active",
       messageId: "om-card-sent",
-      activatedAt: plusSeconds(1),
+      activatedAt: plusSeconds(2),
       version: 2,
     });
 
     const retryDraft = await createDraft("send-retry");
     const retry = await repository.createPresentation(presentationInput("send-retry", retryDraft.id));
     await repository.claimPresentationSend({ workerId: "worker-1", leaseUntil, at });
+    await repository.beginExternalAttempt({
+      presentationId: retry.presentation.id,
+      workerId: "worker-1",
+      at: plusSeconds(1),
+    });
     await repository.failPresentationSend({
       presentationId: retry.presentation.id,
       workerId: "worker-1",
@@ -317,12 +328,17 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       leaseUntil: plusSeconds(120),
       at: plusSeconds(60),
     })).resolves.toMatchObject({ presentation: { id: retry.presentation.id }, workerId: "worker-2" });
+    await repository.beginExternalAttempt({
+      presentationId: retry.presentation.id,
+      workerId: "worker-2",
+      at: plusSeconds(61),
+    });
     await repository.failPresentationSend({
       presentationId: retry.presentation.id,
       workerId: "worker-2",
       classification: "permanent",
       errorCode: "forbidden",
-      at: plusSeconds(61),
+      at: plusSeconds(62),
     });
     await expect(repository.getPresentation(retry.presentation.id)).resolves.toMatchObject({
       state: "send_failed",
@@ -335,12 +351,17 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     const draft = await createDraft("send-unknown");
     const created = await repository.createPresentation(presentationInput("send-unknown", draft.id));
     await repository.claimPresentationSend({ workerId: "worker-1", leaseUntil: plusSeconds(30), at });
+    await repository.beginExternalAttempt({
+      presentationId: created.presentation.id,
+      workerId: "worker-1",
+      at: plusSeconds(1),
+    });
     await repository.failPresentationSend({
       presentationId: created.presentation.id,
       workerId: "worker-1",
       classification: "outcome_unknown",
       errorCode: "timeout",
-      at: plusSeconds(1),
+      at: plusSeconds(2),
     });
 
     await expect(repository.claimPresentationSend({
@@ -351,6 +372,343 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
       state: "send_failed",
       version: 2,
+    });
+  });
+
+  it("requires a lease-owned durable external attempt before completing a send", async () => {
+    const repository = cardRepository() as ReturnType<typeof cardRepository> & {
+      beginExternalAttempt(input: {
+        presentationId: string;
+        workerId: string;
+        at: Date;
+      }): Promise<void>;
+    };
+    const draft = await createDraft("durable-external-boundary");
+    const created = await repository.createPresentation(
+      presentationInput("durable-external-boundary", draft.id),
+    );
+
+    await expect(repository.claimPresentationSend({
+      workerId: "worker-boundary",
+      leaseUntil: plusSeconds(30),
+      at,
+    })).resolves.toMatchObject({ attempts: 1 });
+    await expect(repository.completePresentationSend({
+      presentationId: created.presentation.id,
+      workerId: "worker-boundary",
+      messageId: "om_must_not_complete_before_attempt",
+      at: plusSeconds(1),
+    })).rejects.toBeInstanceOf(KnowledgeCardPersistenceConflictError);
+
+    await repository.beginExternalAttempt({
+      presentationId: created.presentation.id,
+      workerId: "worker-boundary",
+      at: plusSeconds(1),
+    });
+    await expect(repository.beginExternalAttempt({
+      presentationId: created.presentation.id,
+      workerId: "worker-other",
+      at: plusSeconds(2),
+    })).rejects.toBeInstanceOf(KnowledgeCardPersistenceConflictError);
+    await repository.completePresentationSend({
+      presentationId: created.presentation.id,
+      workerId: "worker-boundary",
+      messageId: "om_after_durable_attempt",
+      at: plusSeconds(2),
+    });
+    await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
+      state: "active",
+      messageId: "om_after_durable_attempt",
+    });
+  });
+
+  it("requires a lease-owned durable external attempt before recording post-call failure", async () => {
+    const repository = cardRepository();
+    const draft = await createDraft("durable-external-failure");
+    const created = await repository.createPresentation(
+      presentationInput("durable-external-failure", draft.id),
+    );
+    await repository.claimPresentationSend({
+      workerId: "worker-failure-boundary",
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+
+    await expect(repository.failPresentationSend({
+      presentationId: created.presentation.id,
+      workerId: "worker-failure-boundary",
+      classification: "retryable",
+      errorCode: "request_not_sent",
+      retryAt: plusSeconds(60),
+      at: plusSeconds(1),
+    })).rejects.toBeInstanceOf(KnowledgeCardPersistenceConflictError);
+
+    await repository.beginExternalAttempt({
+      presentationId: created.presentation.id,
+      workerId: "worker-failure-boundary",
+      at: plusSeconds(1),
+    });
+    await repository.failPresentationSend({
+      presentationId: created.presentation.id,
+      workerId: "worker-failure-boundary",
+      classification: "retryable",
+      errorCode: "request_not_sent",
+      retryAt: plusSeconds(60),
+      at: plusSeconds(2),
+    });
+    await expect(repository.claimPresentationSend({
+      workerId: "worker-retry",
+      leaseUntil: plusSeconds(90),
+      at: plusSeconds(60),
+    })).resolves.toMatchObject({ attempts: 2, workerId: "worker-retry" });
+  });
+
+  it("terminalizes an expired original external attempt without reclaiming it", async () => {
+    const repository = cardRepository();
+    const draft = await createDraft("expired-external-send");
+    const created = await repository.createPresentation(
+      presentationInput("expired-external-send", draft.id),
+    );
+    await repository.claimPresentationSend({
+      workerId: "worker-external-send",
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+    await repository.beginExternalAttempt({
+      presentationId: created.presentation.id,
+      workerId: "worker-external-send",
+      at: plusSeconds(1),
+    });
+
+    await expect(repository.claimPresentationSend({
+      workerId: "worker-must-not-reclaim",
+      leaseUntil: plusSeconds(60),
+      at: plusSeconds(30),
+    })).resolves.toBeUndefined();
+    await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
+      state: "send_failed",
+      version: 2,
+    });
+    await expect(pool.query(
+      `SELECT state, worker_id, lease_until, retry_at, error_code
+       FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1`,
+      [created.presentation.id],
+    )).resolves.toMatchObject({
+      rows: [{
+        state: "outcome_unknown",
+        worker_id: null,
+        lease_until: null,
+        retry_at: null,
+        error_code: "external_attempt_lease_expired",
+      }],
+    });
+  });
+
+  it("terminalizes a stable preparation failure without beginning an external attempt", async () => {
+    const repository = cardRepository() as ReturnType<typeof cardRepository> & {
+      failPresentationPreparation(input: {
+        presentationId: string;
+        workerId: string;
+        errorCode: string;
+        at: Date;
+      }): Promise<void>;
+    };
+    const draft = await createDraft("preparation-failure");
+    const created = await repository.createPresentation(
+      presentationInput("preparation-failure", draft.id),
+    );
+    await repository.claimPresentationSend({
+      workerId: "worker-preparation",
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+
+    await repository.failPresentationPreparation({
+      presentationId: created.presentation.id,
+      workerId: "worker-preparation",
+      errorCode: "evidence_invalidated",
+      at: plusSeconds(1),
+    });
+
+    await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
+      state: "send_failed",
+      version: 2,
+    });
+    await expect(pool.query(
+      "SELECT state, error_code FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+      [created.presentation.id],
+    )).resolves.toMatchObject({
+      rows: [{ state: "failed", error_code: "evidence_invalidated" }],
+    });
+  });
+
+  it("terminalizes an expired fifth processing attempt instead of creating attempt six", async () => {
+    const repository = cardRepository();
+    const draft = await createDraft("max-attempt-recovery");
+    const created = await repository.createPresentation(
+      presentationInput("max-attempt-recovery", draft.id),
+    );
+
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      const offset = (attempt - 1) * 10;
+      await expect(repository.claimPresentationSend({
+        workerId: `worker-attempt-${attempt}`,
+        leaseUntil: plusSeconds(offset + 5),
+        at: plusSeconds(offset),
+      })).resolves.toMatchObject({ attempts: attempt });
+      await repository.beginExternalAttempt({
+        presentationId: created.presentation.id,
+        workerId: `worker-attempt-${attempt}`,
+        at: plusSeconds(offset + 1),
+      });
+      await repository.failPresentationSend({
+        presentationId: created.presentation.id,
+        workerId: `worker-attempt-${attempt}`,
+        classification: "retryable",
+        errorCode: "request_not_sent",
+        retryAt: plusSeconds(offset + 3),
+        at: plusSeconds(offset + 2),
+      });
+    }
+
+    await expect(repository.claimPresentationSend({
+      workerId: "worker-attempt-5",
+      leaseUntil: plusSeconds(45),
+      at: plusSeconds(40),
+    })).resolves.toMatchObject({ attempts: 5 });
+    await expect(repository.claimPresentationSend({
+      workerId: "worker-attempt-6-must-not-exist",
+      leaseUntil: plusSeconds(60),
+      at: plusSeconds(45),
+    })).resolves.toBeUndefined();
+
+    await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
+      state: "send_failed",
+    });
+    await expect(pool.query(
+      "SELECT state, attempts, retry_at, error_code FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+      [created.presentation.id],
+    )).resolves.toMatchObject({
+      rows: [{
+        state: "failed",
+        attempts: 5,
+        retry_at: null,
+        error_code: "max_attempts_exhausted",
+      }],
+    });
+  });
+
+  it("never sends again after completion and fallback writes both fail", async () => {
+    const repository = cardRepository();
+    const draft = await createDraft("send-write-loss-recovery");
+    const created = await repository.createPresentation(
+      presentationInput("send-write-loss-recovery", draft.id),
+    );
+    let currentTime = at;
+    const sendCard = vi.fn(async () => ({ messageId: "om_write_loss" }));
+    const dispatcher = createKnowledgeCardDispatcher({
+      repository: {
+        ...repository,
+        completePresentationSend: vi.fn(async () => {
+          throw new Error("completion write unavailable");
+        }),
+        failPresentationSend: vi.fn(async () => {
+          throw new Error("fallback write unavailable");
+        }),
+      },
+      cardClient: { sendCard, updateCard: vi.fn(async () => undefined) },
+      renderer: () => ({
+        status: "rendered",
+        card: {},
+        json: "{}",
+        contentHash: "a".repeat(64),
+        componentCount: 0,
+      }),
+      canUseKnowledgeCards: () => true,
+      targetDisplayName: "Knowledge Base",
+      workerId: "dispatcher-write-loss",
+      leaseMs: 30_000,
+      retryDelayMs: 30_000,
+      now: () => new Date(currentTime),
+    });
+
+    await expect(dispatcher.processBatch({ limit: 1 })).rejects.toThrow("fallback write unavailable");
+    expect(sendCard).toHaveBeenCalledOnce();
+
+    currentTime = plusSeconds(30);
+    await expect(repository.claimPresentationSend({
+      workerId: "recovery-after-write-loss",
+      leaseUntil: plusSeconds(60),
+      at: currentTime,
+    })).resolves.toBeUndefined();
+    currentTime = plusSeconds(31);
+    await expect(dispatcher.processBatch({ limit: 1 })).resolves.toEqual([]);
+    expect(sendCard).toHaveBeenCalledOnce();
+    await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
+      state: "send_failed",
+    });
+    await expect(pool.query(
+      "SELECT state, error_code FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+      [created.presentation.id],
+    )).resolves.toMatchObject({
+      rows: [{ state: "outcome_unknown", error_code: "external_attempt_lease_expired" }],
+    });
+  });
+
+  it("never updates again and keeps a closed presentation closed after both writes fail", async () => {
+    const repository = cardRepository();
+    const { draft, presentation, messageId } = await createActivePresentation(
+      "update-write-loss-recovery",
+    );
+    await repository.applyInteraction(interactionInput(
+      "update-write-loss-recovery",
+      draft.id,
+      presentation.id,
+      { action: "confirm" },
+    ));
+    let currentTime = plusSeconds(11);
+    const updateCard = vi.fn(async () => undefined);
+    const dispatcher = createKnowledgeCardDispatcher({
+      repository: {
+        ...repository,
+        completePresentationSend: vi.fn(async () => {
+          throw new Error("update completion unavailable");
+        }),
+        failPresentationSend: vi.fn(async () => {
+          throw new Error("update fallback unavailable");
+        }),
+      },
+      cardClient: { sendCard: vi.fn(async () => ({ messageId: "unused" })), updateCard },
+      canUseKnowledgeCards: () => true,
+      targetDisplayName: "Knowledge Base",
+      workerId: "dispatcher-update-write-loss",
+      leaseMs: 30_000,
+      retryDelayMs: 30_000,
+      now: () => new Date(currentTime),
+    });
+
+    await expect(dispatcher.processBatch({ limit: 1 })).rejects.toThrow("update fallback unavailable");
+    expect(updateCard).toHaveBeenCalledOnce();
+    expect(updateCard).toHaveBeenCalledWith(expect.objectContaining({ messageId }));
+
+    currentTime = plusSeconds(41);
+    await expect(repository.claimPresentationSend({
+      workerId: "recovery-after-update-write-loss",
+      leaseUntil: plusSeconds(70),
+      at: currentTime,
+    })).resolves.toBeUndefined();
+    currentTime = plusSeconds(42);
+    await expect(dispatcher.processBatch({ limit: 1 })).resolves.toEqual([]);
+    expect(updateCard).toHaveBeenCalledOnce();
+    await expect(repository.getPresentation(presentation.id)).resolves.toMatchObject({
+      state: "closed",
+      version: 3,
+    });
+    await expect(pool.query(
+      "SELECT state, error_code FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+      [presentation.id],
+    )).resolves.toMatchObject({
+      rows: [{ state: "outcome_unknown", error_code: "external_attempt_lease_expired" }],
     });
   });
 
@@ -377,11 +735,16 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       leaseUntil: plusSeconds(60),
       at: plusSeconds(30),
     })).resolves.toMatchObject({ presentation: { id: created.presentation.id } });
+    await repository.beginExternalAttempt({
+      presentationId: created.presentation.id,
+      workerId: "worker-reclaim-complete",
+      at: plusSeconds(31),
+    });
     await repository.completePresentationSend({
       presentationId: created.presentation.id,
       workerId: "worker-reclaim-complete",
       messageId: "om-reclaimed-complete",
-      at: plusSeconds(31),
+      at: plusSeconds(32),
     });
   });
 
@@ -397,10 +760,9 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       at,
     });
 
-    await expect(repository.failPresentationSend({
+    await expect(repository.failPresentationPreparation({
       presentationId: created.presentation.id,
       workerId: "worker-expiring-fail",
-      classification: "permanent",
       errorCode: "expired_owner",
       at: plusSeconds(30),
     })).rejects.toBeInstanceOf(KnowledgeCardPersistenceConflictError);
@@ -409,10 +771,9 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       leaseUntil: plusSeconds(60),
       at: plusSeconds(30),
     })).resolves.toMatchObject({ presentation: { id: created.presentation.id } });
-    await repository.failPresentationSend({
+    await repository.failPresentationPreparation({
       presentationId: created.presentation.id,
       workerId: "worker-reclaim-fail",
-      classification: "permanent",
       errorCode: "forbidden",
       at: plusSeconds(31),
     });
@@ -435,14 +796,19 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       leaseUntil: plusSeconds(31),
       at: plusSeconds(1),
     });
+    await repository.beginExternalAttempt({
+      presentationId: active.presentation.id,
+      workerId: "worker-supersede",
+      at: plusSeconds(2),
+    });
     await repository.completePresentationSend({
       presentationId: active.presentation.id,
       workerId: "worker-supersede",
       messageId: "om-active-before-supersede",
-      at: plusSeconds(2),
+      at: plusSeconds(3),
     });
     const replacement = await repository.createPresentation(presentationInput("supersede-replacement", draft.id, {
-      at: plusSeconds(3),
+      at: plusSeconds(4),
     }));
 
     await expect(repository.getPresentation(active.presentation.id)).resolves.toMatchObject({
@@ -542,11 +908,16 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       leaseUntil: plusSeconds(40),
       at: plusSeconds(11),
     })).resolves.toMatchObject({ presentation: { id: presentation.id, state: "closed" } });
+    await repository.beginExternalAttempt({
+      presentationId: presentation.id,
+      workerId: "worker-card-update",
+      at: plusSeconds(12),
+    });
     await repository.completePresentationSend({
       presentationId: presentation.id,
       workerId: "worker-card-update",
       messageId,
-      at: plusSeconds(12),
+      at: plusSeconds(13),
     });
     await expect(repository.getPresentation(presentation.id)).resolves.toMatchObject({
       state: "closed",
@@ -850,11 +1221,16 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       at,
     })).resolves.toMatchObject({ presentation: { id: created.presentation.id } });
     const messageId = id(`om-active-${key}`);
+    await repository.beginExternalAttempt({
+      presentationId: created.presentation.id,
+      workerId,
+      at: plusSeconds(1),
+    });
     await repository.completePresentationSend({
       presentationId: created.presentation.id,
       workerId,
       messageId,
-      at: plusSeconds(1),
+      at: plusSeconds(2),
     });
     return { draft, presentation: (await repository.getPresentation(created.presentation.id))!, messageId };
   }

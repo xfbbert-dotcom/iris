@@ -17,6 +17,20 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("defines a durable presentation external-attempt outbox state in 0032", async () => {
+    const migrationNames = await readdir(defaultMigrationsDir());
+    expect(migrationNames).toContain("0032_knowledge_card_external_attempts.sql");
+
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0032_knowledge_card_external_attempts.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+    expect(normalized).toContain("drop constraint knowledge_draft_presentation_outbox_state_check");
+    expect(normalized).toContain("'external_attempting'");
+    expect(normalized).toContain("add constraint knowledge_draft_presentation_outbox_state_check check");
+  });
+
   it("defines the named action-aware group-memory scope constraint in 0026", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0026_projection_rollout_contracts.sql"),

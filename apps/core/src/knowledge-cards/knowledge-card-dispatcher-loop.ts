@@ -1,5 +1,3 @@
-import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
-
 import type { KnowledgeCardDispatcherResult } from "./knowledge-card-dispatcher.js";
 
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -38,7 +36,7 @@ export type KnowledgeCardDispatcherBatchSnapshot =
       permanentFailureCount: 0;
       outcomeUnknownCount: 0;
       failed: true;
-      errorMessage: string;
+      errorCode: "worker_failed";
     };
 
 export type KnowledgeCardDispatcherLoopSnapshot = {
@@ -97,7 +95,7 @@ export function createKnowledgeCardDispatcherLoop({
         permanentFailureCount: 0,
         outcomeUnknownCount: 0,
         failed: true,
-        errorMessage: normalizeWorkerErrorMessage(error),
+        errorCode: "worker_failed",
       };
       reportError(onError, error);
     }

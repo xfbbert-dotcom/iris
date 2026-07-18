@@ -65,10 +65,10 @@ describe("ApprovalInteractionWorkerLoop", () => {
     expect(stopped).toBe(true);
   });
 
-  it("records bounded errors and continues polling", async () => {
+  it("records a content-free error category and continues polling", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-19T03:00:00.000Z"));
-    const error = new Error(`${"E".repeat(1200)} private tail`);
+    const error = new Error("draft body ou_actor rejection reason sk_live_secret_token");
     const worker = { processBatch: vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce([]) };
     const onError = vi.fn();
     const loop = createApprovalInteractionWorkerLoop({
@@ -83,9 +83,9 @@ describe("ApprovalInteractionWorkerLoop", () => {
     const failed = loop.getSnapshot().latestBatch;
     expect(failed?.status).toBe("failed");
     if (failed?.status !== "failed") throw new Error("expected failed snapshot");
-    expect(failed.errorMessage.length).toBeLessThanOrEqual(1000);
-    expect(failed.errorMessage).toContain("[truncated]");
-    expect(failed.errorMessage).not.toContain("private tail");
+    expect(failed).toMatchObject({ errorCode: "worker_failed" });
+    expect(failed).not.toHaveProperty("errorMessage");
+    expect(JSON.stringify(failed)).not.toMatch(/draft body|ou_actor|rejection reason|sk_live/iu);
     expect(onError).toHaveBeenCalledWith(error);
 
     await vi.advanceTimersByTimeAsync(1000);

@@ -58,6 +58,7 @@ export type KnowledgeCardSendClaim = {
   presentation: KnowledgeDraftPresentation;
   workerId: string;
   leaseUntil: Date;
+  attempts: number;
 };
 
 export type KnowledgeCardStatusCounts = Record<KnowledgeCardPresentationState, number> & {
@@ -77,6 +78,17 @@ export interface KnowledgeCardRepository {
     leaseUntil: Date;
     at: Date;
   }): Promise<KnowledgeCardSendClaim | undefined>;
+  beginExternalAttempt(input: {
+    presentationId: string;
+    workerId: string;
+    at: Date;
+  }): Promise<void>;
+  failPresentationPreparation(input: {
+    presentationId: string;
+    workerId: string;
+    errorCode: string;
+    at: Date;
+  }): Promise<void>;
   completePresentationSend(input: {
     presentationId: string;
     workerId: string;

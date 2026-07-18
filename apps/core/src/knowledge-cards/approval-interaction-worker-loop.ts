@@ -1,5 +1,3 @@
-import { normalizeWorkerErrorMessage } from "../workers/worker-error-message.js";
-
 import type { ApprovalInteractionWorkerResult } from "./approval-interaction-worker.js";
 
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -38,7 +36,7 @@ export type ApprovalInteractionWorkerBatchSnapshot =
       retryingCount: 0;
       deadLetteredCount: 0;
       failed: true;
-      errorMessage: string;
+      errorCode: "worker_failed";
     };
 
 export type ApprovalInteractionWorkerLoopSnapshot = {
@@ -97,7 +95,7 @@ export function createApprovalInteractionWorkerLoop({
         retryingCount: 0,
         deadLetteredCount: 0,
         failed: true,
-        errorMessage: normalizeWorkerErrorMessage(error),
+        errorCode: "worker_failed",
       };
       reportError(onError, error);
     }

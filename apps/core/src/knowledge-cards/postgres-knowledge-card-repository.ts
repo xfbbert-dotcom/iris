@@ -61,7 +61,17 @@ type OutboxRow = {
   id: string;
   presentation_id: string;
   idempotency_key: string;
-  state: "pending" | "processing" | "sent" | "failed" | "outcome_unknown";
+  state: "pending" | "processing" | "external_attempting" | "sent" | "failed" | "outcome_unknown";
+  attempts: string | number;
+  worker_id: string | null;
+  lease_until: Date | null;
+};
+
+type PresentationOutboxJoinRow = PresentationRow & {
+  outbox_id: string;
+  outbox_state: OutboxRow["state"];
+  presentation_id: string;
+  idempotency_key: string;
   attempts: string | number;
   worker_id: string | null;
   lease_until: Date | null;
@@ -82,6 +92,8 @@ type KnowledgeCardActionEventTypes = {
   draft: "group_confirmed" | "revision_requested" | "rejected";
   presentation: "confirmed" | "revision_requested" | "rejected";
 };
+
+const MAX_PRESENTATION_EXTERNAL_ATTEMPTS = 5;
 
 const KNOWLEDGE_CARD_ACTION_EVENT_TYPES: Record<KnowledgeCardAction, KnowledgeCardActionEventTypes> = {
   confirm: { draft: "group_confirmed", presentation: "confirmed" },
@@ -128,6 +140,17 @@ export function createPostgresKnowledgeCardRepository({
     },
     claimPresentationSend(input: { workerId: string; leaseUntil: Date; at: Date }) {
       return claimPresentationSend(dataSource, input);
+    },
+    beginExternalAttempt(input: { presentationId: string; workerId: string; at: Date }) {
+      return beginExternalAttempt(dataSource, input);
+    },
+    failPresentationPreparation(input: {
+      presentationId: string;
+      workerId: string;
+      errorCode: string;
+      at: Date;
+    }) {
+      return failPresentationPreparation(dataSource, input);
     },
     completePresentationSend(input: {
       presentationId: string;
@@ -438,13 +461,16 @@ async function claimPresentationSend(
   if (leaseUntil.getTime() <= at.getTime()) throw new Error("leaseUntil is invalid");
 
   return withTransaction(dataSource, async (client) => {
-    const result = await client.query<OutboxRow & PresentationRow>(
+    await terminalizeExpiredExternalAttempt(client, at);
+    await terminalizeExhaustedPresentationAttempt(client, at);
+    const result = await client.query<PresentationOutboxJoinRow>(
       `SELECT outbox.id AS outbox_id, outbox.presentation_id, outbox.idempotency_key,
               outbox.state AS outbox_state, outbox.attempts, outbox.worker_id,
               outbox.lease_until, presentation.*
        FROM knowledge_draft_presentation_outbox outbox
        JOIN knowledge_draft_presentations presentation ON presentation.id = outbox.presentation_id
        WHERE presentation.state IN ('pending_send', 'closed')
+         AND outbox.attempts < ${MAX_PRESENTATION_EXTERNAL_ATTEMPTS}
          AND (
            (outbox.state = 'pending' AND (outbox.retry_at IS NULL OR outbox.retry_at <= $1))
            OR (outbox.state = 'processing' AND outbox.lease_until <= $1)
@@ -461,9 +487,155 @@ async function claimPresentationSend(
        SET state = 'processing', attempts = attempts + 1, worker_id = $2,
            lease_until = $3, retry_at = NULL, error_code = NULL, updated_at = $4
        WHERE id = $1`,
-      [(row as unknown as { outbox_id: string }).outbox_id, workerId, leaseUntil, at],
+      [row.outbox_id, workerId, leaseUntil, at],
     );
-    return { presentation: mapPresentation(row), workerId, leaseUntil };
+    return {
+      presentation: mapPresentation(row),
+      workerId,
+      leaseUntil,
+      attempts: Number(row.attempts) + 1,
+    };
+  });
+}
+
+async function terminalizeExhaustedPresentationAttempt(
+  client: KnowledgeDraftTransactionClient,
+  at: Date,
+): Promise<void> {
+  const result = await client.query<PresentationOutboxJoinRow>(
+    `SELECT outbox.id AS outbox_id, outbox.presentation_id, outbox.idempotency_key,
+            outbox.state AS outbox_state, outbox.attempts, outbox.worker_id,
+            outbox.lease_until, presentation.*
+     FROM knowledge_draft_presentation_outbox outbox
+     JOIN knowledge_draft_presentations presentation ON presentation.id = outbox.presentation_id
+     WHERE outbox.attempts >= $2
+       AND presentation.state IN ('pending_send', 'closed')
+       AND (
+         (outbox.state = 'pending' AND (outbox.retry_at IS NULL OR outbox.retry_at <= $1))
+         OR (outbox.state = 'processing' AND outbox.lease_until <= $1)
+       )
+     ORDER BY outbox.updated_at ASC, outbox.id ASC
+     FOR UPDATE OF outbox, presentation SKIP LOCKED
+     LIMIT 1`,
+    [at, MAX_PRESENTATION_EXTERNAL_ATTEMPTS],
+  );
+  const row = result.rows[0];
+  if (row === undefined) return;
+
+  const fromVersion = Number(row.version);
+  let toVersion = fromVersion;
+  if (row.state === "pending_send") {
+    const presentationUpdate = await client.query(
+      `UPDATE knowledge_draft_presentations
+       SET state = 'send_failed', version = version + 1
+       WHERE id = $1 AND version = $2 AND state = 'pending_send'`,
+      [row.presentation_id, fromVersion],
+    );
+    requireOneRow(presentationUpdate);
+    toVersion += 1;
+  }
+  await client.query(
+    `UPDATE knowledge_draft_presentation_outbox
+     SET state = 'failed', worker_id = NULL, lease_until = NULL,
+         retry_at = NULL, error_code = 'max_attempts_exhausted', updated_at = $2
+     WHERE id = $1`,
+    [row.outbox_id, at],
+  );
+  await insertPresentationEvent(client, {
+    presentationId: row.presentation_id,
+    eventType: row.state === "closed" ? "card_update_failed" : "send_failed",
+    operationKey: derivedOperationKey(
+      "attempts-exhausted",
+      row.idempotency_key,
+      String(row.attempts),
+    ),
+    fromVersion,
+    toVersion,
+    at,
+  });
+}
+
+async function terminalizeExpiredExternalAttempt(
+  client: KnowledgeDraftTransactionClient,
+  at: Date,
+): Promise<void> {
+  const result = await client.query<PresentationOutboxJoinRow>(
+    `SELECT outbox.id AS outbox_id, outbox.presentation_id, outbox.idempotency_key,
+            outbox.state AS outbox_state, outbox.attempts, outbox.worker_id,
+            outbox.lease_until, presentation.*
+     FROM knowledge_draft_presentation_outbox outbox
+     JOIN knowledge_draft_presentations presentation ON presentation.id = outbox.presentation_id
+     WHERE outbox.state = 'external_attempting'
+       AND outbox.lease_until <= $1
+       AND presentation.state IN ('pending_send', 'closed')
+     ORDER BY outbox.lease_until ASC, outbox.created_at ASC, outbox.id ASC
+     FOR UPDATE OF outbox, presentation SKIP LOCKED
+     LIMIT 1`,
+    [at],
+  );
+  const row = result.rows[0];
+  if (row === undefined) return;
+
+  const fromVersion = Number(row.version);
+  let toVersion = fromVersion;
+  if (row.state === "pending_send") {
+    const presentationUpdate = await client.query(
+      `UPDATE knowledge_draft_presentations
+       SET state = 'send_failed', version = version + 1
+       WHERE id = $1 AND version = $2 AND state = 'pending_send'`,
+      [row.presentation_id, fromVersion],
+    );
+    requireOneRow(presentationUpdate);
+    toVersion += 1;
+  }
+  await client.query(
+    `UPDATE knowledge_draft_presentation_outbox
+     SET state = 'outcome_unknown', worker_id = NULL, lease_until = NULL,
+         retry_at = NULL, error_code = 'external_attempt_lease_expired', updated_at = $2
+     WHERE id = $1`,
+    [row.outbox_id, at],
+  );
+  await insertPresentationEvent(client, {
+    presentationId: row.presentation_id,
+    eventType: row.state === "closed" ? "card_update_failed" : "send_failed",
+    operationKey: derivedOperationKey(
+      "external-attempt-expired",
+      row.idempotency_key,
+      String(row.attempts),
+    ),
+    fromVersion,
+    toVersion,
+    at,
+  });
+}
+
+async function beginExternalAttempt(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: { presentationId: string; workerId: string; at: Date },
+): Promise<void> {
+  const normalized = {
+    presentationId: requireReference("presentationId", input.presentationId),
+    workerId: requireReference("workerId", input.workerId),
+    at: requireDate(input.at),
+  };
+  await withTransaction(dataSource, async (client) => {
+    const presentation = await lockPresentation(client, normalized.presentationId);
+    if (presentation.state !== "pending_send" && presentation.state !== "closed") {
+      throw new KnowledgeCardPersistenceConflictError();
+    }
+    const outbox = await lockOwnedOutbox(
+      client,
+      normalized.presentationId,
+      normalized.workerId,
+      normalized.at,
+      "processing",
+    );
+    await client.query(
+      `UPDATE knowledge_draft_presentation_outbox
+       SET state = 'external_attempting', updated_at = $2
+       WHERE id = $1`,
+      [outbox.id, normalized.at],
+    );
   });
 }
 
@@ -479,7 +651,13 @@ async function completePresentationSend(
   };
   await withTransaction(dataSource, async (client) => {
     const presentation = await lockPresentation(client, normalized.presentationId);
-    const outbox = await lockOwnedOutbox(client, normalized.presentationId, normalized.workerId, normalized.at);
+    const outbox = await lockOwnedOutbox(
+      client,
+      normalized.presentationId,
+      normalized.workerId,
+      normalized.at,
+      "external_attempting",
+    );
     const fromVersion = Number(presentation.version);
     let eventType: "send_succeeded" | "card_update_succeeded";
     let toVersion = fromVersion;
@@ -522,6 +700,37 @@ async function completePresentationSend(
   });
 }
 
+async function failPresentationPreparation(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: { presentationId: string; workerId: string; errorCode: string; at: Date },
+): Promise<void> {
+  const normalized = {
+    presentationId: requireReference("presentationId", input.presentationId),
+    workerId: requireReference("workerId", input.workerId),
+    errorCode: requireReference("errorCode", input.errorCode),
+    at: requireDate(input.at),
+  };
+  await withTransaction(dataSource, async (client) => {
+    const presentation = await lockPresentation(client, normalized.presentationId);
+    const outbox = await lockOwnedOutbox(
+      client,
+      normalized.presentationId,
+      normalized.workerId,
+      normalized.at,
+      "processing",
+    );
+    await persistPresentationFailure(client, {
+      presentation,
+      outbox,
+      presentationId: normalized.presentationId,
+      classification: "permanent",
+      errorCode: normalized.errorCode,
+      at: normalized.at,
+      operation: "preparation-fail",
+    });
+  });
+}
+
 async function failPresentationSend(
   dataSource: PostgresKnowledgeDraftDataSource,
   input: {
@@ -552,42 +761,75 @@ async function failPresentationSend(
 
   await withTransaction(dataSource, async (client) => {
     const presentation = await lockPresentation(client, normalized.presentationId);
-    const outbox = await lockOwnedOutbox(client, normalized.presentationId, normalized.workerId, normalized.at);
-    if (presentation.state !== "pending_send" && presentation.state !== "closed") {
-      throw new KnowledgeCardPersistenceConflictError();
-    }
-    const fromVersion = Number(presentation.version);
-    let toVersion = fromVersion;
-    if (normalized.classification !== "retryable" && presentation.state === "pending_send") {
-      const result = await client.query(
-        `UPDATE knowledge_draft_presentations
-         SET state = 'send_failed', version = version + 1
-         WHERE id = $1 AND version = $2 AND state = 'pending_send'`,
-        [normalized.presentationId, fromVersion],
-      );
-      if ((result as unknown as { rowCount?: number }).rowCount !== 1) {
-        throw new KnowledgeCardPersistenceConflictError();
-      }
-      toVersion += 1;
-    }
-    const outboxState = normalized.classification === "retryable"
-      ? "pending"
-      : normalized.classification === "permanent" ? "failed" : "outcome_unknown";
-    await client.query(
-      `UPDATE knowledge_draft_presentation_outbox
-       SET state = $2, worker_id = NULL, lease_until = NULL, retry_at = $3,
-           error_code = $4, updated_at = $5
-       WHERE id = $1`,
-      [outbox.id, outboxState, normalized.retryAt ?? null, normalized.errorCode, normalized.at],
+    const outbox = await lockOwnedOutbox(
+      client,
+      normalized.presentationId,
+      normalized.workerId,
+      normalized.at,
+      "external_attempting",
     );
-    await insertPresentationEvent(client, {
+    await persistPresentationFailure(client, {
+      presentation,
+      outbox,
       presentationId: normalized.presentationId,
-      eventType: presentation.state === "closed" ? "card_update_failed" : "send_failed",
-      operationKey: derivedOperationKey("send-fail", outbox.idempotency_key, String(outbox.attempts)),
-      fromVersion,
-      toVersion,
+      classification: normalized.classification,
+      errorCode: normalized.errorCode,
+      retryAt: normalized.retryAt,
       at: normalized.at,
+      operation: "send-fail",
     });
+  });
+}
+
+async function persistPresentationFailure(
+  client: KnowledgeDraftTransactionClient,
+  input: {
+    presentation: PresentationRow;
+    outbox: OutboxRow;
+    presentationId: string;
+    classification: "retryable" | "permanent" | "outcome_unknown";
+    errorCode: string;
+    retryAt?: Date;
+    at: Date;
+    operation: "preparation-fail" | "send-fail";
+  },
+): Promise<void> {
+  if (input.presentation.state !== "pending_send" && input.presentation.state !== "closed") {
+    throw new KnowledgeCardPersistenceConflictError();
+  }
+  const fromVersion = Number(input.presentation.version);
+  let toVersion = fromVersion;
+  if (input.classification !== "retryable" && input.presentation.state === "pending_send") {
+    const result = await client.query(
+      `UPDATE knowledge_draft_presentations
+       SET state = 'send_failed', version = version + 1
+       WHERE id = $1 AND version = $2 AND state = 'pending_send'`,
+      [input.presentationId, fromVersion],
+    );
+    requireOneRow(result);
+    toVersion += 1;
+  }
+  const outboxState = input.classification === "retryable"
+    ? "pending"
+    : input.classification === "permanent" ? "failed" : "outcome_unknown";
+  await client.query(
+    `UPDATE knowledge_draft_presentation_outbox
+     SET state = $2, worker_id = NULL, lease_until = NULL, retry_at = $3,
+         error_code = $4, updated_at = $5
+     WHERE id = $1`,
+    [input.outbox.id, outboxState, input.retryAt ?? null, input.errorCode, input.at],
+  );
+  await insertPresentationEvent(client, {
+    presentationId: input.presentationId,
+    eventType: input.presentation.state === "closed" ? "card_update_failed" : "send_failed",
+    operationKey: derivedOperationKey(
+      input.operation,
+      input.outbox.idempotency_key,
+      String(input.outbox.attempts),
+    ),
+    fromVersion,
+    toVersion,
+    at: input.at,
   });
 }
 
@@ -684,6 +926,7 @@ async function lockOwnedOutbox(
   presentationId: string,
   workerId: string,
   at: Date,
+  expectedState: "processing" | "external_attempting" = "processing",
 ): Promise<OutboxRow> {
   const result = await client.query<OutboxRow>(
     `SELECT id, presentation_id, idempotency_key, state, attempts, worker_id, lease_until
@@ -694,7 +937,7 @@ async function lockOwnedOutbox(
   const row = result.rows[0];
   if (
     row === undefined ||
-    row.state !== "processing" ||
+    row.state !== expectedState ||
     row.worker_id !== workerId ||
     row.lease_until === null ||
     leaseIsExpired(requireDate(row.lease_until), at)

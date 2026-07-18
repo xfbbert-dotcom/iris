@@ -20,6 +20,7 @@ import type {
 
 const MAX_BATCH_LIMIT = 100;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MAX_EXTERNAL_ATTEMPTS = 5;
 
 export type KnowledgeCardDispatcherCode =
   | "send_succeeded"
@@ -30,6 +31,7 @@ export type KnowledgeCardDispatcherCode =
   | "body_too_large"
   | "card_too_large"
   | "too_many_components"
+  | "max_attempts_exhausted"
   | FeishuInteractiveCardClientErrorClassification;
 
 export type KnowledgeCardDispatcherResult = {
@@ -42,6 +44,8 @@ export type KnowledgeCardDispatcherDependencies = {
   repository: Pick<KnowledgeCardRepository,
     | "claimPresentationSend"
     | "getPresentationContext"
+    | "beginExternalAttempt"
+    | "failPresentationPreparation"
     | "completePresentationSend"
     | "failPresentationSend"
   >;
@@ -117,17 +121,17 @@ async function dispatchClaim(input: {
     throw new Error("knowledge card presentation context unavailable");
   }
   if (!isExactClaimContext(input.claim, context)) {
-    return fail(input, "permanent", "stale_presentation");
+    return failPreparation(input, "stale_presentation");
   }
   if (context.evidenceState.status !== "current") {
-    return fail(input, "permanent", "evidence_invalidated");
+    return failPreparation(input, "evidence_invalidated");
   }
 
   if (context.presentation.state === "closed") {
     return updateCommittedResult(input, context);
   }
   if (!isCurrentPendingSend(context)) {
-    return fail(input, "permanent", "stale_presentation");
+    return failPreparation(input, "stale_presentation");
   }
 
   const rendered = input.renderer({
@@ -136,14 +140,20 @@ async function dispatchClaim(input: {
     targetDisplayName: input.targetDisplayName,
   });
   if (rendered.status === "review_required") {
-    return fail(input, "permanent", rendered.reason);
+    return failPreparation(input, rendered.reason);
   }
   if (rendered.contentHash !== context.presentation.contentHash) {
-    return fail(input, "permanent", "stale_presentation");
+    return failPreparation(input, "stale_presentation");
   }
   if (!readRuntimeGate(input, context.presentation.chatId)) {
-    return fail(input, "permanent", "runtime_disabled");
+    return failPreparation(input, "runtime_disabled");
   }
+
+  await input.repository.beginExternalAttempt({
+    presentationId: context.presentation.id,
+    workerId: input.claim.workerId,
+    at: requireDate(input.now()),
+  });
 
   let sent: { messageId: string };
   try {
@@ -164,7 +174,7 @@ async function dispatchClaim(input: {
     });
     return { status: "sent", presentationId: context.presentation.id, code: "send_succeeded" };
   } catch {
-    return fail(input, "outcome_unknown", "outcome_unknown");
+    return failExternalAttempt(input, "outcome_unknown", "outcome_unknown");
   }
 }
 
@@ -173,10 +183,15 @@ async function updateCommittedResult(
   context: KnowledgeCardPresentationContext,
 ): Promise<KnowledgeCardDispatcherResult> {
   const messageId = context.presentation.messageId;
-  if (messageId === undefined) return fail(input, "permanent", "stale_presentation");
+  if (messageId === undefined) return failPreparation(input, "stale_presentation");
   if (!readRuntimeGate(input, context.presentation.chatId)) {
-    return fail(input, "permanent", "runtime_disabled");
+    return failPreparation(input, "runtime_disabled");
   }
+  await input.repository.beginExternalAttempt({
+    presentationId: context.presentation.id,
+    workerId: input.claim.workerId,
+    at: requireDate(input.now()),
+  });
   try {
     await input.cardClient.updateCard({
       messageId,
@@ -198,7 +213,7 @@ async function updateCommittedResult(
       code: "card_update_succeeded",
     };
   } catch {
-    return fail(input, "outcome_unknown", "outcome_unknown");
+    return failExternalAttempt(input, "outcome_unknown", "outcome_unknown");
   }
 }
 
@@ -209,12 +224,37 @@ function failFromCardError(
   const classification = error instanceof FeishuInteractiveCardClientError
     ? error.classification
     : "request_not_sent";
-  if (classification === "outcome_unknown") return fail(input, "outcome_unknown", classification);
-  if (classification === "remote_rejected") return fail(input, "permanent", classification);
-  return fail(input, "retryable", classification);
+  if (classification === "outcome_unknown") {
+    return failExternalAttempt(input, "outcome_unknown", classification);
+  }
+  if (classification === "remote_rejected") {
+    return failExternalAttempt(input, "permanent", classification);
+  }
+  if (input.claim.attempts >= MAX_EXTERNAL_ATTEMPTS) {
+    return failExternalAttempt(input, "permanent", "max_attempts_exhausted");
+  }
+  return failExternalAttempt(input, "retryable", classification);
 }
 
-async function fail(
+async function failPreparation(
+  input: Parameters<typeof dispatchClaim>[0],
+  code: KnowledgeCardDispatcherCode,
+): Promise<KnowledgeCardDispatcherResult> {
+  const failedAt = requireDate(input.now());
+  await input.repository.failPresentationPreparation({
+    presentationId: input.claim.presentation.id,
+    workerId: input.claim.workerId,
+    errorCode: code,
+    at: failedAt,
+  });
+  return {
+    status: "permanent_failure",
+    presentationId: input.claim.presentation.id,
+    code,
+  };
+}
+
+async function failExternalAttempt(
   input: Parameters<typeof dispatchClaim>[0],
   classification: "retryable" | "permanent" | "outcome_unknown",
   code: KnowledgeCardDispatcherCode,
