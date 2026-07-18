@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  APPROVAL_INTERACTION_FAILURE_CODES,
   type ApprovalInteractionDeadLetter,
+  type ApprovalInteractionFailureCode,
   type ApprovalInteractionInvalidPayloadDeadLetter,
   type ApprovalInteractionJobDeadLetter,
   type ApprovalInteractionQueue,
@@ -15,10 +17,10 @@ const DEFAULT_PREFIX = "iris:approval:interactions";
 const DEFAULT_MAX_ATTEMPTS = 5;
 const MAX_QUEUE_LIMIT = 100;
 const MAX_IDENTIFIER_CHARS = 512;
-const MAX_ERROR_CODE_CHARS = 128;
 const RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000] as const;
 const MAX_RETRY_DELAY_MS = 10 * 60_000;
 const CLAIMED_PAYLOAD = Symbol("approvalInteractionClaimedPayload");
+const ALLOWED_FAILURE_CODES = new Set<string>(APPROVAL_INTERACTION_FAILURE_CODES);
 
 const ENQUEUE_SCRIPT = `
 -- approval-interaction:enqueue
@@ -132,6 +134,7 @@ redis.call("HDEL", KEYS[7], ARGV[1])
 redis.call("HSET", KEYS[8], ARGV[4], ARGV[5])
 redis.call("ZADD", KEYS[9], ARGV[6], ARGV[4])
 redis.call("SADD", KEYS[10], ARGV[4])
+redis.call("HDEL", KEYS[11], ARGV[4])
 return 1
 `;
 
@@ -157,6 +160,7 @@ if exact then
     redis.call("HSET", KEYS[8], ARGV[7], ARGV[8])
     redis.call("ZADD", KEYS[9], ARGV[9], ARGV[7])
     redis.call("SADD", KEYS[10], ARGV[7])
+    redis.call("HDEL", KEYS[11], ARGV[7])
   end
   return 1
 end
@@ -197,16 +201,25 @@ return listed
 
 const FIND_DLQ_SCRIPT = `
 -- approval-interaction:find-dlq
-if redis.call("SISMEMBER", KEYS[3], ARGV[1]) ~= 1
-  or not redis.call("ZSCORE", KEYS[2], ARGV[1]) then return nil end
-return redis.call("HGET", KEYS[1], ARGV[1])
+if redis.call("SISMEMBER", KEYS[3], ARGV[1]) == 1
+  and redis.call("ZSCORE", KEYS[2], ARGV[1]) then
+  local payload = redis.call("HGET", KEYS[1], ARGV[1])
+  if payload then return { 1, payload } end
+end
+local outcome = redis.call("HGET", KEYS[4], ARGV[1])
+if outcome == "replayed" then return { 2 } end
+if outcome == "deleted" then return { 3 } end
+return { 0 }
 `;
 
 const REPLAY_DLQ_SCRIPT = `
 -- approval-interaction:replay-dlq
 if redis.call("SISMEMBER", KEYS[10], ARGV[4]) ~= 1
   or not redis.call("ZSCORE", KEYS[9], ARGV[4])
-  or redis.call("HGET", KEYS[8], ARGV[4]) ~= ARGV[5] then return 0 end
+  or redis.call("HGET", KEYS[8], ARGV[4]) ~= ARGV[5] then
+  if redis.call("HGET", KEYS[11], ARGV[4]) == "replayed" then return 2 end
+  return 0
+end
 local state = redis.call("HGET", KEYS[6], ARGV[1])
 local active = redis.call("HGET", KEYS[4], ARGV[1]) and (
   (state == "ready" and redis.call("ZSCORE", KEYS[1], ARGV[1]))
@@ -226,6 +239,7 @@ end
 redis.call("HDEL", KEYS[8], ARGV[4])
 redis.call("ZREM", KEYS[9], ARGV[4])
 redis.call("SREM", KEYS[10], ARGV[4])
+redis.call("HSET", KEYS[11], ARGV[4], "replayed")
 return 1
 `;
 
@@ -233,10 +247,14 @@ const DELETE_DLQ_SCRIPT = `
 -- approval-interaction:delete-dlq
 if redis.call("SISMEMBER", KEYS[3], ARGV[1]) ~= 1
   or not redis.call("ZSCORE", KEYS[2], ARGV[1])
-  or redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then return 0 end
+  or redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then
+  if redis.call("HGET", KEYS[4], ARGV[1]) == "deleted" then return 2 end
+  return 0
+end
 redis.call("HDEL", KEYS[1], ARGV[1])
 redis.call("ZREM", KEYS[2], ARGV[1])
 redis.call("SREM", KEYS[3], ARGV[1])
+redis.call("HSET", KEYS[4], ARGV[1], "deleted")
 return 1
 `;
 
@@ -253,6 +271,15 @@ export type RedisApprovalInteractionQueueOptions = {
   maxAttempts?: number;
   idGenerator?: () => string;
 };
+
+export class ApprovalInteractionQueueError extends Error {
+  readonly code = "invalid_redis_reply" as const;
+
+  constructor(operation: string) {
+    super(`Invalid approval interaction Redis ${operation} reply`);
+    this.name = "ApprovalInteractionQueueError";
+  }
+}
 
 export function createRedisApprovalInteractionQueue({
   client,
@@ -277,6 +304,7 @@ export function createRedisApprovalInteractionQueue({
     keys.deadLetterIndex,
     keys.deadLetterOrder,
     keys.deadLetterMembers,
+    keys.deadLetterOutcomes,
   ];
 
   return {
@@ -291,7 +319,9 @@ export function createRedisApprovalInteractionQueue({
           String(normalized.receivedAt.getTime()),
         ],
       });
-      return result === 1 ? "enqueued" : "duplicate";
+      return readIntegerReply(result, [0, 1], "enqueue") === 1
+        ? "enqueued"
+        : "duplicate";
     },
 
     async claimBatch(input) {
@@ -312,13 +342,10 @@ export function createRedisApprovalInteractionQueue({
           String(leaseUntil.getTime()),
         ],
       });
-      if (!Array.isArray(result)) return [];
+      const claimedPairs = readStringPairsReply(result, "claim");
 
       const jobs: ApprovalInteractionJob[] = [];
-      for (let index = 0; index + 1 < result.length; index += 2) {
-        const id = result[index];
-        const payload = result[index + 1];
-        if (typeof id !== "string" || typeof payload !== "string") continue;
+      for (const [id, payload] of claimedPairs) {
         try {
           const job = parseApprovalInteractionJob(payload);
           if (job.idempotencyKey !== id || job.attempts >= safeMaxAttempts) {
@@ -345,7 +372,7 @@ export function createRedisApprovalInteractionQueue({
               String(now.getTime()),
             ],
           });
-          if (quarantined !== 1) {
+          if (readIntegerReply(quarantined, [0, 1], "quarantine") !== 1) {
             throw new Error("approval interaction quarantine transition did not match processing job");
           }
         }
@@ -362,7 +389,7 @@ export function createRedisApprovalInteractionQueue({
         keys: activeKeys,
         arguments: [id, payload, workerId],
       });
-      if (result !== 1) {
+      if (readIntegerReply(result, [0, 1], "acknowledge") !== 1) {
         throw new Error("approval interaction acknowledge transition did not match processing job");
       }
     },
@@ -402,7 +429,7 @@ export function createRedisApprovalInteractionQueue({
           String(failedAt.getTime()),
         ],
       });
-      if (result !== 1 && result !== 2) {
+      if (readIntegerReply(result, [0, 1, 2], "failure") === 0) {
         throw new Error("approval interaction failure transition did not match processing job");
       }
       return { action: isTerminal ? "dead_lettered" : "delayed" };
@@ -413,14 +440,12 @@ export function createRedisApprovalInteractionQueue({
         keys: [keys.ready, keys.processing, keys.delayed, keys.deadLetterMembers],
         arguments: [],
       });
-      if (!Array.isArray(result) || result.length !== 4) {
-        throw new Error("Invalid approval interaction queue count result");
-      }
+      const counts = readCountReply(result);
       return {
-        pending: readCount(result[0]),
-        processing: readCount(result[1]),
-        delayed: readCount(result[2]),
-        deadLetter: readCount(result[3]),
+        pending: counts[0],
+        processing: counts[1],
+        delayed: counts[2],
+        deadLetter: counts[3],
       };
     },
 
@@ -431,14 +456,14 @@ export function createRedisApprovalInteractionQueue({
         keys: [keys.deadLetterIndex, keys.deadLetterOrder, keys.deadLetterMembers],
         arguments: [String(limit)],
       });
-      if (!Array.isArray(result)) return [];
+      const listedPairs = readStringPairsReply(result, "dead-letter list");
       const deadLetters: ApprovalInteractionDeadLetter[] = [];
-      for (let index = 0; index + 1 < result.length; index += 2) {
-        const id = result[index];
-        const payload = result[index + 1];
-        if (typeof id !== "string" || typeof payload !== "string") continue;
+      for (const [id, payload] of listedPairs) {
         const parsed = parseDeadLetter(payload);
-        if (parsed !== undefined && parsed.id === id) deadLetters.push(parsed);
+        if (parsed === undefined || parsed.id !== id) {
+          throw new ApprovalInteractionQueueError("dead-letter payload");
+        }
+        deadLetters.push(parsed);
       }
       return deadLetters;
     },
@@ -447,9 +472,13 @@ export function createRedisApprovalInteractionQueue({
       const id = normalizeDeadLetterId(rawId);
       if (id === undefined) return "not_found";
       const payload = await findDeadLetter(client, keys, id);
-      if (payload === undefined) return "not_found";
-      const deadLetter = parseDeadLetter(payload);
-      if (deadLetter === undefined || !deadLetter.replayable) return "not_found";
+      if (payload.status === "replayed") return "replayed";
+      if (payload.status !== "active") return "not_found";
+      const deadLetter = parseDeadLetter(payload.payload);
+      if (deadLetter === undefined || deadLetter.id !== id) {
+        throw new ApprovalInteractionQueueError("dead-letter payload");
+      }
+      if (!deadLetter.replayable) return "not_found";
       const replayJob = normalizeApprovalInteractionJob({ ...deadLetter.job, attempts: 0 });
       const replayPayload = serializeApprovalInteractionJob(replayJob);
       const result = await client.eval(REPLAY_DLQ_SCRIPT, {
@@ -459,22 +488,32 @@ export function createRedisApprovalInteractionQueue({
           replayPayload,
           String(replayJob.receivedAt.getTime()),
           id,
-          payload,
+          payload.payload,
         ],
       });
-      return result === 1 ? "replayed" : "not_found";
+      return readIntegerReply(result, [0, 1, 2], "dead-letter replay") !== 0
+        ? "replayed"
+        : "not_found";
     },
 
     async deleteDeadLetter(rawId) {
       const id = normalizeDeadLetterId(rawId);
       if (id === undefined) return "not_found";
       const payload = await findDeadLetter(client, keys, id);
-      if (payload === undefined) return "not_found";
+      if (payload.status === "deleted") return "deleted";
+      if (payload.status !== "active") return "not_found";
       const result = await client.eval(DELETE_DLQ_SCRIPT, {
-        keys: [keys.deadLetterIndex, keys.deadLetterOrder, keys.deadLetterMembers],
-        arguments: [id, payload],
+        keys: [
+          keys.deadLetterIndex,
+          keys.deadLetterOrder,
+          keys.deadLetterMembers,
+          keys.deadLetterOutcomes,
+        ],
+        arguments: [id, payload.payload],
       });
-      return result === 1 ? "deleted" : "not_found";
+      return readIntegerReply(result, [0, 1, 2], "dead-letter delete") !== 0
+        ? "deleted"
+        : "not_found";
     },
   };
 }
@@ -509,6 +548,7 @@ function createKeys(prefix: string) {
     deadLetterIndex: `${prefix}:dlq:index`,
     deadLetterOrder: `${prefix}:dlq:order`,
     deadLetterMembers: `${prefix}:dlq:members`,
+    deadLetterOutcomes: `${prefix}:dlq:outcomes`,
   };
 }
 
@@ -522,12 +562,29 @@ async function findDeadLetter(
   client: RedisApprovalInteractionQueueClient,
   keys: ApprovalInteractionKeys,
   id: string,
-): Promise<string | undefined> {
+): Promise<
+  | { status: "not_found" | "replayed" | "deleted" }
+  | { status: "active"; payload: string }
+> {
   const result = await client.eval(FIND_DLQ_SCRIPT, {
-    keys: [keys.deadLetterIndex, keys.deadLetterOrder, keys.deadLetterMembers],
+    keys: [
+      keys.deadLetterIndex,
+      keys.deadLetterOrder,
+      keys.deadLetterMembers,
+      keys.deadLetterOutcomes,
+    ],
     arguments: [id],
   });
-  return typeof result === "string" ? result : undefined;
+  if (!Array.isArray(result)) {
+    throw new ApprovalInteractionQueueError("dead-letter find");
+  }
+  if (result.length === 1 && result[0] === 0) return { status: "not_found" };
+  if (result.length === 1 && result[0] === 2) return { status: "replayed" };
+  if (result.length === 1 && result[0] === 3) return { status: "deleted" };
+  if (result.length === 2 && result[0] === 1 && typeof result[1] === "string") {
+    return { status: "active", payload: result[1] };
+  }
+  throw new ApprovalInteractionQueueError("dead-letter find");
 }
 
 function serializeDeadLetter(deadLetter: ApprovalInteractionDeadLetter): string {
@@ -545,6 +602,7 @@ function parseDeadLetter(payload: string): ApprovalInteractionDeadLetter | undef
   try {
     const parsed: unknown = JSON.parse(payload);
     if (!isRecord(parsed) || typeof parsed.id !== "string" ||
+        normalizeDeadLetterId(parsed.id) !== parsed.id ||
         typeof parsed.errorCode !== "string" || typeof parsed.failedAt !== "string") {
       return undefined;
     }
@@ -607,14 +665,10 @@ function retryDelayMs(attempts: number): number {
   return RETRY_DELAYS_MS[attempts - 1] ?? MAX_RETRY_DELAY_MS;
 }
 
-function normalizeErrorCode(value: string): string {
-  if (typeof value !== "string") return "internal_error";
-  const normalized = value.trim();
-  if (normalized.length === 0 || normalized.length > MAX_ERROR_CODE_CHARS ||
-      !/^[a-z0-9_.:-]+$/u.test(normalized)) {
-    return "internal_error";
-  }
-  return normalized;
+function normalizeErrorCode(value: string): ApprovalInteractionFailureCode {
+  return typeof value === "string" && ALLOWED_FAILURE_CODES.has(value)
+    ? value as ApprovalInteractionFailureCode
+    : "internal_error";
 }
 
 function normalizeDeadLetterId(value: string): string | undefined {
@@ -647,12 +701,37 @@ function sanitizeMaxAttempts(value: number): number {
   return value;
 }
 
-function readCount(value: unknown): number {
-  const count = typeof value === "string" ? Number(value) : value;
-  if (!Number.isSafeInteger(count) || Number(count) < 0) {
-    throw new Error("Invalid approval interaction queue count result");
+function readIntegerReply<const T extends readonly number[]>(
+  value: unknown,
+  allowed: T,
+  operation: string,
+): T[number] {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) ||
+      !allowed.includes(value)) {
+    throw new ApprovalInteractionQueueError(operation);
   }
-  return Number(count);
+  return value as T[number];
+}
+
+function readStringPairsReply(value: unknown, operation: string): Array<[string, string]> {
+  if (!Array.isArray(value) || value.length % 2 !== 0 ||
+      value.some((item) => typeof item !== "string")) {
+    throw new ApprovalInteractionQueueError(operation);
+  }
+  const pairs: Array<[string, string]> = [];
+  for (let index = 0; index < value.length; index += 2) {
+    pairs.push([value[index] as string, value[index + 1] as string]);
+  }
+  return pairs;
+}
+
+function readCountReply(value: unknown): [number, number, number, number] {
+  if (!Array.isArray(value) || value.length !== 4 ||
+      value.some((count) => typeof count !== "number" ||
+        !Number.isSafeInteger(count) || count < 0)) {
+    throw new ApprovalInteractionQueueError("count");
+  }
+  return value as [number, number, number, number];
 }
 
 function requireValidDate(value: Date, fieldName: string): Date {

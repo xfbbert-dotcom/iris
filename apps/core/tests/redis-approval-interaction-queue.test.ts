@@ -33,6 +33,17 @@ describe("Redis approval interaction queue", () => {
     });
   });
 
+  it("breaks equal receivedAt ties with Redis binary member ordering", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client);
+    const lowercase = jobFixture({ eventId: "event-a" });
+    const uppercase = jobFixture({ eventId: "event-A" });
+    await queue.enqueue(lowercase);
+    await queue.enqueue(uppercase);
+
+    await expect(claim(queue, { limit: 2 })).resolves.toEqual([uppercase, lowercase]);
+  });
+
   it("atomically claims and only permits the owning worker to acknowledge", async () => {
     const client = new StatefulRedisClient();
     const queue = createQueue(client);
@@ -108,7 +119,7 @@ describe("Redis approval interaction queue", () => {
       await expect(queue.handleFailure({
         job: claimed!,
         workerId: "worker-a",
-        errorCode: "transient_failure",
+        errorCode: "repository_unavailable",
         at: new Date(atMs),
       })).resolves.toEqual({ action: "delayed" });
       await expect(claim(queue, {
@@ -142,7 +153,9 @@ describe("Redis approval interaction queue", () => {
       const result = await queue.handleFailure({
         job: job!,
         workerId: "worker-a",
-        errorCode: attempt === 5 ? `bad error ${"secret".repeat(1000)}` : "provider_timeout",
+        errorCode: attempt === 5
+          ? `bad error ${"secret".repeat(1000)}`
+          : "retryable_remote_failure",
         at: new Date(nowMs),
       });
       expect(result.action).toBe(attempt === 5 ? "dead_lettered" : "delayed");
@@ -163,6 +176,47 @@ describe("Redis approval interaction queue", () => {
       replayable: true,
     });
     expect(JSON.stringify(deadLetter)).not.toContain("secret");
+  });
+
+  it.each([
+    "sk_live_123456",
+    "550e8400-e29b-41d4-a716-446655440000",
+    "ou_actor_secret",
+    "draft_content",
+  ])("maps short code-shaped caller text to internal_error: %s", async (errorCode) => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client, { maxAttempts: 1 });
+    await queue.enqueue(jobFixture());
+    const [claimed] = await claim(queue);
+
+    await queue.handleFailure({
+      job: claimed!,
+      workerId: "worker-a",
+      errorCode,
+      at: claimed!.receivedAt,
+    });
+
+    const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
+    expect(deadLetter).toMatchObject({ errorCode: "internal_error" });
+    expect(JSON.stringify(deadLetter)).not.toContain(errorCode);
+  });
+
+  it("preserves a finite public worker classification", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client, { maxAttempts: 1 });
+    await queue.enqueue(jobFixture());
+    const [claimed] = await claim(queue);
+
+    await queue.handleFailure({
+      job: claimed!,
+      workerId: "worker-a",
+      errorCode: "membership_unavailable",
+      at: claimed!.receivedAt,
+    });
+
+    await expect(queue.listDeadLetters({ limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ errorCode: "membership_unavailable" }),
+    ]);
   });
 
   it("quarantines malformed payloads without retaining their contents", async () => {
@@ -198,13 +252,13 @@ describe("Redis approval interaction queue", () => {
     await replayQueue.enqueue(replayJob);
     const [claimed] = await claim(replayQueue);
     await replayQueue.handleFailure({
-      job: claimed!, workerId: "worker-a", errorCode: "provider_timeout", at: claimed!.receivedAt,
+      job: claimed!, workerId: "worker-a", errorCode: "repository_unavailable", at: claimed!.receivedAt,
     });
     const [deadLetter] = await replayQueue.listDeadLetters({ limit: 1 });
 
     await replayQueue.enqueue(replayJob);
     await expect(replayQueue.replayDeadLetter(deadLetter!.id)).resolves.toBe("replayed");
-    await expect(replayQueue.replayDeadLetter(deadLetter!.id)).resolves.toBe("not_found");
+    await expect(replayQueue.replayDeadLetter(deadLetter!.id)).resolves.toBe("replayed");
     await expect(replayQueue.getCounts()).resolves.toMatchObject({ pending: 1, deadLetter: 0 });
 
     const deleteClient = new StatefulRedisClient();
@@ -212,11 +266,11 @@ describe("Redis approval interaction queue", () => {
     await deleteQueue.enqueue(jobFixture({ eventId: "event-delete" }));
     const [deleteClaim] = await claim(deleteQueue);
     await deleteQueue.handleFailure({
-      job: deleteClaim!, workerId: "worker-a", errorCode: "provider_timeout", at: deleteClaim!.receivedAt,
+      job: deleteClaim!, workerId: "worker-a", errorCode: "repository_unavailable", at: deleteClaim!.receivedAt,
     });
     const [toDelete] = await deleteQueue.listDeadLetters({ limit: 1 });
     await expect(deleteQueue.deleteDeadLetter(toDelete!.id)).resolves.toBe("deleted");
-    await expect(deleteQueue.deleteDeadLetter(toDelete!.id)).resolves.toBe("not_found");
+    await expect(deleteQueue.deleteDeadLetter(toDelete!.id)).resolves.toBe("deleted");
     await expect(deleteQueue.getCounts()).resolves.toMatchObject({ pending: 0, deadLetter: 0 });
   });
 
@@ -237,6 +291,220 @@ describe("Redis approval interaction queue", () => {
       delayed: 0,
       deadLetter: 0,
     });
+  });
+
+  it.each([
+    ["enqueue", "approval-interaction:enqueue", 2],
+    ["enqueue string", "approval-interaction:enqueue", "1"],
+  ] as const)("rejects malformed %s replies", async (_label, marker, reply) => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client);
+    client.replyNext(marker, reply);
+
+    await expectInvalidRedisReply(queue.enqueue(jobFixture()));
+    await expect(queue.getCounts()).resolves.toMatchObject({ pending: 0 });
+  });
+
+  it.each([
+    ["null", null],
+    ["odd array", ["feishu-card:cli_a:event-1"]],
+    ["non-string pair", [1, "payload"]],
+  ] as const)("rejects malformed claim replies: %s", async (_label, reply) => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client);
+    await queue.enqueue(jobFixture());
+    client.replyNext("approval-interaction:claim", reply);
+
+    await expectInvalidRedisReply(claim(queue));
+    await expect(queue.getCounts()).resolves.toMatchObject({ pending: 1, processing: 0 });
+  });
+
+  it("rejects malformed acknowledge and failure mutation replies", async () => {
+    const ackClient = new StatefulRedisClient();
+    const ackQueue = createQueue(ackClient);
+    await ackQueue.enqueue(jobFixture());
+    const [ackClaim] = await claim(ackQueue);
+    ackClient.replyNext("approval-interaction:ack", 2);
+    await expectInvalidRedisReply(
+      ackQueue.acknowledge({ job: ackClaim!, workerId: "worker-a" }),
+    );
+    await expect(ackQueue.getCounts()).resolves.toMatchObject({ processing: 1 });
+
+    const failureClient = new StatefulRedisClient();
+    const failureQueue = createQueue(failureClient);
+    await failureQueue.enqueue(jobFixture());
+    const [failureClaim] = await claim(failureQueue);
+    failureClient.replyNext("approval-interaction:fail", 3);
+    await expectInvalidRedisReply(failureQueue.handleFailure({
+      job: failureClaim!,
+      workerId: "worker-a",
+      errorCode: "repository_unavailable",
+      at: failureClaim!.receivedAt,
+    }));
+    await expect(failureQueue.getCounts()).resolves.toMatchObject({ processing: 1 });
+  });
+
+  it("rejects malformed quarantine and count replies", async () => {
+    const quarantineClient = new StatefulRedisClient();
+    const prefix = `${BASE_PREFIX}:invalid-replies`;
+    quarantineClient.injectReady(
+      prefix,
+      "malformed-job",
+      JSON.stringify({ content: "private draft body" }),
+      Date.parse("2026-07-19T00:00:00.000Z"),
+    );
+    const quarantineQueue = createQueue(quarantineClient, { prefix });
+    quarantineClient.replyNext("approval-interaction:ack-invalid", 2);
+    await expectInvalidRedisReply(claim(quarantineQueue));
+    await expect(quarantineQueue.getCounts()).resolves.toMatchObject({ processing: 1 });
+
+    const countClient = new StatefulRedisClient();
+    const countQueue = createQueue(countClient);
+    countClient.replyNext("approval-interaction:get-counts", [0, 0, 0, "0"]);
+    await expectInvalidRedisReply(countQueue.getCounts());
+  });
+
+  it.each([
+    ["non-array", null],
+    ["odd array", [generatedDeadLetterId("listed")]],
+    ["non-string pair", [1, "payload"]],
+  ] as const)("rejects malformed DLQ list replies: %s", async (_label, reply) => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client);
+    client.replyNext("approval-interaction:list-dlq", reply);
+
+    await expectInvalidRedisReply(queue.listDeadLetters({ limit: 1 }));
+  });
+
+  it("rejects a noncanonical DLQ id returned by the list script", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client);
+    const id = "not-a-canonical-dlq-id";
+    client.replyNext("approval-interaction:list-dlq", [id, deadLetterPayloadFixture(id)]);
+
+    await expectInvalidRedisReply(queue.listDeadLetters({ limit: 1 }));
+  });
+
+  it("rejects malformed DLQ find replies for replay and delete", async () => {
+    const replayClient = new StatefulRedisClient();
+    const replayQueue = createQueue(replayClient);
+    replayClient.replyNext("approval-interaction:find-dlq", ["unexpected"]);
+    await expectInvalidRedisReply(replayQueue.replayDeadLetter(generatedDeadLetterId("replay")));
+
+    const deleteClient = new StatefulRedisClient();
+    const deleteQueue = createQueue(deleteClient);
+    deleteClient.replyNext("approval-interaction:find-dlq", ["unexpected"]);
+    await expectInvalidRedisReply(deleteQueue.deleteDeadLetter(generatedDeadLetterId("delete")));
+  });
+
+  it("rejects a corrupt authoritative DLQ payload during replay", async () => {
+    const client = new StatefulRedisClient();
+    const prefix = `${BASE_PREFIX}:corrupt-dlq`;
+    const id = generatedDeadLetterId("corrupt-authoritative");
+    client.injectDeadLetter(prefix, id, JSON.stringify({ content: "private draft body" }));
+    const queue = createQueue(client, { prefix });
+
+    await expectInvalidRedisReply(queue.replayDeadLetter(id));
+  });
+
+  it("rejects malformed replay and delete mutation replies without changing DLQ authority", async () => {
+    const replayClient = new StatefulRedisClient();
+    const replayQueue = createQueue(replayClient, { maxAttempts: 1 });
+    const replayDeadLetter = await createDeadLetter(replayQueue, jobFixture({ eventId: "bad-replay" }));
+    replayClient.replyNext("approval-interaction:replay-dlq", 3);
+    await expectInvalidRedisReply(replayQueue.replayDeadLetter(replayDeadLetter.id));
+    await expect(replayQueue.getCounts()).resolves.toMatchObject({ pending: 0, deadLetter: 1 });
+
+    const deleteClient = new StatefulRedisClient();
+    const deleteQueue = createQueue(deleteClient, { maxAttempts: 1 });
+    const deleteDeadLetter = await createDeadLetter(deleteQueue, jobFixture({ eventId: "bad-delete" }));
+    deleteClient.replyNext("approval-interaction:delete-dlq", 3);
+    await expectInvalidRedisReply(deleteQueue.deleteDeadLetter(deleteDeadLetter.id));
+    await expect(deleteQueue.getCounts()).resolves.toMatchObject({ pending: 0, deadLetter: 1 });
+  });
+
+  it("retries a terminal failure safely after the Redis reply is lost", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client, { maxAttempts: 1 });
+    await queue.enqueue(jobFixture());
+    const [claimed] = await claim(queue);
+    const failure = {
+      job: claimed!,
+      workerId: "worker-a",
+      errorCode: "repository_unavailable",
+      at: claimed!.receivedAt,
+    };
+    client.loseReplyNext("approval-interaction:fail");
+
+    await expect(queue.handleFailure(failure)).rejects.toThrow("injected Redis response loss");
+    await expect(queue.handleFailure(failure)).resolves.toEqual({ action: "dead_lettered" });
+    await expect(queue.getCounts()).resolves.toEqual({
+      pending: 0,
+      processing: 0,
+      delayed: 0,
+      deadLetter: 1,
+    });
+    await expect(queue.listDeadLetters({ limit: 10 })).resolves.toHaveLength(1);
+  });
+
+  it("retries replay and delete safely after their Redis replies are lost", async () => {
+    const replayClient = new StatefulRedisClient();
+    const replayQueue = createQueue(replayClient, { maxAttempts: 1 });
+    const replayDeadLetter = await createDeadLetter(
+      replayQueue,
+      jobFixture({ eventId: "lost-replay" }),
+    );
+    replayClient.loseReplyNext("approval-interaction:replay-dlq");
+    await expect(replayQueue.replayDeadLetter(replayDeadLetter.id)).rejects.toThrow(
+      "injected Redis response loss",
+    );
+    await expect(replayQueue.replayDeadLetter(replayDeadLetter.id)).resolves.toBe("replayed");
+    await expect(replayQueue.getCounts()).resolves.toEqual({
+      pending: 1,
+      processing: 0,
+      delayed: 0,
+      deadLetter: 0,
+    });
+    await expect(claim(replayQueue, { limit: 10 })).resolves.toHaveLength(1);
+
+    const deleteClient = new StatefulRedisClient();
+    const deleteQueue = createQueue(deleteClient, { maxAttempts: 1 });
+    const deleteDeadLetter = await createDeadLetter(
+      deleteQueue,
+      jobFixture({ eventId: "lost-delete" }),
+    );
+    deleteClient.loseReplyNext("approval-interaction:delete-dlq");
+    await expect(deleteQueue.deleteDeadLetter(deleteDeadLetter.id)).rejects.toThrow(
+      "injected Redis response loss",
+    );
+    await expect(deleteQueue.deleteDeadLetter(deleteDeadLetter.id)).resolves.toBe("deleted");
+    await expect(deleteQueue.getCounts()).resolves.toEqual({
+      pending: 0,
+      processing: 0,
+      delayed: 0,
+      deadLetter: 0,
+    });
+  });
+
+  it("preserves processing authority when the wrong worker reports failure", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client);
+    await queue.enqueue(jobFixture());
+    const [claimed] = await claim(queue);
+
+    await expect(queue.handleFailure({
+      job: claimed!,
+      workerId: "worker-b",
+      errorCode: "repository_unavailable",
+      at: claimed!.receivedAt,
+    })).rejects.toThrow("failure transition did not match processing job");
+    await expect(queue.getCounts()).resolves.toEqual({
+      pending: 0,
+      processing: 1,
+      delayed: 0,
+      deadLetter: 0,
+    });
+    await queue.acknowledge({ job: claimed!, workerId: "worker-a" });
   });
 
   it("serializes dates as ISO and parses only normalized safe jobs", () => {
@@ -304,6 +572,41 @@ function generatedDeadLetterId(seed: string): string {
   return `dlq:${createHash("sha256").update(seed).digest("hex")}`;
 }
 
+function deadLetterPayloadFixture(id: string): string {
+  const job = jobFixture();
+  return JSON.stringify({
+    id,
+    job: JSON.parse(serializeApprovalInteractionJob(job)),
+    errorCode: "internal_error",
+    failedAt: job.receivedAt.toISOString(),
+    replayable: true,
+  });
+}
+
+async function createDeadLetter(
+  queue: ReturnType<typeof createRedisApprovalInteractionQueue>,
+  job: ReturnType<typeof jobFixture>,
+) {
+  await queue.enqueue(job);
+  const [claimed] = await claim(queue);
+  await queue.handleFailure({
+    job: claimed!,
+    workerId: "worker-a",
+    errorCode: "repository_unavailable",
+    at: claimed!.receivedAt,
+  });
+  const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
+  if (deadLetter === undefined) throw new Error("expected approval interaction dead letter");
+  return deadLetter;
+}
+
+async function expectInvalidRedisReply(promise: Promise<unknown>): Promise<void> {
+  await expect(promise).rejects.toMatchObject({
+    name: "ApprovalInteractionQueueError",
+    code: "invalid_redis_reply",
+  });
+}
+
 class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   static nextId = 1;
   readonly id = StatefulRedisClient.nextId++;
@@ -312,6 +615,9 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   private readonly sortedSets = new Map<string, Map<string, number>>();
   private readonly sets = new Map<string, Set<string>>();
   private failureMarker: string | undefined;
+  private replyMarker: string | undefined;
+  private replyValue: number | string | Array<number | string> | null = null;
+  private responseLossMarker: string | undefined;
 
   async zCard(key: string): Promise<number> {
     return this.sortedSet(key).size;
@@ -325,11 +631,31 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
     this.failureMarker = marker;
   }
 
+  replyNext(
+    marker: string,
+    value: number | string | ReadonlyArray<number | string> | null,
+  ): void {
+    this.replyMarker = marker;
+    this.replyValue = Array.isArray(value)
+      ? [...value]
+      : value as number | string | null;
+  }
+
+  loseReplyNext(marker: string): void {
+    this.responseLossMarker = marker;
+  }
+
   injectReady(prefix: string, id: string, payload: string, receivedAt: number): void {
     this.hash(`${prefix}:members`).set(id, payload);
     this.hash(`${prefix}:member:received-at`).set(id, String(receivedAt));
     this.hash(`${prefix}:state`).set(id, "ready");
     this.sortedSet(`${prefix}:ready`).set(id, receivedAt);
+  }
+
+  injectDeadLetter(prefix: string, id: string, payload: string): void {
+    this.hash(`${prefix}:dlq:index`).set(id, payload);
+    this.sortedSet(`${prefix}:dlq:order`).set(id, 1);
+    this.set(`${prefix}:dlq:members`).add(id);
   }
 
   allStoredValues(): string[] {
@@ -348,24 +674,46 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
       this.failureMarker = undefined;
       throw new Error("injected Redis failure");
     }
-    if (script.includes("approval-interaction:enqueue")) return this.enqueue(options.keys, options.arguments);
-    if (script.includes("approval-interaction:claim")) return this.claimJobs(options.keys, options.arguments);
-    if (script.includes("approval-interaction:ack-invalid")) return this.ackInvalid(options.keys, options.arguments);
-    if (script.includes("approval-interaction:ack")) return this.ack(options.keys, options.arguments);
-    if (script.includes("approval-interaction:fail")) return this.fail(options.keys, options.arguments);
-    if (script.includes("approval-interaction:get-counts")) {
-      return [
+    if (this.replyMarker !== undefined && script.includes(this.replyMarker)) {
+      const reply = this.replyValue;
+      this.replyMarker = undefined;
+      this.replyValue = null;
+      return reply;
+    }
+    let result: number | string | Array<number | string> | null;
+    if (script.includes("approval-interaction:enqueue")) {
+      result = this.enqueue(options.keys, options.arguments);
+    } else if (script.includes("approval-interaction:claim")) {
+      result = this.claimJobs(options.keys, options.arguments);
+    } else if (script.includes("approval-interaction:ack-invalid")) {
+      result = this.ackInvalid(options.keys, options.arguments);
+    } else if (script.includes("approval-interaction:ack")) {
+      result = this.ack(options.keys, options.arguments);
+    } else if (script.includes("approval-interaction:fail")) {
+      result = this.fail(options.keys, options.arguments);
+    } else if (script.includes("approval-interaction:get-counts")) {
+      result = [
         this.sortedSet(options.keys[0]!).size,
         this.sortedSet(options.keys[1]!).size,
         this.sortedSet(options.keys[2]!).size,
         this.set(options.keys[3]!).size,
       ];
+    } else if (script.includes("approval-interaction:list-dlq")) {
+      result = this.listDlq(options.keys, options.arguments);
+    } else if (script.includes("approval-interaction:find-dlq")) {
+      result = this.findDlq(options.keys, options.arguments);
+    } else if (script.includes("approval-interaction:replay-dlq")) {
+      result = this.replayDlq(options.keys, options.arguments);
+    } else if (script.includes("approval-interaction:delete-dlq")) {
+      result = this.deleteDlq(options.keys, options.arguments);
+    } else {
+      throw new Error("unknown approval interaction script");
     }
-    if (script.includes("approval-interaction:list-dlq")) return this.listDlq(options.keys, options.arguments);
-    if (script.includes("approval-interaction:find-dlq")) return this.findDlq(options.keys, options.arguments);
-    if (script.includes("approval-interaction:replay-dlq")) return this.replayDlq(options.keys, options.arguments);
-    if (script.includes("approval-interaction:delete-dlq")) return this.deleteDlq(options.keys, options.arguments);
-    throw new Error("unknown approval interaction script");
+    if (this.responseLossMarker !== undefined && script.includes(this.responseLossMarker)) {
+      this.responseLossMarker = undefined;
+      throw new Error("injected Redis response loss");
+    }
+    return result;
   }
 
   private enqueue(keys: string[], args: string[]): number {
@@ -437,7 +785,7 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   }
 
   private ackInvalid(keys: string[], args: string[]): number {
-    const [ready, delayed, processing, members, , state, owners, dlqIndex, dlqOrder, dlqMembers] = keys;
+    const [ready, delayed, processing, members, , state, owners, dlqIndex, dlqOrder, dlqMembers, dlqOutcomes] = keys;
     const [id, payload, workerId, dlqId, dlqPayload, order] = args;
     if (this.hash(state!).get(id!) !== "processing" ||
         this.hash(owners!).get(id!) !== workerId ||
@@ -449,32 +797,45 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
     this.hash(dlqIndex!).set(dlqId!, dlqPayload!);
     this.sortedSet(dlqOrder!).set(dlqId!, Number(order));
     this.set(dlqMembers!).add(dlqId!);
+    this.hash(dlqOutcomes!).delete(dlqId!);
     return 1;
   }
 
   private fail(keys: string[], args: string[]): number {
-    const [ready, delayed, processing, members, memberReceivedAt, state, owners, dlqIndex, dlqOrder, dlqMembers] = keys;
+    const [ready, delayed, processing, members, memberReceivedAt, state, owners, dlqIndex, dlqOrder, dlqMembers, dlqOutcomes] = keys;
     const [id, originalPayload, workerId, failedPayload, destination, dueAt, dlqId, dlqPayload, order] = args;
-    if (this.hash(state!).get(id!) !== "processing" ||
-        this.hash(owners!).get(id!) !== workerId ||
-        this.hash(members!).get(id!) !== originalPayload ||
-        !this.sortedSet(processing!).has(id!)) return 0;
-    this.sortedSet(processing!).delete(id!);
-    this.hash(owners!).delete(id!);
-    if (destination === "delayed") {
-      this.hash(members!).set(id!, failedPayload!);
-      this.hash(state!).set(id!, "delayed");
-      this.sortedSet(delayed!).set(id!, Number(dueAt));
-    } else {
-      this.hash(members!).delete(id!);
-      this.hash(memberReceivedAt!).delete(id!);
-      this.hash(state!).delete(id!);
-      this.hash(dlqIndex!).set(dlqId!, dlqPayload!);
-      this.sortedSet(dlqOrder!).set(dlqId!, Number(order));
-      this.set(dlqMembers!).add(dlqId!);
+    const exact = this.hash(state!).get(id!) === "processing" &&
+      this.hash(owners!).get(id!) === workerId &&
+      this.hash(members!).get(id!) === originalPayload &&
+      this.sortedSet(processing!).has(id!);
+    if (exact) {
+      this.sortedSet(processing!).delete(id!);
+      this.hash(owners!).delete(id!);
+      if (destination === "delayed") {
+        this.hash(members!).set(id!, failedPayload!);
+        this.hash(state!).set(id!, "delayed");
+        this.sortedSet(delayed!).set(id!, Number(dueAt));
+      } else {
+        this.hash(members!).delete(id!);
+        this.hash(memberReceivedAt!).delete(id!);
+        this.hash(state!).delete(id!);
+        this.hash(dlqIndex!).set(dlqId!, dlqPayload!);
+        this.sortedSet(dlqOrder!).set(dlqId!, Number(order));
+        this.set(dlqMembers!).add(dlqId!);
+        this.hash(dlqOutcomes!).delete(dlqId!);
+      }
+      this.sortedSet(ready!).delete(id!);
+      return 1;
     }
-    this.sortedSet(ready!).delete(id!);
-    return 1;
+    if (destination === "delayed" &&
+        this.hash(state!).get(id!) === "delayed" &&
+        this.hash(members!).get(id!) === failedPayload &&
+        this.sortedSet(delayed!).has(id!)) return 2;
+    if (destination === "dead_letter" &&
+        this.set(dlqMembers!).has(dlqId!) &&
+        this.hash(dlqIndex!).get(dlqId!) === dlqPayload &&
+        this.sortedSet(dlqOrder!).has(dlqId!)) return 2;
+    return 0;
   }
 
   private listDlq(keys: string[], args: string[]): string[] {
@@ -490,19 +851,27 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
     return result;
   }
 
-  private findDlq(keys: string[], args: string[]): string | null {
-    const [index, order, members] = keys;
+  private findDlq(keys: string[], args: string[]): Array<number | string> {
+    const [index, order, members, outcomes] = keys;
     const id = args[0]!;
-    if (!this.set(members!).has(id) || !this.sortedSet(order!).has(id)) return null;
-    return this.hash(index!).get(id) ?? null;
+    if (this.set(members!).has(id) && this.sortedSet(order!).has(id)) {
+      const payload = this.hash(index!).get(id);
+      if (payload !== undefined) return [1, payload];
+    }
+    const outcome = this.hash(outcomes!).get(id);
+    if (outcome === "replayed") return [2];
+    if (outcome === "deleted") return [3];
+    return [0];
   }
 
   private replayDlq(keys: string[], args: string[]): number {
-    const [ready, delayed, processing, members, memberReceivedAt, state, owners, dlqIndex, dlqOrder, dlqMembers] = keys;
+    const [ready, delayed, processing, members, memberReceivedAt, state, owners, dlqIndex, dlqOrder, dlqMembers, dlqOutcomes] = keys;
     const [id, payload, score, dlqId, dlqPayload] = args;
     if (!this.set(dlqMembers!).has(dlqId!) ||
         !this.sortedSet(dlqOrder!).has(dlqId!) ||
-        this.hash(dlqIndex!).get(dlqId!) !== dlqPayload) return 0;
+        this.hash(dlqIndex!).get(dlqId!) !== dlqPayload) {
+      return this.hash(dlqOutcomes!).get(dlqId!) === "replayed" ? 2 : 0;
+    }
     if (!this.isActive(id!, keys)) {
       this.removeActive(id!, keys);
       this.hash(members!).set(id!, payload!);
@@ -516,18 +885,22 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
     this.hash(dlqIndex!).delete(dlqId!);
     this.sortedSet(dlqOrder!).delete(dlqId!);
     this.set(dlqMembers!).delete(dlqId!);
+    this.hash(dlqOutcomes!).set(dlqId!, "replayed");
     return 1;
   }
 
   private deleteDlq(keys: string[], args: string[]): number {
-    const [index, order, members] = keys;
+    const [index, order, members, outcomes] = keys;
     const [id, payload] = args;
     if (!this.set(members!).has(id!) ||
         !this.sortedSet(order!).has(id!) ||
-        this.hash(index!).get(id!) !== payload) return 0;
+        this.hash(index!).get(id!) !== payload) {
+      return this.hash(outcomes!).get(id!) === "deleted" ? 2 : 0;
+    }
     this.hash(index!).delete(id!);
     this.sortedSet(order!).delete(id!);
     this.set(members!).delete(id!);
+    this.hash(outcomes!).set(id!, "deleted");
     return 1;
   }
 
@@ -555,7 +928,8 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   private sortedIds(key: string, maxScore: number): string[] {
     return [...this.sortedSet(key).entries()]
       .filter(([, score]) => score <= maxScore)
-      .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
+      .sort((left, right) => left[1] - right[1] ||
+        Buffer.compare(Buffer.from(left[0], "utf8"), Buffer.from(right[0], "utf8")))
       .map(([id]) => id);
   }
 
@@ -572,6 +946,28 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   private set(key: string): Set<string> {
     if (!this.sets.has(key)) this.sets.set(key, new Set());
     return this.sets.get(key)!;
+  }
+}
+
+class ExecuteThenThrowRedisClient implements RedisApprovalInteractionQueueClient {
+  private responseLossMarker: string | undefined;
+
+  constructor(private readonly delegate: RedisApprovalInteractionQueueClient) {}
+
+  loseReplyNext(marker: string): void {
+    this.responseLossMarker = marker;
+  }
+
+  async eval(
+    script: string,
+    options: { keys: string[]; arguments: string[] },
+  ): Promise<number | string | Array<number | string> | null> {
+    const result = await this.delegate.eval(script, options);
+    if (this.responseLossMarker !== undefined && script.includes(this.responseLossMarker)) {
+      this.responseLossMarker = undefined;
+      throw new Error("injected Redis response loss");
+    }
+    return result;
   }
 }
 
@@ -608,14 +1004,14 @@ runIfRedis("Redis approval interaction queue with live Redis", () => {
     await queue.enqueue(job);
     const [first] = await claim(queue);
     await queue.handleFailure({
-      job: first!, workerId: "worker-a", errorCode: "provider_timeout", at: first!.receivedAt,
+      job: first!, workerId: "worker-a", errorCode: "retryable_remote_failure", at: first!.receivedAt,
     });
     const [second] = await claim(queue, {
       now: "2026-07-19T00:00:01.000Z",
       leaseUntil: "2026-07-19T00:01:01.000Z",
     });
     await queue.handleFailure({
-      job: second!, workerId: "worker-a", errorCode: "provider_timeout", at: second!.receivedAt,
+      job: second!, workerId: "worker-a", errorCode: "retryable_remote_failure", at: second!.receivedAt,
     });
 
     expect(await queue.getCounts()).toEqual({ pending: 0, processing: 0, delayed: 0, deadLetter: 1 });
@@ -662,6 +1058,67 @@ runIfRedis("Redis approval interaction queue with live Redis", () => {
     });
     expect(JSON.stringify(invalidDeadLetter)).not.toContain("private draft body");
     await expect(queue.deleteDeadLetter(invalidDeadLetter!.id)).resolves.toBe("deleted");
+    await expect(queue.getCounts()).resolves.toEqual({
+      pending: 0,
+      processing: 0,
+      delayed: 0,
+      deadLetter: 0,
+    });
+  });
+
+  it("retries committed terminal, replay, and delete scripts after response loss", async () => {
+    const adapter = new ExecuteThenThrowRedisClient(
+      client as unknown as RedisApprovalInteractionQueueClient,
+    );
+    const queue = createRedisApprovalInteractionQueue({
+      client: adapter,
+      prefix: `${prefix}:response-loss`,
+      maxAttempts: 1,
+    });
+    const replayJob = jobFixture({ eventId: "event-live-lost-replay" });
+    await queue.enqueue(replayJob);
+    const [replayClaim] = await claim(queue);
+    const terminalFailure = {
+      job: replayClaim!,
+      workerId: "worker-a",
+      errorCode: "repository_unavailable",
+      at: replayClaim!.receivedAt,
+    };
+    adapter.loseReplyNext("approval-interaction:fail");
+    await expect(queue.handleFailure(terminalFailure)).rejects.toThrow(
+      "injected Redis response loss",
+    );
+    await expect(queue.handleFailure(terminalFailure)).resolves.toEqual({
+      action: "dead_lettered",
+    });
+    const [replayDeadLetter] = await queue.listDeadLetters({ limit: 1 });
+    adapter.loseReplyNext("approval-interaction:replay-dlq");
+    await expect(queue.replayDeadLetter(replayDeadLetter!.id)).rejects.toThrow(
+      "injected Redis response loss",
+    );
+    await expect(queue.replayDeadLetter(replayDeadLetter!.id)).resolves.toBe("replayed");
+    await expect(queue.getCounts()).resolves.toMatchObject({ pending: 1, deadLetter: 0 });
+    const [replayed] = await claim(queue, {
+      now: "2026-07-19T00:00:01.000Z",
+      leaseUntil: "2026-07-19T00:00:02.000Z",
+    });
+    await queue.acknowledge({ job: replayed!, workerId: "worker-a" });
+
+    const deleteJob = jobFixture({ eventId: "event-live-lost-delete" });
+    await queue.enqueue(deleteJob);
+    const [deleteClaim] = await claim(queue);
+    await queue.handleFailure({
+      job: deleteClaim!,
+      workerId: "worker-a",
+      errorCode: "repository_unavailable",
+      at: deleteClaim!.receivedAt,
+    });
+    const [deleteDeadLetter] = await queue.listDeadLetters({ limit: 1 });
+    adapter.loseReplyNext("approval-interaction:delete-dlq");
+    await expect(queue.deleteDeadLetter(deleteDeadLetter!.id)).rejects.toThrow(
+      "injected Redis response loss",
+    );
+    await expect(queue.deleteDeadLetter(deleteDeadLetter!.id)).resolves.toBe("deleted");
     await expect(queue.getCounts()).resolves.toEqual({
       pending: 0,
       processing: 0,

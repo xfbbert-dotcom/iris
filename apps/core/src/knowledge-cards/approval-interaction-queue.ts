@@ -1,5 +1,20 @@
 import type { ApprovalInteractionJob } from "./knowledge-card.js";
 
+export const APPROVAL_INTERACTION_FAILURE_CODES = [
+  "request_not_sent",
+  "remote_rejected",
+  "retryable_remote_failure",
+  "outcome_unknown",
+  "membership_unavailable",
+  "repository_unavailable",
+  "redis_unavailable",
+  "invalid_queue_payload",
+  "internal_error",
+] as const;
+
+export type ApprovalInteractionFailureCode =
+  (typeof APPROVAL_INTERACTION_FAILURE_CODES)[number];
+
 export type ApprovalInteractionJobDeadLetter = {
   id: string;
   job: ApprovalInteractionJob;
