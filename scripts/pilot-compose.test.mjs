@@ -274,6 +274,27 @@ test("requires zero conversation-state queues, exact processing lists, and repai
   assert.match(runbook, /\$documentReindexProcessing\s+-ne\s+0/u);
 });
 
+test("keeps Phase 5A knowledge draft facts isolated and fail closed", () => {
+  const runbook = readFileSync(
+    "docs/runbooks/iris-knowledge-draft-facts-acceptance.md",
+    "utf8",
+  );
+  for (const marker of [
+    "Phase 5A",
+    "globalEnabled=false",
+    "no model call",
+    "no answer retrieval",
+    "no Feishu send",
+    "no confirm/approve/publish route",
+    "evidence invalidation redaction",
+    "fail-closed rollback",
+    "/internal/knowledge-drafts/status",
+    "/internal/knowledge-drafts/:id/events",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"), `${marker} gate is required`);
+  }
+});
+
 test("renders the pilot example with disabled extraction and placeholder secrets", () => {
   for (const name of [
     "IRIS_AI_WORKER_TOKEN",

@@ -135,6 +135,7 @@ All endpoints require the existing internal bearer token:
 - `POST /internal/knowledge-drafts`;
 - `GET /internal/knowledge-drafts?groupId=&status=&riskLevel=&limit=`;
 - `GET /internal/knowledge-drafts/:id`;
+- `GET /internal/knowledge-drafts/:id/events`;
 - `POST /internal/knowledge-drafts/:id/revisions`;
 - `POST /internal/knowledge-drafts/:id/request-revision`;
 - `POST /internal/knowledge-drafts/:id/reject`;
