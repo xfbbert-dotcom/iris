@@ -106,6 +106,7 @@ describe("FeishuGroupMembershipChecker", () => {
     ["HTTP 403", membersResponse({ status: 403 })],
     ["HTTP 429", membersResponse({ status: 429 })],
     ["HTTP 500", membersResponse({ status: 500 })],
+    ["syntactically invalid JSON", invalidJsonResponse()],
     ["malformed response", jsonResponse({ code: 0, data: {} })],
     ["oversized response", oversizedMembersResponse()],
   ])("fails closed on %s", async (_description, response) => {
@@ -147,6 +148,18 @@ describe("FeishuGroupMembershipChecker", () => {
       isMembershipUnavailable,
     );
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when a paginated response has a malformed page token", async () => {
+    const checker = createFeishuGroupMembershipChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => membersResponse({ memberList: [], hasMore: true, pageToken: 42 })),
+    });
+
+    await expect(checker.isCurrentMember({ chatId: "oc_group", openId: "ou-member" })).rejects.toSatisfy(
+      isMembershipUnavailable,
+    );
   });
 
   it("fails closed after exactly 20 pages instead of treating the limit as absence", async () => {
@@ -198,7 +211,7 @@ function membersResponse({
   code?: number;
   memberList?: unknown[];
   hasMore?: boolean;
-  pageToken?: string;
+  pageToken?: unknown;
   status?: number;
 }): Response {
   return jsonResponse(
@@ -232,6 +245,16 @@ function oversizedMembersResponse(): Response {
     }),
     { headers: { "content-type": "application/json" } },
   );
+}
+
+function invalidJsonResponse(): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => {
+      throw new Error("invalid json");
+    },
+  } as unknown as Response;
 }
 
 function abortError(): Error {

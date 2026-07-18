@@ -176,23 +176,47 @@ describe("FeishuInteractiveCardClient", () => {
   });
 
   it.each([
-    ["malformed JSON", invalidJsonResponse()],
     [
-      "oversized JSON",
-      new Response(
-        JSON.stringify({ code: 0, data: { message_id: "om-card-1" }, padding: "x".repeat(70_000) }),
-        { headers: { "content-type": "application/json" } },
-      ),
+      "sendCard",
+      { chatId: "oc_group", cardJson: "{}", uuid: "send-1" },
+      "unreadable 401 response",
+      invalidJsonResponse(401),
+      "remote_rejected",
+      "http_401",
     ],
-  ])("classifies successful but unreadable %s as outcome unknown", async (_description, response) => {
+    [
+      "updateCard",
+      { messageId: "om-card-1", cardJson: "{}" },
+      "oversized 429 response",
+      oversizedJsonResponse(429),
+      "retryable_remote_failure",
+      "http_429",
+    ],
+    [
+      "sendCard",
+      { chatId: "oc_group", cardJson: "{}", uuid: "send-1" },
+      "unreadable 2xx response",
+      invalidJsonResponse(),
+      "outcome_unknown",
+      "invalid_response",
+    ],
+    [
+      "updateCard",
+      { messageId: "om-card-1", cardJson: "{}" },
+      "oversized 2xx response",
+      oversizedJsonResponse(),
+      "outcome_unknown",
+      "invalid_response",
+    ],
+  ] as const)("classifies %s %s without exposing the response body", async (method, input, _description, response, classification, code) => {
     const client = createFeishuInteractiveCardClient({
       baseUrl: "https://open.feishu.cn",
       tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
       fetch: vi.fn(async () => response),
     });
 
-    await expect(client.sendCard({ chatId: "oc_group", cardJson: "{}", uuid: "send-1" })).rejects.toSatisfy(
-      (error) => isCardError(error, "outcome_unknown", "invalid_response"),
+    await expect(client[method](input as never)).rejects.toSatisfy(
+      (error) => isCardError(error, classification, code),
     );
   });
 
@@ -218,14 +242,21 @@ function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
   } as unknown as Response;
 }
 
-function invalidJsonResponse(): Response {
+function invalidJsonResponse(status = 200): Response {
   return {
-    ok: true,
-    status: 200,
+    ok: status >= 200 && status < 300,
+    status,
     json: async () => {
       throw new Error("invalid json");
     },
   } as unknown as Response;
+}
+
+function oversizedJsonResponse(status = 200): Response {
+  return new Response(
+    JSON.stringify({ code: 0, data: { message_id: "om-card-1" }, padding: "x".repeat(70_000) }),
+    { status, headers: { "content-type": "application/json" } },
+  );
 }
 
 function abortError(): Error {

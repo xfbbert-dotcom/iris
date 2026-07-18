@@ -131,6 +131,10 @@ async function requestFeishuJson({
       throw new FeishuInteractiveCardClientError("request_not_sent", "network_failure");
     }
 
+    if (!response.ok) {
+      throw httpError(response.status);
+    }
+
     let responseBody: unknown;
     try {
       responseBody = await readBoundedJsonResponse({
@@ -143,9 +147,6 @@ async function requestFeishuJson({
       throw new FeishuInteractiveCardClientError("outcome_unknown", "invalid_response");
     }
 
-    if (!response.ok) {
-      throw httpError(response.status);
-    }
     return responseBody;
   } finally {
     clearTimeout(timeout);
