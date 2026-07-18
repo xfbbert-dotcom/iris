@@ -8,8 +8,6 @@ from pydantic import ValidationError
 from .contracts import (
     MAX_CANDIDATES,
     MAX_EVIDENCE_MESSAGE_IDS,
-    MAX_IDENTIFIER_CHARS,
-    MAX_MEMORY_CONTENT_CHARS,
     MAX_OPERATIONS_PER_FAMILY,
     MemoryExtractionRequest,
     MemoryExtractionRequestV2,
@@ -106,8 +104,8 @@ class MemoryExtractionService:
 
 
 def _v2_response_schema() -> dict[str, object]:
-    identifier = _string_schema(MAX_IDENTIFIER_CHARS)
-    memory_text = _string_schema(MAX_MEMORY_CONTENT_CHARS)
+    identifier = _string_schema()
+    memory_text = _string_schema()
     confidence = {"type": "number", "minimum": 0, "maximum": 1}
     evidence_ids = {
         "type": "array",
@@ -248,7 +246,7 @@ def _v2_response_schema() -> dict[str, object]:
                 "thread_id": identifier,
                 "description": memory_text,
                 "owner": owner,
-                "due_at": _string_schema(64),
+                "due_at": _string_schema(),
                 "due_evidence_span": memory_text,
             },
             ["description", "owner"],
@@ -347,8 +345,8 @@ def _closed_object(
     }
 
 
-def _string_schema(max_length: int) -> dict[str, object]:
-    return {"type": "string", "minLength": 1, "maxLength": max_length}
+def _string_schema() -> dict[str, object]:
+    return {"type": "string"}
 
 
 def _enum(*values: str) -> dict[str, object]:

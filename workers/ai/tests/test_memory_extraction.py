@@ -601,6 +601,49 @@ async def test_v2_service_requests_the_strict_response_contract_as_json_schema()
     assert properties["action_operations"]["maxItems"] == 8
 
 
+def test_v2_response_schema_uses_only_gemini_supported_keywords() -> None:
+    from iris_worker.memory_extraction import _v2_response_schema
+
+    supported_keywords = {
+        "additionalProperties",
+        "anyOf",
+        "description",
+        "enum",
+        "format",
+        "items",
+        "maximum",
+        "maxItems",
+        "minimum",
+        "minItems",
+        "oneOf",
+        "prefixItems",
+        "properties",
+        "required",
+        "title",
+        "type",
+    }
+
+    def assert_supported(schema: dict[str, object]) -> None:
+        assert set(schema).issubset(supported_keywords)
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for child in properties.values():
+                assert isinstance(child, dict)
+                assert_supported(child)
+        for name in ("items", "additionalProperties"):
+            child = schema.get(name)
+            if isinstance(child, dict):
+                assert_supported(child)
+        for name in ("anyOf", "oneOf", "prefixItems"):
+            children = schema.get(name)
+            if isinstance(children, list):
+                for child in children:
+                    assert isinstance(child, dict)
+                    assert_supported(child)
+
+    assert_supported(_v2_response_schema())
+
+
 @pytest.mark.asyncio
 async def test_v2_service_validates_response_ownership_and_operation_keys() -> None:
     from iris_worker.contracts import MemoryExtractionRequestV2
