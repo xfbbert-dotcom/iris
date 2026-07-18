@@ -12,6 +12,7 @@ import {
 } from "../src/knowledge-cards/redis-approval-interaction-queue.js";
 
 const BASE_PREFIX = "iris:approval:interactions";
+const OUTCOME_RETENTION_SECONDS = 24 * 60 * 60;
 
 describe("Redis approval interaction queue", () => {
   it("deduplicates active jobs and claims FIFO by receivedAt", async () => {
@@ -486,6 +487,99 @@ describe("Redis approval interaction queue", () => {
     });
   });
 
+  it("expires replay and delete outcomes after the bounded retry horizon", async () => {
+    const replayClient = new StatefulRedisClient();
+    const replayPrefix = `${BASE_PREFIX}:bounded-replay`;
+    const replayQueue = createQueue(replayClient, { prefix: replayPrefix, maxAttempts: 1 });
+    const replayDeadLetter = await createDeadLetter(
+      replayQueue,
+      jobFixture({ eventId: "bounded-replay" }),
+    );
+    const replayMarker = outcomeMarkerKey(replayPrefix, replayDeadLetter.id);
+
+    await expect(replayQueue.replayDeadLetter(replayDeadLetter.id)).resolves.toBe("replayed");
+    expect(replayClient.stringValue(replayMarker)).toBe("replayed");
+    expect(replayClient.ttlSeconds(replayMarker)).toBeGreaterThan(0);
+    expect(replayClient.ttlSeconds(replayMarker)).toBeLessThanOrEqual(OUTCOME_RETENTION_SECONDS);
+
+    replayClient.advanceSeconds(OUTCOME_RETENTION_SECONDS);
+    expect(replayClient.ttlSeconds(replayMarker)).toBe(-2);
+    await expect(replayQueue.replayDeadLetter(replayDeadLetter.id)).resolves.toBe("not_found");
+
+    const deleteClient = new StatefulRedisClient();
+    const deletePrefix = `${BASE_PREFIX}:bounded-delete`;
+    const deleteQueue = createQueue(deleteClient, { prefix: deletePrefix, maxAttempts: 1 });
+    const deleteDeadLetter = await createDeadLetter(
+      deleteQueue,
+      jobFixture({ eventId: "bounded-delete" }),
+    );
+    const deleteMarker = outcomeMarkerKey(deletePrefix, deleteDeadLetter.id);
+
+    await expect(deleteQueue.deleteDeadLetter(deleteDeadLetter.id)).resolves.toBe("deleted");
+    expect(deleteClient.stringValue(deleteMarker)).toBe("deleted");
+    expect(deleteClient.ttlSeconds(deleteMarker)).toBeGreaterThan(0);
+    expect(deleteClient.ttlSeconds(deleteMarker)).toBeLessThanOrEqual(OUTCOME_RETENTION_SECONDS);
+
+    deleteClient.advanceSeconds(OUTCOME_RETENTION_SECONDS);
+    expect(deleteClient.ttlSeconds(deleteMarker)).toBe(-2);
+    await expect(deleteQueue.deleteDeadLetter(deleteDeadLetter.id)).resolves.toBe("not_found");
+  });
+
+  it("clears a stale outcome when the exact DLQ identity is recreated", async () => {
+    const client = new StatefulRedisClient();
+    const prefix = `${BASE_PREFIX}:recreated-outcome`;
+    const queue = createQueue(client, { prefix, maxAttempts: 1 });
+    const job = jobFixture({ eventId: "recreated-outcome" });
+    const firstDeadLetter = await createDeadLetter(queue, job);
+    const marker = outcomeMarkerKey(prefix, firstDeadLetter.id);
+
+    await expect(queue.replayDeadLetter(firstDeadLetter.id)).resolves.toBe("replayed");
+    expect(client.stringValue(marker)).toBe("replayed");
+    const [replayed] = await claim(queue);
+    await expect(queue.handleFailure({
+      job: replayed!,
+      workerId: "worker-a",
+      errorCode: "repository_unavailable",
+      at: replayed!.receivedAt,
+    })).resolves.toEqual({ action: "dead_lettered" });
+
+    expect(client.stringValue(marker)).toBeUndefined();
+    expect(client.ttlSeconds(marker)).toBe(-2);
+    await expect(queue.listDeadLetters({ limit: 10 })).resolves.toEqual([
+      expect.objectContaining({ id: firstDeadLetter.id }),
+    ]);
+  });
+
+  it.each([
+    "repository_unavailable",
+    "sha256:ABCDEF",
+    `sha256:${"A".repeat(64)}`,
+    `md5:${"a".repeat(64)}`,
+  ])("rejects text-shaped invalid-payload digests: %s", async (payloadDigest) => {
+    const client = new StatefulRedisClient();
+    const prefix = `${BASE_PREFIX}:invalid-digest:${client.id}`;
+    const id = generatedDeadLetterId(payloadDigest);
+    client.injectDeadLetter(prefix, id, invalidPayloadDeadLetterFixture(id, { payloadDigest }));
+    const queue = createQueue(client, { prefix });
+
+    await expectInvalidRedisReply(queue.listDeadLetters({ limit: 1 }));
+    await expectInvalidRedisReply(queue.replayDeadLetter(id));
+  });
+
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects unsafe invalid-payload byte counts: %s",
+    async (payloadBytes) => {
+      const client = new StatefulRedisClient();
+      const prefix = `${BASE_PREFIX}:invalid-bytes:${client.id}`;
+      const id = generatedDeadLetterId(String(payloadBytes));
+      client.injectDeadLetter(prefix, id, invalidPayloadDeadLetterFixture(id, { payloadBytes }));
+      const queue = createQueue(client, { prefix });
+
+      await expectInvalidRedisReply(queue.listDeadLetters({ limit: 1 }));
+      await expectInvalidRedisReply(queue.deleteDeadLetter(id));
+    },
+  );
+
   it("preserves processing authority when the wrong worker reports failure", async () => {
     const client = new StatefulRedisClient();
     const queue = createQueue(client);
@@ -583,6 +677,24 @@ function deadLetterPayloadFixture(id: string): string {
   });
 }
 
+function invalidPayloadDeadLetterFixture(
+  id: string,
+  overrides: { payloadDigest?: string; payloadBytes?: number } = {},
+): string {
+  return JSON.stringify({
+    id,
+    payloadDigest: overrides.payloadDigest ?? `sha256:${"a".repeat(64)}`,
+    payloadBytes: overrides.payloadBytes ?? 128,
+    errorCode: "invalid_queue_payload",
+    failedAt: "2026-07-19T00:00:00.000Z",
+    replayable: false,
+  });
+}
+
+function outcomeMarkerKey(prefix: string, id: string): string {
+  return `${prefix}:dlq:outcome:${id}`;
+}
+
 async function createDeadLetter(
   queue: ReturnType<typeof createRedisApprovalInteractionQueue>,
   job: ReturnType<typeof jobFixture>,
@@ -614,6 +726,8 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   private readonly hashes = new Map<string, Map<string, string>>();
   private readonly sortedSets = new Map<string, Map<string, number>>();
   private readonly sets = new Map<string, Set<string>>();
+  private readonly strings = new Map<string, { value: string; expiresAt: number }>();
+  private nowSeconds = 0;
   private failureMarker: string | undefined;
   private replyMarker: string | undefined;
   private replyValue: number | string | Array<number | string> | null = null;
@@ -658,11 +772,28 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
     this.set(`${prefix}:dlq:members`).add(id);
   }
 
+  advanceSeconds(seconds: number): void {
+    this.nowSeconds += seconds;
+  }
+
+  stringValue(key: string): string | undefined {
+    return this.string(key)?.value;
+  }
+
+  ttlSeconds(key: string): number {
+    const value = this.string(key);
+    return value === undefined ? -2 : value.expiresAt - this.nowSeconds;
+  }
+
   allStoredValues(): string[] {
     return [
       ...[...this.hashes.values()].flatMap((hash) => [...hash.values()]),
       ...[...this.sortedSets.values()].flatMap((set) => [...set.keys()]),
       ...[...this.sets.values()].flatMap((set) => [...set]),
+      ...[...this.strings.keys()].flatMap((key) => {
+        const value = this.string(key);
+        return value === undefined ? [] : [value.value];
+      }),
     ];
   }
 
@@ -785,7 +916,7 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   }
 
   private ackInvalid(keys: string[], args: string[]): number {
-    const [ready, delayed, processing, members, , state, owners, dlqIndex, dlqOrder, dlqMembers, dlqOutcomes] = keys;
+    const [ready, delayed, processing, members, , state, owners, dlqIndex, dlqOrder, dlqMembers, outcome] = keys;
     const [id, payload, workerId, dlqId, dlqPayload, order] = args;
     if (this.hash(state!).get(id!) !== "processing" ||
         this.hash(owners!).get(id!) !== workerId ||
@@ -797,12 +928,12 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
     this.hash(dlqIndex!).set(dlqId!, dlqPayload!);
     this.sortedSet(dlqOrder!).set(dlqId!, Number(order));
     this.set(dlqMembers!).add(dlqId!);
-    this.hash(dlqOutcomes!).delete(dlqId!);
+    this.strings.delete(outcome!);
     return 1;
   }
 
   private fail(keys: string[], args: string[]): number {
-    const [ready, delayed, processing, members, memberReceivedAt, state, owners, dlqIndex, dlqOrder, dlqMembers, dlqOutcomes] = keys;
+    const [ready, delayed, processing, members, memberReceivedAt, state, owners, dlqIndex, dlqOrder, dlqMembers, outcome] = keys;
     const [id, originalPayload, workerId, failedPayload, destination, dueAt, dlqId, dlqPayload, order] = args;
     const exact = this.hash(state!).get(id!) === "processing" &&
       this.hash(owners!).get(id!) === workerId &&
@@ -822,7 +953,7 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
         this.hash(dlqIndex!).set(dlqId!, dlqPayload!);
         this.sortedSet(dlqOrder!).set(dlqId!, Number(order));
         this.set(dlqMembers!).add(dlqId!);
-        this.hash(dlqOutcomes!).delete(dlqId!);
+        this.strings.delete(outcome!);
       }
       this.sortedSet(ready!).delete(id!);
       return 1;
@@ -852,25 +983,25 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   }
 
   private findDlq(keys: string[], args: string[]): Array<number | string> {
-    const [index, order, members, outcomes] = keys;
+    const [index, order, members, outcomeKey] = keys;
     const id = args[0]!;
     if (this.set(members!).has(id) && this.sortedSet(order!).has(id)) {
       const payload = this.hash(index!).get(id);
       if (payload !== undefined) return [1, payload];
     }
-    const outcome = this.hash(outcomes!).get(id);
+    const outcome = this.string(outcomeKey!)?.value;
     if (outcome === "replayed") return [2];
     if (outcome === "deleted") return [3];
     return [0];
   }
 
   private replayDlq(keys: string[], args: string[]): number {
-    const [ready, delayed, processing, members, memberReceivedAt, state, owners, dlqIndex, dlqOrder, dlqMembers, dlqOutcomes] = keys;
-    const [id, payload, score, dlqId, dlqPayload] = args;
+    const [ready, delayed, processing, members, memberReceivedAt, state, owners, dlqIndex, dlqOrder, dlqMembers, outcomeKey] = keys;
+    const [id, payload, score, dlqId, dlqPayload, retentionSeconds] = args;
     if (!this.set(dlqMembers!).has(dlqId!) ||
         !this.sortedSet(dlqOrder!).has(dlqId!) ||
         this.hash(dlqIndex!).get(dlqId!) !== dlqPayload) {
-      return this.hash(dlqOutcomes!).get(dlqId!) === "replayed" ? 2 : 0;
+      return this.string(outcomeKey!)?.value === "replayed" ? 2 : 0;
     }
     if (!this.isActive(id!, keys)) {
       this.removeActive(id!, keys);
@@ -885,22 +1016,28 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
     this.hash(dlqIndex!).delete(dlqId!);
     this.sortedSet(dlqOrder!).delete(dlqId!);
     this.set(dlqMembers!).delete(dlqId!);
-    this.hash(dlqOutcomes!).set(dlqId!, "replayed");
+    this.strings.set(outcomeKey!, {
+      value: "replayed",
+      expiresAt: this.nowSeconds + Number(retentionSeconds),
+    });
     return 1;
   }
 
   private deleteDlq(keys: string[], args: string[]): number {
-    const [index, order, members, outcomes] = keys;
-    const [id, payload] = args;
+    const [index, order, members, outcomeKey] = keys;
+    const [id, payload, retentionSeconds] = args;
     if (!this.set(members!).has(id!) ||
         !this.sortedSet(order!).has(id!) ||
         this.hash(index!).get(id!) !== payload) {
-      return this.hash(outcomes!).get(id!) === "deleted" ? 2 : 0;
+      return this.string(outcomeKey!)?.value === "deleted" ? 2 : 0;
     }
     this.hash(index!).delete(id!);
     this.sortedSet(order!).delete(id!);
     this.set(members!).delete(id!);
-    this.hash(outcomes!).set(id!, "deleted");
+    this.strings.set(outcomeKey!, {
+      value: "deleted",
+      expiresAt: this.nowSeconds + Number(retentionSeconds),
+    });
     return 1;
   }
 
@@ -946,6 +1083,15 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   private set(key: string): Set<string> {
     if (!this.sets.has(key)) this.sets.set(key, new Set());
     return this.sets.get(key)!;
+  }
+
+  private string(key: string): { value: string; expiresAt: number } | undefined {
+    const value = this.strings.get(key);
+    if (value !== undefined && value.expiresAt <= this.nowSeconds) {
+      this.strings.delete(key);
+      return undefined;
+    }
+    return value;
   }
 }
 
@@ -1070,9 +1216,10 @@ runIfRedis("Redis approval interaction queue with live Redis", () => {
     const adapter = new ExecuteThenThrowRedisClient(
       client as unknown as RedisApprovalInteractionQueueClient,
     );
+    const responseLossPrefix = `${prefix}:response-loss`;
     const queue = createRedisApprovalInteractionQueue({
       client: adapter,
-      prefix: `${prefix}:response-loss`,
+      prefix: responseLossPrefix,
       maxAttempts: 1,
     });
     const replayJob = jobFixture({ eventId: "event-live-lost-replay" });
@@ -1097,6 +1244,11 @@ runIfRedis("Redis approval interaction queue with live Redis", () => {
       "injected Redis response loss",
     );
     await expect(queue.replayDeadLetter(replayDeadLetter!.id)).resolves.toBe("replayed");
+    const replayOutcomeTtl = await client!.ttl(
+      outcomeMarkerKey(responseLossPrefix, replayDeadLetter!.id),
+    );
+    expect(replayOutcomeTtl).toBeGreaterThan(0);
+    expect(replayOutcomeTtl).toBeLessThanOrEqual(OUTCOME_RETENTION_SECONDS);
     await expect(queue.getCounts()).resolves.toMatchObject({ pending: 1, deadLetter: 0 });
     const [replayed] = await claim(queue, {
       now: "2026-07-19T00:00:01.000Z",
@@ -1119,6 +1271,11 @@ runIfRedis("Redis approval interaction queue with live Redis", () => {
       "injected Redis response loss",
     );
     await expect(queue.deleteDeadLetter(deleteDeadLetter!.id)).resolves.toBe("deleted");
+    const deleteOutcomeTtl = await client!.ttl(
+      outcomeMarkerKey(responseLossPrefix, deleteDeadLetter!.id),
+    );
+    expect(deleteOutcomeTtl).toBeGreaterThan(0);
+    expect(deleteOutcomeTtl).toBeLessThanOrEqual(OUTCOME_RETENTION_SECONDS);
     await expect(queue.getCounts()).resolves.toEqual({
       pending: 0,
       processing: 0,

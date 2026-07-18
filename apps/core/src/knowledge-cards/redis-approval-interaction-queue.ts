@@ -19,8 +19,10 @@ const MAX_QUEUE_LIMIT = 100;
 const MAX_IDENTIFIER_CHARS = 512;
 const RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000] as const;
 const MAX_RETRY_DELAY_MS = 10 * 60_000;
+const DEAD_LETTER_OUTCOME_RETENTION_SECONDS = 24 * 60 * 60;
 const CLAIMED_PAYLOAD = Symbol("approvalInteractionClaimedPayload");
 const ALLOWED_FAILURE_CODES = new Set<string>(APPROVAL_INTERACTION_FAILURE_CODES);
+const SHA256_PAYLOAD_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 
 const ENQUEUE_SCRIPT = `
 -- approval-interaction:enqueue
@@ -134,7 +136,7 @@ redis.call("HDEL", KEYS[7], ARGV[1])
 redis.call("HSET", KEYS[8], ARGV[4], ARGV[5])
 redis.call("ZADD", KEYS[9], ARGV[6], ARGV[4])
 redis.call("SADD", KEYS[10], ARGV[4])
-redis.call("HDEL", KEYS[11], ARGV[4])
+redis.call("DEL", KEYS[11])
 return 1
 `;
 
@@ -160,7 +162,7 @@ if exact then
     redis.call("HSET", KEYS[8], ARGV[7], ARGV[8])
     redis.call("ZADD", KEYS[9], ARGV[9], ARGV[7])
     redis.call("SADD", KEYS[10], ARGV[7])
-    redis.call("HDEL", KEYS[11], ARGV[7])
+    redis.call("DEL", KEYS[11])
   end
   return 1
 end
@@ -206,7 +208,7 @@ if redis.call("SISMEMBER", KEYS[3], ARGV[1]) == 1
   local payload = redis.call("HGET", KEYS[1], ARGV[1])
   if payload then return { 1, payload } end
 end
-local outcome = redis.call("HGET", KEYS[4], ARGV[1])
+local outcome = redis.call("GET", KEYS[4])
 if outcome == "replayed" then return { 2 } end
 if outcome == "deleted" then return { 3 } end
 return { 0 }
@@ -217,7 +219,7 @@ const REPLAY_DLQ_SCRIPT = `
 if redis.call("SISMEMBER", KEYS[10], ARGV[4]) ~= 1
   or not redis.call("ZSCORE", KEYS[9], ARGV[4])
   or redis.call("HGET", KEYS[8], ARGV[4]) ~= ARGV[5] then
-  if redis.call("HGET", KEYS[11], ARGV[4]) == "replayed" then return 2 end
+  if redis.call("GET", KEYS[11]) == "replayed" then return 2 end
   return 0
 end
 local state = redis.call("HGET", KEYS[6], ARGV[1])
@@ -239,7 +241,7 @@ end
 redis.call("HDEL", KEYS[8], ARGV[4])
 redis.call("ZREM", KEYS[9], ARGV[4])
 redis.call("SREM", KEYS[10], ARGV[4])
-redis.call("HSET", KEYS[11], ARGV[4], "replayed")
+redis.call("SET", KEYS[11], "replayed", "EX", ARGV[6])
 return 1
 `;
 
@@ -248,13 +250,13 @@ const DELETE_DLQ_SCRIPT = `
 if redis.call("SISMEMBER", KEYS[3], ARGV[1]) ~= 1
   or not redis.call("ZSCORE", KEYS[2], ARGV[1])
   or redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then
-  if redis.call("HGET", KEYS[4], ARGV[1]) == "deleted" then return 2 end
+  if redis.call("GET", KEYS[4]) == "deleted" then return 2 end
   return 0
 end
 redis.call("HDEL", KEYS[1], ARGV[1])
 redis.call("ZREM", KEYS[2], ARGV[1])
 redis.call("SREM", KEYS[3], ARGV[1])
-redis.call("HSET", KEYS[4], ARGV[1], "deleted")
+redis.call("SET", KEYS[4], "deleted", "EX", ARGV[3])
 return 1
 `;
 
@@ -304,7 +306,6 @@ export function createRedisApprovalInteractionQueue({
     keys.deadLetterIndex,
     keys.deadLetterOrder,
     keys.deadLetterMembers,
-    keys.deadLetterOutcomes,
   ];
 
   return {
@@ -362,7 +363,7 @@ export function createRedisApprovalInteractionQueue({
             failedAt: now,
           });
           const quarantined = await client.eval(ACK_INVALID_SCRIPT, {
-            keys: transitionKeys,
+            keys: [...transitionKeys, createDeadLetterOutcomeKey(safePrefix, deadLetter.id)],
             arguments: [
               id,
               payload,
@@ -416,7 +417,7 @@ export function createRedisApprovalInteractionQueue({
         replayable: true,
       };
       const result = await client.eval(FAIL_SCRIPT, {
-        keys: transitionKeys,
+        keys: [...transitionKeys, createDeadLetterOutcomeKey(safePrefix, deadLetterId)],
         arguments: [
           id,
           originalPayload,
@@ -482,13 +483,14 @@ export function createRedisApprovalInteractionQueue({
       const replayJob = normalizeApprovalInteractionJob({ ...deadLetter.job, attempts: 0 });
       const replayPayload = serializeApprovalInteractionJob(replayJob);
       const result = await client.eval(REPLAY_DLQ_SCRIPT, {
-        keys: transitionKeys,
+        keys: [...transitionKeys, createDeadLetterOutcomeKey(safePrefix, id)],
         arguments: [
           replayJob.idempotencyKey,
           replayPayload,
           String(replayJob.receivedAt.getTime()),
           id,
           payload.payload,
+          String(DEAD_LETTER_OUTCOME_RETENTION_SECONDS),
         ],
       });
       return readIntegerReply(result, [0, 1, 2], "dead-letter replay") !== 0
@@ -507,9 +509,9 @@ export function createRedisApprovalInteractionQueue({
           keys.deadLetterIndex,
           keys.deadLetterOrder,
           keys.deadLetterMembers,
-          keys.deadLetterOutcomes,
+          createDeadLetterOutcomeKey(safePrefix, id),
         ],
-        arguments: [id, payload.payload],
+        arguments: [id, payload.payload, String(DEAD_LETTER_OUTCOME_RETENTION_SECONDS)],
       });
       return readIntegerReply(result, [0, 1, 2], "dead-letter delete") !== 0
         ? "deleted"
@@ -538,6 +540,7 @@ type ApprovalInteractionKeys = ReturnType<typeof createKeys>;
 
 function createKeys(prefix: string) {
   return {
+    prefix,
     ready: `${prefix}:ready`,
     delayed: `${prefix}:delayed`,
     processing: `${prefix}:processing`,
@@ -548,8 +551,11 @@ function createKeys(prefix: string) {
     deadLetterIndex: `${prefix}:dlq:index`,
     deadLetterOrder: `${prefix}:dlq:order`,
     deadLetterMembers: `${prefix}:dlq:members`,
-    deadLetterOutcomes: `${prefix}:dlq:outcomes`,
   };
+}
+
+function createDeadLetterOutcomeKey(prefix: string, id: string): string {
+  return `${prefix}:dlq:outcome:${id}`;
 }
 
 function readClaimedPayload(job: ApprovalInteractionJob): { id: string; payload: string } | undefined {
@@ -571,7 +577,7 @@ async function findDeadLetter(
       keys.deadLetterIndex,
       keys.deadLetterOrder,
       keys.deadLetterMembers,
-      keys.deadLetterOutcomes,
+      createDeadLetterOutcomeKey(keys.prefix, id),
     ],
     arguments: [id],
   });
@@ -582,6 +588,10 @@ async function findDeadLetter(
   if (result.length === 1 && result[0] === 2) return { status: "replayed" };
   if (result.length === 1 && result[0] === 3) return { status: "deleted" };
   if (result.length === 2 && result[0] === 1 && typeof result[1] === "string") {
+    const deadLetter = parseDeadLetter(result[1]);
+    if (deadLetter === undefined || deadLetter.id !== id) {
+      throw new ApprovalInteractionQueueError("dead-letter payload");
+    }
     return { status: "active", payload: result[1] };
   }
   throw new ApprovalInteractionQueueError("dead-letter find");
@@ -618,6 +628,7 @@ function parseDeadLetter(payload: string): ApprovalInteractionDeadLetter | undef
     }
     if (parsed.replayable === false && parsed.errorCode === "invalid_queue_payload" &&
         typeof parsed.payloadDigest === "string" &&
+        SHA256_PAYLOAD_DIGEST_PATTERN.test(parsed.payloadDigest) &&
         Number.isSafeInteger(parsed.payloadBytes) && Number(parsed.payloadBytes) >= 0) {
       return {
         id: parsed.id,
