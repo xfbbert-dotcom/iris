@@ -175,6 +175,38 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     await retireOutbox(first.id);
   });
 
+  it("fails closed with one domain conflict when a presentation id races across drafts", async () => {
+    const firstDraft = await createDraft("cross-draft-id-race-first");
+    const secondDraft = await createDraft("cross-draft-id-race-second");
+    const repository = cardRepository();
+    const presentationId = id("presentation-cross-draft-id-race");
+    const first = {
+      ...presentationInput("cross-draft-id-race-first", firstDraft.id),
+      id: presentationId,
+    };
+    const second = {
+      ...presentationInput("cross-draft-id-race-second", secondDraft.id),
+      id: presentationId,
+    };
+
+    const results = await Promise.allSettled([
+      repository.createPresentation(first),
+      repository.createPresentation(second),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    try {
+      const rejected = results.find((result) => result.status === "rejected");
+      expect(rejected).toMatchObject({ reason: expect.any(KnowledgeCardOperationConflictError) });
+      await expect(pool.query(
+        "SELECT count(*)::int AS count FROM knowledge_draft_presentations WHERE id = $1",
+        [presentationId],
+      )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    } finally {
+      await retireOutbox(presentationId);
+    }
+  });
+
   it("rejects stale version, stale revision, wrong group, and wrong draft status", async () => {
     const draft = await createDraft("guards");
     const repository = cardRepository();
@@ -319,6 +351,70 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
       state: "pending_send",
       version: 1,
+    });
+  });
+
+  it("expires the old owner before completion at the exact lease boundary", async () => {
+    const repository = cardRepository();
+    const draft = await createDraft("complete-lease-boundary");
+    const created = await repository.createPresentation(
+      presentationInput("complete-lease-boundary", draft.id),
+    );
+    await repository.claimPresentationSend({
+      workerId: "worker-expiring-complete",
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+
+    await expect(repository.completePresentationSend({
+      presentationId: created.presentation.id,
+      workerId: "worker-expiring-complete",
+      messageId: "om-expired-complete",
+      at: plusSeconds(30),
+    })).rejects.toBeInstanceOf(KnowledgeCardPersistenceConflictError);
+    await expect(repository.claimPresentationSend({
+      workerId: "worker-reclaim-complete",
+      leaseUntil: plusSeconds(60),
+      at: plusSeconds(30),
+    })).resolves.toMatchObject({ presentation: { id: created.presentation.id } });
+    await repository.completePresentationSend({
+      presentationId: created.presentation.id,
+      workerId: "worker-reclaim-complete",
+      messageId: "om-reclaimed-complete",
+      at: plusSeconds(31),
+    });
+  });
+
+  it("expires the old owner before failure at the exact lease boundary", async () => {
+    const repository = cardRepository();
+    const draft = await createDraft("fail-lease-boundary");
+    const created = await repository.createPresentation(
+      presentationInput("fail-lease-boundary", draft.id),
+    );
+    await repository.claimPresentationSend({
+      workerId: "worker-expiring-fail",
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+
+    await expect(repository.failPresentationSend({
+      presentationId: created.presentation.id,
+      workerId: "worker-expiring-fail",
+      classification: "permanent",
+      errorCode: "expired_owner",
+      at: plusSeconds(30),
+    })).rejects.toBeInstanceOf(KnowledgeCardPersistenceConflictError);
+    await expect(repository.claimPresentationSend({
+      workerId: "worker-reclaim-fail",
+      leaseUntil: plusSeconds(60),
+      at: plusSeconds(30),
+    })).resolves.toMatchObject({ presentation: { id: created.presentation.id } });
+    await repository.failPresentationSend({
+      presentationId: created.presentation.id,
+      workerId: "worker-reclaim-fail",
+      classification: "permanent",
+      errorCode: "forbidden",
+      at: plusSeconds(31),
     });
   });
 
@@ -550,6 +646,49 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       [input.eventId],
     )).resolves.toMatchObject({ rows: [{ count: 1 }] });
     await retireOutbox(presentation.id);
+  });
+
+  it("returns already_applied for an exact request-revision callback replay", async () => {
+    const { draft, presentation } = await createActivePresentation("request-revision-replay");
+    const repository = cardRepository();
+    const input = interactionInput(
+      "request-revision-replay",
+      draft.id,
+      presentation.id,
+      { action: "request_revision", reason: "Clarify the owner." },
+    );
+
+    await expect(repository.applyInteraction(input)).resolves.toMatchObject({ outcome: "applied" });
+    try {
+      await expect(repository.applyInteraction(input)).resolves.toMatchObject({
+        outcome: "already_applied",
+        presentation: { id: presentation.id, state: "closed" },
+        draft: { id: draft.id, status: "needs_revision" },
+      });
+    } finally {
+      await retireOutbox(presentation.id);
+    }
+  });
+
+  it("returns already_applied for an exact reject callback replay", async () => {
+    const { draft, presentation } = await createActivePresentation("reject-replay");
+    const repository = cardRepository();
+    const input = interactionInput("reject-replay", draft.id, presentation.id, {
+      action: "reject",
+      reason: "Evidence is insufficient.",
+      rejectionConfirmed: true,
+    });
+
+    await expect(repository.applyInteraction(input)).resolves.toMatchObject({ outcome: "applied" });
+    try {
+      await expect(repository.applyInteraction(input)).resolves.toMatchObject({
+        outcome: "already_applied",
+        presentation: { id: presentation.id, state: "closed" },
+        draft: { id: draft.id, status: "rejected" },
+      });
+    } finally {
+      await retireOutbox(presentation.id);
+    }
   });
 
   it("rejects callbacks bound to stale or mismatched presentation facts", async () => {

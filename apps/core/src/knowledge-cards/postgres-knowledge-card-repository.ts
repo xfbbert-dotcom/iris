@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   KNOWLEDGE_CARD_PRESENTATION_STATES,
   KNOWLEDGE_CARD_REASON_MAX_CHARS,
+  type KnowledgeCardAction,
   type KnowledgeCardPresentationState,
 } from "./knowledge-card.js";
 import type {
@@ -74,6 +75,17 @@ type InteractionReplayRow = {
   operation_key: string;
   draft_id: string | null;
   operation_fingerprint: string | null;
+};
+
+type KnowledgeCardActionEventTypes = {
+  draft: "group_confirmed" | "revision_requested" | "rejected";
+  presentation: "confirmed" | "revision_requested" | "rejected";
+};
+
+const KNOWLEDGE_CARD_ACTION_EVENT_TYPES: Record<KnowledgeCardAction, KnowledgeCardActionEventTypes> = {
+  confirm: { draft: "group_confirmed", presentation: "confirmed" },
+  request_revision: { draft: "revision_requested", presentation: "revision_requested" },
+  reject: { draft: "rejected", presentation: "rejected" },
 };
 
 export class KnowledgeCardOperationConflictError extends Error {
@@ -194,16 +206,14 @@ async function applyInteraction(
     ) throw new KnowledgeCardPersistenceConflictError();
     await validateDraftEvidence(client, draft);
 
-    const draftEventType = normalized.action === "confirm"
-      ? "group_confirmed"
-      : normalized.action === "request_revision" ? "revision_requested" : "rejected";
+    const eventTypes = KNOWLEDGE_CARD_ACTION_EVENT_TYPES[normalized.action];
     const draftStatus = normalized.action === "confirm"
       ? "pending_review"
       : normalized.action === "request_revision" ? "needs_revision" : "rejected";
     if (!validateKnowledgeDraftTransition({
       from: "pending_confirmation",
       to: draftStatus,
-      eventType: draftEventType,
+      eventType: eventTypes.draft,
       sourceGroupId: draft.source_group_id ?? undefined,
     }).ok) throw new KnowledgeCardPersistenceConflictError();
 
@@ -249,7 +259,7 @@ async function applyInteraction(
     requireOneRow(draftUpdate);
     await insertDraftInteractionEvent(client, {
       draftId: normalized.draftId,
-      eventType: draftEventType,
+      eventType: eventTypes.draft,
       fromVersion: normalized.draftVersion,
       toVersion: nextDraftVersion,
       operationKey,
@@ -268,12 +278,9 @@ async function applyInteraction(
       [normalized.presentationId, normalized.at, presentationVersion],
     );
     requireOneRow(presentationUpdate);
-    const presentationEventType = normalized.action === "confirm"
-      ? "confirmed"
-      : normalized.action === "request_revision" ? "revision_requested" : "rejected";
     await insertInteractionPresentationEvent(client, {
       presentationId: normalized.presentationId,
-      eventType: presentationEventType,
+      eventType: eventTypes.presentation,
       actorOpenId: normalized.actorOpenId,
       operationKey,
       callbackEventId: normalized.eventId,
@@ -330,6 +337,8 @@ async function createPresentation(
     await lockOperation(client, normalized.operationKey);
     const replay = await replayPresentationOperation(client, normalized.operationKey, fingerprint);
     if (replay !== undefined) return replay;
+    // Creation lock order: operation key, presentation ID, then draft row.
+    await lockPresentationId(client, normalized.id);
     const draft = await lockDraft(client, normalized.draftId);
     const existing = await client.query("SELECT 1 FROM knowledge_draft_presentations WHERE id = $1", [
       normalized.id,
@@ -596,7 +605,7 @@ async function replayInteraction(
   );
   const row = result.rows[0];
   if (row === undefined) return undefined;
-  const expectedEventType = input.action === "confirm" ? "confirmed" : input.action;
+  const expectedEventType = KNOWLEDGE_CARD_ACTION_EVENT_TYPES[input.action].presentation;
   if (
     row.presentation_id !== input.presentationId ||
     row.event_type !== expectedEventType ||
@@ -636,6 +645,10 @@ async function replayPresentationOperation(
 
 async function lockOperation(client: KnowledgeDraftTransactionClient, operationKey: string): Promise<void> {
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [operationKey]);
+}
+
+async function lockPresentationId(client: KnowledgeDraftTransactionClient, id: string): Promise<void> {
+  await lockOperation(client, derivedOperationKey("presentation-id-lock", id));
 }
 
 async function lockDraft(client: KnowledgeDraftTransactionClient, id: string): Promise<DraftHeaderRow> {
@@ -680,7 +693,7 @@ async function lockOwnedOutbox(
     row.state !== "processing" ||
     row.worker_id !== workerId ||
     row.lease_until === null ||
-    requireDate(row.lease_until).getTime() < at.getTime()
+    leaseIsExpired(requireDate(row.lease_until), at)
   ) throw new KnowledgeCardPersistenceConflictError();
   return row;
 }
@@ -985,6 +998,11 @@ function requireContentHash(value: unknown): string {
 function requireDate(value: unknown): Date {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw new Error("date is invalid");
   return new Date(value);
+}
+
+// A lease owns [claim time, leaseUntil); equality belongs to the next claimant.
+function leaseIsExpired(leaseUntil: Date, at: Date): boolean {
+  return leaseUntil.getTime() <= at.getTime();
 }
 
 function requireOneRow(result: { rows: unknown[] }): void {
