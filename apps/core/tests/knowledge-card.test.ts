@@ -10,6 +10,7 @@ import {
   KnowledgeCardValidationError,
   normalizeApprovalInteractionJob,
 } from "../src/knowledge-cards/knowledge-card.js";
+import type { ApplyKnowledgeCardInteractionInput } from "../src/knowledge-cards/knowledge-card-repository.js";
 
 describe("knowledge card contracts", () => {
   it("publishes the bounded card constants", () => {
@@ -84,7 +85,66 @@ describe("knowledge card contracts", () => {
     expect(() => normalizeApprovalInteractionJob({ ...validJob(), ...extra }))
       .toThrow(KnowledgeCardValidationError);
   });
+
+  it("counts revision reasons by Unicode code points", () => {
+    const acceptedReason = "\u{1F680}".repeat(KNOWLEDGE_CARD_REASON_MAX_CHARS);
+    const rejectedReason = "\u{1F680}".repeat(KNOWLEDGE_CARD_REASON_MAX_CHARS + 1);
+
+    expect(normalizeApprovalInteractionJob({
+      ...validJob(),
+      action: "request_revision",
+      reason: acceptedReason,
+    })).toMatchObject({ reason: acceptedReason });
+    expect(() => normalizeApprovalInteractionJob({
+      ...validJob(),
+      action: "request_revision",
+      reason: rejectedReason,
+    })).toThrow(KnowledgeCardValidationError);
+  });
 });
+
+const confirmInteraction = {
+  ...validInteraction(),
+  action: "confirm",
+} satisfies ApplyKnowledgeCardInteractionInput;
+
+const revisionInteraction = {
+  ...validInteraction(),
+  action: "request_revision",
+  reason: "Add rollback steps.",
+} satisfies ApplyKnowledgeCardInteractionInput;
+
+const rejectionInteraction = {
+  ...validInteraction(),
+  action: "reject",
+  reason: "Unsafe.",
+  rejectionConfirmed: true,
+} satisfies ApplyKnowledgeCardInteractionInput;
+
+const invalidRevisionInteraction = {
+  ...validInteraction(),
+  action: "request_revision",
+} as const;
+
+const invalidRejectionInteraction = {
+  ...validInteraction(),
+  action: "reject",
+  reason: "Unsafe.",
+} as const;
+
+// @ts-expect-error request_revision requires a reason.
+const missingRevisionReason: ApplyKnowledgeCardInteractionInput = invalidRevisionInteraction;
+
+// @ts-expect-error reject requires both a reason and explicit confirmation.
+const missingRejectionConfirmation: ApplyKnowledgeCardInteractionInput = invalidRejectionInteraction;
+
+void confirmInteraction;
+void revisionInteraction;
+void rejectionInteraction;
+void invalidRevisionInteraction;
+void invalidRejectionInteraction;
+void missingRevisionReason;
+void missingRejectionConfirmation;
 
 function validJob() {
   return {
@@ -100,5 +160,19 @@ function validJob() {
     action: "confirm" as const,
     receivedAt: new Date("2026-07-19T00:00:00.000Z"),
     attempts: 0,
+  };
+}
+
+function validInteraction() {
+  return {
+    presentationId: "presentation-1",
+    draftId: "draft-1",
+    revisionNumber: 2,
+    draftVersion: 3,
+    chatId: "oc_group",
+    eventId: "event-1",
+    actorOpenId: "ou_actor",
+    membershipCheckedAt: new Date("2026-07-19T00:00:00.000Z"),
+    at: new Date("2026-07-19T00:00:00.000Z"),
   };
 }

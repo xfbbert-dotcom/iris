@@ -1,6 +1,6 @@
 import type { KnowledgeDraft, KnowledgeDraftEvidenceState } from "../knowledge-governance/knowledge-draft-repository.js";
 
-import type { KnowledgeCardAction, KnowledgeCardPresentationState } from "./knowledge-card.js";
+import type { KnowledgeCardPresentationState } from "./knowledge-card.js";
 
 export type KnowledgeDraftPresentation = {
   id: string;
@@ -28,7 +28,7 @@ export type CreateKnowledgeCardPresentationInput = {
   at: Date;
 };
 
-export type ApplyKnowledgeCardInteractionInput = {
+type KnowledgeCardInteractionInputBase = {
   presentationId: string;
   draftId: string;
   revisionNumber: number;
@@ -36,12 +36,15 @@ export type ApplyKnowledgeCardInteractionInput = {
   chatId: string;
   eventId: string;
   actorOpenId: string;
-  action: KnowledgeCardAction;
-  reason?: string;
-  rejectionConfirmed?: true;
   membershipCheckedAt: Date;
   at: Date;
 };
+
+export type ApplyKnowledgeCardInteractionInput = KnowledgeCardInteractionInputBase & (
+  | { action: "confirm"; reason?: never; rejectionConfirmed?: never }
+  | { action: "request_revision"; reason: string; rejectionConfirmed?: never }
+  | { action: "reject"; reason: string; rejectionConfirmed: true }
+);
 
 export type KnowledgeCardMutationResult = {
   outcome: "applied" | "already_applied";

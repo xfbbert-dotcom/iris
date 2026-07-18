@@ -1,7 +1,4 @@
-import {
-  KNOWLEDGE_DRAFT_REASON_MAX_CHARS,
-  KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS,
-} from "../knowledge-governance/knowledge-draft.js";
+import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/knowledge-draft.js";
 
 export const KNOWLEDGE_CARD_ACTIONS = ["confirm", "request_revision", "reject"] as const;
 export const KNOWLEDGE_CARD_PRESENTATION_STATES = [
@@ -106,7 +103,8 @@ function normalizeReason(value: unknown, action: KnowledgeCardAction): string | 
   if (action === "confirm") return undefined;
   if (typeof value !== "string") throw validationError("reason must be a string");
   const normalized = value.trim();
-  if (normalized.length < 1 || normalized.length > KNOWLEDGE_DRAFT_REASON_MAX_CHARS) {
+  const codePointLength = [...normalized].length;
+  if (codePointLength < 1 || codePointLength > KNOWLEDGE_CARD_REASON_MAX_CHARS) {
     throw validationError("reason length is invalid");
   }
   return normalized;

@@ -17,6 +17,7 @@ CREATE TABLE knowledge_draft_presentations (
   closed_at TIMESTAMPTZ,
   FOREIGN KEY (draft_id, revision_number)
     REFERENCES knowledge_draft_revisions(draft_id, revision_number) ON DELETE RESTRICT,
+  UNIQUE (id, draft_id, revision_number),
   CHECK (
     (state = 'active' AND message_id IS NOT NULL AND activated_at IS NOT NULL AND closed_at IS NULL)
     OR (state = 'closed' AND closed_at IS NOT NULL)
@@ -54,14 +55,16 @@ CREATE INDEX knowledge_draft_presentation_events_presentation_created_idx
 CREATE TABLE knowledge_draft_group_confirmations (
   draft_id TEXT NOT NULL,
   revision_number INTEGER NOT NULL,
-  presentation_id TEXT NOT NULL REFERENCES knowledge_draft_presentations(id),
+  presentation_id TEXT NOT NULL,
   actor_open_id TEXT NOT NULL CHECK (char_length(actor_open_id) BETWEEN 1 AND 512),
   callback_event_id TEXT NOT NULL UNIQUE CHECK (char_length(callback_event_id) BETWEEN 1 AND 512),
   membership_checked_at TIMESTAMPTZ NOT NULL,
   confirmed_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (draft_id, revision_number),
   FOREIGN KEY (draft_id, revision_number)
-    REFERENCES knowledge_draft_revisions(draft_id, revision_number) ON DELETE RESTRICT
+    REFERENCES knowledge_draft_revisions(draft_id, revision_number) ON DELETE RESTRICT,
+  FOREIGN KEY (presentation_id, draft_id, revision_number)
+    REFERENCES knowledge_draft_presentations (id, draft_id, revision_number) ON DELETE RESTRICT
 );
 
 CREATE TABLE knowledge_draft_presentation_outbox (

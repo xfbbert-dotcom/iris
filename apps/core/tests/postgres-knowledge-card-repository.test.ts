@@ -20,6 +20,8 @@ describe("knowledge card migration contract", () => {
     expect(migration).toMatch(/knowledge_draft_group_confirmations_append_only/iu);
     expect(migration).toMatch(/knowledge_draft_presentations_one_active_idx/iu);
     expect(migration).toMatch(/where state = 'active'/iu);
+    expect(migration).toMatch(/unique \(id, draft_id, revision_number\)/iu);
+    expect(migration).toMatch(/foreign key \(presentation_id, draft_id, revision_number\)\s+references knowledge_draft_presentations \(id, draft_id, revision_number\)/iu);
     expect(migration).toMatch(/callback_event_id text not null unique/iu);
     expect(migration).toMatch(/drop constraint knowledge_draft_events_event_type_check/iu);
     expect(migration).toMatch(/group_confirmed/iu);
