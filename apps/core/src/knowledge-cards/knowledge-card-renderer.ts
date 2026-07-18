@@ -31,9 +31,21 @@ export type KnowledgeDraftCardRenderResult =
       reason: "body_too_large" | "card_too_large" | "too_many_components";
     };
 
+export class KnowledgeCardPresentationBindingError extends Error {
+  constructor() {
+    super("knowledge card presentation does not match draft");
+    this.name = "KnowledgeCardPresentationBindingError";
+  }
+}
+
 export function renderKnowledgeDraftCard(
   input: KnowledgeDraftCardRenderInput,
 ): KnowledgeDraftCardRenderResult {
+  if (
+    input.presentation.draftId !== input.draft.id ||
+    input.presentation.revisionNumber !== input.draft.currentRevisionNumber ||
+    input.presentation.draftVersion !== input.draft.version
+  ) throw new KnowledgeCardPresentationBindingError();
   const revision = input.draft.currentRevision;
   if (!("content" in revision)) {
     throw new Error("knowledge card requires a current draft revision");
@@ -63,7 +75,10 @@ export function renderKnowledgeDraftCard(
       rows: 3,
       max_length: Math.min(KNOWLEDGE_CARD_REASON_MAX_CHARS, FEISHU_INPUT_MAX_LENGTH),
       required: false,
-      label: { tag: "plain_text", content: "Reason for revision or rejection" },
+      label: {
+        tag: "plain_text",
+        content: "Reason for revision or rejection (at most 1,000 characters)",
+      },
       placeholder: { tag: "plain_text", content: "Describe the required change or rejection reason" },
     }),
     component({

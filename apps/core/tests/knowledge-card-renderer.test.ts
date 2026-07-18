@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
+  KnowledgeCardPresentationBindingError,
   renderKnowledgeDraftCard,
 } from "../src/knowledge-cards/knowledge-card-renderer.js";
 import type { KnowledgeDraft } from "../src/knowledge-governance/knowledge-draft-repository.js";
@@ -68,6 +69,10 @@ describe("renderKnowledgeDraftCard", () => {
       input_type: "multiline_text",
       max_length: 1_000,
       required: false,
+      label: {
+        tag: "plain_text",
+        content: "Reason for revision or rejection (at most 1,000 characters)",
+      },
     });
     expect(form.elements.find((element) => isRecord(element) && element.tag === "checkbox")).toMatchObject({
       tag: "checkbox",
@@ -100,6 +105,18 @@ describe("renderKnowledgeDraftCard", () => {
     expect(rendered.status).toBe("rendered");
   });
 
+  it.each([
+    ["draft ID", { draftId: "other-draft" }],
+    ["revision number", { revisionNumber: 8 }],
+    ["draft version", { draftVersion: 12 }],
+  ] as const)("fails closed when the presentation %s does not bind the rendered draft", (
+    _label,
+    presentationOverrides,
+  ) => {
+    expect(() => renderKnowledgeDraftCard(cardInput({ presentationOverrides })))
+      .toThrowError(new KnowledgeCardPresentationBindingError());
+  });
+
   it("refuses a body over 8,000 Unicode code points without truncating it", () => {
     const rendered = renderKnowledgeDraftCard(cardInput({ content: "\u4e2d".repeat(8_001) }));
 
@@ -123,10 +140,11 @@ function cardInput(overrides: {
   content?: string;
   title?: string;
   targetDisplayName?: string;
+  presentationOverrides?: Partial<KnowledgeDraftPresentation>;
 } = {}) {
   return {
     draft: draft({ content: overrides.content, title: overrides.title }),
-    presentation: presentation(),
+    presentation: presentation(overrides.presentationOverrides),
     targetDisplayName: overrides.targetDisplayName ?? "Knowledge Base",
   };
 }
@@ -156,7 +174,7 @@ function draft(overrides: { content?: string; title?: string } = {}): KnowledgeD
   };
 }
 
-function presentation(): KnowledgeDraftPresentation {
+function presentation(overrides: Partial<KnowledgeDraftPresentation> = {}): KnowledgeDraftPresentation {
   const now = new Date("2026-07-19T00:00:00.000Z");
   return {
     id: "presentation-1",
@@ -168,6 +186,7 @@ function presentation(): KnowledgeDraftPresentation {
     state: "pending_send",
     createdAt: now,
     version: 1,
+    ...overrides,
   };
 }
 
