@@ -349,8 +349,8 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       at: plusSeconds(90),
     })).resolves.toBeUndefined();
     await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
-      state: "pending_send",
-      version: 1,
+      state: "send_failed",
+      version: 2,
     });
   });
 

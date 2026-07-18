@@ -14,6 +14,7 @@ import type {
   KnowledgeCardRepository,
   KnowledgeCardSendClaim,
   KnowledgeCardStatusCounts,
+  KnowledgeCardPresentationContext,
   KnowledgeDraftPresentation,
 } from "./knowledge-card-repository.js";
 import type { KnowledgeDraftEvidenceReference } from "../knowledge-governance/knowledge-draft.js";
@@ -151,6 +152,9 @@ export function createPostgresKnowledgeCardRepository({
     },
     getPresentation(id: string) {
       return loadPresentation(dataSource, requireReference("id", id));
+    },
+    getPresentationContext(id: string) {
+      return loadPresentationContext(dataSource, requireReference("id", id));
     },
     async listPresentations(input: { draftId: string; limit: number }) {
       const result = await dataSource.query<PresentationRow>(
@@ -554,7 +558,7 @@ async function failPresentationSend(
     }
     const fromVersion = Number(presentation.version);
     let toVersion = fromVersion;
-    if (normalized.classification === "permanent" && presentation.state === "pending_send") {
+    if (normalized.classification !== "retryable" && presentation.state === "pending_send") {
       const result = await client.query(
         `UPDATE knowledge_draft_presentations
          SET state = 'send_failed', version = version + 1
@@ -854,6 +858,22 @@ async function loadPresentation(
   const result = await queryable.query<PresentationRow>(`${presentationSelect()} WHERE id = $1`, [id]);
   const row = result.rows[0];
   return row === undefined ? undefined : mapPresentation(row);
+}
+
+async function loadPresentationContext(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  id: string,
+): Promise<KnowledgeCardPresentationContext | undefined> {
+  return withTransaction(dataSource, async (client) => {
+    const presentation = await loadPresentation(client, id);
+    if (presentation === undefined) return undefined;
+    const draft = await requireDraftView(client, presentation.draftId);
+    return {
+      presentation,
+      draft,
+      evidenceState: draft.currentRevision.evidenceState,
+    };
+  });
 }
 
 async function requirePresentation(

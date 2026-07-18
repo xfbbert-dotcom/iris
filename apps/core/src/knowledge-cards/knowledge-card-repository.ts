@@ -66,6 +66,7 @@ export type KnowledgeCardStatusCounts = Record<KnowledgeCardPresentationState, n
 
 export type KnowledgeCardPresentationContext = {
   presentation: KnowledgeDraftPresentation;
+  draft: KnowledgeDraft;
   evidenceState: KnowledgeDraftEvidenceState;
 };
 
@@ -92,6 +93,7 @@ export interface KnowledgeCardRepository {
   }): Promise<void>;
   applyInteraction(input: ApplyKnowledgeCardInteractionInput): Promise<KnowledgeCardInteractionResult>;
   getPresentation(id: string): Promise<KnowledgeDraftPresentation | undefined>;
+  getPresentationContext(id: string): Promise<KnowledgeCardPresentationContext | undefined>;
   listPresentations(input: { draftId: string; limit: number }): Promise<KnowledgeDraftPresentation[]>;
   getStatusCounts(): Promise<KnowledgeCardStatusCounts>;
 }
