@@ -154,6 +154,9 @@ async function dispatchClaim(input: {
     workerId: input.claim.workerId,
     at: requireDate(input.now()),
   });
+  if (!readRuntimeGate(input, context.presentation.chatId)) {
+    return failExternalAttempt(input, "permanent", "runtime_disabled");
+  }
 
   let sent: { messageId: string };
   try {
@@ -192,6 +195,9 @@ async function updateCommittedResult(
     workerId: input.claim.workerId,
     at: requireDate(input.now()),
   });
+  if (!readRuntimeGate(input, context.presentation.chatId)) {
+    return failExternalAttempt(input, "permanent", "runtime_disabled");
+  }
   try {
     await input.cardClient.updateCard({
       messageId,

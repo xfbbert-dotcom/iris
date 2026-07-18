@@ -50,7 +50,16 @@ describe("KnowledgeCardDispatcher", () => {
     await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([
       { status: "sent", presentationId: "presentation-1", code: "send_succeeded" },
     ]);
-    expect(order).toEqual(["claim", "context", "render", "gate", "begin", "send", "complete"]);
+    expect(order).toEqual([
+      "claim",
+      "context",
+      "render",
+      "gate",
+      "begin",
+      "gate",
+      "send",
+      "complete",
+    ]);
     expect(harness.cardClient.sendCard).toHaveBeenCalledWith({
       chatId: "oc_group",
       cardJson: rendered().json,
@@ -91,6 +100,57 @@ describe("KnowledgeCardDispatcher", () => {
     );
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
     expect(harness.cardClient.updateCard).not.toHaveBeenCalled();
+  });
+
+  it("terminalizes a send when runtime is disabled during the durable begin", async () => {
+    let enabled = true;
+    const harness = createHarness({
+      canUseKnowledgeCards: () => enabled,
+      beginExternalAttempt: async () => {
+        enabled = false;
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      presentationId: "presentation-1",
+      code: "runtime_disabled",
+    }]);
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+    expect(harness.repository.failPresentationSend).toHaveBeenCalledWith({
+      presentationId: "presentation-1",
+      workerId: "dispatcher-1",
+      classification: "permanent",
+      errorCode: "runtime_disabled",
+      at,
+    });
+  });
+
+  it("terminalizes an update when runtime is disabled during the durable begin", async () => {
+    let enabled = true;
+    const closed = presentation({ state: "closed", messageId: "om_existing", version: 3 });
+    const harness = createHarness({
+      context: context({ presentation: closed }),
+      claim: claim({ presentation: closed }),
+      canUseKnowledgeCards: () => enabled,
+      beginExternalAttempt: async () => {
+        enabled = false;
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      presentationId: "presentation-1",
+      code: "runtime_disabled",
+    }]);
+    expect(harness.cardClient.updateCard).not.toHaveBeenCalled();
+    expect(harness.repository.failPresentationSend).toHaveBeenCalledWith({
+      presentationId: "presentation-1",
+      workerId: "dispatcher-1",
+      classification: "permanent",
+      errorCode: "runtime_disabled",
+      at,
+    });
   });
 
   it("permanently closes invalidated evidence without rendering or sending", async () => {

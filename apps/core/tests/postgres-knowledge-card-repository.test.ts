@@ -9,10 +9,14 @@ import {
   KnowledgeCardMembershipProofError,
   KnowledgeCardOperationConflictError,
   KnowledgeCardPersistenceConflictError,
+  KnowledgeCardPresentationConflictError,
   createPostgresKnowledgeCardRepository,
 } from "../src/knowledge-cards/postgres-knowledge-card-repository.js";
 import type { KnowledgeCardStatusCounts } from "../src/knowledge-cards/knowledge-card-repository.js";
-import { createPostgresKnowledgeDraftRepository } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
+import {
+  createPostgresKnowledgeDraftRepository,
+  type PostgresKnowledgeDraftDataSource,
+} from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
 import {
   defaultMigrationsDir,
   runMigrations,
@@ -53,11 +57,70 @@ describe("knowledge card migration contract", () => {
     expect(migration).toMatch(/drop constraint knowledge_draft_events_event_type_check/iu);
     expect(migration).toMatch(/group_confirmed/iu);
   });
+
+  it("locks supersession presentations before outboxes and rejects external attempts", async () => {
+    const queries: string[] = [];
+    const draftId = id("draft-scripted-supersession-lock");
+    const originalPresentationId = id("presentation-scripted-supersession-original");
+    const client = {
+      release: vi.fn(),
+      query: vi.fn(async (sql: string) => {
+        const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+        queries.push(normalized);
+        if (normalized.includes("FROM knowledge_drafts WHERE id = $1 FOR UPDATE")) {
+          return {
+            rows: [{
+              id: draftId,
+              source_group_id: sourceGroupId,
+              status: "pending_confirmation",
+              current_revision_number: 1,
+              version: 1,
+            }],
+          };
+        }
+        if (normalized.includes("FROM knowledge_draft_presentations presentation")) {
+          return { rows: [{ id: originalPresentationId, version: 1 }] };
+        }
+        if (normalized.includes("FROM knowledge_draft_presentation_outbox outbox")) {
+          return {
+            rows: [{
+              id: id("outbox-scripted-supersession"),
+              presentation_id: originalPresentationId,
+              idempotency_key: id("idempotency-scripted-supersession"),
+              state: "external_attempting",
+              attempts: 1,
+              worker_id: "worker-scripted-supersession",
+              lease_until: plusSeconds(30),
+            }],
+          };
+        }
+        return { rows: [] };
+      }),
+    };
+    const dataSource = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(async () => ({ rows: [] })),
+    } as unknown as PostgresKnowledgeDraftDataSource;
+
+    await expect(createPostgresKnowledgeCardRepository({ dataSource }).createPresentation({
+      ...presentationInput("scripted-supersession-replacement", draftId),
+      id: id("presentation-scripted-supersession-replacement"),
+    })).rejects.toBeInstanceOf(KnowledgeCardPresentationConflictError);
+
+    const presentationLock = queries.findIndex((sql) => sql.includes("FOR UPDATE OF presentation"));
+    const outboxLock = queries.findIndex((sql) => sql.includes("FOR UPDATE OF outbox"));
+    expect(presentationLock).toBeGreaterThan(-1);
+    expect(outboxLock).toBeGreaterThan(presentationLock);
+    expect(queries.some((sql) => sql.includes("SET state = 'superseded'"))).toBe(false);
+    expect(queries.some((sql) => sql.includes("INSERT INTO knowledge_draft_presentations"))).toBe(false);
+    expect(queries.at(-1)).toBe("ROLLBACK");
+  });
 });
 
 runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
   let adminPool: pg.Pool;
   let pool: pg.Pool;
+  let isolatedDatabaseUrl: string;
   let baselineCounts: KnowledgeCardStatusCounts;
 
   beforeAll(async () => {
@@ -65,7 +128,8 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     await adminPool.query(`CREATE SCHEMA ${schema}`);
     const isolatedUrl = new URL(databaseUrl!);
     isolatedUrl.searchParams.set("options", `-c search_path=${schema},public`);
-    pool = new pg.Pool({ connectionString: isolatedUrl.toString() });
+    isolatedDatabaseUrl = isolatedUrl.toString();
+    pool = new pg.Pool({ connectionString: isolatedDatabaseUrl });
     await runMigrations({
       client: pool as unknown as MigrationClient,
       migrationsDir: defaultMigrationsDir(),
@@ -712,6 +776,162 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     });
   });
 
+  it("marks an original send failed when runtime disables during begin", async () => {
+    const repository = cardRepository();
+    const draft = await createDraft("send-disabled-during-begin");
+    const created = await repository.createPresentation(
+      presentationInput("send-disabled-during-begin", draft.id),
+    );
+    let enabled = true;
+    const sendCard = vi.fn(async () => ({ messageId: "must-not-send" }));
+    const dispatcher = createKnowledgeCardDispatcher({
+      repository: {
+        ...repository,
+        beginExternalAttempt: async (input) => {
+          await repository.beginExternalAttempt(input);
+          enabled = false;
+        },
+      },
+      cardClient: { sendCard, updateCard: vi.fn(async () => undefined) },
+      renderer: () => ({
+        status: "rendered",
+        card: {},
+        json: "{}",
+        contentHash: "a".repeat(64),
+        componentCount: 0,
+      }),
+      canUseKnowledgeCards: () => enabled,
+      targetDisplayName: "Knowledge Base",
+      workerId: "dispatcher-send-disabled-during-begin",
+      leaseMs: 30_000,
+      retryDelayMs: 30_000,
+      now: () => plusSeconds(5),
+    });
+
+    await expect(dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      presentationId: created.presentation.id,
+      code: "runtime_disabled",
+    }]);
+    expect(sendCard).not.toHaveBeenCalled();
+    await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
+      state: "send_failed",
+    });
+    await expect(pool.query(
+      "SELECT state, error_code FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+      [created.presentation.id],
+    )).resolves.toMatchObject({
+      rows: [{ state: "failed", error_code: "runtime_disabled" }],
+    });
+  });
+
+  it("recovers disabled-after-begin write loss as outcome unknown without sending", async () => {
+    const repository = cardRepository();
+    const draft = await createDraft("send-disabled-write-loss");
+    const created = await repository.createPresentation(
+      presentationInput("send-disabled-write-loss", draft.id),
+    );
+    let enabled = true;
+    const sendCard = vi.fn(async () => ({ messageId: "must-not-send" }));
+    const dispatcher = createKnowledgeCardDispatcher({
+      repository: {
+        ...repository,
+        beginExternalAttempt: async (input) => {
+          await repository.beginExternalAttempt(input);
+          enabled = false;
+        },
+        failPresentationSend: async () => {
+          throw new Error("runtime-disabled terminal write unavailable");
+        },
+      },
+      cardClient: { sendCard, updateCard: vi.fn(async () => undefined) },
+      renderer: () => ({
+        status: "rendered",
+        card: {},
+        json: "{}",
+        contentHash: "a".repeat(64),
+        componentCount: 0,
+      }),
+      canUseKnowledgeCards: () => enabled,
+      targetDisplayName: "Knowledge Base",
+      workerId: "dispatcher-send-disabled-write-loss",
+      leaseMs: 30_000,
+      retryDelayMs: 30_000,
+      now: () => plusSeconds(5),
+    });
+
+    await expect(dispatcher.processBatch({ limit: 1 })).rejects.toThrow(
+      "runtime-disabled terminal write unavailable",
+    );
+    expect(sendCard).not.toHaveBeenCalled();
+    await expect(pool.query(
+      "SELECT state FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+      [created.presentation.id],
+    )).resolves.toMatchObject({ rows: [{ state: "external_attempting" }] });
+
+    await expect(repository.claimPresentationSend({
+      workerId: "recovery-send-disabled-write-loss",
+      leaseUntil: plusSeconds(65),
+      at: plusSeconds(35),
+    })).resolves.toBeUndefined();
+    expect(sendCard).not.toHaveBeenCalled();
+    await expect(repository.getPresentation(created.presentation.id)).resolves.toMatchObject({
+      state: "send_failed",
+    });
+    await expect(pool.query(
+      "SELECT state, error_code FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+      [created.presentation.id],
+    )).resolves.toMatchObject({
+      rows: [{ state: "outcome_unknown", error_code: "external_attempt_lease_expired" }],
+    });
+  });
+
+  it("keeps a result presentation closed when runtime disables during begin", async () => {
+    const repository = cardRepository();
+    const { draft, presentation } = await createActivePresentation("update-disabled-during-begin");
+    await repository.applyInteraction(interactionInput(
+      "update-disabled-during-begin",
+      draft.id,
+      presentation.id,
+      { action: "confirm" },
+    ));
+    let enabled = true;
+    const updateCard = vi.fn(async () => undefined);
+    const dispatcher = createKnowledgeCardDispatcher({
+      repository: {
+        ...repository,
+        beginExternalAttempt: async (input) => {
+          await repository.beginExternalAttempt(input);
+          enabled = false;
+        },
+      },
+      cardClient: { sendCard: vi.fn(async () => ({ messageId: "unused" })), updateCard },
+      canUseKnowledgeCards: () => enabled,
+      targetDisplayName: "Knowledge Base",
+      workerId: "dispatcher-update-disabled-during-begin",
+      leaseMs: 30_000,
+      retryDelayMs: 30_000,
+      now: () => plusSeconds(11),
+    });
+
+    await expect(dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      presentationId: presentation.id,
+      code: "runtime_disabled",
+    }]);
+    expect(updateCard).not.toHaveBeenCalled();
+    await expect(repository.getPresentation(presentation.id)).resolves.toMatchObject({
+      state: "closed",
+      version: 3,
+    });
+    await expect(pool.query(
+      "SELECT state, error_code FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+      [presentation.id],
+    )).resolves.toMatchObject({
+      rows: [{ state: "failed", error_code: "runtime_disabled" }],
+    });
+  });
+
   it("expires the old owner before completion at the exact lease boundary", async () => {
     const repository = cardRepository();
     const draft = await createDraft("complete-lease-boundary");
@@ -822,6 +1042,140 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       expect.objectContaining({ id: pending.presentation.id, state: "superseded" }),
     ]);
     await retireOutbox(replacement.presentation.id);
+  });
+
+  it("lets committed supersession make a concurrent begin fail before any external call", async () => {
+    const draft = await createDraft("supersession-wins-race");
+    const repository = cardRepository();
+    const original = await repository.createPresentation(
+      presentationInput("supersession-wins-race-original", draft.id),
+    );
+    const workerId = id("worker-supersession-wins-race");
+    await expect(repository.claimPresentationSend({
+      workerId,
+      leaseUntil: plusSeconds(30),
+      at,
+    })).resolves.toMatchObject({ presentation: { id: original.presentation.id } });
+
+    const blocker = await pool.connect();
+    const createPool = new pg.Pool({ connectionString: isolatedDatabaseUrl, max: 1 });
+    const beginPool = new pg.Pool({ connectionString: isolatedDatabaseUrl, max: 1 });
+    let externalCalls = 0;
+    try {
+      await blocker.query("BEGIN");
+      const blockerPid = await backendPid(blocker);
+      await blocker.query(
+        "SELECT id FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1 FOR UPDATE",
+        [original.presentation.id],
+      );
+      const createPid = await backendPid(createPool);
+      const beginPid = await backendPid(beginPool);
+      const replacementInput = presentationInput("supersession-wins-race-replacement", draft.id, {
+        at: plusSeconds(1),
+      });
+      const replacementPromise = createPostgresKnowledgeCardRepository({
+        dataSource: createPool,
+      }).createPresentation(replacementInput);
+      void replacementPromise.catch(() => undefined);
+      await waitUntilBlocked(createPid, blockerPid);
+
+      const externalPath = (async () => {
+        const beginRepository = createPostgresKnowledgeCardRepository({ dataSource: beginPool });
+        await beginRepository.beginExternalAttempt({
+          presentationId: original.presentation.id,
+          workerId,
+          at: plusSeconds(2),
+        });
+        externalCalls += 1;
+      })();
+      void externalPath.catch(() => undefined);
+      await waitUntilBlocked(beginPid, createPid);
+      await blocker.query("COMMIT");
+
+      await expect(replacementPromise).resolves.toMatchObject({
+        outcome: "applied",
+        presentation: { id: replacementInput.id },
+      });
+      await expect(externalPath).rejects.toBeInstanceOf(KnowledgeCardPersistenceConflictError);
+      expect(externalCalls).toBe(0);
+      await expect(repository.getPresentation(original.presentation.id)).resolves.toMatchObject({
+        state: "superseded",
+      });
+      await expect(pool.query(
+        "SELECT state FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+        [original.presentation.id],
+      )).resolves.toMatchObject({ rows: [{ state: "failed" }] });
+      await retireOutbox(replacementInput.id);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+      await createPool.end();
+      await beginPool.end();
+    }
+  });
+
+  it("rejects concurrent supersession after begin commits and lets the old attempt complete", async () => {
+    const draft = await createDraft("begin-wins-race");
+    const repository = cardRepository();
+    const original = await repository.createPresentation(
+      presentationInput("begin-wins-race-original", draft.id),
+    );
+    const workerId = id("worker-begin-wins-race");
+    await expect(repository.claimPresentationSend({
+      workerId,
+      leaseUntil: plusSeconds(30),
+      at,
+    })).resolves.toMatchObject({ presentation: { id: original.presentation.id } });
+
+    const blocker = await pool.connect();
+    const createPool = new pg.Pool({ connectionString: isolatedDatabaseUrl, max: 1 });
+    const beginPool = new pg.Pool({ connectionString: isolatedDatabaseUrl, max: 1 });
+    let externalCalls = 0;
+    try {
+      await blocker.query("BEGIN");
+      const blockerPid = await backendPid(blocker);
+      await blocker.query("SELECT id FROM knowledge_drafts WHERE id = $1 FOR UPDATE", [draft.id]);
+      const createPid = await backendPid(createPool);
+      const replacementInput = presentationInput("begin-wins-race-replacement", draft.id, {
+        at: plusSeconds(1),
+      });
+      const replacementPromise = createPostgresKnowledgeCardRepository({
+        dataSource: createPool,
+      }).createPresentation(replacementInput);
+      void replacementPromise.catch(() => undefined);
+      await waitUntilBlocked(createPid, blockerPid);
+
+      const beginRepository = createPostgresKnowledgeCardRepository({ dataSource: beginPool });
+      await beginRepository.beginExternalAttempt({
+        presentationId: original.presentation.id,
+        workerId,
+        at: plusSeconds(2),
+      });
+      externalCalls += 1;
+      await blocker.query("COMMIT");
+
+      await expect(replacementPromise).rejects.toBeInstanceOf(KnowledgeCardPresentationConflictError);
+      await beginRepository.completePresentationSend({
+        presentationId: original.presentation.id,
+        workerId,
+        messageId: id("om-begin-wins-race"),
+        at: plusSeconds(3),
+      });
+      expect(externalCalls).toBe(1);
+      await expect(repository.getPresentation(original.presentation.id)).resolves.toMatchObject({
+        state: "active",
+      });
+      await expect(repository.getPresentation(replacementInput.id)).resolves.toBeUndefined();
+      await expect(pool.query(
+        "SELECT state FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+        [original.presentation.id],
+      )).resolves.toMatchObject({ rows: [{ state: "sent" }] });
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+      await createPool.end();
+      await beginPool.end();
+    }
   });
 
   it("confirms one exact active presentation and records all facts atomically", async () => {
@@ -1242,6 +1596,24 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
        WHERE presentation_id = $1`,
       [presentationId, at],
     );
+  }
+
+  async function backendPid(queryable: { query<T>(sql: string): Promise<{ rows: T[] }> }) {
+    const result = await queryable.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+    return result.rows[0]!.pid;
+  }
+
+  async function waitUntilBlocked(blockedPid: number, blockerPid: number): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const result = await pool.query<{ blocked: boolean }>(
+        "SELECT $2::int = ANY(pg_blocking_pids($1::int)) AS blocked",
+        [blockedPid, blockerPid],
+      );
+      if (result.rows[0]?.blocked) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`backend ${blockedPid} was not blocked by ${blockerPid}`);
   }
 });
 

@@ -115,6 +115,13 @@ export class KnowledgeCardPersistenceConflictError extends Error {
   }
 }
 
+export class KnowledgeCardPresentationConflictError extends KnowledgeCardPersistenceConflictError {
+  constructor() {
+    super();
+    this.name = "KnowledgeCardPresentationConflictError";
+  }
+}
+
 export class KnowledgeCardPresentationNotFoundError extends Error {
   constructor() {
     super("knowledge card presentation not found");
@@ -379,13 +386,39 @@ async function createPresentation(
     ) throw new KnowledgeCardPersistenceConflictError();
     await validateDraftEvidence(client, draft);
 
-    const superseded = await client.query<Pick<PresentationRow, "id" | "version">>(
-      `UPDATE knowledge_draft_presentations
-       SET state = 'superseded', version = version + 1
-       WHERE draft_id = $1 AND state IN ('pending_send', 'active')
-       RETURNING id, version`,
+    const supersessionCandidates = await client.query<Pick<PresentationRow, "id" | "version">>(
+      `SELECT presentation.id, presentation.version
+       FROM knowledge_draft_presentations presentation
+       WHERE presentation.draft_id = $1 AND presentation.state IN ('pending_send', 'active')
+       ORDER BY presentation.id ASC
+       FOR UPDATE OF presentation`,
       [normalized.draftId],
     );
+    const candidateIds = supersessionCandidates.rows.map((row) => row.id);
+    const candidateOutboxes = candidateIds.length === 0
+      ? { rows: [] as OutboxRow[] }
+      : await client.query<OutboxRow>(
+        `SELECT outbox.id, outbox.presentation_id, outbox.idempotency_key, outbox.state,
+                outbox.attempts, outbox.worker_id, outbox.lease_until
+         FROM knowledge_draft_presentation_outbox outbox
+         WHERE outbox.presentation_id = ANY($1::TEXT[])
+         ORDER BY outbox.presentation_id ASC, outbox.id ASC
+         FOR UPDATE OF outbox`,
+        [candidateIds],
+      );
+    if (candidateOutboxes.rows.some((outbox) => outbox.state === "external_attempting")) {
+      throw new KnowledgeCardPresentationConflictError();
+    }
+
+    const superseded = candidateIds.length === 0
+      ? { rows: [] as Array<Pick<PresentationRow, "id" | "version">> }
+      : await client.query<Pick<PresentationRow, "id" | "version">>(
+      `UPDATE knowledge_draft_presentations
+       SET state = 'superseded', version = version + 1
+       WHERE id = ANY($1::TEXT[]) AND state IN ('pending_send', 'active')
+       RETURNING id, version`,
+        [candidateIds],
+      );
     for (const row of superseded.rows) {
       await insertPresentationEvent(client, {
         presentationId: row.id,
