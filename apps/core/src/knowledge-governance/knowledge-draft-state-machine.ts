@@ -25,6 +25,12 @@ export function validateKnowledgeDraftTransition(input: {
     return { ok: true };
   }
   if (
+    input.eventType === "group_confirmed" &&
+    input.from === "pending_confirmation" &&
+    input.to === "pending_review" &&
+    input.sourceGroupId?.trim()
+  ) return { ok: true };
+  if (
     input.eventType === "revision_requested" &&
     input.to === "needs_revision" &&
     (input.from === "pending_confirmation" || input.from === "pending_review")

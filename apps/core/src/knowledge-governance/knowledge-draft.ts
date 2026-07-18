@@ -18,6 +18,7 @@ export const KNOWLEDGE_DRAFT_STATUSES = [
 export const KNOWLEDGE_DRAFT_EVENT_TYPES = [
   "created",
   "revised",
+  "group_confirmed",
   "revision_requested",
   "rejected",
 ] as const;

@@ -23,6 +23,7 @@ describe("knowledge draft state machine", () => {
     ["pending_confirmation", "pending_confirmation", "revised", "oc_group"],
     ["pending_review", "pending_review", "revised", undefined],
     ["pending_confirmation", "needs_revision", "revision_requested", "oc_group"],
+    ["pending_confirmation", "pending_review", "group_confirmed", "oc_group"],
     ["pending_review", "needs_revision", "revision_requested", undefined],
     ["needs_revision", "pending_confirmation", "revised", "oc_group"],
     ["needs_revision", "pending_review", "revised", undefined],
