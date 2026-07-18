@@ -10,6 +10,7 @@ import {
   KnowledgeDraftVersionConflictError,
   createPostgresKnowledgeDraftRepository,
 } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
+import type { KnowledgeDraftStatusCounts } from "../src/knowledge-governance/knowledge-draft-repository.js";
 import {
   defaultMigrationsDir,
   runMigrations,
@@ -54,6 +55,7 @@ describe("knowledge draft migration contract", () => {
 
 runIfDatabase("PostgresKnowledgeDraftRepository with Postgres", () => {
   let pool: pg.Pool;
+  let baselineCounts: KnowledgeDraftStatusCounts;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: databaseUrl });
@@ -61,6 +63,9 @@ runIfDatabase("PostgresKnowledgeDraftRepository with Postgres", () => {
       client: pool as unknown as MigrationClient,
       migrationsDir: defaultMigrationsDir(),
     });
+    baselineCounts = await createPostgresKnowledgeDraftRepository({
+      dataSource: pool,
+    }).getStatusCounts();
     await pool.query(
       `
       INSERT INTO conversation_messages (
@@ -314,11 +319,11 @@ runIfDatabase("PostgresKnowledgeDraftRepository with Postgres", () => {
     await expect(repository.listDrafts({ sourceGroupId: groupId, limit: 20 }))
       .resolves.toEqual([expect.objectContaining({ id: id("draft-main"), sourceGroupId: groupId })]);
     await expect(repository.getStatusCounts()).resolves.toMatchObject({
-      pending_confirmation: 1,
-      pending_review: 1,
-      needs_revision: 0,
-      rejected: 0,
-      published: 0,
+      pending_confirmation: baselineCounts.pending_confirmation + 1,
+      pending_review: baselineCounts.pending_review + 1,
+      needs_revision: baselineCounts.needs_revision,
+      rejected: baselineCounts.rejected,
+      published: baselineCounts.published,
     });
   });
 
