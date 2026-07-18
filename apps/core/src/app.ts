@@ -79,6 +79,11 @@ import {
   type ConversationStateInspectionRuntime,
   type ConversationStateInspectionStore,
 } from "./conversation-state/conversation-state-api.js";
+import { registerProactiveSignalApi } from "./proactive/proactive-signal-api.js";
+import {
+  createProactiveSignalRuntime,
+  type ProactiveSignalRuntime,
+} from "./runtime/proactive-signal-runtime.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
@@ -89,6 +94,10 @@ type EventWorkerRuntimeFactoryInput = {
 type MemoryExtractionRuntimeFactoryInput = {
   runtimeController: RuntimeController;
   auditLog: InMemoryAuditLog;
+};
+
+type ProactiveSignalRuntimeFactoryInput = {
+  runtimeController: RuntimeController;
 };
 
 export type RuntimeControlDependency = {
@@ -125,6 +134,9 @@ export type BuildAppDependencies = {
   groupMemoryService?: GroupMemoryService;
   conversationStateInspectionStore?: ConversationStateInspectionStore;
   createConversationStateInspectionRuntime?: () => ConversationStateInspectionRuntime | undefined;
+  createProactiveSignalRuntime?: (
+    input: ProactiveSignalRuntimeFactoryInput,
+  ) => ProactiveSignalRuntime | undefined;
 };
 
 export type StartServerOptions = {
@@ -268,6 +280,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let eventWorkerRuntime: EventWorkerRuntime | undefined;
   let documentSyncRuntime: DocumentSyncRuntime | undefined;
   let conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
+  let proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   let startupApp: FastifyInstance | undefined;
   let appOwnsRuntimeResources = false;
@@ -294,6 +307,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     conversationStateInspectionRuntime = dependencies.conversationStateInspectionStore === undefined
       ? (dependencies.createConversationStateInspectionRuntime ?? createConversationStateInspectionRuntime)()
       : undefined;
+    proactiveSignalRuntime = (
+      dependencies.createProactiveSignalRuntime ?? createProactiveSignalRuntime
+    )({ runtimeController });
+    proactiveSignalRuntime?.start();
     eventWorkerRuntime =
       (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
         runtimeController,
@@ -379,6 +396,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
     { authenticationConfigured: internalApiToken !== undefined },
   );
+  registerProactiveSignalApi(app, proactiveSignalRuntime, {
+    authenticationConfigured: internalApiToken !== undefined,
+    now,
+  });
 
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
@@ -467,6 +488,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         memoryExtractionRuntime === undefined
           ? { ok: true, enabled: false, running: false }
           : await getMemoryExtractionStatus(memoryExtractionRuntime),
+      proactiveSignals: await getProactiveSignalStatus(proactiveSignalRuntime),
       eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
@@ -1449,6 +1471,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => documentSyncRuntime?.close(),
       () => eventWorkerRuntime?.close(),
       () => memoryExtractionRuntime?.close(),
+      () => proactiveSignalRuntime?.close(),
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
       () => conversationStateInspectionRuntime?.close(),
@@ -1468,6 +1491,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       eventWorkerRuntime,
       documentSyncRuntime,
       conversationStateInspectionRuntime,
+      proactiveSignalRuntime,
     });
     dependencies.onRuntimeStartupCleanup?.(cleanup);
     throw error;
@@ -1602,6 +1626,7 @@ function scheduleRuntimeStartupCleanup({
   eventWorkerRuntime,
   documentSyncRuntime,
   conversationStateInspectionRuntime,
+  proactiveSignalRuntime,
 }: {
   app: Pick<FastifyInstance, "close"> | undefined;
   gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
@@ -1611,12 +1636,14 @@ function scheduleRuntimeStartupCleanup({
   eventWorkerRuntime: EventWorkerRuntime | undefined;
   documentSyncRuntime: DocumentSyncRuntime | undefined;
   conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
+  proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
 }): Promise<void> {
   const cleanup = closeRuntimeResources([
     () => gateway?.close(),
     () => documentSyncRuntime?.close(),
     () => eventWorkerRuntime?.close(),
     () => memoryExtractionRuntime?.close(),
+    () => proactiveSignalRuntime?.close(),
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
     () => conversationStateInspectionRuntime?.close(),
@@ -1723,6 +1750,22 @@ async function getMemoryExtractionStatus(runtime: MemoryExtractionRuntime) {
       enabled: true,
       running: false,
       error: "memory_extraction_status_failed",
+    };
+  }
+}
+
+async function getProactiveSignalStatus(runtime: ProactiveSignalRuntime | undefined) {
+  if (runtime === undefined) {
+    return { ok: true, enabled: false, running: false };
+  }
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "proactive_signal_status_failed" as const,
     };
   }
 }
