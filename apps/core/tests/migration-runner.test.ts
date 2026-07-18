@@ -766,6 +766,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           "0024_semantic_thread_action_memory.sql",
           "0025_conversation_state_extraction.sql",
           "0026_projection_rollout_contracts.sql",
+          "0030_knowledge_draft_facts.sql",
         ]),
       });
       await expect(client.query(`

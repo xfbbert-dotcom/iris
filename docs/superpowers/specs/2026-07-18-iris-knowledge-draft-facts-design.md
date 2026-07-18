@@ -54,7 +54,7 @@ Alternatives rejected:
 - `current_revision_number` and compare-and-swap `version`;
 - creator reference and timestamps;
 - rejection actor/reason/time when terminally rejected;
-- publication fields reserved for Phase 5B and nullable until a guarded publication succeeds.
+- no publication metadata in Phase 5A; Phase 5B adds it only with the guarded publication path.
 
 The `published` state exists to preserve the whitepaper lifecycle, but Phase 5A exposes no operation that can enter it.
 
