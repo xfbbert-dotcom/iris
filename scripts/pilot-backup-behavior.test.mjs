@@ -280,6 +280,16 @@ for (const [networkMode, cleanupError] of [
   );
 }
 
+test("ordinary backup harness leaves bounded headroom for fail-closed cleanup", () => {
+  assert.equal(backupHarnessTimeout({ hangPoint: "", networkMode: "" }), 90_000);
+  assert.equal(backupHarnessTimeout({ hangPoint: "cleanup-stop", networkMode: "" }), 15_000);
+  assert.equal(backupHarnessTimeout({ hangPoint: "", networkMode: "status-timeout" }), 8_000);
+  assert.equal(
+    backupHarnessTimeout({ hangPoint: "", networkMode: "enable-committed-response-timeout" }),
+    20_000,
+  );
+});
+
 test(
   "primary failure reports durable cleanup failure when desired intent returns after restart",
   { skip: gitBash === undefined },
@@ -496,14 +506,7 @@ function runBackup({
     cwd: root,
     encoding: "utf8",
     env: environment,
-    timeout:
-      hangPoint !== ""
-        ? 15_000
-        : networkMode === "status-timeout"
-        ? 8_000
-        : networkMode === "enable-committed-response-timeout"
-          ? 20_000
-          : 30_000,
+    timeout: backupHarnessTimeout({ hangPoint, networkMode }),
   });
   const elapsedMs = Date.now() - startedAt;
 
@@ -532,6 +535,13 @@ function runBackup({
     backupSize,
     cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
   };
+}
+
+function backupHarnessTimeout({ hangPoint, networkMode }) {
+  if (hangPoint !== "") return 15_000;
+  if (networkMode === "status-timeout") return 8_000;
+  if (networkMode === "enable-committed-response-timeout") return 20_000;
+  return 90_000;
 }
 
 function writeExecutable(path, content) {
