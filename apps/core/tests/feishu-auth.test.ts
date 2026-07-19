@@ -374,6 +374,33 @@ describe("Feishu auth primitives", () => {
     })).toBe(false);
   });
 
+  it("accepts fresh nanosecond callback timestamps without weakening the replay window", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = JSON.stringify(body);
+    const nonce = "nonce-1";
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 300,
+      requireSignature: true,
+    });
+    const requestAt = (at: Date) => {
+      const timestamp = String(BigInt(at.getTime()) * 1_000_000n);
+      return {
+        headers: {
+          "x-lark-request-timestamp": timestamp,
+          "x-lark-request-nonce": nonce,
+          "x-lark-signature": sign(timestamp, nonce, rawBody),
+        },
+        body,
+        rawBody,
+      };
+    };
+
+    expect(verifier(requestAt(now))).toBe(true);
+    expect(verifier(requestAt(new Date(now.getTime() - 301_000)))).toBe(false);
+  });
+
   it("caps configured timestamp skew at the 300-second anti-replay maximum", () => {
     const rawBody = JSON.stringify({ event: { message: "hello" } });
     const nonce = "nonce-1";

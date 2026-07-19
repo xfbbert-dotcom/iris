@@ -207,7 +207,7 @@ Pilot Caddy 公网边界只精确代理已有 `POST /feishu/events` 和新增 `P
 
 安全修正：启用 knowledge-card confirmation 时必须配置非空且有界的 `FEISHU_ENCRYPT_KEY`。卡片入口缺少 raw body、签名或时间戳，或签名/时间戳过期时，一律拒绝且不入队；该严格要求只作用于新版卡片入口，不能放宽或破坏旧 Feishu event callback 的兼容行为。
 
-飞书新版卡片回调必须使用卡片专用协议边界：按飞书官方 Go SDK 对完整原始请求体计算 `SHA-1(timestamp + nonce + Verification Token + raw body)`，并使用常量时间比较；`FEISHU_ENCRYPT_KEY` 只用于解密加密信封。入口仍要求 300 秒以内时间窗和原始请求体，解密后再独立验证 Verification Token 与精确 `app_id`。不得把事件订阅的 `SHA-256(... + Encrypt Key + ...)` 验签规则套用到卡片回调，也不得接受缺失签名、过期时间戳、未知应用或解密失败的请求。
+飞书新版卡片回调 `card.action.trigger` 必须使用 V2 事件/回调协议边界：对完整原始请求体计算 `SHA-256(timestamp + nonce + Encrypt Key + raw body)`，并使用常量时间比较；通过外层签名后，再使用同一 Encrypt Key 解密加密信封，并独立验证解密后的 Verification Token 与精确 `app_id`。入口仍要求 300 秒以内时间窗和原始请求体；时间戳必须用 `BigInt` 安全支持飞书可能发送的秒、毫秒、微秒或纳秒整数精度，不得因 JavaScript 安全整数上限误拒真实请求，也不得把旧版 `card.action.trigger_v1` 的 `SHA-1(... + Verification Token + ...)` 规则套用到新版回调。缺失签名、过期时间戳、未知应用或解密失败的请求一律拒绝。
 
 如果 Redis 明确拒绝入队，入口仍在 3 秒内返回 HTTP 200，但 toast 必须明确显示“操作未提交，请稍后重试”，且 Postgres 不产生确认或审批事实。如果 1,000 ms 入队期限先到而 Redis 请求仍未完成，入口无法证明动作未提交，必须改为显示“提交状态未确认，请勿重复点击；请以卡片最终状态为准”；原来的单次幂等入队请求可以晚到成功，但入口不得自动发起第二次入队。这样既避免飞书重复回调风暴和用户重复点击，也不会把未持久化或结果未明的动作伪装成确定结果。
 
@@ -241,7 +241,8 @@ Pilot Caddy 公网边界只精确代理已有 `POST /feishu/events` 和新增 `P
 本设计以以下官方接口契约为基线：
 
 - 新版卡片回调为 `card.action.trigger`，`header.event_id` 是回调唯一标识，业务服务器需要在 3 秒内响应：<https://open.feishu.cn/document/feishu-cards/card-callback-communication?lang=zh-CN>
-- 飞书官方 Go SDK 的卡片处理器以 Verification Token 和完整原始请求体执行 SHA-1 验签，再使用 Encrypt Key 解密：<https://github.com/larksuite/oapi-sdk-go/blob/v3_main/card/card.go>
+- 飞书官方处理回调文档明确区分新版 `card.action.trigger` 与旧版消息卡片回调，新版接入 Event Dispatcher：<https://open.feishu.cn/document/server-side-sdk/golang-sdk-guide/handle-callback?lang=zh-CN>
+- 飞书官方 Node SDK 对新版事件/回调使用 Encrypt Key 与 SHA-256，对旧版卡片分支才使用 Verification Token 与 SHA-1：<https://github.com/larksuite/node-sdk/blob/main/dispatcher/request-handle.ts>
 - 回调无法同步完成业务时，可以先返回空响应，再异步更新消息卡片：<https://open.feishu.cn/document/server-docs/im-v1/faq?lang=zh-CN>
 - 创建知识空间节点使用 `POST /open-apis/wiki/v2/spaces/:space_id/nodes`；当前公开请求字段没有可证明创建幂等性的业务 request ID：<https://open.feishu.cn/document/server-docs/docs/wiki-v2/space-node/create>
 

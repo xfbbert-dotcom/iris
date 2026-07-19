@@ -72,8 +72,8 @@ describe("KnowledgeCardRuntime", () => {
       headers: {
         "x-lark-request-timestamp": timestamp,
         "x-lark-request-nonce": nonce,
-        "x-lark-signature": createHash("sha1")
-          .update(timestamp + nonce + "verification-token" + rawBody)
+        "x-lark-signature": createHash("sha256")
+          .update(timestamp + nonce + "encrypt-key" + rawBody)
           .digest("hex"),
       },
       body,
@@ -567,14 +567,14 @@ function enabledController() {
 function encryptedRequest(payload: unknown) {
   const body = { encrypt: encryptPayload(payload) };
   const rawBody = JSON.stringify(body);
-  const timestamp = String(Math.floor(Date.now() / 1_000));
+  const timestamp = String(BigInt(Date.now()) * 1_000_000n);
   const nonce = "encrypted-card-callback-nonce";
   return {
     headers: {
       "x-lark-request-timestamp": timestamp,
       "x-lark-request-nonce": nonce,
-      "x-lark-signature": createHash("sha1")
-        .update(timestamp + nonce + "verification-token" + rawBody)
+      "x-lark-signature": createHash("sha256")
+        .update(timestamp + nonce + "encrypt-key" + rawBody)
         .digest("hex"),
     },
     body,

@@ -1,6 +1,9 @@
 import { createDecipheriv, createHash, timingSafeEqual } from "node:crypto";
 
 const MAX_ENCRYPTED_PAYLOAD_CHARS = 1_048_576;
+const MIN_SUPPORTED_FEISHU_EPOCH_SECONDS = 946_684_800n;
+const MAX_SUPPORTED_FEISHU_EPOCH_SECONDS = 4_102_444_800n;
+const FEISHU_TIMESTAMP_SCALES = [1n, 1_000n, 1_000_000n, 1_000_000_000n] as const;
 
 export type FeishuAuthConfig = {
   verificationToken?: string;
@@ -239,9 +242,9 @@ function classifyFeishuTimestamp(
 ): FeishuCallbackAuthenticationDiagnostic["timestamp"] {
   const value = getHeader(headers, "x-lark-request-timestamp");
   if (value === undefined || value.length === 0) return "missing";
-  const timestamp = Number(value);
-  if (!Number.isSafeInteger(timestamp)) return "invalid";
-  return Math.abs(Math.floor(now.getTime() / 1_000) - timestamp) <= 300 ? "fresh" : "stale";
+  const skewSeconds = resolveFeishuTimestampSkewSeconds(value, now);
+  if (skewSeconds === undefined) return "invalid";
+  return skewSeconds <= 300n ? "fresh" : "stale";
 }
 
 function hasValidFeishuTimestamp(input: {
@@ -254,18 +257,30 @@ function hasValidFeishuTimestamp(input: {
     return false;
   }
 
-  const timestampSeconds = Number(timestamp);
-  const nowSeconds = Math.floor(input.now.getTime() / 1_000);
-  if (
-    !Number.isSafeInteger(timestampSeconds) ||
-    !Number.isFinite(nowSeconds) ||
-    !Number.isFinite(input.maxTimestampSkewSeconds) ||
-    input.maxTimestampSkewSeconds < 0
-  ) {
-    return false;
-  }
+  const skewSeconds = resolveFeishuTimestampSkewSeconds(timestamp, input.now);
+  return skewSeconds !== undefined && skewSeconds <= BigInt(input.maxTimestampSkewSeconds);
+}
 
-  return Math.abs(nowSeconds - timestampSeconds) <= input.maxTimestampSkewSeconds;
+function resolveFeishuTimestampSkewSeconds(value: string, now: Date): bigint | undefined {
+  if (!/^\d{1,20}$/u.test(value) || !Number.isFinite(now.getTime())) return undefined;
+
+  const rawTimestamp = BigInt(value);
+  const nowSeconds = BigInt(Math.floor(now.getTime() / 1_000));
+  let closestSkew: bigint | undefined;
+  for (const scale of FEISHU_TIMESTAMP_SCALES) {
+    const timestampSeconds = rawTimestamp / scale;
+    if (
+      timestampSeconds < MIN_SUPPORTED_FEISHU_EPOCH_SECONDS ||
+      timestampSeconds > MAX_SUPPORTED_FEISHU_EPOCH_SECONDS
+    ) {
+      continue;
+    }
+    const skew = timestampSeconds >= nowSeconds
+      ? timestampSeconds - nowSeconds
+      : nowSeconds - timestampSeconds;
+    if (closestSkew === undefined || skew < closestSkew) closestSkew = skew;
+  }
+  return closestSkew;
 }
 
 function resolveVerificationToken(body: unknown): string | undefined {
