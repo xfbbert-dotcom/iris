@@ -25,7 +25,9 @@ type FeishuSignatureInput = {
   encryptKey: string;
 };
 
-export function isFeishuUrlVerificationPayload(body: unknown): boolean {
+export function isFeishuUrlVerificationPayload(
+  body: unknown,
+): body is { type: "url_verification"; challenge: string } {
   return isRecord(body) && body.type === "url_verification" && typeof body.challenge === "string";
 }
 
