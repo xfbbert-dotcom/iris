@@ -4,7 +4,9 @@ import { readFileSync } from "node:fs";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { createApprovalInteractionWorker } from "../src/knowledge-cards/approval-interaction-worker.js";
 import { createKnowledgeCardDispatcher } from "../src/knowledge-cards/knowledge-card-dispatcher.js";
+import type { ApprovalInteractionJob } from "../src/knowledge-cards/knowledge-card.js";
 import {
   KnowledgeCardMembershipProofError,
   KnowledgeCardOperationConflictError,
@@ -1550,6 +1552,143 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       [input.eventId],
     )).resolves.toMatchObject({ rows: [{ count: 1 }] });
     await retireOutbox(presentation.id);
+  });
+
+  it("replays a committed worker redelivery with fresh timestamps and immutable intent", async () => {
+    const { draft, presentation, messageId } = await createActivePresentation("worker-redelivery");
+    const repository = cardRepository();
+    const reason = "Clarify durable retry ownership.";
+    const callbackJob: ApprovalInteractionJob = {
+      idempotencyKey: id("worker-redelivery-idempotency"),
+      eventId: id("callback-worker-redelivery"),
+      appId: "cli_test_app",
+      actorOpenId: "ou_group_member",
+      chatId: sourceGroupId,
+      messageId,
+      presentationId: presentation.id,
+      draftId: draft.id,
+      revisionNumber: 1,
+      draftVersion: 1,
+      action: "request_revision",
+      reason,
+      receivedAt: plusSeconds(5),
+      attempts: 0,
+    };
+    const canUseKnowledgeCards = vi.fn((groupId: string) => groupId === sourceGroupId);
+    const isCurrentMember = vi.fn(async (input: { chatId: string; openId: string }) =>
+      input.chatId === sourceGroupId && input.openId === callbackJob.actorOpenId
+    );
+    const cardClient = {
+      updateCard: vi.fn(async (_input: { messageId: string; cardJson: string }) => undefined),
+    };
+
+    const runAttempt = async (attemptAt: Date, attempts: number, failAcknowledge: boolean) => {
+      const attemptJob = { ...callbackJob, attempts };
+      const queue = {
+        claimBatch: vi.fn(async () => [attemptJob]),
+        acknowledge: vi.fn(async () => {
+          if (failAcknowledge) throw new Error("simulated post-commit acknowledgement failure");
+        }),
+        handleFailure: vi.fn(async () => ({ action: "delayed" as const })),
+      };
+      const worker = createApprovalInteractionWorker({
+        queue,
+        repository,
+        membershipChecker: { isCurrentMember },
+        cardClient,
+        canUseKnowledgeCards,
+        botOpenId: "ou_iris_bot",
+        workerId: id(`worker-redelivery-${attempts}`),
+        leaseMs: 30_000,
+        now: () => new Date(attemptAt),
+      });
+      return { result: await worker.processBatch({ limit: 1 }), queue };
+    };
+
+    try {
+      const first = await runAttempt(plusSeconds(10), 0, true);
+      expect(first.result).toEqual([{
+        status: "retrying",
+        idempotencyKey: callbackJob.idempotencyKey,
+        code: "redis_unavailable",
+      }]);
+      expect(first.queue.handleFailure).toHaveBeenCalledOnce();
+
+      const redelivery = await runAttempt(plusSeconds(40), 1, false);
+      expect(redelivery.result).toEqual([{
+        status: "already_applied",
+        idempotencyKey: callbackJob.idempotencyKey,
+        code: "duplicate_callback",
+      }]);
+      expect(redelivery.queue.handleFailure).not.toHaveBeenCalled();
+      expect(canUseKnowledgeCards).toHaveBeenCalledTimes(4);
+      expect(isCurrentMember).toHaveBeenCalledTimes(2);
+
+      expect(cardClient.updateCard).toHaveBeenCalledTimes(2);
+      const firstCardJson = cardClient.updateCard.mock.calls[0]?.[0].cardJson;
+      const replayCardJson = cardClient.updateCard.mock.calls[1]?.[0].cardJson;
+      expect(replayCardJson).toBe(firstCardJson);
+      expect(replayCardJson).toContain("Iris / revision_requested");
+      expect(replayCardJson).toContain(`Reason: ${reason}`);
+      expect(replayCardJson).not.toContain("This action was already processed.");
+
+      const replayInput = {
+        presentationId: presentation.id,
+        draftId: draft.id,
+        revisionNumber: 1,
+        draftVersion: 1,
+        chatId: sourceGroupId,
+        eventId: callbackJob.eventId,
+        actorOpenId: callbackJob.actorOpenId,
+        membershipCheckedAt: plusSeconds(49),
+        at: plusSeconds(50),
+        action: "request_revision" as const,
+        reason,
+      };
+      await expect(repository.applyInteraction({
+        ...replayInput,
+        membershipCheckedAt: plusSeconds(19),
+      })).rejects.toBeInstanceOf(KnowledgeCardMembershipProofError);
+      for (const immutableChange of [
+        { actorOpenId: "ou_changed_actor" },
+        { reason: "Changed immutable reason." },
+        { presentationId: id("changed-presentation-binding") },
+        { draftId: id("changed-draft-binding") },
+        { revisionNumber: 2 },
+        { draftVersion: 2 },
+      ]) {
+        await expect(repository.applyInteraction({
+          ...replayInput,
+          ...immutableChange,
+        })).rejects.toBeInstanceOf(KnowledgeCardOperationConflictError);
+      }
+      await expect(repository.applyInteraction({
+        ...replayInput,
+        action: "confirm",
+        reason: undefined,
+      })).rejects.toBeInstanceOf(KnowledgeCardOperationConflictError);
+
+      await expect(pool.query(
+        `SELECT count(*)::int AS count
+         FROM knowledge_draft_presentation_events
+         WHERE callback_event_id = $1`,
+        [callbackJob.eventId],
+      )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+      await expect(pool.query(
+        `SELECT count(*)::int AS count
+         FROM knowledge_draft_events draft_event
+         JOIN knowledge_draft_presentation_events presentation_event
+           ON presentation_event.operation_key = draft_event.operation_key
+         WHERE presentation_event.callback_event_id = $1`,
+        [callbackJob.eventId],
+      )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+      await expect(pool.query(
+        "SELECT count(*)::int AS count FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+        [presentation.id],
+      )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    } finally {
+      await retireOutbox(presentation.id);
+    }
   });
 
   it("returns already_applied for an exact request-revision callback replay", async () => {

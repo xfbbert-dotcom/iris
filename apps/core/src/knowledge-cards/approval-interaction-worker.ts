@@ -123,7 +123,7 @@ async function processJob(input: {
   } catch {
     return handleTransientFailure(input, "repository_unavailable");
   }
-  if (!isExactActivePresentation(presentation, job)) {
+  if (!isExactActionPresentation(presentation, job)) {
     return denyAndAcknowledge(input, "stale_presentation", presentation?.messageId ?? job.messageId);
   }
 
@@ -215,12 +215,12 @@ function toRepositoryInput(
   };
 }
 
-function isExactActivePresentation(
+function isExactActionPresentation(
   presentation: KnowledgeDraftPresentation | undefined,
   job: ApprovalInteractionJob,
 ): presentation is KnowledgeDraftPresentation & { messageId: string } {
   return presentation !== undefined &&
-    presentation.state === "active" &&
+    (presentation.state === "active" || presentation.state === "closed") &&
     presentation.id === job.presentationId &&
     presentation.draftId === job.draftId &&
     presentation.revisionNumber === job.revisionNumber &&

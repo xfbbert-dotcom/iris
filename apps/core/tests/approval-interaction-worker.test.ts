@@ -68,7 +68,6 @@ describe("ApprovalInteractionWorker", () => {
     ["bot_actor", { actorOpenId: "ou_bot" }],
     ["not_current_member", { isCurrentMember: async () => false }],
     ["stale_presentation", { presentation: undefined }],
-    ["stale_presentation", { presentation: presentation({ state: "closed" }) }],
     ["stale_presentation", { presentation: presentation({ draftVersion: 2 }) }],
   ] as const)("acknowledges stable denial %s without applying", async (code, overrides) => {
     const harness = createHarness(overrides);
@@ -80,6 +79,29 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
     expect(harness.queue.handleFailure).not.toHaveBeenCalled();
     expect(harness.cardClient.updateCard).toHaveBeenCalledOnce();
+  });
+
+  it("re-authorizes an exact closed presentation before repository replay", async () => {
+    const canUseKnowledgeCards = vi.fn(() => true);
+    const isCurrentMember = vi.fn(async () => true);
+    const harness = createHarness({
+      presentation: presentation({ state: "closed", closedAt: at, version: 3 }),
+      canUseKnowledgeCards,
+      isCurrentMember,
+      applyInteraction: async () => mutationResult("already_applied"),
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "already_applied",
+      idempotencyKey: job().idempotencyKey,
+      code: "duplicate_callback",
+    }]);
+    expect(canUseKnowledgeCards).toHaveBeenCalledTimes(2);
+    expect(isCurrentMember).toHaveBeenCalledOnce();
+    expect(harness.repository.applyInteraction).toHaveBeenCalledOnce();
+    const cardJson = harness.cardClient.updateCard.mock.calls[0]?.[0]?.cardJson as string;
+    expect(cardJson).toContain("Iris / confirmed");
+    expect(cardJson).not.toContain("This action was already processed.");
   });
 
   it("fails closed when the live gate is disabled while membership is pending", async () => {

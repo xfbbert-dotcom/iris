@@ -271,7 +271,7 @@ async function applyInteraction(
   input: ApplyKnowledgeCardInteractionInput,
 ): Promise<KnowledgeCardInteractionResult> {
   const normalized = normalizeInteraction(input);
-  const fingerprint = operationFingerprint({ operation: "apply_interaction", ...normalized });
+  const fingerprint = interactionOperationFingerprint(normalized);
   const operationKey = derivedOperationKey("interaction", normalized.eventId, normalized.action);
 
   return withTransaction(dataSource, async (client) => {
@@ -1397,6 +1397,22 @@ function normalizeInteraction(input: ApplyKnowledgeCardInteractionInput) {
     };
   }
   throw new Error("action is invalid");
+}
+
+function interactionOperationFingerprint(input: ReturnType<typeof normalizeInteraction>): string {
+  return operationFingerprint({
+    operation: "apply_interaction",
+    presentationId: input.presentationId,
+    draftId: input.draftId,
+    revisionNumber: input.revisionNumber,
+    draftVersion: input.draftVersion,
+    chatId: input.chatId,
+    eventId: input.eventId,
+    actorOpenId: input.actorOpenId,
+    action: input.action,
+    reason: input.reason,
+    rejectionConfirmed: input.rejectionConfirmed,
+  });
 }
 
 async function withTransaction<T>(
