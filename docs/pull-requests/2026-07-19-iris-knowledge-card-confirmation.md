@@ -22,7 +22,7 @@ Implements Iris Phase 5B-1: governed, version-bound Feishu cards for knowledge-d
 - `npm run build`: passed.
 - `npm test`: 2,034 passed, 127 skipped (2,161 total).
 - `npm run test:python`: 177 passed.
-- `npm run test:pilot`: 77 passed, 0 skipped (including 29 pilot-smoke checks).
+- `npm run test:pilot`: 82 passed, 0 skipped (including 34 pilot-smoke checks).
 - `docker compose config`, `npm run readiness -- --env-file deploy/pilot/ci.env` (14/14 checks passed), `npm run pilot:config`, and `git diff --check`: passed.
 
 ## Intended PR

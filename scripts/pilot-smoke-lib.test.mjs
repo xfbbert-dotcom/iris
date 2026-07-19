@@ -140,6 +140,62 @@ test("proves default-off knowledge-card readiness without exposing draft content
   }
 });
 
+test("rejects an enabled selected Compose env file when host card values are unset", () => {
+  const result = runSmokeWithFetchMode("", {
+    envFileContents: "IRIS_KNOWLEDGE_CARD_ENABLED=true\nIRIS_KNOWLEDGE_CARD_GROUP_IDS=oc_pilot\n",
+    unsetKnowledgeCardEnv: true,
+  });
+  try {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /IRIS_KNOWLEDGE_CARD_ENABLED=false/u);
+  } finally {
+    result.cleanup();
+  }
+});
+
+test("uses host knowledge-card values with Compose precedence over the selected env file", () => {
+  const hostDisabled = runSmokeWithFetchMode("", {
+    envFileContents: "IRIS_KNOWLEDGE_CARD_ENABLED=true\nIRIS_KNOWLEDGE_CARD_GROUP_IDS=oc_pilot\n",
+    hostKnowledgeCardEnv: { enabled: "false", groupIds: "" },
+  });
+  const hostEnabled = runSmokeWithFetchMode("", {
+    envFileContents: "IRIS_KNOWLEDGE_CARD_ENABLED=false\nIRIS_KNOWLEDGE_CARD_GROUP_IDS=\n",
+    hostKnowledgeCardEnv: { enabled: "true", groupIds: "oc_pilot" },
+  });
+  try {
+    assert.equal(hostDisabled.status, 0, hostDisabled.stderr || hostDisabled.stdout);
+    assert.notEqual(hostEnabled.status, 0);
+    assert.match(hostEnabled.stderr, /IRIS_KNOWLEDGE_CARD_ENABLED=false/u);
+  } finally {
+    hostDisabled.cleanup();
+    hostEnabled.cleanup();
+  }
+});
+
+test("uses Compose default expansion when the host card enablement is empty", () => {
+  const result = runSmokeWithFetchMode("", {
+    envFileContents: "IRIS_KNOWLEDGE_CARD_ENABLED=true\nIRIS_KNOWLEDGE_CARD_GROUP_IDS=oc_pilot\n",
+    hostKnowledgeCardEnv: { enabled: "", groupIds: "" },
+  });
+  try {
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    result.cleanup();
+  }
+});
+
+for (const mode of ["readiness-nested-content", "approval-status-nested-content"]) {
+  test(`rejects nested knowledge-card content from ${mode}`, () => {
+    const result = runSmokeWithFetchMode(mode);
+    try {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /content-free/u);
+    } finally {
+      result.cleanup();
+    }
+  });
+}
+
 test("rejects a live gate that reopened from durable desired enablement", () => {
   assert.throws(
     () =>
@@ -396,7 +452,14 @@ test("disable transport failure stops Caddy and terminates the Compose process t
 
 function runSmokeWithFetchMode(
   mode,
-  { args = ["200"], caddyRunning = true, composeMode = "" } = {},
+  {
+    args = ["200"],
+    caddyRunning = true,
+    composeMode = "",
+    envFileContents,
+    unsetKnowledgeCardEnv = false,
+    hostKnowledgeCardEnv,
+  } = {},
 ) {
   const root = mkdtempSync(resolve(".tmp-iris-smoke-test-"));
   const stateDir = resolve(root, "state");
@@ -408,8 +471,32 @@ function runSmokeWithFetchMode(
   writeFileSync(resolve(stateDir, "operations.log"), "");
   const preloadPath = resolve(root, "mock-fetch.mjs");
   const fakeDockerPath = resolve(root, "fake-docker.mjs");
+  const envFilePath = resolve(root, "pilot-smoke.env");
   writeFileSync(preloadPath, smokeFetchPreload);
   writeFileSync(fakeDockerPath, fakeSmokeDocker);
+  if (envFileContents !== undefined) writeFileSync(envFilePath, envFileContents);
+
+  const env = {
+    ...process.env,
+    IRIS_TEST_FETCH_MODE: mode,
+    IRIS_TEST_COMPOSE_MODE: composeMode,
+    IRIS_TEST_STATE_DIR: stateDir,
+    IRIS_PILOT_DOCKER_COMMAND: process.execPath,
+    IRIS_PILOT_DOCKER_COMMAND_ARGS_JSON: JSON.stringify([fakeDockerPath]),
+    IRIS_PILOT_COMPOSE_COMMAND_TIMEOUT_MS: "300",
+    IRIS_PILOT_CLEANUP_RETRY_DELAY_MS: "0",
+    IRIS_KNOWLEDGE_CARD_ENABLED: "false",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
+    ...(envFileContents === undefined ? {} : { IRIS_PILOT_ENV_FILE: envFilePath }),
+  };
+  if (unsetKnowledgeCardEnv) {
+    delete env.IRIS_KNOWLEDGE_CARD_ENABLED;
+    delete env.IRIS_KNOWLEDGE_CARD_GROUP_IDS;
+  }
+  if (hostKnowledgeCardEnv !== undefined) {
+    env.IRIS_KNOWLEDGE_CARD_ENABLED = hostKnowledgeCardEnv.enabled;
+    env.IRIS_KNOWLEDGE_CARD_GROUP_IDS = hostKnowledgeCardEnv.groupIds;
+  }
 
   const startedAt = Date.now();
   const result = spawnSync(
@@ -419,18 +506,7 @@ function runSmokeWithFetchMode(
       cwd: resolve("."),
       encoding: "utf8",
       timeout: 5_000,
-      env: {
-        ...process.env,
-        IRIS_TEST_FETCH_MODE: mode,
-        IRIS_TEST_COMPOSE_MODE: composeMode,
-        IRIS_TEST_STATE_DIR: stateDir,
-        IRIS_PILOT_DOCKER_COMMAND: process.execPath,
-        IRIS_PILOT_DOCKER_COMMAND_ARGS_JSON: JSON.stringify([fakeDockerPath]),
-        IRIS_PILOT_COMPOSE_COMMAND_TIMEOUT_MS: "300",
-        IRIS_PILOT_CLEANUP_RETRY_DELAY_MS: "0",
-        IRIS_KNOWLEDGE_CARD_ENABLED: "false",
-        IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
-      },
+      env,
     },
   );
   const elapsedMs = Date.now() - startedAt;
@@ -548,18 +624,24 @@ globalThis.fetch = async (input, init = {}) => {
     if (authorization(init) !== "Bearer ci-internal-token") {
       return json({ error: "unauthorized" }, 401);
     }
-    return json({
+    const body = {
       ok: true,
       status: "ready",
       checks: [{ id: "knowledgeCards", status: "pass", detail: "Knowledge cards are safely disabled." }],
-    });
+    };
+    if (mode === "readiness-nested-content") {
+      body.checks[0].diagnostics = { draft: { body: "Full governed draft body" } };
+    }
+    return json(body);
   }
   if (url.pathname === "/internal/approval-interactions/status") {
     if (url.port !== "3000") return json({ error: "not_found" }, 404);
     if (authorization(init) !== "Bearer ci-internal-token") {
       return json({ error: "unauthorized" }, 401);
     }
-    return json({ ok: false, error: "knowledge_card_runtime_unavailable" }, 503);
+    const body = { ok: false, error: "knowledge_card_runtime_unavailable" };
+    if (mode === "approval-status-nested-content") body.details = { actorOpenId: "secret-actor" };
+    return json(body, 503);
   }
   if (url.pathname === "/internal/ingress-readiness") {
     if (url.port !== "3000") return json({ error: "not_found" }, 404);

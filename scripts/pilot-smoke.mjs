@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   assertDurableRuntimeMutation,
@@ -43,13 +45,13 @@ const dockerCommandArgs = readStringArrayJson(
   process.env.IRIS_PILOT_DOCKER_COMMAND_ARGS_JSON,
   "IRIS_PILOT_DOCKER_COMMAND_ARGS_JSON",
 );
+const composeEnvFile =
+  process.env.IRIS_PILOT_ENV_FILE ?? process.env.IRIS_ENV_FILE ?? "deploy/pilot/ci.env";
 const composeArguments = [
   ...dockerCommandArgs,
   "compose",
   "--env-file",
-  process.env.IRIS_PILOT_ENV_FILE ??
-    process.env.IRIS_ENV_FILE ??
-    "deploy/pilot/ci.env",
+  composeEnvFile,
   "--file",
   process.env.IRIS_PILOT_COMPOSE_FILE ??
     process.env.IRIS_COMPOSE_FILE ??
@@ -220,13 +222,49 @@ function sanitizeErrorText(value) {
 }
 
 function assertKnowledgeCardDefaults() {
-  const enabled = process.env.IRIS_KNOWLEDGE_CARD_ENABLED ?? "false";
-  const groupIds = process.env.IRIS_KNOWLEDGE_CARD_GROUP_IDS ?? "";
+  const envFileValues = readComposeEnvFile(composeEnvFile);
+  const enabled = readEffectiveComposeEnvValue(
+    "IRIS_KNOWLEDGE_CARD_ENABLED",
+    envFileValues,
+    "false",
+  );
+  const groupIds = readEffectiveComposeEnvValue(
+    "IRIS_KNOWLEDGE_CARD_GROUP_IDS",
+    envFileValues,
+    "",
+  );
   if (enabled !== "false" || groupIds !== "") {
     throw new Error(
       "Pilot smoke requires IRIS_KNOWLEDGE_CARD_ENABLED=false and an empty IRIS_KNOWLEDGE_CARD_GROUP_IDS allowlist",
     );
   }
+}
+
+function readComposeEnvFile(path) {
+  let contents;
+  try {
+    contents = readFileSync(resolve(path), "utf8");
+  } catch {
+    throw new Error(`Pilot smoke could not read selected Compose env file: ${path}`);
+  }
+
+  const values = new Map();
+  for (const line of contents.split(/\r?\n/u)) {
+    if (line.length === 0 || line.startsWith("#")) continue;
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(line);
+    if (match === null) continue;
+    const [, name, value] = match;
+    if (values.has(name)) {
+      throw new Error(`Selected Compose env file repeats ${name}`);
+    }
+    values.set(name, value);
+  }
+  return values;
+}
+
+function readEffectiveComposeEnvValue(name, envFileValues, fallback) {
+  const value = Object.hasOwn(process.env, name) ? process.env[name] : envFileValues.get(name);
+  return value === undefined || value === "" ? fallback : value;
 }
 
 async function assertKnowledgeCardReadiness() {
@@ -243,6 +281,10 @@ async function assertKnowledgeCardReadiness() {
   ) {
     throw new Error("Expected knowledge-card readiness to prove the default-off configuration");
   }
+  assertContentFreeKnowledgeCardResponse(
+    { ok: readiness.ok, status: readiness.status, knowledgeCards },
+    "knowledge-card readiness",
+  );
 
   const statusResponse = await expectStatus(
     `${coreBaseUrl}/internal/approval-interactions/status`,
@@ -253,7 +295,31 @@ async function assertKnowledgeCardReadiness() {
   if (status?.ok !== false || status?.error !== "knowledge_card_runtime_unavailable") {
     throw new Error("Expected the disabled knowledge-card status route to remain content-free");
   }
+  assertContentFreeKnowledgeCardResponse(status, "knowledge-card status");
   return "safe-disabled";
+}
+
+function assertContentFreeKnowledgeCardResponse(value, label, key = undefined) {
+  if (typeof value === "string") {
+    if (key === "detail" && value === "Knowledge cards are safely disabled.") return;
+    if (key === "envVars" && /^[A-Z][A-Z0-9_]*$/u.test(value)) return;
+    if (/(draft|body|content|evidence|reason|actoropenid|token|secret)/iu.test(value)) {
+      throw new Error(`Expected ${label} to be content-free`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) assertContentFreeKnowledgeCardResponse(item, label, key);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+
+  for (const [nestedKey, nestedValue] of Object.entries(value)) {
+    if (/(draft|body|content|evidence|reason|actoropenid|token|secret)/iu.test(nestedKey)) {
+      throw new Error(`Expected ${label} to be content-free`);
+    }
+    assertContentFreeKnowledgeCardResponse(nestedValue, label, nestedKey);
+  }
 }
 
 async function runPublicBoundaryChecks() {
