@@ -4,6 +4,7 @@ import { createApprovalInteractionWorker } from "../src/knowledge-cards/approval
 import type { ApprovalInteractionJob } from "../src/knowledge-cards/knowledge-card.js";
 import type {
   KnowledgeCardCommittedResult,
+  KnowledgeCardPresentationContext,
   KnowledgeDraftPresentation,
 } from "../src/knowledge-cards/knowledge-card-repository.js";
 import {
@@ -104,6 +105,57 @@ describe("ApprovalInteractionWorker", () => {
     expect(cardJson).not.toContain("This action was already processed.");
   });
 
+  it.each([
+    ["runtime disable", { canUseKnowledgeCards: () => false }, "runtime_disabled"],
+    ["bot actor", { actorOpenId: "ou_bot" }, "bot_actor"],
+    ["membership denial", { isCurrentMember: async () => false }, "not_current_member"],
+    [
+      "immutable intent conflict",
+      { applyInteraction: async () => { throw new KnowledgeCardOperationConflictError(); } },
+      "immutable_intent_conflict",
+    ],
+  ] as const)("keeps the committed result card on closed %s", async (_label, overrides, code) => {
+    const context = committedContext();
+    const harness = createHarness({
+      presentation: context.presentation,
+      getPresentationContext: async () => context,
+      ...overrides,
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "denied",
+      idempotencyKey: job().idempotencyKey,
+      code,
+    }]);
+    expect(harness.cardClient.updateCard).toHaveBeenCalledOnce();
+    const cardJson = harness.cardClient.updateCard.mock.calls[0]?.[0]?.cardJson as string;
+    expect(cardJson).toContain("Iris / revision_requested");
+    expect(cardJson).toContain("Reason: Committed closed reason.");
+    expect(cardJson).not.toMatch(
+      /currently disabled|approve its own|current group members|already processed|action conflicts/iu,
+    );
+  });
+
+  it("restores the committed result card on a closed membership error", async () => {
+    const context = committedContext();
+    const harness = createHarness({
+      presentation: context.presentation,
+      getPresentationContext: async () => context,
+      isCurrentMember: async () => { throw new Error("membership unavailable"); },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      idempotencyKey: job().idempotencyKey,
+      code: "membership_unavailable",
+    }]);
+    expect(harness.cardClient.updateCard).toHaveBeenCalledOnce();
+    expect(harness.cardClient.updateCard.mock.calls[0]?.[0]?.cardJson).toContain(
+      "Iris / revision_requested",
+    );
+    expect(harness.queue.handleFailure).toHaveBeenCalledOnce();
+  });
+
   it("fails closed when the live gate is disabled while membership is pending", async () => {
     let enabled = true;
     let membershipStarted!: () => void;
@@ -141,7 +193,7 @@ describe("ApprovalInteractionWorker", () => {
     [new KnowledgeCardPersistenceConflictError(), "stale_presentation"],
     [new KnowledgeCardMembershipProofError(), "invalid_membership_evidence"],
     [new KnowledgeDraftEvidenceError("message_deleted"), "evidence_invalidated"],
-    [new KnowledgeCardOperationConflictError(), "duplicate_callback"],
+    [new KnowledgeCardOperationConflictError(), "immutable_intent_conflict"],
   ] as const)("acks stable repository denial %s", async (error, code) => {
     const harness = createHarness({
       applyInteraction: async () => {
@@ -335,6 +387,7 @@ type HarnessOverrides = {
   presentation?: KnowledgeDraftPresentation;
   canUseKnowledgeCards?: (groupId: string) => boolean;
   getPresentation?: () => Promise<KnowledgeDraftPresentation | undefined>;
+  getPresentationContext?: () => Promise<KnowledgeCardPresentationContext | undefined>;
   isCurrentMember?: () => Promise<boolean>;
   applyInteraction?: (...args: any[]) => Promise<any>;
   updateCard?: (input: { messageId: string; cardJson: string }) => Promise<void>;
@@ -354,6 +407,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
   const repository = {
     getPresentation: vi.fn(overrides.getPresentation ?? (async () =>
       "presentation" in overrides ? overrides.presentation : presentation())),
+    getPresentationContext: vi.fn(overrides.getPresentationContext ?? (async () => undefined)),
     applyInteraction: vi.fn(overrides.applyInteraction ?? (async () => mutationResult("applied"))),
   };
   const membershipChecker = {
@@ -456,5 +510,19 @@ function mutationResult(
       },
     },
     committedResult,
+  };
+}
+
+function committedContext(): KnowledgeCardPresentationContext {
+  const mutation = mutationResult("already_applied", {
+    action: "request_revision",
+    state: "needs_revision",
+    reason: "Committed closed reason.",
+  });
+  return {
+    presentation: mutation.presentation,
+    draft: mutation.draft,
+    evidenceState: mutation.draft.currentRevision.evidenceState,
+    committedResult: mutation.committedResult,
   };
 }

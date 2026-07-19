@@ -1624,9 +1624,11 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       expect(canUseKnowledgeCards).toHaveBeenCalledTimes(4);
       expect(isCurrentMember).toHaveBeenCalledTimes(2);
 
-      expect(cardClient.updateCard).toHaveBeenCalledTimes(2);
+      expect(cardClient.updateCard).toHaveBeenCalledTimes(3);
       const firstCardJson = cardClient.updateCard.mock.calls[0]?.[0].cardJson;
-      const replayCardJson = cardClient.updateCard.mock.calls[1]?.[0].cardJson;
+      const recoveryCardJson = cardClient.updateCard.mock.calls[1]?.[0].cardJson;
+      const replayCardJson = cardClient.updateCard.mock.calls[2]?.[0].cardJson;
+      expect(recoveryCardJson).toBe(firstCardJson);
       expect(replayCardJson).toBe(firstCardJson);
       expect(replayCardJson).toContain("Iris / revision_requested");
       expect(replayCardJson).toContain(`Reason: ${reason}`);
@@ -1668,6 +1670,180 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
         reason: undefined,
       })).rejects.toBeInstanceOf(KnowledgeCardOperationConflictError);
 
+      await expect(pool.query(
+        `SELECT count(*)::int AS count
+         FROM knowledge_draft_presentation_events
+         WHERE callback_event_id = $1`,
+        [callbackJob.eventId],
+      )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+      await expect(pool.query(
+        `SELECT count(*)::int AS count
+         FROM knowledge_draft_events draft_event
+         JOIN knowledge_draft_presentation_events presentation_event
+           ON presentation_event.operation_key = draft_event.operation_key
+         WHERE presentation_event.callback_event_id = $1`,
+        [callbackJob.eventId],
+      )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+      await expect(pool.query(
+        "SELECT count(*)::int AS count FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+        [presentation.id],
+      )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    } finally {
+      await retireOutbox(presentation.id);
+    }
+  });
+
+  it("restores committed result JSON across denied and conflicting closed redeliveries", async () => {
+    const { draft, presentation, messageId } = await createActivePresentation("closed-redelivery-display");
+    const repository = cardRepository();
+    const reason = "Preserve the committed display result.";
+    const callbackJob: ApprovalInteractionJob = {
+      idempotencyKey: id("closed-redelivery-display-idempotency"),
+      eventId: id("callback-closed-redelivery-display"),
+      appId: "cli_test_app",
+      actorOpenId: "ou_group_member",
+      chatId: sourceGroupId,
+      messageId,
+      presentationId: presentation.id,
+      draftId: draft.id,
+      revisionNumber: 1,
+      draftVersion: 1,
+      action: "request_revision",
+      reason,
+      receivedAt: plusSeconds(5),
+      attempts: 0,
+    };
+    let attemptedCommittedJson: string | undefined;
+    const missingUpdateClient = {
+      updateCard: vi.fn(async (input: { messageId: string; cardJson: string }) => {
+        attemptedCommittedJson = input.cardJson;
+        throw new Error("simulated missing original card update");
+      }),
+    };
+    const firstQueue = {
+      claimBatch: vi.fn(async () => [callbackJob]),
+      acknowledge: vi.fn(async () => {
+        throw new Error("simulated post-commit acknowledgement failure");
+      }),
+      handleFailure: vi.fn(async () => ({ action: "delayed" as const })),
+    };
+
+    try {
+      const firstWorker = createApprovalInteractionWorker({
+        queue: firstQueue,
+        repository,
+        membershipChecker: { isCurrentMember: async () => true },
+        cardClient: missingUpdateClient,
+        canUseKnowledgeCards: () => true,
+        botOpenId: "ou_iris_bot",
+        workerId: id("closed-redelivery-first-worker"),
+        leaseMs: 30_000,
+        now: () => plusSeconds(10),
+      });
+      await expect(firstWorker.processBatch({ limit: 1 })).resolves.toEqual([{
+        status: "retrying",
+        idempotencyKey: callbackJob.idempotencyKey,
+        code: "redis_unavailable",
+      }]);
+      if (attemptedCommittedJson === undefined) throw new Error("expected committed result render attempt");
+      const expectedCardJson = attemptedCommittedJson;
+      expect(expectedCardJson).toContain("Iris / revision_requested");
+      expect(expectedCardJson).toContain(`Reason: ${reason}`);
+
+      const visibleUpdates: string[] = [];
+      let redeliveryNumber = 0;
+      const runRedelivery = async (input: {
+        job?: Partial<ApprovalInteractionJob>;
+        enabled?: boolean;
+        membership?: "member" | "denied" | "error";
+      }) => {
+        redeliveryNumber += 1;
+        const redeliveryJob = {
+          ...callbackJob,
+          attempts: redeliveryNumber,
+          ...input.job,
+        } as ApprovalInteractionJob;
+        const queue = {
+          claimBatch: vi.fn(async () => [redeliveryJob]),
+          acknowledge: vi.fn(async () => undefined),
+          handleFailure: vi.fn(async () => ({ action: "delayed" as const })),
+        };
+        const membershipChecker = {
+          isCurrentMember: vi.fn(async () => {
+            if (input.membership === "error") throw new Error("simulated membership failure");
+            return input.membership !== "denied";
+          }),
+        };
+        const beforeUpdates = visibleUpdates.length;
+        const worker = createApprovalInteractionWorker({
+          queue,
+          repository,
+          membershipChecker,
+          cardClient: {
+            updateCard: async (update) => {
+              visibleUpdates.push(update.cardJson);
+            },
+          },
+          canUseKnowledgeCards: () => input.enabled !== false,
+          botOpenId: "ou_iris_bot",
+          workerId: id(`closed-redelivery-worker-${redeliveryNumber}`),
+          leaseMs: 30_000,
+          now: () => plusSeconds(40 + redeliveryNumber),
+        });
+        const result = await worker.processBatch({ limit: 1 });
+        expect(visibleUpdates).toHaveLength(beforeUpdates + 1);
+        expect(visibleUpdates.at(-1)).toBe(expectedCardJson);
+        return { result, queue, membershipChecker };
+      };
+
+      await expect(runRedelivery({ enabled: false }).then(({ result }) => result)).resolves.toEqual([{
+        status: "denied",
+        idempotencyKey: callbackJob.idempotencyKey,
+        code: "runtime_disabled",
+      }]);
+      await expect(runRedelivery({ membership: "denied" }).then(({ result }) => result)).resolves.toEqual([{
+        status: "denied",
+        idempotencyKey: callbackJob.idempotencyKey,
+        code: "not_current_member",
+      }]);
+      await expect(runRedelivery({
+        job: { actorOpenId: "ou_iris_bot" },
+      }).then(({ result }) => result)).resolves.toEqual([{
+        status: "denied",
+        idempotencyKey: callbackJob.idempotencyKey,
+        code: "bot_actor",
+      }]);
+      await expect(runRedelivery({ membership: "error" }).then(({ result }) => result)).resolves.toEqual([{
+        status: "retrying",
+        idempotencyKey: callbackJob.idempotencyKey,
+        code: "membership_unavailable",
+      }]);
+      for (const jobOverride of [
+        { actorOpenId: "ou_changed_member" },
+        { action: "reject" as const, reason: "Changed action.", rejectionConfirmed: true as const },
+        { reason: "Changed immutable reason." },
+      ]) {
+        await expect(runRedelivery({ job: jobOverride }).then(({ result }) => result)).resolves.toEqual([{
+          status: "denied",
+          idempotencyKey: callbackJob.idempotencyKey,
+          code: "immutable_intent_conflict",
+        }]);
+      }
+      await expect(runRedelivery({
+        job: { draftVersion: 2 },
+      }).then(({ result }) => result)).resolves.toEqual([{
+        status: "denied",
+        idempotencyKey: callbackJob.idempotencyKey,
+        code: "stale_presentation",
+      }]);
+
+      expect(visibleUpdates).toHaveLength(8);
+      for (const cardJson of visibleUpdates) {
+        expect(cardJson).toBe(expectedCardJson);
+        expect(cardJson).not.toMatch(
+          /currently disabled|approve its own|current group members|already processed|action conflicts|draft changed/iu,
+        );
+      }
       await expect(pool.query(
         `SELECT count(*)::int AS count
          FROM knowledge_draft_presentation_events

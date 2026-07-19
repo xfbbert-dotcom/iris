@@ -30,6 +30,7 @@ export type ApprovalInteractionWorkerResult = {
 export type ApprovalInteractionWorkerCode =
   | "action_applied"
   | "duplicate_callback"
+  | "immutable_intent_conflict"
   | "runtime_disabled"
   | "bot_actor"
   | "not_current_member"
@@ -43,7 +44,10 @@ export type ApprovalInteractionWorkerCode =
 
 export type ApprovalInteractionWorkerDependencies = {
   queue: Pick<ApprovalInteractionQueue, "claimBatch" | "acknowledge" | "handleFailure">;
-  repository: Pick<KnowledgeCardRepository, "getPresentation" | "applyInteraction">;
+  repository: Pick<
+    KnowledgeCardRepository,
+    "getPresentation" | "getPresentationContext" | "applyInteraction"
+  >;
   membershipChecker: FeishuGroupMembershipChecker;
   cardClient: Pick<FeishuInteractiveCardClient, "updateCard">;
   canUseKnowledgeCards(groupId: string): boolean;
@@ -99,7 +103,10 @@ export function createApprovalInteractionWorker({
 async function processJob(input: {
   job: ApprovalInteractionJob;
   queue: Pick<ApprovalInteractionQueue, "acknowledge" | "handleFailure">;
-  repository: Pick<KnowledgeCardRepository, "getPresentation" | "applyInteraction">;
+  repository: Pick<
+    KnowledgeCardRepository,
+    "getPresentation" | "getPresentationContext" | "applyInteraction"
+  >;
   membershipChecker: FeishuGroupMembershipChecker;
   cardClient: Pick<FeishuInteractiveCardClient, "updateCard">;
   canUseKnowledgeCards(groupId: string): boolean;
@@ -233,9 +240,12 @@ function isExactActionPresentation(
 function classifyStableRepositoryDenial(
   error: unknown,
 ): Extract<ApprovalInteractionWorkerCode,
-  "stale_presentation" | "invalid_membership_evidence" | "evidence_invalidated" | "duplicate_callback"
+  | "stale_presentation"
+  | "invalid_membership_evidence"
+  | "evidence_invalidated"
+  | "immutable_intent_conflict"
 > | undefined {
-  if (error instanceof KnowledgeCardOperationConflictError) return "duplicate_callback";
+  if (error instanceof KnowledgeCardOperationConflictError) return "immutable_intent_conflict";
   if (error instanceof KnowledgeCardMembershipProofError) return "invalid_membership_evidence";
   if (error instanceof KnowledgeDraftEvidenceError) return "evidence_invalidated";
   if (
@@ -255,10 +265,18 @@ async function denyAndAcknowledge(
     | "invalid_membership_evidence"
     | "evidence_invalidated"
     | "duplicate_callback"
+    | "immutable_intent_conflict"
   >,
   messageId: string | undefined,
 ): Promise<ApprovalInteractionWorkerResult> {
-  await attemptBoundedCardUpdate(input.cardClient, messageId, () => renderStatusCard(code));
+  const committedDisplay = await attemptCommittedResultDisplay(input);
+  if (committedDisplay.status === "not_committed") {
+    await attemptBoundedCardUpdate(
+      input.cardClient,
+      committedDisplay.messageId ?? messageId,
+      () => renderStatusCard(code),
+    );
+  }
   const ackFailure = await acknowledge(input);
   if (ackFailure !== undefined) return ackFailure;
   return { status: "denied", idempotencyKey: input.job.idempotencyKey, code };
@@ -281,6 +299,7 @@ async function handleTransientFailure(
     "membership_unavailable" | "repository_unavailable" | "redis_unavailable" | "internal_error"
   >,
 ): Promise<ApprovalInteractionWorkerResult> {
+  await attemptCommittedResultDisplay(input);
   const failure = await input.queue.handleFailure({
     job: input.job,
     workerId: input.workerId,
@@ -292,6 +311,48 @@ async function handleTransientFailure(
     idempotencyKey: input.job.idempotencyKey,
     code,
   };
+}
+
+async function attemptCommittedResultDisplay(
+  input: Parameters<typeof processJob>[0],
+): Promise<
+  | { status: "committed" }
+  | { status: "not_committed"; messageId?: string }
+  | { status: "unknown" }
+> {
+  let context;
+  try {
+    context = await input.repository.getPresentationContext(input.job.presentationId);
+  } catch {
+    return { status: "unknown" };
+  }
+  if (context === undefined) {
+    return {
+      status: "not_committed",
+      ...(input.job.messageId === undefined ? {} : { messageId: input.job.messageId }),
+    };
+  }
+  if (context.presentation.id !== input.job.presentationId) return { status: "unknown" };
+  if (context.presentation.state !== "closed") {
+    const messageId = context.presentation.messageId ?? input.job.messageId;
+    return messageId === undefined
+      ? { status: "not_committed" }
+      : { status: "not_committed", messageId };
+  }
+  const messageId = context.presentation.messageId;
+  const committedResult = context.committedResult;
+  if (messageId !== undefined && committedResult !== undefined) {
+    await attemptBoundedCardUpdate(
+      input.cardClient,
+      messageId,
+      () => renderKnowledgeCardCommittedResult({
+        presentation: context.presentation,
+        draft: context.draft,
+        result: committedResult,
+      }),
+    );
+  }
+  return { status: "committed" };
 }
 
 async function attemptBoundedCardUpdate(
@@ -315,6 +376,7 @@ function renderStatusCard(code: ApprovalInteractionWorkerCode): string {
   const content: Record<ApprovalInteractionWorkerCode, string> = {
     action_applied: "Knowledge draft action recorded.",
     duplicate_callback: "This action was already processed.",
+    immutable_intent_conflict: "This callback conflicts with the committed action.",
     runtime_disabled: "Knowledge card actions are currently disabled.",
     bot_actor: "Iris cannot approve its own knowledge draft.",
     not_current_member: "Only current group members can review this draft.",
