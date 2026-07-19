@@ -31,7 +31,12 @@ type RequestDecoder = (
 ) => Promise<FeishuCardActionCallbackRequest | undefined> | FeishuCardActionCallbackRequest | undefined;
 
 export type FeishuCardActionCallbackDiagnostic = {
-  stage: "envelope_rejected" | "decode_rejected" | "decoded_identity_rejected" | "challenge_accepted";
+  stage:
+    | "envelope_rejected"
+    | "decode_rejected"
+    | "decoded_identity_rejected"
+    | "challenge_accepted"
+    | "unsigned_encrypted_challenge_accepted";
   statusCode: 200 | 401;
   hasTimestamp: boolean;
   hasNonce: boolean;
@@ -44,6 +49,7 @@ export type FeishuCardActionGatewayDependencies = {
   verifyRequest: RequestVerifier;
   decodeRequest?: RequestDecoder;
   verifyDecodedRequest?: RequestVerifier;
+  allowUnsignedEncryptedUrlVerification?: boolean;
   onDiagnostic?: (diagnostic: FeishuCardActionCallbackDiagnostic) => void;
   now?: () => Date;
 };
@@ -54,6 +60,41 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
   return {
     async handleCallback(request: FeishuCardActionCallbackRequest): Promise<FeishuCardActionCallbackResponse> {
       if (!await passesVerifier(dependencies.verifyRequest, request)) {
+        if (canAttemptUnsignedEncryptedUrlVerification(dependencies, request)) {
+          let decodedRequest: FeishuCardActionCallbackRequest | undefined;
+          try {
+            decodedRequest = await dependencies.decodeRequest(request);
+          } catch {
+            decodedRequest = undefined;
+          }
+          if (decodedRequest === undefined) {
+            reportDiagnostic(dependencies.onDiagnostic, {
+              stage: "decode_rejected",
+              statusCode: 401,
+              ...requestShape(request),
+            });
+            return rejectedResponse(401);
+          }
+          if (!await passesVerifier(dependencies.verifyDecodedRequest, decodedRequest)) {
+            reportDiagnostic(dependencies.onDiagnostic, {
+              stage: "decoded_identity_rejected",
+              statusCode: 401,
+              ...requestShape(request),
+            });
+            return rejectedResponse(401);
+          }
+          if (isFeishuUrlVerificationPayload(decodedRequest.body)) {
+            reportDiagnostic(dependencies.onDiagnostic, {
+              stage: "unsigned_encrypted_challenge_accepted",
+              statusCode: 200,
+              ...requestShape(request),
+            });
+            return {
+              statusCode: 200,
+              body: { challenge: decodedRequest.body.challenge },
+            };
+          }
+        }
         reportDiagnostic(dependencies.onDiagnostic, {
           stage: "envelope_rejected",
           statusCode: 401,
@@ -117,6 +158,22 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
       return outcome === "rejected" ? enqueueFailureResponse() : enqueueUncertaintyResponse();
     },
   };
+}
+
+function canAttemptUnsignedEncryptedUrlVerification(
+  dependencies: FeishuCardActionGatewayDependencies,
+  request: FeishuCardActionCallbackRequest,
+): dependencies is FeishuCardActionGatewayDependencies & {
+  decodeRequest: RequestDecoder;
+  verifyDecodedRequest: RequestVerifier;
+} {
+  return dependencies.allowUnsignedEncryptedUrlVerification === true &&
+    dependencies.decodeRequest !== undefined &&
+    dependencies.verifyDecodedRequest !== undefined &&
+    isEncryptedWrapper(request.body) &&
+    request.headers["x-lark-request-timestamp"] === undefined &&
+    request.headers["x-lark-request-nonce"] === undefined &&
+    request.headers["x-lark-signature"] === undefined;
 }
 
 function requestShape(request: FeishuCardActionCallbackRequest): Pick<

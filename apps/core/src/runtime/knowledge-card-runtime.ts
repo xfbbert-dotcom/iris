@@ -238,6 +238,7 @@ export function createKnowledgeCardRuntime({
     const gateway = createFeishuCardActionGateway({
       queue,
       verifyRequest: verifyFeishuEnvelope,
+      allowUnsignedEncryptedUrlVerification: feishuAuthConfig.encryptKey !== undefined,
       onDiagnostic: dependencies.onCardCallbackDiagnostic ?? reportCardCallbackDiagnostic,
       decodeRequest(request) {
         const body = decodeFeishuPayload(request.body, feishuAuthConfig.encryptKey);

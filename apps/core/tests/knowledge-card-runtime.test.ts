@@ -109,6 +109,96 @@ describe("KnowledgeCardRuntime", () => {
     await runtime.close();
   });
 
+  it("accepts an unsigned encrypted Feishu URL challenge after exact token verification", async () => {
+    const dependencies = runtimeDependencies();
+    const onCardCallbackDiagnostic = vi.fn();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies: { ...dependencies, onCardCallbackDiagnostic },
+    })!;
+    const signedRequest = encryptedRequest({
+      type: "url_verification",
+      challenge: "unsigned-encrypted-challenge",
+      token: "verification-token",
+    });
+    const request = { ...signedRequest, headers: {} };
+
+    await expect(runtime.gateway.handleCallback(request)).resolves.toEqual({
+      statusCode: 200,
+      body: { challenge: "unsigned-encrypted-challenge" },
+    });
+    expect(onCardCallbackDiagnostic).toHaveBeenCalledWith({
+      stage: "unsigned_encrypted_challenge_accepted",
+      statusCode: 200,
+      hasTimestamp: false,
+      hasNonce: false,
+      hasSignature: false,
+      encrypted: true,
+    });
+    expect(dependencies.queue.enqueue).not.toHaveBeenCalled();
+
+    await runtime.close();
+  });
+
+  it("rejects an unsigned encrypted normal card action", async () => {
+    const dependencies = runtimeDependencies();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+    const request = { ...encryptedRequest(cardAction()), headers: {} };
+
+    await expect(runtime.gateway.handleCallback(request)).resolves.toMatchObject({ statusCode: 401 });
+    expect(dependencies.queue.enqueue).not.toHaveBeenCalled();
+
+    await runtime.close();
+  });
+
+  it("rejects an unsigned encrypted URL challenge with the wrong verification token", async () => {
+    const dependencies = runtimeDependencies();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+    const signedRequest = encryptedRequest({
+      type: "url_verification",
+      challenge: "wrong-token-challenge",
+      token: "wrong-verification-token",
+    });
+    const request = { ...signedRequest, headers: {} };
+
+    await expect(runtime.gateway.handleCallback(request)).resolves.toMatchObject({ statusCode: 401 });
+    expect(dependencies.queue.enqueue).not.toHaveBeenCalled();
+
+    await runtime.close();
+  });
+
+  it("rejects a partially signed encrypted URL challenge instead of using unsigned fallback", async () => {
+    const dependencies = runtimeDependencies();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+    const signedRequest = encryptedRequest({
+      type: "url_verification",
+      challenge: "partial-signature-challenge",
+      token: "verification-token",
+    });
+    const request = {
+      ...signedRequest,
+      headers: { "x-lark-request-timestamp": signedRequest.headers["x-lark-request-timestamp"] },
+    };
+
+    await expect(runtime.gateway.handleCallback(request)).resolves.toMatchObject({ statusCode: 401 });
+    expect(dependencies.queue.enqueue).not.toHaveBeenCalled();
+
+    await runtime.close();
+  });
+
   it("authenticates and decrypts Feishu card actions before enqueueing", async () => {
     const dependencies = runtimeDependencies();
     const runtime = createKnowledgeCardRuntime({
