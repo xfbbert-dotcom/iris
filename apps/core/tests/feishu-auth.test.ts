@@ -7,6 +7,7 @@ import {
   diagnoseFeishuCallbackAuthentication,
   isFeishuUrlVerificationPayload,
   verifyFeishuSignature,
+  verifyFreshFeishuCallbackPayload,
   verifyFeishuVerificationToken
 } from "../src/feishu/feishu-auth.js";
 
@@ -399,6 +400,43 @@ describe("Feishu auth primitives", () => {
 
     expect(verifier(requestAt(now))).toBe(true);
     expect(verifier(requestAt(new Date(now.getTime() - 301_000)))).toBe(false);
+  });
+
+  it("can defer v2 replay validation until after the signed payload is decrypted", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = JSON.stringify(body);
+    const timestamp = "signed-v2-header-value";
+    const nonce = "nonce-1";
+    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+      requireSignature: true,
+      requireFreshTimestamp: false,
+    });
+
+    expect(verifier({
+      headers: {
+        "x-lark-request-timestamp": timestamp,
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(timestamp, nonce, rawBody),
+      },
+      body,
+      rawBody,
+    })).toBe(true);
+  });
+
+  it("validates the signed v2 callback create_time with a 300-second ceiling", () => {
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const payloadAt = (at: Date) => ({
+      schema: "2.0",
+      header: { create_time: String(BigInt(at.getTime()) * 1_000n) },
+    });
+
+    expect(verifyFreshFeishuCallbackPayload(payloadAt(now), now)).toBe(true);
+    expect(verifyFreshFeishuCallbackPayload(
+      payloadAt(new Date(now.getTime() - 301_000)),
+      now,
+    )).toBe(false);
+    expect(verifyFreshFeishuCallbackPayload({ header: { create_time: "invalid" } }, now))
+      .toBe(false);
   });
 
   it("caps configured timestamp skew at the 300-second anti-replay maximum", () => {

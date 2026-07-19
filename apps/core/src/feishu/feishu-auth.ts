@@ -22,6 +22,7 @@ export type FeishuRequestVerifierOptions = {
   now?: () => Date;
   maxTimestampSkewSeconds?: number;
   requireSignature?: boolean;
+  requireFreshTimestamp?: boolean;
 };
 
 export type FeishuCallbackAuthenticationDiagnostic = {
@@ -89,6 +90,39 @@ export function verifyFeishuVerificationToken(body: unknown, verificationToken: 
   }
 
   return safeEqual(token, verificationToken);
+}
+
+export function verifyFreshFeishuCallbackPayload(
+  body: unknown,
+  now: Date,
+  maxTimestampSkewSeconds?: number,
+): boolean {
+  const maxSkewSeconds = resolveMaxTimestampSkewSeconds(maxTimestampSkewSeconds);
+  if (
+    maxSkewSeconds === undefined ||
+    !Number.isFinite(now.getTime()) ||
+    !isRecord(body) ||
+    !isRecord(body.header) ||
+    typeof body.header.create_time !== "string" ||
+    !/^\d{16}$/u.test(body.header.create_time)
+  ) {
+    return false;
+  }
+
+  const createTimeMicros = BigInt(body.header.create_time);
+  const createTimeSeconds = createTimeMicros / 1_000_000n;
+  if (
+    createTimeSeconds < MIN_SUPPORTED_FEISHU_EPOCH_SECONDS ||
+    createTimeSeconds > MAX_SUPPORTED_FEISHU_EPOCH_SECONDS
+  ) {
+    return false;
+  }
+
+  const nowMicros = BigInt(now.getTime()) * 1_000n;
+  const skewMicros = createTimeMicros >= nowMicros
+    ? createTimeMicros - nowMicros
+    : nowMicros - createTimeMicros;
+  return skewMicros <= BigInt(maxSkewSeconds) * 1_000_000n;
 }
 
 export function verifyFeishuSignature(input: FeishuSignatureInput): boolean {
@@ -197,6 +231,7 @@ export function createFeishuRequestVerifier(
   const now = options.now ?? (() => new Date());
   const maxTimestampSkewSeconds = resolveMaxTimestampSkewSeconds(options.maxTimestampSkewSeconds);
   const requireSignature = options.requireSignature === true;
+  const requireFreshTimestamp = options.requireFreshTimestamp !== false;
 
   return (request) => {
     const verificationToken = config.verificationToken;
@@ -214,12 +249,13 @@ export function createFeishuRequestVerifier(
     const signatureVerified =
       encryptKey === undefined ||
       (request.rawBody !== undefined &&
-        maxTimestampSkewSeconds !== undefined &&
-        hasValidFeishuTimestamp({
-          headers: request.headers,
-          now: now(),
-          maxTimestampSkewSeconds,
-        }) &&
+        (!requireFreshTimestamp ||
+          (maxTimestampSkewSeconds !== undefined &&
+            hasValidFeishuTimestamp({
+              headers: request.headers,
+              now: now(),
+              maxTimestampSkewSeconds,
+            }))) &&
         verifyFeishuSignature({
           headers: request.headers,
           rawBody: request.rawBody,

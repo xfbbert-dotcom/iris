@@ -228,6 +228,30 @@ describe("KnowledgeCardRuntime", () => {
     await runtime.close();
   });
 
+  it("rejects a signed v2 card action whose decrypted create_time is stale", async () => {
+    const dependencies = runtimeDependencies();
+    const onCardCallbackDiagnostic = vi.fn();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies: { ...dependencies, onCardCallbackDiagnostic },
+    })!;
+    const payload = cardAction();
+    (payload.header as Record<string, unknown>).create_time = String(
+      BigInt(Date.now() - 301_000) * 1_000n,
+    );
+
+    await expect(runtime.gateway.handleCallback(encryptedRequest(payload))).resolves.toMatchObject({
+      statusCode: 401,
+    });
+    expect(onCardCallbackDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      stage: "decoded_identity_rejected",
+    }));
+    expect(dependencies.queue.enqueue).not.toHaveBeenCalled();
+
+    await runtime.close();
+  });
+
   it("owns one pool and Redis client, shares one token provider, and combines every group gate", async () => {
     const dependencies = runtimeDependencies();
     const controller = new RuntimeController(createDefaultRuntimeConfig());
@@ -567,7 +591,7 @@ function enabledController() {
 function encryptedRequest(payload: unknown) {
   const body = { encrypt: encryptPayload(payload) };
   const rawBody = JSON.stringify(body);
-  const timestamp = String(BigInt(Date.now()) * 1_000_000n);
+  const timestamp = "signed-v2-header-value";
   const nonce = "encrypted-card-callback-nonce";
   return {
     headers: {
@@ -602,7 +626,7 @@ function cardAction(): Record<string, unknown> {
     header: {
       event_id: "event-1",
       token: "verification-token",
-      create_time: "1784419200000000",
+      create_time: String(BigInt(Date.now()) * 1_000n),
       event_type: "card.action.trigger",
       tenant_key: "tenant-1",
       app_id: "app-id",

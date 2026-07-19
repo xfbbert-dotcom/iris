@@ -15,6 +15,7 @@ import {
   diagnoseFeishuCallbackAuthentication,
   type FeishuCallbackAuthenticationDiagnostic,
   isFeishuUrlVerificationPayload,
+  verifyFreshFeishuCallbackPayload,
   verifyFeishuVerificationToken,
 } from "../feishu/feishu-auth.js";
 import {
@@ -237,6 +238,7 @@ export function createKnowledgeCardRuntime({
       encryptKey: feishuAuthConfig.encryptKey,
     }, {
       requireSignature: true,
+      requireFreshTimestamp: false,
     });
     const verifyFeishuEnvelopeWithDiagnostics = (request: FeishuCardActionCallbackRequest): boolean => {
       const verified = verifyFeishuEnvelope(request);
@@ -264,7 +266,8 @@ export function createKnowledgeCardRuntime({
         return feishuAuthConfig.verificationToken !== undefined &&
           verifyFeishuVerificationToken(request.body, feishuAuthConfig.verificationToken) &&
           (isFeishuUrlVerificationPayload(request.body) ||
-            readCallbackAppId(request) === feishuConfig.appId);
+            (readCallbackAppId(request) === feishuConfig.appId &&
+              verifyFreshFeishuCallbackPayload(request.body, new Date())));
       },
     });
     let lifecycle: "idle" | "starting" | "started" | "failed" | "closed" = "idle";
