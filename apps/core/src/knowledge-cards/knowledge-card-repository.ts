@@ -52,7 +52,27 @@ export type KnowledgeCardMutationResult = {
   draft: KnowledgeDraft;
 };
 
-export type KnowledgeCardInteractionResult = KnowledgeCardMutationResult;
+export type KnowledgeCardCommittedResult =
+  | {
+      action: "confirm";
+      actorOpenId: string;
+      confirmedAt: Date;
+      nextGate: "pending_review";
+    }
+  | {
+      action: "request_revision";
+      state: "needs_revision";
+      reason: string;
+    }
+  | {
+      action: "reject";
+      state: "rejected";
+      reason: string;
+    };
+
+export type KnowledgeCardInteractionResult = KnowledgeCardMutationResult & {
+  committedResult: KnowledgeCardCommittedResult;
+};
 
 export type KnowledgeCardSendClaim = {
   presentation: KnowledgeDraftPresentation;
@@ -79,6 +99,7 @@ export type KnowledgeCardPresentationContext = {
   presentation: KnowledgeDraftPresentation;
   draft: KnowledgeDraft;
   evidenceState: KnowledgeDraftEvidenceState;
+  committedResult?: KnowledgeCardCommittedResult;
 };
 
 export interface KnowledgeCardRepository {

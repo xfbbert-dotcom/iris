@@ -4,6 +4,7 @@ import { KnowledgeDraftEvidenceError } from "../knowledge-governance/postgres-kn
 
 import type { ApprovalInteractionQueue } from "./approval-interaction-queue.js";
 import type { ApprovalInteractionJob } from "./knowledge-card.js";
+import { renderKnowledgeCardCommittedResult } from "./knowledge-card-renderer.js";
 import type {
   ApplyKnowledgeCardInteractionInput,
   KnowledgeCardInteractionResult,
@@ -109,13 +110,11 @@ async function processJob(input: {
   const { job } = input;
   let presentation: KnowledgeDraftPresentation | undefined;
 
-  let enabled: boolean;
-  try {
-    enabled = input.canUseKnowledgeCards(job.chatId);
-  } catch {
+  const initiallyEnabled = readRuntimeGate(input.canUseKnowledgeCards, job.chatId);
+  if (initiallyEnabled === undefined) {
     return handleTransientFailure(input, "internal_error");
   }
-  if (!enabled) {
+  if (!initiallyEnabled) {
     return denyAndAcknowledge(input, "runtime_disabled", job.messageId);
   }
 
@@ -145,6 +144,14 @@ async function processJob(input: {
     return denyAndAcknowledge(input, "not_current_member", presentation.messageId);
   }
 
+  const enabledBeforeMutation = readRuntimeGate(input.canUseKnowledgeCards, job.chatId);
+  if (enabledBeforeMutation === undefined) {
+    return handleTransientFailure(input, "internal_error");
+  }
+  if (!enabledBeforeMutation) {
+    return denyAndAcknowledge(input, "runtime_disabled", presentation.messageId);
+  }
+
   const membershipCheckedAt = requireDate(input.now());
   let mutation: KnowledgeCardInteractionResult;
   try {
@@ -162,7 +169,15 @@ async function processJob(input: {
   }
 
   const code = mutation.outcome === "already_applied" ? "duplicate_callback" : "action_applied";
-  await attemptBoundedCardUpdate(input.cardClient, presentation.messageId, code);
+  await attemptBoundedCardUpdate(
+    input.cardClient,
+    mutation.presentation.messageId ?? presentation.messageId,
+    () => renderKnowledgeCardCommittedResult({
+      presentation: mutation.presentation,
+      draft: mutation.draft,
+      result: mutation.committedResult,
+    }),
+  );
   const ackFailure = await acknowledge(input);
   if (ackFailure !== undefined) return ackFailure;
   return {
@@ -243,7 +258,7 @@ async function denyAndAcknowledge(
   >,
   messageId: string | undefined,
 ): Promise<ApprovalInteractionWorkerResult> {
-  await attemptBoundedCardUpdate(input.cardClient, messageId, code);
+  await attemptBoundedCardUpdate(input.cardClient, messageId, () => renderStatusCard(code));
   const ackFailure = await acknowledge(input);
   if (ackFailure !== undefined) return ackFailure;
   return { status: "denied", idempotencyKey: input.job.idempotencyKey, code };
@@ -282,11 +297,11 @@ async function handleTransientFailure(
 async function attemptBoundedCardUpdate(
   cardClient: Pick<FeishuInteractiveCardClient, "updateCard">,
   messageId: string | undefined,
-  code: ApprovalInteractionWorkerCode,
+  renderCard: () => string,
 ): Promise<void> {
   if (messageId === undefined) return;
   try {
-    await cardClient.updateCard({ messageId, cardJson: renderStatusCard(code) });
+    await cardClient.updateCard({ messageId, cardJson: renderCard() });
   } catch {
     // Stable denials are not retried, and committed actions already have a PG result outbox.
   }
@@ -319,6 +334,17 @@ function renderStatusCard(code: ApprovalInteractionWorkerCode): string {
     },
     body: { elements: [{ tag: "markdown", content: content[code] }] },
   });
+}
+
+function readRuntimeGate(
+  canUseKnowledgeCards: (groupId: string) => boolean,
+  groupId: string,
+): boolean | undefined {
+  try {
+    return canUseKnowledgeCards(groupId);
+  } catch {
+    return undefined;
+  }
 }
 
 function sanitizeLimit(value: number): number {

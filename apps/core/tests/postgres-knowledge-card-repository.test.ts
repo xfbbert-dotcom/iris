@@ -149,6 +149,78 @@ describe("knowledge card migration contract", () => {
     expect(queries.some((sql) => sql.includes("INSERT INTO knowledge_draft_presentations"))).toBe(false);
     expect(queries.at(-1)).toBe("ROLLBACK");
   });
+
+  it("discovers presentation identity before locking draft then presentation", async () => {
+    const queries: string[] = [];
+    const draftId = id("draft-scripted-interaction-lock-order");
+    const presentationId = id("presentation-scripted-interaction-lock-order");
+    const stopAfterLocks = new Error("stop after interaction row locks");
+    const client = {
+      release: vi.fn(),
+      query: vi.fn(async (sql: string) => {
+        const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+        queries.push(normalized);
+        if (
+          normalized === "SELECT draft_id FROM knowledge_draft_presentations WHERE id = $1"
+        ) return { rows: [{ draft_id: draftId }] };
+        if (normalized.includes("FROM knowledge_drafts WHERE id = $1 FOR UPDATE")) {
+          return {
+            rows: [{
+              id: draftId,
+              source_group_id: sourceGroupId,
+              status: "pending_confirmation",
+              current_revision_number: 1,
+              version: 1,
+            }],
+          };
+        }
+        if (normalized.includes("FROM knowledge_draft_presentations WHERE id = $1 FOR UPDATE")) {
+          return {
+            rows: [{
+              id: presentationId,
+              draft_id: draftId,
+              revision_number: 1,
+              draft_version: 1,
+              chat_id: sourceGroupId,
+              content_hash: "a".repeat(64),
+              state: "active",
+              message_id: "om_scripted_lock_order",
+              created_at: at,
+              activated_at: at,
+              closed_at: null,
+              version: 2,
+            }],
+          };
+        }
+        if (normalized.startsWith("UPDATE knowledge_drafts")) throw stopAfterLocks;
+        return { rows: [] };
+      }),
+    };
+    const dataSource = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(async () => ({ rows: [] })),
+    } as unknown as PostgresKnowledgeDraftDataSource;
+
+    await expect(createPostgresKnowledgeCardRepository({ dataSource }).applyInteraction(
+      interactionInput("scripted-interaction-lock-order", draftId, presentationId, {
+        action: "confirm",
+      }),
+    )).rejects.toBe(stopAfterLocks);
+
+    const identityLookup = queries.findIndex((sql) =>
+      sql === "SELECT draft_id FROM knowledge_draft_presentations WHERE id = $1"
+    );
+    const draftLock = queries.findIndex((sql) =>
+      sql.includes("FROM knowledge_drafts WHERE id = $1 FOR UPDATE")
+    );
+    const presentationLock = queries.findIndex((sql) =>
+      sql.includes("FROM knowledge_draft_presentations WHERE id = $1 FOR UPDATE")
+    );
+    expect(identityLookup).toBeGreaterThan(-1);
+    expect(draftLock).toBeGreaterThan(identityLookup);
+    expect(presentationLock).toBeGreaterThan(draftLock);
+    expect(queries.at(-1)).toBe("ROLLBACK");
+  });
 });
 
 runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
@@ -1264,6 +1336,20 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
         version: 3,
       },
       draft: { id: draft.id, status: "pending_review", version: 2 },
+      committedResult: {
+        action: "confirm",
+        actorOpenId: input.actorOpenId,
+        confirmedAt: input.at,
+        nextGate: "pending_review",
+      },
+    });
+    await expect(repository.getPresentationContext(presentation.id)).resolves.toMatchObject({
+      committedResult: {
+        action: "confirm",
+        actorOpenId: input.actorOpenId,
+        confirmedAt: input.at,
+        nextGate: "pending_review",
+      },
     });
     await expect(pool.query(
       `SELECT draft_id, revision_number, presentation_id, actor_open_id,
@@ -1375,6 +1461,18 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       outcome: "applied",
       presentation: { state: "closed", version: 3 },
       draft: { status: "needs_revision", version: 2 },
+      committedResult: {
+        action: "request_revision",
+        state: "needs_revision",
+        reason: "Add rollback ownership.",
+      },
+    });
+    await expect(repository.getPresentationContext(presentation.id)).resolves.toMatchObject({
+      committedResult: {
+        action: "request_revision",
+        state: "needs_revision",
+        reason: "Add rollback ownership.",
+      },
     });
     await expect(pool.query(
       `SELECT event_type, reason FROM knowledge_draft_events
@@ -1410,6 +1508,18 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
         rejectedAt: input.at,
         rejectedBy: input.actorOpenId,
         rejectionReason: "Evidence is too weak.",
+      },
+      committedResult: {
+        action: "reject",
+        state: "rejected",
+        reason: "Evidence is too weak.",
+      },
+    });
+    await expect(repository.getPresentationContext(presentation.id)).resolves.toMatchObject({
+      committedResult: {
+        action: "reject",
+        state: "rejected",
+        reason: "Evidence is too weak.",
       },
     });
     await retireOutbox(presentation.id);
@@ -1565,6 +1675,87 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     await expect(cardRepository().getPresentation(presentation.id)).resolves.toMatchObject({ state: "closed" });
     await retireOutbox(presentation.id);
   });
+
+  it("completes createPresentation versus applyInteraction without a lock-order deadlock", async () => {
+    const { draft, presentation } = await createActivePresentation("create-apply-lock-race");
+    const applyFirstRowLock = deferred<void>();
+    const createDraftLock = deferred<void>();
+    let applyFirstRowLockSeen = false;
+
+    const coordinatedDataSource = (role: "apply" | "create") => ({
+      query: pool.query.bind(pool),
+      connect: async () => {
+        const client = await pool.connect();
+        return {
+          release: () => client.release(),
+          query: async (sql: string, params?: unknown[]) => {
+            const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+            const draftLock = normalized.includes("FROM knowledge_drafts WHERE id = $1 FOR UPDATE");
+            const presentationLock = normalized.includes(
+              "FROM knowledge_draft_presentations WHERE id = $1 FOR UPDATE",
+            );
+            if (role === "create" && draftLock) await applyFirstRowLock.promise;
+            const result = await client.query(sql, params);
+            if (role === "apply" && !applyFirstRowLockSeen && (draftLock || presentationLock)) {
+              applyFirstRowLockSeen = true;
+              applyFirstRowLock.resolve();
+              if (presentationLock) await createDraftLock.promise;
+            }
+            if (role === "create" && draftLock) createDraftLock.resolve();
+            return result;
+          },
+        };
+      },
+    }) as unknown as PostgresKnowledgeDraftDataSource;
+
+    const replacement = presentationInput("create-apply-lock-race-replacement", draft.id);
+    let results: PromiseSettledResult<unknown>[];
+    try {
+      results = await Promise.allSettled([
+        createPostgresKnowledgeCardRepository({
+          dataSource: coordinatedDataSource("apply"),
+        }).applyInteraction(interactionInput(
+          "create-apply-lock-race-confirm",
+          draft.id,
+          presentation.id,
+          { action: "confirm" },
+        )),
+        createPostgresKnowledgeCardRepository({
+          dataSource: coordinatedDataSource("create"),
+        }).createPresentation(replacement),
+      ]);
+
+      expect(results.map((result) =>
+        result.status === "rejected" ? errorCode(result.reason) : undefined
+      )).not.toContain("40P01");
+      expect(results[0]).toMatchObject({
+        status: "fulfilled",
+        value: { outcome: "applied", draft: { status: "pending_review" } },
+      });
+      expect(results[1]).toMatchObject({
+        status: "rejected",
+        reason: { name: "KnowledgeCardPersistenceConflictError" },
+      });
+      await expect(cardRepository().getPresentation(presentation.id)).resolves.toMatchObject({
+        state: "closed",
+      });
+      await expect(cardRepository().getPresentation(replacement.id)).resolves.toBeUndefined();
+      await expect(pool.query(
+        `SELECT count(*)::int AS count FROM knowledge_draft_presentation_events
+         WHERE presentation_id = $1 AND callback_event_id IS NOT NULL`,
+        [presentation.id],
+      )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    } finally {
+      await pool.query(
+        `UPDATE knowledge_draft_presentation_outbox
+         SET state = 'failed', error_code = 'test_retired', updated_at = $2
+         WHERE presentation_id IN (
+           SELECT id FROM knowledge_draft_presentations WHERE draft_id = $1
+         )`,
+        [draft.id, at],
+      );
+    }
+  }, 10_000);
 
   it("rejects membership proof older than 30 seconds", async () => {
     const { draft, presentation } = await createActivePresentation("stale-membership");
@@ -1741,4 +1932,18 @@ function plusSeconds(seconds: number): Date {
 
 function id(value: string): string {
   return `${value}-${suffix}`;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function errorCode(value: unknown): string | undefined {
+  return typeof value === "object" && value !== null && "code" in value && typeof value.code === "string"
+    ? value.code
+    : undefined;
 }

@@ -176,6 +176,26 @@ test("proves default-off knowledge-card readiness without exposing draft content
   }
 });
 
+test("probes both public callback paths while every public internal path stays hidden", () => {
+  const result = runSmokeWithFetchMode("");
+  try {
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const checks = JSON.parse(result.stdout).checks;
+    assert.equal(checks.feishuEventsBoundary, "non-404");
+    assert.equal(checks.feishuCardActionsBoundary, "non-404");
+    assert.equal(checks.publicInternalStatus, 404);
+    assert.equal(checks.publicInternalReadiness, 404);
+    assert.equal(checks.publicIngressReadiness, 404);
+    assert.match(result.log, /public-feishu-events-boundary/u);
+    assert.match(result.log, /public-feishu-card-actions-boundary/u);
+    assert.match(result.log, /public-internal-status-404/u);
+    assert.match(result.log, /public-internal-readiness-404/u);
+    assert.match(result.log, /public-internal-ingress-readiness-404/u);
+  } finally {
+    result.cleanup();
+  }
+});
+
 test("rejects an enabled selected Compose env file when host card values are unset", () => {
   const result = runSmokeWithFetchMode("", {
     envFileContents: "IRIS_KNOWLEDGE_CARD_ENABLED=true\nIRIS_KNOWLEDGE_CARD_GROUP_IDS=oc_pilot\n",
@@ -620,7 +640,10 @@ globalThis.fetch = async (input, init = {}) => {
       : json({ error: "caddy_stopped" }, 503);
   }
   if (url.pathname === "/internal/status") {
-    if (url.port !== "3000") return json({ error: "not_found" }, 404);
+    if (url.port !== "3000") {
+      log("public-internal-status-404");
+      return json({ error: "not_found" }, 404);
+    }
     if (authorization(init) !== "Bearer ci-internal-token") {
       return json({ error: "unauthorized" }, 401);
     }
@@ -656,7 +679,10 @@ globalThis.fetch = async (input, init = {}) => {
     });
   }
   if (url.pathname === "/internal/readiness") {
-    if (url.port !== "3000") return json({ error: "not_found" }, 404);
+    if (url.port !== "3000") {
+      log("public-internal-readiness-404");
+      return json({ error: "not_found" }, 404);
+    }
     if (authorization(init) !== "Bearer ci-internal-token") {
       return json({ error: "unauthorized" }, 401);
     }
@@ -680,7 +706,10 @@ globalThis.fetch = async (input, init = {}) => {
     return json(body, 503);
   }
   if (url.pathname === "/internal/ingress-readiness") {
-    if (url.port !== "3000") return json({ error: "not_found" }, 404);
+    if (url.port !== "3000") {
+      log("public-internal-ingress-readiness-404");
+      return json({ error: "not_found" }, 404);
+    }
     if (authorization(init) !== "Bearer ci-internal-token") {
       return json({ error: "unauthorized" }, 401);
     }
@@ -720,9 +749,18 @@ globalThis.fetch = async (input, init = {}) => {
     return json({ globalEnabled: enabled, durable: true });
   }
   if (url.pathname === "/feishu/events") {
+    const body = JSON.parse(init.body);
+    if (body.pilotBoundaryProbe === true) {
+      log("public-feishu-events-boundary");
+      return json({ error: "invalid_callback" }, 403);
+    }
     writeFileSync(resolve(stateDir, "pending-event"), "true");
     log("public-feishu");
     return json({ ok: true });
+  }
+  if (url.pathname === "/feishu/card-actions") {
+    log("public-feishu-card-actions-boundary");
+    return json({ toast: { type: "error", content: "runtime unavailable" } });
   }
   throw new Error("Unexpected smoke URL: " + url);
 };

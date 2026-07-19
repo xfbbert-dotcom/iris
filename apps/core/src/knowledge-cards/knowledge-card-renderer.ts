@@ -7,7 +7,14 @@ import {
   KNOWLEDGE_CARD_REASON_MAX_CHARS,
   type KnowledgeCardAction,
 } from "./knowledge-card.js";
-import type { KnowledgeDraftPresentation } from "./knowledge-card-repository.js";
+import type {
+  KnowledgeCardCommittedResult,
+  KnowledgeDraftPresentation,
+} from "./knowledge-card-repository.js";
+import {
+  KNOWLEDGE_DRAFT_REASON_MAX_CHARS,
+  KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS,
+} from "../knowledge-governance/knowledge-draft.js";
 import type { KnowledgeDraft } from "../knowledge-governance/knowledge-draft-repository.js";
 
 const FEISHU_INPUT_MAX_LENGTH = 1_000;
@@ -16,6 +23,12 @@ export type KnowledgeDraftCardRenderInput = {
   draft: KnowledgeDraft;
   presentation: KnowledgeDraftPresentation;
   targetDisplayName: string;
+};
+
+export type KnowledgeCardCommittedResultRenderInput = {
+  draft: KnowledgeDraft;
+  presentation: KnowledgeDraftPresentation;
+  result: KnowledgeCardCommittedResult;
 };
 
 export type KnowledgeDraftCardRenderResult =
@@ -157,4 +170,98 @@ export function renderKnowledgeDraftCard(
     contentHash: createHash("sha256").update(json).digest("hex"),
     componentCount,
   };
+}
+
+export function renderKnowledgeCardCommittedResult(
+  input: KnowledgeCardCommittedResultRenderInput,
+): string {
+  if (
+    input.presentation.state !== "closed" ||
+    input.presentation.draftId !== input.draft.id
+  ) throw new KnowledgeCardPresentationBindingError();
+
+  const metadata = [
+    `Source type: ${input.draft.originKind}`,
+    `Draft ID: ${input.presentation.draftId}`,
+    `Draft revision: ${input.presentation.revisionNumber}`,
+    `Draft version: ${input.presentation.draftVersion}`,
+  ];
+  let marker: string;
+  let title: string;
+  let template: "green" | "orange" | "red";
+  let outcome: string[];
+
+  if (input.result.action === "confirm") {
+    marker = "confirmed";
+    title = "Knowledge draft confirmed";
+    template = "green";
+    outcome = [
+      "Result: confirmed",
+      `Confirmed by: ${requireBoundedResultText(
+        "actorOpenId",
+        input.result.actorOpenId,
+        KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS,
+      )}`,
+      `Confirmed at: ${requireResultDate(input.result.confirmedAt).toISOString()}`,
+      `Next gate: ${input.result.nextGate}`,
+    ];
+  } else if (input.result.action === "request_revision") {
+    marker = "revision_requested";
+    title = "Knowledge draft revision requested";
+    template = "orange";
+    outcome = [
+      "Result: revision_requested",
+      `State: ${input.result.state}`,
+      `Reason: ${requireBoundedResultText(
+        "reason",
+        input.result.reason,
+        KNOWLEDGE_DRAFT_REASON_MAX_CHARS,
+      )}`,
+    ];
+  } else {
+    marker = "rejected";
+    title = "Knowledge draft rejected";
+    template = "red";
+    outcome = [
+      "Result: rejected",
+      `State: ${input.result.state}`,
+      `Reason: ${requireBoundedResultText(
+        "reason",
+        input.result.reason,
+        KNOWLEDGE_DRAFT_REASON_MAX_CHARS,
+      )}`,
+    ];
+  }
+
+  const json = JSON.stringify({
+    schema: "2.0",
+    header: {
+      template,
+      title: { tag: "plain_text", content: title },
+    },
+    body: {
+      elements: [{
+        tag: "markdown",
+        content: [`Iris / ${marker}`, ...metadata, ...outcome].join("\n"),
+      }],
+    },
+  });
+  if (Buffer.byteLength(json, "utf8") > KNOWLEDGE_CARD_JSON_MAX_BYTES) {
+    throw new Error("knowledge card committed result is too large");
+  }
+  return json;
+}
+
+function requireBoundedResultText(name: string, value: string, maximum: number): string {
+  if (typeof value !== "string" || value.trim().length === 0 || [...value].length > maximum) {
+    throw new Error(`knowledge card committed ${name} is invalid`);
+  }
+  return value;
+}
+
+function requireResultDate(value: Date): Date {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw new Error("knowledge card committed date is invalid");
+  }
+  return value;
 }

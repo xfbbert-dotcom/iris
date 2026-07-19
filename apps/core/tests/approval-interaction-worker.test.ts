@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createApprovalInteractionWorker } from "../src/knowledge-cards/approval-interaction-worker.js";
 import type { ApprovalInteractionJob } from "../src/knowledge-cards/knowledge-card.js";
-import type { KnowledgeDraftPresentation } from "../src/knowledge-cards/knowledge-card-repository.js";
+import type {
+  KnowledgeCardCommittedResult,
+  KnowledgeDraftPresentation,
+} from "../src/knowledge-cards/knowledge-card-repository.js";
 import {
   KnowledgeCardMembershipProofError,
   KnowledgeCardOperationConflictError,
@@ -53,6 +56,7 @@ describe("ApprovalInteractionWorker", () => {
       `gate:${job().chatId}`,
       "presentation",
       "membership",
+      `gate:${job().chatId}`,
       "apply",
       "update",
       "ack",
@@ -76,6 +80,39 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
     expect(harness.queue.handleFailure).not.toHaveBeenCalled();
     expect(harness.cardClient.updateCard).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when the live gate is disabled while membership is pending", async () => {
+    let enabled = true;
+    let membershipStarted!: () => void;
+    let resolveMembership!: (isCurrentMember: boolean) => void;
+    const started = new Promise<void>((resolve) => {
+      membershipStarted = resolve;
+    });
+    const membership = new Promise<boolean>((resolve) => {
+      resolveMembership = resolve;
+    });
+    const harness = createHarness({
+      canUseKnowledgeCards: () => enabled,
+      isCurrentMember: async () => {
+        membershipStarted();
+        return membership;
+      },
+    });
+
+    const processing = harness.worker.processBatch({ limit: 1 });
+    await started;
+    enabled = false;
+    resolveMembership(true);
+
+    await expect(processing).resolves.toEqual([{
+      status: "denied",
+      idempotencyKey: job().idempotencyKey,
+      code: "runtime_disabled",
+    }]);
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+    expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
+    expect(harness.queue.handleFailure).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -117,6 +154,66 @@ describe("ApprovalInteractionWorker", () => {
       reason: "Conflicts with policy.",
       rejectionConfirmed: true,
     }));
+  });
+
+  it.each([
+    [
+      "confirm",
+      { action: "confirm" },
+      {
+        action: "confirm",
+        actorOpenId: "ou_committed_actor",
+        confirmedAt: at,
+        nextGate: "pending_review",
+      },
+      ["Iris / confirmed", "Confirmed by: ou_committed_actor", "Next gate: pending_review"],
+    ],
+    [
+      "request revision",
+      { action: "request_revision", reason: "UNTRUSTED callback revision reason" },
+      {
+        action: "request_revision",
+        state: "needs_revision",
+        reason: "Committed revision reason.",
+      },
+      ["Iris / revision_requested", "State: needs_revision", "Reason: Committed revision reason."],
+    ],
+    [
+      "reject",
+      {
+        action: "reject",
+        reason: "UNTRUSTED callback rejection reason",
+        rejectionConfirmed: true,
+      },
+      {
+        action: "reject",
+        state: "rejected",
+        reason: "Committed rejection reason.",
+      },
+      ["Iris / rejected", "State: rejected", "Reason: Committed rejection reason."],
+    ],
+  ] as const)("immediately renders the committed %s result instead of callback text", async (
+    _label,
+    jobOverrides,
+    committedResult,
+    expectedText,
+  ) => {
+    const harness = createHarness({
+      job: job(jobOverrides as Partial<ApprovalInteractionJob>),
+      applyInteraction: async () => mutationResult("applied", committedResult),
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toMatchObject([
+      { status: "applied", code: "action_applied" },
+    ]);
+
+    const cardJson = harness.cardClient.updateCard.mock.calls[0]?.[0]?.cardJson as string;
+    for (const text of expectedText) expect(cardJson).toContain(text);
+    expect(cardJson).toContain("Source type: group_conclusion");
+    expect(cardJson).toContain("Draft ID: draft-1");
+    expect(cardJson).toContain("Draft revision: 1");
+    expect(cardJson).toContain("Draft version: 1");
+    expect(cardJson).not.toMatch(/UNTRUSTED callback|draft body|evidence/iu);
   });
 
   it("acknowledges an exact idempotent replay without exposing or reapplying content", async () => {
@@ -218,7 +315,7 @@ type HarnessOverrides = {
   getPresentation?: () => Promise<KnowledgeDraftPresentation | undefined>;
   isCurrentMember?: () => Promise<boolean>;
   applyInteraction?: (...args: any[]) => Promise<any>;
-  updateCard?: () => Promise<void>;
+  updateCard?: (input: { messageId: string; cardJson: string }) => Promise<void>;
   acknowledge?: () => Promise<void>;
   handleFailure?: () => Promise<{ action: "delayed" | "dead_lettered" }>;
 };
@@ -300,7 +397,18 @@ function presentation(
   };
 }
 
-function mutationResult(outcome: "applied" | "already_applied") {
+function mutationResult(
+  outcome: "applied" | "already_applied",
+  committedResult: KnowledgeCardCommittedResult = {
+    action: "confirm",
+    actorOpenId: "ou_actor",
+    confirmedAt: at,
+    nextGate: "pending_review",
+  },
+) {
+  const status = committedResult.action === "confirm"
+    ? "pending_review" as const
+    : committedResult.action === "request_revision" ? "needs_revision" as const : "rejected" as const;
   return {
     outcome,
     presentation: presentation({ state: "closed", closedAt: at, version: 3 }),
@@ -308,7 +416,7 @@ function mutationResult(outcome: "applied" | "already_applied") {
       id: "draft-1",
       sourceGroupId: "oc_group",
       originKind: "group_conclusion" as const,
-      status: "pending_review" as const,
+      status,
       currentRevisionNumber: 1,
       version: 2,
       createdBy: "iris",
@@ -325,5 +433,6 @@ function mutationResult(outcome: "applied" | "already_applied") {
         evidence: [],
       },
     },
+    committedResult,
   };
 }

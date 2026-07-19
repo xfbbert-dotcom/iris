@@ -6,8 +6,8 @@ import {
   type FeishuInteractiveCardClientErrorClassification,
 } from "../feishu/feishu-interactive-card-client.js";
 
-import { renderApprovalInteractionStatusCard } from "./approval-interaction-worker.js";
 import {
+  renderKnowledgeCardCommittedResult,
   renderKnowledgeDraftCard,
   type KnowledgeDraftCardRenderInput,
   type KnowledgeDraftCardRenderResult,
@@ -123,12 +123,11 @@ async function dispatchClaim(input: {
   if (!isExactClaimContext(input.claim, context)) {
     return failPreparation(input, "stale_presentation");
   }
-  if (context.evidenceState.status !== "current") {
-    return failPreparation(input, "evidence_invalidated");
-  }
-
   if (context.presentation.state === "closed") {
     return updateCommittedResult(input, context);
+  }
+  if (context.evidenceState.status !== "current") {
+    return failPreparation(input, "evidence_invalidated");
   }
   if (!isCurrentPendingSend(context)) {
     return failPreparation(input, "stale_presentation");
@@ -186,7 +185,19 @@ async function updateCommittedResult(
   context: KnowledgeCardPresentationContext,
 ): Promise<KnowledgeCardDispatcherResult> {
   const messageId = context.presentation.messageId;
-  if (messageId === undefined) return failPreparation(input, "stale_presentation");
+  if (messageId === undefined || context.committedResult === undefined) {
+    return failPreparation(input, "stale_presentation");
+  }
+  let cardJson: string;
+  try {
+    cardJson = renderKnowledgeCardCommittedResult({
+      presentation: context.presentation,
+      draft: context.draft,
+      result: context.committedResult,
+    });
+  } catch {
+    return failPreparation(input, "stale_presentation");
+  }
   if (!readRuntimeGate(input, context.presentation.chatId)) {
     return failPreparation(input, "runtime_disabled");
   }
@@ -201,7 +212,7 @@ async function updateCommittedResult(
   try {
     await input.cardClient.updateCard({
       messageId,
-      cardJson: renderApprovalInteractionStatusCard("action_applied"),
+      cardJson,
     });
   } catch (error) {
     return failFromCardError(input, error);

@@ -19,10 +19,10 @@
 - When knowledge cards are enabled, require a nonblank bounded `FEISHU_ENCRYPT_KEY` and verify raw body, signature/token, and a five-minute timestamp window before enqueue. This strict card verification must not loosen legacy Feishu event callbacks. An explicit queue rejection returns HTTP 200 with an “操作未提交” toast and writes no business fact.
 - Bound callback queue enqueue to 1,000 ms so a stalled Redis connection cannot consume Feishu's three-second response window. A timeout is uncertain, returns “提交状态未确认，请勿重复点击；请以卡片最终状态为准”, leaves the single idempotent enqueue attempt to settle, and never starts a second enqueue automatically.
 - Use `header.event_id` as callback idempotency identity. Never trust callback title, content, risk, reviewer, group, actor role, or destination.
-- The interaction worker must repeat global/group/capability gates, exact presentation/revision/version checks, current evidence validation, and live group membership checks.
+- The interaction worker must repeat global/group/capability gates, exact presentation/revision/version checks, current evidence validation, and live group membership checks. It re-reads the live gate after membership succeeds and immediately before mutation.
 - Postgres facts decide validity. Card update failure cannot roll back a committed draft transition.
 - No full draft body, evidence body, access token, callback raw body, or external raw error may enter Redis, ordinary logs, status responses, or DLQ records.
-- Public `/internal/*` remains blocked by Caddy. The only new public path is `/feishu/card-actions`.
+- Caddy publicly proxies exactly `/feishu/events` and `/feishu/card-actions`; public `/internal/*` and every other unmatched path remain 404.
 - Every quality gate has an exit condition. Security, duplicate-action, data-loss, state-machine, and core-crash failures block Phase 5B-1; cosmetic variants and bulk administration go to the backlog.
 
 ---
@@ -254,7 +254,7 @@ Cover:
 
 - [ ] **Step 5: Implement `applyInteraction`**
 
-Lock callback operation, presentation, and draft in that order. Require `active`, exact chat/draft/revision/version, `pending_confirmation`, and current evidence. For confirmation use:
+Lock the callback operation, perform one unlocked bounded presentation lookup to discover its draft ID, then lock the draft row before re-locking the presentation row. Fully revalidate `active`, exact chat/draft/revision/version, `pending_confirmation`, and current evidence after both row locks. This preserves the same draft-to-presentation row-lock order as presentation creation. For confirmation use:
 
 ```sql
 INSERT INTO knowledge_draft_group_confirmations (...)
@@ -550,15 +550,16 @@ Assert order and fail-closed behavior:
 2. exact presentation fetch;
 3. actor differs from configured bot Open ID;
 4. live membership check;
-5. atomic repository action;
-6. best-effort/result-outbox card update;
-7. queue acknowledge.
+5. repeat runtime/group/capability gate immediately before mutation;
+6. atomic repository action;
+7. best-effort/result-outbox action-specific committed-fact card update;
+8. queue acknowledge.
 
 Test disabled runtime, nonmember, bot actor, unavailable membership API, stale card, invalidated evidence, duplicate callback, revision/rejection reason, committed transition plus update failure, retry/DLQ classification, and no content in results.
 
 - [ ] **Step 2: Implement worker and loop**
 
-Use a 30-second membership evidence maximum in the repository call. Stable business denials acknowledge the queue and update the card with a bounded denial; transient Feishu/Redis/Postgres failures call queue failure handling. A committed idempotent transition is never re-applied.
+Use a 30-second membership evidence maximum in the repository call. Stable business denials acknowledge the queue and update the card with a bounded denial; transient Feishu/Redis/Postgres failures call queue failure handling. A committed idempotent transition is never re-applied. Immediate and outbox updates use the same deterministic committed-result renderer for confirm, request-revision, and reject; they never render callback text or evidence/source raw text.
 
 - [ ] **Step 3: Write failing presentation dispatcher tests**
 
@@ -566,7 +567,7 @@ Cover current presentation send, runtime disabled before call, evidence invalida
 
 - [ ] **Step 4: Implement dispatcher and loop**
 
-The dispatcher claims one Postgres outbox row, re-reads exact current draft/presentation, renders full content, and calls `sendCard`. On success it atomically activates the presentation. On `outcome_unknown`, mark `send_failed` plus outbox `outcome_unknown`; do not resend automatically.
+The dispatcher claims one Postgres outbox row, re-reads exact current draft/presentation, renders full content, and calls `sendCard`. On success it atomically activates the presentation. A closed presentation renders its action-specific result only from committed repository facts, including bounded traceability and committed reason/confirmation fields, so retries are byte-identical even if the mutable draft later advances. On `outcome_unknown`, mark `send_failed` plus outbox `outcome_unknown`; do not resend automatically.
 
 - [ ] **Step 5: Run all worker/dispatcher tests**
 

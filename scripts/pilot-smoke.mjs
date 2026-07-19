@@ -63,13 +63,14 @@ let runtimeEnableAttempted = false;
 let completedChecks;
 let primaryError;
 let cleanupError;
+let publicCallbackBoundaries;
 
 try {
   assertKnowledgeCardDefaults();
   if (postRestore) {
     await assertCaddyRunning(false);
   } else {
-    await runPublicBoundaryChecks();
+    publicCallbackBoundaries = await runPublicBoundaryChecks();
   }
   await expectStatus(`${coreBaseUrl}/internal/status`, 401);
   await expectStatus(`${coreBaseUrl}/internal/ingress-readiness`, 401);
@@ -98,7 +99,7 @@ try {
 
   if (postRestore) {
     await startCaddyVerified();
-    await runPublicBoundaryChecks();
+    publicCallbackBoundaries = await runPublicBoundaryChecks();
   }
 
   const callbackStartedAt = Date.now();
@@ -144,6 +145,7 @@ try {
     runtimeStartup: "disabled",
     runtimeEnablement: "explicit",
     smokeMode: postRestore ? "post-restore" : "ordinary",
+    ...publicCallbackBoundaries,
     feishuCallback: 200,
     feishuCallbackAckUnderMs: FEISHU_ACK_DEADLINE_MS,
     durableRawEventQueue: "persisted",
@@ -327,9 +329,23 @@ function assertContentFreeKnowledgeCardResponse(value, label, key = undefined) {
 
 async function runPublicBoundaryChecks() {
   await waitForStatus(`${publicBaseUrl}/health`, 200, timeoutMs);
+  const events = await expectPublicCallbackRoute("/feishu/events");
+  const cardActions = await expectPublicCallbackRoute("/feishu/card-actions");
   await expectStatus(`${publicBaseUrl}/internal/status`, 404);
   await expectStatus(`${publicBaseUrl}/internal/readiness`, 404);
   await expectStatus(`${publicBaseUrl}/internal/ingress-readiness`, 404);
+  return {
+    feishuEventsBoundary: events,
+    feishuCardActionsBoundary: cardActions,
+  };
+}
+
+async function expectPublicCallbackRoute(path) {
+  const response = await requestJson(`${publicBaseUrl}${path}`, { pilotBoundaryProbe: true });
+  if (response.status === 404) {
+    throw new Error(`Expected public callback ${path} to reach Iris Core`);
+  }
+  return "non-404";
 }
 
 async function waitForStatus(url, expectedStatus, deadlineMs) {

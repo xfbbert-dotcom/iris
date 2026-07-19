@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   KnowledgeCardPresentationBindingError,
+  renderKnowledgeCardCommittedResult,
   renderKnowledgeDraftCard,
 } from "../src/knowledge-cards/knowledge-card-renderer.js";
 import type { KnowledgeDraft } from "../src/knowledge-governance/knowledge-draft-repository.js";
@@ -153,6 +154,88 @@ describe("renderKnowledgeDraftCard", () => {
     const rendered = renderKnowledgeDraftCard(cardInput({ content: "\u4e2d".repeat(8_000) }));
 
     expect(rendered).toEqual({ status: "review_required", reason: "card_too_large" });
+  });
+});
+
+describe("renderKnowledgeCardCommittedResult", () => {
+  it.each([
+    [
+      "confirm",
+      {
+        action: "confirm",
+        actorOpenId: "ou_committed_actor",
+        confirmedAt: new Date("2026-07-19T03:04:05.000Z"),
+        nextGate: "pending_review",
+      },
+      "pending_review",
+      [
+        "Iris / confirmed",
+        "Result: confirmed",
+        "Confirmed by: ou_committed_actor",
+        "Confirmed at: 2026-07-19T03:04:05.000Z",
+        "Next gate: pending_review",
+      ],
+    ],
+    [
+      "request revision",
+      {
+        action: "request_revision",
+        state: "needs_revision",
+        reason: "Committed revision reason.",
+      },
+      "needs_revision",
+      [
+        "Iris / revision_requested",
+        "Result: revision_requested",
+        "State: needs_revision",
+        "Reason: Committed revision reason.",
+      ],
+    ],
+    [
+      "reject",
+      {
+        action: "reject",
+        state: "rejected",
+        reason: "Committed rejection reason.",
+      },
+      "rejected",
+      [
+        "Iris / rejected",
+        "Result: rejected",
+        "State: rejected",
+        "Reason: Committed rejection reason.",
+      ],
+    ],
+  ] as const)("renders a deterministic content-free %s result from committed facts", (
+    _label,
+    result,
+    draftStatus,
+    expectedText,
+  ) => {
+    const input = {
+      presentation: presentation({
+        state: "closed",
+        messageId: "om_card",
+        closedAt: new Date("2026-07-19T03:04:05.000Z"),
+        version: 3,
+      }),
+      draft: { ...draft(), status: draftStatus, version: 12 },
+      result,
+    };
+
+    const first = renderKnowledgeCardCommittedResult(input);
+    const second = renderKnowledgeCardCommittedResult(input);
+
+    expect(second).toBe(first);
+    for (const text of [
+      ...expectedText,
+      "Source type: group_conclusion",
+      "Draft ID: draft-1",
+      "Draft revision: 7",
+      "Draft version: 11",
+    ]) expect(first).toContain(text);
+    expect(first).not.toMatch(/Full draft body|secret evidence text|oc_group|knowledgeDraftReview/iu);
+    expect(JSON.parse(first)).toMatchObject({ schema: "2.0" });
   });
 });
 

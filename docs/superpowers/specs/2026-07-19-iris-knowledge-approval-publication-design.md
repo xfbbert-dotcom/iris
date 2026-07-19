@@ -158,6 +158,10 @@ Phase 5B-1 首先支持安全预算内的完整卡片。内部初始预算固定
 - Core 服务端解析合同对“需要修改”和“拒绝草稿”保留 1-2,000 字符的规范化非空原因上限。
 - Phase 5B-1 飞书卡片输入控件受平台合同限制，`max_length` 必须为 1,000，因此卡片 UI 实际只能提交 1-1,000 字符；不得向飞书发出无效的 2,000 字符控件上限。
 - “拒绝草稿”还必须要求二次确认。
+
+### 6.4 已提交结果卡片
+
+动作提交后，worker 的即时更新和 Postgres outbox dispatcher 的持久重试必须使用同一个确定性 renderer，并只读取 repository 返回/重读的已提交事实。确认结果显示 `Iris / confirmed`、来源类型、草稿 ID、修订号、版本、确认 actor/time 和下一门禁 `pending_review`；要求修改显示 `Iris / revision_requested`、相同绑定元数据、`needs_revision` 和已提交规范化原因；拒绝显示 `Iris / rejected`、相同绑定元数据、`rejected` 和已提交规范化原因。结果卡片不得包含正文、证据或来源原文，也不得从 callback 原始文本构造结果。outbox 重试必须产生字节等价结果，即使当前草稿随后已进入新修订。
 - 卡片使用受限文本输入收集原因；Core 只保存规范化后的有界文本。
 - “确认内容”不读取或保存原因输入框中的临时文本。
 - 缺失、超限或结构异常的原因不会改变草稿状态。
@@ -186,6 +190,8 @@ Phase 5B-1 首先支持安全预算内的完整卡片。内部初始预算固定
 ```text
 POST /feishu/card-actions
 ```
+
+Pilot Caddy 公网边界只精确代理已有 `POST /feishu/events` 和新增 `POST /feishu/card-actions`；`/internal/*`、Feishu 通配路径和其他未匹配路径继续返回 404。
 
 入口职责仅包括：
 

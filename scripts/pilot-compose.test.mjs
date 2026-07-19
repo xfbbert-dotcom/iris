@@ -175,6 +175,18 @@ test("keeps knowledge cards disabled with an empty pilot allowlist", () => {
   }
 });
 
+test("proxies exactly the two public Feishu callback paths and keeps the fallback closed", () => {
+  const matcher = /^\s*@feishu\s+path\s+([^\r\n]+)$/mu.exec(caddyfile);
+  assert.notEqual(matcher, null, "Caddy must define one exact Feishu callback matcher");
+  assert.deepEqual(matcher[1].trim().split(/\s+/u), [
+    "/feishu/events",
+    "/feishu/card-actions",
+  ]);
+  assert.match(caddyfile, /handle @feishu\s*\{\s*reverse_proxy core:3000/su);
+  assert.match(caddyfile, /handle\s*\{\s*respond 404\s*\}/su);
+  assert.doesNotMatch(caddyfile, /\/feishu\/\*|path_regexp|handle_path/iu);
+});
+
 test("requires exhaustive group isolation and a real proactive-speech status gate", () => {
   const globalEnableIndex = conversationStateAcceptanceRunbook.indexOf("# GLOBAL_ENABLE");
   assert.notEqual(globalEnableIndex, -1, "runbook must mark the global-enable boundary");

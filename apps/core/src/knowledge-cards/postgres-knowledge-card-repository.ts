@@ -9,6 +9,7 @@ import {
 import type {
   ApplyKnowledgeCardInteractionInput,
   CreateKnowledgeCardPresentationInput,
+  KnowledgeCardCommittedResult,
   KnowledgeCardInteractionResult,
   KnowledgeCardMutationResult,
   KnowledgeCardOutboxStatusCounts,
@@ -97,6 +98,17 @@ type InteractionReplayRow = {
   operation_key: string;
   draft_id: string | null;
   operation_fingerprint: string | null;
+};
+
+type CommittedInteractionRow = {
+  event_type: "confirmed" | "revision_requested" | "rejected";
+  actor_open_id: string | null;
+  draft_id: string;
+  revision_number: string | number;
+  draft_event_type: "group_confirmed" | "revision_requested" | "rejected";
+  reason: string | null;
+  confirmed_actor_open_id: string | null;
+  confirmed_at: Date | null;
 };
 
 type KnowledgeCardActionEventTypes = {
@@ -267,17 +279,20 @@ async function applyInteraction(
     const replay = await replayInteraction(client, normalized, operationKey, fingerprint);
     if (replay !== undefined) return replay;
 
+    const presentationDraftId = await loadPresentationDraftId(client, normalized.presentationId);
+    const draft = await lockDraft(client, presentationDraftId);
     const presentation = await lockPresentation(client, normalized.presentationId);
     if (
       presentation.state !== "active" ||
+      presentation.draft_id !== presentationDraftId ||
       presentation.draft_id !== normalized.draftId ||
       Number(presentation.revision_number) !== normalized.revisionNumber ||
       Number(presentation.draft_version) !== normalized.draftVersion ||
       presentation.chat_id !== normalized.chatId
     ) throw new KnowledgeCardPersistenceConflictError();
 
-    const draft = await lockDraft(client, normalized.draftId);
     if (
+      draft.id !== presentation.draft_id ||
       draft.status !== "pending_confirmation" ||
       draft.source_group_id !== normalized.chatId ||
       Number(draft.current_revision_number) !== normalized.revisionNumber ||
@@ -385,10 +400,17 @@ async function applyInteraction(
     );
     requireOneRow(outboxUpdate);
 
+    const committedResult = await requireCommittedInteractionResult(
+      client,
+      normalized.presentationId,
+      normalized.draftId,
+      normalized.revisionNumber,
+    );
     return {
       outcome: "applied",
       presentation: await requirePresentation(client, normalized.presentationId),
       draft: await requireDraftView(client, normalized.draftId),
+      committedResult,
     };
   });
 }
@@ -416,7 +438,7 @@ async function createPresentation(
     await lockOperation(client, normalized.operationKey);
     const replay = await replayPresentationOperation(client, normalized.operationKey, fingerprint);
     if (replay !== undefined) return replay;
-    // Creation lock order: operation key, presentation ID, then draft row.
+    // Advisory locks precede row access; contended rows are always draft then presentation.
     await lockPresentationId(client, normalized.id);
     const draft = await lockDraft(client, normalized.draftId);
     const existing = await client.query("SELECT 1 FROM knowledge_draft_presentations WHERE id = $1", [
@@ -938,10 +960,82 @@ async function replayInteraction(
     row.draft_id !== input.draftId ||
     row.operation_fingerprint !== fingerprint
   ) throw new KnowledgeCardOperationConflictError();
+  const committedResult = await requireCommittedInteractionResult(
+    client,
+    row.presentation_id,
+    input.draftId,
+    input.revisionNumber,
+  );
   return {
     outcome: "already_applied",
     presentation: await requirePresentation(client, row.presentation_id),
     draft: await requireDraftView(client, input.draftId),
+    committedResult,
+  };
+}
+
+async function requireCommittedInteractionResult(
+  client: KnowledgeDraftTransactionClient,
+  presentationId: string,
+  draftId: string,
+  revisionNumber: number,
+): Promise<KnowledgeCardCommittedResult> {
+  const result = await client.query<CommittedInteractionRow>(
+    `SELECT presentation_event.event_type, presentation_event.actor_open_id,
+            draft_event.draft_id, draft_event.revision_number,
+            draft_event.event_type AS draft_event_type, draft_event.reason,
+            confirmation.actor_open_id AS confirmed_actor_open_id,
+            confirmation.confirmed_at
+     FROM knowledge_draft_presentation_events presentation_event
+     JOIN knowledge_draft_events draft_event
+       ON draft_event.operation_key = presentation_event.operation_key
+     LEFT JOIN knowledge_draft_group_confirmations confirmation
+       ON confirmation.presentation_id = presentation_event.presentation_id
+      AND confirmation.callback_event_id = presentation_event.callback_event_id
+     WHERE presentation_event.presentation_id = $1
+       AND presentation_event.callback_event_id IS NOT NULL
+     ORDER BY presentation_event.created_at DESC, presentation_event.id DESC
+     LIMIT 1`,
+    [presentationId],
+  );
+  const row = result.rows[0];
+  if (
+    row === undefined ||
+    row.draft_id !== draftId ||
+    Number(row.revision_number) !== revisionNumber
+  ) throw new KnowledgeCardPersistenceConflictError();
+
+  const actorOpenId = requireReference("committed actorOpenId", row.actor_open_id ?? "");
+  if (row.event_type === "confirmed") {
+    if (
+      row.draft_event_type !== "group_confirmed" ||
+      row.confirmed_actor_open_id !== actorOpenId ||
+      row.confirmed_at === null
+    ) throw new KnowledgeCardPersistenceConflictError();
+    return {
+      action: "confirm",
+      actorOpenId,
+      confirmedAt: requireDate(row.confirmed_at),
+      nextGate: "pending_review",
+    };
+  }
+  if (row.event_type === "revision_requested") {
+    if (row.draft_event_type !== "revision_requested") {
+      throw new KnowledgeCardPersistenceConflictError();
+    }
+    return {
+      action: "request_revision",
+      state: "needs_revision",
+      reason: requireReason(row.reason),
+    };
+  }
+  if (row.draft_event_type !== "rejected") {
+    throw new KnowledgeCardPersistenceConflictError();
+  }
+  return {
+    action: "reject",
+    state: "rejected",
+    reason: requireReason(row.reason),
   };
 }
 
@@ -984,6 +1078,19 @@ async function lockDraft(client: KnowledgeDraftTransactionClient, id: string): P
   const row = result.rows[0];
   if (row === undefined) throw new KnowledgeCardPersistenceConflictError();
   return row;
+}
+
+async function loadPresentationDraftId(
+  client: KnowledgeDraftTransactionClient,
+  id: string,
+): Promise<string> {
+  const result = await client.query<Pick<PresentationRow, "draft_id">>(
+    "SELECT draft_id FROM knowledge_draft_presentations WHERE id = $1",
+    [id],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new KnowledgeCardPresentationNotFoundError();
+  return requireReference("presentation draftId", row.draft_id);
 }
 
 async function lockPresentation(
@@ -1189,10 +1296,19 @@ async function loadPresentationContext(
     const presentation = await loadPresentation(client, id);
     if (presentation === undefined) return undefined;
     const draft = await requireDraftView(client, presentation.draftId);
+    const committedResult = presentation.state === "closed"
+      ? await requireCommittedInteractionResult(
+          client,
+          presentation.id,
+          presentation.draftId,
+          presentation.revisionNumber,
+        )
+      : undefined;
     return {
       presentation,
       draft,
       evidenceState: draft.currentRevision.evidenceState,
+      ...(committedResult === undefined ? {} : { committedResult }),
     };
   });
 }

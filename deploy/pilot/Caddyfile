@@ -5,7 +5,7 @@
 {$IRIS_PUBLIC_HOSTNAME} {
   encode zstd gzip
 
-  @feishu path /feishu/events
+  @feishu path /feishu/events /feishu/card-actions
   handle @feishu {
     reverse_proxy core:3000 {
       health_uri /internal/ingress-readiness

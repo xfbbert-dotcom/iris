@@ -8,6 +8,7 @@ import {
 } from "../src/feishu/feishu-interactive-card-client.js";
 import type { KnowledgeDraft } from "../src/knowledge-governance/knowledge-draft-repository.js";
 import type {
+  KnowledgeCardCommittedResult,
   KnowledgeCardPresentationContext,
   KnowledgeCardSendClaim,
   KnowledgeDraftPresentation,
@@ -130,7 +131,16 @@ describe("KnowledgeCardDispatcher", () => {
     let enabled = true;
     const closed = presentation({ state: "closed", messageId: "om_existing", version: 3 });
     const harness = createHarness({
-      context: context({ presentation: closed }),
+      context: context({
+        presentation: closed,
+        draft: draft({ status: "pending_review", version: 2 }),
+        committedResult: {
+          action: "confirm",
+          actorOpenId: "ou_committed_actor",
+          confirmedAt: at,
+          nextGate: "pending_review",
+        },
+      }),
       claim: claim({ presentation: closed }),
       canUseKnowledgeCards: () => enabled,
       beginExternalAttempt: async () => {
@@ -322,17 +332,144 @@ describe("KnowledgeCardDispatcher", () => {
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
   });
 
-  it("updates a committed result from the same outbox without reapplying the action", async () => {
+  it.each([
+    [
+      "confirm",
+      {
+        action: "confirm",
+        actorOpenId: "ou_committed_actor",
+        confirmedAt: at,
+        nextGate: "pending_review",
+      },
+      "pending_review",
+      ["Iris / confirmed", "Confirmed by: ou_committed_actor", "Next gate: pending_review"],
+    ],
+    [
+      "request revision",
+      {
+        action: "request_revision",
+        state: "needs_revision",
+        reason: "Committed revision reason.",
+      },
+      "needs_revision",
+      ["Iris / revision_requested", "State: needs_revision", "Reason: Committed revision reason."],
+    ],
+    [
+      "reject",
+      {
+        action: "reject",
+        state: "rejected",
+        reason: "Committed rejection reason.",
+      },
+      "rejected",
+      ["Iris / rejected", "State: rejected", "Reason: Committed rejection reason."],
+    ],
+  ] as const)("updates a committed %s result from the same outbox", async (
+    _label,
+    committedResult,
+    draftStatus,
+    expectedText,
+  ) => {
     const closedPresentation = presentation({
       state: "closed",
       messageId: "om_card",
       closedAt: at,
       version: 3,
     });
-    const closedDraft = draft({ status: "pending_review", version: 2 });
+    const closedDraft = draft({ status: draftStatus, version: 2 });
     const harness = createHarness({
       claim: claim({ presentation: closedPresentation }),
-      context: context({ presentation: closedPresentation, draft: closedDraft }),
+      context: context({ presentation: closedPresentation, draft: closedDraft, committedResult }),
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([
+      { status: "updated", presentationId: "presentation-1", code: "card_update_succeeded" },
+    ]);
+    const update = harness.cardClient.updateCard.mock.calls[0]?.[0];
+    expect(update?.messageId).toBe("om_card");
+    for (const text of expectedText) expect(update?.cardJson).toContain(text);
+    expect(update?.cardJson).toContain("Source type: group_conclusion");
+    expect(update?.cardJson).toContain("Draft ID: draft-1");
+    expect(update?.cardJson).toContain("Draft revision: 1");
+    expect(update?.cardJson).toContain("Draft version: 1");
+    expect(update?.cardJson).not.toMatch(/Full governed draft body|evidence/iu);
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+    expect(harness.repository.completePresentationSend).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: "om_card",
+    }));
+  });
+
+  it("renders byte-identical committed facts across a retryable dispatcher update", async () => {
+    const closedPresentation = presentation({
+      state: "closed",
+      messageId: "om_card",
+      closedAt: at,
+      version: 3,
+    });
+    const committedResult = {
+      action: "request_revision" as const,
+      state: "needs_revision" as const,
+      reason: "Committed retry reason.",
+    };
+    const updateCard = vi.fn()
+      .mockRejectedValueOnce(new FeishuInteractiveCardClientError("request_not_sent", "network"))
+      .mockResolvedValueOnce(undefined);
+    const harness = createHarness({
+      claims: [
+        claim({ presentation: closedPresentation, attempts: 1 }),
+        claim({ presentation: closedPresentation, attempts: 2 }),
+        undefined,
+      ],
+      context: context({
+        presentation: closedPresentation,
+        draft: draft({ status: "needs_revision", version: 2 }),
+        committedResult,
+      }),
+      updateCard,
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 2 })).resolves.toEqual([
+      { status: "retrying", presentationId: "presentation-1", code: "request_not_sent" },
+      { status: "updated", presentationId: "presentation-1", code: "card_update_succeeded" },
+    ]);
+    expect(updateCard).toHaveBeenCalledTimes(2);
+    expect(updateCard.mock.calls[0]?.[0].cardJson).toBe(updateCard.mock.calls[1]?.[0].cardJson);
+    expect(updateCard.mock.calls[1]?.[0].cardJson).toContain("Iris / revision_requested");
+    expect(updateCard.mock.calls[1]?.[0].cardJson).toContain("Reason: Committed retry reason.");
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+  });
+
+  it("renders a closed committed result after the mutable draft advances", async () => {
+    const closedPresentation = presentation({
+      state: "closed",
+      messageId: "om_card",
+      closedAt: at,
+      version: 3,
+    });
+    const advancedDraft = draft({
+      status: "pending_confirmation",
+      currentRevisionNumber: 2,
+      version: 3,
+      currentRevision: {
+        revisionNumber: 2,
+        riskLevel: "medium",
+        author: "iris",
+        createdAt: at,
+        evidenceState: { status: "invalidated", reason: "message_deleted" },
+      },
+    });
+    const harness = createHarness({
+      claim: claim({ presentation: closedPresentation }),
+      context: context({
+        presentation: closedPresentation,
+        draft: advancedDraft,
+        committedResult: {
+          action: "confirm",
+          actorOpenId: "ou_committed_actor",
+          confirmedAt: at,
+          nextGate: "pending_review",
+        },
+      }),
     });
 
     await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([
@@ -340,12 +477,9 @@ describe("KnowledgeCardDispatcher", () => {
     ]);
     expect(harness.cardClient.updateCard).toHaveBeenCalledWith({
       messageId: "om_card",
-      cardJson: expect.stringContaining("Knowledge draft action recorded."),
+      cardJson: expect.stringContaining("Iris / confirmed"),
     });
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
-    expect(harness.repository.completePresentationSend).toHaveBeenCalledWith(expect.objectContaining({
-      messageId: "om_card",
-    }));
   });
 
   it("claims with a bounded lease and bounds each batch", async () => {
@@ -376,6 +510,7 @@ type HarnessOverrides = {
   renderer?: () => ReturnType<typeof rendered> | { status: "review_required"; reason: "body_too_large" };
   canUseKnowledgeCards?: () => boolean;
   sendCard?: () => Promise<{ messageId: string }>;
+  updateCard?: (input: { messageId: string; cardJson: string }) => Promise<void>;
 };
 
 function createHarness(overrides: HarnessOverrides = {}) {
@@ -389,7 +524,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
   });
   const cardClient = {
     sendCard: vi.fn(overrides.sendCard ?? (async () => ({ messageId: "om_sent" }))),
-    updateCard: vi.fn(async () => undefined),
+    updateCard: vi.fn(overrides.updateCard ?? (async () => undefined)),
   };
   const renderer = vi.fn(overrides.renderer ?? (() => rendered()));
   return {
@@ -442,12 +577,14 @@ function claim(overrides: Partial<KnowledgeCardSendClaim> = {}): KnowledgeCardSe
 function context(overrides: {
   presentation?: KnowledgeDraftPresentation;
   draft?: KnowledgeDraft;
+  committedResult?: KnowledgeCardCommittedResult;
 } = {}): KnowledgeCardPresentationContext {
   const currentDraft = overrides.draft ?? draft();
   return {
     presentation: overrides.presentation ?? presentation(),
     draft: currentDraft,
     evidenceState: currentDraft.currentRevision.evidenceState,
+    ...(overrides.committedResult === undefined ? {} : { committedResult: overrides.committedResult }),
   };
 }
 

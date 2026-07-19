@@ -147,7 +147,7 @@ if ((@($KnownGroupIds | Where-Object { $enabledRuntime.disabledGroupIds -notcont
 if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true" -or (Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_GROUP_IDS) -cne $PilotGroupId) { throw "Knowledge-card allowlist no longer exactly matches the pilot group" }
 ```
 
-从外部确认 `/health` 为 `200`、公开 `/internal/*` 为 `404`。AI Worker 不得公开端口，Caddy 不得代理 `/internal/*`。
+从外部确认 `/health` 为 `200`，且 `POST /feishu/events` 与 `POST /feishu/card-actions` 都能到达 Core（不得为 `404`）；公开 `/internal/*`、`/feishu/card-actions/extra` 和其他未列出的路径必须为 `404`。AI Worker 不得公开端口，Caddy 只能代理上述两个精确回调路径，不能代理 `/internal/*` 或 Feishu 通配路径。
 
 卡片回调明确返回“操作未提交，请稍后重试”时才允许稍后重新操作。若返回“提交状态未确认，请勿重复点击；请以卡片最终状态为准”，不得再次点击；等待原单次幂等入队完成并以卡片最终状态、approval-interaction 队列计数和 Postgres 事实核对结果。超时路径不得自动发起第二次入队。
 
@@ -155,9 +155,9 @@ if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true" -or (Get-PilotEn
 
 每例使用测试草稿，等待 worker 清空，并将可见卡片结果与 Postgres 事实双向核对：
 
-1. 完整内容确认：操作前可见卡片必须显示 `Iris / pending_confirmation`、来源类型、草稿 ID、修订号和草稿版本，且不显示来源消息/证据原文；当前 `pending_confirmation` 草稿确认后卡片已处理，只新增一次 group confirmation 和对应 append-only event，草稿进入 `pending_review`。
-2. 要求修改：另一个当前草稿提交非空原因；卡片已处理，草稿状态和 event 与可见原因一致。
-3. 拒绝：第三个草稿在飞书确认拒绝；草稿为终态 rejected，后续点击不改变业务事实。
+1. 完整内容确认：操作前可见卡片必须显示 `Iris / pending_confirmation`、来源类型、草稿 ID、修订号和草稿版本，且不显示来源消息/证据原文；当前 `pending_confirmation` 草稿确认后最终卡片必须显示 `Iris / confirmed`、相同绑定元数据、已提交 actor/time 和 `Next gate: pending_review`。只新增一次 group confirmation 和对应 append-only event，草稿进入 `pending_review`。
+2. 要求修改：另一个当前草稿提交非空原因；最终卡片必须显示 `Iris / revision_requested`、相同绑定元数据、`needs_revision` 和数据库已提交的规范化原因，不得回显未提交 callback 字段；草稿状态和 event 与可见原因一致。
+3. 拒绝：第三个草稿在飞书确认拒绝；最终卡片必须显示 `Iris / rejected`、相同绑定元数据、`rejected` 和数据库已提交的规范化原因；草稿为终态 rejected，后续点击不改变业务事实。
 4. 过期卡片：生成新修订或使证据失效后点击旧卡；必须 stale/不可处理，且不新增 confirmation、event 或状态变化。
 5. 重复 callback 重放：同一 callback event 只产生一次业务结果和一次对应事实。
 6. 运行时停用后点击：先 durable-disable `$PilotGroupId` 再点击旧卡；不得产生业务状态变化。
