@@ -16,6 +16,7 @@ import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js"
 import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
+import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
 import { isolateEnvVar } from "./test-env.js";
 
 let restorePort: () => void = () => undefined;
@@ -205,6 +206,57 @@ describe("Core server startup", () => {
       "close-extraction",
       "close-runtime-control",
     ]);
+  });
+
+  it("starts knowledge cards with the durable controller and closes them after event workers", async () => {
+    const reservation = await occupyLoopbackPort();
+    const port = reservation.port;
+    await closeServer(reservation.server);
+    process.env.PORT = String(port);
+    const order: string[] = [];
+    const runtimeControlRuntime = fakeRuntimeControlRuntime({
+      onClose: () => order.push("close-runtime-control"),
+    });
+    const knowledgeCardRuntime = fakeKnowledgeCardRuntime({
+      start: vi.fn(() => order.push("start-knowledge-cards")),
+      close: vi.fn(async () => {
+        order.push("close-knowledge-cards");
+      }),
+    });
+    const eventWorkerRuntime = fakeEventWorkerRuntime({
+      start: vi.fn(() => order.push("start-event")),
+      close: vi.fn(async () => {
+        order.push("close-event");
+      }),
+    });
+    const createKnowledgeCardRuntime = vi.fn((input) => {
+      expect(input).toEqual({ runtimeController: runtimeControlRuntime.runtimeControl.controller });
+      return knowledgeCardRuntime;
+    });
+
+    const app = await startServer({
+      createRuntimeControlRuntime: async () => runtimeControlRuntime,
+      appDependencies: {
+        createAnswerDraftRuntime: () => undefined,
+        createReindexWorkerRuntime: () => undefined,
+        createMemoryExtractionRuntime: () => undefined,
+        createKnowledgeDraftRuntime: () => undefined,
+        createKnowledgeCardRuntime,
+        createEventWorkerRuntime: () => eventWorkerRuntime,
+        createDocumentSyncRuntime: () => undefined,
+      },
+    });
+
+    expect(order).toEqual(["start-knowledge-cards", "start-event"]);
+    await app.close();
+    expect(order).toEqual([
+      "start-knowledge-cards",
+      "start-event",
+      "close-event",
+      "close-knowledge-cards",
+      "close-runtime-control",
+    ]);
+    expect(createKnowledgeCardRuntime).toHaveBeenCalledOnce();
   });
 
   it("awaits extraction cleanup when event runtime composition fails", async () => {
@@ -666,6 +718,25 @@ function fakeMemoryExtractionRuntime(
       failedRunCount: 0,
     })),
     start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeKnowledgeCardRuntime(
+  overrides: Partial<KnowledgeCardRuntime> = {},
+): KnowledgeCardRuntime {
+  return {
+    gateway: { handleCallback: vi.fn() },
+    repository: {} as KnowledgeCardRuntime["repository"],
+    deadLetters: {
+      list: vi.fn(async () => []),
+      replay: vi.fn(async () => "not_found" as const),
+      delete: vi.fn(async () => "not_found" as const),
+    },
+    canUseKnowledgeCards: vi.fn(() => true),
+    start: vi.fn(),
+    getStatus: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,
   };

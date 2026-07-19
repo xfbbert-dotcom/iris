@@ -72,6 +72,18 @@ export type MemoryExtractionRuntimeConfig =
       applyConfidence: number;
     };
 
+export type KnowledgeCardRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      databaseUrl: string;
+      redisUrl: string;
+      enabledGroupIds: string[];
+      intervalMs: number;
+      batchLimit: number;
+      botOpenId: string;
+    };
+
 export type FeishuOpenApiConfig = {
   appId: string;
   appSecret: string;
@@ -329,6 +341,49 @@ export function readMemoryExtractionRuntimeConfig(
   };
 }
 
+export function readKnowledgeCardRuntimeConfig(
+  env: EnvLike = process.env,
+): KnowledgeCardRuntimeConfig {
+  if (env.IRIS_KNOWLEDGE_CARD_ENABLED !== "true") {
+    return { enabled: false };
+  }
+
+  const enabledGroupIds = readRequiredUniqueGroupIdListEnv(
+    "IRIS_KNOWLEDGE_CARD_GROUP_IDS",
+    env.IRIS_KNOWLEDGE_CARD_GROUP_IDS,
+  );
+  const { databaseUrl } = readDatabaseConfig(env);
+  const redisUrl = readRedisUrlEnv(readRequiredEnv("REDIS_URL", env.REDIS_URL));
+  const auth = readFeishuAuthConfig(env);
+  if (auth.verificationToken === undefined) {
+    throw new Error("FEISHU_VERIFICATION_TOKEN is required when knowledge cards are enabled");
+  }
+  readFeishuOpenApiConfig(env);
+  const botOpenId = readOptionalFeishuBotOpenId(env);
+  if (botOpenId === undefined) {
+    throw new Error("IRIS_FEISHU_BOT_OPEN_ID is required when knowledge cards are enabled");
+  }
+
+  return {
+    enabled: true,
+    databaseUrl,
+    redisUrl,
+    enabledGroupIds,
+    intervalMs: readTimerDelayEnv(
+      "IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS",
+      env.IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS,
+      1000,
+    ),
+    batchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT",
+      env.IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT,
+      10,
+      100,
+    ),
+    botOpenId,
+  };
+}
+
 export function readFeishuOpenApiConfig(env: EnvLike = process.env): FeishuOpenApiConfig {
   return {
     appId: readRequiredEnv("FEISHU_APP_ID", env.FEISHU_APP_ID),
@@ -506,6 +561,28 @@ function readGroupIdListEnv(name: string, value: string | undefined): string[] {
   if (groupIds.some((groupId) => groupId.length > 512)) {
     throw new Error(`${name} group IDs must be at most 512 characters`);
   }
+  return groupIds;
+}
+
+function readRequiredUniqueGroupIdListEnv(name: string, value: string | undefined): string[] {
+  if (value === undefined || value.trim().length === 0) {
+    throw new Error(`${name} must contain at least one group`);
+  }
+  const parts = value.split(",");
+  const groupIds = parts.map((part) => part.trim());
+  if (groupIds.some((groupId) => groupId.length === 0)) {
+    throw new Error(`${name} must not contain blank group IDs`);
+  }
+  if (groupIds.length > 100) {
+    throw new Error(`${name} must contain at most 100 groups`);
+  }
+  if (groupIds.some((groupId) => groupId.length > 512)) {
+    throw new Error(`${name} group IDs must be at most 512 characters`);
+  }
+  if (new Set(groupIds).size !== groupIds.length) {
+    throw new Error(`${name} must contain unique group IDs`);
+  }
+
   return groupIds;
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
+import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
 
 describe("runtime cleanup", () => {
   it("rethrows one cleanup failure without wrapping it", async () => {
@@ -25,6 +26,7 @@ describe("runtime cleanup", () => {
   it("closes every resource and preserves all failures in operation order", async () => {
     const closeOrder: string[] = [];
     const eventCloseError = new Error("event worker cleanup failed");
+    const knowledgeCardCloseError = new Error("knowledge card cleanup failed");
     const runtimeCloseError = new Error("runtime-control pool cleanup failed");
     const eventWorkerRuntime = fakeEventWorkerRuntime({
       close: vi.fn(async () => {
@@ -36,11 +38,18 @@ describe("runtime cleanup", () => {
       closeOrder.push("runtime-control");
       throw runtimeCloseError;
     });
+    const knowledgeCardRuntime = fakeKnowledgeCardRuntime({
+      close: vi.fn(async () => {
+        closeOrder.push("knowledge-cards");
+        throw knowledgeCardCloseError;
+      }),
+    });
     const app = buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
+      createKnowledgeCardRuntime: () => knowledgeCardRuntime,
       closeRuntimeControl,
     });
 
@@ -57,10 +66,12 @@ describe("runtime cleanup", () => {
     );
     expect((cleanupError as AggregateError).errors).toEqual([
       eventCloseError,
+      knowledgeCardCloseError,
       runtimeCloseError,
     ]);
-    expect(closeOrder).toEqual(["event", "runtime-control"]);
+    expect(closeOrder).toEqual(["event", "knowledge-cards", "runtime-control"]);
     expect(eventWorkerRuntime.close).toHaveBeenCalledOnce();
+    expect(knowledgeCardRuntime.close).toHaveBeenCalledOnce();
     expect(closeRuntimeControl).toHaveBeenCalledOnce();
   });
 
@@ -111,6 +122,25 @@ function fakeEventWorkerRuntime(
       deadLetterEventCount: 0,
     })),
     start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeKnowledgeCardRuntime(
+  overrides: Partial<KnowledgeCardRuntime> = {},
+): KnowledgeCardRuntime {
+  return {
+    gateway: { handleCallback: vi.fn() },
+    repository: {} as KnowledgeCardRuntime["repository"],
+    deadLetters: {
+      list: vi.fn(async () => []),
+      replay: vi.fn(async () => "not_found" as const),
+      delete: vi.fn(async () => "not_found" as const),
+    },
+    canUseKnowledgeCards: vi.fn(() => true),
+    start: vi.fn(),
+    getStatus: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,
   };

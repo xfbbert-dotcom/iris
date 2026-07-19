@@ -5,6 +5,7 @@ import {
   readEventWorkerRuntimeConfig,
   readFeishuAuthConfig,
   readFeishuOpenApiConfig,
+  readKnowledgeCardRuntimeConfig,
   readModelProviderConfig,
   readOptionalFeishuBotOpenId,
   readReindexWorkerRuntimeConfig,
@@ -40,8 +41,18 @@ export type InternalRolloutReadinessReport = {
 };
 
 type CheckResult = Pick<InternalRolloutReadinessCheck, "status" | "detail">;
+export type InternalRolloutReadinessContext = {
+  knowledgeCardStatus?: {
+    ok: boolean;
+    enabled: boolean;
+    running: boolean;
+    dispatcher?: { running: boolean };
+    worker?: { running: boolean };
+    degradedReason?: string;
+  };
+};
 type CheckDefinition = Pick<InternalRolloutReadinessCheck, "id" | "title" | "envVars"> & {
-  evaluate(env: EnvLike): CheckResult;
+  evaluate(env: EnvLike, context: InternalRolloutReadinessContext): CheckResult;
 };
 
 const checkDefinitions: CheckDefinition[] = [
@@ -291,12 +302,53 @@ const checkDefinitions: CheckDefinition[] = [
       return pass("Internal operator APIs have a bearer token configured.");
     },
   },
+  {
+    id: "knowledgeCards",
+    title: "Knowledge-card confirmation runtime",
+    envVars: [
+      "IRIS_KNOWLEDGE_CARD_ENABLED",
+      "IRIS_KNOWLEDGE_CARD_GROUP_IDS",
+      "IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS",
+      "IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT",
+      "DATABASE_URL",
+      "REDIS_URL",
+      "FEISHU_VERIFICATION_TOKEN",
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "IRIS_FEISHU_BOT_OPEN_ID",
+    ],
+    evaluate(env, context) {
+      const config = readKnowledgeCardRuntimeConfig(env);
+      if (!config.enabled) {
+        return pass("Knowledge cards are safely disabled.");
+      }
+      const status = context.knowledgeCardStatus;
+      if (status === undefined) {
+        return fail("Knowledge-card runtime status is unavailable.");
+      }
+      if (!status.ok) {
+        return fail("Knowledge-card runtime status is unreadable.");
+      }
+      if (!status.enabled) {
+        return fail("Knowledge-card runtime is not available while configured enabled.");
+      }
+      if (
+        !status.running ||
+        status.dispatcher?.running !== true ||
+        status.worker?.running !== true
+      ) {
+        return fail("Knowledge-card dispatcher and interaction worker must both be running.");
+      }
+      return pass("Knowledge-card dispatcher and interaction worker are running.");
+    },
+  },
 ];
 
 export function buildInternalRolloutReadinessReport(
   env: EnvLike = process.env,
+  context: InternalRolloutReadinessContext = {},
 ): InternalRolloutReadinessReport {
-  const checks = checkDefinitions.map((definition) => runCheck(definition, env));
+  const checks = checkDefinitions.map((definition) => runCheck(definition, env, context));
   const passCount = checks.filter((check) => check.status === "pass").length;
   const warnCount = checks.filter((check) => check.status === "warn").length;
   const failCount = checks.filter((check) => check.status === "fail").length;
@@ -318,13 +370,17 @@ export function buildInternalRolloutReadinessReport(
   };
 }
 
-function runCheck(definition: CheckDefinition, env: EnvLike): InternalRolloutReadinessCheck {
+function runCheck(
+  definition: CheckDefinition,
+  env: EnvLike,
+  context: InternalRolloutReadinessContext,
+): InternalRolloutReadinessCheck {
   try {
     return {
       id: definition.id,
       title: definition.title,
       envVars: [...definition.envVars],
-      ...definition.evaluate(env),
+      ...definition.evaluate(env, context),
     };
   } catch (error) {
     return {

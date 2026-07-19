@@ -10,9 +10,97 @@ import {
   readDocumentSyncWorkerRuntimeConfig,
   readModelProviderConfig,
   readMemoryExtractionRuntimeConfig,
+  readKnowledgeCardRuntimeConfig,
   readReindexWorkerRuntimeConfig,
   readServerPort,
 } from "../src/config/env.js";
+
+describe("readKnowledgeCardRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: " oc_pilot ,oc_review ",
+    DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
+    REDIS_URL: " redis://redis:6379 ",
+    FEISHU_VERIFICATION_TOKEN: " verification-token ",
+    FEISHU_APP_ID: " app-id ",
+    FEISHU_APP_SECRET: " app-secret ",
+    IRIS_FEISHU_BOT_OPEN_ID: "ou_irisbot",
+  };
+
+  it("is disabled unless the feature value is exactly true", () => {
+    expect(readKnowledgeCardRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readKnowledgeCardRuntimeConfig({ IRIS_KNOWLEDGE_CARD_ENABLED: value })).toEqual({
+        enabled: false,
+      });
+    }
+  });
+
+  it("reads normalized enabled config with exact defaults", () => {
+    expect(readKnowledgeCardRuntimeConfig(enabledEnv)).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@postgres:5432/iris",
+      redisUrl: "redis://redis:6379",
+      enabledGroupIds: ["oc_pilot", "oc_review"],
+      intervalMs: 1000,
+      batchLimit: 10,
+      botOpenId: "ou_irisbot",
+    });
+  });
+
+  it("requires every enabled runtime authority and adapter input", () => {
+    const required = [
+      ["IRIS_KNOWLEDGE_CARD_GROUP_IDS", "IRIS_KNOWLEDGE_CARD_GROUP_IDS must contain at least one group"],
+      ["DATABASE_URL", "DATABASE_URL is required for database operations"],
+      ["REDIS_URL", "REDIS_URL is required"],
+      ["FEISHU_VERIFICATION_TOKEN", "FEISHU_VERIFICATION_TOKEN is required"],
+      ["FEISHU_APP_ID", "FEISHU_APP_ID is required"],
+      ["FEISHU_APP_SECRET", "FEISHU_APP_SECRET is required"],
+      ["IRIS_FEISHU_BOT_OPEN_ID", "IRIS_FEISHU_BOT_OPEN_ID is required when knowledge cards are enabled"],
+    ] as const;
+
+    for (const [name, message] of required) {
+      expect(() => readKnowledgeCardRuntimeConfig({ ...enabledEnv, [name]: " " })).toThrow(message);
+    }
+  });
+
+  it("rejects blank, duplicate, overlong, and oversized group allowlists", () => {
+    for (const value of ["oc_one,,oc_two", "oc_one,  ,oc_two"]) {
+      expect(() => readKnowledgeCardRuntimeConfig({
+        ...enabledEnv,
+        IRIS_KNOWLEDGE_CARD_GROUP_IDS: value,
+      })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS must not contain blank group IDs");
+    }
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_one, oc_one",
+    })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS must contain unique group IDs");
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: `oc_${"a".repeat(510)}`,
+    })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS group IDs must be at most 512 characters");
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: Array.from({ length: 101 }, (_, index) => `oc_${index}`).join(","),
+    })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS must contain at most 100 groups");
+  });
+
+  it("enforces timer and batch bounds", () => {
+    expect(readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS: "2500",
+      IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT: "100",
+    })).toMatchObject({ intervalMs: 2500, batchLimit: 100 });
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS: "2147483648",
+    })).toThrow("IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS must not exceed 2147483647");
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT: "101",
+    })).toThrow("IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT must not exceed 100");
+  });
+});
 
 describe("readFeishuAuthConfig", () => {
   it("reads Feishu verification token and encrypt key from the environment", () => {

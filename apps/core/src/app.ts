@@ -84,6 +84,11 @@ import {
   createKnowledgeDraftRuntime as createDefaultKnowledgeDraftRuntime,
   type KnowledgeDraftRuntime,
 } from "./runtime/knowledge-draft-runtime.js";
+import {
+  createKnowledgeCardRuntime as createDefaultKnowledgeCardRuntime,
+  type KnowledgeCardRuntime,
+} from "./runtime/knowledge-card-runtime.js";
+import { registerKnowledgeCardApi } from "./knowledge-cards/knowledge-card-api.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
@@ -133,6 +138,9 @@ export type BuildAppDependencies = {
   createKnowledgeDraftRuntime?: (
     input?: Parameters<typeof createDefaultKnowledgeDraftRuntime>[0],
   ) => KnowledgeDraftRuntime | undefined;
+  createKnowledgeCardRuntime?: (
+    input?: Parameters<typeof createDefaultKnowledgeCardRuntime>[0],
+  ) => KnowledgeCardRuntime | undefined;
 };
 
 export type StartServerOptions = {
@@ -277,6 +285,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let documentSyncRuntime: DocumentSyncRuntime | undefined;
   let conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
+  let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   let startupApp: FastifyInstance | undefined;
   let appOwnsRuntimeResources = false;
@@ -306,6 +315,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     knowledgeDraftRuntime = (
       dependencies.createKnowledgeDraftRuntime ?? createDefaultKnowledgeDraftRuntime
     )({ runtimeController });
+    knowledgeCardRuntime = (
+      dependencies.createKnowledgeCardRuntime ?? createDefaultKnowledgeCardRuntime
+    )({ runtimeController });
+    knowledgeCardRuntime?.start();
     eventWorkerRuntime =
       (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
         runtimeController,
@@ -395,6 +408,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     authenticationConfigured: internalApiToken !== undefined,
     now,
   });
+  registerKnowledgeCardApi(app, knowledgeCardRuntime, { now });
 
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
@@ -448,6 +462,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       controller: runtimeController,
       service: runtimeControlService,
     });
+    const knowledgeCards = await getKnowledgeCardStatus(knowledgeCardRuntime);
     const components = {
       audit: {
         ok: true,
@@ -488,12 +503,16 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       reindex: await getReindexStatus(reindexWorkerRuntime),
     };
 
-    return buildInternalStatusSnapshot({ components, generatedAt: now() });
+    return buildInternalStatusSnapshot({ components, generatedAt: now(), knowledgeCards });
   });
 
-  app.get("/internal/readiness", async () =>
-    buildInternalRolloutReadinessReport(dependencies.readinessEnv ?? process.env),
-  );
+  app.get("/internal/readiness", async () => {
+    const knowledgeCardStatus = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    return buildInternalRolloutReadinessReport(
+      dependencies.readinessEnv ?? process.env,
+      { knowledgeCardStatus },
+    );
+  });
 
   app.get("/internal/runtime-control/status", async () => ({
     ...await readRuntimeControlStatus({
@@ -1468,6 +1487,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
       () => conversationStateInspectionRuntime?.close(),
+      () => knowledgeCardRuntime?.close(),
       () => knowledgeDraftRuntime?.close(),
       () => dependencies.closeRuntimeControl?.(),
     ]);
@@ -1485,6 +1505,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       eventWorkerRuntime,
       documentSyncRuntime,
       conversationStateInspectionRuntime,
+      knowledgeCardRuntime,
       knowledgeDraftRuntime,
     });
     dependencies.onRuntimeStartupCleanup?.(cleanup);
@@ -1504,6 +1525,20 @@ function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
           latestEnqueueError: state.latestEnqueueError,
         }),
   };
+}
+
+async function getKnowledgeCardStatus(runtime: KnowledgeCardRuntime | undefined) {
+  if (runtime === undefined) return undefined;
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "knowledge_card_status_unavailable" as const,
+    };
+  }
 }
 
 function readInternalApiToken(value: string | undefined): string | undefined {
@@ -1620,6 +1655,7 @@ function scheduleRuntimeStartupCleanup({
   eventWorkerRuntime,
   documentSyncRuntime,
   conversationStateInspectionRuntime,
+  knowledgeCardRuntime,
   knowledgeDraftRuntime,
 }: {
   app: Pick<FastifyInstance, "close"> | undefined;
@@ -1630,6 +1666,7 @@ function scheduleRuntimeStartupCleanup({
   eventWorkerRuntime: EventWorkerRuntime | undefined;
   documentSyncRuntime: DocumentSyncRuntime | undefined;
   conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
+  knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
 }): Promise<void> {
   const cleanup = closeRuntimeResources([
@@ -1640,6 +1677,7 @@ function scheduleRuntimeStartupCleanup({
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
     () => conversationStateInspectionRuntime?.close(),
+    () => knowledgeCardRuntime?.close(),
     () => knowledgeDraftRuntime?.close(),
     () => app?.close(),
   ]);

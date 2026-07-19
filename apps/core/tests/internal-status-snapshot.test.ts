@@ -301,4 +301,67 @@ describe("buildInternalStatusSnapshot", () => {
       failed: false,
     });
   });
+
+  it("adds an immutable content-free knowledge-card snapshot without changing component order", () => {
+    const knowledgeCards = {
+      ok: true,
+      enabled: true,
+      running: true,
+      enabledGroupCount: 1,
+      dispatcher: {
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 10,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt: new Date("2026-07-19T08:00:00.000Z"),
+          finishedAt: new Date("2026-07-19T08:00:01.000Z"),
+          sentCount: 1,
+          updatedCount: 0,
+          retryingCount: 0,
+          permanentFailureCount: 0,
+          outcomeUnknownCount: 0,
+          failed: false as const,
+        },
+      },
+      worker: { running: true, intervalMs: 1000, batchLimit: 10 },
+      queue: { pending: 1, processing: 2, delayed: 3, deadLetter: 4 },
+      presentations: {
+        pending_send: 1,
+        active: 2,
+        superseded: 3,
+        closed: 4,
+        send_failed: 5,
+        pendingSend: 1,
+      },
+    };
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-19T08:00:02.000Z"),
+      components: { audit: { ok: true, enabled: true } },
+      knowledgeCards,
+    });
+
+    expect(snapshot.componentOrder).toEqual(["audit"]);
+    const cardSnapshot = snapshot.knowledgeCards;
+    if (cardSnapshot === undefined) throw new Error("expected knowledge-card snapshot");
+    expect(cardSnapshot.queue).toEqual({
+      pending: 1,
+      processing: 2,
+      delayed: 3,
+      deadLetter: 4,
+    });
+    expect(Object.keys(cardSnapshot.queue)).toEqual([
+      "pending",
+      "processing",
+      "delayed",
+      "deadLetter",
+    ]);
+    cardSnapshot.dispatcher.latestBatch!.startedAt.setUTCFullYear(2030);
+    expect(knowledgeCards.dispatcher.latestBatch.startedAt).toEqual(
+      new Date("2026-07-19T08:00:00.000Z"),
+    );
+    expect(JSON.stringify(cardSnapshot)).not.toMatch(
+      /draft body|evidence|reason|actorOpenId|token-secret/u,
+    );
+  });
 });

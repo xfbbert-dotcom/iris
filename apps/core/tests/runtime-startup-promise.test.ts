@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createDocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import { createEventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import { createReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
+import {
+  createKnowledgeCardRuntime,
+  type KnowledgeCardRuntimeDependencies,
+} from "../src/runtime/knowledge-card-runtime.js";
+import { RuntimeController } from "../src/admin/runtime-controller.js";
+import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 
 describe("runtime startup promises", () => {
   it("does not emit an unhandled rejection when event worker Redis connect fails before use", async () => {
@@ -73,6 +79,26 @@ describe("runtime startup promises", () => {
     ).rejects.toThrow("profile store unavailable");
     await runtime?.close();
   });
+
+  it("observes knowledge-card Redis startup failure and still closes Postgres", async () => {
+    const dependencies = knowledgeCardDependencies({
+      connect: vi.fn(async () => {
+        throw new Error("knowledge card redis unavailable");
+      }),
+    });
+    const runtime = await expectNoUnhandledRejectionDuringStartup(() =>
+      createKnowledgeCardRuntime({
+        env: knowledgeCardEnv(),
+        runtimeController: new RuntimeController(createDefaultRuntimeConfig()),
+        dependencies,
+      }),
+    );
+
+    await expect(runtime?.getStatus()).rejects.toThrow("knowledge card redis unavailable");
+    await expect(runtime?.close()).rejects.toThrow("knowledge card redis unavailable");
+    expect(dependencies.redis.quit).toHaveBeenCalledOnce();
+    expect(dependencies.pool.end).toHaveBeenCalledOnce();
+  });
 });
 
 async function expectNoUnhandledRejectionDuringStartup<T>(createRuntime: () => T): Promise<T> {
@@ -121,6 +147,19 @@ function reindexWorkerEnv() {
     IRIS_EMBEDDING_API_KEY: "key",
     IRIS_EMBEDDING_MODEL: "text-embedding-small",
     IRIS_EMBEDDING_DIMENSIONS: "1536",
+  };
+}
+
+function knowledgeCardEnv() {
+  return {
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    DATABASE_URL: "postgres://example",
+    REDIS_URL: "redis://localhost:6379",
+    FEISHU_VERIFICATION_TOKEN: "verification-token",
+    FEISHU_APP_ID: "app-id",
+    FEISHU_APP_SECRET: "app-secret",
+    IRIS_FEISHU_BOT_OPEN_ID: "ou_irisbot",
   };
 }
 
@@ -270,6 +309,60 @@ function redisClientFixture({ connect }: { connect: ReturnType<typeof vi.fn> }) 
   };
 
   return redisClient;
+}
+
+function knowledgeCardDependencies({ connect }: { connect: ReturnType<typeof vi.fn> }) {
+  const pool = {
+    query: vi.fn(),
+    connect: vi.fn(),
+    end: vi.fn(async () => undefined),
+  };
+  const redis = {
+    connect,
+    quit: vi.fn(async () => undefined),
+    eval: vi.fn(async () => 1),
+  };
+  const repository = {
+    createPresentation: vi.fn(),
+    claimPresentationSend: vi.fn(async () => undefined),
+    beginExternalAttempt: vi.fn(),
+    failPresentationPreparation: vi.fn(),
+    completePresentationSend: vi.fn(),
+    failPresentationSend: vi.fn(),
+    applyInteraction: vi.fn(),
+    getPresentation: vi.fn(),
+    getPresentationContext: vi.fn(),
+    listPresentations: vi.fn(async () => []),
+    getStatusCounts: vi.fn(async () => ({
+      pending_send: 0,
+      active: 0,
+      superseded: 0,
+      closed: 0,
+      send_failed: 0,
+      pendingSend: 0,
+    })),
+  };
+  const loop = () => ({
+    start: vi.fn(),
+    stop: vi.fn(async () => undefined),
+    isRunning: vi.fn(() => false),
+    getSnapshot: vi.fn(() => ({ running: false, intervalMs: 1000, batchLimit: 10 })),
+  });
+  const dependencies = {
+    createPostgresPool: vi.fn(() => pool),
+    createRedisClient: vi.fn(() => redis),
+    createKnowledgeDraftRepository: vi.fn(() => ({ getDraft: vi.fn() })),
+    createKnowledgeCardRepository: vi.fn(() => repository),
+    createFeishuTenantAccessTokenProvider: vi.fn(() => ({ getTenantAccessToken: vi.fn() })),
+    createFeishuInteractiveCardClient: vi.fn(() => ({
+      sendCard: vi.fn(),
+      updateCard: vi.fn(),
+    })),
+    createFeishuGroupMembershipChecker: vi.fn(() => ({ isCurrentMember: vi.fn() })),
+    createDispatcherLoop: vi.fn(loop),
+    createInteractionLoop: vi.fn(loop),
+  } satisfies KnowledgeCardRuntimeDependencies;
+  return Object.assign(dependencies, { pool, redis });
 }
 
 function embeddingProfile() {

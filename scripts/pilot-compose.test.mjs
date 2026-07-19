@@ -163,6 +163,18 @@ test("keeps semantic thread and action extraction disabled by default", () => {
   assert.doesNotMatch(caddyfile, /@internal|path \/internal|reverse_proxy \/internal/u);
 });
 
+test("keeps knowledge cards disabled with an empty pilot allowlist", () => {
+  const expectedValues = {
+    IRIS_KNOWLEDGE_CARD_ENABLED: "false",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
+  };
+
+  for (const [name, expected] of Object.entries(expectedValues)) {
+    assert.equal(readEnvAssignment(pilotCiEnv, name), expected, `${name} must match in CI env`);
+    assert.equal(compose.services.core.environment[name], expected);
+  }
+});
+
 test("requires exhaustive group isolation and a real proactive-speech status gate", () => {
   const globalEnableIndex = conversationStateAcceptanceRunbook.indexOf("# GLOBAL_ENABLE");
   assert.notEqual(globalEnableIndex, -1, "runbook must mark the global-enable boundary");

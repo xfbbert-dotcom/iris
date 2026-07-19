@@ -233,7 +233,113 @@ describe("buildInternalRolloutReadinessReport", () => {
       },
     });
   });
+
+  it("reports the default-off knowledge-card state as safely disabled", () => {
+    const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
+
+    expect(checksById(report)).toMatchObject({
+      knowledgeCards: {
+        status: "pass",
+        detail: "Knowledge cards are safely disabled.",
+        envVars: [
+          "IRIS_KNOWLEDGE_CARD_ENABLED",
+          "IRIS_KNOWLEDGE_CARD_GROUP_IDS",
+          "IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS",
+          "IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT",
+          "DATABASE_URL",
+          "REDIS_URL",
+          "FEISHU_VERIFICATION_TOKEN",
+          "FEISHU_APP_ID",
+          "FEISHU_APP_SECRET",
+          "IRIS_FEISHU_BOT_OPEN_ID",
+        ],
+      },
+    });
+  });
+
+  it("passes enabled knowledge cards only while both loops and status are healthy", () => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: knowledgeCardStatus() },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "pass",
+      detail: "Knowledge-card dispatcher and interaction worker are running.",
+    });
+  });
+
+  it("fails closed for incomplete config, stopped loops, absent status, and unreadable status", () => {
+    const incomplete = buildInternalRolloutReadinessReport(readyRolloutEnv({
+      IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
+    }));
+    expect(checksById(incomplete).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "IRIS_KNOWLEDGE_CARD_GROUP_IDS must contain at least one group",
+    });
+
+    const stopped = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: knowledgeCardStatus({
+        running: false,
+        dispatcher: { running: false, intervalMs: 1000, batchLimit: 10 },
+      }) },
+    );
+    expect(checksById(stopped).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card dispatcher and interaction worker must both be running.",
+    });
+
+    const absent = buildInternalRolloutReadinessReport(knowledgeCardEnabledEnv());
+    expect(checksById(absent).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card runtime status is unavailable.",
+    });
+
+    const unreadable = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: {
+        ok: false,
+        enabled: true,
+        running: false,
+        degradedReason: "knowledge_card_status_unavailable",
+      } },
+    );
+    expect(checksById(unreadable).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card runtime status is unreadable.",
+    });
+  });
 });
+
+function knowledgeCardEnabledEnv(): EnvLike {
+  return readyRolloutEnv({
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+  });
+}
+
+function knowledgeCardStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    ok: true as const,
+    enabled: true as const,
+    running: true,
+    enabledGroupCount: 1,
+    dispatcher: { running: true, intervalMs: 1000, batchLimit: 10 },
+    worker: { running: true, intervalMs: 1000, batchLimit: 10 },
+    queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
+    presentations: {
+      pending_send: 0,
+      active: 0,
+      superseded: 0,
+      closed: 0,
+      send_failed: 0,
+      pendingSend: 0,
+    },
+    ...overrides,
+  };
+}
 
 function readyRolloutEnv(overrides: EnvLike = {}): EnvLike {
   return {
