@@ -456,7 +456,8 @@ async function createPresentation(
     const supersessionCandidates = await client.query<Pick<PresentationRow, "id" | "version">>(
       `SELECT presentation.id, presentation.version
        FROM knowledge_draft_presentations presentation
-       WHERE presentation.draft_id = $1 AND presentation.state IN ('pending_send', 'active')
+       WHERE presentation.draft_id = $1
+         AND presentation.state IN ('pending_send', 'active', 'send_failed')
        ORDER BY presentation.id ASC
        FOR UPDATE OF presentation`,
       [normalized.draftId],
@@ -482,7 +483,7 @@ async function createPresentation(
       : await client.query<Pick<PresentationRow, "id" | "version">>(
       `UPDATE knowledge_draft_presentations
        SET state = 'superseded', version = version + 1
-       WHERE id = ANY($1::TEXT[]) AND state IN ('pending_send', 'active')
+       WHERE id = ANY($1::TEXT[]) AND state IN ('pending_send', 'active', 'send_failed')
        RETURNING id, version`,
         [candidateIds],
       );
@@ -501,7 +502,8 @@ async function createPresentation(
         `UPDATE knowledge_draft_presentation_outbox
          SET state = 'failed', worker_id = NULL, lease_until = NULL,
              retry_at = NULL, error_code = 'superseded', updated_at = $2
-         WHERE presentation_id = ANY($1::TEXT[]) AND state IN ('pending', 'processing')`,
+         WHERE presentation_id = ANY($1::TEXT[])
+           AND state IN ('pending', 'processing', 'failed')`,
         [superseded.rows.map((row) => row.id), normalized.at],
       );
     }

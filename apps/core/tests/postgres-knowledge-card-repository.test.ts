@@ -40,6 +40,10 @@ describe("knowledge card migration contract", () => {
     new URL("../migrations/0031_knowledge_draft_presentations.sql", import.meta.url),
     "utf8",
   );
+  const repositorySource = readFileSync(
+    new URL("../src/knowledge-cards/postgres-knowledge-card-repository.ts", import.meta.url),
+    "utf8",
+  );
 
   it("defines immutable presentation and confirmation facts", () => {
     for (const table of [
@@ -92,6 +96,15 @@ describe("knowledge card migration contract", () => {
     expect(dataSource.query).toHaveBeenCalledWith(expect.stringContaining(
       "count(*) FILTER (WHERE state = 'external_attempting')",
     ));
+  });
+
+  it("archives a terminal send failure when a corrected presentation replaces it", () => {
+    expect(repositorySource).toMatch(
+      /presentation\.state IN \('pending_send', 'active', 'send_failed'\)/u,
+    );
+    expect(repositorySource).toMatch(
+      /state IN \('pending', 'processing', 'failed'\)/u,
+    );
   });
 
   it("locks supersession presentations before outboxes and rejects external attempts", async () => {
@@ -1184,6 +1197,59 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       expect.objectContaining({ id: active.presentation.id, state: "superseded" }),
       expect.objectContaining({ id: pending.presentation.id, state: "superseded" }),
     ]);
+    await retireOutbox(replacement.presentation.id);
+  });
+
+  it("supersedes a terminal send failure and clears its readiness blocker on replacement", async () => {
+    const repository = cardRepository();
+    const before = await repository.getOutboxStatusCounts();
+    const draft = await createDraft("supersede-terminal-failure");
+    const failed = await repository.createPresentation(
+      presentationInput("supersede-terminal-failure-original", draft.id),
+    );
+    await repository.claimPresentationSend({
+      workerId: "worker-supersede-terminal-failure",
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+    await repository.beginExternalAttempt({
+      presentationId: failed.presentation.id,
+      workerId: "worker-supersede-terminal-failure",
+      at: plusSeconds(1),
+    });
+    await repository.failPresentationSend({
+      presentationId: failed.presentation.id,
+      workerId: "worker-supersede-terminal-failure",
+      classification: "permanent",
+      errorCode: "remote_rejected",
+      at: plusSeconds(2),
+    });
+    await expect(repository.getOutboxStatusCounts()).resolves.toMatchObject({
+      failed: before.failed + 1,
+      terminalFailed: before.terminalFailed + 1,
+    });
+
+    const replacement = await repository.createPresentation(
+      presentationInput("supersede-terminal-failure-replacement", draft.id, {
+        at: plusSeconds(3),
+      }),
+    );
+
+    await expect(repository.getPresentation(failed.presentation.id)).resolves.toMatchObject({
+      state: "superseded",
+      version: 3,
+    });
+    await expect(pool.query(
+      "SELECT state, error_code FROM knowledge_draft_presentation_outbox WHERE presentation_id = $1",
+      [failed.presentation.id],
+    )).resolves.toMatchObject({
+      rows: [{ state: "failed", error_code: "superseded" }],
+    });
+    await expect(repository.getOutboxStatusCounts()).resolves.toMatchObject({
+      pending: before.pending + 1,
+      failed: before.failed + 1,
+      terminalFailed: before.terminalFailed,
+    });
     await retireOutbox(replacement.presentation.id);
   });
 
