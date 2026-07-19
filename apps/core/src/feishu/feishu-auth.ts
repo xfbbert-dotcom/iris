@@ -118,14 +118,30 @@ export function createFeishuRequestVerifier(
           now: now(),
           maxTimestampSkewSeconds,
         }) &&
-        verifyFeishuSignature({
-          headers: request.headers,
-          rawBody: request.rawBody,
-          encryptKey,
-        }));
+        verifyFeishuRequestSignature(request, encryptKey));
 
     return tokenVerified && signatureVerified;
   };
+}
+
+function verifyFeishuRequestSignature(request: FeishuAuthRequest, encryptKey: string): boolean {
+  const rawBody = request.rawBody;
+  if (rawBody === undefined) return false;
+  if (verifyFeishuSignature({ headers: request.headers, rawBody, encryptKey })) return true;
+
+  let serializedBody: string | undefined;
+  try {
+    serializedBody = JSON.stringify(request.body);
+  } catch {
+    return false;
+  }
+  return serializedBody !== undefined &&
+    serializedBody !== rawBody &&
+    verifyFeishuSignature({
+      headers: request.headers,
+      rawBody: serializedBody,
+      encryptKey,
+    });
 }
 
 function resolveMaxTimestampSkewSeconds(value: number | undefined): number | undefined {

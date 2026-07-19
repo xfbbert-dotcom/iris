@@ -117,6 +117,28 @@ describe("Feishu auth primitives", () => {
     ).toBe(true);
   });
 
+  it("accepts encrypted callback signatures over Feishu's parsed JSON serialization", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = '{\n  "encrypt": "encrypted-callback-payload"\n}';
+    const timestamp = "1782864000";
+    const nonce = "nonce-1";
+    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+      now: () => new Date("2026-07-01T00:00:00.000Z"),
+      maxTimestampSkewSeconds: 300,
+      requireSignature: true,
+    });
+
+    expect(verifier({
+      headers: {
+        "x-lark-request-timestamp": timestamp,
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(timestamp, nonce, JSON.stringify(body)),
+      },
+      body,
+      rawBody,
+    })).toBe(true);
+  });
+
   it("rejects invalid signatures without throwing", () => {
     expect(
       verifyFeishuSignature({

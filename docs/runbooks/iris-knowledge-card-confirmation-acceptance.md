@@ -187,6 +187,8 @@ if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true" -or (Get-PilotEn
 
 从外部确认 `/health` 为 `200`，且 `POST /feishu/events` 与 `POST /feishu/card-actions` 都能到达 Core（不得为 `404`）；公开 `/internal/*`、`/feishu/card-actions/extra` 和其他未列出的路径必须为 `404`。AI Worker 不得公开端口，Caddy 只能代理上述两个精确回调路径，不能代理 `/internal/*` 或 Feishu 通配路径。
 
+真实卡片点击若在 Core 记录 `feishu_card_callback` 的 `envelope_rejected`，不得放宽鉴权或伪造验收。先核对飞书官方 SDK 的新版加密回调签名序列化规则；Iris 只允许原始 JSON 或同一已解析 JSON 的紧凑序列化通过签名，并继续要求有效时间窗、解密后 Verification Token 和精确 `app_id`。修复后必须重新从真实飞书卡片点击验证回调入队与 Postgres 事实。
+
 卡片回调明确返回“操作未提交，请稍后重试”时才允许稍后重新操作。若返回“提交状态未确认，请勿重复点击；请以卡片最终状态为准”，不得再次点击；等待原单次幂等入队完成并以卡片最终状态、approval-interaction 队列计数和 Postgres 事实核对结果。超时路径不得自动发起第二次入队。
 
 ## 真实 Feishu 六例
