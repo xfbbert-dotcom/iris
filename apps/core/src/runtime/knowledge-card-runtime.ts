@@ -9,7 +9,10 @@ import {
 } from "../config/env.js";
 import type { DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
-import { createFeishuRequestVerifier } from "../feishu/feishu-auth.js";
+import {
+  createFeishuRequestVerifier,
+  isFeishuUrlVerificationPayload,
+} from "../feishu/feishu-auth.js";
 import {
   createFeishuCardActionGateway,
   type FeishuCardActionCallbackRequest,
@@ -230,7 +233,8 @@ export function createKnowledgeCardRuntime({
       queue,
       verifyRequest(request) {
         return verifyFeishuRequest(request) &&
-          readCallbackAppId(request) === feishuConfig.appId;
+          (isFeishuUrlVerificationPayload(request.body) ||
+            readCallbackAppId(request) === feishuConfig.appId);
       },
     });
     let lifecycle: "idle" | "starting" | "started" | "failed" | "closed" = "idle";

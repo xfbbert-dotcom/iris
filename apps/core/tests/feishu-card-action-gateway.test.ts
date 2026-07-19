@@ -30,6 +30,24 @@ describe("FeishuCardActionGateway", () => {
     expect(queue.enqueue).not.toHaveBeenCalled();
   });
 
+  it("returns a verified URL challenge without parsing or enqueueing a card action", async () => {
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const gateway = createFeishuCardActionGateway({ queue, verifyRequest: () => true });
+
+    await expect(gateway.handleCallback({
+      headers: {},
+      body: {
+        type: "url_verification",
+        challenge: "card-callback-challenge",
+        token: "verification-token",
+      },
+    })).resolves.toEqual({
+      statusCode: 200,
+      body: { challenge: "card-callback-challenge" },
+    });
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
   it("rejects a token-only card callback when a signature is required", async () => {
     const now = new Date("2026-07-19T00:00:00.000Z");
     const body = cardAction();

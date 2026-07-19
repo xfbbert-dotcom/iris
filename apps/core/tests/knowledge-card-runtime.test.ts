@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeController } from "../src/admin/runtime-controller.js";
@@ -14,6 +15,41 @@ describe("KnowledgeCardRuntime", () => {
     expect(createKnowledgeCardRuntime({ env: {}, dependencies })).toBeUndefined();
     expect(dependencies.createPostgresPool).not.toHaveBeenCalled();
     expect(dependencies.createRedisClient).not.toHaveBeenCalled();
+  });
+
+  it("accepts a signed URL challenge before requiring a card callback app id", async () => {
+    const dependencies = runtimeDependencies();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+    const body = {
+      type: "url_verification",
+      challenge: "card-callback-challenge",
+      token: "verification-token",
+    };
+    const rawBody = JSON.stringify(body);
+    const timestamp = String(Math.floor(Date.now() / 1_000));
+    const nonce = "card-callback-nonce";
+
+    await expect(runtime.gateway.handleCallback({
+      headers: {
+        "x-lark-request-timestamp": timestamp,
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": createHash("sha256")
+          .update(timestamp + nonce + "encrypt-key" + rawBody)
+          .digest("hex"),
+      },
+      body,
+      rawBody,
+    })).resolves.toEqual({
+      statusCode: 200,
+      body: { challenge: "card-callback-challenge" },
+    });
+    expect(dependencies.queue.enqueue).not.toHaveBeenCalled();
+
+    await runtime.close();
   });
 
   it("owns one pool and Redis client, shares one token provider, and combines every group gate", async () => {

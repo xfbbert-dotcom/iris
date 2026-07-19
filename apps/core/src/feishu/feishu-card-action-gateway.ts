@@ -6,6 +6,7 @@ import {
   parseFeishuCardAction,
   type ParsedFeishuCardAction,
 } from "./feishu-card-action.js";
+import { isFeishuUrlVerificationPayload } from "./feishu-auth.js";
 
 const ENQUEUE_TIMEOUT_MS = 1_000;
 
@@ -44,6 +45,12 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
         return rejectedResponse(401);
       }
       if (!verified) return rejectedResponse(401);
+      if (isFeishuUrlVerificationPayload(request.body)) {
+        return {
+          statusCode: 200,
+          body: { challenge: request.body.challenge },
+        };
+      }
 
       const action = parseFeishuCardAction(request.body);
       if (action === undefined) return rejectedResponse(400);
