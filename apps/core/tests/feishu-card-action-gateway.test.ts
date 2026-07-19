@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
+import { createFeishuRequestVerifier } from "../src/feishu/feishu-auth.js";
 import { createFeishuCardActionGateway } from "../src/feishu/feishu-card-action-gateway.js";
 
 describe("FeishuCardActionGateway", () => {
@@ -26,6 +28,77 @@ describe("FeishuCardActionGateway", () => {
       body: { ok: false },
     });
     expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("rejects a token-only card callback when a signature is required", async () => {
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const body = cardAction();
+    const rawBody = JSON.stringify(body);
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: createFeishuRequestVerifier({
+        verificationToken: "verification-token",
+      }, {
+        now: () => now,
+        requireSignature: true,
+      }),
+    });
+
+    await expect(gateway.handleCallback({ headers: {}, body, rawBody })).resolves.toMatchObject({
+      statusCode: 401,
+    });
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsigned, missing-body, and stale signed card callbacks", async () => {
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const encryptKey = "card-action-encrypt-key";
+    const body = cardAction();
+    const rawBody = JSON.stringify(body);
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: createFeishuRequestVerifier({
+        verificationToken: "verification-token",
+        encryptKey,
+      }, {
+        now: () => now,
+        requireSignature: true,
+      }),
+    });
+    const signedHeaders = (timestamp: string) => ({
+      "x-lark-request-timestamp": timestamp,
+      "x-lark-request-nonce": "nonce-1",
+      "x-lark-signature": createHash("sha256")
+        .update(timestamp + "nonce-1" + encryptKey + rawBody)
+        .digest("hex"),
+    });
+
+    await expect(gateway.handleCallback({
+      headers: {
+        "x-lark-request-timestamp": String(nowSeconds),
+        "x-lark-request-nonce": "nonce-1",
+      },
+      body,
+      rawBody,
+    })).resolves.toMatchObject({ statusCode: 401 });
+    await expect(gateway.handleCallback({
+      headers: signedHeaders(String(nowSeconds)),
+      body,
+    })).resolves.toMatchObject({ statusCode: 401 });
+    await expect(gateway.handleCallback({
+      headers: signedHeaders(String(nowSeconds - 301)),
+      body,
+      rawBody,
+    })).resolves.toMatchObject({ statusCode: 401 });
+    await expect(gateway.handleCallback({
+      headers: signedHeaders(String(nowSeconds)),
+      body,
+      rawBody,
+    })).resolves.toMatchObject({ statusCode: 200 });
+    expect(queue.enqueue).toHaveBeenCalledTimes(1);
   });
 
   it("enqueues the normalized job once and acknowledges a fast enqueue", async () => {
@@ -59,7 +132,7 @@ describe("FeishuCardActionGateway", () => {
     });
   });
 
-  it("returns an error toast after one second when enqueue does not settle", async () => {
+  it("returns an uncertainty toast after one second when enqueue does not settle", async () => {
     vi.useFakeTimers();
     try {
       const queue = { enqueue: vi.fn(() => new Promise<"enqueued" | "duplicate">(() => undefined)) };
@@ -72,7 +145,7 @@ describe("FeishuCardActionGateway", () => {
 
       await expect(response).resolves.toEqual({
         statusCode: 200,
-        body: { toast: { type: "error", content: "\u64cd\u4f5c\u672a\u63d0\u4ea4\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5" } },
+        body: { toast: { type: "error", content: "\u63d0\u4ea4\u72b6\u6001\u672a\u786e\u8ba4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\uff1b\u8bf7\u4ee5\u5361\u7247\u6700\u7ec8\u72b6\u6001\u4e3a\u51c6" } },
       });
       expect(queue.enqueue).toHaveBeenCalledTimes(1);
     } finally {
@@ -93,7 +166,7 @@ describe("FeishuCardActionGateway", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(response).resolves.toEqual({
         statusCode: 200,
-        body: { toast: { type: "error", content: "\u64cd\u4f5c\u672a\u63d0\u4ea4\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5" } },
+        body: { toast: { type: "error", content: "\u63d0\u4ea4\u72b6\u6001\u672a\u786e\u8ba4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\uff1b\u8bf7\u4ee5\u5361\u7247\u6700\u7ec8\u72b6\u6001\u4e3a\u51c6" } },
       });
       expect(vi.getTimerCount()).toBe(0);
 
@@ -106,6 +179,33 @@ describe("FeishuCardActionGateway", () => {
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       process.off("unhandledRejection", unhandledRejection);
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not enqueue again when the single Redis write succeeds after the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const deferred = createDeferred<"enqueued" | "duplicate">();
+      const queue = { enqueue: vi.fn(() => deferred.promise) };
+      const gateway = createFeishuCardActionGateway({ queue, verifyRequest: () => true });
+      const response = gateway.handleCallback({ headers: {}, body: cardAction() });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(response).resolves.toEqual({
+        statusCode: 200,
+        body: { toast: { type: "error", content: "\u63d0\u4ea4\u72b6\u6001\u672a\u786e\u8ba4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\uff1b\u8bf7\u4ee5\u5361\u7247\u6700\u7ec8\u72b6\u6001\u4e3a\u51c6" } },
+      });
+
+      deferred.resolve("enqueued");
+      await Promise.resolve();
+
+      expect(queue.enqueue).toHaveBeenCalledOnce();
+      expect(queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        idempotencyKey: "feishu-card:cli_approval:event-1",
+      }));
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
       vi.useRealTimers();
     }
   });

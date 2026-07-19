@@ -17,18 +17,19 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
-  it("defines a durable presentation external-attempt outbox state in 0032", async () => {
+  it("reserves 0032 and defines the external-attempt outbox state in 0031", async () => {
     const migrationNames = await readdir(defaultMigrationsDir());
-    expect(migrationNames).toContain("0032_knowledge_card_external_attempts.sql");
+    expect(migrationNames.filter((name) => name.startsWith("0032_"))).toEqual([]);
 
     const sql = await readFile(
-      join(defaultMigrationsDir(), "0032_knowledge_card_external_attempts.sql"),
+      join(defaultMigrationsDir(), "0031_knowledge_draft_presentations.sql"),
       "utf8",
     );
     const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
-    expect(normalized).toContain("drop constraint knowledge_draft_presentation_outbox_state_check");
     expect(normalized).toContain("'external_attempting'");
-    expect(normalized).toContain("add constraint knowledge_draft_presentation_outbox_state_check check");
+    expect(normalized).toMatch(
+      /state text not null check \(state in \( ?'pending', 'processing', 'external_attempting', 'sent', 'failed', 'outcome_unknown' ?\)\)/u,
+    );
   });
 
   it("defines the named action-aware group-memory scope constraint in 0026", async () => {
@@ -781,7 +782,17 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           "0025_conversation_state_extraction.sql",
           "0026_projection_rollout_contracts.sql",
           "0030_knowledge_draft_facts.sql",
+          "0031_knowledge_draft_presentations.sql",
         ]),
+      });
+      await expect(client.query<{ definition: string }>(`
+        SELECT pg_get_constraintdef(constraint_row.oid) AS definition
+        FROM pg_constraint constraint_row
+        JOIN pg_class table_row ON table_row.oid = constraint_row.conrelid
+        WHERE table_row.oid = 'knowledge_draft_presentation_outbox'::regclass
+          AND constraint_row.conname = 'knowledge_draft_presentation_outbox_state_check'
+      `)).resolves.toMatchObject({
+        rows: [{ definition: expect.stringContaining("external_attempting") }],
       });
       await expect(client.query(`
         INSERT INTO group_memories (

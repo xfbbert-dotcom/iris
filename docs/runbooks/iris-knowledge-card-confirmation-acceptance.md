@@ -6,6 +6,7 @@
 
 - 真实 Feishu pilot 尚未通过；执行前需要批准、人工值守和失败即停止。
 - 令牌、密码、`FEISHU_APP_SECRET`、`IRIS_INTERNAL_API_TOKEN` 和草稿正文不得进入命令行历史、日志、报告或 PR。
+- 飞书卡片的原因输入上限必须保持 `1,000`；Core 服务端解析器保留 `2,000` 字符合同用于边界兼容，但不得向飞书发出 `max_length: 2000`。启用卡片前必须私下配置非空、最多 512 字符的 `FEISHU_ENCRYPT_KEY`，不得仅依赖 verification token。
 - 已检查的部署日志与 runbook 没有保留可用真实群 ID；其中的 `oc_group_id` 是历史占位符，旧群已删除或其 ID 未被保留。不得猜测或复用它。
 - 以下变量必须从当前机器人成员资格和 PostgreSQL 事实清单取得。三个已知群是负向控制；不能留空或用虚构 ID 代替。
 
@@ -114,11 +115,29 @@ if ($missingDisabledGroups.Count -ne 0) { throw "Runtime preflight did not disab
 ```powershell
 if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true") { throw "Knowledge cards are not explicitly enabled in .env.pilot" }
 if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_GROUP_IDS) -cne $PilotGroupId) { throw "Knowledge-card allowlist is not exactly the pilot group" }
+$encryptKey = Get-PilotEnvValue FEISHU_ENCRYPT_KEY
+if ([string]::IsNullOrWhiteSpace($encryptKey) -or $encryptKey.Length -gt 512) { throw "FEISHU_ENCRYPT_KEY must be privately configured and bounded before enabling knowledge cards" }
 ```
 
-重建后，`/internal/status` 的 `knowledgeCards` 只能包含 worker、queue 和 presentation 数字，不能含草稿正文、证据正文、`actorOpenId`、`reason` 或 token。`/internal/approval-interactions/status` 必须在内部 bearer 路由可读，且 `pending`、`processing`、`delayed`、`deadLetter` 都为 `0`。随后只将 `$PilotGroupId` group runtime 设为 `true`，三个 `$KnownGroupIds` 保持 disabled；最后才开启 global runtime 和 Caddy。每次 mutation 都必须验证 durable 结果，并在开启后重新读取完整状态：
+重建后，`/internal/status` 的 `knowledgeCards` 只能包含 worker、queue、presentation 和 outbox 数字，不能含草稿正文、证据正文、`actorOpenId`、`reason` 或 token。outbox 至少必须包含 `pending`、`processing`、`external_attempting`、`failed`、`outcome_unknown`，并以 `terminalFailed` 区分会阻断 readiness 的 terminal/exhausted 失败；历史 `superseded` failed 计数本身不阻断。`/internal/approval-interactions/status` 必须在内部 bearer 路由可读，且 `pending`、`processing`、`delayed`、`deadLetter` 都为 `0`。pilot 基线还要求 outbox 的普通在途计数排空，且没有 unresolved outcome-unknown 或 terminal failed。随后只将 `$PilotGroupId` group runtime 设为 `true`，三个 `$KnownGroupIds` 保持 disabled；最后才开启 global runtime 和 Caddy。每次 mutation 都必须验证 durable 结果，并在开启后重新读取完整状态：
 
 ```powershell
+$cardStatus = (Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/status).knowledgeCards
+if ($null -eq $cardStatus -or $cardStatus.running -ne $true -or $cardStatus.dispatcher.running -ne $true -or $cardStatus.worker.running -ne $true) { throw "Knowledge-card runtime is not fully running" }
+$requiredOutboxCounts = @("pending", "processing", "external_attempting", "sent", "failed", "outcome_unknown", "terminalFailed")
+$outboxCounts = @{}
+foreach ($name in $requiredOutboxCounts) {
+  if ($cardStatus.outbox.PSObject.Properties.Name -notcontains $name) { throw "Knowledge-card outbox status is missing $name" }
+  $count = 0L
+  if (-not [long]::TryParse([string]$cardStatus.outbox.$name, [ref]$count) -or $count -lt 0) { throw "Knowledge-card outbox count $name is invalid" }
+  $outboxCounts[$name] = $count
+}
+if ($outboxCounts.terminalFailed -gt $outboxCounts.failed) { throw "Knowledge-card terminal failed count exceeds failed count" }
+$unresolvedOutbox = @($outboxCounts.pending, $outboxCounts.processing, $outboxCounts.external_attempting, $outboxCounts.outcome_unknown, $outboxCounts.terminalFailed)
+if ((@($unresolvedOutbox | Where-Object { [long]$_ -ne 0 })).Count -ne 0) { throw "Knowledge-card outbox baseline is not drained or has unresolved failures" }
+$cardReadiness = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/readiness
+$cardReadinessCheck = @($cardReadiness.checks | Where-Object { $_.id -eq "knowledgeCards" })
+if ($cardReadiness.ok -ne $true -or $cardReadinessCheck.Count -ne 1 -or $cardReadinessCheck[0].status -ne "pass") { throw "Knowledge-card readiness is blocked" }
 $pilotEnable = Assert-DurableMutation (Invoke-RestMethod -Method Post -Headers $irisHeaders -Uri "http://localhost:3000/internal/runtime-control/groups/$PilotGroupId" -ContentType "application/json" -Body '{"enabled":true}') "Pilot group enable"
 $globalEnable = Assert-DurableMutation (Invoke-RestMethod -Method Post -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/global -ContentType "application/json" -Body '{"enabled":true}') "Global enable"
 $enabledRuntime = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/status
@@ -130,11 +149,13 @@ if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true" -or (Get-PilotEn
 
 从外部确认 `/health` 为 `200`、公开 `/internal/*` 为 `404`。AI Worker 不得公开端口，Caddy 不得代理 `/internal/*`。
 
+卡片回调明确返回“操作未提交，请稍后重试”时才允许稍后重新操作。若返回“提交状态未确认，请勿重复点击；请以卡片最终状态为准”，不得再次点击；等待原单次幂等入队完成并以卡片最终状态、approval-interaction 队列计数和 Postgres 事实核对结果。超时路径不得自动发起第二次入队。
+
 ## 真实 Feishu 六例
 
 每例使用测试草稿，等待 worker 清空，并将可见卡片结果与 Postgres 事实双向核对：
 
-1. 完整内容确认：当前 `pending_confirmation` 草稿确认后卡片已处理，只新增一次 group confirmation 和对应 append-only event，草稿进入 `pending_review`。
+1. 完整内容确认：操作前可见卡片必须显示 `Iris / pending_confirmation`、来源类型、草稿 ID、修订号和草稿版本，且不显示来源消息/证据原文；当前 `pending_confirmation` 草稿确认后卡片已处理，只新增一次 group confirmation 和对应 append-only event，草稿进入 `pending_review`。
 2. 要求修改：另一个当前草稿提交非空原因；卡片已处理，草稿状态和 event 与可见原因一致。
 3. 拒绝：第三个草稿在飞书确认拒绝；草稿为终态 rejected，后续点击不改变业务事实。
 4. 过期卡片：生成新修订或使证据失效后点击旧卡；必须 stale/不可处理，且不新增 confirmation、event 或状态变化。

@@ -81,7 +81,7 @@ describe("Redis approval interaction queue", () => {
     expect(client.eval.mock.calls.at(-1)?.[0]).toContain("approval-interaction:get-counts");
   });
 
-  it("recovers expired leases without reclaiming active work", async () => {
+  it("consumes one attempt while recovering expired leases without reclaiming active work", async () => {
     const client = new StatefulRedisClient();
     const queue = createQueue(client);
     const expired = jobFixture({ eventId: "event-expired", receivedAt: "2026-07-19T00:00:00.000Z" });
@@ -100,7 +100,94 @@ describe("Redis approval interaction queue", () => {
       workerId: "worker-b",
       now: "2026-07-19T00:00:10.000Z",
       leaseUntil: "2026-07-19T00:00:20.000Z",
-    })).resolves.toEqual([expired, active]);
+    })).resolves.toEqual([
+      { ...expired, attempts: 1 },
+      { ...active, attempts: 1 },
+    ]);
+  });
+
+  it("dead-letters a content-free deterministic record after five consecutive lease expiries", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client);
+    const queued = normalizeApprovalInteractionJob({
+      ...jobFixture({ eventId: "event-lease-expired" }),
+      action: "request_revision",
+      reason: "private revision reason",
+    });
+    await queue.enqueue(queued);
+
+    let [processing] = await claim(queue, {
+      now: "2026-07-19T00:00:00.000Z",
+      leaseUntil: "2026-07-19T00:00:01.000Z",
+    });
+    expect(processing).toMatchObject({ attempts: 0 });
+
+    for (let expiry = 1; expiry < 5; expiry += 1) {
+      [processing] = await claim(queue, {
+        workerId: `worker-${expiry}`,
+        now: `2026-07-19T00:00:0${expiry}.000Z`,
+        leaseUntil: `2026-07-19T00:00:0${expiry + 1}.000Z`,
+      });
+      expect(processing).toMatchObject({ attempts: expiry });
+      await expect(queue.getCounts()).resolves.toEqual({
+        pending: 0,
+        processing: 1,
+        delayed: 0,
+        deadLetter: 0,
+      });
+    }
+
+    await expect(claim(queue, {
+      workerId: "worker-5",
+      now: "2026-07-19T00:00:05.000Z",
+      leaseUntil: "2026-07-19T00:00:06.000Z",
+    })).resolves.toEqual([]);
+    await expect(queue.getCounts()).resolves.toEqual({
+      pending: 0,
+      processing: 0,
+      delayed: 0,
+      deadLetter: 1,
+    });
+
+    const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
+    expect(deadLetter).toEqual({
+      id: leaseExpiredDeadLetterId(queued.idempotencyKey),
+      attempts: 5,
+      errorCode: "lease_expired",
+      failedAt: new Date("2026-07-19T00:00:05.000Z"),
+      replayable: false,
+    });
+    expect(JSON.stringify(deadLetter)).not.toContain("private revision reason");
+    await expect(queue.replayDeadLetter(deadLetter!.id)).resolves.toBe("not_found");
+  });
+
+  it("counts one lease expiry and one normal failure as exactly two attempts", async () => {
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client);
+    await queue.enqueue(jobFixture({ eventId: "event-lease-then-failure" }));
+    await claim(queue, {
+      workerId: "worker-a",
+      now: "2026-07-19T00:00:00.000Z",
+      leaseUntil: "2026-07-19T00:00:01.000Z",
+    });
+    const [recovered] = await claim(queue, {
+      workerId: "worker-b",
+      now: "2026-07-19T00:00:01.000Z",
+      leaseUntil: "2026-07-19T00:00:02.000Z",
+    });
+    expect(recovered).toMatchObject({ attempts: 1 });
+
+    await expect(queue.handleFailure({
+      job: recovered!,
+      workerId: "worker-b",
+      errorCode: "repository_unavailable",
+      at: new Date("2026-07-19T00:00:01.000Z"),
+    })).resolves.toEqual({ action: "delayed" });
+    await expect(claim(queue, {
+      workerId: "worker-c",
+      now: "2026-07-19T00:00:06.000Z",
+      leaseUntil: "2026-07-19T00:00:07.000Z",
+    })).resolves.toEqual([expect.objectContaining({ attempts: 2 })]);
   });
 
   it("uses the exact retry delays and consistent attempt numbering", async () => {
@@ -666,6 +753,10 @@ function generatedDeadLetterId(seed: string): string {
   return `dlq:${createHash("sha256").update(seed).digest("hex")}`;
 }
 
+function leaseExpiredDeadLetterId(idempotencyKey: string): string {
+  return `dlq:lease-expired:${createHash("sha1").update(idempotencyKey).digest("hex")}`;
+}
+
 function deadLetterPayloadFixture(id: string): string {
   const job = jobFixture();
   return JSON.stringify({
@@ -862,17 +953,66 @@ class StatefulRedisClient implements RedisApprovalInteractionQueueClient {
   }
 
   private claimJobs(keys: string[], args: string[]): string[] {
-    const [ready, delayed, processing, members, memberReceivedAt, state, owners] = keys;
-    const [limitRaw, workerId, nowRaw, leaseRaw] = args;
+    const [
+      ready,
+      delayed,
+      processing,
+      members,
+      memberReceivedAt,
+      state,
+      owners,
+      dlqIndex,
+      dlqOrder,
+      dlqMembers,
+    ] = keys;
+    const [limitRaw, workerId, nowRaw, leaseRaw, maxAttemptsRaw, nowIso] = args;
     const now = Number(nowRaw);
     for (const id of this.sortedIds(processing!, Number.POSITIVE_INFINITY).filter(
       (id) => this.sortedSet(processing!).get(id)! <= now,
     )) {
-      if (this.hash(state!).get(id) === "processing" && this.hash(members!).has(id)) {
+      const payload = this.hash(members!).get(id);
+      if (this.hash(state!).get(id) === "processing" && payload !== undefined) {
         this.sortedSet(processing!).delete(id);
         this.hash(owners!).delete(id);
-        this.hash(state!).set(id, "ready");
-        this.sortedSet(ready!).set(id, Number(this.hash(memberReceivedAt!).get(id)));
+        let parsed: Record<string, unknown> | undefined;
+        try {
+          const value: unknown = JSON.parse(payload);
+          if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+            parsed = value as Record<string, unknown>;
+          }
+        } catch {
+          // Invalid payloads are requeued so the normal quarantine path handles them.
+        }
+        const attempts = parsed?.attempts;
+        const maxAttempts = Number(maxAttemptsRaw);
+        if (
+          typeof attempts === "number" &&
+          Number.isInteger(attempts) &&
+          attempts >= 0 &&
+          attempts < maxAttempts
+        ) {
+          const nextAttempts = attempts + 1;
+          if (nextAttempts >= maxAttempts) {
+            this.removeActive(id, keys);
+            const deadLetterId = leaseExpiredDeadLetterId(id);
+            this.hash(dlqIndex!).set(deadLetterId, JSON.stringify({
+              id: deadLetterId,
+              attempts: nextAttempts,
+              errorCode: "lease_expired",
+              failedAt: nowIso,
+              replayable: false,
+            }));
+            this.sortedSet(dlqOrder!).set(deadLetterId, now);
+            this.set(dlqMembers!).add(deadLetterId);
+          } else {
+            this.hash(members!).set(id, JSON.stringify({ ...parsed, attempts: nextAttempts }));
+            this.hash(state!).set(id, "ready");
+            this.sortedSet(ready!).set(id, Number(this.hash(memberReceivedAt!).get(id)));
+          }
+        } else {
+          this.hash(state!).set(id, "ready");
+          this.sortedSet(ready!).set(id, Number(this.hash(memberReceivedAt!).get(id)));
+        }
       } else {
         this.removeActive(id, keys);
       }
@@ -1177,7 +1317,7 @@ runIfRedis("Redis approval interaction queue with live Redis", () => {
       now: "2026-07-19T00:00:03.000Z",
       leaseUntil: "2026-07-19T00:00:04.000Z",
     });
-    expect(recoveredClaim).toEqual(replayedClaim);
+    expect(recoveredClaim).toEqual({ ...replayedClaim, attempts: 1 });
     await queue.acknowledge({ job: recoveredClaim!, workerId: "worker-c" });
 
     const malformedPayload = JSON.stringify({ content: "private draft body", attempts: 0 });
@@ -1210,6 +1350,62 @@ runIfRedis("Redis approval interaction queue with live Redis", () => {
       delayed: 0,
       deadLetter: 0,
     });
+  });
+
+  it("consumes five consecutive expired leases and atomically reaches a content-free DLQ", async () => {
+    const leasePrefix = `${prefix}:lease-expiry`;
+    const queue = createRedisApprovalInteractionQueue({
+      client: client as unknown as RedisApprovalInteractionQueueClient,
+      prefix: leasePrefix,
+    });
+    const queued = normalizeApprovalInteractionJob({
+      ...jobFixture({ eventId: "event-live-lease-expired" }),
+      action: "request_revision",
+      reason: "private live revision reason",
+    });
+    await queue.enqueue(queued);
+
+    let [processing] = await claim(queue, {
+      now: "2026-07-19T00:00:00.000Z",
+      leaseUntil: "2026-07-19T00:00:01.000Z",
+    });
+    expect(processing).toMatchObject({ attempts: 0 });
+
+    for (let expiry = 1; expiry < 5; expiry += 1) {
+      [processing] = await claim(queue, {
+        workerId: `live-worker-${expiry}`,
+        now: `2026-07-19T00:00:0${expiry}.000Z`,
+        leaseUntil: `2026-07-19T00:00:0${expiry + 1}.000Z`,
+      });
+      expect(processing).toMatchObject({ attempts: expiry });
+      await expect(queue.getCounts()).resolves.toEqual({
+        pending: 0,
+        processing: 1,
+        delayed: 0,
+        deadLetter: 0,
+      });
+    }
+
+    await expect(claim(queue, {
+      workerId: "live-worker-5",
+      now: "2026-07-19T00:00:05.000Z",
+      leaseUntil: "2026-07-19T00:00:06.000Z",
+    })).resolves.toEqual([]);
+    await expect(queue.getCounts()).resolves.toEqual({
+      pending: 0,
+      processing: 0,
+      delayed: 0,
+      deadLetter: 1,
+    });
+    const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
+    expect(deadLetter).toEqual({
+      id: leaseExpiredDeadLetterId(queued.idempotencyKey),
+      attempts: 5,
+      errorCode: "lease_expired",
+      failedAt: new Date("2026-07-19T00:00:05.000Z"),
+      replayable: false,
+    });
+    expect(JSON.stringify(deadLetter)).not.toContain("private live revision reason");
   });
 
   it("retries committed terminal, replay, and delete scripts after response loss", async () => {

@@ -176,6 +176,43 @@ describe("FeishuInteractiveCardClient", () => {
   });
 
   it.each([
+    ["sendCard", { chatId: "oc_group", cardJson: "{}", uuid: "send-1" }],
+    ["updateCard", { messageId: "om-card-1", cardJson: "{}" }],
+  ] as const)("classifies a generic %s fetch rejection after dispatch as outcome unknown", async (method, input) => {
+    const fetch = vi.fn(async () => {
+      throw new TypeError("connection reset after request dispatch");
+    });
+    const client = createFeishuInteractiveCardClient({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(client[method](input as never)).rejects.toSatisfy(
+      (error) => isCardError(error, "outcome_unknown", "network_failure"),
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("classifies a response-stream reset as outcome unknown", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"code":0,'));
+        controller.error(new Error("response connection reset"));
+      },
+    });
+    const client = createFeishuInteractiveCardClient({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => new Response(body, { status: 200 })),
+    });
+
+    await expect(client.updateCard({ messageId: "om-card-1", cardJson: "{}" })).rejects.toSatisfy(
+      (error) => isCardError(error, "outcome_unknown", "invalid_response"),
+    );
+  });
+
+  it.each([
     [
       "sendCard",
       { chatId: "oc_group", cardJson: "{}", uuid: "send-1" },

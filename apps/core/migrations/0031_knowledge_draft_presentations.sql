@@ -72,7 +72,9 @@ CREATE TABLE knowledge_draft_presentation_outbox (
   presentation_id TEXT NOT NULL UNIQUE
     REFERENCES knowledge_draft_presentations(id) ON DELETE RESTRICT,
   idempotency_key TEXT NOT NULL UNIQUE CHECK (char_length(idempotency_key) BETWEEN 1 AND 512),
-  state TEXT NOT NULL CHECK (state IN ('pending', 'processing', 'sent', 'failed', 'outcome_unknown')),
+  state TEXT NOT NULL CHECK (state IN (
+    'pending', 'processing', 'external_attempting', 'sent', 'failed', 'outcome_unknown'
+  )),
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   worker_id TEXT CHECK (worker_id IS NULL OR char_length(worker_id) BETWEEN 1 AND 512),
   lease_until TIMESTAMPTZ,

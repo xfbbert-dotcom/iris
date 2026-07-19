@@ -93,6 +93,7 @@ export type FeishuOpenApiConfig = {
 };
 
 const MAX_FEISHU_BOT_OPEN_ID_CHARS = 512;
+const MAX_FEISHU_ENCRYPT_KEY_CHARS = 512;
 
 export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConfig {
   return {
@@ -357,6 +358,14 @@ export function readKnowledgeCardRuntimeConfig(
   const auth = readFeishuAuthConfig(env);
   if (auth.verificationToken === undefined) {
     throw new Error("FEISHU_VERIFICATION_TOKEN is required when knowledge cards are enabled");
+  }
+  if (auth.encryptKey === undefined) {
+    throw new Error("FEISHU_ENCRYPT_KEY is required when knowledge cards are enabled");
+  }
+  if (auth.encryptKey.length > MAX_FEISHU_ENCRYPT_KEY_CHARS) {
+    throw new Error(
+      `FEISHU_ENCRYPT_KEY must be at most ${MAX_FEISHU_ENCRYPT_KEY_CHARS} characters`,
+    );
   }
   readFeishuOpenApiConfig(env);
   const botOpenId = readOptionalFeishuBotOpenId(env);

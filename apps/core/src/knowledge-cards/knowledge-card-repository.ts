@@ -65,6 +65,16 @@ export type KnowledgeCardStatusCounts = Record<KnowledgeCardPresentationState, n
   pendingSend: number;
 };
 
+export type KnowledgeCardOutboxStatusCounts = {
+  pending: number;
+  processing: number;
+  external_attempting: number;
+  sent: number;
+  failed: number;
+  outcome_unknown: number;
+  terminalFailed: number;
+};
+
 export type KnowledgeCardPresentationContext = {
   presentation: KnowledgeDraftPresentation;
   draft: KnowledgeDraft;
@@ -108,4 +118,5 @@ export interface KnowledgeCardRepository {
   getPresentationContext(id: string): Promise<KnowledgeCardPresentationContext | undefined>;
   listPresentations(input: { draftId: string; limit: number }): Promise<KnowledgeDraftPresentation[]>;
   getStatusCounts(): Promise<KnowledgeCardStatusCounts>;
+  getOutboxStatusCounts(): Promise<KnowledgeCardOutboxStatusCounts>;
 }

@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import {
   assertDurableRuntimeMutation,
   assertFastFeishuAcknowledgement,
+  assertKnowledgeCardOutboxReady,
   assertPilotActivationReady,
 } from "./pilot-smoke-lib.mjs";
 
@@ -80,6 +81,7 @@ try {
   });
   const internalStatus = await internalStatusResponse.json();
   assertPilotActivationReady(internalStatus);
+  const knowledgeCardOutbox = assertKnowledgeCardOutboxReady(internalStatus.knowledgeCards);
   const knowledgeCardReadiness = await assertKnowledgeCardReadiness();
   const ingressReadinessResponse = await expectStatus(
     `${coreBaseUrl}/internal/ingress-readiness`,
@@ -138,6 +140,7 @@ try {
     knowledgeCardDefaults: "disabled-empty-allowlist",
     knowledgeCardReadiness,
     knowledgeCardStatus: "unavailable-while-disabled",
+    knowledgeCardOutbox,
     runtimeStartup: "disabled",
     runtimeEnablement: "explicit",
     smokeMode: postRestore ? "post-restore" : "ordinary",

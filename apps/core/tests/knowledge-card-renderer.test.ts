@@ -28,7 +28,7 @@ describe("renderKnowledgeDraftCard", () => {
     expect(rendered.json).toContain("\u5b8c\u6574\u8349\u7a3f\u6b63\u6587");
     expect(rendered.json).toContain('\\"title\\"');
     expect(rendered.json).toContain("Risk: medium");
-    expect(rendered.json).toContain("Revision: 7");
+    expect(rendered.json).toContain("Draft revision: 7");
     expect(rendered.json).toContain("Target: Knowledge Base");
     expect(rendered.json).not.toContain("secret evidence text");
     expect(JSON.parse(rendered.json)).toEqual(rendered.card);
@@ -79,6 +79,32 @@ describe("renderKnowledgeDraftCard", () => {
       name: "rejectionConfirmed",
       options: [{ value: "true" }],
     });
+  });
+
+  it("visibly identifies the bounded Iris pending-confirmation draft without source evidence", () => {
+    const rendered = renderedCard();
+    const body = rendered.card.body as { elements: Array<Record<string, unknown>> };
+    const traceability = body.elements.find((element) =>
+      element.tag === "markdown" &&
+      typeof element.content === "string" &&
+      element.content.includes("Iris / pending_confirmation")
+    );
+
+    expect(traceability).toEqual({
+      tag: "markdown",
+      content: [
+        "Iris / pending_confirmation",
+        "Source type: group_conclusion",
+        "Draft ID: draft-1",
+        "Draft revision: 7",
+        "Draft version: 11",
+        "Risk: medium",
+        "Target: Knowledge Base",
+      ].join("\n"),
+    });
+    expect([...(traceability!.content as string)].length).toBeLessThanOrEqual(1_000);
+    expect(rendered.json).not.toContain("oc_group");
+    expect(rendered.json).not.toContain("secret evidence text");
   });
 
   it("is deterministic and JSON-escapes presentation metadata", () => {

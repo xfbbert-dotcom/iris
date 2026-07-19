@@ -292,6 +292,7 @@ describe("knowledge card API", () => {
         IRIS_EMBEDDING_DIMENSIONS: "1536",
         IRIS_KNOWLEDGE_CARD_ENABLED: "true",
         IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+        FEISHU_ENCRYPT_KEY: "knowledge-card-encrypt-key",
       },
     });
     const status = await app.inject({ method: "GET", url: "/internal/status", headers: authorization });
@@ -305,6 +306,15 @@ describe("knowledge card API", () => {
         enabled: true,
         running: true,
         queue: { pending: 1, processing: 2, delayed: 3, deadLetter: 4 },
+        outbox: {
+          pending: 5,
+          processing: 6,
+          external_attempting: 7,
+          sent: 8,
+          failed: 9,
+          outcome_unknown: 0,
+          terminalFailed: 0,
+        },
       },
     });
     expect(readiness.statusCode).toBe(200);
@@ -341,6 +351,21 @@ describe("knowledge card API", () => {
           attempts: 2,
         },
       },
+      {
+        id: "dlq-lease-expired",
+        attempts: 5,
+        errorCode: "lease_expired",
+        failedAt: new Date("2026-07-19T08:02:00.000Z"),
+        replayable: false,
+      },
+      {
+        id: "dlq-invalid-payload",
+        payloadDigest: `sha256:${"a".repeat(64)}`,
+        payloadBytes: 42,
+        errorCode: "invalid_queue_payload",
+        failedAt: new Date("2026-07-19T08:03:00.000Z"),
+        replayable: false,
+      },
     ]);
     vi.mocked(runtime.deadLetters.replay).mockResolvedValue("replayed");
     vi.mocked(runtime.deadLetters.delete).mockResolvedValue("deleted");
@@ -369,18 +394,35 @@ describe("knowledge card API", () => {
     expect(runtime.deadLetters.list).toHaveBeenCalledWith({ limit: 5 });
     expect(list.json()).toEqual({
       ok: true,
-      deadLetters: [{
-        id: "dlq-1",
-        replayable: true,
-        errorCode: "membership_unavailable",
-        failedAt: "2026-07-19T08:01:00.000Z",
-        presentationId: "presentation-1",
-        draftId: "draft-1",
-        revisionNumber: 3,
-        draftVersion: 7,
-        action: "request_revision",
-        attempts: 2,
-      }],
+      deadLetters: [
+        {
+          id: "dlq-1",
+          replayable: true,
+          errorCode: "membership_unavailable",
+          failedAt: "2026-07-19T08:01:00.000Z",
+          presentationId: "presentation-1",
+          draftId: "draft-1",
+          revisionNumber: 3,
+          draftVersion: 7,
+          action: "request_revision",
+          attempts: 2,
+        },
+        {
+          id: "dlq-lease-expired",
+          replayable: false,
+          errorCode: "lease_expired",
+          failedAt: "2026-07-19T08:02:00.000Z",
+          attempts: 5,
+        },
+        {
+          id: "dlq-invalid-payload",
+          replayable: false,
+          errorCode: "invalid_queue_payload",
+          failedAt: "2026-07-19T08:03:00.000Z",
+          payloadDigest: `sha256:${"a".repeat(64)}`,
+          payloadBytes: 42,
+        },
+      ],
     });
     expect(list.body).not.toMatch(/ou_actor_secret|raw secret reason|token-secret|idempotencyKey/u);
     expect(replay.json()).toEqual({ ok: true, status: "replayed" });
@@ -427,6 +469,7 @@ function runtimeFixture(): KnowledgeCardRuntime {
     getPresentationContext: vi.fn(),
     listPresentations: vi.fn(async () => []),
     getStatusCounts: vi.fn(),
+    getOutboxStatusCounts: vi.fn(),
     getDraft: vi.fn(async () => currentDraft()),
   };
   return {
@@ -453,6 +496,15 @@ function runtimeFixture(): KnowledgeCardRuntime {
         closed: 4,
         send_failed: 5,
         pendingSend: 1,
+      },
+      outbox: {
+        pending: 5,
+        processing: 6,
+        external_attempting: 7,
+        sent: 8,
+        failed: 9,
+        outcome_unknown: 0,
+        terminalFailed: 0,
       },
     })),
     close: vi.fn(async () => undefined),

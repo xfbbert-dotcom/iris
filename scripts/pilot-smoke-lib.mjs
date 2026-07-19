@@ -66,6 +66,33 @@ export function assertPilotActivationReady(snapshot) {
   }
 }
 
+export function assertKnowledgeCardOutboxReady(knowledgeCards) {
+  if (knowledgeCards === undefined) return "unavailable-while-disabled";
+  const outbox = isRecord(knowledgeCards) && isRecord(knowledgeCards.outbox)
+    ? knowledgeCards.outbox
+    : undefined;
+  const countNames = [
+    "pending",
+    "processing",
+    "external_attempting",
+    "sent",
+    "failed",
+    "outcome_unknown",
+    "terminalFailed",
+  ];
+  if (
+    outbox === undefined ||
+    countNames.some((name) => !Number.isSafeInteger(outbox[name]) || outbox[name] < 0) ||
+    outbox.terminalFailed > outbox.failed
+  ) {
+    throw new Error("Expected bounded content-free knowledge-card outbox counts");
+  }
+  if (outbox.outcome_unknown > 0 || outbox.terminalFailed > 0) {
+    throw new Error("Expected knowledge-card outbox without unresolved or terminal failures");
+  }
+  return "no-unresolved-terminal-failures";
+}
+
 export function assertDurableRuntimeMutation({ responseStatus, body, enabled }) {
   if (
     responseStatus !== 200 ||

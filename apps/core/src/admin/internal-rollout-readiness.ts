@@ -41,6 +41,15 @@ export type InternalRolloutReadinessReport = {
 };
 
 type CheckResult = Pick<InternalRolloutReadinessCheck, "status" | "detail">;
+type KnowledgeCardOutboxReadinessStatus = {
+  pending: number;
+  processing: number;
+  external_attempting: number;
+  sent: number;
+  failed: number;
+  outcome_unknown: number;
+  terminalFailed: number;
+};
 export type InternalRolloutReadinessContext = {
   knowledgeCardStatus?: {
     ok: boolean;
@@ -48,6 +57,7 @@ export type InternalRolloutReadinessContext = {
     running: boolean;
     dispatcher?: { running: boolean };
     worker?: { running: boolean };
+    outbox?: KnowledgeCardOutboxReadinessStatus;
     degradedReason?: string;
   };
 };
@@ -313,6 +323,7 @@ const checkDefinitions: CheckDefinition[] = [
       "DATABASE_URL",
       "REDIS_URL",
       "FEISHU_VERIFICATION_TOKEN",
+      "FEISHU_ENCRYPT_KEY",
       "FEISHU_APP_ID",
       "FEISHU_APP_SECRET",
       "IRIS_FEISHU_BOT_OPEN_ID",
@@ -339,10 +350,36 @@ const checkDefinitions: CheckDefinition[] = [
       ) {
         return fail("Knowledge-card dispatcher and interaction worker must both be running.");
       }
+      if (!isValidKnowledgeCardOutboxStatus(status.outbox)) {
+        return fail("Knowledge-card outbox status is unavailable.");
+      }
+      if (status.outbox.outcome_unknown > 0) {
+        return fail("Knowledge-card outbox has unresolved outcome-unknown rows.");
+      }
+      if (status.outbox.terminalFailed > 0) {
+        return fail("Knowledge-card outbox has terminal failed rows.");
+      }
       return pass("Knowledge-card dispatcher and interaction worker are running.");
     },
   },
 ];
+
+function isValidKnowledgeCardOutboxStatus(
+  value: KnowledgeCardOutboxReadinessStatus | undefined,
+): value is KnowledgeCardOutboxReadinessStatus {
+  if (value === undefined) return false;
+  const counts = [
+    value.pending,
+    value.processing,
+    value.external_attempting,
+    value.sent,
+    value.failed,
+    value.outcome_unknown,
+    value.terminalFailed,
+  ];
+  return counts.every((count) => Number.isSafeInteger(count) && count >= 0) &&
+    value.terminalFailed <= value.failed;
+}
 
 export function buildInternalRolloutReadinessReport(
   env: EnvLike = process.env,

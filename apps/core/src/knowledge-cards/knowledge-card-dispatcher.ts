@@ -229,7 +229,7 @@ function failFromCardError(
 ): Promise<KnowledgeCardDispatcherResult> {
   const classification = error instanceof FeishuInteractiveCardClientError
     ? error.classification
-    : "request_not_sent";
+    : "outcome_unknown";
   if (classification === "outcome_unknown") {
     return failExternalAttempt(input, "outcome_unknown", classification);
   }

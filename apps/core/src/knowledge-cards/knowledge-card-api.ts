@@ -279,13 +279,22 @@ function toPresentationResponse(presentation: KnowledgeDraftPresentation) {
 
 function toDeadLetterResponse(deadLetter: ApprovalInteractionDeadLetter) {
   if (!deadLetter.replayable) {
-    return {
+    const response = {
       id: deadLetter.id,
       replayable: false,
       errorCode: deadLetter.errorCode,
       failedAt: deadLetter.failedAt.toISOString(),
-      payloadDigest: deadLetter.payloadDigest,
-      payloadBytes: deadLetter.payloadBytes,
+    };
+    if (deadLetter.errorCode === "invalid_queue_payload") {
+      return {
+        ...response,
+        payloadDigest: deadLetter.payloadDigest,
+        payloadBytes: deadLetter.payloadBytes,
+      };
+    }
+    return {
+      ...response,
+      attempts: deadLetter.attempts,
     };
   }
   return {

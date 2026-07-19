@@ -32,9 +32,18 @@ export type ApprovalInteractionInvalidPayloadDeadLetter = {
   replayable: false;
 };
 
+export type ApprovalInteractionLeaseExpiredDeadLetter = {
+  id: string;
+  attempts: number;
+  errorCode: "lease_expired";
+  failedAt: Date;
+  replayable: false;
+};
+
 export type ApprovalInteractionDeadLetter =
   | ApprovalInteractionJobDeadLetter
-  | ApprovalInteractionInvalidPayloadDeadLetter;
+  | ApprovalInteractionInvalidPayloadDeadLetter
+  | ApprovalInteractionLeaseExpiredDeadLetter;
 
 export interface ApprovalInteractionQueue {
   enqueue(job: ApprovalInteractionJob): Promise<"enqueued" | "duplicate">;

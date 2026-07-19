@@ -254,6 +254,25 @@ describe("KnowledgeCardDispatcher", () => {
     }));
   });
 
+  it("treats an untyped post-dispatch rejection as outcome unknown without resending", async () => {
+    const harness = createHarness({
+      sendCard: async () => {
+        throw new TypeError("generic fetch rejection");
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 2 })).resolves.toEqual([{
+      status: "outcome_unknown",
+      presentationId: "presentation-1",
+      code: "outcome_unknown",
+    }]);
+    expect(harness.cardClient.sendCard).toHaveBeenCalledOnce();
+    expect(harness.repository.failPresentationSend).toHaveBeenCalledWith(expect.objectContaining({
+      classification: "outcome_unknown",
+      errorCode: "outcome_unknown",
+    }));
+  });
+
   it("never retries a send that succeeded before Postgres completion failed", async () => {
     const harness = createHarness({
       completePresentationSend: async () => {

@@ -128,7 +128,7 @@ async function requestFeishuJson({
       if (isAbortError(error)) {
         throw new FeishuInteractiveCardClientError("outcome_unknown", "timeout");
       }
-      throw new FeishuInteractiveCardClientError("request_not_sent", "network_failure");
+      throw new FeishuInteractiveCardClientError("outcome_unknown", "network_failure");
     }
 
     if (!response.ok) {

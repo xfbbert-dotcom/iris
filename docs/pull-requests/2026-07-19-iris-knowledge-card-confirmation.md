@@ -5,7 +5,13 @@ Implements Iris Phase 5B-1: governed, version-bound Feishu cards for knowledge-d
 ## Safety boundaries
 
 - All knowledge-card runtime gates default off.
-- Callback handling acknowledges first and processes through a durable queue.
+- Enabled card callbacks require bounded `FEISHU_ENCRYPT_KEY`, raw body, fresh timestamp, and a valid signature; legacy Feishu event callback compatibility remains unchanged.
+- Callback handling acknowledges first and processes through a durable queue; lease expiry consumes the five-attempt budget and terminalizes to a deterministic content-free DLQ.
+- Callback enqueue rejection and timeout uncertainty are distinct; uncertain users are told not to repeat the click, and no second enqueue is started automatically.
+- Dispatch-time transport rejection is `outcome_unknown` and is never resent automatically; `request_not_sent` is reserved for provable pre-dispatch failures.
+- Internal status exposes content-free outbox counts, and readiness blocks unresolved outcome-unknown or terminal/exhausted failures without permanently blocking ordinary in-flight retries.
+- Cards visibly carry bounded Iris/status/source/draft/revision/version traceability while keeping evidence/source raw text out and using Feishu's valid 1,000-character input cap.
+- Phase 5B-1 uses only migration `0031`; migration number `0032` remains reserved for Phase 5B-2.
 - Current runtime, presentation, draft evidence, and group membership are revalidated before mutation.
 - This PR does not add ActionProposal, owner/admin approval, OAuth review pages, or Feishu knowledge-base writes.
 
@@ -20,9 +26,10 @@ Implements Iris Phase 5B-1: governed, version-bound Feishu cards for knowledge-d
 
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
-- `npm test`: 2,034 passed, 127 skipped (2,161 total).
+- Focused A-G suites with real Redis and real Postgres: 322 passed, 0 skipped.
+- `npm test`: 2,050 passed, 129 skipped (2,179 total); the skipped integration paths passed in the focused real-backend run above.
 - `npm run test:python`: 177 passed.
-- `npm run test:pilot`: 82 passed, 0 skipped (including 34 pilot-smoke checks).
+- `npm run test:pilot`: 116 passed, 0 skipped (including 38 pilot-smoke checks).
 - `docker compose config`, `npm run readiness -- --env-file deploy/pilot/ci.env` (14/14 checks passed), `npm run pilot:config`, and `git diff --check`: passed.
 
 ## Intended PR

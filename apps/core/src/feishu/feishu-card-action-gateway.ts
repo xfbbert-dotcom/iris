@@ -49,8 +49,9 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
       if (action === undefined) return rejectedResponse(400);
 
       const job = createJob(action, now());
-      const enqueued = await enqueueWithinDeadline(dependencies.queue, job);
-      return enqueued ? acceptedResponse() : enqueueFailureResponse();
+      const outcome = await enqueueWithinDeadline(dependencies.queue, job);
+      if (outcome === "accepted") return acceptedResponse();
+      return outcome === "rejected" ? enqueueFailureResponse() : enqueueUncertaintyResponse();
     },
   };
 }
@@ -78,17 +79,20 @@ function createJob(action: ParsedFeishuCardAction, receivedAt: Date): ApprovalIn
 async function enqueueWithinDeadline(
   queue: ApprovalInteractionEnqueuer,
   job: ApprovalInteractionJob,
-): Promise<boolean> {
+): Promise<"accepted" | "rejected" | "uncertain"> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timeoutId = setTimeout(() => reject(new Error("approval interaction enqueue timed out")), ENQUEUE_TIMEOUT_MS);
+  const enqueue = Promise.resolve()
+    .then(() => queue.enqueue(job))
+    .then(
+      () => "accepted" as const,
+      () => "rejected" as const,
+    );
+  const timeout = new Promise<"uncertain">((resolve) => {
+    timeoutId = setTimeout(() => resolve("uncertain"), ENQUEUE_TIMEOUT_MS);
   });
 
   try {
-    await Promise.race([queue.enqueue(job), timeout]);
-    return true;
-  } catch {
-    return false;
+    return await Promise.race([enqueue, timeout]);
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
@@ -105,6 +109,18 @@ function enqueueFailureResponse(): FeishuCardActionCallbackResponse {
   return {
     statusCode: 200,
     body: { toast: { type: "error", content: "\u64cd\u4f5c\u672a\u63d0\u4ea4\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5" } },
+  };
+}
+
+function enqueueUncertaintyResponse(): FeishuCardActionCallbackResponse {
+  return {
+    statusCode: 200,
+    body: {
+      toast: {
+        type: "error",
+        content: "\u63d0\u4ea4\u72b6\u6001\u672a\u786e\u8ba4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\uff1b\u8bf7\u4ee5\u5361\u7247\u6700\u7ec8\u72b6\u6001\u4e3a\u51c6",
+      },
+    },
   };
 }
 

@@ -56,6 +56,40 @@ describe("knowledge card migration contract", () => {
     expect(migration).toMatch(/callback_event_id text not null unique/iu);
     expect(migration).toMatch(/drop constraint knowledge_draft_events_event_type_check/iu);
     expect(migration).toMatch(/group_confirmed/iu);
+    expect(migration).toMatch(
+      /state text not null check \(state in \(\s*'pending', 'processing', 'external_attempting', 'sent', 'failed', 'outcome_unknown'\s*\)\)/iu,
+    );
+  });
+
+  it("maps content-free outbox state and terminal-failure counts", async () => {
+    const dataSource = {
+      query: vi.fn(async () => ({
+        rows: [{
+          pending: "1",
+          processing: "2",
+          external_attempting: "3",
+          sent: "4",
+          failed: "5",
+          outcome_unknown: "6",
+          terminal_failed: "2",
+        }],
+      })),
+    } as unknown as PostgresKnowledgeDraftDataSource;
+
+    await expect(
+      createPostgresKnowledgeCardRepository({ dataSource }).getOutboxStatusCounts(),
+    ).resolves.toEqual({
+      pending: 1,
+      processing: 2,
+      external_attempting: 3,
+      sent: 4,
+      failed: 5,
+      outcome_unknown: 6,
+      terminalFailed: 2,
+    });
+    expect(dataSource.query).toHaveBeenCalledWith(expect.stringContaining(
+      "count(*) FILTER (WHERE state = 'external_attempting')",
+    ));
   });
 
   it("locks supersession presentations before outboxes and rejects external attempts", async () => {
@@ -192,6 +226,41 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       }],
     });
     await retireOutbox(created.presentation.id);
+  });
+
+  it("reports outbox state counts while excluding superseded rows from terminal failures", async () => {
+    const repository = cardRepository();
+    const before = await repository.getOutboxStatusCounts();
+    const draft = await createDraft("outbox-status");
+    const created = await repository.createPresentation(
+      presentationInput("outbox-status", draft.id),
+    );
+
+    await expect(repository.getOutboxStatusCounts()).resolves.toEqual({
+      ...before,
+      pending: before.pending + 1,
+    });
+    await pool.query(
+      `UPDATE knowledge_draft_presentation_outbox
+       SET state = 'failed', error_code = 'superseded', updated_at = $2
+       WHERE presentation_id = $1`,
+      [created.presentation.id, at],
+    );
+    await expect(repository.getOutboxStatusCounts()).resolves.toEqual({
+      ...before,
+      failed: before.failed + 1,
+    });
+    await pool.query(
+      `UPDATE knowledge_draft_presentation_outbox
+       SET error_code = 'max_attempts_exhausted', updated_at = $2
+       WHERE presentation_id = $1`,
+      [created.presentation.id, plusSeconds(1)],
+    );
+    await expect(repository.getOutboxStatusCounts()).resolves.toEqual({
+      ...before,
+      failed: before.failed + 1,
+      terminalFailed: before.terminalFailed + 1,
+    });
   });
 
   it("replays only an exact presentation operation payload", async () => {

@@ -249,6 +249,7 @@ describe("buildInternalRolloutReadinessReport", () => {
           "DATABASE_URL",
           "REDIS_URL",
           "FEISHU_VERIFICATION_TOKEN",
+          "FEISHU_ENCRYPT_KEY",
           "FEISHU_APP_ID",
           "FEISHU_APP_SECRET",
           "IRIS_FEISHU_BOT_OPEN_ID",
@@ -266,6 +267,69 @@ describe("buildInternalRolloutReadinessReport", () => {
     expect(checksById(report).knowledgeCards).toMatchObject({
       status: "pass",
       detail: "Knowledge-card dispatcher and interaction worker are running.",
+    });
+  });
+
+  it("does not block enabled knowledge cards on ordinary in-flight or superseded outbox rows", () => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: knowledgeCardStatus({
+        outbox: {
+          pending: 3,
+          processing: 2,
+          external_attempting: 1,
+          sent: 8,
+          failed: 4,
+          outcome_unknown: 0,
+          terminalFailed: 0,
+        },
+      }) },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({ status: "pass" });
+  });
+
+  it.each([
+    [
+      "missing outbox status",
+      undefined,
+      "Knowledge-card outbox status is unavailable.",
+    ],
+    [
+      "unresolved outcome-unknown rows",
+      {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 0,
+        outcome_unknown: 1,
+        terminalFailed: 0,
+      },
+      "Knowledge-card outbox has unresolved outcome-unknown rows.",
+    ],
+    [
+      "terminal failed rows",
+      {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 2,
+        outcome_unknown: 0,
+        terminalFailed: 1,
+      },
+      "Knowledge-card outbox has terminal failed rows.",
+    ],
+  ])("fails closed for %s", (_case, outbox, detail) => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: knowledgeCardStatus({ outbox }) },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail,
     });
   });
 
@@ -317,6 +381,7 @@ function knowledgeCardEnabledEnv(): EnvLike {
   return readyRolloutEnv({
     IRIS_KNOWLEDGE_CARD_ENABLED: "true",
     IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    FEISHU_ENCRYPT_KEY: "knowledge-card-encrypt-key",
   });
 }
 
@@ -336,6 +401,15 @@ function knowledgeCardStatus(overrides: Record<string, unknown> = {}) {
       closed: 0,
       send_failed: 0,
       pendingSend: 0,
+    },
+    outbox: {
+      pending: 0,
+      processing: 0,
+      external_attempting: 0,
+      sent: 0,
+      failed: 0,
+      outcome_unknown: 0,
+      terminalFailed: 0,
     },
     ...overrides,
   };

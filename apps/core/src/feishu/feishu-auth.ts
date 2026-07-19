@@ -16,6 +16,7 @@ export type FeishuAuthRequest = {
 export type FeishuRequestVerifierOptions = {
   now?: () => Date;
   maxTimestampSkewSeconds?: number;
+  requireSignature?: boolean;
 };
 
 type FeishuSignatureInput = {
@@ -59,11 +60,15 @@ export function createFeishuRequestVerifier(
 ): FeishuRequestVerifier {
   const now = options.now ?? (() => new Date());
   const maxTimestampSkewSeconds = resolveMaxTimestampSkewSeconds(options.maxTimestampSkewSeconds);
+  const requireSignature = options.requireSignature === true;
 
   return (request) => {
     const verificationToken = config.verificationToken;
     const encryptKey = config.encryptKey;
-    if (verificationToken === undefined && encryptKey === undefined) {
+    if (
+      (verificationToken === undefined && encryptKey === undefined) ||
+      (requireSignature && encryptKey === undefined)
+    ) {
       return false;
     }
 

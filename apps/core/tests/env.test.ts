@@ -22,6 +22,7 @@ describe("readKnowledgeCardRuntimeConfig", () => {
     DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
     REDIS_URL: " redis://redis:6379 ",
     FEISHU_VERIFICATION_TOKEN: " verification-token ",
+    FEISHU_ENCRYPT_KEY: " encrypt-key ",
     FEISHU_APP_ID: " app-id ",
     FEISHU_APP_SECRET: " app-secret ",
     IRIS_FEISHU_BOT_OPEN_ID: "ou_irisbot",
@@ -54,6 +55,7 @@ describe("readKnowledgeCardRuntimeConfig", () => {
       ["DATABASE_URL", "DATABASE_URL is required for database operations"],
       ["REDIS_URL", "REDIS_URL is required"],
       ["FEISHU_VERIFICATION_TOKEN", "FEISHU_VERIFICATION_TOKEN is required"],
+      ["FEISHU_ENCRYPT_KEY", "FEISHU_ENCRYPT_KEY is required when knowledge cards are enabled"],
       ["FEISHU_APP_ID", "FEISHU_APP_ID is required"],
       ["FEISHU_APP_SECRET", "FEISHU_APP_SECRET is required"],
       ["IRIS_FEISHU_BOT_OPEN_ID", "IRIS_FEISHU_BOT_OPEN_ID is required when knowledge cards are enabled"],
@@ -62,6 +64,13 @@ describe("readKnowledgeCardRuntimeConfig", () => {
     for (const [name, message] of required) {
       expect(() => readKnowledgeCardRuntimeConfig({ ...enabledEnv, [name]: " " })).toThrow(message);
     }
+  });
+
+  it("rejects an oversized Feishu encrypt key when knowledge cards are enabled", () => {
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      FEISHU_ENCRYPT_KEY: "k".repeat(513),
+    })).toThrow("FEISHU_ENCRYPT_KEY must be at most 512 characters");
   });
 
   it("rejects blank, duplicate, overlong, and oversized group allowlists", () => {

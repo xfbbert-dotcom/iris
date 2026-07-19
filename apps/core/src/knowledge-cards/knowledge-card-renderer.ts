@@ -119,8 +119,12 @@ export function renderKnowledgeDraftCard(
     }),
   ];
   const metadata = [
+    `Iris / ${input.draft.status}`,
+    `Source type: ${input.draft.originKind}`,
+    `Draft ID: ${input.draft.id}`,
+    `Draft revision: ${input.presentation.revisionNumber}`,
+    `Draft version: ${input.presentation.draftVersion}`,
     `Risk: ${revision.riskLevel}`,
-    `Revision: ${input.presentation.revisionNumber}`,
     `Target: ${input.targetDisplayName}`,
   ].join("\n");
   const bodyElements: Record<string, unknown>[] = [

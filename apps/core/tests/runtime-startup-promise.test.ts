@@ -157,6 +157,7 @@ function knowledgeCardEnv() {
     DATABASE_URL: "postgres://example",
     REDIS_URL: "redis://localhost:6379",
     FEISHU_VERIFICATION_TOKEN: "verification-token",
+    FEISHU_ENCRYPT_KEY: "encrypt-key",
     FEISHU_APP_ID: "app-id",
     FEISHU_APP_SECRET: "app-secret",
     IRIS_FEISHU_BOT_OPEN_ID: "ou_irisbot",
@@ -340,6 +341,15 @@ function knowledgeCardDependencies({ connect }: { connect: ReturnType<typeof vi.
       closed: 0,
       send_failed: 0,
       pendingSend: 0,
+    })),
+    getOutboxStatusCounts: vi.fn(async () => ({
+      pending: 0,
+      processing: 0,
+      external_attempting: 0,
+      sent: 0,
+      failed: 0,
+      outcome_unknown: 0,
+      terminalFailed: 0,
     })),
   };
   const loop = () => ({

@@ -94,6 +94,8 @@ Phase 5B 分为三个连续、都必须完成的子阶段。拆分用于控制�
 - Phase 5B-2 使用 `0032_action_approval_facts.sql`。
 - Phase 5B-3 使用 `0033_knowledge_publications.sql`。
 
+Phase 5B-1 尚未部署，因此其 `external_attempting` outbox 约束直接包含在 `0031_knowledge_draft_presentations.sql` 中；不得为它占用或新增任何 `0032_*` 迁移，`0032` 继续专用于 Phase 5B-2。
+
 每个子阶段都必须有自己的单元测试、真实 Postgres 测试、运行手册和明确退出条件。完成一个退出条件后进入下一核心能力；非阻断加固项进入后续清单，不能无限延长当前子阶段。
 
 ## 5. 角色与授权
@@ -138,6 +140,8 @@ Phase 5B 分为三个连续、都必须完成的子阶段。拆分用于控制�
 - “确认内容”“需要修改”“拒绝草稿”三个动作；
 - 草稿 ID、修订号和版本的可追溯摘要。
 
+Phase 5B-1 卡片把上述摘要作为可见的固定 metadata 块展示：`Iris / pending_confirmation`、来源类型、草稿 ID、修订号和草稿版本。该块只使用有界事实字段，不复制来源群消息、证据标识或证据原文。
+
 ### 6.2 禁止确认截断内容
 
 确认必须覆盖用户实际看到的全部正式内容：
@@ -151,8 +155,9 @@ Phase 5B-1 首先支持安全预算内的完整卡片。内部初始预算固定
 
 ### 6.3 修改与拒绝原因
 
-- “需要修改”必须提交 1-2,000 字符的非空原因。
-- “拒绝草稿”必须提交 1-2,000 字符的非空原因，并要求二次确认。
+- Core 服务端解析合同对“需要修改”和“拒绝草稿”保留 1-2,000 字符的规范化非空原因上限。
+- Phase 5B-1 飞书卡片输入控件受平台合同限制，`max_length` 必须为 1,000，因此卡片 UI 实际只能提交 1-1,000 字符；不得向飞书发出无效的 2,000 字符控件上限。
+- “拒绝草稿”还必须要求二次确认。
 - 卡片使用受限文本输入收集原因；Core 只保存规范化后的有界文本。
 - “确认内容”不读取或保存原因输入框中的临时文本。
 - 缺失、超限或结构异常的原因不会改变草稿状态。
@@ -193,7 +198,9 @@ POST /feishu/card-actions
 
 入口不读取大型草稿、不查询外部权限、不完成审批、不执行发布。
 
-如果 Redis 入队失败，入口仍在 3 秒内返回 HTTP 200，但 toast 必须明确显示“操作未提交，请稍后重试”，且 Postgres 不产生确认或审批事实。这样既避免飞书重复回调风暴，也不会把未持久化的动作伪装成成功。
+安全修正：启用 knowledge-card confirmation 时必须配置非空且有界的 `FEISHU_ENCRYPT_KEY`。卡片入口缺少 raw body、签名或时间戳，或签名/时间戳过期时，一律拒绝且不入队；该严格要求只作用于新版卡片入口，不能放宽或破坏旧 Feishu event callback 的兼容行为。
+
+如果 Redis 明确拒绝入队，入口仍在 3 秒内返回 HTTP 200，但 toast 必须明确显示“操作未提交，请稍后重试”，且 Postgres 不产生确认或审批事实。如果 1,000 ms 入队期限先到而 Redis 请求仍未完成，入口无法证明动作未提交，必须改为显示“提交状态未确认，请勿重复点击；请以卡片最终状态为准”；原来的单次幂等入队请求可以晚到成功，但入口不得自动发起第二次入队。这样既避免飞书重复回调风暴和用户重复点击，也不会把未持久化或结果未明的动作伪装成确定结果。
 
 ### 7.2 专用交互队列
 
@@ -217,6 +224,8 @@ POST /feishu/card-actions
 - DLQ 查看、单条重放和删除接口；
 - replay 不绕过业务幂等和当前权限校验；
 - 日志不记录卡片正文、访问令牌或完整回调原文。
+
+每次 processing lease 过期都必须在 Redis 原子恢复中消耗一次 attempt。达到第 5 次 lease 过期时任务进入确定性的、无正文 DLQ，不再回到 ready 队列；若任务随后由正常 worker 处理失败，不能对同一次尝试重复递增。
 
 ### 7.3 飞书官方接口约束
 
@@ -263,7 +272,7 @@ POST /feishu/card-actions
 
 卡片发送使用 Postgres outbox：草稿展示事实与待发送任务在同一事务提交，后台 dispatcher 再调用飞书。这样数据库提交成功但进程崩溃时不会永久丢失卡片。
 
-发送 outbox 使用稳定幂等键。飞书消息发送发生超时且结果未知时，先按可查询证据核对，不立即重复发送。即使重复卡片最终不可避免，只有 Postgres 中的一个 active presentation 能产生有效确认。
+发送 outbox 使用 `pending`、`processing`、`external_attempting`、`sent`、`failed`、`outcome_unknown` 状态和稳定幂等键。飞书消息发送发生超时、连接重置或 dispatch 后 generic fetch rejection 且结果未知时，先按可查询证据核对，不立即重复发送；`request_not_sent` 只保留给可证明的调用前失败。即使重复卡片最终不可避免，只有 Postgres 中的一个 active presentation 能产生有效确认。
 
 ## 9. 草稿生命周期扩展
 
@@ -526,7 +535,7 @@ Phase 5B 不建设完整多租户策略系统。内部 MVP 使用单租户、少
 状态接口和部署门禁必须覆盖：
 
 - approval interaction queue pending/processing/delayed/DLQ；
-- presentation outbox pending/processing/failed/unknown；
+- presentation outbox `pending`/`processing`/`external_attempting`/`failed`/`outcome_unknown`（可附带 `sent` 和 terminal-failed 细分）；
 - action proposal 各状态计数；
 - action execution pending/executing/failed/reconciliation_required；
 - result notification outbox；
@@ -534,7 +543,7 @@ Phase 5B 不建设完整多租户策略系统。内部 MVP 使用单租户、少
 - bounded failure classification；
 - 当前候选提交和 Core 镜像 SHA。
 
-健康检查不因为一个业务 proposal 被拒绝而整体 unhealthy，但 readiness 在基础队列不可达、迁移缺失、worker 未运行或启用发布却缺少必要飞书配置时必须失败。
+状态和 telemetry 只暴露有界计数与稳定分类，不包含草稿正文、证据正文或原因文本。健康检查不因为一个业务 proposal 被拒绝而整体 unhealthy，但 knowledge-card readiness 在 outbox 状态不可读、存在未解决 `outcome_unknown`、或存在 terminal/exhausted failed 行时必须 fail closed。普通 `pending`、`processing`、`external_attempting` 可重试工作不构成永久 enable blocker；pilot 前置验收仍应先等待这些队列排空。基础队列不可达、迁移缺失、worker 未运行或启用发布却缺少必要飞书配置时也必须失败。
 
 ## 20. 测试策略
 

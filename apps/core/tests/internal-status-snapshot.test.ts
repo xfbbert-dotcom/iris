@@ -334,6 +334,15 @@ describe("buildInternalStatusSnapshot", () => {
         send_failed: 5,
         pendingSend: 1,
       },
+      outbox: {
+        pending: 5,
+        processing: 6,
+        external_attempting: 7,
+        sent: 8,
+        failed: 9,
+        outcome_unknown: 0,
+        terminalFailed: 0,
+      },
     };
     const snapshot = buildInternalStatusSnapshot({
       generatedAt: new Date("2026-07-19T08:00:02.000Z"),
@@ -356,6 +365,15 @@ describe("buildInternalStatusSnapshot", () => {
       "delayed",
       "deadLetter",
     ]);
+    expect(cardSnapshot.outbox).toEqual({
+      pending: 5,
+      processing: 6,
+      external_attempting: 7,
+      sent: 8,
+      failed: 9,
+      outcome_unknown: 0,
+      terminalFailed: 0,
+    });
     cardSnapshot.dispatcher.latestBatch!.startedAt.setUTCFullYear(2030);
     expect(knowledgeCards.dispatcher.latestBatch.startedAt).toEqual(
       new Date("2026-07-19T08:00:00.000Z"),

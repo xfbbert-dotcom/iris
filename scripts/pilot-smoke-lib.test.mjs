@@ -16,6 +16,7 @@ import {
   assertDurableRuntimeMutation,
   assertFastFeishuAcknowledgement,
   assertHealthyInternalStatus,
+  assertKnowledgeCardOutboxReady,
   assertPilotActivationReady,
   assertRuntimeGloballyDisabled,
 } from "./pilot-smoke-lib.mjs";
@@ -126,6 +127,40 @@ test("accepts durable desired enablement only while the restarted live gate rema
   assert.doesNotThrow(() => assertPilotActivationReady(activationReadyStatus));
 });
 
+test("accepts content-free knowledge-card outbox counts with ordinary in-flight work", () => {
+  assert.equal(assertKnowledgeCardOutboxReady({
+    outbox: {
+      pending: 3,
+      processing: 2,
+      external_attempting: 1,
+      sent: 8,
+      failed: 4,
+      outcome_unknown: 0,
+      terminalFailed: 0,
+    },
+  }), "no-unresolved-terminal-failures");
+});
+
+for (const [label, knowledgeCards] of [
+  ["missing counts", { outbox: { pending: 0 } }],
+  ["outcome unknown", {
+    outbox: {
+      pending: 0, processing: 0, external_attempting: 0, sent: 0, failed: 0,
+      outcome_unknown: 1, terminalFailed: 0,
+    },
+  }],
+  ["terminal failure", {
+    outbox: {
+      pending: 0, processing: 0, external_attempting: 0, sent: 0, failed: 1,
+      outcome_unknown: 0, terminalFailed: 1,
+    },
+  }],
+]) {
+  test(`rejects knowledge-card outbox ${label}`, () => {
+    assert.throws(() => assertKnowledgeCardOutboxReady(knowledgeCards), /outbox/u);
+  });
+}
+
 test("proves default-off knowledge-card readiness without exposing draft content", () => {
   const result = runSmokeWithFetchMode("");
   try {
@@ -134,6 +169,7 @@ test("proves default-off knowledge-card readiness without exposing draft content
     assert.equal(checks.knowledgeCardDefaults, "disabled-empty-allowlist");
     assert.equal(checks.knowledgeCardReadiness, "safe-disabled");
     assert.equal(checks.knowledgeCardStatus, "unavailable-while-disabled");
+    assert.equal(checks.knowledgeCardOutbox, "unavailable-while-disabled");
     assert.doesNotMatch(result.stdout, /Full governed draft body|evidence-message-1|token-secret/u);
   } finally {
     result.cleanup();

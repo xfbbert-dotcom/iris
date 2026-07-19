@@ -55,8 +55,38 @@ for _, id in ipairs(expired) do
   if redis.call("HGET", KEYS[6], id) == "processing" and payload and received_at then
     redis.call("ZREM", KEYS[3], id)
     redis.call("HDEL", KEYS[7], id)
-    redis.call("HSET", KEYS[6], id, "ready")
-    redis.call("ZADD", KEYS[1], received_at, id)
+    local decoded_ok, job = pcall(cjson.decode, payload)
+    local attempts = decoded_ok and type(job) == "table" and job.attempts or nil
+    if type(attempts) == "number"
+      and attempts >= 0
+      and attempts == math.floor(attempts)
+      and attempts < tonumber(ARGV[5]) then
+      attempts = attempts + 1
+      job.attempts = attempts
+      if attempts >= tonumber(ARGV[5]) then
+        local dead_letter_id = "dlq:lease-expired:" .. redis.sha1hex(id)
+        local dead_letter_payload = cjson.encode({
+          id = dead_letter_id,
+          attempts = attempts,
+          errorCode = "lease_expired",
+          failedAt = ARGV[6],
+          replayable = false
+        })
+        redis.call("HDEL", KEYS[4], id)
+        redis.call("HDEL", KEYS[5], id)
+        redis.call("HDEL", KEYS[6], id)
+        redis.call("HSET", KEYS[8], dead_letter_id, dead_letter_payload)
+        redis.call("ZADD", KEYS[9], ARGV[3], dead_letter_id)
+        redis.call("SADD", KEYS[10], dead_letter_id)
+      else
+        redis.call("HSET", KEYS[4], id, cjson.encode(job))
+        redis.call("HSET", KEYS[6], id, "ready")
+        redis.call("ZADD", KEYS[1], received_at, id)
+      end
+    else
+      redis.call("HSET", KEYS[6], id, "ready")
+      redis.call("ZADD", KEYS[1], received_at, id)
+    end
   else
     redis.call("ZREM", KEYS[3], id)
     redis.call("HDEL", KEYS[4], id)
@@ -335,12 +365,14 @@ export function createRedisApprovalInteractionQueue({
         throw new Error("leaseUntil must be after now");
       }
       const result = await client.eval(CLAIM_SCRIPT, {
-        keys: activeKeys,
+        keys: transitionKeys,
         arguments: [
           String(limit),
           workerId,
           String(now.getTime()),
           String(leaseUntil.getTime()),
+          String(safeMaxAttempts),
+          now.toISOString(),
         ],
       });
       const claimedPairs = readStringPairsReply(result, "claim");
@@ -626,6 +658,16 @@ function parseDeadLetter(payload: string): ApprovalInteractionDeadLetter | undef
         replayable: true,
       };
     }
+    if (parsed.replayable === false && parsed.errorCode === "lease_expired" &&
+        Number.isSafeInteger(parsed.attempts) && Number(parsed.attempts) >= 1) {
+      return {
+        id: parsed.id,
+        attempts: Number(parsed.attempts),
+        errorCode: "lease_expired",
+        failedAt,
+        replayable: false,
+      };
+    }
     if (parsed.replayable === false && parsed.errorCode === "invalid_queue_payload" &&
         typeof parsed.payloadDigest === "string" &&
         SHA256_PAYLOAD_DIGEST_PATTERN.test(parsed.payloadDigest) &&
@@ -685,7 +727,9 @@ function normalizeErrorCode(value: string): ApprovalInteractionFailureCode {
 function normalizeDeadLetterId(value: string): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
-  return /^dlq:[a-f0-9]{64}$/u.test(normalized) ? normalized : undefined;
+  return /^(?:dlq:[a-f0-9]{64}|dlq:lease-expired:[a-f0-9]{40})$/u.test(normalized)
+    ? normalized
+    : undefined;
 }
 
 function normalizeIdentifier(value: string, fieldName: string): string {

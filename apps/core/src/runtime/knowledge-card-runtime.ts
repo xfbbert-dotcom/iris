@@ -37,6 +37,7 @@ import {
 } from "../knowledge-cards/knowledge-card-dispatcher-loop.js";
 import type {
   KnowledgeCardRepository,
+  KnowledgeCardOutboxStatusCounts,
   KnowledgeCardStatusCounts,
 } from "../knowledge-cards/knowledge-card-repository.js";
 import { createPostgresKnowledgeCardRepository } from "../knowledge-cards/postgres-knowledge-card-repository.js";
@@ -76,6 +77,7 @@ export type KnowledgeCardRuntimeStatus = {
     deadLetter: number;
   };
   presentations: KnowledgeCardStatusCounts;
+  outbox: KnowledgeCardOutboxStatusCounts;
 };
 
 export type KnowledgeCardRuntime = {
@@ -221,7 +223,9 @@ export function createKnowledgeCardRuntime({
       batchLimit: config.batchLimit,
       onError: () => undefined,
     });
-    const verifyFeishuRequest = createFeishuRequestVerifier(feishuAuthConfig);
+    const verifyFeishuRequest = createFeishuRequestVerifier(feishuAuthConfig, {
+      requireSignature: true,
+    });
     const gateway = createFeishuCardActionGateway({
       queue,
       verifyRequest(request) {
@@ -286,9 +290,10 @@ export function createKnowledgeCardRuntime({
       async getStatus() {
         const dispatcher = dispatcherLoop!.getSnapshot();
         const worker = interactionLoop!.getSnapshot();
-        const [queueCounts, presentations] = await Promise.all([
+        const [queueCounts, presentations, outbox] = await Promise.all([
           queue.getCounts(),
           repository.getStatusCounts(),
+          repository.getOutboxStatusCounts(),
         ]);
         return {
           enabled: true,
@@ -298,6 +303,7 @@ export function createKnowledgeCardRuntime({
           worker,
           queue: queueCounts,
           presentations,
+          outbox,
         };
       },
       close() {

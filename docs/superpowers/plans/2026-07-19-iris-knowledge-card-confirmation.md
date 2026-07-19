@@ -12,12 +12,12 @@
 
 - Implement only Phase 5B-1. Do not create ActionProposal, approval-requirement, publication, OAuth review-page, or Feishu knowledge-base write code.
 - Base all work on Phase 5A commit `20f8dc2462583959c8e1115cbd7d275e6ad46327` plus the approved design commit `1963d3b`.
-- Use migration `0031_knowledge_draft_presentations.sql`; do not renumber or edit migration `0030`.
+- Use migration `0031_knowledge_draft_presentations.sql`; fold the `external_attempting` outbox constraint into it, do not renumber or edit migration `0030`, and reserve every `0032_*` name for Phase 5B-2.
 - Default `IRIS_KNOWLEDGE_CARD_ENABLED=false`; an empty `IRIS_KNOWLEDGE_CARD_GROUP_IDS` means no group is enabled.
 - A card body may be confirmed only when the complete draft body is at most 8,000 Unicode code points, serialized card JSON is at most 24 KiB, and the card has at most 100 components.
-- “需要修改” and “拒绝草稿” require a normalized reason of 1-2,000 characters; rejection requires the card confirmation field.
-- Verify Feishu signature/token and a five-minute timestamp window before enqueue. A queue failure returns HTTP 200 with an explicit “操作未提交” toast and writes no business fact.
-- Bound callback queue enqueue to 1,000 ms so a stalled Redis connection cannot consume Feishu's three-second response window.
+- Core retains a normalized server-side reason contract of 1-2,000 characters for “需要修改” and “拒绝草稿”, while the Feishu card input must use the platform-valid `max_length: 1000`; rejection also requires the card confirmation field.
+- When knowledge cards are enabled, require a nonblank bounded `FEISHU_ENCRYPT_KEY` and verify raw body, signature/token, and a five-minute timestamp window before enqueue. This strict card verification must not loosen legacy Feishu event callbacks. An explicit queue rejection returns HTTP 200 with an “操作未提交” toast and writes no business fact.
+- Bound callback queue enqueue to 1,000 ms so a stalled Redis connection cannot consume Feishu's three-second response window. A timeout is uncertain, returns “提交状态未确认，请勿重复点击；请以卡片最终状态为准”, leaves the single idempotent enqueue attempt to settle, and never starts a second enqueue automatically.
 - Use `header.event_id` as callback idempotency identity. Never trust callback title, content, risk, reviewer, group, actor role, or destination.
 - The interaction worker must repeat global/group/capability gates, exact presentation/revision/version checks, current evidence validation, and live group membership checks.
 - Postgres facts decide validity. Card update failure cannot roll back a committed draft transition.
@@ -291,7 +291,7 @@ git commit -m "feat(core): persist knowledge card interactions"
 
 - [ ] **Step 1: Write failing renderer tests**
 
-Verify exact full body, title/risk/revision labels, action values, reason input, rejection confirmation, deterministic hash/JSON, escaping, Unicode code-point counting, 8,001-code-point refusal, 24-KiB refusal, and no evidence body.
+Verify exact full body, title/risk labels, visible `Iris / pending_confirmation`, source type, draft ID, revision and version, action values, a Feishu-valid 1,000-character reason input, rejection confirmation, deterministic hash/JSON, escaping, Unicode code-point counting, 8,001-code-point refusal, 24-KiB refusal, and no evidence/source raw text.
 
 ```ts
 expect(rendered.card).toMatchObject({ schema: "2.0" });
@@ -306,7 +306,7 @@ Expected: FAIL because `renderKnowledgeDraftCard` is missing.
 
 - [ ] **Step 3: Implement deterministic renderer**
 
-Build JSON 2.0 with a blue header, full Markdown body, bounded metadata, one review-reason input, one rejection confirmation checkbox, and three buttons. The callback value contains only:
+Build JSON 2.0 with a blue header, full Markdown body, bounded visible traceability metadata, one review-reason input capped at 1,000 for Feishu, one rejection confirmation checkbox, and three buttons. The callback value contains only:
 
 ```ts
 {
@@ -447,17 +447,25 @@ The gateway verifies before parsing, creates `feishu-card:{appId}:{eventId}`, an
 { toast: { type: "info", content: "已收到，正在核验" } }
 ```
 
-Enqueue failure response remains HTTP 200:
+An explicit enqueue rejection remains HTTP 200:
 
 ```ts
 { toast: { type: "error", content: "操作未提交，请稍后重试" } }
 ```
 
+If the 1,000 ms deadline wins while the enqueue is still pending, return HTTP 200 without claiming failure:
+
+```ts
+{ toast: { type: "error", content: "提交状态未确认，请勿重复点击；请以卡片最终状态为准" } }
+```
+
+The original idempotent enqueue may settle successfully after the response. Do not issue a second enqueue from the timeout path.
+
 It must not query Postgres, Feishu membership, or draft content.
 
 - [ ] **Step 5: Verify the callback completes before slow dependencies**
 
-Use a deferred queue promise and fake timers to prove the gateway returns the failure toast after the 1,000 ms enqueue timeout instead of hanging. A fast enqueue must return immediately. The gateway must not receive repository, membership, or draft-content dependencies, so those operations are structurally impossible at this boundary.
+Use a deferred queue promise and fake timers to prove the gateway returns the uncertainty toast after the 1,000 ms enqueue timeout instead of hanging. Resolve the deferred enqueue afterward and prove exactly one idempotent operation was enqueued. A fast enqueue and an explicit rejection must remain distinguishable. The gateway must not receive repository, membership, or draft-content dependencies, so those operations are structurally impossible at this boundary.
 
 - [ ] **Step 6: Commit callback boundary**
 
@@ -482,7 +490,7 @@ git commit -m "feat(core): accept Feishu card actions safely"
 
 - [ ] **Step 1: Write failing queue contract tests**
 
-Reuse the behavioral shape of the existing memory-extraction queue but limit it to this job. Test enqueue dedupe, FIFO ordering by `receivedAt`, atomic claim, lease recovery, exponential delayed retry, max-attempt DLQ, exact counts, malformed payload quarantine, replay, duplicate replay, delete, Redis failure preservation, and bounded error text.
+Reuse the behavioral shape of the existing memory-extraction queue but limit it to this job. Test enqueue dedupe, FIFO ordering by `receivedAt`, atomic claim, lease recovery, exponential delayed retry, max-attempt DLQ, exact counts, malformed payload quarantine, replay, duplicate replay, delete, Redis failure preservation, and bounded error text. Every expired lease atomically consumes one attempt; five consecutive expiries without `handleFailure` produce one deterministic content-free DLQ row and no ready/processing/delayed rows.
 
 - [ ] **Step 2: Run queue tests and verify failure**
 
@@ -633,7 +641,7 @@ Cover:
 - presentation list and status;
 - DLQ list/replay/delete authentication and bounds;
 - absent runtime returns 503 internally and safe failure toast publicly;
-- `/internal/status` includes all four queue counts without body content;
+- `/internal/status` includes all four interaction-queue counts plus content-free presentation-outbox counts for `pending`, `processing`, `external_attempting`, `failed`, and `outcome_unknown` without body content;
 - close waits for both loops before Redis/PG close.
 
 - [ ] **Step 4: Register routes without expanding app business logic**
@@ -642,7 +650,7 @@ Cover:
 
 - [ ] **Step 5: Add readiness and deployment defaults**
 
-When disabled, readiness reports a safe disabled state. When enabled, it fails if worker loops are stopped, required config is absent, or Redis/Postgres status cannot be read. Add compose variables with safe defaults:
+When disabled, readiness reports a safe disabled state. When enabled, it fails if worker loops are stopped, required config is absent, Redis/Postgres or outbox status cannot be read, unresolved `outcome_unknown` rows exist, or terminal/exhausted failed rows exist. Ordinary retryable pending/processing/external-attempting rows do not permanently block enablement. Add compose variables with safe defaults:
 
 ```yaml
 IRIS_KNOWLEDGE_CARD_ENABLED: ${IRIS_KNOWLEDGE_CARD_ENABLED:-false}
@@ -684,7 +692,7 @@ The runbook must require:
 
 1. approved commit and same-SHA Core image;
 2. Core/Postgres/Redis/AI Worker healthy;
-3. all existing and new pending/processing/delayed/DLQ counts zero;
+3. all existing and new pending/processing/external-attempting/delayed/DLQ counts zero, with no unresolved outcome-unknown or terminal/exhausted presentation-outbox rows;
 4. global, three known groups, knowledge cards, and card allowlist disabled before rollout;
 5. only the pilot group enabled;
 6. one full-content confirmation, one required-revision with reason, one rejection with confirmation, one stale-card click, one duplicate callback replay, and one runtime-disabled click;

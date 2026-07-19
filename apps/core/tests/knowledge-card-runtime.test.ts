@@ -73,6 +73,15 @@ describe("KnowledgeCardRuntime", () => {
         send_failed: 5,
         pendingSend: 1,
       },
+      outbox: {
+        pending: 6,
+        processing: 7,
+        external_attempting: 8,
+        sent: 9,
+        failed: 10,
+        outcome_unknown: 11,
+        terminalFailed: 4,
+      },
     });
     expect(JSON.stringify(await runtime?.getStatus())).not.toMatch(
       /draft body|evidence|actorOpenId|reason|token-secret/u,
@@ -331,6 +340,7 @@ function enabledEnv() {
     DATABASE_URL: "postgres://iris:secret@postgres:5432/iris",
     REDIS_URL: "redis://redis:6379",
     FEISHU_VERIFICATION_TOKEN: "verification-token",
+    FEISHU_ENCRYPT_KEY: "encrypt-key",
     FEISHU_APP_ID: "app-id",
     FEISHU_APP_SECRET: "app-secret",
     FEISHU_OPEN_BASE_URL: "https://open.example.com",
@@ -380,6 +390,15 @@ function runtimeDependencies(overrides: {
       closed: 4,
       send_failed: 5,
       pendingSend: 1,
+    })),
+    getOutboxStatusCounts: vi.fn(async () => ({
+      pending: 6,
+      processing: 7,
+      external_attempting: 8,
+      sent: 9,
+      failed: 10,
+      outcome_unknown: 11,
+      terminalFailed: 4,
     })),
   };
   const drafts = { getDraft: vi.fn() };

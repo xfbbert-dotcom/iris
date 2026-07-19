@@ -11,6 +11,7 @@ import type {
   CreateKnowledgeCardPresentationInput,
   KnowledgeCardInteractionResult,
   KnowledgeCardMutationResult,
+  KnowledgeCardOutboxStatusCounts,
   KnowledgeCardRepository,
   KnowledgeCardSendClaim,
   KnowledgeCardStatusCounts,
@@ -78,6 +79,16 @@ type PresentationOutboxJoinRow = PresentationRow & {
 };
 
 type CountRow = { state: KnowledgeCardPresentationState; count: string | number };
+
+type OutboxCountRow = {
+  pending: string | number;
+  processing: string | number;
+  external_attempting: string | number;
+  sent: string | number;
+  failed: string | number;
+  outcome_unknown: string | number;
+  terminal_failed: string | number;
+};
 
 type InteractionReplayRow = {
   presentation_id: string;
@@ -206,7 +217,41 @@ export function createPostgresKnowledgeCardRepository({
       for (const row of result.rows) counts[row.state] = Number(row.count);
       return { ...counts, pendingSend: counts.pending_send } satisfies KnowledgeCardStatusCounts;
     },
+    async getOutboxStatusCounts() {
+      const result = await dataSource.query<OutboxCountRow>(
+        `SELECT
+           count(*) FILTER (WHERE state = 'pending') AS pending,
+           count(*) FILTER (WHERE state = 'processing') AS processing,
+           count(*) FILTER (WHERE state = 'external_attempting') AS external_attempting,
+           count(*) FILTER (WHERE state = 'sent') AS sent,
+           count(*) FILTER (WHERE state = 'failed') AS failed,
+           count(*) FILTER (WHERE state = 'outcome_unknown') AS outcome_unknown,
+           count(*) FILTER (
+             WHERE state = 'failed' AND error_code IS DISTINCT FROM 'superseded'
+           ) AS terminal_failed
+         FROM knowledge_draft_presentation_outbox`,
+      );
+      const row = result.rows[0];
+      if (row === undefined) throw new Error("knowledge card outbox status unavailable");
+      return {
+        pending: statusCount(row.pending),
+        processing: statusCount(row.processing),
+        external_attempting: statusCount(row.external_attempting),
+        sent: statusCount(row.sent),
+        failed: statusCount(row.failed),
+        outcome_unknown: statusCount(row.outcome_unknown),
+        terminalFailed: statusCount(row.terminal_failed),
+      } satisfies KnowledgeCardOutboxStatusCounts;
+    },
   };
+}
+
+function statusCount(value: string | number): number {
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error("invalid knowledge card status count");
+  }
+  return count;
 }
 
 async function applyInteraction(
