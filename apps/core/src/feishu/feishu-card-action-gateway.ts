@@ -30,11 +30,21 @@ type RequestDecoder = (
   request: FeishuCardActionCallbackRequest,
 ) => Promise<FeishuCardActionCallbackRequest | undefined> | FeishuCardActionCallbackRequest | undefined;
 
+export type FeishuCardActionCallbackDiagnostic = {
+  stage: "envelope_rejected" | "decode_rejected" | "decoded_identity_rejected" | "challenge_accepted";
+  statusCode: 200 | 401;
+  hasTimestamp: boolean;
+  hasNonce: boolean;
+  hasSignature: boolean;
+  encrypted: boolean;
+};
+
 export type FeishuCardActionGatewayDependencies = {
   queue: ApprovalInteractionEnqueuer;
   verifyRequest: RequestVerifier;
   decodeRequest?: RequestDecoder;
   verifyDecodedRequest?: RequestVerifier;
+  onDiagnostic?: (diagnostic: FeishuCardActionCallbackDiagnostic) => void;
   now?: () => Date;
 };
 
@@ -44,6 +54,11 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
   return {
     async handleCallback(request: FeishuCardActionCallbackRequest): Promise<FeishuCardActionCallbackResponse> {
       if (!await passesVerifier(dependencies.verifyRequest, request)) {
+        reportDiagnostic(dependencies.onDiagnostic, {
+          stage: "envelope_rejected",
+          statusCode: 401,
+          ...requestShape(request),
+        });
         return rejectedResponse(401);
       }
 
@@ -51,9 +66,21 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
       if (dependencies.decodeRequest !== undefined) {
         try {
           const decoded = await dependencies.decodeRequest(request);
-          if (decoded === undefined) return rejectedResponse(401);
+          if (decoded === undefined) {
+            reportDiagnostic(dependencies.onDiagnostic, {
+              stage: "decode_rejected",
+              statusCode: 401,
+              ...requestShape(request),
+            });
+            return rejectedResponse(401);
+          }
           decodedRequest = decoded;
         } catch {
+          reportDiagnostic(dependencies.onDiagnostic, {
+            stage: "decode_rejected",
+            statusCode: 401,
+            ...requestShape(request),
+          });
           return rejectedResponse(401);
         }
       }
@@ -61,10 +88,20 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
         dependencies.verifyDecodedRequest !== undefined &&
         !await passesVerifier(dependencies.verifyDecodedRequest, decodedRequest)
       ) {
+        reportDiagnostic(dependencies.onDiagnostic, {
+          stage: "decoded_identity_rejected",
+          statusCode: 401,
+          ...requestShape(request),
+        });
         return rejectedResponse(401);
       }
 
       if (isFeishuUrlVerificationPayload(decodedRequest.body)) {
+        reportDiagnostic(dependencies.onDiagnostic, {
+          stage: "challenge_accepted",
+          statusCode: 200,
+          ...requestShape(request),
+        });
         return {
           statusCode: 200,
           body: { challenge: decodedRequest.body.challenge },
@@ -80,6 +117,34 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
       return outcome === "rejected" ? enqueueFailureResponse() : enqueueUncertaintyResponse();
     },
   };
+}
+
+function requestShape(request: FeishuCardActionCallbackRequest): Pick<
+  FeishuCardActionCallbackDiagnostic,
+  "hasTimestamp" | "hasNonce" | "hasSignature" | "encrypted"
+> {
+  return {
+    hasTimestamp: request.headers["x-lark-request-timestamp"] !== undefined,
+    hasNonce: request.headers["x-lark-request-nonce"] !== undefined,
+    hasSignature: request.headers["x-lark-signature"] !== undefined,
+    encrypted: isEncryptedWrapper(request.body),
+  };
+}
+
+function isEncryptedWrapper(body: unknown): boolean {
+  return typeof body === "object" && body !== null &&
+    Object.keys(body).length === 1 && typeof (body as Record<string, unknown>).encrypt === "string";
+}
+
+function reportDiagnostic(
+  observer: ((diagnostic: FeishuCardActionCallbackDiagnostic) => void) | undefined,
+  diagnostic: FeishuCardActionCallbackDiagnostic,
+): void {
+  try {
+    observer?.(diagnostic);
+  } catch {
+    // Diagnostics must never alter callback authentication or acknowledgement.
+  }
 }
 
 async function passesVerifier(

@@ -17,6 +17,7 @@ import {
 } from "../feishu/feishu-auth.js";
 import {
   createFeishuCardActionGateway,
+  type FeishuCardActionCallbackDiagnostic,
   type FeishuCardActionCallbackRequest,
 } from "../feishu/feishu-card-action-gateway.js";
 import { createFeishuGroupMembershipChecker } from "../feishu/feishu-group-membership-checker.js";
@@ -116,6 +117,7 @@ export type KnowledgeCardRuntimeDependencies = {
   createFeishuGroupMembershipChecker?: typeof createFeishuGroupMembershipChecker;
   createDispatcherLoop?: typeof createKnowledgeCardDispatcherLoop;
   createInteractionLoop?: typeof createApprovalInteractionWorkerLoop;
+  onCardCallbackDiagnostic?: (diagnostic: FeishuCardActionCallbackDiagnostic) => void;
   onStartupCleanup?: (cleanup: Promise<void>) => void;
 };
 
@@ -236,6 +238,7 @@ export function createKnowledgeCardRuntime({
     const gateway = createFeishuCardActionGateway({
       queue,
       verifyRequest: verifyFeishuEnvelope,
+      onDiagnostic: dependencies.onCardCallbackDiagnostic ?? reportCardCallbackDiagnostic,
       decodeRequest(request) {
         const body = decodeFeishuPayload(request.body, feishuAuthConfig.encryptKey);
         return body === undefined ? undefined : { ...request, body };
@@ -336,6 +339,13 @@ export function createKnowledgeCardRuntime({
     dependencies.onStartupCleanup?.(cleanup);
     throw error;
   }
+}
+
+function reportCardCallbackDiagnostic(diagnostic: FeishuCardActionCallbackDiagnostic): void {
+  console.info(JSON.stringify({
+    event: "feishu_card_callback",
+    ...diagnostic,
+  }));
 }
 
 function startupCleanupFailure(startupError: unknown, cleanupError: unknown): AggregateError {

@@ -17,6 +17,41 @@ describe("KnowledgeCardRuntime", () => {
     expect(dependencies.createRedisClient).not.toHaveBeenCalled();
   });
 
+  it("routes content-free callback diagnostics through the runtime observer", async () => {
+    const dependencies = runtimeDependencies();
+    const onCardCallbackDiagnostic = vi.fn();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies: { ...dependencies, onCardCallbackDiagnostic },
+    })!;
+
+    await expect(runtime.gateway.handleCallback({
+      headers: {},
+      body: {
+        type: "url_verification",
+        challenge: "sensitive-challenge",
+        token: "sensitive-token",
+      },
+      rawBody: "sensitive-raw-body",
+    })).resolves.toMatchObject({ statusCode: 401 });
+
+    expect(onCardCallbackDiagnostic).toHaveBeenCalledOnce();
+    expect(onCardCallbackDiagnostic).toHaveBeenCalledWith({
+      stage: "envelope_rejected",
+      statusCode: 401,
+      hasTimestamp: false,
+      hasNonce: false,
+      hasSignature: false,
+      encrypted: false,
+    });
+    expect(JSON.stringify(onCardCallbackDiagnostic.mock.calls)).not.toMatch(
+      /sensitive-(?:challenge|token|raw-body)/u,
+    );
+
+    await runtime.close();
+  });
+
   it("accepts a signed URL challenge before requiring a card callback app id", async () => {
     const dependencies = runtimeDependencies();
     const runtime = createKnowledgeCardRuntime({

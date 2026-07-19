@@ -5,6 +5,134 @@ import { createFeishuRequestVerifier } from "../src/feishu/feishu-auth.js";
 import { createFeishuCardActionGateway } from "../src/feishu/feishu-card-action-gateway.js";
 
 describe("FeishuCardActionGateway", () => {
+  it("reports a content-free envelope rejection before decoding", async () => {
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const decodeRequest = vi.fn((request) => request);
+    const onDiagnostic = vi.fn();
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: () => false,
+      decodeRequest,
+      onDiagnostic,
+    });
+    const request = {
+      headers: {
+        "x-lark-request-timestamp": "sensitive-timestamp",
+        "x-lark-request-nonce": "sensitive-nonce",
+        "x-lark-signature": "sensitive-signature",
+      },
+      body: { encrypt: "sensitive-encrypted-body" },
+      rawBody: "sensitive-raw-body",
+    };
+
+    await expect(gateway.handleCallback(request)).resolves.toMatchObject({ statusCode: 401 });
+
+    expect(onDiagnostic).toHaveBeenCalledOnce();
+    expect(onDiagnostic).toHaveBeenCalledWith({
+      stage: "envelope_rejected",
+      statusCode: 401,
+      hasTimestamp: true,
+      hasNonce: true,
+      hasSignature: true,
+      encrypted: true,
+    });
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toMatch(
+      /sensitive-(?:timestamp|nonce|signature|encrypted-body|raw-body)/u,
+    );
+    expect(decodeRequest).not.toHaveBeenCalled();
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("reports a content-free decode rejection", async () => {
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const onDiagnostic = vi.fn();
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: () => true,
+      decodeRequest: () => undefined,
+      onDiagnostic,
+    });
+
+    await expect(gateway.handleCallback({
+      headers: {},
+      body: { encrypt: "sensitive-encrypted-body" },
+    })).resolves.toMatchObject({ statusCode: 401 });
+
+    expect(onDiagnostic).toHaveBeenCalledOnce();
+    expect(onDiagnostic).toHaveBeenCalledWith({
+      stage: "decode_rejected",
+      statusCode: 401,
+      hasTimestamp: false,
+      hasNonce: false,
+      hasSignature: false,
+      encrypted: true,
+    });
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toContain("sensitive-encrypted-body");
+  });
+
+  it("reports a content-free decoded identity rejection", async () => {
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const onDiagnostic = vi.fn();
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: () => true,
+      decodeRequest: (request) => ({
+        ...request,
+        body: { token: "sensitive-token", challenge: "sensitive-challenge" },
+      }),
+      verifyDecodedRequest: () => false,
+      onDiagnostic,
+    });
+
+    await expect(gateway.handleCallback({ headers: {}, body: { encrypt: "ciphertext" } }))
+      .resolves.toMatchObject({ statusCode: 401 });
+
+    expect(onDiagnostic).toHaveBeenCalledOnce();
+    expect(onDiagnostic).toHaveBeenCalledWith({
+      stage: "decoded_identity_rejected",
+      statusCode: 401,
+      hasTimestamp: false,
+      hasNonce: false,
+      hasSignature: false,
+      encrypted: true,
+    });
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toMatch(/sensitive-(?:token|challenge)/u);
+  });
+
+  it("reports a content-free accepted URL challenge", async () => {
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const onDiagnostic = vi.fn();
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: () => true,
+      verifyDecodedRequest: () => true,
+      onDiagnostic,
+    });
+
+    await expect(gateway.handleCallback({
+      headers: {},
+      body: {
+        type: "url_verification",
+        challenge: "sensitive-challenge",
+        token: "sensitive-token",
+      },
+    })).resolves.toEqual({
+      statusCode: 200,
+      body: { challenge: "sensitive-challenge" },
+    });
+
+    expect(onDiagnostic).toHaveBeenCalledOnce();
+    expect(onDiagnostic).toHaveBeenCalledWith({
+      stage: "challenge_accepted",
+      statusCode: 200,
+      hasTimestamp: false,
+      hasNonce: false,
+      hasSignature: false,
+      encrypted: false,
+    });
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toMatch(/sensitive-(?:token|challenge)/u);
+  });
+
   it("verifies before parsing and returns 401 without enqueueing", async () => {
     const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
     const decodeRequest = vi.fn((request) => request);
