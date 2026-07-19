@@ -620,7 +620,7 @@ function cardAction(): Record<string, unknown> {
         },
         tag: "button",
         name: "confirm",
-        form_value: { reason: "", rejectionConfirmed: [] },
+        form_value: { reason: "" },
       },
       host: "im_message",
       context: { open_message_id: "om_approval", open_chat_id: "oc_pilot" },

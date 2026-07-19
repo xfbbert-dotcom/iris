@@ -132,15 +132,15 @@ function parseAction(value: unknown): Omit<ParsedFeishuCardAction, "eventId" | "
   }
 
   if (callbackValue.action === "confirm") {
-    return formValue.reason === "" && formValue.rejectionConfirmed.length === 0 ? callbackValue : undefined;
+    return formValue.reason === "" ? callbackValue : undefined;
   }
   if (callbackValue.action === "request_revision") {
-    return formValue.reason !== "" && formValue.rejectionConfirmed.length === 0
+    return formValue.reason !== ""
       ? { ...callbackValue, reason: formValue.reason }
       : undefined;
   }
 
-  return formValue.reason !== "" && formValue.rejectionConfirmed.length === 1
+  return formValue.reason !== ""
     ? { ...callbackValue, reason: formValue.reason, rejectionConfirmed: true }
     : undefined;
 }
@@ -174,14 +174,11 @@ function parseCallbackValue(value: unknown): Pick<ParsedFeishuCardAction, "prese
   };
 }
 
-function parseFormValue(value: unknown): { reason: string; rejectionConfirmed: ["true"] | [] } | undefined {
+function parseFormValue(value: unknown): { reason: string } | undefined {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["reason", "rejectionConfirmed"]) ||
-    typeof value.reason !== "string" ||
-    !Array.isArray(value.rejectionConfirmed) ||
-    !value.rejectionConfirmed.every((item) => item === "true") ||
-    value.rejectionConfirmed.length > 1
+    !hasOnlyKeys(value, ["reason"]) ||
+    typeof value.reason !== "string"
   ) {
     return undefined;
   }
@@ -191,10 +188,7 @@ function parseFormValue(value: unknown): { reason: string; rejectionConfirmed: [
     return undefined;
   }
 
-  return {
-    reason,
-    rejectionConfirmed: value.rejectionConfirmed.length === 1 ? ["true"] : [],
-  };
+  return { reason };
 }
 
 function parseReference(value: unknown): string | undefined {

@@ -34,7 +34,7 @@ describe("parseFeishuCardAction", () => {
         action: {
           name: "confirm",
           value: actionValue({ action: "confirm" }),
-          form_value: { reason: "", rejectionConfirmed: [] },
+          form_value: { reason: "" },
         },
       },
     }))).toMatchObject({ action: "confirm" });
@@ -44,7 +44,7 @@ describe("parseFeishuCardAction", () => {
         action: {
           name: "request_revision",
           value: actionValue({ action: "request_revision" }),
-          form_value: { reason: "  Add rollback steps.  ", rejectionConfirmed: [] },
+          form_value: { reason: "  Add rollback steps.  " },
         },
       },
     }))).toMatchObject({ action: "request_revision", reason: "Add rollback steps." });
@@ -52,13 +52,13 @@ describe("parseFeishuCardAction", () => {
 
   it.each([
     ["an unknown callback-value field", cardAction({ event: { action: { value: { ...actionValue(), unexpected: true } } } })],
-    ["an unknown form field", cardAction({ event: { action: { form_value: { reason: "Unsafe rollout plan.", rejectionConfirmed: ["true"], unexpected: "value" } } } })],
+    ["an unknown form field", cardAction({ event: { action: { form_value: { reason: "Unsafe rollout plan.", unexpected: "value" } } } })],
+    ["a legacy checkbox field", cardAction({ event: { action: { form_value: { reason: "Unsafe rollout plan.", rejectionConfirmed: ["true"] } } } })],
     ["a wrong callback-value type", cardAction({ event: { action: { value: { ...actionValue(), revisionNumber: "7" } } } })],
     ["a missing callback-value field", cardAction({ event: { action: { value: { ...actionValue(), draftVersion: undefined } } } })],
     ["a mismatched action name", cardAction({ event: { action: { name: "confirm" } } })],
-    ["a missing revision reason", cardAction({ event: { action: { name: "request_revision", value: actionValue({ action: "request_revision" }), form_value: { reason: "", rejectionConfirmed: [] } } } })],
-    ["an unconfirmed rejection", cardAction({ event: { action: { form_value: { reason: "Unsafe rollout plan.", rejectionConfirmed: [] } } } })],
-    ["a wrong rejection confirmation type", cardAction({ event: { action: { form_value: { reason: "Unsafe rollout plan.", rejectionConfirmed: "true" } } } })],
+    ["a missing revision reason", cardAction({ event: { action: { name: "request_revision", value: actionValue({ action: "request_revision" }), form_value: { reason: "" } } } })],
+    ["a missing rejection reason", cardAction({ event: { action: { form_value: { reason: "" } } } })],
   ])("rejects %s", (_label, body) => {
     expect(parseFeishuCardAction(body)).toBeUndefined();
   });
@@ -87,7 +87,6 @@ function cardAction(overrides: Record<string, unknown> = {}): Record<string, unk
         name: "reject",
         form_value: {
           reason: "  Unsafe rollout plan.  ",
-          rejectionConfirmed: ["true"],
         },
       },
       host: "im_message",

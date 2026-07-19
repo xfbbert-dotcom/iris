@@ -195,7 +195,7 @@ if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true" -or (Get-PilotEn
 
 1. 完整内容确认：操作前可见卡片必须显示 `Iris / pending_confirmation`、来源类型、草稿 ID、修订号和草稿版本，且不显示来源消息/证据原文；当前 `pending_confirmation` 草稿确认后最终卡片必须显示 `Iris / confirmed`、相同绑定元数据、已提交 actor/time 和 `Next gate: pending_review`。只新增一次 group confirmation 和对应 append-only event，草稿进入 `pending_review`。
 2. 要求修改：另一个当前草稿提交非空原因；最终卡片必须显示 `Iris / revision_requested`、相同绑定元数据、`needs_revision` 和数据库已提交的规范化原因，不得回显未提交 callback 字段；草稿状态和 event 与可见原因一致。
-3. 拒绝：第三个草稿在飞书确认拒绝；最终卡片必须显示 `Iris / rejected`、相同绑定元数据、`rejected` 和数据库已提交的规范化原因；草稿为终态 rejected，后续点击不改变业务事实。
+3. 拒绝：第三个草稿填写非空原因，点击 Reject 并在飞书原生二次确认弹窗中确认；不得添加飞书卡片 JSON 2.0 不支持的 `checkbox` 标签。最终卡片必须显示 `Iris / rejected`、相同绑定元数据、`rejected` 和数据库已提交的规范化原因；草稿为终态 rejected，后续点击不改变业务事实。
 4. 过期卡片：生成新修订或使证据失效后点击旧卡；必须 stale/不可处理，且不新增 confirmation、event 或状态变化。
 5. 重复 callback 重放：同一 callback event 只产生一次业务结果和一次对应事实。
 6. 运行时停用后点击：先 durable-disable `$PilotGroupId` 再点击旧卡；不得产生业务状态变化。

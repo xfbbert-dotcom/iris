@@ -95,14 +95,6 @@ export function renderKnowledgeDraftCard(
       placeholder: { tag: "plain_text", content: "Describe the required change or rejection reason" },
     }),
     component({
-      tag: "checkbox",
-      name: "rejectionConfirmed",
-      options: [{
-        text: { tag: "plain_text", content: "I confirm this rejection" },
-        value: "true",
-      }],
-    }),
-    component({
       tag: "button",
       name: "confirm",
       text: { tag: "plain_text", content: "Confirm" },
@@ -127,7 +119,10 @@ export function renderKnowledgeDraftCard(
       value: callbackValue("reject"),
       confirm: {
         title: { tag: "plain_text", content: "Reject draft" },
-        text: { tag: "plain_text", content: "Confirm the rejection after selecting the checkbox." },
+        text: {
+          tag: "plain_text",
+          content: "Confirm this irreversible rejection. The submitted reason will be recorded.",
+        },
       },
     }),
   ];

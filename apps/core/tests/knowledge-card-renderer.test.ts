@@ -62,7 +62,6 @@ describe("renderKnowledgeDraftCard", () => {
     ]);
 
     const form = body.elements.find((element) => element.tag === "form");
-    expect(JSON.stringify(form)).toContain("I confirm this rejection");
     if (!form || !Array.isArray(form.elements)) throw new Error("expected a card form");
     expect(form.elements.find((element) => isRecord(element) && element.tag === "input")).toMatchObject({
       tag: "input",
@@ -75,10 +74,17 @@ describe("renderKnowledgeDraftCard", () => {
         content: "Reason for revision or rejection (at most 1,000 characters)",
       },
     });
-    expect(form.elements.find((element) => isRecord(element) && element.tag === "checkbox")).toMatchObject({
-      tag: "checkbox",
-      name: "rejectionConfirmed",
-      options: [{ value: "true" }],
+    expect(form.elements.some((element) => isRecord(element) && element.tag === "checkbox")).toBe(false);
+    expect(form.elements.find((element) => isRecord(element) && element.name === "reject")).toMatchObject({
+      tag: "button",
+      action_type: "form_submit",
+      confirm: {
+        title: { tag: "plain_text", content: "Reject draft" },
+        text: {
+          tag: "plain_text",
+          content: "Confirm this irreversible rejection. The submitted reason will be recorded.",
+        },
+      },
     });
   });
 
