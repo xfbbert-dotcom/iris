@@ -286,6 +286,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
   let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
+  let knowledgeCardStartup: Promise<void> | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   let startupApp: FastifyInstance | undefined;
   let appOwnsRuntimeResources = false;
@@ -318,7 +319,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     knowledgeCardRuntime = (
       dependencies.createKnowledgeCardRuntime ?? createDefaultKnowledgeCardRuntime
     )({ runtimeController });
-    knowledgeCardRuntime?.start();
+    knowledgeCardStartup = knowledgeCardRuntime?.start();
     eventWorkerRuntime =
       (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
         runtimeController,
@@ -359,6 +360,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   startupGateway = gateway;
   const app = Fastify({ logger: false, bodyLimit: maxJsonBodyBytes });
   startupApp = app;
+
+  if (knowledgeCardStartup !== undefined) {
+    app.addHook("onReady", async () => {
+      await knowledgeCardStartup;
+    });
+  }
 
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, payload, done) => {
     const rawBody = typeof payload === "string" ? payload : payload.toString("utf8");

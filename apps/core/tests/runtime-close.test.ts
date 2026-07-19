@@ -3,8 +3,25 @@ import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
+import { closeRuntimeResources } from "../src/runtime/runtime-close.js";
 
 describe("runtime cleanup", () => {
+  it("preserves one shared-helper cleanup error identity while attempting later steps", async () => {
+    const order: string[] = [];
+    const cleanupError = new Error("single cleanup failed");
+
+    await expect(closeRuntimeResources([
+      async () => {
+        order.push("first");
+        throw cleanupError;
+      },
+      async () => {
+        order.push("second");
+      },
+    ])).rejects.toBe(cleanupError);
+    expect(order).toEqual(["first", "second"]);
+  });
+
   it("rethrows one cleanup failure without wrapping it", async () => {
     const eventCloseError = new Error("event worker cleanup failed");
     const eventWorkerRuntime = fakeEventWorkerRuntime({

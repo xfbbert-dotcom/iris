@@ -50,8 +50,11 @@ describe("KnowledgeCardRuntime", () => {
     controller.disableGlobal();
     expect(runtime?.canUseKnowledgeCards("oc_pilot")).toBe(false);
 
-    runtime?.start();
-    runtime?.start();
+    const firstStart = runtime!.start();
+    const concurrentStart = runtime!.start();
+    expect(firstStart).toBeInstanceOf(Promise);
+    expect(concurrentStart).toBe(firstStart);
+    await firstStart;
     expect(dependencies.dispatcherLoop.start).toHaveBeenCalledOnce();
     expect(dependencies.interactionLoop.start).toHaveBeenCalledOnce();
 
@@ -76,6 +79,120 @@ describe("KnowledgeCardRuntime", () => {
     );
 
     await runtime?.close();
+  });
+
+  it("awaits full cleanup after the interaction loop throws and remains terminal", async () => {
+    const order: string[] = [];
+    const startError = new Error("interaction loop start failed");
+    const dispatcherStop = deferred<void>();
+    const interactionStop = deferred<void>();
+    const dependencies = runtimeDependencies({
+      dispatcherStart: vi.fn(() => order.push("dispatcher-start")),
+      interactionStart: vi.fn(() => {
+        order.push("interaction-start");
+        throw startError;
+      }),
+      dispatcherStop: vi.fn(() => {
+        order.push("dispatcher-stop");
+        return dispatcherStop.promise;
+      }),
+      interactionStop: vi.fn(() => {
+        order.push("interaction-stop");
+        return interactionStop.promise;
+      }),
+      redisQuit: vi.fn(async () => {
+        order.push("redis-quit");
+      }),
+      poolEnd: vi.fn(async () => {
+        order.push("pool-end");
+      }),
+    });
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+
+    const startup = runtime.start();
+    const concurrentStartup = runtime.start();
+    expect(startup).toBeInstanceOf(Promise);
+    expect(concurrentStartup).toBe(startup);
+    expect(order).toEqual(["dispatcher-start", "interaction-start", "dispatcher-stop"]);
+
+    dispatcherStop.resolve();
+    await Promise.resolve();
+    expect(order).toEqual([
+      "dispatcher-start",
+      "interaction-start",
+      "dispatcher-stop",
+      "interaction-stop",
+    ]);
+    interactionStop.resolve();
+    await expect(startup).rejects.toBe(startError);
+
+    expect(order).toEqual([
+      "dispatcher-start",
+      "interaction-start",
+      "dispatcher-stop",
+      "interaction-stop",
+      "redis-quit",
+      "pool-end",
+    ]);
+    const laterStartup = runtime.start();
+    expect(laterStartup).toBe(startup);
+    await expect(laterStartup).rejects.toBe(startError);
+    await expect(runtime.close()).resolves.toBeUndefined();
+    await expect(runtime.close()).resolves.toBeUndefined();
+    expect(dependencies.dispatcherLoop.stop).toHaveBeenCalledOnce();
+    expect(dependencies.interactionLoop.stop).toHaveBeenCalledOnce();
+    expect(dependencies.redis.quit).toHaveBeenCalledOnce();
+    expect(dependencies.pool.end).toHaveBeenCalledOnce();
+  });
+
+  it("cleans both loops and owned clients when the dispatcher loop start throws", async () => {
+    const order: string[] = [];
+    const startError = new Error("dispatcher loop start failed");
+    const dependencies = runtimeDependencies({
+      dispatcherStart: vi.fn(() => {
+        order.push("dispatcher-start");
+        throw startError;
+      }),
+      interactionStart: vi.fn(() => order.push("interaction-start")),
+      dispatcherStop: vi.fn(async () => {
+        order.push("dispatcher-stop");
+      }),
+      interactionStop: vi.fn(async () => {
+        order.push("interaction-stop");
+      }),
+      redisQuit: vi.fn(async () => {
+        order.push("redis-quit");
+      }),
+      poolEnd: vi.fn(async () => {
+        order.push("pool-end");
+      }),
+    });
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+
+    const startup = runtime.start();
+    await expect(startup).rejects.toBe(startError);
+
+    expect(order).toEqual([
+      "dispatcher-start",
+      "dispatcher-stop",
+      "interaction-stop",
+      "redis-quit",
+      "pool-end",
+    ]);
+    expect(dependencies.interactionLoop.start).not.toHaveBeenCalled();
+    await expect(runtime.close()).resolves.toBeUndefined();
+    expect(dependencies.dispatcherLoop.stop).toHaveBeenCalledOnce();
+    expect(dependencies.interactionLoop.stop).toHaveBeenCalledOnce();
+    expect(dependencies.redis.quit).toHaveBeenCalledOnce();
+    expect(dependencies.pool.end).toHaveBeenCalledOnce();
   });
 
   it("waits for both loops before closing Redis then Postgres and closes idempotently", async () => {
@@ -125,6 +242,67 @@ describe("KnowledgeCardRuntime", () => {
     expect(dependencies.pool.end).toHaveBeenCalledOnce();
   });
 
+  it("attempts every ordered close step and aggregates all cleanup failures", async () => {
+    const order: string[] = [];
+    const dispatcherError = new Error("dispatcher stop failed");
+    const interactionError = new Error("interaction stop failed");
+    const redisError = new Error("redis quit failed");
+    const postgresError = new Error("postgres close failed");
+    const dependencies = runtimeDependencies({
+      dispatcherStop: vi.fn(async () => {
+        order.push("dispatcher-stop");
+        throw dispatcherError;
+      }),
+      interactionStop: vi.fn(async () => {
+        order.push("interaction-stop");
+        throw interactionError;
+      }),
+      redisQuit: vi.fn(async () => {
+        order.push("redis-quit");
+        throw redisError;
+      }),
+      poolEnd: vi.fn(async () => {
+        order.push("pool-end");
+        throw postgresError;
+      }),
+    });
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+    await runtime.start();
+
+    let closeError: unknown;
+    try {
+      await runtime.close();
+    } catch (error) {
+      closeError = error;
+    }
+
+    expect(closeError).toBeInstanceOf(AggregateError);
+    expect((closeError as AggregateError).message).toBe(
+      "Iris runtime resource cleanup failed",
+    );
+    expect((closeError as AggregateError).errors).toEqual([
+      dispatcherError,
+      interactionError,
+      redisError,
+      postgresError,
+    ]);
+    expect(order).toEqual([
+      "dispatcher-stop",
+      "interaction-stop",
+      "redis-quit",
+      "pool-end",
+    ]);
+    await expect(runtime.close()).rejects.toBe(closeError);
+    expect(dependencies.dispatcherLoop.stop).toHaveBeenCalledOnce();
+    expect(dependencies.interactionLoop.stop).toHaveBeenCalledOnce();
+    expect(dependencies.redis.quit).toHaveBeenCalledOnce();
+    expect(dependencies.pool.end).toHaveBeenCalledOnce();
+  });
+
   it("cleans every acquired resource when enabled composition fails", async () => {
     const cleanupPromises: Promise<void>[] = [];
     const dependencies = runtimeDependencies({
@@ -165,6 +343,8 @@ function enabledController() {
 }
 
 function runtimeDependencies(overrides: {
+  dispatcherStart?: ReturnType<typeof vi.fn>;
+  interactionStart?: ReturnType<typeof vi.fn>;
   dispatcherStop?: ReturnType<typeof vi.fn>;
   interactionStop?: ReturnType<typeof vi.fn>;
   redisQuit?: ReturnType<typeof vi.fn>;
@@ -214,13 +394,13 @@ function runtimeDependencies(overrides: {
     deleteDeadLetter: vi.fn(async () => "not_found" as const),
   };
   const dispatcherLoop = {
-    start: vi.fn(),
+    start: overrides.dispatcherStart ?? vi.fn(),
     stop: overrides.dispatcherStop ?? vi.fn(async () => undefined),
     isRunning: vi.fn(() => true),
     getSnapshot: vi.fn(() => ({ running: true, intervalMs: 1000, batchLimit: 10 })),
   };
   const interactionLoop = {
-    start: vi.fn(),
+    start: overrides.interactionStart ?? vi.fn(),
     stop: overrides.interactionStop ?? vi.fn(async () => undefined),
     isRunning: vi.fn(() => true),
     getSnapshot: vi.fn(() => ({ running: true, intervalMs: 1000, batchLimit: 10 })),

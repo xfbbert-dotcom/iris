@@ -87,7 +87,7 @@ export type KnowledgeCardRuntime = {
     delete(id: string): ReturnType<ApprovalInteractionQueue["deleteDeadLetter"]>;
   };
   canUseKnowledgeCards(groupId: string): boolean;
-  start(): void;
+  start(): Promise<void>;
   getStatus(): Promise<KnowledgeCardRuntimeStatus>;
   close(): Promise<void>;
 };
@@ -229,8 +229,20 @@ export function createKnowledgeCardRuntime({
           readCallbackAppId(request) === feishuConfig.appId;
       },
     });
-    let started = false;
+    let lifecycle: "idle" | "starting" | "started" | "failed" | "closed" = "idle";
+    let startupPromise: Promise<void> | undefined;
+    let closedStartPromise: Promise<void> | undefined;
     let closePromise: Promise<void> | undefined;
+    const closeOwnedResources = (): Promise<void> => {
+      if (lifecycle !== "failed") lifecycle = "closed";
+      closePromise ??= observeStartupPromise(closeRuntimeResources([
+        () => dispatcherLoop!.stop(),
+        () => interactionLoop!.stop(),
+        () => closeRedisClient(redisClient!, redisConnection!),
+        () => pool!.end(),
+      ]));
+      return closePromise;
+    };
 
     return {
       gateway,
@@ -242,10 +254,34 @@ export function createKnowledgeCardRuntime({
       },
       canUseKnowledgeCards,
       start() {
-        if (started) return;
-        started = true;
-        dispatcherLoop!.start();
-        interactionLoop!.start();
+        if (lifecycle === "closed") {
+          closedStartPromise ??= observeStartupPromise(Promise.reject(
+            new Error("knowledge-card runtime is closed"),
+          ));
+          return closedStartPromise;
+        }
+        if (startupPromise !== undefined) return startupPromise;
+
+        let resolveStartup!: () => void;
+        let rejectStartup!: (error: unknown) => void;
+        startupPromise = observeStartupPromise(new Promise<void>((resolve, reject) => {
+          resolveStartup = resolve;
+          rejectStartup = reject;
+        }));
+        lifecycle = "starting";
+        try {
+          dispatcherLoop!.start();
+          interactionLoop!.start();
+          lifecycle = "started";
+          resolveStartup();
+        } catch (error) {
+          lifecycle = "failed";
+          void closeOwnedResources().then(
+            () => rejectStartup(error),
+            (cleanupError) => rejectStartup(startupCleanupFailure(error, cleanupError)),
+          );
+        }
+        return startupPromise;
       },
       async getStatus() {
         const dispatcher = dispatcherLoop!.getSnapshot();
@@ -265,13 +301,7 @@ export function createKnowledgeCardRuntime({
         };
       },
       close() {
-        closePromise ??= closeRuntimeResources([
-          () => dispatcherLoop!.stop(),
-          () => interactionLoop!.stop(),
-          () => closeRedisClient(redisClient!, redisConnection!),
-          () => pool!.end(),
-        ]);
-        return closePromise;
+        return closeOwnedResources();
       },
     };
   } catch (error) {
@@ -286,6 +316,16 @@ export function createKnowledgeCardRuntime({
     dependencies.onStartupCleanup?.(cleanup);
     throw error;
   }
+}
+
+function startupCleanupFailure(startupError: unknown, cleanupError: unknown): AggregateError {
+  const cleanupErrors = cleanupError instanceof AggregateError
+    ? cleanupError.errors
+    : [cleanupError];
+  return new AggregateError(
+    [startupError, ...cleanupErrors],
+    "Knowledge-card runtime startup and cleanup failed",
+  );
 }
 
 async function closeRedisClient(

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 import {
+  buildApp,
   startServer,
   type BuildAppDependencies,
 } from "../src/app.js";
@@ -218,7 +219,9 @@ describe("Core server startup", () => {
       onClose: () => order.push("close-runtime-control"),
     });
     const knowledgeCardRuntime = fakeKnowledgeCardRuntime({
-      start: vi.fn(() => order.push("start-knowledge-cards")),
+      start: vi.fn(async () => {
+        order.push("start-knowledge-cards");
+      }),
       close: vi.fn(async () => {
         order.push("close-knowledge-cards");
       }),
@@ -257,6 +260,37 @@ describe("Core server startup", () => {
       "close-runtime-control",
     ]);
     expect(createKnowledgeCardRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces a rejected knowledge-card startup through buildApp readiness and closes once", async () => {
+    const startError = new Error("knowledge-card startup failed");
+    const startup = Promise.reject(startError);
+    void startup.catch(() => undefined);
+    const knowledgeCardRuntime = fakeKnowledgeCardRuntime({
+      start: vi.fn(() => startup),
+      close: vi.fn(async () => undefined),
+    });
+    const app = buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => undefined,
+      createKnowledgeDraftRuntime: () => undefined,
+      createKnowledgeCardRuntime: () => knowledgeCardRuntime,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    let readyError: unknown;
+    try {
+      await app.ready();
+    } catch (error) {
+      readyError = error;
+    } finally {
+      await app.close();
+    }
+    expect(readyError).toBe(startError);
+    expect(knowledgeCardRuntime.start).toHaveBeenCalledOnce();
+    expect(knowledgeCardRuntime.close).toHaveBeenCalledOnce();
   });
 
   it("awaits extraction cleanup when event runtime composition fails", async () => {
