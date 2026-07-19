@@ -1,6 +1,7 @@
 import { createCipheriv, createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  createFeishuCardRequestVerifier,
   createFeishuRequestVerifier,
   decodeFeishuPayload,
   isFeishuUrlVerificationPayload,
@@ -117,26 +118,63 @@ describe("Feishu auth primitives", () => {
     ).toBe(true);
   });
 
-  it("accepts encrypted callback signatures over Feishu's parsed JSON serialization", () => {
+  it("accepts card callback signatures over the raw body using the verification token", () => {
     const body = { encrypt: "encrypted-callback-payload" };
-    const rawBody = '{\n  "encrypt": "encrypted-callback-payload"\n}';
+    const rawBody = JSON.stringify(body);
     const timestamp = "1782864000";
     const nonce = "nonce-1";
-    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+    const verifier = createFeishuCardRequestVerifier({ verificationToken }, {
       now: () => new Date("2026-07-01T00:00:00.000Z"),
       maxTimestampSkewSeconds: 300,
-      requireSignature: true,
     });
 
     expect(verifier({
       headers: {
         "x-lark-request-timestamp": timestamp,
         "x-lark-request-nonce": nonce,
-        "x-lark-signature": sign(timestamp, nonce, JSON.stringify(body)),
+        "x-lark-signature": signCard(timestamp, nonce, rawBody),
       },
       body,
       rawBody,
     })).toBe(true);
+  });
+
+  it("fails closed for stale, missing-body, and wrong-key card signatures", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = JSON.stringify(body);
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const nonce = "nonce-1";
+    const verifier = createFeishuCardRequestVerifier({ verificationToken }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 300,
+    });
+    const headers = (timestamp: string, signature: string) => ({
+      "x-lark-request-timestamp": timestamp,
+      "x-lark-request-nonce": nonce,
+      "x-lark-signature": signature,
+    });
+
+    expect(verifier({
+      headers: headers(
+        String(nowSeconds - 301),
+        signCard(String(nowSeconds - 301), nonce, rawBody),
+      ),
+      body,
+      rawBody,
+    })).toBe(false);
+    expect(verifier({
+      headers: headers(
+        String(nowSeconds),
+        signCard(String(nowSeconds), nonce, rawBody),
+      ),
+      body,
+    })).toBe(false);
+    expect(verifier({
+      headers: headers(String(nowSeconds), sign(String(nowSeconds), nonce, rawBody)),
+      body,
+      rawBody,
+    })).toBe(false);
   });
 
   it("rejects invalid signatures without throwing", () => {
@@ -354,6 +392,12 @@ describe("Feishu auth primitives", () => {
 
 function sign(timestamp: string, nonce: string, rawBody: string): string {
   return createHash("sha256").update(timestamp + nonce + encryptKey + rawBody).digest("hex");
+}
+
+function signCard(timestamp: string, nonce: string, rawBody: string): string {
+  return createHash("sha1")
+    .update(timestamp + nonce + verificationToken + rawBody)
+    .digest("hex");
 }
 
 function encryptPayload(payload: unknown): string {

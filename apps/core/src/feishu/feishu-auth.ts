@@ -27,6 +27,12 @@ type FeishuSignatureInput = {
   encryptKey: string;
 };
 
+type FeishuCardSignatureInput = {
+  headers: Record<string, string | undefined>;
+  rawBody: string;
+  verificationToken: string;
+};
+
 export function isFeishuUrlVerificationPayload(
   body: unknown,
 ): body is { type: "url_verification"; challenge: string } {
@@ -88,6 +94,48 @@ export function verifyFeishuSignature(input: FeishuSignatureInput): boolean {
   return safeEqual(signature, expectedSignature);
 }
 
+export function verifyFeishuCardSignature(input: FeishuCardSignatureInput): boolean {
+  const timestamp = getHeader(input.headers, "x-lark-request-timestamp");
+  const nonce = getHeader(input.headers, "x-lark-request-nonce");
+  const signature = getHeader(input.headers, "x-lark-signature");
+
+  if (!timestamp || !nonce || !signature) {
+    return false;
+  }
+
+  const expectedSignature = createHash("sha1")
+    .update(timestamp + nonce + input.verificationToken + input.rawBody)
+    .digest("hex");
+
+  return safeEqual(signature, expectedSignature);
+}
+
+export function createFeishuCardRequestVerifier(
+  config: Pick<FeishuAuthConfig, "verificationToken">,
+  options: Pick<FeishuRequestVerifierOptions, "now" | "maxTimestampSkewSeconds"> = {},
+): FeishuRequestVerifier {
+  const now = options.now ?? (() => new Date());
+  const maxTimestampSkewSeconds = resolveMaxTimestampSkewSeconds(options.maxTimestampSkewSeconds);
+
+  return (request) => {
+    const verificationToken = config.verificationToken;
+    return verificationToken !== undefined &&
+      verificationToken.length > 0 &&
+      request.rawBody !== undefined &&
+      maxTimestampSkewSeconds !== undefined &&
+      hasValidFeishuTimestamp({
+        headers: request.headers,
+        now: now(),
+        maxTimestampSkewSeconds,
+      }) &&
+      verifyFeishuCardSignature({
+        headers: request.headers,
+        rawBody: request.rawBody,
+        verificationToken,
+      });
+  };
+}
+
 export function createFeishuRequestVerifier(
   config: FeishuAuthConfig,
   options: FeishuRequestVerifierOptions = {},
@@ -118,30 +166,14 @@ export function createFeishuRequestVerifier(
           now: now(),
           maxTimestampSkewSeconds,
         }) &&
-        verifyFeishuRequestSignature(request, encryptKey));
+        verifyFeishuSignature({
+          headers: request.headers,
+          rawBody: request.rawBody,
+          encryptKey,
+        }));
 
     return tokenVerified && signatureVerified;
   };
-}
-
-function verifyFeishuRequestSignature(request: FeishuAuthRequest, encryptKey: string): boolean {
-  const rawBody = request.rawBody;
-  if (rawBody === undefined) return false;
-  if (verifyFeishuSignature({ headers: request.headers, rawBody, encryptKey })) return true;
-
-  let serializedBody: string | undefined;
-  try {
-    serializedBody = JSON.stringify(request.body);
-  } catch {
-    return false;
-  }
-  return serializedBody !== undefined &&
-    serializedBody !== rawBody &&
-    verifyFeishuSignature({
-      headers: request.headers,
-      rawBody: serializedBody,
-      encryptKey,
-    });
 }
 
 function resolveMaxTimestampSkewSeconds(value: number | undefined): number | undefined {

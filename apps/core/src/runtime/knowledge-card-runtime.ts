@@ -10,7 +10,7 @@ import {
 import type { DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
 import {
-  createFeishuRequestVerifier,
+  createFeishuCardRequestVerifier,
   decodeFeishuPayload,
   isFeishuUrlVerificationPayload,
   verifyFeishuVerificationToken,
@@ -230,10 +230,8 @@ export function createKnowledgeCardRuntime({
       batchLimit: config.batchLimit,
       onError: () => undefined,
     });
-    const verifyFeishuEnvelope = createFeishuRequestVerifier({
-      encryptKey: feishuAuthConfig.encryptKey,
-    }, {
-      requireSignature: true,
+    const verifyFeishuEnvelope = createFeishuCardRequestVerifier({
+      verificationToken: feishuAuthConfig.verificationToken,
     });
     const gateway = createFeishuCardActionGateway({
       queue,

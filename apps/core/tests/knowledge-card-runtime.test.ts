@@ -72,8 +72,8 @@ describe("KnowledgeCardRuntime", () => {
       headers: {
         "x-lark-request-timestamp": timestamp,
         "x-lark-request-nonce": nonce,
-        "x-lark-signature": createHash("sha256")
-          .update(timestamp + nonce + "encrypt-key" + rawBody)
+        "x-lark-signature": createHash("sha1")
+          .update(timestamp + nonce + "verification-token" + rawBody)
           .digest("hex"),
       },
       body,
@@ -573,8 +573,8 @@ function encryptedRequest(payload: unknown) {
     headers: {
       "x-lark-request-timestamp": timestamp,
       "x-lark-request-nonce": nonce,
-      "x-lark-signature": createHash("sha256")
-        .update(timestamp + nonce + "encrypt-key" + rawBody)
+      "x-lark-signature": createHash("sha1")
+        .update(timestamp + nonce + "verification-token" + rawBody)
         .digest("hex"),
     },
     body,
