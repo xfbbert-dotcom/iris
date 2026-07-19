@@ -14,6 +14,10 @@ const conversationStateAcceptanceRunbook = readFileSync(
   conversationStateAcceptanceRunbookPath,
   "utf8",
 );
+const knowledgeCardAcceptanceRunbook = readFileSync(
+  "docs/runbooks/iris-knowledge-card-confirmation-acceptance.md",
+  "utf8",
+);
 const documentReindexQueueSource = readFileSync(
   "apps/core/src/reindex/redis-document-reindex-queue.ts",
   "utf8",
@@ -232,6 +236,41 @@ test("requires exhaustive group isolation and a real proactive-speech status gat
   ]) {
     assert.match(afterGlobalEnable, new RegExp(escapeRegExp(marker), "ui"));
   }
+});
+
+test("derives knowledge-card isolation from the complete live and historical group inventory", () => {
+  for (const marker of [
+    "$currentBotGroupIds",
+    "$databaseGroupIds",
+    "$knownGroupIds",
+    "$currentNonPilotGroupIds",
+    "$nonPilotGroupIds",
+    "conversation_messages",
+    "group_memories",
+    "discussion_threads",
+    "action_items",
+  ]) {
+    assert.match(
+      knowledgeCardAcceptanceRunbook,
+      new RegExp(escapeRegExp(marker), "u"),
+      `${marker} must participate in the knowledge-card group inventory`,
+    );
+  }
+  assert.match(
+    knowledgeCardAcceptanceRunbook,
+    /\$currentBotGroupIds\s+-notcontains\s+\$PilotGroupId/u,
+  );
+  assert.match(
+    knowledgeCardAcceptanceRunbook,
+    /\$currentNonPilotGroupIds\.Count\s+-lt\s+1/u,
+  );
+  assert.match(
+    knowledgeCardAcceptanceRunbook,
+    /foreach \(\$groupId in \$knownGroupIds\)/u,
+  );
+  assert.match(knowledgeCardAcceptanceRunbook, /完整 `\$currentNonPilotGroupIds`/u);
+  assert.doesNotMatch(knowledgeCardAcceptanceRunbook, /IRIS_KNOWN_GROUP_ID_[123]/u);
+  assert.doesNotMatch(knowledgeCardAcceptanceRunbook, /exactly three|三个已知群/u);
 });
 
 test("requires best-effort fail-closed rollback after every global-enable attempt", () => {

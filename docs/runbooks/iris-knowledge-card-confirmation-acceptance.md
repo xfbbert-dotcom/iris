@@ -8,15 +8,14 @@
 - 令牌、密码、`FEISHU_APP_SECRET`、`IRIS_INTERNAL_API_TOKEN` 和草稿正文不得进入命令行历史、日志、报告或 PR。
 - 飞书卡片的原因输入上限必须保持 `1,000`；Core 服务端解析器保留 `2,000` 字符合同用于边界兼容，但不得向飞书发出 `max_length: 2000`。启用卡片前必须私下配置非空、最多 512 字符的 `FEISHU_ENCRYPT_KEY`，不得仅依赖 verification token。
 - 已检查的部署日志与 runbook 没有保留可用真实群 ID；其中的 `oc_group_id` 是历史占位符，旧群已删除或其 ID 未被保留。不得猜测或复用它。
-- 以下变量必须从当前机器人成员资格和 PostgreSQL 事实清单取得。三个已知群是负向控制；不能留空或用虚构 ID 代替。
+- 群隔离必须来自两份事实的完整并集：执行前即时导出的机器人成员资格，以及 PostgreSQL 中仍保留的历史/当前群事实。不得写死群数量、留空、虚构群 ID 或为了通过验收复用已删除群。
 
 ```powershell
 $PilotGroupId = $env:IRIS_PILOT_GROUP_ID
-$KnownGroupIds = @($env:IRIS_KNOWN_GROUP_ID_1, $env:IRIS_KNOWN_GROUP_ID_2, $env:IRIS_KNOWN_GROUP_ID_3)
-if ([string]::IsNullOrWhiteSpace($PilotGroupId) -or $KnownGroupIds.Count -ne 3 -or ($KnownGroupIds | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) { throw "Set IRIS_PILOT_GROUP_ID and exactly three IRIS_KNOWN_GROUP_ID_1..3 values from the current inventory" }
+$botGroupInventoryPath = $env:IRIS_BOT_GROUP_INVENTORY_PATH
+if ([string]::IsNullOrWhiteSpace($PilotGroupId)) { throw "Set IRIS_PILOT_GROUP_ID from the current Feishu inventory" }
+if ([string]::IsNullOrWhiteSpace($botGroupInventoryPath)) { throw "Set IRIS_BOT_GROUP_INVENTORY_PATH to a fresh authoritative Feishu export" }
 $PilotGroupId = $PilotGroupId.Trim()
-$KnownGroupIds = @($KnownGroupIds | ForEach-Object { $_.Trim() })
-if ((@($KnownGroupIds | Sort-Object -Unique)).Count -ne 3 -or $KnownGroupIds -contains $PilotGroupId) { throw "Known group IDs must be distinct and all distinct from the pilot group" }
 $irisHeaders = @{ authorization = "Bearer $env:IRIS_INTERNAL_API_TOKEN"; "x-iris-operator" = "knowledge-card-pilot" }
 $compose = @("compose", "--env-file", ".env.pilot", "--file", "deploy/pilot/docker-compose.yml")
 
@@ -32,6 +31,44 @@ function Get-PilotEnvValue {
   if ($matches.Count -ne 1) { throw ".env.pilot must contain exactly one $Name assignment" }
   return ($matches[0] -replace ("^{0}=" -f [regex]::Escape($Name)), "")
 }
+
+function Get-PilotEnv {
+  $entries = Get-Content -LiteralPath ".env.pilot" | Where-Object { $_ -match '^\s*[^#][^=]*=' }
+  ConvertFrom-StringData ($entries -join "`n")
+}
+
+function Invoke-PilotSql {
+  param([Parameter(Mandatory)][string]$Sql)
+  $pilotEnv = Get-PilotEnv
+  $result = & docker @compose exec -T postgres psql -v ON_ERROR_STOP=1 -U $pilotEnv.POSTGRES_USER -d $pilotEnv.POSTGRES_DB -Atc $Sql
+  if ($LASTEXITCODE -ne 0) { throw "Pilot PostgreSQL query failed" }
+  @($result)
+}
+
+function Get-CurrentBotGroupIds {
+  if (-not (Test-Path -LiteralPath $botGroupInventoryPath)) { throw "Authoritative Feishu bot membership inventory is unavailable" }
+  $ids = @(Get-Content -LiteralPath $botGroupInventoryPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | Sort-Object -Unique)
+  if ($ids.Count -eq 0 -or $ids -match '<|>') { throw "Feishu bot membership inventory is empty or contains placeholders" }
+  $ids
+}
+
+$currentBotGroupIds = @(Get-CurrentBotGroupIds)
+$databaseGroupIds = @(Invoke-PilotSql -Sql @"
+SELECT group_id FROM (
+  SELECT chat_id AS group_id FROM conversation_messages
+  UNION SELECT group_id FROM group_memories
+  UNION SELECT group_id FROM discussion_threads
+  UNION SELECT group_id FROM action_items
+) known_database_groups
+WHERE group_id IS NOT NULL AND group_id <> ''
+ORDER BY group_id;
+"@ | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | Sort-Object -Unique)
+$knownGroupIds = @($currentBotGroupIds + $databaseGroupIds | Sort-Object -Unique)
+$currentNonPilotGroupIds = @($currentBotGroupIds | Where-Object { $_ -ne $PilotGroupId })
+$nonPilotGroupIds = @($knownGroupIds | Where-Object { $_ -ne $PilotGroupId })
+if ($currentBotGroupIds -notcontains $PilotGroupId) { throw "Pilot group is not in the current bot membership" }
+if ($currentNonPilotGroupIds.Count -lt 1) { throw "At least one current non-pilot group is required as a live negative control" }
+if ($knownGroupIds.Count -ne (@($knownGroupIds | Sort-Object -Unique)).Count -or $knownGroupIds -match '<|>') { throw "Known group inventory is invalid" }
 ```
 
 ## 本地退出门禁
@@ -96,16 +133,16 @@ $redisCounts = @(
 if ((@($existing + $redisCounts | Where-Object { [long]$_ -ne 0 })).Count -ne 0) { throw "Queue or DLQ zero baseline failed; do not continue" }
 ```
 
-4. Durably disable global Iris, all three known groups and the pilot group; set `generateKnowledgeDrafts=false` and `writeKnowledgeBase=false`; preserve `IRIS_KNOWLEDGE_CARD_ENABLED=false` with an empty `IRIS_KNOWLEDGE_CARD_GROUP_IDS` allowlist. Every mutation must return `durable=true`, then reread runtime state.
+4. Durably disable global Iris and the complete `$knownGroupIds` union; set `generateKnowledgeDrafts=false` and `writeKnowledgeBase=false`; preserve `IRIS_KNOWLEDGE_CARD_ENABLED=false` with an empty `IRIS_KNOWLEDGE_CARD_GROUP_IDS` allowlist. Every mutation must return `durable=true`, then reread runtime state.
 
 ```powershell
 $globalDisable = Assert-DurableMutation (Invoke-RestMethod -Method Post -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/global -ContentType "application/json" -Body '{"enabled":false}') "Global disable"
-foreach ($groupId in $KnownGroupIds + $PilotGroupId) { $null = Assert-DurableMutation (Invoke-RestMethod -Method Post -Headers $irisHeaders -Uri "http://localhost:3000/internal/runtime-control/groups/$groupId" -ContentType "application/json" -Body '{"enabled":false}') "Group disable $groupId" }
+foreach ($groupId in $knownGroupIds) { $null = Assert-DurableMutation (Invoke-RestMethod -Method Post -Headers $irisHeaders -Uri "http://localhost:3000/internal/runtime-control/groups/$groupId" -ContentType "application/json" -Body '{"enabled":false}') "Group disable $groupId" }
 $capabilityDisable = Assert-DurableMutation (Invoke-RestMethod -Method Patch -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/capabilities -ContentType "application/json" -Body '{"generateKnowledgeDrafts":false,"writeKnowledgeBase":false}') "Capability disable"
 $runtime = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/status
 if ($runtime.persistence.ok -ne $true -or $runtime.globalEnabled -ne $false -or $runtime.desiredGlobalEnabled -ne $false -or $runtime.capabilities.generateKnowledgeDrafts -ne $false -or $runtime.capabilities.writeKnowledgeBase -ne $false) { throw "Runtime preflight is not durably disabled" }
-$missingDisabledGroups = @($KnownGroupIds + $PilotGroupId | Where-Object { $runtime.disabledGroupIds -notcontains $_ })
-if ($missingDisabledGroups.Count -ne 0) { throw "Runtime preflight did not disable every known and pilot group" }
+$disabledDifference = @(Compare-Object -ReferenceObject @($knownGroupIds | Sort-Object -Unique) -DifferenceObject @($runtime.disabledGroupIds | Sort-Object -Unique))
+if ($disabledDifference.Count -ne 0) { throw "Runtime preflight disabled-group set does not exactly match the complete inventory" }
 ```
 
 ## 单群开启和卡片 readiness
@@ -119,7 +156,7 @@ $encryptKey = Get-PilotEnvValue FEISHU_ENCRYPT_KEY
 if ([string]::IsNullOrWhiteSpace($encryptKey) -or $encryptKey.Length -gt 512) { throw "FEISHU_ENCRYPT_KEY must be privately configured and bounded before enabling knowledge cards" }
 ```
 
-重建后，`/internal/status` 的 `knowledgeCards` 只能包含 worker、queue、presentation 和 outbox 数字，不能含草稿正文、证据正文、`actorOpenId`、`reason` 或 token。outbox 至少必须包含 `pending`、`processing`、`external_attempting`、`failed`、`outcome_unknown`，并以 `terminalFailed` 区分会阻断 readiness 的 terminal/exhausted 失败；历史 `superseded` failed 计数本身不阻断。`/internal/approval-interactions/status` 必须在内部 bearer 路由可读，且 `pending`、`processing`、`delayed`、`deadLetter` 都为 `0`。pilot 基线还要求 outbox 的普通在途计数排空，且没有 unresolved outcome-unknown 或 terminal failed。随后只将 `$PilotGroupId` group runtime 设为 `true`，三个 `$KnownGroupIds` 保持 disabled；最后才开启 global runtime 和 Caddy。每次 mutation 都必须验证 durable 结果，并在开启后重新读取完整状态：
+重建后，`/internal/status` 的 `knowledgeCards` 只能包含 worker、queue、presentation 和 outbox 数字，不能含草稿正文、证据正文、`actorOpenId`、`reason` 或 token。outbox 至少必须包含 `pending`、`processing`、`external_attempting`、`failed`、`outcome_unknown`，并以 `terminalFailed` 区分会阻断 readiness 的 terminal/exhausted 失败；历史 `superseded` failed 计数本身不阻断。`/internal/approval-interactions/status` 必须在内部 bearer 路由可读，且 `pending`、`processing`、`delayed`、`deadLetter` 都为 `0`。pilot 基线还要求 outbox 的普通在途计数排空，且没有 unresolved outcome-unknown 或 terminal failed。随后只将 `$PilotGroupId` group runtime 设为 `true`，完整 `$nonPilotGroupIds` 保持 disabled；最后才开启 global runtime 和 Caddy。每次 mutation 都必须验证 durable 结果，并在开启后重新读取完整状态：
 
 ```powershell
 $cardStatus = (Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/status).knowledgeCards
@@ -143,7 +180,8 @@ $globalEnable = Assert-DurableMutation (Invoke-RestMethod -Method Post -Headers 
 $enabledRuntime = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/status
 if ($enabledRuntime.persistence.ok -ne $true -or $enabledRuntime.globalEnabled -ne $true -or $enabledRuntime.desiredGlobalEnabled -ne $true) { throw "Global runtime enablement is not durable" }
 if ($enabledRuntime.disabledGroupIds -contains $PilotGroupId) { throw "Pilot group is still disabled" }
-if ((@($KnownGroupIds | Where-Object { $enabledRuntime.disabledGroupIds -notcontains $_ })).Count -ne 0) { throw "A negative-control group was enabled" }
+if ((@($nonPilotGroupIds | Where-Object { $enabledRuntime.disabledGroupIds -notcontains $_ })).Count -ne 0) { throw "A known non-pilot group was enabled" }
+if ((@(Compare-Object -ReferenceObject @($nonPilotGroupIds | Sort-Object -Unique) -DifferenceObject @($enabledRuntime.disabledGroupIds | Sort-Object -Unique))).Count -ne 0) { throw "Enabled runtime disabled-group set differs from the complete non-pilot inventory" }
 if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true" -or (Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_GROUP_IDS) -cne $PilotGroupId) { throw "Knowledge-card allowlist no longer exactly matches the pilot group" }
 ```
 
@@ -166,8 +204,8 @@ if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true" -or (Get-PilotEn
 
 ## 非 pilot 负向控制、回滚和边界
 
-在三个 `$KnownGroupIds` 中各发送普通消息并执行旧卡片/回调负向检查；不得产生 presentation、approval interaction、confirmation 或 draft event。不得通过删除 Redis 或数据库记录伪造通过。
+必须遍历完整 `$currentNonPilotGroupIds`，分别在每个当前非 Pilot 群发送普通消息并执行旧卡片/回调负向检查，不得只抽样一个群；不得产生 presentation、approval interaction、confirmation 或 draft event。仅存在于数据库历史中的 `$nonPilotGroupIds` 仍必须保持 runtime disabled，但不伪造无法发送的飞书消息。不得通过删除 Redis 或数据库记录伪造通过。
 
-完成或任一失败时按顺序回滚：先将私有 `.env.pilot` 还原为 `IRIS_KNOWLEDGE_CARD_ENABLED=false` 和空 `IRIS_KNOWLEDGE_CARD_GROUP_IDS`，再 durable-disable pilot/三个已知群/global/`generateKnowledgeDrafts` 并保持 `writeKnowledgeBase=false`，然后重建 Core，确认卡片 status route fail-closed、所有队列和 DLQ 为零，最后停止 Caddy。保留 append-only 事实；迁移只向前，不删除 presentation、confirmation 或 event 历史。
+完成或任一失败时按顺序回滚：先将私有 `.env.pilot` 还原为 `IRIS_KNOWLEDGE_CARD_ENABLED=false` 和空 `IRIS_KNOWLEDGE_CARD_GROUP_IDS`，再 durable-disable `$knownGroupIds`/global/`generateKnowledgeDrafts` 并保持 `writeKnowledgeBase=false`，然后重建 Core，确认卡片 status route fail-closed、所有队列和 DLQ 为零，最后停止 Caddy。保留 append-only 事实；迁移只向前，不删除 presentation、confirmation 或 event 历史。
 
 本文不允许、也不声称存在知识库发布。飞书知识库写入属于 Phase 5B-3，必须在独立计划、门禁和真实验收后才可执行。
