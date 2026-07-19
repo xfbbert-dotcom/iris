@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createCipheriv, createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeController } from "../src/admin/runtime-controller.js";
@@ -48,6 +48,57 @@ describe("KnowledgeCardRuntime", () => {
       body: { challenge: "card-callback-challenge" },
     });
     expect(dependencies.queue.enqueue).not.toHaveBeenCalled();
+
+    await runtime.close();
+  });
+
+  it("authenticates and decrypts Feishu URL challenges before responding", async () => {
+    const dependencies = runtimeDependencies();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+    const request = encryptedRequest({
+      type: "url_verification",
+      challenge: "encrypted-card-callback-challenge",
+      token: "verification-token",
+    });
+
+    await expect(runtime.gateway.handleCallback(request)).resolves.toEqual({
+      statusCode: 200,
+      body: { challenge: "encrypted-card-callback-challenge" },
+    });
+    expect(dependencies.queue.enqueue).not.toHaveBeenCalled();
+
+    await runtime.close();
+  });
+
+  it("authenticates and decrypts Feishu card actions before enqueueing", async () => {
+    const dependencies = runtimeDependencies();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+    const request = encryptedRequest(cardAction());
+
+    await expect(runtime.gateway.handleCallback(request)).resolves.toEqual({
+      statusCode: 200,
+      body: { toast: { type: "info", content: "\u5df2\u6536\u5230\uff0c\u6b63\u5728\u6838\u9a8c" } },
+    });
+    expect(dependencies.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: "feishu-card:app-id:event-1",
+      eventId: "event-1",
+      appId: "app-id",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_pilot",
+      presentationId: "presentation-1",
+      draftId: "draft-1",
+      revisionNumber: 7,
+      draftVersion: 11,
+      action: "confirm",
+    }));
 
     await runtime.close();
   });
@@ -386,6 +437,70 @@ function enabledEnv() {
 
 function enabledController() {
   return new RuntimeController(createDefaultRuntimeConfig());
+}
+
+function encryptedRequest(payload: unknown) {
+  const body = { encrypt: encryptPayload(payload) };
+  const rawBody = JSON.stringify(body);
+  const timestamp = String(Math.floor(Date.now() / 1_000));
+  const nonce = "encrypted-card-callback-nonce";
+  return {
+    headers: {
+      "x-lark-request-timestamp": timestamp,
+      "x-lark-request-nonce": nonce,
+      "x-lark-signature": createHash("sha256")
+        .update(timestamp + nonce + "encrypt-key" + rawBody)
+        .digest("hex"),
+    },
+    body,
+    rawBody,
+  };
+}
+
+function encryptPayload(payload: unknown): string {
+  const iv = Buffer.from("0123456789abcdef", "utf8");
+  const cipher = createCipheriv(
+    "aes-256-cbc",
+    createHash("sha256").update("encrypt-key").digest(),
+    iv,
+  );
+  return Buffer.concat([
+    iv,
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]).toString("base64");
+}
+
+function cardAction(): Record<string, unknown> {
+  return {
+    schema: "2.0",
+    header: {
+      event_id: "event-1",
+      token: "verification-token",
+      create_time: "1784419200000000",
+      event_type: "card.action.trigger",
+      tenant_key: "tenant-1",
+      app_id: "app-id",
+    },
+    event: {
+      operator: { tenant_key: "tenant-1", open_id: "ou_reviewer" },
+      token: "card-token",
+      action: {
+        value: {
+          action: "confirm",
+          presentationId: "presentation-1",
+          draftId: "draft-1",
+          revisionNumber: 7,
+          draftVersion: 11,
+        },
+        tag: "button",
+        name: "confirm",
+        form_value: { reason: "", rejectionConfirmed: [] },
+      },
+      host: "im_message",
+      context: { open_message_id: "om_approval", open_chat_id: "oc_pilot" },
+    },
+  };
 }
 
 function runtimeDependencies(overrides: {

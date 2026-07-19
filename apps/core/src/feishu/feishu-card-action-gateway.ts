@@ -26,10 +26,15 @@ export type ApprovalInteractionEnqueuer = {
 };
 
 type RequestVerifier = (request: FeishuCardActionCallbackRequest) => Promise<boolean> | boolean;
+type RequestDecoder = (
+  request: FeishuCardActionCallbackRequest,
+) => Promise<FeishuCardActionCallbackRequest | undefined> | FeishuCardActionCallbackRequest | undefined;
 
 export type FeishuCardActionGatewayDependencies = {
   queue: ApprovalInteractionEnqueuer;
   verifyRequest: RequestVerifier;
+  decodeRequest?: RequestDecoder;
+  verifyDecodedRequest?: RequestVerifier;
   now?: () => Date;
 };
 
@@ -38,21 +43,35 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
 
   return {
     async handleCallback(request: FeishuCardActionCallbackRequest): Promise<FeishuCardActionCallbackResponse> {
-      let verified = false;
-      try {
-        verified = await dependencies.verifyRequest(request);
-      } catch {
+      if (!await passesVerifier(dependencies.verifyRequest, request)) {
         return rejectedResponse(401);
       }
-      if (!verified) return rejectedResponse(401);
-      if (isFeishuUrlVerificationPayload(request.body)) {
+
+      let decodedRequest = request;
+      if (dependencies.decodeRequest !== undefined) {
+        try {
+          const decoded = await dependencies.decodeRequest(request);
+          if (decoded === undefined) return rejectedResponse(401);
+          decodedRequest = decoded;
+        } catch {
+          return rejectedResponse(401);
+        }
+      }
+      if (
+        dependencies.verifyDecodedRequest !== undefined &&
+        !await passesVerifier(dependencies.verifyDecodedRequest, decodedRequest)
+      ) {
+        return rejectedResponse(401);
+      }
+
+      if (isFeishuUrlVerificationPayload(decodedRequest.body)) {
         return {
           statusCode: 200,
-          body: { challenge: request.body.challenge },
+          body: { challenge: decodedRequest.body.challenge },
         };
       }
 
-      const action = parseFeishuCardAction(request.body);
+      const action = parseFeishuCardAction(decodedRequest.body);
       if (action === undefined) return rejectedResponse(400);
 
       const job = createJob(action, now());
@@ -61,6 +80,17 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
       return outcome === "rejected" ? enqueueFailureResponse() : enqueueUncertaintyResponse();
     },
   };
+}
+
+async function passesVerifier(
+  verifier: RequestVerifier,
+  request: FeishuCardActionCallbackRequest,
+): Promise<boolean> {
+  try {
+    return await verifier(request);
+  } catch {
+    return false;
+  }
 }
 
 function createJob(action: ParsedFeishuCardAction, receivedAt: Date): ApprovalInteractionJob {

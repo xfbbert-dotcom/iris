@@ -1,4 +1,6 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createDecipheriv, createHash, timingSafeEqual } from "node:crypto";
+
+const MAX_ENCRYPTED_PAYLOAD_CHARS = 1_048_576;
 
 export type FeishuAuthConfig = {
   verificationToken?: string;
@@ -29,6 +31,36 @@ export function isFeishuUrlVerificationPayload(
   body: unknown,
 ): body is { type: "url_verification"; challenge: string } {
   return isRecord(body) && body.type === "url_verification" && typeof body.challenge === "string";
+}
+
+export function decodeFeishuPayload(body: unknown, encryptKey: string | undefined): unknown | undefined {
+  if (!isRecord(body) || !("encrypt" in body)) return body;
+  if (
+    Object.keys(body).length !== 1 ||
+    typeof body.encrypt !== "string" ||
+    body.encrypt.length === 0 ||
+    body.encrypt.length > MAX_ENCRYPTED_PAYLOAD_CHARS ||
+    body.encrypt.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/u.test(body.encrypt) ||
+    encryptKey === undefined ||
+    encryptKey.length === 0
+  ) {
+    return undefined;
+  }
+
+  try {
+    const encrypted = Buffer.from(body.encrypt, "base64");
+    if (encrypted.length < 32 || (encrypted.length - 16) % 16 !== 0) return undefined;
+    const key = createHash("sha256").update(encryptKey).digest();
+    const decipher = createDecipheriv("aes-256-cbc", key, encrypted.subarray(0, 16));
+    const decrypted = Buffer.concat([
+      decipher.update(encrypted.subarray(16)),
+      decipher.final(),
+    ]).toString("utf8");
+    return JSON.parse(decrypted) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 export function verifyFeishuVerificationToken(body: unknown, verificationToken: string): boolean {

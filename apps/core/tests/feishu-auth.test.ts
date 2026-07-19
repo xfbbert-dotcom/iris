@@ -1,7 +1,8 @@
-import { createHash } from "node:crypto";
+import { createCipheriv, createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createFeishuRequestVerifier,
+  decodeFeishuPayload,
   isFeishuUrlVerificationPayload,
   verifyFeishuSignature,
   verifyFeishuVerificationToken
@@ -25,6 +26,29 @@ describe("Feishu auth primitives", () => {
         challenge: "challenge-value"
       })
     ).toBe(false);
+  });
+
+  it("decrypts the bounded encrypted envelope used by Feishu callbacks", () => {
+    const payload = {
+      type: "url_verification",
+      challenge: "encrypted-challenge",
+      token: verificationToken,
+    };
+
+    expect(decodeFeishuPayload({
+      encrypt: encryptPayload(payload),
+    }, encryptKey)).toEqual(payload);
+    expect(decodeFeishuPayload(payload, encryptKey)).toBe(payload);
+  });
+
+  it("fails closed for malformed or ambiguous encrypted callback envelopes", () => {
+    expect(decodeFeishuPayload({ encrypt: "not-base64" }, encryptKey)).toBeUndefined();
+    expect(decodeFeishuPayload({
+      encrypt: encryptPayload({ token: verificationToken }),
+      token: verificationToken,
+    }, encryptKey)).toBeUndefined();
+    expect(decodeFeishuPayload({ encrypt: encryptPayload({ token: verificationToken }) }, ""))
+      .toBeUndefined();
   });
 
   it("verifies tokens from body.header.token and body.token", () => {
@@ -308,4 +332,14 @@ describe("Feishu auth primitives", () => {
 
 function sign(timestamp: string, nonce: string, rawBody: string): string {
   return createHash("sha256").update(timestamp + nonce + encryptKey + rawBody).digest("hex");
+}
+
+function encryptPayload(payload: unknown): string {
+  const iv = Buffer.from("0123456789abcdef", "utf8");
+  const cipher = createCipheriv("aes-256-cbc", createHash("sha256").update(encryptKey).digest(), iv);
+  return Buffer.concat([
+    iv,
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]).toString("base64");
 }

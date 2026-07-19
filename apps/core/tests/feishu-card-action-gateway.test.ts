@@ -7,15 +7,21 @@ import { createFeishuCardActionGateway } from "../src/feishu/feishu-card-action-
 describe("FeishuCardActionGateway", () => {
   it("verifies before parsing and returns 401 without enqueueing", async () => {
     const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const decodeRequest = vi.fn((request) => request);
+    const verifyDecodedRequest = vi.fn(() => true);
     const gateway = createFeishuCardActionGateway({
       queue,
       verifyRequest: () => false,
+      decodeRequest,
+      verifyDecodedRequest,
     });
 
     await expect(gateway.handleCallback({ headers: {}, body: { invalid: true } })).resolves.toEqual({
       statusCode: 401,
       body: { ok: false },
     });
+    expect(decodeRequest).not.toHaveBeenCalled();
+    expect(verifyDecodedRequest).not.toHaveBeenCalled();
     expect(queue.enqueue).not.toHaveBeenCalled();
   });
 

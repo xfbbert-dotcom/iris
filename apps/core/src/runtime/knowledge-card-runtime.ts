@@ -11,7 +11,9 @@ import type { DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
 import {
   createFeishuRequestVerifier,
+  decodeFeishuPayload,
   isFeishuUrlVerificationPayload,
+  verifyFeishuVerificationToken,
 } from "../feishu/feishu-auth.js";
 import {
   createFeishuCardActionGateway,
@@ -226,13 +228,21 @@ export function createKnowledgeCardRuntime({
       batchLimit: config.batchLimit,
       onError: () => undefined,
     });
-    const verifyFeishuRequest = createFeishuRequestVerifier(feishuAuthConfig, {
+    const verifyFeishuEnvelope = createFeishuRequestVerifier({
+      encryptKey: feishuAuthConfig.encryptKey,
+    }, {
       requireSignature: true,
     });
     const gateway = createFeishuCardActionGateway({
       queue,
-      verifyRequest(request) {
-        return verifyFeishuRequest(request) &&
+      verifyRequest: verifyFeishuEnvelope,
+      decodeRequest(request) {
+        const body = decodeFeishuPayload(request.body, feishuAuthConfig.encryptKey);
+        return body === undefined ? undefined : { ...request, body };
+      },
+      verifyDecodedRequest(request) {
+        return feishuAuthConfig.verificationToken !== undefined &&
+          verifyFeishuVerificationToken(request.body, feishuAuthConfig.verificationToken) &&
           (isFeishuUrlVerificationPayload(request.body) ||
             readCallbackAppId(request) === feishuConfig.appId);
       },
