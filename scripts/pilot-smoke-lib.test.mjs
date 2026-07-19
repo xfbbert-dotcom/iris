@@ -126,6 +126,20 @@ test("accepts durable desired enablement only while the restarted live gate rema
   assert.doesNotThrow(() => assertPilotActivationReady(activationReadyStatus));
 });
 
+test("proves default-off knowledge-card readiness without exposing draft content", () => {
+  const result = runSmokeWithFetchMode("");
+  try {
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const checks = JSON.parse(result.stdout).checks;
+    assert.equal(checks.knowledgeCardDefaults, "disabled-empty-allowlist");
+    assert.equal(checks.knowledgeCardReadiness, "safe-disabled");
+    assert.equal(checks.knowledgeCardStatus, "unavailable-while-disabled");
+    assert.doesNotMatch(result.stdout, /Full governed draft body|evidence-message-1|token-secret/u);
+  } finally {
+    result.cleanup();
+  }
+});
+
 test("rejects a live gate that reopened from durable desired enablement", () => {
   assert.throws(
     () =>
@@ -414,6 +428,8 @@ function runSmokeWithFetchMode(
         IRIS_PILOT_DOCKER_COMMAND_ARGS_JSON: JSON.stringify([fakeDockerPath]),
         IRIS_PILOT_COMPOSE_COMMAND_TIMEOUT_MS: "300",
         IRIS_PILOT_CLEANUP_RETRY_DELAY_MS: "0",
+        IRIS_KNOWLEDGE_CARD_ENABLED: "false",
+        IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
       },
     },
   );
@@ -527,7 +543,24 @@ globalThis.fetch = async (input, init = {}) => {
       },
     });
   }
-  if (url.pathname === "/internal/readiness") return json({ error: "not_found" }, 404);
+  if (url.pathname === "/internal/readiness") {
+    if (url.port !== "3000") return json({ error: "not_found" }, 404);
+    if (authorization(init) !== "Bearer ci-internal-token") {
+      return json({ error: "unauthorized" }, 401);
+    }
+    return json({
+      ok: true,
+      status: "ready",
+      checks: [{ id: "knowledgeCards", status: "pass", detail: "Knowledge cards are safely disabled." }],
+    });
+  }
+  if (url.pathname === "/internal/approval-interactions/status") {
+    if (url.port !== "3000") return json({ error: "not_found" }, 404);
+    if (authorization(init) !== "Bearer ci-internal-token") {
+      return json({ error: "unauthorized" }, 401);
+    }
+    return json({ ok: false, error: "knowledge_card_runtime_unavailable" }, 503);
+  }
   if (url.pathname === "/internal/ingress-readiness") {
     if (url.port !== "3000") return json({ error: "not_found" }, 404);
     if (authorization(init) !== "Bearer ci-internal-token") {

@@ -62,6 +62,7 @@ let primaryError;
 let cleanupError;
 
 try {
+  assertKnowledgeCardDefaults();
   if (postRestore) {
     await assertCaddyRunning(false);
   } else {
@@ -77,6 +78,7 @@ try {
   });
   const internalStatus = await internalStatusResponse.json();
   assertPilotActivationReady(internalStatus);
+  const knowledgeCardReadiness = await assertKnowledgeCardReadiness();
   const ingressReadinessResponse = await expectStatus(
     `${coreBaseUrl}/internal/ingress-readiness`,
     200,
@@ -131,6 +133,9 @@ try {
     privateInternalStatusWithToken: 200,
     privateInternalStatusHealth: "healthy",
     privateIngressReadiness: "ready",
+    knowledgeCardDefaults: "disabled-empty-allowlist",
+    knowledgeCardReadiness,
+    knowledgeCardStatus: "unavailable-while-disabled",
     runtimeStartup: "disabled",
     runtimeEnablement: "explicit",
     smokeMode: postRestore ? "post-restore" : "ordinary",
@@ -212,6 +217,43 @@ function sanitizeErrorText(value) {
     sanitized = sanitized.split(internalApiToken).join("[redacted]");
   }
   return sanitized.slice(0, 1_024);
+}
+
+function assertKnowledgeCardDefaults() {
+  const enabled = process.env.IRIS_KNOWLEDGE_CARD_ENABLED ?? "false";
+  const groupIds = process.env.IRIS_KNOWLEDGE_CARD_GROUP_IDS ?? "";
+  if (enabled !== "false" || groupIds !== "") {
+    throw new Error(
+      "Pilot smoke requires IRIS_KNOWLEDGE_CARD_ENABLED=false and an empty IRIS_KNOWLEDGE_CARD_GROUP_IDS allowlist",
+    );
+  }
+}
+
+async function assertKnowledgeCardReadiness() {
+  const readinessResponse = await expectStatus(`${coreBaseUrl}/internal/readiness`, 200, {
+    authorization: `Bearer ${internalApiToken}`,
+  });
+  const readiness = await readinessResponse.json();
+  const knowledgeCards = readiness?.checks?.find?.((check) => check?.id === "knowledgeCards");
+  if (
+    readiness?.ok !== true ||
+    readiness?.status !== "ready" ||
+    knowledgeCards?.status !== "pass" ||
+    knowledgeCards?.detail !== "Knowledge cards are safely disabled."
+  ) {
+    throw new Error("Expected knowledge-card readiness to prove the default-off configuration");
+  }
+
+  const statusResponse = await expectStatus(
+    `${coreBaseUrl}/internal/approval-interactions/status`,
+    503,
+    { authorization: `Bearer ${internalApiToken}` },
+  );
+  const status = await statusResponse.json();
+  if (status?.ok !== false || status?.error !== "knowledge_card_runtime_unavailable") {
+    throw new Error("Expected the disabled knowledge-card status route to remain content-free");
+  }
+  return "safe-disabled";
 }
 
 async function runPublicBoundaryChecks() {
