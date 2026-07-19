@@ -644,6 +644,70 @@ def test_v2_response_schema_uses_only_gemini_supported_keywords() -> None:
     assert_supported(_v2_response_schema())
 
 
+def test_v2_response_schema_flattens_operation_variants_for_gemini() -> None:
+    from iris_worker.memory_extraction import _v2_response_schema
+
+    schema = _v2_response_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+
+    thread_item = properties["thread_operations"]["items"]
+    assert thread_item["type"] == "object"
+    assert thread_item["additionalProperties"] is False
+    assert "anyOf" not in thread_item
+    assert set(thread_item["properties"]["operation"]["enum"]) == {
+        "create",
+        "attach_evidence",
+        "promote",
+        "merge",
+        "resolve",
+        "reopen",
+        "update_summary",
+        "correct",
+    }
+    assert set(thread_item["required"]) == {
+        "operation",
+        "operation_key",
+        "confidence",
+        "evidence_message_ids",
+        "evidence_span",
+    }
+
+    action_item = properties["action_operations"]["items"]
+    assert action_item["type"] == "object"
+    assert action_item["additionalProperties"] is False
+    assert "anyOf" not in action_item
+    assert set(action_item["properties"]["operation"]["enum"]) == {
+        "create",
+        "complete",
+        "cancel",
+        "reopen",
+        "resolve_owner",
+        "correct",
+    }
+    assert set(action_item["required"]) == {
+        "operation",
+        "operation_key",
+        "confidence",
+        "evidence_message_ids",
+        "evidence_span",
+    }
+
+    owner = action_item["properties"]["owner"]
+    assert owner["type"] == "object"
+    assert owner["additionalProperties"] is False
+    assert "anyOf" not in owner
+    assert owner["required"] == ["owner_type", "message_id"]
+    assert set(owner["properties"]["owner_type"]["enum"]) == {
+        "sender",
+        "mention",
+        "text_label",
+    }
+
+    encoded = json.dumps(schema, separators=(",", ":"), sort_keys=True)
+    assert len(encoded.encode("utf-8")) <= 7_000
+
+
 @pytest.mark.asyncio
 async def test_v2_service_validates_response_ownership_and_operation_keys() -> None:
     from iris_worker.contracts import MemoryExtractionRequestV2

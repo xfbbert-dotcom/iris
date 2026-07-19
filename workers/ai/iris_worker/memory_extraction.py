@@ -55,6 +55,7 @@ V2_SYSTEM_INSTRUCTION = (
     "Thread operations are create, attach_evidence, promote, merge, resolve, reopen, "
     "update_summary, or correct; action operations are create, complete, cancel, reopen, "
     "resolve_owner, or correct. Use only eligible evidence message ids.\n"
+    "For each operation, omit every field that is not listed for that operation.\n"
     "Return one JSON object and no surrounding text."
 )
 
@@ -127,161 +128,74 @@ def _v2_response_schema() -> dict[str, object]:
         "evidence_span",
     ]
 
-    owner = {
-        "anyOf": [
-            _closed_object(
-                {"owner_type": _enum("sender"), "message_id": identifier},
-                ["owner_type", "message_id"],
+    # Keep provider-facing variants flat; Pydantic enforces operation-specific fields locally.
+    owner = _closed_object(
+        {
+            "owner_type": _enum("sender", "mention", "text_label"),
+            "message_id": identifier,
+            "mention_key": identifier,
+            "label": memory_text,
+        },
+        ["owner_type", "message_id"],
+    )
+
+    thread_operation = _closed_object(
+        {
+            **common_operation_properties,
+            "operation": _enum(
+                "create",
+                "attach_evidence",
+                "promote",
+                "merge",
+                "resolve",
+                "reopen",
+                "update_summary",
+                "correct",
             ),
-            _closed_object(
-                {
-                    "owner_type": _enum("mention"),
-                    "message_id": identifier,
-                    "mention_key": identifier,
-                },
-                ["owner_type", "message_id", "mention_key"],
+            "title": memory_text,
+            "summary": memory_text,
+            "initial_status": _enum("candidate", "open"),
+            "thread_id": identifier,
+            "expected_version": _positive_integer(),
+            "source_thread_id": identifier,
+            "target_thread_id": identifier,
+            "corrected_fields": {
+                "type": "array",
+                "items": _enum("title", "summary"),
+                "minItems": 1,
+                "maxItems": 2,
+            },
+        },
+        common_operation_required,
+    )
+
+    action_operation = _closed_object(
+        {
+            **common_operation_properties,
+            "operation": _enum(
+                "create",
+                "complete",
+                "cancel",
+                "reopen",
+                "resolve_owner",
+                "correct",
             ),
-            _closed_object(
-                {
-                    "owner_type": _enum("text_label"),
-                    "message_id": identifier,
-                    "label": memory_text,
-                },
-                ["owner_type", "message_id", "label"],
-            ),
-        ]
-    }
-
-    def thread_operation(
-        operation: str,
-        fields: dict[str, object],
-        required: list[str],
-    ) -> dict[str, object]:
-        return _closed_object(
-            {
-                **common_operation_properties,
-                "operation": _enum(operation),
-                **fields,
+            "action_id": identifier,
+            "expected_version": _positive_integer(),
+            "thread_id": {"anyOf": [identifier, {"type": "null"}]},
+            "description": memory_text,
+            "owner": owner,
+            "due_at": _string_schema(),
+            "due_evidence_span": memory_text,
+            "corrected_fields": {
+                "type": "array",
+                "items": _enum("description", "thread_id", "owner"),
+                "minItems": 1,
+                "maxItems": 3,
             },
-            [*common_operation_required, *required],
-        )
-
-    expected_thread = {"thread_id": identifier, "expected_version": _positive_integer()}
-    thread_operations = [
-        thread_operation(
-            "create",
-            {
-                "title": memory_text,
-                "summary": memory_text,
-                "initial_status": _enum("candidate", "open"),
-            },
-            ["title", "summary", "initial_status"],
-        ),
-        thread_operation(
-            "attach_evidence",
-            expected_thread,
-            ["thread_id", "expected_version"],
-        ),
-        thread_operation(
-            "promote",
-            {**expected_thread, "summary": memory_text},
-            ["thread_id", "expected_version", "summary"],
-        ),
-        thread_operation(
-            "merge",
-            {
-                "source_thread_id": identifier,
-                "target_thread_id": identifier,
-                "expected_version": _positive_integer(),
-            },
-            ["source_thread_id", "target_thread_id", "expected_version"],
-        ),
-        thread_operation(
-            "resolve", expected_thread, ["thread_id", "expected_version"]
-        ),
-        thread_operation(
-            "reopen", expected_thread, ["thread_id", "expected_version"]
-        ),
-        thread_operation(
-            "update_summary",
-            {**expected_thread, "summary": memory_text},
-            ["thread_id", "expected_version", "summary"],
-        ),
-        thread_operation(
-            "correct",
-            {
-                **expected_thread,
-                "corrected_fields": {
-                    "type": "array",
-                    "items": _enum("title", "summary"),
-                    "minItems": 1,
-                    "maxItems": 2,
-                },
-                "title": memory_text,
-                "summary": memory_text,
-            },
-            ["thread_id", "expected_version", "corrected_fields"],
-        ),
-    ]
-
-    def action_operation(
-        operation: str,
-        fields: dict[str, object],
-        required: list[str],
-    ) -> dict[str, object]:
-        return _closed_object(
-            {
-                **common_operation_properties,
-                "operation": _enum(operation),
-                **fields,
-            },
-            [*common_operation_required, *required],
-        )
-
-    existing_action = {"action_id": identifier, "expected_version": _positive_integer()}
-    action_operations = [
-        action_operation(
-            "create",
-            {
-                "thread_id": identifier,
-                "description": memory_text,
-                "owner": owner,
-                "due_at": _string_schema(),
-                "due_evidence_span": memory_text,
-            },
-            ["description", "owner"],
-        ),
-        action_operation(
-            "complete", existing_action, ["action_id", "expected_version"]
-        ),
-        action_operation(
-            "cancel", existing_action, ["action_id", "expected_version"]
-        ),
-        action_operation(
-            "reopen", existing_action, ["action_id", "expected_version"]
-        ),
-        action_operation(
-            "resolve_owner",
-            {**existing_action, "owner": owner},
-            ["action_id", "expected_version", "owner"],
-        ),
-        action_operation(
-            "correct",
-            {
-                **existing_action,
-                "corrected_fields": {
-                    "type": "array",
-                    "items": _enum("description", "thread_id", "owner"),
-                    "minItems": 1,
-                    "maxItems": 3,
-                },
-                "description": memory_text,
-                "thread_id": {"anyOf": [identifier, {"type": "null"}]},
-                "owner": owner,
-            },
-            ["action_id", "expected_version", "corrected_fields"],
-        ),
-    ]
+        },
+        common_operation_required,
+    )
 
     candidate = _closed_object(
         {
@@ -315,12 +229,12 @@ def _v2_response_schema() -> dict[str, object]:
             },
             "thread_operations": {
                 "type": "array",
-                "items": {"anyOf": thread_operations},
+                "items": thread_operation,
                 "maxItems": MAX_OPERATIONS_PER_FAMILY,
             },
             "action_operations": {
                 "type": "array",
-                "items": {"anyOf": action_operations},
+                "items": action_operation,
                 "maxItems": MAX_OPERATIONS_PER_FAMILY,
             },
         },
