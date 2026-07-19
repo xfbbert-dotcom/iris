@@ -31,13 +31,14 @@ Implements Iris Phase 5B-1: governed, version-bound Feishu cards for knowledge-d
 - `npm run typecheck`: passed.
 - `npm run build`: passed.
 - Focused A-G suites with real Redis and real Postgres: 322 passed, 0 skipped.
-- `npm test`: 2,050 passed, 129 skipped (2,179 total); the skipped integration paths passed in the focused real-backend run above.
+- `npm test`: 2,067 passed, 132 skipped (2,199 total); the affected skipped integration paths passed in the focused real-backend runs above.
 - `npm run test:python`: 177 passed.
-- `npm run test:pilot`: 116 passed, 0 skipped (including 38 pilot-smoke checks).
+- `npm run test:pilot`: 118 passed, 0 skipped.
 - `docker compose config`, `npm run readiness -- --env-file deploy/pilot/ci.env` (14/14 checks passed), `npm run pilot:config`, and `git diff --check`: passed.
 - Second-wave worker/renderer/dispatcher/static repository suites: 73 passed, with 36 database-only cases skipped in this invocation.
 - Second-wave real Postgres migration/repository suites: 67 passed, 0 skipped, including the coordinated create-versus-apply race.
 - Second-wave Caddy/public-smoke assertions: 54 passed, 0 skipped; the pinned pilot image also passed `caddy validate`.
+- Final worker/renderer/dispatcher replay suite with real Postgres: 116 passed, 0 skipped, including denied/conflicting redelivery and committed-card recovery.
 
 ## Intended PR
 
