@@ -21,6 +21,16 @@ export type FeishuRequestVerifierOptions = {
   requireSignature?: boolean;
 };
 
+export type FeishuCallbackAuthenticationDiagnostic = {
+  timestamp: "missing" | "invalid" | "stale" | "fresh";
+  rawBodyPresent: boolean;
+  rawEqualsCanonical: boolean;
+  sha256EncryptKeyRaw: boolean;
+  sha256EncryptKeyCanonical: boolean;
+  sha1VerificationTokenRaw: boolean;
+  sha1VerificationTokenCanonical: boolean;
+};
+
 type FeishuSignatureInput = {
   headers: Record<string, string | undefined>;
   rawBody: string;
@@ -110,6 +120,47 @@ export function verifyFeishuCardSignature(input: FeishuCardSignatureInput): bool
   return safeEqual(signature, expectedSignature);
 }
 
+export function diagnoseFeishuCallbackAuthentication(input: {
+  request: FeishuAuthRequest;
+  verificationToken?: string;
+  encryptKey?: string;
+  now: Date;
+}): FeishuCallbackAuthenticationDiagnostic {
+  const rawBody = input.request.rawBody;
+  let canonicalBody: string | undefined;
+  try {
+    canonicalBody = JSON.stringify(input.request.body);
+  } catch {
+    canonicalBody = undefined;
+  }
+
+  return {
+    timestamp: classifyFeishuTimestamp(input.request.headers, input.now),
+    rawBodyPresent: rawBody !== undefined,
+    rawEqualsCanonical: rawBody !== undefined && canonicalBody !== undefined && rawBody === canonicalBody,
+    sha256EncryptKeyRaw: rawBody !== undefined && input.encryptKey !== undefined &&
+      verifyFeishuSignature({ headers: input.request.headers, rawBody, encryptKey: input.encryptKey }),
+    sha256EncryptKeyCanonical: canonicalBody !== undefined && input.encryptKey !== undefined &&
+      verifyFeishuSignature({
+        headers: input.request.headers,
+        rawBody: canonicalBody,
+        encryptKey: input.encryptKey,
+      }),
+    sha1VerificationTokenRaw: rawBody !== undefined && input.verificationToken !== undefined &&
+      verifyFeishuCardSignature({
+        headers: input.request.headers,
+        rawBody,
+        verificationToken: input.verificationToken,
+      }),
+    sha1VerificationTokenCanonical: canonicalBody !== undefined && input.verificationToken !== undefined &&
+      verifyFeishuCardSignature({
+        headers: input.request.headers,
+        rawBody: canonicalBody,
+        verificationToken: input.verificationToken,
+      }),
+  };
+}
+
 export function createFeishuCardRequestVerifier(
   config: Pick<FeishuAuthConfig, "verificationToken">,
   options: Pick<FeishuRequestVerifierOptions, "now" | "maxTimestampSkewSeconds"> = {},
@@ -180,6 +231,17 @@ function resolveMaxTimestampSkewSeconds(value: number | undefined): number | und
   if (value === undefined) return 300;
   if (!Number.isSafeInteger(value) || value < 1) return undefined;
   return Math.min(value, 300);
+}
+
+function classifyFeishuTimestamp(
+  headers: Record<string, string | undefined>,
+  now: Date,
+): FeishuCallbackAuthenticationDiagnostic["timestamp"] {
+  const value = getHeader(headers, "x-lark-request-timestamp");
+  if (value === undefined || value.length === 0) return "missing";
+  const timestamp = Number(value);
+  if (!Number.isSafeInteger(timestamp)) return "invalid";
+  return Math.abs(Math.floor(now.getTime() / 1_000) - timestamp) <= 300 ? "fresh" : "stale";
 }
 
 function hasValidFeishuTimestamp(input: {

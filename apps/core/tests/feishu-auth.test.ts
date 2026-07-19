@@ -4,6 +4,7 @@ import {
   createFeishuCardRequestVerifier,
   createFeishuRequestVerifier,
   decodeFeishuPayload,
+  diagnoseFeishuCallbackAuthentication,
   isFeishuUrlVerificationPayload,
   verifyFeishuSignature,
   verifyFeishuVerificationToken
@@ -116,6 +117,36 @@ describe("Feishu auth primitives", () => {
         encryptKey
       })
     ).toBe(true);
+  });
+
+  it("classifies callback signature candidates without exposing request material", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = '{\n  "encrypt": "encrypted-callback-payload"\n}';
+    const timestamp = "1784419200";
+    const nonce = "nonce-1";
+
+    expect(diagnoseFeishuCallbackAuthentication({
+      request: {
+        headers: {
+          "x-lark-request-timestamp": timestamp,
+          "x-lark-request-nonce": nonce,
+          "x-lark-signature": sign(timestamp, nonce, JSON.stringify(body)),
+        },
+        body,
+        rawBody,
+      },
+      verificationToken,
+      encryptKey,
+      now: new Date("2026-07-19T00:00:00.000Z"),
+    })).toEqual({
+      timestamp: "fresh",
+      rawBodyPresent: true,
+      rawEqualsCanonical: false,
+      sha256EncryptKeyRaw: false,
+      sha256EncryptKeyCanonical: true,
+      sha1VerificationTokenRaw: false,
+      sha1VerificationTokenCanonical: false,
+    });
   });
 
   it("accepts card callback signatures over the raw body using the verification token", () => {

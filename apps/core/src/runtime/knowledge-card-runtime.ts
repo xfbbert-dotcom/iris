@@ -12,6 +12,8 @@ import { createPostgresPool } from "../database/postgres.js";
 import {
   createFeishuCardRequestVerifier,
   decodeFeishuPayload,
+  diagnoseFeishuCallbackAuthentication,
+  type FeishuCallbackAuthenticationDiagnostic,
   isFeishuUrlVerificationPayload,
   verifyFeishuVerificationToken,
 } from "../feishu/feishu-auth.js";
@@ -118,6 +120,7 @@ export type KnowledgeCardRuntimeDependencies = {
   createDispatcherLoop?: typeof createKnowledgeCardDispatcherLoop;
   createInteractionLoop?: typeof createApprovalInteractionWorkerLoop;
   onCardCallbackDiagnostic?: (diagnostic: FeishuCardActionCallbackDiagnostic) => void;
+  onCardAuthenticationDiagnostic?: (diagnostic: FeishuCallbackAuthenticationDiagnostic) => void;
   onStartupCleanup?: (cleanup: Promise<void>) => void;
 };
 
@@ -233,9 +236,22 @@ export function createKnowledgeCardRuntime({
     const verifyFeishuEnvelope = createFeishuCardRequestVerifier({
       verificationToken: feishuAuthConfig.verificationToken,
     });
+    const verifyFeishuEnvelopeWithDiagnostics = (request: FeishuCardActionCallbackRequest): boolean => {
+      const verified = verifyFeishuEnvelope(request);
+      if (!verified) {
+        const diagnostic = diagnoseFeishuCallbackAuthentication({
+          request,
+          verificationToken: feishuAuthConfig.verificationToken,
+          encryptKey: feishuAuthConfig.encryptKey,
+          now: new Date(),
+        });
+        (dependencies.onCardAuthenticationDiagnostic ?? reportCardAuthenticationDiagnostic)(diagnostic);
+      }
+      return verified;
+    };
     const gateway = createFeishuCardActionGateway({
       queue,
-      verifyRequest: verifyFeishuEnvelope,
+      verifyRequest: verifyFeishuEnvelopeWithDiagnostics,
       allowUnsignedEncryptedUrlVerification: feishuAuthConfig.encryptKey !== undefined,
       onDiagnostic: dependencies.onCardCallbackDiagnostic ?? reportCardCallbackDiagnostic,
       decodeRequest(request) {
@@ -343,6 +359,15 @@ export function createKnowledgeCardRuntime({
 function reportCardCallbackDiagnostic(diagnostic: FeishuCardActionCallbackDiagnostic): void {
   console.info(JSON.stringify({
     event: "feishu_card_callback",
+    ...diagnostic,
+  }));
+}
+
+function reportCardAuthenticationDiagnostic(
+  diagnostic: FeishuCallbackAuthenticationDiagnostic,
+): void {
+  console.info(JSON.stringify({
+    event: "feishu_card_authentication",
     ...diagnostic,
   }));
 }
