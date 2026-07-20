@@ -17,9 +17,11 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
-  it("reserves 0032 and defines the external-attempt outbox state in 0031", async () => {
+  it("assigns 0032 to action approval facts and keeps 0031 external-attempt state", async () => {
     const migrationNames = await readdir(defaultMigrationsDir());
-    expect(migrationNames.filter((name) => name.startsWith("0032_"))).toEqual([]);
+    expect(migrationNames.filter((name) => name.startsWith("0032_"))).toEqual([
+      "0032_action_approval_facts.sql",
+    ]);
 
     const sql = await readFile(
       join(defaultMigrationsDir(), "0031_knowledge_draft_presentations.sql"),
