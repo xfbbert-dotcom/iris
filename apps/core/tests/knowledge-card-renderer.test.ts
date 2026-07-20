@@ -75,9 +75,17 @@ describe("renderKnowledgeDraftCard", () => {
       },
     });
     expect(form.elements.some((element) => isRecord(element) && element.tag === "checkbox")).toBe(false);
+    const submitButtons = form.elements.filter((element) =>
+      isRecord(element) && element.tag === "button"
+    );
+    expect(submitButtons).toHaveLength(3);
+    for (const button of submitButtons) {
+      expect(button).toMatchObject({ form_action_type: "submit" });
+      expect(button).not.toHaveProperty("action_type");
+    }
     expect(form.elements.find((element) => isRecord(element) && element.name === "reject")).toMatchObject({
       tag: "button",
-      action_type: "form_submit",
+      form_action_type: "submit",
       confirm: {
         title: { tag: "plain_text", content: "Reject draft" },
         text: {

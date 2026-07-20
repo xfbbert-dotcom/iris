@@ -99,7 +99,7 @@ export function renderKnowledgeDraftCard(
       name: "confirm",
       text: { tag: "plain_text", content: "Confirm" },
       type: "primary",
-      action_type: "form_submit",
+      form_action_type: "submit",
       value: callbackValue("confirm"),
     }),
     component({
@@ -107,7 +107,7 @@ export function renderKnowledgeDraftCard(
       name: "request_revision",
       text: { tag: "plain_text", content: "Request revision" },
       type: "default",
-      action_type: "form_submit",
+      form_action_type: "submit",
       value: callbackValue("request_revision"),
     }),
     component({
@@ -115,7 +115,7 @@ export function renderKnowledgeDraftCard(
       name: "reject",
       text: { tag: "plain_text", content: "Reject" },
       type: "danger",
-      action_type: "form_submit",
+      form_action_type: "submit",
       value: callbackValue("reject"),
       confirm: {
         title: { tag: "plain_text", content: "Reject draft" },

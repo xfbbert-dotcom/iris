@@ -158,7 +158,7 @@ Phase 5B-1 首先支持安全预算内的完整卡片。内部初始预算固定
 - Core 服务端解析合同对“需要修改”和“拒绝草稿”保留 1-2,000 字符的规范化非空原因上限。
 - Phase 5B-1 飞书卡片输入控件受平台合同限制，`max_length` 必须为 1,000，因此卡片 UI 实际只能提交 1-1,000 字符；不得向飞书发出无效的 2,000 字符控件上限。
 - “拒绝草稿”还必须要求二次确认。
-- Phase 5B-1 使用飞书 `form_submit` 按钮的原生 `confirm` 弹窗完成拒绝二次确认；飞书卡片 JSON 2.0 不接受 `checkbox` 标签，因此回调解析器只接受规范化非空原因，并仅在经过签名、身份与卡片绑定校验的 `reject` 回调上生成内部 `rejectionConfirmed=true` 事实。
+- Phase 5B-1 使用飞书卡片 JSON 2.0 表单按钮的 `form_action_type: "submit"` 与原生 `confirm` 弹窗完成拒绝二次确认；不得沿用 JSON 1.0 的 `action_type: "form_submit"`。飞书卡片 JSON 2.0 不接受 `checkbox` 标签，因此回调解析器只接受规范化非空原因，并仅在经过签名、身份与卡片绑定校验的 `reject` 回调上生成内部 `rejectionConfirmed=true` 事实。
 
 ### 6.4 已提交结果卡片
 

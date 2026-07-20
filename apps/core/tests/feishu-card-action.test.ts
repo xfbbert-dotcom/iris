@@ -57,6 +57,7 @@ describe("parseFeishuCardAction", () => {
     ["a wrong callback-value type", cardAction({ event: { action: { value: { ...actionValue(), revisionNumber: "7" } } } })],
     ["a missing callback-value field", cardAction({ event: { action: { value: { ...actionValue(), draftVersion: undefined } } } })],
     ["a mismatched action name", cardAction({ event: { action: { name: "confirm" } } })],
+    ["a non-string action timezone", cardAction({ event: { action: { timezone: 8 } } })],
     ["a missing revision reason", cardAction({ event: { action: { name: "request_revision", value: actionValue({ action: "request_revision" }), form_value: { reason: "" } } } })],
     ["a missing rejection reason", cardAction({ event: { action: { form_value: { reason: "" } } } })],
   ])("rejects %s", (_label, body) => {
@@ -85,6 +86,7 @@ function cardAction(overrides: Record<string, unknown> = {}): Record<string, unk
         value: actionValue(),
         tag: "button",
         name: "reject",
+        timezone: "Asia/Shanghai",
         form_value: {
           reason: "  Unsafe rollout plan.  ",
         },

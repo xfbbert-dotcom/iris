@@ -119,8 +119,9 @@ function parseContext(value: unknown): { chatId: string; messageId?: string } | 
 function parseAction(value: unknown): Omit<ParsedFeishuCardAction, "eventId" | "appId" | "actorOpenId" | "chatId" | "messageId"> | undefined {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["value", "tag", "name", "form_value"]) ||
-    value.tag !== "button"
+    !hasOnlyKeys(value, ["value", "tag", "name", "timezone", "form_value"]) ||
+    value.tag !== "button" ||
+    !areOptionalStrings(value, ["timezone"])
   ) {
     return undefined;
   }
