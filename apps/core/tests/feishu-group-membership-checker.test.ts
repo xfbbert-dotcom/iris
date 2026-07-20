@@ -6,9 +6,19 @@ import {
 } from "../src/feishu/feishu-group-membership-checker.js";
 
 describe("FeishuGroupMembershipChecker", () => {
+  it("accepts the current Feishu items/member_id membership response contract", async () => {
+    const checker = createFeishuGroupMembershipChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => membersResponse({ memberList: [member("ou-member")] })),
+    });
+
+    await expect(checker.isCurrentMember({ chatId: "oc_group", openId: "ou-member" })).resolves.toBe(true);
+  });
+
   it("checks the first bounded member page with the exact Feishu contract", async () => {
     const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
-    const fetch = vi.fn(async () => membersResponse({ memberList: [{ open_id: "ou-member" }] }));
+    const fetch = vi.fn(async () => membersResponse({ memberList: [member("ou-member")] }));
     const checker = createFeishuGroupMembershipChecker({
       baseUrl: "https://open.feishu.cn/",
       tokenProvider,
@@ -33,7 +43,7 @@ describe("FeishuGroupMembershipChecker", () => {
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(membersResponse({ memberList: [], hasMore: true, pageToken: "page-2" }))
-      .mockResolvedValueOnce(membersResponse({ memberList: [{ open_id: "ou-member" }] }));
+      .mockResolvedValueOnce(membersResponse({ memberList: [member("ou-member")] }));
     const checker = createFeishuGroupMembershipChecker({
       baseUrl: "https://open.feishu.cn",
       tokenProvider,
@@ -58,7 +68,7 @@ describe("FeishuGroupMembershipChecker", () => {
   it("returns early when a normalized exact Open ID appears on the first page", async () => {
     const fetch = vi.fn(async () =>
       membersResponse({
-        memberList: [{ open_id: " ou-member " }],
+        memberList: [member(" ou-member ")],
         hasMore: true,
         pageToken: "page-2",
       }),
@@ -77,7 +87,7 @@ describe("FeishuGroupMembershipChecker", () => {
     const checker = createFeishuGroupMembershipChecker({
       baseUrl: "https://open.feishu.cn",
       tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
-      fetch: vi.fn(async () => membersResponse({ memberList: [{ open_id: "ou-other" }] })),
+      fetch: vi.fn(async () => membersResponse({ memberList: [member("ou-other")] })),
     });
 
     await expect(checker.isCurrentMember({ chatId: "oc_group", openId: "ou-member" })).resolves.toBe(false);
@@ -125,7 +135,7 @@ describe("FeishuGroupMembershipChecker", () => {
     const checker = createFeishuGroupMembershipChecker({
       baseUrl: "https://open.feishu.cn",
       tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
-      fetch: vi.fn(async () => membersResponse({ memberList: [{ open_id: "o".repeat(513) }] })),
+      fetch: vi.fn(async () => membersResponse({ memberList: [member("o".repeat(513))] })),
     });
 
     await expect(checker.isCurrentMember({ chatId: "oc_group", openId: "ou-member" })).rejects.toSatisfy(
@@ -218,7 +228,7 @@ function membersResponse({
     {
       code,
       data: {
-        member_list: memberList,
+        items: memberList,
         has_more: hasMore,
         ...(pageToken === undefined ? {} : { page_token: pageToken }),
       },
@@ -240,7 +250,7 @@ function oversizedMembersResponse(): Response {
   return new Response(
     JSON.stringify({
       code: 0,
-      data: { member_list: [], has_more: false },
+      data: { items: [], has_more: false },
       padding: "x".repeat(70_000),
     }),
     { headers: { "content-type": "application/json" } },
@@ -255,6 +265,10 @@ function invalidJsonResponse(): Response {
       throw new Error("invalid json");
     },
   } as unknown as Response;
+}
+
+function member(memberId: string): { member_id: string; member_id_type: "open_id" } {
+  return { member_id: memberId, member_id_type: "open_id" };
 }
 
 function abortError(): Error {

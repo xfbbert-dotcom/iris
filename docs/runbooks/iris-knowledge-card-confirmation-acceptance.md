@@ -199,6 +199,11 @@ if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true" -or (Get-PilotEn
 2. 要求修改：另一个当前草稿提交非空原因；最终卡片必须显示 `Iris / revision_requested`、相同绑定元数据、`needs_revision` 和数据库已提交的规范化原因，不得回显未提交 callback 字段；草稿状态和 event 与可见原因一致。
 3. 拒绝：第三个草稿填写非空原因，点击 Reject 并在飞书原生二次确认弹窗中确认；不得添加飞书卡片 JSON 2.0 不支持的 `checkbox` 标签。最终卡片必须显示 `Iris / rejected`、相同绑定元数据、`rejected` 和数据库已提交的规范化原因；草稿为终态 rejected，后续点击不改变业务事实。
 4. 过期卡片：生成新修订或使证据失效后点击旧卡；必须 stale/不可处理，且不新增 confirmation、event 或状态变化。
+
+真实回调若进入 `membership_unavailable`，先以同一应用凭据对当前群执行一次只读群成员
+接口探测。成功响应必须使用 `data.items[].member_id` 且每项
+`member_id_type=open_id`；不得按旧的 `member_list[].open_id` 形状放宽解析。修复后只重放
+对应 DLQ 项，并继续要求队列清零、数据库事实与卡片结果一致。
 5. 重复 callback 重放：同一 callback event 只产生一次业务结果和一次对应事实。
 6. 运行时停用后点击：先 durable-disable `$PilotGroupId` 再点击旧卡；不得产生业务状态变化。
 

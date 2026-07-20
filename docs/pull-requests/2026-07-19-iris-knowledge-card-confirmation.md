@@ -14,6 +14,8 @@ Implements Iris Phase 5B-1: governed, version-bound Feishu cards for knowledge-d
 - Feishu JSON 2.0 buttons bind string-valued version metadata through `behaviors[].value`; the strict callback parser rejects missing, non-canonical, unsafe, or name-mismatched bindings instead of inferring draft identity.
 - Phase 5B-1 uses only migration `0031`; migration number `0032` remains reserved for Phase 5B-2.
 - Current runtime, presentation, draft evidence, and group membership are revalidated before mutation.
+- Live Feishu membership parsing follows the current `data.items[].member_id` contract and requires
+  `member_id_type=open_id`; malformed, legacy-shaped, or unavailable responses fail closed.
 - The worker rechecks the live global/group/capability gate after membership and immediately before mutation.
 - Pilot Caddy exposes exactly `/feishu/events` and `/feishu/card-actions`; `/internal/*` and every other unmatched path remain 404.
 - Final cards render action-specific committed facts for confirm, request-revision, and reject through one deterministic immediate/retry renderer, without draft or evidence text.

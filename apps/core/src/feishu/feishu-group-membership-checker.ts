@@ -141,17 +141,17 @@ function readMembersPage(responseBody: unknown): {
   if (!isRecord(responseBody) || responseBody.code !== 0 || !isRecord(responseBody.data)) {
     throw new FeishuGroupMembershipError();
   }
-  const memberList = responseBody.data.member_list;
+  const memberList = responseBody.data.items;
   const hasMore = responseBody.data.has_more;
   if (!Array.isArray(memberList) || typeof hasMore !== "boolean") {
     throw new FeishuGroupMembershipError();
   }
 
   const openIds = memberList.map((member) => {
-    if (!isRecord(member)) {
+    if (!isRecord(member) || member.member_id_type !== "open_id") {
       throw new FeishuGroupMembershipError();
     }
-    return readIdentifier(member.open_id);
+    return readIdentifier(member.member_id);
   });
   return { openIds, hasMore, pageToken: responseBody.data.page_token };
 }
