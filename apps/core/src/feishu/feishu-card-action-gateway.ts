@@ -35,13 +35,40 @@ export type FeishuCardActionCallbackDiagnostic = {
     | "envelope_rejected"
     | "decode_rejected"
     | "decoded_identity_rejected"
+    | "action_rejected"
     | "challenge_accepted"
     | "unsigned_encrypted_challenge_accepted";
-  statusCode: 200 | 401;
+  statusCode: 200 | 400 | 401;
   hasTimestamp: boolean;
   hasNonce: boolean;
   hasSignature: boolean;
   encrypted: boolean;
+  actionShape?: FeishuCardActionShapeDiagnostic;
+};
+
+type FeishuCardActionShapeDiagnostic = {
+  bodyRecord: boolean;
+  bodyKeyCount: number;
+  headerRecord: boolean;
+  headerKeyCount: number;
+  eventRecord: boolean;
+  eventKeyCount: number;
+  operatorRecord: boolean;
+  operatorKeyCount: number;
+  contextRecord: boolean;
+  contextKeyCount: number;
+  actionRecord: boolean;
+  actionKeyCount: number;
+  callbackValueRecord: boolean;
+  callbackValueKeyCount: number;
+  formValueRecord: boolean;
+  formValueKeyCount: number;
+  hasReason: boolean;
+  reasonType: string;
+  hasName: boolean;
+  nameType: string;
+  hasTimezone: boolean;
+  timezoneType: string;
 };
 
 export type FeishuCardActionGatewayDependencies = {
@@ -150,7 +177,15 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
       }
 
       const action = parseFeishuCardAction(decodedRequest.body);
-      if (action === undefined) return rejectedResponse(400);
+      if (action === undefined) {
+        reportDiagnostic(dependencies.onDiagnostic, {
+          stage: "action_rejected",
+          statusCode: 400,
+          ...requestShape(request),
+          actionShape: describeActionShape(decodedRequest.body),
+        });
+        return rejectedResponse(400);
+      }
 
       const job = createJob(action, now());
       const outcome = await enqueueWithinDeadline(dependencies.queue, job);
@@ -191,6 +226,58 @@ function requestShape(request: FeishuCardActionCallbackRequest): Pick<
 function isEncryptedWrapper(body: unknown): boolean {
   return typeof body === "object" && body !== null &&
     Object.keys(body).length === 1 && typeof (body as Record<string, unknown>).encrypt === "string";
+}
+
+function describeActionShape(body: unknown): FeishuCardActionShapeDiagnostic {
+  const bodyRecord = asRecord(body);
+  const header = asRecord(bodyRecord?.header);
+  const event = asRecord(bodyRecord?.event);
+  const operator = asRecord(event?.operator);
+  const context = asRecord(event?.context);
+  const action = asRecord(event?.action);
+  const callbackValue = asRecord(action?.value);
+  const formValue = asRecord(action?.form_value);
+
+  return {
+    bodyRecord: bodyRecord !== undefined,
+    bodyKeyCount: keyCount(bodyRecord),
+    headerRecord: header !== undefined,
+    headerKeyCount: keyCount(header),
+    eventRecord: event !== undefined,
+    eventKeyCount: keyCount(event),
+    operatorRecord: operator !== undefined,
+    operatorKeyCount: keyCount(operator),
+    contextRecord: context !== undefined,
+    contextKeyCount: keyCount(context),
+    actionRecord: action !== undefined,
+    actionKeyCount: keyCount(action),
+    callbackValueRecord: callbackValue !== undefined,
+    callbackValueKeyCount: keyCount(callbackValue),
+    formValueRecord: formValue !== undefined,
+    formValueKeyCount: keyCount(formValue),
+    hasReason: formValue !== undefined && Object.hasOwn(formValue, "reason"),
+    reasonType: valueType(formValue?.reason),
+    hasName: action !== undefined && Object.hasOwn(action, "name"),
+    nameType: valueType(action?.name),
+    hasTimezone: action !== undefined && Object.hasOwn(action, "timezone"),
+    timezoneType: valueType(action?.timezone),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function keyCount(value: Record<string, unknown> | undefined): number {
+  return value === undefined ? 0 : Object.keys(value).length;
+}
+
+function valueType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
 }
 
 function reportDiagnostic(

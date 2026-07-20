@@ -155,12 +155,69 @@ describe("FeishuCardActionGateway", () => {
 
   it("returns 400 without enqueueing when a verified callback is not an exact card action", async () => {
     const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
-    const gateway = createFeishuCardActionGateway({ queue, verifyRequest: () => true });
+    const onDiagnostic = vi.fn();
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: () => true,
+      onDiagnostic,
+    });
 
-    await expect(gateway.handleCallback({ headers: {}, body: { schema: "1.0" } })).resolves.toEqual({
+    const body = {
+      schema: "1.0",
+      header: { event_id: "sensitive-event-id" },
+      event: {
+        host: "sensitive-host",
+        operator: { open_id: "sensitive-open-id" },
+        context: { open_chat_id: "sensitive-chat-id" },
+        action: {
+          name: "sensitive-action-name",
+          timezone: "sensitive-timezone",
+          value: { presentationId: "sensitive-presentation-id" },
+          form_value: {},
+        },
+      },
+    };
+
+    await expect(gateway.handleCallback({ headers: {}, body })).resolves.toEqual({
       statusCode: 400,
       body: { ok: false },
     });
+    expect(onDiagnostic).toHaveBeenCalledOnce();
+    expect(onDiagnostic).toHaveBeenCalledWith({
+      stage: "action_rejected",
+      statusCode: 400,
+      hasTimestamp: false,
+      hasNonce: false,
+      hasSignature: false,
+      encrypted: false,
+      actionShape: {
+        bodyRecord: true,
+        bodyKeyCount: 3,
+        headerRecord: true,
+        headerKeyCount: 1,
+        eventRecord: true,
+        eventKeyCount: 4,
+        operatorRecord: true,
+        operatorKeyCount: 1,
+        contextRecord: true,
+        contextKeyCount: 1,
+        actionRecord: true,
+        actionKeyCount: 4,
+        callbackValueRecord: true,
+        callbackValueKeyCount: 1,
+        formValueRecord: true,
+        formValueKeyCount: 0,
+        hasReason: false,
+        reasonType: "undefined",
+        hasName: true,
+        nameType: "string",
+        hasTimezone: true,
+        timezoneType: "string",
+      },
+    });
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toMatch(
+      /sensitive-(?:event-id|host|open-id|chat-id|action-name|timezone|presentation-id)/u,
+    );
     expect(queue.enqueue).not.toHaveBeenCalled();
   });
 
