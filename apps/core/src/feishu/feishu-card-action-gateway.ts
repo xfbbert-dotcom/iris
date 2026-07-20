@@ -61,6 +61,7 @@ type FeishuCardActionShapeDiagnostic = {
   actionKeyCount: number;
   callbackValueRecord: boolean;
   callbackValueKeyCount: number;
+  callbackValueType: string;
   formValueRecord: boolean;
   formValueKeyCount: number;
   hasReason: boolean;
@@ -253,6 +254,7 @@ function describeActionShape(body: unknown): FeishuCardActionShapeDiagnostic {
     actionKeyCount: keyCount(action),
     callbackValueRecord: callbackValue !== undefined,
     callbackValueKeyCount: keyCount(callbackValue),
+    callbackValueType: valueType(action?.value),
     formValueRecord: formValue !== undefined,
     formValueKeyCount: keyCount(formValue),
     hasReason: formValue !== undefined && Object.hasOwn(formValue, "reason"),

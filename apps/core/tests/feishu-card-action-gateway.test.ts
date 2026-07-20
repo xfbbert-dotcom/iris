@@ -205,6 +205,7 @@ describe("FeishuCardActionGateway", () => {
         actionKeyCount: 4,
         callbackValueRecord: true,
         callbackValueKeyCount: 1,
+        callbackValueType: "object",
         formValueRecord: true,
         formValueKeyCount: 0,
         hasReason: false,
