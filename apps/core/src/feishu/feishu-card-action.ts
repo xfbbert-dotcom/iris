@@ -157,11 +157,13 @@ function parseCallbackValue(value: unknown): Pick<ParsedFeishuCardAction, "prese
 
   const presentationId = parseReference(value.presentationId);
   const draftId = parseReference(value.draftId);
+  const revisionNumber = parsePositiveIntegerString(value.revisionNumber);
+  const draftVersion = parsePositiveIntegerString(value.draftVersion);
   if (
     presentationId === undefined ||
     draftId === undefined ||
-    !isPositiveInteger(value.revisionNumber) ||
-    !isPositiveInteger(value.draftVersion)
+    revisionNumber === undefined ||
+    draftVersion === undefined
   ) {
     return undefined;
   }
@@ -170,8 +172,8 @@ function parseCallbackValue(value: unknown): Pick<ParsedFeishuCardAction, "prese
     action: value.action as KnowledgeCardAction,
     presentationId,
     draftId,
-    revisionNumber: value.revisionNumber,
-    draftVersion: value.draftVersion,
+    revisionNumber,
+    draftVersion,
   };
 }
 
@@ -200,8 +202,10 @@ function parseReference(value: unknown): string | undefined {
     : undefined;
 }
 
-function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+function parsePositiveIntegerString(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function areOptionalStrings(value: Record<string, unknown>, keys: string[]): boolean {

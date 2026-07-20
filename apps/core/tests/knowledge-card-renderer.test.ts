@@ -7,6 +7,7 @@ import {
   renderKnowledgeCardCommittedResult,
   renderKnowledgeDraftCard,
 } from "../src/knowledge-cards/knowledge-card-renderer.js";
+import { parseFeishuCardAction } from "../src/feishu/feishu-card-action.js";
 import type { KnowledgeDraft } from "../src/knowledge-governance/knowledge-draft-repository.js";
 import type { KnowledgeDraftPresentation } from "../src/knowledge-cards/knowledge-card-repository.js";
 
@@ -37,27 +38,27 @@ describe("renderKnowledgeDraftCard", () => {
     expect(rendered.componentCount).toBe(countComponents(body.elements));
     expect(rendered.componentCount).toBeLessThanOrEqual(100);
 
-    expect(buttonValues(body.elements)).toEqual([
+    expect(buttonCallbackValues(body.elements)).toEqual([
       {
         action: "confirm",
         presentationId: "presentation-1",
         draftId: "draft-1",
-        revisionNumber: 7,
-        draftVersion: 11,
+        revisionNumber: "7",
+        draftVersion: "11",
       },
       {
         action: "request_revision",
         presentationId: "presentation-1",
         draftId: "draft-1",
-        revisionNumber: 7,
-        draftVersion: 11,
+        revisionNumber: "7",
+        draftVersion: "11",
       },
       {
         action: "reject",
         presentationId: "presentation-1",
         draftId: "draft-1",
-        revisionNumber: 7,
-        draftVersion: 11,
+        revisionNumber: "7",
+        draftVersion: "11",
       },
     ]);
 
@@ -82,6 +83,13 @@ describe("renderKnowledgeDraftCard", () => {
     for (const button of submitButtons) {
       expect(button).toMatchObject({ form_action_type: "submit" });
       expect(button).not.toHaveProperty("action_type");
+      expect(button).not.toHaveProperty("value");
+      expect(button.behaviors).toEqual([
+        {
+          type: "callback",
+          value: expect.objectContaining({ action: button.name }),
+        },
+      ]);
     }
     expect(form.elements.find((element) => isRecord(element) && element.name === "reject")).toMatchObject({
       tag: "button",
@@ -94,6 +102,56 @@ describe("renderKnowledgeDraftCard", () => {
         },
       },
     });
+  });
+
+  it("round-trips every JSON 2.0 callback behavior through the strict Feishu action parser", () => {
+    const rendered = renderedCard();
+    const body = rendered.card.body as { elements: Array<Record<string, unknown>> };
+    const form = body.elements.find((element) => element.tag === "form");
+    if (!form || !Array.isArray(form.elements)) throw new Error("expected a card form");
+    const buttons = form.elements.filter(
+      (element): element is Record<string, unknown> => isRecord(element) && element.tag === "button",
+    );
+
+    for (const [index, button] of buttons.entries()) {
+      const behaviors = button.behaviors;
+      if (!Array.isArray(behaviors) || !isRecord(behaviors[0])) {
+        throw new Error("expected one callback behavior");
+      }
+      expect(behaviors).toHaveLength(1);
+      expect(behaviors[0].type).toBe("callback");
+      const reason = button.name === "confirm" ? "" : "Required governance reason.";
+      expect(parseFeishuCardAction({
+        schema: "2.0",
+        header: {
+          event_id: `event-${index + 1}`,
+          event_type: "card.action.trigger",
+          app_id: "cli_approval",
+        },
+        event: {
+          operator: { open_id: "ou_reviewer" },
+          action: {
+            value: behaviors[0].value,
+            tag: "button",
+            name: button.name,
+            timezone: "Asia/Shanghai",
+            form_value: { reason },
+          },
+          host: "im_message",
+          context: {
+            open_message_id: "om_approval",
+            open_chat_id: "oc_approval",
+          },
+        },
+      })).toMatchObject({
+        action: button.name,
+        presentationId: "presentation-1",
+        draftId: "draft-1",
+        revisionNumber: 7,
+        draftVersion: 11,
+        ...(reason === "" ? {} : { reason }),
+      });
+    }
   });
 
   it("visibly identifies the bounded Iris pending-confirmation draft without source evidence", () => {
@@ -313,12 +371,17 @@ function presentation(overrides: Partial<KnowledgeDraftPresentation> = {}): Know
   };
 }
 
-function buttonValues(elements: Array<Record<string, unknown>>): unknown[] {
+function buttonCallbackValues(elements: Array<Record<string, unknown>>): unknown[] {
   const form = elements.find((element) => element.tag === "form");
   if (!form || !Array.isArray(form.elements)) return [];
   return form.elements
     .filter((element): element is Record<string, unknown> => isRecord(element) && element.tag === "button")
-    .map((button) => button.value);
+    .map((button) => {
+      const behaviors = button.behaviors;
+      return Array.isArray(behaviors) && isRecord(behaviors[0])
+        ? behaviors[0].value
+        : undefined;
+    });
 }
 
 function countComponents(elements: Array<Record<string, unknown>>): number {

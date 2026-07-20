@@ -76,8 +76,8 @@ export function renderKnowledgeDraftCard(
     action,
     presentationId: input.presentation.id,
     draftId: input.draft.id,
-    revisionNumber: input.presentation.revisionNumber,
-    draftVersion: input.presentation.draftVersion,
+    revisionNumber: String(input.presentation.revisionNumber),
+    draftVersion: String(input.presentation.draftVersion),
   });
 
   const formElements: Record<string, unknown>[] = [
@@ -100,7 +100,7 @@ export function renderKnowledgeDraftCard(
       text: { tag: "plain_text", content: "Confirm" },
       type: "primary",
       form_action_type: "submit",
-      value: callbackValue("confirm"),
+      behaviors: [{ type: "callback", value: callbackValue("confirm") }],
     }),
     component({
       tag: "button",
@@ -108,7 +108,7 @@ export function renderKnowledgeDraftCard(
       text: { tag: "plain_text", content: "Request revision" },
       type: "default",
       form_action_type: "submit",
-      value: callbackValue("request_revision"),
+      behaviors: [{ type: "callback", value: callbackValue("request_revision") }],
     }),
     component({
       tag: "button",
@@ -116,7 +116,7 @@ export function renderKnowledgeDraftCard(
       text: { tag: "plain_text", content: "Reject" },
       type: "danger",
       form_action_type: "submit",
-      value: callbackValue("reject"),
+      behaviors: [{ type: "callback", value: callbackValue("reject") }],
       confirm: {
         title: { tag: "plain_text", content: "Reject draft" },
         text: {

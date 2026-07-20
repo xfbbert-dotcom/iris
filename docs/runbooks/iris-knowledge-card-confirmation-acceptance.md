@@ -187,7 +187,7 @@ if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CARD_ENABLED) -cne "true" -or (Get-PilotEn
 
 从外部确认 `/health` 为 `200`，且 `POST /feishu/events` 与 `POST /feishu/card-actions` 都能到达 Core（不得为 `404`）；公开 `/internal/*`、`/feishu/card-actions/extra` 和其他未列出的路径必须为 `404`。AI Worker 不得公开端口，Caddy 只能代理上述两个精确回调路径，不能代理 `/internal/*` 或 Feishu 通配路径。
 
-真实卡片点击若在 Core 记录 `feishu_card_callback` 的 `envelope_rejected`，不得放宽鉴权或伪造验收。先确认订阅类型：新版 `card.action.trigger` 按 V2 事件/回调协议使用 Encrypt Key 和完整原始请求体计算 SHA-256，旧版 `card.action.trigger_v1` 才使用 Verification Token 和 SHA-1。新版入口要求签名头中的 timestamp、nonce、签名和 raw body 全部存在并参与签名，但不把签名头的 timestamp 猜测为 Unix 时间；通过签名并解密后，使用受同一签名保护且协议明确为微秒精度的 `header.create_time` 执行 300 秒防重放校验，再验证 Verification Token 和精确 `app_id`。修复后必须重新从真实飞书卡片点击验证回调入队与 Postgres 事实。
+真实卡片点击若在 Core 记录 `feishu_card_callback` 的 `envelope_rejected`，不得放宽鉴权或伪造验收。先确认订阅类型：新版 `card.action.trigger` 按 V2 事件/回调协议使用 Encrypt Key 和完整原始请求体计算 SHA-256，旧版 `card.action.trigger_v1` 才使用 Verification Token 和 SHA-1。新版入口要求签名头中的 timestamp、nonce、签名和 raw body 全部存在并参与签名，但不把签名头的 timestamp 猜测为 Unix 时间；通过签名并解密后，使用受同一签名保护且协议明确为微秒精度的 `header.create_time` 执行 300 秒防重放校验，再验证 Verification Token 和精确 `app_id`。JSON 2.0 按钮的绑定元数据必须来自 `behaviors[0].value`，且内部键值均为字符串；revision/version 使用无前导零的正十进制字符串，同时保留 `form_action_type: "submit"` 以提交 `form_value.reason`。不得把绑定元数据放在按钮顶层 `value`。真实回调缺失绑定元数据或数值字符串不规范时必须拒绝且不入队，不能放宽解析器或根据 `action.name` 猜测。修复后必须使用修复后 renderer 新生成的卡片重新点击，旧卡片不能证明新协议有效。
 
 卡片回调明确返回“操作未提交，请稍后重试”时才允许稍后重新操作。若返回“提交状态未确认，请勿重复点击；请以卡片最终状态为准”，不得再次点击；等待原单次幂等入队完成并以卡片最终状态、approval-interaction 队列计数和 Postgres 事实核对结果。超时路径不得自动发起第二次入队。
 

@@ -158,7 +158,7 @@ Phase 5B-1 首先支持安全预算内的完整卡片。内部初始预算固定
 - Core 服务端解析合同对“需要修改”和“拒绝草稿”保留 1-2,000 字符的规范化非空原因上限。
 - Phase 5B-1 飞书卡片输入控件受平台合同限制，`max_length` 必须为 1,000，因此卡片 UI 实际只能提交 1-1,000 字符；不得向飞书发出无效的 2,000 字符控件上限。
 - “拒绝草稿”还必须要求二次确认。
-- Phase 5B-1 使用飞书卡片 JSON 2.0 表单按钮的 `form_action_type: "submit"` 与原生 `confirm` 弹窗完成拒绝二次确认；不得沿用 JSON 1.0 的 `action_type: "form_submit"`。飞书卡片 JSON 2.0 不接受 `checkbox` 标签，因此回调解析器只接受规范化非空原因，并仅在经过签名、身份与卡片绑定校验的 `reject` 回调上生成内部 `rejectionConfirmed=true` 事实。
+- Phase 5B-1 使用飞书卡片 JSON 2.0 表单按钮的 `form_action_type: "submit"` 与原生 `confirm` 弹窗完成拒绝二次确认；不得沿用 JSON 1.0 的 `action_type: "form_submit"`。每个按钮必须通过 `behaviors: [{ type: "callback", value: ... }]` 绑定 action、presentation、draft、revision 和 version，`value` 内所有字段都按平台 SDK 合同编码为字符串，其中 revision/version 只能使用无前导零的正十进制字符串；不得使用会被 JSON 2.0 回调丢弃的按钮顶层 `value`。回调缺失该绑定元数据、数值字符串不规范或 `action.name` 与绑定 action 不一致时必须 fail closed，不能根据按钮名称猜测草稿身份。飞书卡片 JSON 2.0 不接受 `checkbox` 标签，因此回调解析器只接受规范化非空原因，并仅在经过签名、身份与卡片绑定校验的 `reject` 回调上生成内部 `rejectionConfirmed=true` 事实。
 
 ### 6.4 已提交结果卡片
 
@@ -240,6 +240,7 @@ Pilot Caddy 公网边界只精确代理已有 `POST /feishu/events` 和新增 `P
 
 本设计以以下官方接口契约为基线：
 
+- 飞书卡片 JSON 2.0 按钮使用 `behaviors` 声明 callback 交互，表单内使用 `form_action_type`：<https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button?lang=zh-CN>
 - 新版卡片回调为 `card.action.trigger`，`header.event_id` 是回调唯一标识，业务服务器需要在 3 秒内响应：<https://open.feishu.cn/document/feishu-cards/card-callback-communication?lang=zh-CN>
 - 飞书官方处理回调文档明确区分新版 `card.action.trigger` 与旧版消息卡片回调，新版接入 Event Dispatcher：<https://open.feishu.cn/document/server-side-sdk/golang-sdk-guide/handle-callback?lang=zh-CN>
 - 飞书官方 Node SDK 对新版事件/回调使用 Encrypt Key 与 SHA-256，对旧版卡片分支才使用 Verification Token 与 SHA-1：<https://github.com/larksuite/node-sdk/blob/main/dispatcher/request-handle.ts>

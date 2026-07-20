@@ -54,7 +54,9 @@ describe("parseFeishuCardAction", () => {
     ["an unknown callback-value field", cardAction({ event: { action: { value: { ...actionValue(), unexpected: true } } } })],
     ["an unknown form field", cardAction({ event: { action: { form_value: { reason: "Unsafe rollout plan.", unexpected: "value" } } } })],
     ["a legacy checkbox field", cardAction({ event: { action: { form_value: { reason: "Unsafe rollout plan.", rejectionConfirmed: ["true"] } } } })],
-    ["a wrong callback-value type", cardAction({ event: { action: { value: { ...actionValue(), revisionNumber: "7" } } } })],
+    ["a wrong callback-value type", cardAction({ event: { action: { value: { ...actionValue(), revisionNumber: 7 } } } })],
+    ["a non-canonical revision number", cardAction({ event: { action: { value: { ...actionValue(), revisionNumber: "07" } } } })],
+    ["an unsafe draft version", cardAction({ event: { action: { value: { ...actionValue(), draftVersion: "9007199254740992" } } } })],
     ["a missing callback-value field", cardAction({ event: { action: { value: { ...actionValue(), draftVersion: undefined } } } })],
     ["a mismatched action name", cardAction({ event: { action: { name: "confirm" } } })],
     ["a non-string action timezone", cardAction({ event: { action: { timezone: 8 } } })],
@@ -105,8 +107,8 @@ function actionValue(overrides: Record<string, unknown> = {}): Record<string, un
     action: "reject",
     presentationId: "presentation-1",
     draftId: "draft-1",
-    revisionNumber: 7,
-    draftVersion: 11,
+    revisionNumber: "7",
+    draftVersion: "11",
     ...overrides,
   };
 }

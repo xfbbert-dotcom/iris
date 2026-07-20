@@ -11,6 +11,7 @@ Implements Iris Phase 5B-1: governed, version-bound Feishu cards for knowledge-d
 - Dispatch-time transport rejection is `outcome_unknown` and is never resent automatically; `request_not_sent` is reserved for provable pre-dispatch failures.
 - Internal status exposes content-free outbox counts, and readiness blocks unresolved outcome-unknown or terminal/exhausted failures without permanently blocking ordinary in-flight retries.
 - Cards visibly carry bounded Iris/status/source/draft/revision/version traceability while keeping evidence/source raw text out and using Feishu's valid 1,000-character input cap.
+- Feishu JSON 2.0 buttons bind string-valued version metadata through `behaviors[].value`; the strict callback parser rejects missing, non-canonical, unsafe, or name-mismatched bindings instead of inferring draft identity.
 - Phase 5B-1 uses only migration `0031`; migration number `0032` remains reserved for Phase 5B-2.
 - Current runtime, presentation, draft evidence, and group membership are revalidated before mutation.
 - The worker rechecks the live global/group/capability gate after membership and immediately before mutation.
