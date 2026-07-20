@@ -1,11 +1,37 @@
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type {
   ActionProposalRepository,
   ActionProposalStatusCounts,
 } from "../src/action-approvals/action-proposal-repository.js";
+import {
+  ActionProposalIneligibleError,
+  ActionProposalAuthorizationError,
+  ActionProposalOperationConflictError,
+  ActionProposalVersionConflictError,
+  createPostgresActionProposalRepository,
+} from "../src/action-approvals/postgres-action-proposal-repository.js";
+import {
+  createPostgresKnowledgeDraftRepository,
+  type PostgresKnowledgeDraftDataSource,
+} from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
+import { createPostgresKnowledgeCardRepository } from "../src/knowledge-cards/postgres-knowledge-card-repository.js";
+import {
+  defaultMigrationsDir,
+  runMigrations,
+  type MigrationClient,
+} from "../src/database/migrate.js";
+
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
+const runIfDatabase = databaseUrl ? describe.sequential : describe.skip;
+const suffix = randomUUID();
+const schema = `action_approval_${suffix.replaceAll("-", "")}`;
+const groupId = `approval-group-${suffix}`;
+const at = new Date("2026-07-20T12:00:00.000Z");
 
 describe("action approval migration contract", () => {
   const migration = readFileSync(
@@ -16,7 +42,9 @@ describe("action approval migration contract", () => {
   it("defines durable policy, proposal, approval, card, and execution facts", () => {
     for (const table of [
       "knowledge_publication_target_policies",
+      "action_target_policy_operations",
       "action_role_grants",
+      "action_role_grant_operations",
       "action_proposals",
       "action_approval_requirements",
       "action_approvals",
@@ -56,3 +84,898 @@ describe("action approval migration contract", () => {
     expect(repository).not.toHaveProperty("approveAsActor");
   });
 });
+
+runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
+  let adminPool: pg.Pool;
+  let pool: pg.Pool;
+
+  beforeAll(async () => {
+    adminPool = new pg.Pool({ connectionString: databaseUrl });
+    await adminPool.query(`CREATE SCHEMA ${schema}`);
+    const isolatedUrl = new URL(databaseUrl!);
+    isolatedUrl.searchParams.set("options", `-c search_path=${schema},public`);
+    pool = new pg.Pool({ connectionString: isolatedUrl.toString() });
+    await runMigrations({
+      client: pool as unknown as MigrationClient,
+      migrationsDir: defaultMigrationsDir(),
+    });
+  });
+
+  afterAll(async () => {
+    await pool?.end();
+    await adminPool?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await adminPool?.end();
+  });
+
+  it("upserts target policies with exact replay and version checks", async () => {
+    const repository = actionRepository();
+    const input = policyInput("policy-upsert", {
+      enabled: false,
+      expectedVersion: 0,
+      allowedGroupIds: ["oc_z", "oc_a"],
+      allowedRiskLevels: ["high", "low", "medium"],
+    });
+
+    await expect(repository.upsertTargetPolicy(input)).resolves.toMatchObject({
+      outcome: "applied",
+      policy: {
+        id: input.id,
+        enabled: false,
+        version: 1,
+        allowedGroupIds: ["oc_a", "oc_z"],
+        allowedRiskLevels: ["high", "low", "medium"],
+      },
+    });
+    await expect(repository.getTargetPolicy(input.id)).resolves.toMatchObject({
+      id: input.id,
+      allowedGroupIds: ["oc_a", "oc_z"],
+    });
+    await expect(repository.upsertTargetPolicy(input)).resolves.toMatchObject({
+      outcome: "already_applied",
+      policy: { id: input.id, version: 1 },
+    });
+    await expect(repository.upsertTargetPolicy({
+      ...input,
+      displayName: "Conflicting replay",
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+
+    const update = policyInput("policy-upsert", {
+      enabled: true,
+      expectedVersion: 1,
+      operationKey: `${input.operationKey}:enable`,
+    });
+    await expect(repository.upsertTargetPolicy(update)).resolves.toMatchObject({
+      outcome: "applied",
+      policy: { enabled: true, version: 2 },
+    });
+    await expect(repository.upsertTargetPolicy({
+      ...update,
+      operationKey: `${input.operationKey}:stale`,
+      expectedVersion: 1,
+    })).rejects.toBeInstanceOf(ActionProposalVersionConflictError);
+  });
+
+  it("versions and revokes exact role grants", async () => {
+    const repository = actionRepository();
+    const create = {
+      roleType: "iris_admin" as const,
+      actorOpenId: `ou_admin_${suffix}`,
+      enabled: true,
+      expectedVersion: 0,
+      operationKey: `grant:${suffix}:create`,
+      operator: "acceptance",
+      at,
+    };
+
+    await expect(repository.upsertRoleGrant(create)).resolves.toMatchObject({
+      outcome: "applied",
+      grant: { enabled: true, version: 1 },
+    });
+    await expect(repository.upsertRoleGrant(create)).resolves.toMatchObject({
+      outcome: "already_applied",
+      grant: { enabled: true, version: 1 },
+    });
+    await expect(repository.upsertRoleGrant({
+      ...create,
+      enabled: false,
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+    await expect(repository.actorHasCurrentRole({
+      roleType: "iris_admin",
+      actorOpenId: create.actorOpenId,
+    })).resolves.toBe(true);
+    await expect(repository.upsertRoleGrant({
+      ...create,
+      enabled: false,
+      expectedVersion: 1,
+      operationKey: `grant:${suffix}:revoke`,
+    })).resolves.toMatchObject({ grant: { enabled: false, version: 2 } });
+    await expect(repository.actorHasCurrentRole({
+      roleType: "iris_admin",
+      actorOpenId: create.actorOpenId,
+    })).resolves.toBe(false);
+  });
+
+  it("creates an approved low-risk proposal from exact confirmed facts", async () => {
+    const policy = await createEnabledPolicy("proposal-low", ["low"]);
+    const draft = await createConfirmedDraft("proposal-low", "low");
+    const repository = actionRepository();
+    const input = {
+      proposalId: `proposal-low-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: "p".repeat(512),
+      at,
+    };
+
+    await expect(repository.createProposal(input)).resolves.toMatchObject({
+      outcome: "applied",
+      proposal: {
+        id: input.proposalId,
+        subjectId: draft.id,
+        subjectRevision: 1,
+        subjectVersion: 2,
+        status: "approved",
+        riskLevel: "low",
+      },
+    });
+    await expect(repository.createProposal(input)).resolves.toMatchObject({
+      outcome: "already_applied",
+      proposal: { id: input.proposalId },
+    });
+    await expect(repository.getProposal(input.proposalId)).resolves.toMatchObject({
+      requirements: [{
+        kind: "group_confirmation",
+        state: "satisfied",
+        roleRef: groupId,
+      }],
+      approvals: [],
+    });
+  });
+
+  it("keeps a medium-risk proposal pending for the exact owner", async () => {
+    const policy = await createEnabledPolicy("proposal-medium", ["medium"]);
+    const draft = await createConfirmedDraft("proposal-medium", "medium", `ou_owner_${suffix}`);
+    const repository = actionRepository();
+
+    const result = await repository.createProposal({
+      proposalId: `proposal-medium-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${suffix}:medium`,
+      at,
+    });
+
+    expect(result.proposal.status).toBe("pending_approval");
+    await expect(repository.getProposal(result.proposal.id)).resolves.toMatchObject({
+      requirements: [
+        { kind: "group_confirmation", state: "satisfied" },
+        {
+          kind: "designated_owner",
+          state: "pending",
+          roleRefType: "feishu_user",
+          roleRef: `ou_owner_${suffix}`,
+        },
+      ],
+    });
+  });
+
+  it("keeps high risk pending for an explicitly bound authorized owner", async () => {
+    const policy = await createEnabledPolicy("proposal-high", ["high"]);
+    const reviewerOpenId = `ou_high_owner_${suffix}`;
+    const draft = await createConfirmedDraft("proposal-high", "high", reviewerOpenId);
+    const repository = actionRepository();
+
+    const result = await repository.createProposal({
+      proposalId: `proposal-high-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${suffix}:high`,
+      at,
+    });
+
+    expect(result.proposal.status).toBe("pending_approval");
+    await expect(repository.getProposal(result.proposal.id)).resolves.toMatchObject({
+      requirements: [
+        { kind: "group_confirmation", state: "satisfied" },
+        {
+          kind: "iris_admin_or_authorized_owner",
+          state: "pending",
+          roleRefType: "feishu_user",
+          roleRef: reviewerOpenId,
+        },
+      ],
+    });
+  });
+
+  it("never downgrades a missing reviewer into an arbitrary group approval", async () => {
+    const policy = await createEnabledPolicy("proposal-unassigned", ["medium"]);
+    const draft = await createConfirmedDraft("proposal-unassigned", "medium");
+    const repository = actionRepository();
+
+    const result = await repository.createProposal({
+      proposalId: `proposal-unassigned-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${suffix}:unassigned`,
+      at,
+    });
+
+    expect(result.proposal.status).toBe("pending_approval");
+    await expect(repository.getProposal(result.proposal.id)).resolves.toMatchObject({
+      requirements: [
+        { kind: "group_confirmation", state: "satisfied" },
+        {
+          kind: "designated_owner",
+          state: "pending",
+          roleRefType: "unassigned",
+        },
+      ],
+    });
+  });
+
+  it("requires a designated owner for a company-scoped medium-risk draft", async () => {
+    const policy = (await actionRepository().upsertTargetPolicy(policyInput("proposal-company", {
+      enabled: true,
+      expectedVersion: 0,
+      allowedGroupIds: [],
+      allowedRiskLevels: ["medium"],
+    }))).policy;
+    const reviewerOpenId = `ou_company_owner_${suffix}`;
+    const draft = await createCompanyDraft("proposal-company", "medium", reviewerOpenId);
+    const repository = actionRepository();
+
+    const result = await repository.createProposal({
+      proposalId: `proposal-company-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 1,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${suffix}:company`,
+      at,
+    });
+
+    expect(result.proposal.status).toBe("pending_approval");
+    await expect(repository.getProposal(result.proposal.id)).resolves.toMatchObject({
+      requirements: [{
+        kind: "designated_owner",
+        state: "pending",
+        roleRefType: "feishu_user",
+        roleRef: reviewerOpenId,
+      }],
+    });
+  });
+
+  it("fails closed without persisting when the current policy rejects the risk", async () => {
+    const policy = await createEnabledPolicy("proposal-unsupported", ["low"]);
+    const draft = await createConfirmedDraft(
+      "proposal-unsupported",
+      "medium",
+      `ou_owner_${suffix}`,
+    );
+    const repository = actionRepository();
+    const before = await repository.getStatusCounts();
+
+    await expect(repository.createProposal({
+      proposalId: `proposal-unsupported-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${suffix}:unsupported`,
+      at,
+    })).rejects.toBeInstanceOf(ActionProposalIneligibleError);
+    await expect(repository.getProposal(`proposal-unsupported-${suffix}`)).resolves.toBeUndefined();
+    await expect(repository.getStatusCounts()).resolves.toEqual(before);
+  });
+
+  it("invalidates an old live proposal after a new draft revision", async () => {
+    const label = "proposal-stale-revision";
+    const reviewerOpenId = `ou_stale_owner_${suffix}`;
+    const policy = await createEnabledPolicy(label, ["medium"]);
+    const draft = await createConfirmedDraft(label, "medium", reviewerOpenId);
+    const repository = actionRepository();
+    const proposal = (await repository.createProposal({
+      proposalId: `proposal-stale-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${suffix}:stale`,
+      at,
+    })).proposal;
+    const draftRepository = createPostgresKnowledgeDraftRepository({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+    });
+    await draftRepository.requestRevision({
+      id: draft.id,
+      expectedVersion: 2,
+      operationKey: `draft:${suffix}:request-revision`,
+      actor: reviewerOpenId,
+      reason: "Update the approved wording.",
+      at: plusSeconds(1),
+    });
+    const revised = (await draftRepository.reviseDraft({
+      id: draft.id,
+      expectedVersion: 3,
+      operationKey: `draft:${suffix}:revise`,
+      actor: "acceptance",
+      at: plusSeconds(2),
+      revision: {
+        sourceGroupId: groupId,
+        title: "Revised title",
+        content: "Revised content",
+        riskLevel: "medium",
+        reviewer: { type: "feishu_user", ref: reviewerOpenId },
+        suggestedPublication: { spaceId: policy.spaceId },
+        evidence: [{
+          type: "conversation_message",
+          id: `feishu:approval-${label}-${suffix}`,
+          groupId,
+        }],
+      },
+    })).draft;
+
+    const input = {
+      draftId: draft.id,
+      currentRevision: revised.currentRevisionNumber,
+      currentDraftVersion: revised.version,
+      operationKey: `action-proposal:${suffix}:invalidate`,
+      at: plusSeconds(3),
+    };
+    await expect(repository.cancelStaleProposals(input)).resolves.toEqual({
+      outcome: "applied",
+      cancelledProposalIds: [proposal.id],
+      draftVersion: 5,
+    });
+    await expect(repository.cancelStaleProposals(input)).resolves.toEqual({
+      outcome: "already_applied",
+      cancelledProposalIds: [proposal.id],
+      draftVersion: 5,
+    });
+    await expect(repository.getProposal(proposal.id)).resolves.toMatchObject({
+      proposal: { status: "cancelled", version: 2 },
+      requirements: expect.arrayContaining([
+        expect.objectContaining({ state: "invalidated" }),
+      ]),
+    });
+    await expect(repository.listEvents(proposal.id)).resolves.toEqual([
+      expect.objectContaining({ eventType: "created", toVersion: 1 }),
+      expect.objectContaining({
+        eventType: "approval_invalidated",
+        fromVersion: 1,
+        toVersion: 2,
+      }),
+    ]);
+    await expect(draftRepository.listEvents(draft.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ eventType: "approval_invalidated", toVersion: 5 }),
+    ]));
+  });
+
+  it("records one exact owner approval and advances the proposal atomically", async () => {
+    const label = "proposal-owner-approval";
+    const ownerOpenId = `ou_approval_owner_${suffix}`;
+    const policy = await createEnabledPolicy(label, ["medium"]);
+    const draft = await createConfirmedDraft(label, "medium", ownerOpenId);
+    const repository = actionRepository();
+    const proposal = (await repository.createProposal({
+      proposalId: `proposal-owner-approval-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${suffix}:owner-approval`,
+      at,
+    })).proposal;
+    const context = await repository.getProposal(proposal.id);
+    const requirement = context?.requirements.find((item) => item.kind === "designated_owner");
+    expect(requirement).toBeDefined();
+    const presentationId = await createActiveActionPresentation({
+      proposalId: proposal.id,
+      proposalVersion: proposal.version,
+      requirementId: requirement!.id,
+      recipientOpenId: ownerOpenId,
+      label,
+    });
+    const baseInput = {
+      proposalId: proposal.id,
+      requirementId: requirement!.id,
+      expectedProposalVersion: proposal.version,
+      expectedSubjectRevision: proposal.subjectRevision,
+      expectedSubjectVersion: proposal.subjectVersion,
+      sourcePresentationId: presentationId,
+      callbackEventId: `callback-action-${label}-${suffix}`,
+      actorOpenId: ownerOpenId,
+      action: "approve" as const,
+      operationKey: `action-approval:${label}:${suffix}`,
+      at: plusSeconds(1),
+    };
+
+    await expect(repository.applyApprovalAction({
+      ...baseInput,
+      actorOpenId: `ou_wrong_${suffix}`,
+      operationKey: `action-approval:${label}:${suffix}:wrong`,
+      callbackEventId: `callback-action-${label}-${suffix}:wrong`,
+    })).rejects.toBeInstanceOf(ActionProposalAuthorizationError);
+    await expect(pool.query(
+      "SELECT count(*)::int AS count FROM action_approvals WHERE proposal_id = $1",
+      [proposal.id],
+    )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+
+    await expect(repository.applyApprovalAction(baseInput)).resolves.toMatchObject({
+      outcome: "applied",
+      action: "approve",
+      proposal: { id: proposal.id, status: "approved", version: 3, subjectVersion: 3 },
+      draftStatus: "pending_review",
+      draftVersion: 3,
+    });
+    await expect(repository.applyApprovalAction(baseInput)).resolves.toMatchObject({
+      outcome: "already_applied",
+      proposal: { status: "approved", version: 3 },
+      draftVersion: 3,
+    });
+    const committed = await repository.getProposal(proposal.id);
+    expect(committed).toMatchObject({
+      requirements: expect.arrayContaining([
+        expect.objectContaining({
+          id: requirement!.id,
+          state: "satisfied",
+          satisfiedActorOpenId: ownerOpenId,
+          satisfiedSourceType: "action_approval",
+          satisfiedSourceId: expect.any(String),
+        }),
+      ]),
+      approvals: [expect.objectContaining({
+        requirementId: requirement!.id,
+        actorOpenId: ownerOpenId,
+        callbackEventId: baseInput.callbackEventId,
+      })],
+    });
+    const approval = committed?.approvals[0];
+    const satisfiedRequirement = committed?.requirements.find((item) => item.id === requirement!.id);
+    expect(approval?.sourcePresentationId).toBe(presentationId);
+    expect(satisfiedRequirement?.satisfiedSourceId).toBe(approval?.id);
+    await expect(repository.listEvents(proposal.id)).resolves.toEqual([
+      expect.objectContaining({ eventType: "created", toVersion: 1 }),
+      expect.objectContaining({ eventType: "approval_recorded", fromVersion: 1, toVersion: 2 }),
+      expect.objectContaining({ eventType: "requirements_satisfied", fromVersion: 2, toVersion: 3 }),
+    ]);
+  });
+
+  it("rechecks a high-risk owner's current grant at approval time", async () => {
+    const label = "proposal-high-current-grant";
+    const ownerOpenId = `ou_high_current_${suffix}`;
+    const policy = await createEnabledPolicy(label, ["high"]);
+    const draft = await createConfirmedDraft(label, "high", ownerOpenId);
+    const repository = actionRepository();
+    const proposal = (await repository.createProposal({
+      proposalId: `proposal-high-current-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${suffix}:high-current`,
+      at,
+    })).proposal;
+    const requirement = (await repository.getProposal(proposal.id))?.requirements.find(
+      (item) => item.kind === "iris_admin_or_authorized_owner",
+    );
+    expect(requirement).toBeDefined();
+    const presentationId = await createActiveActionPresentation({
+      proposalId: proposal.id,
+      proposalVersion: proposal.version,
+      requirementId: requirement!.id,
+      recipientOpenId: ownerOpenId,
+      label,
+    });
+    const grant = {
+      roleType: "authorized_high_risk_owner" as const,
+      actorOpenId: ownerOpenId,
+      enabled: true,
+      expectedVersion: 0,
+      operationKey: `grant:${label}:${suffix}:enable`,
+      operator: "acceptance",
+      at,
+    };
+    await repository.upsertRoleGrant(grant);
+    await repository.upsertRoleGrant({
+      ...grant,
+      enabled: false,
+      expectedVersion: 1,
+      operationKey: `grant:${label}:${suffix}:revoke`,
+      at: plusSeconds(1),
+    });
+    const approvalInput = {
+      proposalId: proposal.id,
+      requirementId: requirement!.id,
+      expectedProposalVersion: proposal.version,
+      expectedSubjectRevision: proposal.subjectRevision,
+      expectedSubjectVersion: proposal.subjectVersion,
+      sourcePresentationId: presentationId,
+      callbackEventId: `callback-action-${label}-${suffix}`,
+      actorOpenId: ownerOpenId,
+      action: "approve" as const,
+      operationKey: `action-approval:${label}:${suffix}`,
+      at: plusSeconds(2),
+    };
+
+    await expect(repository.applyApprovalAction(approvalInput))
+      .rejects.toBeInstanceOf(ActionProposalAuthorizationError);
+    await repository.upsertRoleGrant({
+      ...grant,
+      expectedVersion: 2,
+      operationKey: `grant:${label}:${suffix}:restore`,
+      at: plusSeconds(3),
+    });
+    await expect(repository.applyApprovalAction({
+      ...approvalInput,
+      at: plusSeconds(4),
+    })).resolves.toMatchObject({
+      outcome: "applied",
+      proposal: { status: "approved" },
+    });
+  });
+
+  it("requests revision without fabricating an approval fact", async () => {
+    const acceptance = await createPendingOwnerApprovalCase("proposal-request-revision");
+    const input = {
+      proposalId: acceptance.proposal.id,
+      requirementId: acceptance.requirement.id,
+      expectedProposalVersion: acceptance.proposal.version,
+      expectedSubjectRevision: acceptance.proposal.subjectRevision,
+      expectedSubjectVersion: acceptance.proposal.subjectVersion,
+      sourcePresentationId: acceptance.presentationId,
+      callbackEventId: `callback-action-request-revision-${suffix}`,
+      actorOpenId: acceptance.ownerOpenId,
+      action: "request_revision" as const,
+      reason: "Clarify the rollback owner.",
+      operationKey: `action-request-revision:${suffix}`,
+      at: plusSeconds(1),
+    };
+
+    await expect(acceptance.repository.applyApprovalAction(input)).resolves.toMatchObject({
+      outcome: "applied",
+      action: "request_revision",
+      proposal: { status: "cancelled", version: 2 },
+      draftStatus: "needs_revision",
+      draftVersion: 3,
+    });
+    await expect(acceptance.repository.applyApprovalAction(input)).resolves.toMatchObject({
+      outcome: "already_applied",
+      proposal: { status: "cancelled", version: 2 },
+      draftStatus: "needs_revision",
+    });
+    await expect(acceptance.repository.getProposal(acceptance.proposal.id)).resolves.toMatchObject({
+      requirements: expect.arrayContaining([
+        expect.objectContaining({ id: acceptance.requirement.id, state: "invalidated" }),
+      ]),
+      approvals: [],
+    });
+    await expect(acceptance.repository.listEvents(acceptance.proposal.id)).resolves.toEqual([
+      expect.objectContaining({ eventType: "created", toVersion: 1 }),
+      expect.objectContaining({ eventType: "revision_requested", fromVersion: 1, toVersion: 2 }),
+    ]);
+  });
+
+  it("requires explicit rejection confirmation and rejects without an approval fact", async () => {
+    const acceptance = await createPendingOwnerApprovalCase("proposal-reject");
+    const input = {
+      proposalId: acceptance.proposal.id,
+      requirementId: acceptance.requirement.id,
+      expectedProposalVersion: acceptance.proposal.version,
+      expectedSubjectRevision: acceptance.proposal.subjectRevision,
+      expectedSubjectVersion: acceptance.proposal.subjectVersion,
+      sourcePresentationId: acceptance.presentationId,
+      callbackEventId: `callback-action-reject-${suffix}`,
+      actorOpenId: acceptance.ownerOpenId,
+      action: "reject" as const,
+      reason: "This content should not be published.",
+      operationKey: `action-reject:${suffix}`,
+      at: plusSeconds(1),
+    };
+
+    await expect(acceptance.repository.applyApprovalAction(input)).rejects.toThrow(
+      /rejection confirmation is required/iu,
+    );
+    await expect(acceptance.repository.applyApprovalAction({
+      ...input,
+      rejectionConfirmed: true,
+    })).resolves.toMatchObject({
+      outcome: "applied",
+      action: "reject",
+      proposal: { status: "cancelled", version: 2 },
+      draftStatus: "rejected",
+      draftVersion: 3,
+    });
+    const draftRepository = createPostgresKnowledgeDraftRepository({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+    });
+    await expect(draftRepository.getDraft(acceptance.proposal.subjectId)).resolves.toMatchObject({
+      status: "rejected",
+      rejectedBy: acceptance.ownerOpenId,
+      rejectionReason: input.reason,
+    });
+    await expect(acceptance.repository.getProposal(acceptance.proposal.id)).resolves.toMatchObject({
+      approvals: [],
+    });
+  });
+
+  it("deduplicates concurrent identical approval callbacks", async () => {
+    const acceptance = await createPendingOwnerApprovalCase("proposal-concurrent-approval");
+    const input = {
+      proposalId: acceptance.proposal.id,
+      requirementId: acceptance.requirement.id,
+      expectedProposalVersion: acceptance.proposal.version,
+      expectedSubjectRevision: acceptance.proposal.subjectRevision,
+      expectedSubjectVersion: acceptance.proposal.subjectVersion,
+      sourcePresentationId: acceptance.presentationId,
+      callbackEventId: `callback-action-concurrent-${suffix}`,
+      actorOpenId: acceptance.ownerOpenId,
+      action: "approve" as const,
+      operationKey: `action-concurrent:${suffix}`,
+      at: plusSeconds(1),
+    };
+
+    const results = await Promise.all([
+      acceptance.repository.applyApprovalAction(input),
+      acceptance.repository.applyApprovalAction(input),
+    ]);
+    expect(results.map((result) => result.outcome).sort()).toEqual([
+      "already_applied",
+      "applied",
+    ]);
+    await expect(pool.query(
+      "SELECT count(*)::int AS count FROM action_approvals WHERE proposal_id = $1",
+      [acceptance.proposal.id],
+    )).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  function actionRepository() {
+    return createPostgresActionProposalRepository({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+    });
+  }
+
+  async function createEnabledPolicy(label: string, risks: Array<"low" | "medium" | "high">) {
+    const result = await actionRepository().upsertTargetPolicy(policyInput(label, {
+      enabled: true,
+      expectedVersion: 0,
+      allowedRiskLevels: risks,
+    }));
+    return result.policy;
+  }
+
+  async function createConfirmedDraft(
+    label: string,
+    riskLevel: "low" | "medium" | "high",
+    reviewerOpenId?: string,
+  ) {
+    const messageId = `feishu:approval-${label}-${suffix}`;
+    await pool.query(
+      `INSERT INTO conversation_messages (
+        id, provider, provider_message_id, chat_id, sender_id, message_type,
+        text, sent_at, raw_event_idempotency_key, created_at
+      ) VALUES ($1, 'feishu', $2, $3, 'ou_author', 'text', 'approval evidence', $4, $5, $4)`,
+      [messageId, `om-${label}-${suffix}`, groupId, at, `event-${label}-${suffix}`],
+    );
+    const draftRepository = createPostgresKnowledgeDraftRepository({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+    });
+    const draft = (await draftRepository.createDraft({
+      id: `draft-${label}-${suffix}`,
+      operationKey: `draft:${label}:${suffix}`,
+      originKind: "user_requested",
+      createdBy: "acceptance",
+      revision: {
+        sourceGroupId: groupId,
+        title: `Title ${label}`,
+        content: `Content ${label}`,
+        riskLevel,
+        ...(reviewerOpenId === undefined
+          ? {}
+          : { reviewer: { type: "feishu_user" as const, ref: reviewerOpenId } }),
+        suggestedPublication: { spaceId: `space-${label}-${suffix}` },
+        evidence: [{ type: "conversation_message", id: messageId, groupId }],
+      },
+      at,
+    })).draft;
+    const cardRepository = createPostgresKnowledgeCardRepository({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+    });
+    const presentationId = `presentation-${label}-${suffix}`;
+    await cardRepository.createPresentation({
+      id: presentationId,
+      draftId: draft.id,
+      expectedDraftVersion: 1,
+      expectedRevisionNumber: 1,
+      chatId: groupId,
+      contentHash: "a".repeat(64),
+      operationKey: `presentation:${label}:${suffix}`,
+      at,
+    });
+    const workerId = `worker-${label}`;
+    await cardRepository.claimPresentationSend({ workerId, leaseUntil: plusSeconds(30), at });
+    await cardRepository.beginExternalAttempt({ presentationId, workerId, at });
+    await cardRepository.completePresentationSend({
+      presentationId,
+      workerId,
+      messageId: `om-card-${label}-${suffix}`,
+      at,
+    });
+    const interaction = await cardRepository.applyInteraction({
+      presentationId,
+      draftId: draft.id,
+      revisionNumber: 1,
+      draftVersion: 1,
+      chatId: groupId,
+      eventId: `callback-${label}-${suffix}`,
+      actorOpenId: `ou_member_${suffix}`,
+      membershipCheckedAt: at,
+      at,
+      action: "confirm",
+    });
+    const updateClaim = await cardRepository.claimPresentationSend({
+      workerId,
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+    expect(updateClaim?.presentation.id).toBe(presentationId);
+    await cardRepository.beginExternalAttempt({ presentationId, workerId, at });
+    await cardRepository.completePresentationSend({
+      presentationId,
+      workerId,
+      messageId: `om-card-${label}-${suffix}`,
+      at,
+    });
+    return interaction.draft;
+  }
+
+  async function createCompanyDraft(
+    label: string,
+    riskLevel: "low" | "medium" | "high",
+    reviewerOpenId?: string,
+  ) {
+    const documentSourceId = `company-source-${label}-${suffix}`;
+    await pool.query(
+      `INSERT INTO document_sources (
+        id, source_type, source_uri, title, origin_group_id, origin_message_id,
+        permission_state, sync_state, can_use_for_answering,
+        can_use_for_knowledge_drafts, created_at, updated_at
+      ) VALUES ($1, 'authorized_wiki_document', $2, 'Company source', NULL, NULL,
+        'readable', 'synced', TRUE, TRUE, $3, $3)`,
+      [documentSourceId, `https://example.com/wiki/${documentSourceId}`, at],
+    );
+    const draftRepository = createPostgresKnowledgeDraftRepository({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+    });
+    return (await draftRepository.createDraft({
+      id: `draft-${label}-${suffix}`,
+      operationKey: `draft:${label}:${suffix}`,
+      originKind: "user_requested",
+      createdBy: "acceptance",
+      revision: {
+        title: `Title ${label}`,
+        content: `Content ${label}`,
+        riskLevel,
+        ...(reviewerOpenId === undefined
+          ? {}
+          : { reviewer: { type: "feishu_user" as const, ref: reviewerOpenId } }),
+        suggestedPublication: { spaceId: `space-${label}-${suffix}` },
+        evidence: [{
+          type: "document_source" as const,
+          id: documentSourceId,
+          expectedUpdatedAt: at,
+        }],
+      },
+      at,
+    })).draft;
+  }
+
+  async function createActiveActionPresentation(input: {
+    proposalId: string;
+    proposalVersion: number;
+    requirementId: string;
+    recipientOpenId: string;
+    label: string;
+  }) {
+    const id = `action-presentation-${input.label}-${suffix}`;
+    await pool.query(
+      `INSERT INTO action_approval_presentations (
+        id, proposal_id, requirement_id, proposal_version, recipient_open_id,
+        state, message_id, operation_key, operation_fingerprint,
+        version, created_at, activated_at
+      ) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, 1, $9, $9)`,
+      [
+        id,
+        input.proposalId,
+        input.requirementId,
+        input.proposalVersion,
+        input.recipientOpenId,
+        `om-action-${input.label}-${suffix}`,
+        `action-presentation:${input.label}:${suffix}`,
+        "b".repeat(64),
+        at,
+      ],
+    );
+    return id;
+  }
+
+  async function createPendingOwnerApprovalCase(label: string) {
+    const ownerOpenId = `ou_${label}_${suffix}`;
+    const policy = await createEnabledPolicy(label, ["medium"]);
+    const draft = await createConfirmedDraft(label, "medium", ownerOpenId);
+    const repository = actionRepository();
+    const proposal = (await repository.createProposal({
+      proposalId: `${label}-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${label}:${suffix}`,
+      at,
+    })).proposal;
+    const requirement = (await repository.getProposal(proposal.id))?.requirements.find(
+      (item) => item.kind === "designated_owner",
+    );
+    expect(requirement).toBeDefined();
+    const presentationId = await createActiveActionPresentation({
+      proposalId: proposal.id,
+      proposalVersion: proposal.version,
+      requirementId: requirement!.id,
+      recipientOpenId: ownerOpenId,
+      label,
+    });
+    return {
+      ownerOpenId,
+      proposal,
+      requirement: requirement!,
+      presentationId,
+      repository,
+    };
+  }
+});
+
+function policyInput(
+  label: string,
+  overrides: Partial<{
+    enabled: boolean;
+    expectedVersion: number;
+    operationKey: string;
+    allowedRiskLevels: Array<"low" | "medium" | "high">;
+    allowedGroupIds: string[];
+  }> = {},
+) {
+  return {
+    id: `policy-${label}-${suffix}`,
+    spaceId: `space-${label}-${suffix}`,
+    displayName: `Policy ${label}`,
+    allowedGroupIds: overrides.allowedGroupIds ?? [groupId],
+    allowedRiskLevels: overrides.allowedRiskLevels ?? ["low", "medium", "high"],
+    enabled: overrides.enabled ?? false,
+    expectedVersion: overrides.expectedVersion ?? 0,
+    operationKey: overrides.operationKey ?? `policy:${label}:${suffix}`,
+    operator: "acceptance",
+    at,
+  };
+}
+
+function plusSeconds(seconds: number): Date {
+  return new Date(at.getTime() + seconds * 1_000);
+}

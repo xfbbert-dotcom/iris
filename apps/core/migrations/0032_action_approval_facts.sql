@@ -35,6 +35,28 @@ CREATE TABLE action_role_grants (
   PRIMARY KEY (role_type, actor_open_id)
 );
 
+CREATE TABLE action_target_policy_operations (
+  operation_key TEXT PRIMARY KEY CHECK (char_length(operation_key) BETWEEN 1 AND 512),
+  operation_fingerprint TEXT NOT NULL CHECK (operation_fingerprint ~ '^[0-9a-f]{64}$'),
+  policy_id TEXT NOT NULL REFERENCES knowledge_publication_target_policies(id) ON DELETE RESTRICT,
+  resulting_version BIGINT NOT NULL CHECK (resulting_version >= 1),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE action_role_grant_operations (
+  operation_key TEXT PRIMARY KEY CHECK (char_length(operation_key) BETWEEN 1 AND 512),
+  operation_fingerprint TEXT NOT NULL CHECK (operation_fingerprint ~ '^[0-9a-f]{64}$'),
+  role_type TEXT NOT NULL,
+  actor_open_id TEXT NOT NULL,
+  resulting_version BIGINT NOT NULL CHECK (resulting_version >= 1),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (role_type, actor_open_id)
+    REFERENCES action_role_grants(role_type, actor_open_id) ON DELETE RESTRICT
+);
+
+CREATE UNIQUE INDEX knowledge_publication_target_policies_destination_idx
+  ON knowledge_publication_target_policies (space_id, COALESCE(parent_node_token, ''));
+
 CREATE TABLE action_proposals (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   action_type TEXT NOT NULL CHECK (action_type = 'publish_knowledge_draft'),
@@ -259,6 +281,22 @@ FOR EACH ROW EXECUTE FUNCTION knowledge_draft_append_only_guard();
 
 CREATE TRIGGER action_approvals_truncate_guard
 BEFORE TRUNCATE ON action_approvals
+FOR EACH STATEMENT EXECUTE FUNCTION knowledge_draft_append_only_guard();
+
+CREATE TRIGGER action_target_policy_operations_append_only
+BEFORE UPDATE OR DELETE ON action_target_policy_operations
+FOR EACH ROW EXECUTE FUNCTION knowledge_draft_append_only_guard();
+
+CREATE TRIGGER action_target_policy_operations_truncate_guard
+BEFORE TRUNCATE ON action_target_policy_operations
+FOR EACH STATEMENT EXECUTE FUNCTION knowledge_draft_append_only_guard();
+
+CREATE TRIGGER action_role_grant_operations_append_only
+BEFORE UPDATE OR DELETE ON action_role_grant_operations
+FOR EACH ROW EXECUTE FUNCTION knowledge_draft_append_only_guard();
+
+CREATE TRIGGER action_role_grant_operations_truncate_guard
+BEFORE TRUNCATE ON action_role_grant_operations
 FOR EACH STATEMENT EXECUTE FUNCTION knowledge_draft_append_only_guard();
 
 CREATE TRIGGER action_events_append_only

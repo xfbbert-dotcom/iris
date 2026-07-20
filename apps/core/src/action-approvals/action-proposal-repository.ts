@@ -1,4 +1,7 @@
-import type { KnowledgeDraftRiskLevel } from "../knowledge-governance/knowledge-draft.js";
+import type {
+  KnowledgeDraftRiskLevel,
+  KnowledgeDraftStatus,
+} from "../knowledge-governance/knowledge-draft.js";
 
 import type {
   ActionApprovalRequirementKind,
@@ -40,6 +43,9 @@ export type ActionApprovalRequirement = {
   targetPolicyId: string;
   targetPolicyVersion: number;
   state: "pending" | "satisfied" | "invalidated";
+  satisfiedActorOpenId?: string;
+  satisfiedSourceType?: "group_confirmation" | "action_approval";
+  satisfiedSourceId?: string;
   version: number;
   createdAt: Date;
   updatedAt: Date;
@@ -58,20 +64,146 @@ export type ActionApproval = {
   createdAt: Date;
 };
 
+export type ActionProposalEvent = {
+  id: string;
+  proposalId: string;
+  eventType:
+    | "created"
+    | "approval_recorded"
+    | "requirements_satisfied"
+    | "revision_requested"
+    | "rejected"
+    | "approval_invalidated"
+    | "cancelled"
+    | "expired"
+    | "execution_started"
+    | "execution_succeeded"
+    | "execution_failed"
+    | "execution_reconciliation_required";
+  actorOpenId?: string;
+  fromVersion?: number;
+  toVersion: number;
+  reasonCode?: string;
+  createdAt: Date;
+};
+
 export type ActionProposalContext = {
   proposal: ActionProposal;
   requirements: ActionApprovalRequirement[];
   approvals: ActionApproval[];
 };
 
+export type UpsertPublicationTargetPolicyInput = {
+  id: string;
+  spaceId: string;
+  parentNodeToken?: string;
+  displayName: string;
+  allowedGroupIds: string[];
+  allowedRiskLevels: KnowledgeDraftRiskLevel[];
+  enabled: boolean;
+  expectedVersion: number;
+  operationKey: string;
+  operator: string;
+  at: Date;
+};
+
+export type UpsertActionRoleGrantInput = {
+  roleType: ActionRoleGrantType;
+  actorOpenId: string;
+  enabled: boolean;
+  expectedVersion: number;
+  operationKey: string;
+  operator: string;
+  at: Date;
+};
+
+export type CreateActionProposalInput = {
+  proposalId: string;
+  draftId: string;
+  expectedRevision: number;
+  expectedDraftVersion: number;
+  targetPolicyId: string;
+  expectedTargetPolicyVersion: number;
+  operationKey: string;
+  at: Date;
+};
+
+export type PolicyMutationResult = {
+  outcome: "applied" | "already_applied";
+  policy: PublicationTargetPolicy;
+};
+
+export type RoleGrantMutationResult = {
+  outcome: "applied" | "already_applied";
+  grant: ActionRoleGrant;
+};
+
+export type ActionProposalMutationResult = {
+  outcome: "applied" | "already_applied";
+  proposal: ActionProposal;
+};
+
+export type CancelStaleActionProposalsInput = {
+  draftId: string;
+  currentRevision: number;
+  currentDraftVersion: number;
+  operationKey: string;
+  at: Date;
+};
+
+export type CancelStaleActionProposalsResult = {
+  outcome: "applied" | "already_applied";
+  cancelledProposalIds: string[];
+  draftVersion: number;
+};
+
+export type ApplyActionProposalActionInput = {
+  proposalId: string;
+  requirementId: string;
+  expectedProposalVersion: number;
+  expectedSubjectRevision: number;
+  expectedSubjectVersion: number;
+  sourcePresentationId: string;
+  callbackEventId: string;
+  actorOpenId: string;
+  action: "approve" | "request_revision" | "reject";
+  reason?: string;
+  rejectionConfirmed?: boolean;
+  operationKey: string;
+  at: Date;
+};
+
+export type ApplyActionProposalActionResult = {
+  outcome: "applied" | "already_applied";
+  action: ApplyActionProposalActionInput["action"];
+  proposal: ActionProposal;
+  draftStatus: KnowledgeDraftStatus;
+  draftVersion: number;
+};
+
 export interface ActionProposalRepository {
+  upsertTargetPolicy(input: UpsertPublicationTargetPolicyInput): Promise<PolicyMutationResult>;
+  upsertRoleGrant(input: UpsertActionRoleGrantInput): Promise<RoleGrantMutationResult>;
+  actorHasCurrentRole(input: {
+    roleType: ActionRoleGrantType;
+    actorOpenId: string;
+  }): Promise<boolean>;
+  createProposal(input: CreateActionProposalInput): Promise<ActionProposalMutationResult>;
+  cancelStaleProposals(
+    input: CancelStaleActionProposalsInput,
+  ): Promise<CancelStaleActionProposalsResult>;
+  applyApprovalAction(
+    input: ApplyActionProposalActionInput,
+  ): Promise<ApplyActionProposalActionResult>;
   getProposal(id: string): Promise<ActionProposalContext | undefined>;
+  listEvents(id: string): Promise<ActionProposalEvent[]>;
   listProposals(input: {
     statuses?: ActionProposalStatus[];
     subjectId?: string;
     limit: number;
   }): Promise<ActionProposal[]>;
   getStatusCounts(): Promise<ActionProposalStatusCounts>;
+  getTargetPolicy(id: string): Promise<PublicationTargetPolicy | undefined>;
   listTargetPolicies(input: { enabled?: boolean; limit: number }): Promise<PublicationTargetPolicy[]>;
   listRoleGrants(input: {
     roleType?: ActionRoleGrantType;
