@@ -182,7 +182,7 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
           stage: "action_rejected",
           statusCode: 400,
           ...requestShape(request),
-          actionShape: describeActionShape(decodedRequest.body),
+          actionShape: safelyDescribeActionShape(decodedRequest.body),
         });
         return rejectedResponse(400);
       }
@@ -262,6 +262,14 @@ function describeActionShape(body: unknown): FeishuCardActionShapeDiagnostic {
     hasTimezone: action !== undefined && Object.hasOwn(action, "timezone"),
     timezoneType: valueType(action?.timezone),
   };
+}
+
+function safelyDescribeActionShape(body: unknown): FeishuCardActionShapeDiagnostic | undefined {
+  try {
+    return describeActionShape(body);
+  } catch {
+    return undefined;
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

@@ -221,6 +221,30 @@ describe("FeishuCardActionGateway", () => {
     expect(queue.enqueue).not.toHaveBeenCalled();
   });
 
+  it("keeps action rejection diagnostics from changing the callback response", async () => {
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const onDiagnostic = vi.fn();
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: () => true,
+      onDiagnostic,
+    });
+    const body = {
+      schema: "1.0",
+      get header(): never {
+        throw new Error("sensitive-getter-error");
+      },
+    };
+
+    await expect(gateway.handleCallback({ headers: {}, body })).resolves.toEqual({
+      statusCode: 400,
+      body: { ok: false },
+    });
+    expect(onDiagnostic).toHaveBeenCalledOnce();
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toContain("sensitive-getter-error");
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
   it("returns a verified URL challenge without parsing or enqueueing a card action", async () => {
     const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
     const gateway = createFeishuCardActionGateway({ queue, verifyRequest: () => true });
