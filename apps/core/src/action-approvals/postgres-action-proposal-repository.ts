@@ -9,7 +9,10 @@ import {
   type KnowledgeDraftRiskLevel,
   type KnowledgeDraftStatus,
 } from "../knowledge-governance/knowledge-draft.js";
-import { validateCurrentKnowledgeDraftEvidence } from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
+import {
+  findInvalidKnowledgeDraftEvidence,
+  validateCurrentKnowledgeDraftEvidence,
+} from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
 import type {
   KnowledgeDraftTransactionClient,
   PostgresKnowledgeDraftDataSource,
@@ -29,6 +32,7 @@ import type {
   ActionApproval,
   ActionApprovalRequirement,
   ActionProposalContext,
+  ActionProposalDraftCandidate,
   ActionProposalEvent,
   ActionProposalMutationResult,
   ActionProposalRepository,
@@ -140,6 +144,11 @@ type DraftRevisionRow = {
   suggested_parent_node_token: string | null;
 };
 
+type DraftCandidateRow = DraftRevisionRow & {
+  has_current_group_confirmation: boolean;
+  updated_at: Date;
+};
+
 type EvidenceRow = {
   evidence_type: "conversation_message" | "discussion_thread" | "action_item" | "document_source";
   reference_id: string;
@@ -237,6 +246,66 @@ export function createPostgresActionProposalRepository({
     },
     getProposal(id) {
       return loadProposalContext(dataSource, requireReference("id", id));
+    },
+    async listEligibleDrafts(input) {
+      const groupIds = input.groupIds === undefined
+        ? undefined
+        : normalizeReferenceList("groupIds", input.groupIds, true);
+      if (groupIds?.length === 0) return [];
+      const result = await dataSource.query<DraftCandidateRow>(
+        `SELECT draft.id, draft.source_group_id, draft.status, draft.current_revision_number,
+                draft.version, revision.risk_level, revision.reviewer_type, revision.reviewer_ref,
+                revision.suggested_space_id, revision.suggested_parent_node_token,
+                EXISTS (
+                  SELECT 1 FROM knowledge_draft_group_confirmations confirmation
+                  WHERE confirmation.draft_id = draft.id
+                    AND confirmation.revision_number = draft.current_revision_number
+                ) AS has_current_group_confirmation,
+                draft.updated_at
+         FROM knowledge_drafts draft
+         JOIN knowledge_draft_revisions revision
+           ON revision.draft_id = draft.id
+          AND revision.revision_number = draft.current_revision_number
+         WHERE draft.status = 'pending_review'
+           AND ($1::TEXT[] IS NULL OR draft.source_group_id IS NULL OR draft.source_group_id = ANY($1))
+         ORDER BY draft.updated_at ASC, draft.id ASC
+         LIMIT $2`,
+        [groupIds ?? null, requireLimit(input.limit)],
+      );
+      const candidates: ActionProposalDraftCandidate[] = [];
+      for (const row of result.rows) {
+        const evidence = await loadDraftEvidence(dataSource, row.id, Number(row.current_revision_number));
+        const invalidReason = await findInvalidKnowledgeDraftEvidence({
+          queryable: dataSource,
+          sourceGroupId: row.source_group_id ?? undefined,
+          evidence,
+        });
+        const reviewer = mapReviewer(row);
+        const suggestedPublication = row.suggested_space_id === null &&
+          row.suggested_parent_node_token === null
+          ? undefined
+          : {
+              ...(row.suggested_space_id === null ? {} : { spaceId: row.suggested_space_id }),
+              ...(row.suggested_parent_node_token === null
+                ? {}
+                : { parentNodeToken: row.suggested_parent_node_token }),
+            };
+        candidates.push({
+          id: row.id,
+          ...(row.source_group_id === null ? {} : { sourceGroupId: row.source_group_id }),
+          currentRevision: Number(row.current_revision_number),
+          version: Number(row.version),
+          riskLevel: row.risk_level,
+          ...(reviewer === undefined ? {} : { reviewer }),
+          ...(suggestedPublication === undefined ? {} : { suggestedPublication }),
+          evidenceState: invalidReason === undefined
+            ? { status: "current" }
+            : { status: "invalidated", reason: invalidReason },
+          hasCurrentGroupConfirmation: row.has_current_group_confirmation,
+          updatedAt: requireDate(row.updated_at),
+        });
+      }
+      return candidates;
     },
     async listEvents(id) {
       const result = await dataSource.query<ActionEventRow>(
@@ -1308,18 +1377,27 @@ async function validateDraftEvidence(
   client: KnowledgeDraftTransactionClient,
   draft: DraftRevisionRow,
 ): Promise<void> {
-  const result = await client.query<EvidenceRow>(
+  const evidence = await loadDraftEvidence(client, draft.id, Number(draft.current_revision_number));
+  await validateCurrentKnowledgeDraftEvidence({
+    queryable: client,
+    sourceGroupId: draft.source_group_id ?? undefined,
+    evidence,
+  });
+}
+
+async function loadDraftEvidence(
+  queryable: Pick<PostgresKnowledgeDraftDataSource, "query">,
+  draftId: string,
+  revision: number,
+): Promise<KnowledgeDraftEvidenceReference[]> {
+  const result = await queryable.query<EvidenceRow>(
     `SELECT evidence_type, reference_id, source_group_id, entity_version, source_updated_at
      FROM knowledge_draft_revision_evidence
      WHERE draft_id = $1 AND revision_number = $2
      ORDER BY evidence_type ASC, reference_id ASC`,
-    [draft.id, Number(draft.current_revision_number)],
+    [draftId, revision],
   );
-  await validateCurrentKnowledgeDraftEvidence({
-    queryable: client,
-    sourceGroupId: draft.source_group_id ?? undefined,
-    evidence: result.rows.map(mapEvidence),
-  });
+  return result.rows.map(mapEvidence);
 }
 
 function mapEvidence(row: EvidenceRow): KnowledgeDraftEvidenceReference {

@@ -424,7 +424,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
         suggestedPublication: { spaceId: policy.spaceId },
         evidence: [{
           type: "conversation_message",
-          id: `feishu:approval-${label}-${suffix}`,
+          id: `feishu:om-${label}-${suffix}`,
           groupId,
         }],
       },
@@ -746,6 +746,56 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
     )).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });
 
+  it("lists bounded content-free planner candidates with current evidence state", async () => {
+    const label = "planner-invalid-evidence";
+    const draft = await createConfirmedDraft(label, "low");
+    const providerMessageId = `om-${label}-${suffix}`;
+    await pool.query(
+      `INSERT INTO conversation_message_deletion_tombstones (
+        provider, provider_message_id, conversation_message_id, chat_id, deleted_at
+      ) VALUES ('feishu', $1, $2, $3, $4)`,
+      [
+        providerMessageId,
+        `feishu:${providerMessageId}`,
+        groupId,
+        plusSeconds(10),
+      ],
+    );
+    const repository = actionRepository();
+
+    const candidates = await repository.listEligibleDrafts({
+      groupIds: [groupId],
+      limit: 100,
+    });
+
+    expect(candidates).toEqual([...candidates].sort((left, right) =>
+      left.updatedAt.getTime() - right.updatedAt.getTime() || left.id.localeCompare(right.id)));
+    expect(candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: draft.id,
+        sourceGroupId: groupId,
+        hasCurrentGroupConfirmation: true,
+        evidenceState: { status: "invalidated", reason: "message_deleted" },
+      }),
+      expect.objectContaining({
+        id: `draft-proposal-company-${suffix}`,
+        hasCurrentGroupConfirmation: false,
+        evidenceState: { status: "current" },
+      }),
+    ]));
+    expect(JSON.stringify(candidates)).not.toMatch(/Title |Content |approval evidence/iu);
+    await expect(repository.listEligibleDrafts({
+      groupIds: [`oc_not_allowed_${suffix}`],
+      limit: 100,
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: `draft-proposal-company-${suffix}` }),
+    ]));
+    expect((await repository.listEligibleDrafts({
+      groupIds: [`oc_not_allowed_${suffix}`],
+      limit: 100,
+    })).some((candidate) => candidate.sourceGroupId !== undefined)).toBe(false);
+  });
+
   function actionRepository() {
     return createPostgresActionProposalRepository({
       dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
@@ -766,13 +816,14 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
     riskLevel: "low" | "medium" | "high",
     reviewerOpenId?: string,
   ) {
-    const messageId = `feishu:approval-${label}-${suffix}`;
+    const providerMessageId = `om-${label}-${suffix}`;
+    const messageId = `feishu:${providerMessageId}`;
     await pool.query(
       `INSERT INTO conversation_messages (
         id, provider, provider_message_id, chat_id, sender_id, message_type,
         text, sent_at, raw_event_idempotency_key, created_at
       ) VALUES ($1, 'feishu', $2, $3, 'ou_author', 'text', 'approval evidence', $4, $5, $4)`,
-      [messageId, `om-${label}-${suffix}`, groupId, at, `event-${label}-${suffix}`],
+      [messageId, providerMessageId, groupId, at, `event-${label}-${suffix}`],
     );
     const draftRepository = createPostgresKnowledgeDraftRepository({
       dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,

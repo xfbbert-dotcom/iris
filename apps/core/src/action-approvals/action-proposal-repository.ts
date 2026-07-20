@@ -1,4 +1,7 @@
 import type {
+  KnowledgeDraftEvidenceInvalidReason,
+} from "../knowledge-governance/knowledge-draft-repository.js";
+import type {
   KnowledgeDraftRiskLevel,
   KnowledgeDraftStatus,
 } from "../knowledge-governance/knowledge-draft.js";
@@ -91,6 +94,21 @@ export type ActionProposalContext = {
   proposal: ActionProposal;
   requirements: ActionApprovalRequirement[];
   approvals: ActionApproval[];
+};
+
+export type ActionProposalDraftCandidate = {
+  id: string;
+  sourceGroupId?: string;
+  currentRevision: number;
+  version: number;
+  riskLevel: KnowledgeDraftRiskLevel;
+  reviewer?: { type: "feishu_user" | "text_label" | "admin_role"; ref: string };
+  suggestedPublication?: { spaceId?: string; parentNodeToken?: string };
+  evidenceState:
+    | { status: "current" }
+    | { status: "invalidated"; reason: KnowledgeDraftEvidenceInvalidReason };
+  hasCurrentGroupConfirmation: boolean;
+  updatedAt: Date;
 };
 
 export type UpsertPublicationTargetPolicyInput = {
@@ -196,6 +214,10 @@ export interface ActionProposalRepository {
     input: ApplyActionProposalActionInput,
   ): Promise<ApplyActionProposalActionResult>;
   getProposal(id: string): Promise<ActionProposalContext | undefined>;
+  listEligibleDrafts(input: {
+    groupIds?: string[];
+    limit: number;
+  }): Promise<ActionProposalDraftCandidate[]>;
   listEvents(id: string): Promise<ActionProposalEvent[]>;
   listProposals(input: {
     statuses?: ActionProposalStatus[];
