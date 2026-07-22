@@ -1,7 +1,7 @@
 # Iris 知识草稿审批与发布设计
 
 > 设计日期：2026-07-19  
-> 状态：待书面审阅  
+> 状态：已批准，分阶段实施中（Phase 5B 尚未整体完成）
 > 宪法依据：`2026-06-30-iris-architecture-whitepaper.md`  
 > 前置设计：`2026-07-18-iris-knowledge-draft-facts-design.md`  
 > 需求基线：IRIS-CORE-007、IRIS-CORE-008、IRIS-CORE-013  
@@ -103,17 +103,17 @@ append-only 顺序为准，禁止为了恢复旧编号重命名已部署迁移�
 
 每个子阶段都必须有自己的单元测试、真实 Postgres 测试、运行手册和明确退出条件。完成一个退出条件后进入下一核心能力；非阻断加固项进入后续清单，不能无限延长当前子阶段。
 
-### 4.5 实施状态（2026-07-20）
+### 4.5 实施状态（2026-07-22）
 
 | 子阶段 | 当前状态 | 不能越过的边界 |
 |---|---|---|
 | Phase 5A | 代码与事实层已实现 | 真实生产使用仍受 runtime 和群门禁控制 |
 | Phase 5B-1 | 群确认卡片代码与真实 Feishu pilot 已通过，最终恢复默认关闭 | 只把草稿推进到 `pending_review`，不产生人工 owner/admin approval，不写知识库 |
-| Phase 5B-2A | `ActionProposal`、目标策略、角色 grant、low/medium/high 风险要求、审批卡片、实时授权、治理 API、运行时与 readiness 已实现；真实 Feishu pilot 已通过并恢复默认关闭 | 单群 pilot 的生产 planner 只接收显式 allowlist 群；公司级草稿保留领域事实但在专用 runtime/policy 契约完成前不进入生产派送；不提供完整正文 Web 审阅，不创建 execution，不调用 Wiki 写 API |
-| Phase 5B-2B | 聚焦设计与实施计划已写入 `2026-07-22-iris-oauth-review-page-design.md` 和对应 plan，代码未实现 | 必须提供飞书 OAuth 身份、完整正文/哈希/风险/要求展示，并复用同一 proposal 事实；链接本身不是授权 |
+| Phase 5B-2A | `ActionProposal`、目标策略、角色 grant、low/medium/high 风险要求、审批卡片、实时授权、治理 API、运行时与 readiness 已实现；真实 Feishu pilot 已通过并恢复默认关闭 | 单群 pilot 的生产 planner 只接收显式 allowlist 群；公司级草稿保留领域事实但在专用 runtime/policy 契约完成前不进入生产派送；不创建 execution，不调用 Wiki 写 API |
+| Phase 5B-2B | 飞书 OAuth + PKCE、完整正文审阅页、append-only 审阅事实、批准前精确审阅门禁、实时 readiness 和 Caddy 精确路由的代码候选与自动门禁已完成；真实 Feishu OAuth pilot 待验收，功能保持默认关闭 | 审阅页只能记录知情审阅事实；最终批准仍来自飞书卡片；链接本身不是授权；验收前不得宣称生产可用，不创建 execution，不调用 Wiki 写 API |
 | Phase 5B-3 | 未实现 | 只有 5B-1、5B-2A、5B-2B 各自门禁通过后才可增加执行器和 Wiki 写入 |
 
-5B-2A 的退出证据由 `docs/runbooks/iris-action-proposal-approval-acceptance.md` 定义。自动化门禁通过只能证明代码候选可进入默认关闭部署，不能替代真实飞书身份、撤权、stale card 和非 pilot 负向验收。
+5B-2A 的退出证据由 `docs/runbooks/iris-action-proposal-approval-acceptance.md` 定义；该真实 pilot 已完成并安全回收。5B-2B 的退出证据由 `docs/runbooks/iris-action-review-acceptance.md` 定义。5B-2B 自动化门禁通过只能证明代码候选可进入默认关闭部署，不能替代真实飞书 OAuth、完整正文、撤权、stale、未审阅批准和公网边界验收。
 
 ## 5. 角色与授权
 
