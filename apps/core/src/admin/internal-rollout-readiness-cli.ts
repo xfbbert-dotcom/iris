@@ -197,8 +197,11 @@ function validateLiveReadinessUrl(value: string): URL {
   const isLoopback = url.hostname === "127.0.0.1"
     || url.hostname === "localhost"
     || url.hostname === "::1";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback)) {
-    throw new Error("Live readiness URL must use HTTPS or loopback HTTP");
+  if (!isLoopback) {
+    throw new Error("Live readiness URL must use a loopback host");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Live readiness URL must use HTTP or HTTPS");
   }
   if (
     url.pathname !== "/internal/readiness"

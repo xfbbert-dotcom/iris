@@ -271,6 +271,7 @@ test("enforces the action-review boundary in the pinned Caddy runtime", async (t
     for (const request of [
       { method: "POST", path: "/review/action-proposals/proposal-1" },
       { method: "GET", path: "/review/action-proposals/proposal-1/attest" },
+      { method: "POST", path: "/review/oauth/callback" },
       { method: "GET", path: "/review" },
       { method: "GET", path: "/review/action-proposals/proposal-1/" },
       { method: "GET", path: "/review/action-proposals/proposal-1/extra" },

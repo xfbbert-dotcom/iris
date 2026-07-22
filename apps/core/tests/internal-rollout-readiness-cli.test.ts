@@ -161,12 +161,12 @@ EMPTY_VALUE= # empty on purpose
 
   it("does not send the internal token to an unsafe live readiness URL", async () => {
     await expect(resolveInternalRolloutReadinessReport({
-      args: ["--live-readiness-url", "http://example.com/internal/readiness"],
+      args: ["--live-readiness-url", "https://attacker.example/internal/readiness"],
       env: enabledActionReviewEnv(),
       fetchImpl: async () => {
         throw new Error("must not fetch");
       },
-    })).rejects.toThrow("Live readiness URL must use HTTPS or loopback HTTP");
+    })).rejects.toThrow("Live readiness URL must use a loopback host");
   });
 });
 
