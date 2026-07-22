@@ -226,6 +226,7 @@ export type ApplyActionProposalActionInput = {
   expectedProposalVersion: number;
   expectedSubjectRevision: number;
   expectedSubjectVersion: number;
+  expectedTargetPolicyVersion: number;
   sourcePresentationId: string;
   callbackEventId: string;
   actorOpenId: string;

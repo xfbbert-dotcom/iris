@@ -195,13 +195,12 @@ function toMutationInput(
     operationKey: `action-approval:${job.appId}:${job.eventId}`,
     at: requireDate(job.receivedAt),
   };
-  const { expectedTargetPolicyVersion: _policyVersion, ...mutationCommon } = common;
-  if (job.action === "approve") return { ...mutationCommon, action: "approve" as const };
+  if (job.action === "approve") return { ...common, action: "approve" as const };
   if (job.action === "request_revision") {
-    return { ...mutationCommon, action: "request_revision" as const, reason: requireReason(intent?.reason) };
+    return { ...common, action: "request_revision" as const, reason: requireReason(intent?.reason) };
   }
   return {
-    ...mutationCommon,
+    ...common,
     action: "reject" as const,
     reason: requireReason(intent?.reason),
     rejectionConfirmed: requireRejectionConfirmation(intent),

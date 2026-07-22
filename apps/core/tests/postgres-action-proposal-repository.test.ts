@@ -691,6 +691,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       expectedProposalVersion: proposal.version,
       expectedSubjectRevision: proposal.subjectRevision,
       expectedSubjectVersion: proposal.subjectVersion,
+      expectedTargetPolicyVersion: proposal.targetPolicyVersion,
       sourcePresentationId: presentationId,
       callbackEventId: `callback-action-${label}-${suffix}`,
       actorOpenId: ownerOpenId,
@@ -747,6 +748,10 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
     await expect(repository.inspectApprovalActionReplay({
       ...baseInput,
       actorOpenId: `ou_conflicting_${suffix}`,
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+    await expect(repository.inspectApprovalActionReplay({
+      ...baseInput,
+      expectedTargetPolicyVersion: baseInput.expectedTargetPolicyVersion + 1,
     })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
     await expect(repository.applyApprovalAction(baseInput)).resolves.toMatchObject({
       outcome: "already_applied",
@@ -831,6 +836,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       expectedProposalVersion: proposal.version,
       expectedSubjectRevision: proposal.subjectRevision,
       expectedSubjectVersion: proposal.subjectVersion,
+      expectedTargetPolicyVersion: proposal.targetPolicyVersion,
       sourcePresentationId: presentationId,
       callbackEventId: `callback-action-${label}-${suffix}`,
       actorOpenId: ownerOpenId,
@@ -884,6 +890,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       expectedProposalVersion: acceptance.proposal.version,
       expectedSubjectRevision: acceptance.proposal.subjectRevision,
       expectedSubjectVersion: acceptance.proposal.subjectVersion,
+      expectedTargetPolicyVersion: acceptance.proposal.targetPolicyVersion,
       sourcePresentationId: acceptance.presentationId,
       callbackEventId: `callback-action-request-revision-${suffix}`,
       actorOpenId: acceptance.ownerOpenId,
@@ -921,6 +928,10 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       ...input,
       reason: "Conflicting revision reason.",
     })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+    await expect(acceptance.repository.inspectApprovalActionReplay({
+      ...input,
+      expectedTargetPolicyVersion: input.expectedTargetPolicyVersion + 1,
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
     await expect(acceptance.repository.applyApprovalAction(input)).resolves.toMatchObject({
       outcome: "already_applied",
       proposal: { status: "cancelled", version: 2 },
@@ -946,6 +957,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       expectedProposalVersion: acceptance.proposal.version,
       expectedSubjectRevision: acceptance.proposal.subjectRevision,
       expectedSubjectVersion: acceptance.proposal.subjectVersion,
+      expectedTargetPolicyVersion: acceptance.proposal.targetPolicyVersion,
       sourcePresentationId: acceptance.presentationId,
       callbackEventId: `callback-action-reject-${suffix}`,
       actorOpenId: acceptance.ownerOpenId,
@@ -989,6 +1001,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       expectedProposalVersion: acceptance.proposal.version,
       expectedSubjectRevision: acceptance.proposal.subjectRevision,
       expectedSubjectVersion: acceptance.proposal.subjectVersion,
+      expectedTargetPolicyVersion: acceptance.proposal.targetPolicyVersion,
       sourcePresentationId: acceptance.presentationId,
       callbackEventId: `callback-action-concurrent-${suffix}`,
       actorOpenId: acceptance.ownerOpenId,

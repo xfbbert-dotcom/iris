@@ -985,7 +985,8 @@ async function applyApprovalAction(
       proposal.status !== "pending_approval" ||
       Number(proposal.version) !== normalized.expectedProposalVersion ||
       Number(proposal.subject_revision) !== normalized.expectedSubjectRevision ||
-      Number(proposal.subject_version) !== normalized.expectedSubjectVersion
+      Number(proposal.subject_version) !== normalized.expectedSubjectVersion ||
+      Number(proposal.target_policy_version) !== normalized.expectedTargetPolicyVersion
     ) throw new ActionProposalVersionConflictError();
     const draft = await lockDraftRevision(client, proposal.subject_id);
     if (
@@ -2266,6 +2267,10 @@ function normalizeApplyActionInput(input: ApplyActionProposalActionInput) {
     expectedSubjectVersion: requirePositiveInteger(
       "expectedSubjectVersion",
       input.expectedSubjectVersion,
+    ),
+    expectedTargetPolicyVersion: requirePositiveInteger(
+      "expectedTargetPolicyVersion",
+      input.expectedTargetPolicyVersion,
     ),
     sourcePresentationId: requireReference("sourcePresentationId", input.sourcePresentationId),
     callbackEventId: requireReference("callbackEventId", input.callbackEventId),

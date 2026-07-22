@@ -45,6 +45,7 @@ describe("ActionApprovalWorker", () => {
       expectedProposalVersion: 4,
       expectedSubjectRevision: 2,
       expectedSubjectVersion: 7,
+      expectedTargetPolicyVersion: 3,
       sourcePresentationId: "proposal-presentation-1",
       callbackEventId: "event-1",
       actorOpenId: "ou_owner",
@@ -174,6 +175,20 @@ describe("ActionApprovalWorker", () => {
       code: "immutable_intent_conflict",
     });
     expect(harness.repository.applyApprovalAction).not.toHaveBeenCalled();
+  });
+
+  it("includes the target policy version in immutable replay inspection", async () => {
+    const inspectReplay = vi.fn(async () => ({
+      result: mutation("already_applied"),
+      sourceGroupId: "oc_source",
+    }));
+    const harness = createHarness({ inspectReplay });
+
+    await harness.worker.processActionApproval(job({ targetPolicyVersion: 9 }));
+
+    expect(inspectReplay).toHaveBeenCalledWith(expect.objectContaining({
+      expectedTargetPolicyVersion: 9,
+    }));
   });
 
   it("refreshes every proposal card through bounded cursor pages", async () => {

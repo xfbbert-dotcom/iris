@@ -265,7 +265,7 @@ async function processActionApprovalJob(
       "membership_unavailable" | "repository_unavailable" | "internal_error"
     >);
   }
-  const ackFailure = await acknowledge(input);
+  const ackFailure = await acknowledge(input, result.code !== "immutable_intent_conflict");
   if (ackFailure !== undefined) return ackFailure;
   return {
     status: result.status,
@@ -358,7 +358,7 @@ async function denyAndAcknowledge(
       () => renderStatusCard(code),
     );
   }
-  const ackFailure = await acknowledge(input);
+  const ackFailure = await acknowledge(input, code !== "immutable_intent_conflict");
   if (ackFailure !== undefined) return ackFailure;
   return { status: "denied", idempotencyKey: input.job.idempotencyKey, code };
 }

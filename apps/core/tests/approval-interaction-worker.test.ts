@@ -322,6 +322,55 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.intentStore.deleteIntent).not.toHaveBeenCalled();
   });
 
+  it("retains a resolved sensitive intent after a durable knowledge conflict", async () => {
+    const sensitiveJob = job({
+      action: "request_revision",
+      intentId: "intent-durable-knowledge-conflict",
+    });
+    const harness = createHarness({
+      job: sensitiveJob,
+      resolveIntent: async () => ({
+        id: sensitiveJob.intentId!,
+        reason: "Keep this intent for conflict investigation.",
+      }),
+      applyInteraction: async () => { throw new KnowledgeCardOperationConflictError(); },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toMatchObject([{
+      status: "denied",
+      code: "immutable_intent_conflict",
+    }]);
+    expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
+    expect(harness.intentStore.deleteIntent).not.toHaveBeenCalled();
+  });
+
+  it("retains a resolved sensitive intent after a durable action-proposal conflict", async () => {
+    const sensitiveJob = actionJob({
+      action: "request_revision",
+      intentId: "intent-durable-action-conflict",
+    });
+    const harness = createHarness({
+      job: sensitiveJob,
+      resolveIntent: async () => ({
+        id: sensitiveJob.intentId!,
+        reason: "Keep this action intent for conflict investigation.",
+      }),
+      actionApprovalWorker: {
+        processActionApproval: vi.fn(async () => ({
+          status: "denied" as const,
+          code: "immutable_intent_conflict" as const,
+        })),
+      },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toMatchObject([{
+      status: "denied",
+      code: "immutable_intent_conflict",
+    }]);
+    expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
+    expect(harness.intentStore.deleteIntent).not.toHaveBeenCalled();
+  });
+
   it("does not retry a committed mutation when post-ack intent cleanup fails", async () => {
     const sensitiveJob = job({
       action: "reject",
@@ -617,7 +666,9 @@ function createHarness(overrides: HarnessOverrides = {}) {
   };
 }
 
-function actionJob(): Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }> {
+function actionJob(
+  overrides: Partial<Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>> = {},
+): Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }> {
   return {
     kind: "action_proposal_approval",
     idempotencyKey: "card-action:proposal-event-1",
@@ -636,6 +687,7 @@ function actionJob(): Extract<ApprovalInteractionJob, { kind: "action_proposal_a
     action: "approve",
     receivedAt: new Date(at.getTime() - 1_000),
     attempts: 0,
+    ...overrides,
   };
 }
 
