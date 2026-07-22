@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   ActionProposalOperationConflictError,
+  ActionProposalVersionConflictError,
   createPostgresActionProposalRepository,
 } from "../src/action-approvals/postgres-action-proposal-repository.js";
 import { createPostgresKnowledgeDraftRepository } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
@@ -146,9 +147,14 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
     })).resolves.toBeUndefined();
 
     const invalidEvidence = await createReviewCase("invalid-evidence", "medium", `ou_evidence_${suffix}`);
-    await pool.query("UPDATE document_sources SET permission_state = 'denied' WHERE id = $1", [
-      invalidEvidence.documentSourceId,
-    ]);
+    await pool.query(
+      `UPDATE document_sources
+       SET permission_state = 'denied',
+           can_use_for_answering = FALSE,
+           can_use_for_knowledge_drafts = FALSE
+       WHERE id = $1`,
+      [invalidEvidence.documentSourceId],
+    );
     await expect(invalidEvidence.repository.getAuthorizedReviewContext({
       proposalId: invalidEvidence.proposal.id,
       actorOpenId: invalidEvidence.actorOpenId,
@@ -197,6 +203,274 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       ...input,
       sessionIdHash: sha256("different-session"),
     })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+  });
+
+  it("enforces append-only attestation history and both database uniqueness constraints", async () => {
+    const acceptance = await createReviewCase("append-only", "medium", `ou_append_${suffix}`);
+    const context = await acceptance.repository.getAuthorizedReviewContext({
+      proposalId: acceptance.proposal.id,
+      actorOpenId: acceptance.actorOpenId,
+    });
+    expect(context).toBeDefined();
+    const input = reviewAttestationInput(acceptance, context!, "append-only");
+    await acceptance.repository.recordReviewAttestation(input);
+
+    await expect(pool.query(
+      "UPDATE action_review_attestations SET reviewed_at = reviewed_at + INTERVAL '1 second' WHERE operation_key = $1",
+      [input.operationKey],
+    )).rejects.toThrow(/append-only/iu);
+    await expect(pool.query(
+      "DELETE FROM action_review_attestations WHERE operation_key = $1",
+      [input.operationKey],
+    )).rejects.toThrow(/append-only/iu);
+    await expect(pool.query("TRUNCATE action_review_attestations")).rejects.toThrow(/append-only/iu);
+
+    await expect(pool.query(
+      `INSERT INTO action_review_attestations (
+        id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
+        content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at
+      )
+      SELECT $1, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
+             content_hash, session_id_hash, $2, operation_fingerprint, reviewed_at
+      FROM action_review_attestations WHERE operation_key = $3`,
+      [randomUUID(), `review-attestation:duplicate-identity:${suffix}`, input.operationKey],
+    )).rejects.toMatchObject({ code: "23505" });
+    await expect(pool.query(
+      `INSERT INTO action_review_attestations (
+        id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
+        content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at
+      )
+      SELECT $1, proposal_id, $2, subject_revision, subject_version, proposal_version,
+             content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at
+      FROM action_review_attestations WHERE operation_key = $3`,
+      [randomUUID(), `ou_other_${suffix}`, input.operationKey],
+    )).rejects.toMatchObject({ code: "23505" });
+
+    await expect(acceptance.repository.recordReviewAttestation({
+      ...input,
+      operationKey: `review-attestation:different-operation:${suffix}`,
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+  });
+
+  it("rejects every stale expected review field on the write side", async () => {
+    const acceptance = await createReviewCase("write-mismatch", "medium", `ou_mismatch_${suffix}`);
+    const context = await acceptance.repository.getAuthorizedReviewContext({
+      proposalId: acceptance.proposal.id,
+      actorOpenId: acceptance.actorOpenId,
+    });
+    expect(context).toBeDefined();
+    const input = reviewAttestationInput(acceptance, context!, "write-mismatch");
+    const mismatches = [
+      { expectedProposalVersion: input.expectedProposalVersion + 1 },
+      { expectedSubjectRevision: input.expectedSubjectRevision + 1 },
+      { expectedSubjectVersion: input.expectedSubjectVersion + 1 },
+      { expectedContentHash: sha256("mismatched content") },
+    ];
+
+    for (const [index, mismatch] of mismatches.entries()) {
+      await expect(acceptance.repository.recordReviewAttestation({
+        ...input,
+        ...mismatch,
+        operationKey: `${input.operationKey}:${index}`,
+      })).rejects.toBeInstanceOf(ActionProposalVersionConflictError);
+    }
+    await expect(pool.query(
+      "SELECT count(*)::int AS count FROM action_review_attestations WHERE proposal_id = $1",
+      [acceptance.proposal.id],
+    )).resolves.toMatchObject({ rows: [{ count: 0 }] });
+  });
+
+  it("rechecks authorization, policy, evidence, and proposal/draft versions before writing", async () => {
+    const revoked = await createReviewCase("write-revoked", "high", `ou_write_revoked_${suffix}`);
+    await revoked.repository.upsertRoleGrant({
+      roleType: "authorized_high_risk_owner",
+      actorOpenId: revoked.actorOpenId,
+      enabled: true,
+      expectedVersion: 0,
+      operationKey: `grant:${revoked.label}:enable:${suffix}`,
+      operator: "test",
+      at,
+    });
+    const revokedContext = await requireReviewContext(revoked);
+    await revoked.repository.upsertRoleGrant({
+      roleType: "authorized_high_risk_owner",
+      actorOpenId: revoked.actorOpenId,
+      enabled: false,
+      expectedVersion: 1,
+      operationKey: `grant:${revoked.label}:disable:${suffix}`,
+      operator: "test",
+      at,
+    });
+    await expect(revoked.repository.recordReviewAttestation(
+      reviewAttestationInput(revoked, revokedContext, "write-revoked"),
+    )).rejects.toBeInstanceOf(ActionProposalVersionConflictError);
+
+    const disabledPolicy = await createReviewCase(
+      "write-disabled-policy",
+      "medium",
+      `ou_write_policy_${suffix}`,
+    );
+    const disabledPolicyContext = await requireReviewContext(disabledPolicy);
+    await disablePolicy(disabledPolicy);
+    await expect(disabledPolicy.repository.recordReviewAttestation(
+      reviewAttestationInput(disabledPolicy, disabledPolicyContext, "write-disabled-policy"),
+    )).rejects.toBeInstanceOf(ActionProposalVersionConflictError);
+
+    const invalidEvidence = await createReviewCase(
+      "write-invalid-evidence",
+      "medium",
+      `ou_write_evidence_${suffix}`,
+    );
+    const invalidEvidenceContext = await requireReviewContext(invalidEvidence);
+    await denyDocumentSource(invalidEvidence.documentSourceId);
+    await expect(invalidEvidence.repository.recordReviewAttestation(
+      reviewAttestationInput(invalidEvidence, invalidEvidenceContext, "write-invalid-evidence"),
+    )).rejects.toBeInstanceOf(ActionProposalVersionConflictError);
+
+    const staleProposal = await createReviewCase(
+      "write-stale-proposal",
+      "medium",
+      `ou_write_proposal_${suffix}`,
+    );
+    const staleProposalContext = await requireReviewContext(staleProposal);
+    await pool.query("UPDATE action_proposals SET subject_version = subject_version + 1 WHERE id = $1", [
+      staleProposal.proposal.id,
+    ]);
+    await expect(staleProposal.repository.recordReviewAttestation(
+      reviewAttestationInput(staleProposal, staleProposalContext, "write-stale-proposal"),
+    )).rejects.toBeInstanceOf(ActionProposalVersionConflictError);
+
+    const staleDraft = await createReviewCase(
+      "write-stale-draft",
+      "medium",
+      `ou_write_draft_${suffix}`,
+    );
+    const staleDraftContext = await requireReviewContext(staleDraft);
+    await pool.query("UPDATE knowledge_drafts SET version = version + 1 WHERE id = $1", [
+      staleDraft.draft.id,
+    ]);
+    await expect(staleDraft.repository.recordReviewAttestation(
+      reviewAttestationInput(staleDraft, staleDraftContext, "write-stale-draft"),
+    )).rejects.toBeInstanceOf(ActionProposalVersionConflictError);
+  });
+
+  it("returns false for every attestation identity mismatch", async () => {
+    const acceptance = await createReviewCase("current-mismatch", "medium", `ou_current_${suffix}`);
+    const context = await requireReviewContext(acceptance);
+    const input = reviewAttestationInput(acceptance, context, "current-mismatch");
+    await acceptance.repository.recordReviewAttestation(input);
+    const currentInput = currentAttestationInput(input);
+    const mismatches = [
+      { actorOpenId: `ou_other_${suffix}` },
+      { expectedProposalVersion: input.expectedProposalVersion + 1 },
+      { expectedSubjectRevision: input.expectedSubjectRevision + 1 },
+      { expectedSubjectVersion: input.expectedSubjectVersion + 1 },
+      { expectedContentHash: sha256("other content") },
+    ];
+
+    for (const mismatch of mismatches) {
+      await expect(acceptance.repository.hasCurrentReviewAttestation({
+        ...currentInput,
+        ...mismatch,
+      })).resolves.toBe(false);
+    }
+  });
+
+  it("invalidates a recorded attestation when current authorization or evidence changes", async () => {
+    const revoked = await createReviewCase("current-revoked", "high", `ou_current_admin_${suffix}`);
+    await revoked.repository.upsertRoleGrant({
+      roleType: "authorized_high_risk_owner",
+      actorOpenId: revoked.actorOpenId,
+      enabled: true,
+      expectedVersion: 0,
+      operationKey: `grant:${revoked.label}:enable:${suffix}`,
+      operator: "test",
+      at,
+    });
+    const revokedContext = await requireReviewContext(revoked);
+    const revokedInput = reviewAttestationInput(revoked, revokedContext, "current-revoked");
+    await revoked.repository.recordReviewAttestation(revokedInput);
+    await revoked.repository.upsertRoleGrant({
+      roleType: "authorized_high_risk_owner",
+      actorOpenId: revoked.actorOpenId,
+      enabled: false,
+      expectedVersion: 1,
+      operationKey: `grant:${revoked.label}:disable:${suffix}`,
+      operator: "test",
+      at,
+    });
+    await expect(revoked.repository.hasCurrentReviewAttestation(
+      currentAttestationInput(revokedInput),
+    )).resolves.toBe(false);
+
+    const invalidEvidence = await createReviewCase(
+      "current-invalid-evidence",
+      "medium",
+      `ou_current_evidence_${suffix}`,
+    );
+    const invalidEvidenceContext = await requireReviewContext(invalidEvidence);
+    const invalidEvidenceInput = reviewAttestationInput(
+      invalidEvidence,
+      invalidEvidenceContext,
+      "current-invalid-evidence",
+    );
+    await invalidEvidence.repository.recordReviewAttestation(invalidEvidenceInput);
+    await denyDocumentSource(invalidEvidence.documentSourceId);
+    await expect(invalidEvidence.repository.hasCurrentReviewAttestation(
+      currentAttestationInput(invalidEvidenceInput),
+    )).resolves.toBe(false);
+  });
+
+  it("authorizes a current iris_admin for high risk and fails closed after revocation", async () => {
+    const ownerOpenId = `ou_admin_case_owner_${suffix}`;
+    const adminOpenId = `ou_iris_admin_${suffix}`;
+    const acceptance = await createReviewCase("iris-admin", "high", ownerOpenId);
+    await acceptance.repository.upsertRoleGrant({
+      roleType: "iris_admin",
+      actorOpenId: adminOpenId,
+      enabled: true,
+      expectedVersion: 0,
+      operationKey: `grant:iris-admin:enable:${suffix}`,
+      operator: "test",
+      at,
+    });
+
+    const context = await acceptance.repository.getAuthorizedReviewContext({
+      proposalId: acceptance.proposal.id,
+      actorOpenId: adminOpenId,
+    });
+    expect(context).toMatchObject({
+      proposalId: acceptance.proposal.id,
+      riskLevel: "high",
+      requirements: [{ kind: "iris_admin_or_authorized_owner", state: "pending" }],
+    });
+    const input = {
+      ...reviewAttestationInput(acceptance, context!, "iris-admin"),
+      actorOpenId: adminOpenId,
+    };
+    await expect(acceptance.repository.recordReviewAttestation(input)).resolves.toEqual({
+      outcome: "applied",
+    });
+    await expect(acceptance.repository.hasCurrentReviewAttestation(
+      currentAttestationInput(input),
+    )).resolves.toBe(true);
+
+    await acceptance.repository.upsertRoleGrant({
+      roleType: "iris_admin",
+      actorOpenId: adminOpenId,
+      enabled: false,
+      expectedVersion: 1,
+      operationKey: `grant:iris-admin:disable:${suffix}`,
+      operator: "test",
+      at,
+    });
+    await expect(acceptance.repository.getAuthorizedReviewContext({
+      proposalId: acceptance.proposal.id,
+      actorOpenId: adminOpenId,
+    })).resolves.toBeUndefined();
+    await expect(acceptance.repository.hasCurrentReviewAttestation(
+      currentAttestationInput(input),
+    )).resolves.toBe(false);
   });
 
   async function createReviewCase(
@@ -258,6 +532,74 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       at,
     })).proposal;
     return { label, actorOpenId, documentSourceId, draft, policy, proposal, repository };
+  }
+
+  function reviewAttestationInput(
+    acceptance: Awaited<ReturnType<typeof createReviewCase>>,
+    context: NonNullable<Awaited<ReturnType<typeof acceptance.repository.getAuthorizedReviewContext>>>,
+    label: string,
+  ) {
+    return {
+      proposalId: acceptance.proposal.id,
+      actorOpenId: acceptance.actorOpenId,
+      expectedProposalVersion: context.proposalVersion,
+      expectedSubjectRevision: context.subjectRevision,
+      expectedSubjectVersion: context.subjectVersion,
+      expectedContentHash: context.contentHash,
+      sessionIdHash: sha256(`session-${label}`),
+      operationKey: `review-attestation:${label}:${suffix}`,
+      at,
+    };
+  }
+
+  async function requireReviewContext(
+    acceptance: Awaited<ReturnType<typeof createReviewCase>>,
+  ) {
+    const context = await acceptance.repository.getAuthorizedReviewContext({
+      proposalId: acceptance.proposal.id,
+      actorOpenId: acceptance.actorOpenId,
+    });
+    expect(context).toBeDefined();
+    return context!;
+  }
+
+  function currentAttestationInput(input: ReturnType<typeof reviewAttestationInput>) {
+    return {
+      proposalId: input.proposalId,
+      actorOpenId: input.actorOpenId,
+      expectedProposalVersion: input.expectedProposalVersion,
+      expectedSubjectRevision: input.expectedSubjectRevision,
+      expectedSubjectVersion: input.expectedSubjectVersion,
+      expectedContentHash: input.expectedContentHash,
+    };
+  }
+
+  async function disablePolicy(
+    acceptance: Awaited<ReturnType<typeof createReviewCase>>,
+  ): Promise<void> {
+    await acceptance.repository.upsertTargetPolicy({
+      id: acceptance.policy.id,
+      spaceId: acceptance.policy.spaceId,
+      displayName: acceptance.policy.displayName,
+      allowedGroupIds: [],
+      allowedRiskLevels: [acceptance.proposal.riskLevel],
+      enabled: false,
+      expectedVersion: acceptance.policy.version,
+      operationKey: `policy:${acceptance.label}:disable:${suffix}`,
+      operator: "test",
+      at,
+    });
+  }
+
+  async function denyDocumentSource(documentSourceId: string): Promise<void> {
+    await pool.query(
+      `UPDATE document_sources
+       SET permission_state = 'denied',
+           can_use_for_answering = FALSE,
+           can_use_for_knowledge_drafts = FALSE
+       WHERE id = $1`,
+      [documentSourceId],
+    );
   }
 });
 
