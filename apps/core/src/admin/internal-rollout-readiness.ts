@@ -1,6 +1,7 @@
 import {
   readAnswerDraftRuntimeConfig,
   readActionApprovalRuntimeConfig,
+  readActionReviewRuntimeConfig,
   readDocumentSyncWorkerRuntimeConfig,
   readEmbeddingProviderConfig,
   readEventWorkerRuntimeConfig,
@@ -78,6 +79,11 @@ export type InternalRolloutReadinessContext = {
     dispatcher?: { running: boolean; latestBatch?: { status: "succeeded" | "failed" } };
     outbox?: ActionApprovalOutboxReadinessStatus;
     degradedReason?: string;
+  };
+  actionReviewStatus?: {
+    configured: boolean;
+    running: boolean;
+    migration0034Applied: boolean;
   };
 };
 type CheckDefinition = Pick<InternalRolloutReadinessCheck, "id" | "title" | "envVars"> & {
@@ -424,6 +430,41 @@ const checkDefinitions: CheckDefinition[] = [
         return fail("Action-approval outbox has terminal failed rows.");
       }
       return pass("Action-proposal planner and approval dispatcher are running.");
+    },
+  },
+  {
+    id: "actionReviews",
+    title: "Public action-review runtime",
+    envVars: [
+      "IRIS_ACTION_REVIEW_ENABLED",
+      "IRIS_REVIEW_PUBLIC_ORIGIN",
+      "IRIS_REVIEW_SESSION_SECRET",
+      "IRIS_APPROVAL_ACTIONS_ENABLED",
+      "IRIS_KNOWLEDGE_CARD_ENABLED",
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "FEISHU_OPEN_BASE_URL",
+    ],
+    evaluate(env, context) {
+      const reviewConfig = readActionReviewRuntimeConfig(env);
+      if (!reviewConfig.enabled) return pass("Action reviews are safely disabled.");
+
+      if (!readActionApprovalRuntimeConfig(env).enabled) {
+        return fail("IRIS_APPROVAL_ACTIONS_ENABLED=true is required for action reviews.");
+      }
+      if (!readKnowledgeCardRuntimeConfig(env).enabled) {
+        return fail("IRIS_KNOWLEDGE_CARD_ENABLED=true is required for action reviews.");
+      }
+
+      const status = context.actionReviewStatus;
+      if (status === undefined) return fail("Action-review runtime status is unavailable.");
+      if (!status.configured) return fail("Action-review runtime is not configured.");
+      if (!status.running) return fail("Action-review runtime is not running.");
+      if (!status.migration0034Applied) {
+        return fail("Action-review migration 0034 is not applied.");
+      }
+
+      return pass("Action-review runtime is configured and running with migration 0034 applied.");
     },
   },
 ];

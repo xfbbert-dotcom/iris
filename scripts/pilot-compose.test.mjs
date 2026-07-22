@@ -188,7 +188,37 @@ test("proxies exactly the two public Feishu callback paths and keeps the fallbac
   ]);
   assert.match(caddyfile, /handle @feishu\s*\{\s*reverse_proxy core:3000/su);
   assert.match(caddyfile, /handle\s*\{\s*respond 404\s*\}/su);
-  assert.doesNotMatch(caddyfile, /\/feishu\/\*|path_regexp|handle_path/iu);
+  assert.doesNotMatch(caddyfile, /\/feishu\/\*|handle_path/iu);
+});
+
+test("proxies only exact public action-review methods and paths", () => {
+  assert.match(
+    caddyfile,
+    /@reviewProposal\s*\{\s*method GET\s*path_regexp review_proposal \^\/review\/action-proposals\/\[\^\/\]\+\$\s*\}/su,
+  );
+  assert.match(
+    caddyfile,
+    /@reviewOAuthCallback\s*\{\s*method GET\s*path \/review\/oauth\/callback\s*\}/su,
+  );
+  assert.match(
+    caddyfile,
+    /@reviewAttestation\s*\{\s*method POST\s*path_regexp review_attestation \^\/review\/action-proposals\/\[\^\/\]\+\/attest\$\s*\}/su,
+  );
+  for (const matcher of ["@reviewProposal", "@reviewOAuthCallback", "@reviewAttestation"]) {
+    assert.match(caddyfile, new RegExp(`handle ${matcher}\\s*\\{\\s*reverse_proxy core:3000`, "su"));
+  }
+  assert.doesNotMatch(caddyfile, /path \/review\/\*|handle_path \/review|@review\s+path/iu);
+  assert.match(caddyfile, /handle\s*\{\s*respond 404\s*\}/su);
+});
+
+test("keeps action review default-off and does not track a review session secret", () => {
+  assert.equal(readEnvAssignment(pilotCiEnv, "IRIS_ACTION_REVIEW_ENABLED"), "false");
+  assert.equal(readEnvAssignment(pilotCiEnv, "IRIS_REVIEW_PUBLIC_ORIGIN"), "");
+  assert.equal(readEnvAssignment(pilotCiEnv, "IRIS_REVIEW_SESSION_SECRET"), "");
+  assert.equal(compose.services.core.environment.IRIS_ACTION_REVIEW_ENABLED, "false");
+  assert.equal(compose.services.core.environment.IRIS_REVIEW_SESSION_SECRET, "");
+  assert.equal(compose.services.core.environment.IRIS_REVIEW_PUBLIC_ORIGIN, "");
+  assert.doesNotMatch(pilotCiEnv, /IRIS_REVIEW_SESSION_SECRET=(?!\s*$).+/mu);
 });
 
 test("requires exhaustive group isolation and a real proactive-speech status gate", () => {

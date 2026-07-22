@@ -23,6 +23,30 @@
     reverse_proxy core:3000
   }
 
+  @reviewProposal {
+    method GET
+    path_regexp review_proposal ^/review/action-proposals/[^/]+$
+  }
+  handle @reviewProposal {
+    reverse_proxy core:3000
+  }
+
+  @reviewOAuthCallback {
+    method GET
+    path /review/oauth/callback
+  }
+  handle @reviewOAuthCallback {
+    reverse_proxy core:3000
+  }
+
+  @reviewAttestation {
+    method POST
+    path_regexp review_attestation ^/review/action-proposals/[^/]+/attest$
+  }
+  handle @reviewAttestation {
+    reverse_proxy core:3000
+  }
+
   handle {
     respond 404
   }

@@ -4,6 +4,83 @@ import { buildInternalRolloutReadinessReport } from "../src/admin/internal-rollo
 import type { EnvLike } from "../src/config/env.js";
 
 describe("buildInternalRolloutReadinessReport", () => {
+  it("treats action reviews as disabled without requiring review credentials", () => {
+    const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
+
+    expect(checksById(report).actionReviews).toMatchObject({
+      status: "pass",
+      detail: "Action reviews are safely disabled.",
+    });
+  });
+
+  it("fails closed when enabled action review prerequisites or runtime facts are incomplete", () => {
+    const env = readyRolloutEnv({
+      IRIS_ACTION_REVIEW_ENABLED: "true",
+      IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+      IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+      IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+      IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+      FEISHU_ENCRYPT_KEY: "knowledge-card-encrypt-key",
+    });
+
+    expect(checksById(buildInternalRolloutReadinessReport(env)).actionReviews).toMatchObject({
+      status: "fail",
+      detail: "Action-review runtime status is unavailable.",
+    });
+
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      actionReviewStatus: {
+        configured: true,
+        running: true,
+        migration0034Applied: false,
+      },
+    })).actionReviews).toMatchObject({
+      status: "fail",
+      detail: "Action-review migration 0034 is not applied.",
+    });
+
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      actionReviewStatus: {
+        configured: true,
+        running: true,
+        migration0034Applied: true,
+      },
+    })).actionReviews).toMatchObject({
+      status: "pass",
+      detail: "Action-review runtime is configured and running with migration 0034 applied.",
+    });
+  });
+
+  it("blocks enabled action reviews when their dependent approval or knowledge-card runtimes are disabled", () => {
+    const reviewEnv = {
+      IRIS_ACTION_REVIEW_ENABLED: "true",
+      IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+      IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+    };
+
+    expect(checksById(buildInternalRolloutReadinessReport(
+      readyRolloutEnv(reviewEnv),
+      { actionReviewStatus: actionReviewStatus() },
+    )).actionReviews).toMatchObject({
+      status: "fail",
+      detail: "IRIS_APPROVAL_ACTIONS_ENABLED=true is required for action reviews.",
+    });
+
+    expect(checksById(buildInternalRolloutReadinessReport(
+      readyRolloutEnv({
+        ...reviewEnv,
+        IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+        IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+      }),
+      { actionReviewStatus: actionReviewStatus() },
+    )).actionReviews).toMatchObject({
+      status: "fail",
+      detail: "IRIS_KNOWLEDGE_CARD_ENABLED=true is required for action reviews.",
+    });
+  });
+
   it("treats action approvals as safely disabled by default", () => {
     const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
     expect(report.checks.find((check) => check.id === "actionApprovals")).toMatchObject({
@@ -494,6 +571,15 @@ function knowledgeCardStatus(overrides: Record<string, unknown> = {}) {
       outcome_unknown: 0,
       terminalFailed: 0,
     },
+    ...overrides,
+  };
+}
+
+function actionReviewStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    configured: true,
+    running: true,
+    migration0034Applied: true,
     ...overrides,
   };
 }

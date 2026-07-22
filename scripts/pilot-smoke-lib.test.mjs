@@ -61,6 +61,13 @@ const activationReadyStatus = {
   },
 };
 
+test("keeps the pilot action-review environment disabled without a tracked session secret", () => {
+  const env = readFileSync("deploy/pilot/ci.env", "utf8");
+  assert.match(env, /^IRIS_ACTION_REVIEW_ENABLED=false$/mu);
+  assert.match(env, /^IRIS_REVIEW_SESSION_SECRET=$/mu);
+  assert.doesNotMatch(env, /^IRIS_REVIEW_SESSION_SECRET=\S+$/mu);
+});
+
 test("accepts a fully healthy internal status snapshot", () => {
   assert.doesNotThrow(() =>
     assertHealthyInternalStatus({
