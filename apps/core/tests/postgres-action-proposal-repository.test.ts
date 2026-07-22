@@ -701,6 +701,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       callbackEventId: `callback-action-${label}-${suffix}`,
       actorOpenId: ownerOpenId,
       action: "approve" as const,
+      requireReviewAttestation: false,
       operationKey: `action-approval:${label}:${suffix}`,
       at: plusSeconds(1),
     };
@@ -714,6 +715,8 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       expectedTargetPolicyVersion: proposal.targetPolicyVersion,
       sourcePresentationId: presentationId,
       actorOpenId: ownerOpenId,
+      action: "approve",
+      requireReviewAttestation: false,
     })).resolves.toEqual({ sourceGroupId: groupId });
 
     await expect(repository.applyApprovalAction({
@@ -846,6 +849,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       callbackEventId: `callback-action-${label}-${suffix}`,
       actorOpenId: ownerOpenId,
       action: "approve" as const,
+      requireReviewAttestation: false,
       operationKey: `action-approval:${label}:${suffix}`,
       at: plusSeconds(2),
     };
@@ -859,6 +863,8 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       expectedTargetPolicyVersion: proposal.targetPolicyVersion,
       sourcePresentationId: presentationId,
       actorOpenId: ownerOpenId,
+      action: "approve",
+      requireReviewAttestation: false,
     })).rejects.toBeInstanceOf(ActionProposalAuthorizationError);
     await expect(repository.applyApprovalAction(approvalInput))
       .rejects.toBeInstanceOf(ActionProposalAuthorizationError);
@@ -877,6 +883,8 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       expectedTargetPolicyVersion: proposal.targetPolicyVersion,
       sourcePresentationId: presentationId,
       actorOpenId: ownerOpenId,
+      action: "approve",
+      requireReviewAttestation: false,
     })).resolves.toEqual({ sourceGroupId: groupId });
     await expect(repository.applyApprovalAction({
       ...approvalInput,
@@ -900,6 +908,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       callbackEventId: `callback-action-request-revision-${suffix}`,
       actorOpenId: acceptance.ownerOpenId,
       action: "request_revision" as const,
+      requireReviewAttestation: false,
       reason: "Clarify the rollback owner.",
       operationKey: `action-request-revision:${suffix}`,
       at: plusSeconds(1),
@@ -1037,6 +1046,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       callbackEventId: `callback-action-reject-${suffix}`,
       actorOpenId: acceptance.ownerOpenId,
       action: "reject" as const,
+      requireReviewAttestation: false,
       reason: "This content should not be published.",
       operationKey: `action-reject:${suffix}`,
       at: plusSeconds(1),
@@ -1081,6 +1091,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       callbackEventId: `callback-action-concurrent-${suffix}`,
       actorOpenId: acceptance.ownerOpenId,
       action: "approve" as const,
+      requireReviewAttestation: false,
       operationKey: `action-concurrent:${suffix}`,
       at: plusSeconds(1),
     };

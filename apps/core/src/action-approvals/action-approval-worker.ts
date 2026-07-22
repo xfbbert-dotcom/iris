@@ -14,6 +14,7 @@ import {
   ActionProposalIneligibleError,
   ActionProposalOperationConflictError,
   ActionProposalPersistenceConflictError,
+  ActionProposalReviewRequiredError,
   ActionProposalVersionConflictError,
 } from "./postgres-action-proposal-repository.js";
 
@@ -26,6 +27,7 @@ export type ActionApprovalWorkerCode =
   | "not_authorized"
   | "stale_presentation"
   | "evidence_or_policy_invalid"
+  | "review_required"
   | "immutable_intent_conflict"
   | "membership_unavailable"
   | "repository_unavailable"
@@ -42,6 +44,7 @@ export function createActionApprovalWorker({
   cardClient,
   isActionApprovalRuntimeEnabled,
   canUseActionApprovalsForSourceGroup,
+  requireReviewAttestation,
   botOpenId,
   now = () => new Date(),
 }: {
@@ -56,6 +59,7 @@ export function createActionApprovalWorker({
   cardClient: Pick<FeishuInteractiveCardClient, "updateCard">;
   isActionApprovalRuntimeEnabled(): boolean;
   canUseActionApprovalsForSourceGroup(groupId?: string): boolean;
+  requireReviewAttestation: boolean;
   botOpenId: string;
   now?: () => Date;
 }) {
@@ -70,7 +74,9 @@ export function createActionApprovalWorker({
 
       let replay;
       try {
-        replay = await repository.inspectApprovalActionReplay(toMutationInput(job, intent));
+        replay = await repository.inspectApprovalActionReplay(
+          toMutationInput(job, intent, requireReviewAttestation),
+        );
       } catch (error) {
         return classifyStableOrRetryable(error);
       }
@@ -106,7 +112,9 @@ export function createActionApprovalWorker({
 
       let sourceGroupId: string | undefined;
       try {
-        const preflight = await repository.preflightApprovalAction(toPreflightInput(job));
+        const preflight = await repository.preflightApprovalAction(
+          toPreflightInput(job, requireReviewAttestation),
+        );
         sourceGroupId = preflight.sourceGroupId;
       } catch (error) {
         return classifyStableOrRetryable(error);
@@ -131,7 +139,9 @@ export function createActionApprovalWorker({
 
       let mutation: ApplyActionProposalActionResult;
       try {
-        mutation = await repository.applyApprovalAction(toMutationInput(job, intent));
+        mutation = await repository.applyApprovalAction(
+          toMutationInput(job, intent, requireReviewAttestation),
+        );
       } catch (error) {
         return classifyStableOrRetryable(error);
       }
@@ -172,7 +182,10 @@ function isExactContext(
     (job.messageId === undefined || job.messageId === presentation.messageId);
 }
 
-function toPreflightInput(job: ActionProposalApprovalInteractionJob) {
+function toPreflightInput(
+  job: ActionProposalApprovalInteractionJob,
+  requireReviewAttestation: boolean,
+) {
   return {
     proposalId: job.proposalId,
     requirementId: job.requirementId,
@@ -182,15 +195,18 @@ function toPreflightInput(job: ActionProposalApprovalInteractionJob) {
     expectedTargetPolicyVersion: job.targetPolicyVersion,
     sourcePresentationId: job.presentationId,
     actorOpenId: job.actorOpenId,
+    action: job.action,
+    requireReviewAttestation,
   };
 }
 
 function toMutationInput(
   job: ActionProposalApprovalInteractionJob,
   intent?: ApprovalInteractionIntent,
+  requireReviewAttestation = false,
 ) {
   const common = {
-    ...toPreflightInput(job),
+    ...toPreflightInput(job, requireReviewAttestation),
     callbackEventId: job.eventId,
     operationKey: `action-approval:${job.appId}:${job.eventId}`,
     at: requireDate(job.receivedAt),
@@ -265,6 +281,7 @@ function renderCommittedResult(result: ApplyActionProposalActionResult): string 
 }
 
 function classifyStableOrRetryable(error: unknown): ActionApprovalWorkerResult {
+  if (error instanceof ActionProposalReviewRequiredError) return denied("review_required");
   if (error instanceof ActionProposalAuthorizationError) return denied("not_authorized");
   if (error instanceof ActionProposalIneligibleError || error instanceof KnowledgeDraftEvidenceError) {
     return denied("evidence_or_policy_invalid");
@@ -278,7 +295,7 @@ function classifyStableOrRetryable(error: unknown): ActionApprovalWorkerResult {
 
 function denied(code: Extract<ActionApprovalWorkerCode,
   "runtime_disabled" | "bot_actor" | "not_current_member" | "not_authorized" |
-  "stale_presentation" | "evidence_or_policy_invalid" | "immutable_intent_conflict"
+  "stale_presentation" | "evidence_or_policy_invalid" | "review_required" | "immutable_intent_conflict"
 >): ActionApprovalWorkerResult {
   return { status: "denied", code };
 }

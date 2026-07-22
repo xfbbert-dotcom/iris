@@ -10,6 +10,7 @@ import {
   ActionProposalAuthorizationError,
   ActionProposalIneligibleError,
   ActionProposalOperationConflictError,
+  ActionProposalReviewRequiredError,
   ActionProposalVersionConflictError,
 } from "../src/action-approvals/postgres-action-proposal-repository.js";
 import type {
@@ -50,9 +51,27 @@ describe("ActionApprovalWorker", () => {
       callbackEventId: "event-1",
       actorOpenId: "ou_owner",
       action: "approve",
+      requireReviewAttestation: false,
       operationKey: "action-approval:cli_app:event-1",
       at: job().receivedAt,
     });
+  });
+
+  it("maps a missing required review to a stable denial without mutation", async () => {
+    const harness = createHarness({
+      requireReviewAttestation: true,
+      preflight: async () => { throw new ActionProposalReviewRequiredError(); },
+    });
+
+    await expect(harness.worker.processActionApproval(job())).resolves.toEqual({
+      status: "denied",
+      code: "review_required",
+    });
+    expect(harness.repository.applyApprovalAction).not.toHaveBeenCalled();
+    expect(harness.repository.preflightApprovalAction).toHaveBeenCalledWith(expect.objectContaining({
+      action: "approve",
+      requireReviewAttestation: true,
+    }));
   });
 
   it.each([
@@ -224,6 +243,7 @@ describe("ActionApprovalWorker", () => {
 type Overrides = {
   actorOpenId?: string;
   runtimeEnabled?: () => boolean;
+  requireReviewAttestation?: boolean;
   groupEnabled?: () => boolean;
   getContext?: () => Promise<ActionApprovalDeliveryContext | undefined>;
   preflight?: () => Promise<{ sourceGroupId?: string }>;
@@ -260,6 +280,7 @@ function createHarness(overrides: Overrides = {}) {
       membershipChecker,
       cardClient,
       isActionApprovalRuntimeEnabled: overrides.runtimeEnabled ?? (() => true),
+      requireReviewAttestation: overrides.requireReviewAttestation ?? false,
       canUseActionApprovalsForSourceGroup: overrides.groupEnabled ?? (() => true),
       botOpenId: "ou_bot",
       now: () => new Date(at),

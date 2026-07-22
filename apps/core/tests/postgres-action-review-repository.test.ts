@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   ActionProposalOperationConflictError,
+  ActionProposalReviewRequiredError,
   ActionProposalVersionConflictError,
   createPostgresActionProposalRepository,
 } from "../src/action-approvals/postgres-action-proposal-repository.js";
@@ -203,6 +204,40 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       ...input,
       sessionIdHash: sha256("different-session"),
     })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+  });
+
+  it("requires an exact current review attestation before approving", async () => {
+    const acceptance = await createReviewApprovalCase("approval-gate", `ou_approval_${suffix}`);
+    const input = approvalInput(acceptance);
+
+    await expect(acceptance.repository.preflightApprovalAction({
+      ...input,
+      requireReviewAttestation: true,
+    })).rejects.toBeInstanceOf(ActionProposalReviewRequiredError);
+    await expect(acceptance.repository.applyApprovalAction({
+      ...input,
+      action: "approve",
+      requireReviewAttestation: true,
+      callbackEventId: `approval-gate-missing-${suffix}`,
+      operationKey: `approval-gate-missing-${suffix}`,
+      at,
+    })).rejects.toBeInstanceOf(ActionProposalReviewRequiredError);
+
+    const context = await requireReviewContext(acceptance);
+    await acceptance.repository.recordReviewAttestation(reviewAttestationInput(
+      acceptance,
+      context,
+      "approval-gate",
+    ));
+
+    await expect(acceptance.repository.applyApprovalAction({
+      ...input,
+      action: "approve",
+      requireReviewAttestation: true,
+      callbackEventId: `approval-gate-approved-${suffix}`,
+      operationKey: `approval-gate-approved-${suffix}`,
+      at,
+    })).resolves.toMatchObject({ outcome: "applied", action: "approve" });
   });
 
   it("enforces append-only attestation history and both database uniqueness constraints", async () => {
@@ -532,6 +567,49 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
       at,
     })).proposal;
     return { label, actorOpenId, documentSourceId, draft, policy, proposal, repository };
+  }
+
+  async function createReviewApprovalCase(label: string, actorOpenId: string) {
+    const acceptance = await createReviewCase(label, "medium", actorOpenId);
+    const proposalContext = await acceptance.repository.getProposal(acceptance.proposal.id);
+    expect(proposalContext).toBeDefined();
+    const requirement = proposalContext!.requirements[0]!;
+    const presentationId = `review-presentation-${label}-${suffix}`;
+    await pool.query(
+      `INSERT INTO action_approval_presentations (
+        id, proposal_id, requirement_id, proposal_version, recipient_open_id,
+        state, message_id, operation_key, operation_fingerprint,
+        version, created_at, activated_at
+      ) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, 1, $9, $9)`,
+      [
+        presentationId,
+        acceptance.proposal.id,
+        requirement.id,
+        acceptance.proposal.version,
+        actorOpenId,
+        `om-review-${label}-${suffix}`,
+        `review-presentation:${label}:${suffix}`,
+        sha256(`review-presentation:${label}:${suffix}`),
+        at,
+      ],
+    );
+    return { ...acceptance, requirementId: requirement.id, presentationId };
+  }
+
+  function approvalInput(
+    acceptance: Awaited<ReturnType<typeof createReviewApprovalCase>>,
+  ) {
+    return {
+      proposalId: acceptance.proposal.id,
+      requirementId: acceptance.requirementId,
+      expectedProposalVersion: acceptance.proposal.version,
+      expectedSubjectRevision: acceptance.proposal.subjectRevision,
+      expectedSubjectVersion: acceptance.proposal.subjectVersion,
+      expectedTargetPolicyVersion: acceptance.policy.version,
+      sourcePresentationId: acceptance.presentationId,
+      actorOpenId: acceptance.actorOpenId,
+      action: "approve" as const,
+    };
   }
 
   function reviewAttestationInput(

@@ -541,6 +541,29 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.queue.acknowledge).not.toHaveBeenCalled();
   });
 
+  it("acknowledges a required action review with the generic review message", async () => {
+    const harness = createHarness({
+      job: actionJob(),
+      actionApprovalWorker: {
+        processActionApproval: vi.fn(async () => ({
+          status: "denied" as const,
+          code: "review_required" as const,
+        })),
+      },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "denied",
+      idempotencyKey: actionJob().idempotencyKey,
+      code: "review_required",
+    }]);
+    expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
+    expect(harness.queue.handleFailure).not.toHaveBeenCalled();
+    const cardJson = harness.cardClient.updateCard.mock.calls[0]?.[0]?.cardJson as string;
+    expect(cardJson).toContain("请先打开完整正文审阅页并完成审阅");
+    expect(cardJson).not.toMatch(/proposal-1|ou_owner|role|存在/iu);
+  });
+
   it.each([
     ["membership", "membership_unavailable"],
     ["presentation", "repository_unavailable"],

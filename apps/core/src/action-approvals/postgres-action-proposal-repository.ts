@@ -258,6 +258,13 @@ export class ActionProposalAuthorizationError extends Error {
   }
 }
 
+export class ActionProposalReviewRequiredError extends Error {
+  constructor() {
+    super("action proposal review is required");
+    this.name = "ActionProposalReviewRequiredError";
+  }
+}
+
 export function createPostgresActionProposalRepository({
   dataSource,
 }: {
@@ -572,6 +579,11 @@ async function preflightApprovalAction(
     ),
     sourcePresentationId: requireReference("sourcePresentationId", input.sourcePresentationId),
     actorOpenId: requireReference("actorOpenId", input.actorOpenId),
+    action: requireApprovalAction(input.action),
+    requireReviewAttestation: requireBoolean(
+      "requireReviewAttestation",
+      input.requireReviewAttestation,
+    ),
   };
   return withTransaction(dataSource, async (client) => {
     const proposal = await lockProposal(client, normalized.proposalId);
@@ -603,6 +615,7 @@ async function preflightApprovalAction(
     ) throw new ActionProposalVersionConflictError();
     await validateDraftEvidence(client, draft);
     await requireApprovalAuthorization(client, requirement, normalized.actorOpenId);
+    await requireCurrentReviewAttestation(client, normalized);
     return draft.source_group_id === null ? {} : { sourceGroupId: draft.source_group_id };
   });
 }
@@ -689,31 +702,62 @@ async function hasCurrentReviewAttestation(
 ): Promise<boolean> {
   const normalized = normalizeCurrentReviewAttestationInput(input);
   return withTransaction(dataSource, async (client) => {
-    const context = await loadAuthorizedReviewContext(client, normalized);
-    if (
-      context === undefined ||
-      context.proposalVersion !== normalized.expectedProposalVersion ||
-      context.subjectRevision !== normalized.expectedSubjectRevision ||
-      context.subjectVersion !== normalized.expectedSubjectVersion ||
-      context.contentHash !== normalized.expectedContentHash
-    ) return false;
-    const result = await client.query<{ present: boolean }>(
-      `SELECT EXISTS (
-        SELECT 1 FROM action_review_attestations
-        WHERE proposal_id = $1 AND proposal_version = $2 AND actor_open_id = $3
-          AND subject_revision = $4 AND subject_version = $5 AND content_hash = $6
-      ) AS present`,
-      [
-        normalized.proposalId,
-        normalized.expectedProposalVersion,
-        normalized.actorOpenId,
-        normalized.expectedSubjectRevision,
-        normalized.expectedSubjectVersion,
-        normalized.expectedContentHash,
-      ],
-    );
-    return result.rows[0]?.present === true;
+    return hasCurrentReviewAttestationInTransaction(client, normalized);
   });
+}
+
+async function requireCurrentReviewAttestation(
+  client: KnowledgeDraftTransactionClient,
+  input: {
+    action: "approve" | "request_revision" | "reject";
+    requireReviewAttestation: boolean;
+    proposalId: string;
+    actorOpenId: string;
+    expectedProposalVersion: number;
+    expectedSubjectRevision: number;
+    expectedSubjectVersion: number;
+  },
+): Promise<void> {
+  if (input.action !== "approve" || !input.requireReviewAttestation) return;
+  const context = await loadAuthorizedReviewContext(client, input);
+  if (context === undefined || !await hasCurrentReviewAttestationInTransaction(client, {
+    proposalId: input.proposalId,
+    actorOpenId: input.actorOpenId,
+    expectedProposalVersion: input.expectedProposalVersion,
+    expectedSubjectRevision: input.expectedSubjectRevision,
+    expectedSubjectVersion: input.expectedSubjectVersion,
+    expectedContentHash: context.contentHash,
+  })) throw new ActionProposalReviewRequiredError();
+}
+
+async function hasCurrentReviewAttestationInTransaction(
+  client: KnowledgeDraftTransactionClient,
+  input: CurrentActionReviewAttestationInput,
+): Promise<boolean> {
+  const context = await loadAuthorizedReviewContext(client, input);
+  if (
+    context === undefined ||
+    context.proposalVersion !== input.expectedProposalVersion ||
+    context.subjectRevision !== input.expectedSubjectRevision ||
+    context.subjectVersion !== input.expectedSubjectVersion ||
+    context.contentHash !== input.expectedContentHash
+  ) return false;
+  const result = await client.query<{ present: boolean }>(
+    `SELECT EXISTS (
+      SELECT 1 FROM action_review_attestations
+      WHERE proposal_id = $1 AND proposal_version = $2 AND actor_open_id = $3
+        AND subject_revision = $4 AND subject_version = $5 AND content_hash = $6
+    ) AS present`,
+    [
+      input.proposalId,
+      input.expectedProposalVersion,
+      input.actorOpenId,
+      input.expectedSubjectRevision,
+      input.expectedSubjectVersion,
+      input.expectedContentHash,
+    ],
+  );
+  return result.rows[0]?.present === true;
 }
 
 async function loadAuthorizedReviewContext(
@@ -1311,6 +1355,8 @@ async function applyApprovalAction(
       );
     }
 
+    await requireCurrentReviewAttestation(client, normalized);
+
     const approvalId = randomUUID();
     await client.query(
       `INSERT INTO action_approvals (
@@ -1647,7 +1693,7 @@ async function applyGovernanceDisposition(
 function actionApprovalFingerprint(
   normalized: ReturnType<typeof normalizeApplyActionInput>,
 ): string {
-  const { at: _auditTimestamp, ...intent } = normalized;
+  const { at: _auditTimestamp, requireReviewAttestation: _reviewGate, ...intent } = normalized;
   return operationFingerprint({ operation: "apply_action_proposal_action", ...intent });
 }
 
@@ -2754,6 +2800,10 @@ function normalizeApplyActionInput(input: ApplyActionProposalActionInput) {
     callbackEventId: requireReference("callbackEventId", input.callbackEventId),
     actorOpenId: requireReference("actorOpenId", input.actorOpenId),
     action,
+    requireReviewAttestation: requireBoolean(
+      "requireReviewAttestation",
+      input.requireReviewAttestation,
+    ),
     ...(reason === undefined ? {} : { reason }),
     ...(action === "reject" ? { rejectionConfirmed: true as const } : {}),
     operationKey: requireReference("operationKey", input.operationKey),
@@ -2897,6 +2947,13 @@ function requireRoleType(value: unknown): ActionRoleGrantType {
     throw new Error("roleType is invalid");
   }
   return value as ActionRoleGrantType;
+}
+
+function requireApprovalAction(value: unknown): "approve" | "request_revision" | "reject" {
+  if (!(value === "approve" || value === "request_revision" || value === "reject")) {
+    throw new Error("action is invalid");
+  }
+  return value;
 }
 
 function requireReference(name: string, value: unknown): string {

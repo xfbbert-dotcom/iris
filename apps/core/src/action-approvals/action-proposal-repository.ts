@@ -272,6 +272,7 @@ export type ApplyActionProposalActionInput = {
   callbackEventId: string;
   actorOpenId: string;
   action: "approve" | "request_revision" | "reject";
+  requireReviewAttestation: boolean;
   reason?: string;
   rejectionConfirmed?: boolean;
   operationKey: string;
@@ -320,6 +321,8 @@ export type PreflightActionApprovalInput = {
   expectedTargetPolicyVersion: number;
   sourcePresentationId: string;
   actorOpenId: string;
+  action: "approve" | "request_revision" | "reject";
+  requireReviewAttestation: boolean;
 };
 
 export interface ActionProposalRepository {

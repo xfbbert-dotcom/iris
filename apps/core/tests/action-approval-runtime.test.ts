@@ -39,6 +39,9 @@ describe("ActionApprovalRuntime", () => {
     expect(dependencies.createPostgresPool).toHaveBeenCalledWith({
       databaseUrl: "postgres://iris:secret@postgres:5432/iris",
     });
+    expect(dependencies.createActionWorker).toHaveBeenCalledWith(expect.objectContaining({
+      requireReviewAttestation: false,
+    }));
     expect(knowledgeCards.bindActionApprovalWorker).toHaveBeenCalledWith(dependencies.actionWorker);
     const dispatcherGate = dependencies.createDispatcher.mock.calls[0]?.[0].canDeliverApprovalCards;
     expect(dispatcherGate?.("oc_pilot")).toBe(false);
@@ -85,6 +88,20 @@ describe("ActionApprovalRuntime", () => {
       "planner-stop",
       "pool-end",
     ]);
+  });
+
+  it("enables the review attestation gate only when explicitly configured", () => {
+    const dependencies = runtimeDependencies();
+    createActionApprovalRuntime({
+      env: { ...enabledEnv(), IRIS_ACTION_REVIEW_ENABLED: "true" },
+      runtimeController: enabledController(),
+      knowledgeCardRuntime: knowledgeCardRuntime(),
+      dependencies,
+    });
+
+    expect(dependencies.createActionWorker).toHaveBeenCalledWith(expect.objectContaining({
+      requireReviewAttestation: true,
+    }));
   });
 });
 

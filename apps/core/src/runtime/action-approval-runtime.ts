@@ -91,6 +91,7 @@ export function createActionApprovalRuntime({
   const createPlannerPollingLoop = dependencies.createPlannerLoop ?? createActionProposalPlannerLoop;
   const createDispatcherPollingLoop = dependencies.createDispatcherLoop ?? createActionApprovalDispatcherLoop;
   const enabledGroups = new Set(config.enabledGroupIds);
+  const requireReviewAttestation = env.IRIS_ACTION_REVIEW_ENABLED === "true";
   let pool: ActionApprovalPool | undefined;
   let plannerLoop: ActionProposalPlannerLoop | undefined;
   let dispatcherLoop: ReturnType<typeof createActionApprovalDispatcherLoop> | undefined;
@@ -132,6 +133,7 @@ export function createActionApprovalRuntime({
       cardClient: knowledgeCardRuntime.approvalInteractions.cardClient,
       isActionApprovalRuntimeEnabled: anyGroupEnabled,
       canUseActionApprovalsForSourceGroup: canUseGroup,
+      requireReviewAttestation,
       botOpenId: knowledgeCardRuntime.approvalInteractions.botOpenId,
     });
     plannerLoop = createPlannerPollingLoop({

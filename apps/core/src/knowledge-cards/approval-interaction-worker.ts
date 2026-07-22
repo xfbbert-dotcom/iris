@@ -265,6 +265,13 @@ async function processActionApprovalJob(
       "membership_unavailable" | "repository_unavailable" | "internal_error"
     >);
   }
+  if (result.code === "review_required") {
+    await attemptBoundedCardUpdate(
+      input.cardClient,
+      input.job.messageId,
+      () => renderStatusCard("review_required"),
+    );
+  }
   const ackFailure = await acknowledge(input, result.code !== "immutable_intent_conflict");
   if (ackFailure !== undefined) return ackFailure;
   return {
@@ -502,6 +509,7 @@ function renderStatusCard(code: ApprovalInteractionWorkerCode): string {
     invalid_membership_evidence: "Membership verification expired. Try again.",
     evidence_invalidated: "This draft can no longer be reviewed because its evidence changed.",
     evidence_or_policy_invalid: "This publication can no longer be reviewed because its evidence or policy changed.",
+    review_required: "请先打开完整正文审阅页并完成审阅",
     membership_unavailable: "Membership could not be verified. Try again later.",
     repository_unavailable: "The action could not be recorded. Try again later.",
     redis_unavailable: "The action could not be queued. Try again later.",
