@@ -974,7 +974,7 @@ async function applyApprovalAction(
   input: ApplyActionProposalActionInput,
 ): Promise<ApplyActionProposalActionResult> {
   const normalized = normalizeApplyActionInput(input);
-  const fingerprint = operationFingerprint({ operation: "apply_action_proposal_action", ...normalized });
+  const fingerprint = actionApprovalFingerprint(normalized);
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, normalized.operationKey);
     const replay = await inspectNormalizedApprovalActionReplay(client, normalized, fingerprint);
@@ -1168,8 +1168,15 @@ async function inspectApprovalActionReplay(
   input: ApplyActionProposalActionInput,
 ): Promise<ActionApprovalReplayInspection | undefined> {
   const normalized = normalizeApplyActionInput(input);
-  const fingerprint = operationFingerprint({ operation: "apply_action_proposal_action", ...normalized });
+  const fingerprint = actionApprovalFingerprint(normalized);
   return inspectNormalizedApprovalActionReplay(dataSource, normalized, fingerprint);
+}
+
+function actionApprovalFingerprint(
+  normalized: ReturnType<typeof normalizeApplyActionInput>,
+): string {
+  const { at: _auditTimestamp, ...intent } = normalized;
+  return operationFingerprint({ operation: "apply_action_proposal_action", ...intent });
 }
 
 async function inspectNormalizedApprovalActionReplay(

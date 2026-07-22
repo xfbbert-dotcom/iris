@@ -739,6 +739,13 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
     });
     await expect(repository.inspectApprovalActionReplay({
       ...baseInput,
+      at: plusSeconds(60),
+    })).resolves.toMatchObject({
+      result: { outcome: "already_applied", action: "approve" },
+      sourceGroupId: groupId,
+    });
+    await expect(repository.inspectApprovalActionReplay({
+      ...baseInput,
       actorOpenId: `ou_conflicting_${suffix}`,
     })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
     await expect(repository.applyApprovalAction(baseInput)).resolves.toMatchObject({
@@ -901,6 +908,13 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
         draftStatus: "needs_revision",
         draftVersion: 3,
       },
+      sourceGroupId: groupId,
+    });
+    await expect(acceptance.repository.inspectApprovalActionReplay({
+      ...input,
+      at: plusSeconds(60),
+    })).resolves.toMatchObject({
+      result: { outcome: "already_applied", action: "request_revision" },
       sourceGroupId: groupId,
     });
     await expect(acceptance.repository.inspectApprovalActionReplay({
