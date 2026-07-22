@@ -244,6 +244,17 @@ export type ApplyActionProposalActionResult = {
   draftVersion: number;
 };
 
+export type PreflightActionApprovalInput = {
+  proposalId: string;
+  requirementId: string;
+  expectedProposalVersion: number;
+  expectedSubjectRevision: number;
+  expectedSubjectVersion: number;
+  expectedTargetPolicyVersion: number;
+  sourcePresentationId: string;
+  actorOpenId: string;
+};
+
 export interface ActionProposalRepository {
   upsertTargetPolicy(input: UpsertPublicationTargetPolicyInput): Promise<PolicyMutationResult>;
   upsertRoleGrant(input: UpsertActionRoleGrantInput): Promise<RoleGrantMutationResult>;
@@ -258,6 +269,13 @@ export interface ActionProposalRepository {
   applyApprovalAction(
     input: ApplyActionProposalActionInput,
   ): Promise<ApplyActionProposalActionResult>;
+  preflightApprovalAction(
+    input: PreflightActionApprovalInput,
+  ): Promise<{ sourceGroupId?: string }>;
+  listApprovalPresentations(input: {
+    proposalId: string;
+    limit: number;
+  }): Promise<ActionApprovalPresentation[]>;
   claimApprovalPresentationSend(input: {
     workerId: string;
     leaseUntil: Date;

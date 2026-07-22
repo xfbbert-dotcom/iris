@@ -322,6 +322,46 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
   });
 
+  it("dispatches an action proposal job without touching the knowledge draft repository", async () => {
+    const processActionApproval = vi.fn(async () => ({
+      status: "applied" as const,
+      code: "action_approval_applied" as const,
+    }));
+    const harness = createHarness({
+      job: actionJob(),
+      actionApprovalWorker: { processActionApproval },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "applied",
+      idempotencyKey: actionJob().idempotencyKey,
+      code: "action_approval_applied",
+    }]);
+    expect(processActionApproval).toHaveBeenCalledWith(actionJob());
+    expect(harness.repository.getPresentation).not.toHaveBeenCalled();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+    expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
+  });
+
+  it("routes a retryable action proposal result through the shared finite queue", async () => {
+    const harness = createHarness({
+      job: actionJob(),
+      actionApprovalWorker: {
+        processActionApproval: vi.fn(async () => ({
+          status: "retryable" as const,
+          code: "repository_unavailable" as const,
+        })),
+      },
+    });
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      idempotencyKey: actionJob().idempotencyKey,
+      code: "repository_unavailable",
+    }]);
+    expect(harness.queue.handleFailure).toHaveBeenCalledOnce();
+    expect(harness.queue.acknowledge).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["membership", "membership_unavailable"],
     ["presentation", "repository_unavailable"],
@@ -393,6 +433,9 @@ type HarnessOverrides = {
   updateCard?: (input: { messageId: string; cardJson: string }) => Promise<void>;
   acknowledge?: () => Promise<void>;
   handleFailure?: () => Promise<{ action: "delayed" | "dead_lettered" }>;
+  actionApprovalWorker?: {
+    processActionApproval: (job: Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>) => Promise<any>;
+  };
 };
 
 function createHarness(overrides: HarnessOverrides = {}) {
@@ -431,7 +474,30 @@ function createHarness(overrides: HarnessOverrides = {}) {
       workerId: "approval-worker-1",
       leaseMs: 30_000,
       now: () => new Date(at),
+      actionApprovalWorker: overrides.actionApprovalWorker,
     }),
+  };
+}
+
+function actionJob(): Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }> {
+  return {
+    kind: "action_proposal_approval",
+    idempotencyKey: "card-action:proposal-event-1",
+    eventId: "proposal-event-1",
+    appId: "cli_app",
+    actorOpenId: "ou_owner",
+    chatId: "oc_dm",
+    messageId: "om_proposal_card",
+    presentationId: "proposal-presentation-1",
+    proposalId: "proposal-1",
+    requirementId: "requirement-1",
+    proposalVersion: 4,
+    subjectRevision: 2,
+    subjectVersion: 7,
+    targetPolicyVersion: 3,
+    action: "approve",
+    receivedAt: new Date(at.getTime() - 1_000),
+    attempts: 0,
   };
 }
 

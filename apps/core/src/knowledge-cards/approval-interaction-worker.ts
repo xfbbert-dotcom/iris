@@ -1,5 +1,9 @@
 import type { FeishuGroupMembershipChecker } from "../feishu/feishu-group-membership-checker.js";
 import type { FeishuInteractiveCardClient } from "../feishu/feishu-interactive-card-client.js";
+import type {
+  ActionApprovalWorkerCode,
+  ActionApprovalWorkerResult,
+} from "../action-approvals/action-approval-worker.js";
 import { KnowledgeDraftEvidenceError } from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
 
 import type { ApprovalInteractionQueue } from "./approval-interaction-queue.js";
@@ -43,7 +47,8 @@ export type ApprovalInteractionWorkerCode =
   | "membership_unavailable"
   | "repository_unavailable"
   | "redis_unavailable"
-  | "internal_error";
+  | "internal_error"
+  | ActionApprovalWorkerCode;
 
 export type ApprovalInteractionWorkerDependencies = {
   queue: Pick<ApprovalInteractionQueue, "claimBatch" | "acknowledge" | "handleFailure">;
@@ -58,6 +63,10 @@ export type ApprovalInteractionWorkerDependencies = {
   workerId: string;
   leaseMs: number;
   now?: () => Date;
+  actionApprovalWorker?: {
+    processActionApproval(job: Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>):
+      Promise<ActionApprovalWorkerResult>;
+  };
 };
 
 export function createApprovalInteractionWorker({
@@ -70,6 +79,7 @@ export function createApprovalInteractionWorker({
   workerId,
   leaseMs,
   now = () => new Date(),
+  actionApprovalWorker,
 }: ApprovalInteractionWorkerDependencies) {
   const safeBotOpenId = requireIdentifier("botOpenId", botOpenId);
   const safeWorkerId = requireIdentifier("workerId", workerId);
@@ -96,6 +106,7 @@ export function createApprovalInteractionWorker({
           botOpenId: safeBotOpenId,
           workerId: safeWorkerId,
           now,
+          actionApprovalWorker,
         }));
       }
       return results;
@@ -116,12 +127,13 @@ async function processJob(input: {
   botOpenId: string;
   workerId: string;
   now: () => Date;
+  actionApprovalWorker?: ApprovalInteractionWorkerDependencies["actionApprovalWorker"];
 }): Promise<ApprovalInteractionWorkerResult> {
   const { job } = input;
   let presentation: KnowledgeDraftPresentation | undefined;
 
   if (job.kind !== "knowledge_draft_confirmation") {
-    return handleTransientFailure(input, "internal_error");
+    return processActionApprovalJob({ ...input, job });
   }
 
   const initiallyEnabled = readRuntimeGate(input.canUseKnowledgeCards, job.chatId);
@@ -198,6 +210,32 @@ async function processJob(input: {
     status: mutation.outcome,
     idempotencyKey: job.idempotencyKey,
     code,
+  };
+}
+
+async function processActionApprovalJob(
+  input: Parameters<typeof processJob>[0] & {
+    job: Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>;
+  },
+): Promise<ApprovalInteractionWorkerResult> {
+  if (input.actionApprovalWorker === undefined) return handleTransientFailure(input, "internal_error");
+  let result: ActionApprovalWorkerResult;
+  try {
+    result = await input.actionApprovalWorker.processActionApproval(input.job);
+  } catch {
+    return handleTransientFailure(input, "internal_error");
+  }
+  if (result.status === "retryable") {
+    return handleTransientFailure(input, result.code as Extract<ActionApprovalWorkerCode,
+      "membership_unavailable" | "repository_unavailable" | "internal_error"
+    >);
+  }
+  const ackFailure = await acknowledge(input);
+  if (ackFailure !== undefined) return ackFailure;
+  return {
+    status: result.status,
+    idempotencyKey: input.job.idempotencyKey,
+    code: result.code,
   };
 }
 
@@ -382,14 +420,17 @@ export function renderApprovalInteractionStatusCard(code: ApprovalInteractionWor
 function renderStatusCard(code: ApprovalInteractionWorkerCode): string {
   const content: Record<ApprovalInteractionWorkerCode, string> = {
     action_applied: "Knowledge draft action recorded.",
+    action_approval_applied: "Knowledge publication action recorded.",
     duplicate_callback: "This action was already processed.",
     immutable_intent_conflict: "This callback conflicts with the committed action.",
     runtime_disabled: "Knowledge card actions are currently disabled.",
     bot_actor: "Iris cannot approve its own knowledge draft.",
     not_current_member: "Only current group members can review this draft.",
+    not_authorized: "The current approval role does not authorize this action.",
     stale_presentation: "This draft changed. Use the latest knowledge card.",
     invalid_membership_evidence: "Membership verification expired. Try again.",
     evidence_invalidated: "This draft can no longer be reviewed because its evidence changed.",
+    evidence_or_policy_invalid: "This publication can no longer be reviewed because its evidence or policy changed.",
     membership_unavailable: "Membership could not be verified. Try again later.",
     repository_unavailable: "The action could not be recorded. Try again later.",
     redis_unavailable: "The action could not be queued. Try again later.",

@@ -633,6 +633,17 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       at: plusSeconds(1),
     };
 
+    await expect(repository.preflightApprovalAction({
+      proposalId: proposal.id,
+      requirementId: requirement!.id,
+      expectedProposalVersion: proposal.version,
+      expectedSubjectRevision: proposal.subjectRevision,
+      expectedSubjectVersion: proposal.subjectVersion,
+      expectedTargetPolicyVersion: proposal.targetPolicyVersion,
+      sourcePresentationId: presentationId,
+      actorOpenId: ownerOpenId,
+    })).resolves.toEqual({ sourceGroupId: groupId });
+
     await expect(repository.applyApprovalAction({
       ...baseInput,
       actorOpenId: `ou_wrong_${suffix}`,
@@ -742,6 +753,16 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       at: plusSeconds(2),
     };
 
+    await expect(repository.preflightApprovalAction({
+      proposalId: proposal.id,
+      requirementId: requirement!.id,
+      expectedProposalVersion: proposal.version,
+      expectedSubjectRevision: proposal.subjectRevision,
+      expectedSubjectVersion: proposal.subjectVersion,
+      expectedTargetPolicyVersion: proposal.targetPolicyVersion,
+      sourcePresentationId: presentationId,
+      actorOpenId: ownerOpenId,
+    })).rejects.toBeInstanceOf(ActionProposalAuthorizationError);
     await expect(repository.applyApprovalAction(approvalInput))
       .rejects.toBeInstanceOf(ActionProposalAuthorizationError);
     await repository.upsertRoleGrant({
@@ -750,6 +771,16 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       operationKey: `grant:${label}:${suffix}:restore`,
       at: plusSeconds(3),
     });
+    await expect(repository.preflightApprovalAction({
+      proposalId: proposal.id,
+      requirementId: requirement!.id,
+      expectedProposalVersion: proposal.version,
+      expectedSubjectRevision: proposal.subjectRevision,
+      expectedSubjectVersion: proposal.subjectVersion,
+      expectedTargetPolicyVersion: proposal.targetPolicyVersion,
+      sourcePresentationId: presentationId,
+      actorOpenId: ownerOpenId,
+    })).resolves.toEqual({ sourceGroupId: groupId });
     await expect(repository.applyApprovalAction({
       ...approvalInput,
       at: plusSeconds(4),

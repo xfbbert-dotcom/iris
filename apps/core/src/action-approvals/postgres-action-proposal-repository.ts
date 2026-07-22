@@ -49,6 +49,7 @@ import type {
   CancelStaleActionProposalsResult,
   CreateActionProposalInput,
   PolicyMutationResult,
+  PreflightActionApprovalInput,
   PublicationTargetPolicy,
   RoleGrantMutationResult,
   UpsertActionRoleGrantInput,
@@ -268,6 +269,17 @@ export function createPostgresActionProposalRepository({
     applyApprovalAction(input) {
       return applyApprovalAction(dataSource, input);
     },
+    preflightApprovalAction(input) {
+      return preflightApprovalAction(dataSource, input);
+    },
+    async listApprovalPresentations(input) {
+      const result = await dataSource.query<ApprovalPresentationRow>(
+        `${approvalPresentationSelect()} WHERE proposal_id = $1
+         ORDER BY created_at ASC, id ASC LIMIT $2`,
+        [requireReference("proposalId", input.proposalId), requireLimit(input.limit)],
+      );
+      return result.rows.map(mapApprovalPresentation);
+    },
     claimApprovalPresentationSend(input) {
       return claimApprovalPresentationSend(dataSource, input);
     },
@@ -462,6 +474,57 @@ async function claimApprovalPresentationSend(
       leaseUntil,
       attempts: updated.rows[0]?.attempts ?? outbox.attempts + 1,
     };
+  });
+}
+
+async function preflightApprovalAction(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: PreflightActionApprovalInput,
+): Promise<{ sourceGroupId?: string }> {
+  const normalized = {
+    proposalId: requireReference("proposalId", input.proposalId),
+    requirementId: requireReference("requirementId", input.requirementId),
+    expectedProposalVersion: requirePositiveInteger("expectedProposalVersion", input.expectedProposalVersion),
+    expectedSubjectRevision: requirePositiveInteger("expectedSubjectRevision", input.expectedSubjectRevision),
+    expectedSubjectVersion: requirePositiveInteger("expectedSubjectVersion", input.expectedSubjectVersion),
+    expectedTargetPolicyVersion: requirePositiveInteger(
+      "expectedTargetPolicyVersion",
+      input.expectedTargetPolicyVersion,
+    ),
+    sourcePresentationId: requireReference("sourcePresentationId", input.sourcePresentationId),
+    actorOpenId: requireReference("actorOpenId", input.actorOpenId),
+  };
+  return withTransaction(dataSource, async (client) => {
+    const proposal = await lockProposal(client, normalized.proposalId);
+    const draft = await lockDraftRevision(client, proposal.subject_id);
+    const policy = await lockPolicy(client, proposal.target_policy_id);
+    const requirement = await lockRequirement(client, normalized.requirementId);
+    const presentation = await lockApprovalPresentation(client, normalized.sourcePresentationId);
+    if (
+      proposal.status !== "pending_approval" ||
+      Number(proposal.version) !== normalized.expectedProposalVersion ||
+      Number(proposal.subject_revision) !== normalized.expectedSubjectRevision ||
+      Number(proposal.subject_version) !== normalized.expectedSubjectVersion ||
+      draft.status !== "pending_review" ||
+      Number(draft.current_revision_number) !== normalized.expectedSubjectRevision ||
+      Number(draft.version) !== normalized.expectedSubjectVersion ||
+      !policy.enabled ||
+      Number(policy.version) !== normalized.expectedTargetPolicyVersion ||
+      Number(proposal.target_policy_version) !== normalized.expectedTargetPolicyVersion ||
+      !policyMatchesDraft(policy, draft) ||
+      requirement.proposal_id !== proposal.id ||
+      requirement.state !== "pending" ||
+      requirement.target_policy_id !== policy.id ||
+      Number(requirement.target_policy_version) !== Number(policy.version) ||
+      presentation.proposal_id !== proposal.id ||
+      presentation.requirement_id !== requirement.id ||
+      Number(presentation.proposal_version) !== normalized.expectedProposalVersion ||
+      presentation.state !== "active" ||
+      presentation.recipient_open_id !== normalized.actorOpenId
+    ) throw new ActionProposalVersionConflictError();
+    await validateDraftEvidence(client, draft);
+    await requireApprovalAuthorization(client, requirement, normalized.actorOpenId);
+    return draft.source_group_id === null ? {} : { sourceGroupId: draft.source_group_id };
   });
 }
 
