@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  readActionApprovalRuntimeConfig,
   readAnswerDraftRuntimeConfig,
   readEmbeddingProviderConfig,
   readEventWorkerRuntimeConfig,
@@ -14,6 +15,54 @@ import {
   readReindexWorkerRuntimeConfig,
   readServerPort,
 } from "../src/config/env.js";
+
+describe("readActionApprovalRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+    IRIS_APPROVAL_ACTION_GROUP_IDS: " oc_pilot ,oc_review ",
+    DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
+  };
+
+  it("is disabled unless explicitly enabled", () => {
+    expect(readActionApprovalRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readActionApprovalRuntimeConfig({ IRIS_APPROVAL_ACTIONS_ENABLED: value })).toEqual({
+        enabled: false,
+      });
+    }
+  });
+
+  it("reads bounded planner and dispatcher configuration", () => {
+    expect(readActionApprovalRuntimeConfig({
+      ...enabledEnv,
+      IRIS_ACTION_PROPOSAL_PLANNER_INTERVAL_MS: "2500",
+      IRIS_ACTION_PROPOSAL_PLANNER_BATCH_LIMIT: "12",
+      IRIS_ACTION_APPROVAL_DISPATCHER_INTERVAL_MS: "1500",
+      IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT: "8",
+      IRIS_REVIEW_PUBLIC_ORIGIN: " https://iris.example.com/review/ ",
+    })).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@postgres:5432/iris",
+      enabledGroupIds: ["oc_pilot", "oc_review"],
+      plannerIntervalMs: 2500,
+      plannerBatchLimit: 12,
+      dispatcherIntervalMs: 1500,
+      dispatcherBatchLimit: 8,
+      reviewPublicOrigin: "https://iris.example.com/review",
+    });
+  });
+
+  it("requires an enabled group allowlist and database only when enabled", () => {
+    expect(() => readActionApprovalRuntimeConfig({
+      ...enabledEnv,
+      IRIS_APPROVAL_ACTION_GROUP_IDS: " ",
+    })).toThrow("IRIS_APPROVAL_ACTION_GROUP_IDS must contain at least one group");
+    expect(() => readActionApprovalRuntimeConfig({
+      ...enabledEnv,
+      DATABASE_URL: " ",
+    })).toThrow("DATABASE_URL is required for database operations");
+  });
+});
 
 describe("readKnowledgeCardRuntimeConfig", () => {
   const enabledEnv = {

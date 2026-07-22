@@ -14,6 +14,7 @@ import {
 import { RuntimeController } from "../src/admin/runtime-controller.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
+import type { ActionApprovalRuntime } from "../src/runtime/action-approval-runtime.js";
 import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
@@ -226,6 +227,14 @@ describe("Core server startup", () => {
         order.push("close-knowledge-cards");
       }),
     });
+    const actionApprovalRuntime = fakeActionApprovalRuntime({
+      start: vi.fn(async () => {
+        order.push("start-action-approvals");
+      }),
+      close: vi.fn(async () => {
+        order.push("close-action-approvals");
+      }),
+    });
     const eventWorkerRuntime = fakeEventWorkerRuntime({
       start: vi.fn(() => order.push("start-event")),
       close: vi.fn(async () => {
@@ -236,6 +245,13 @@ describe("Core server startup", () => {
       expect(input).toEqual({ runtimeController: runtimeControlRuntime.runtimeControl.controller });
       return knowledgeCardRuntime;
     });
+    const createActionApprovalRuntime = vi.fn((input) => {
+      expect(input).toEqual({
+        runtimeController: runtimeControlRuntime.runtimeControl.controller,
+        knowledgeCardRuntime,
+      });
+      return actionApprovalRuntime;
+    });
 
     const app = await startServer({
       createRuntimeControlRuntime: async () => runtimeControlRuntime,
@@ -245,21 +261,25 @@ describe("Core server startup", () => {
         createMemoryExtractionRuntime: () => undefined,
         createKnowledgeDraftRuntime: () => undefined,
         createKnowledgeCardRuntime,
+        createActionApprovalRuntime,
         createEventWorkerRuntime: () => eventWorkerRuntime,
         createDocumentSyncRuntime: () => undefined,
       },
     });
 
-    expect(order).toEqual(["start-knowledge-cards", "start-event"]);
+    expect(order).toEqual(["start-action-approvals", "start-knowledge-cards", "start-event"]);
     await app.close();
     expect(order).toEqual([
+      "start-action-approvals",
       "start-knowledge-cards",
       "start-event",
       "close-event",
       "close-knowledge-cards",
+      "close-action-approvals",
       "close-runtime-control",
     ]);
     expect(createKnowledgeCardRuntime).toHaveBeenCalledOnce();
+    expect(createActionApprovalRuntime).toHaveBeenCalledOnce();
   });
 
   it("surfaces a rejected knowledge-card startup through buildApp readiness and closes once", async () => {
@@ -769,6 +789,21 @@ function fakeKnowledgeCardRuntime(
       delete: vi.fn(async () => "not_found" as const),
     },
     canUseKnowledgeCards: vi.fn(() => true),
+    approvalInteractions: {} as KnowledgeCardRuntime["approvalInteractions"],
+    bindActionApprovalWorker: vi.fn(),
+    start: vi.fn(),
+    getStatus: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeActionApprovalRuntime(
+  overrides: Partial<ActionApprovalRuntime> = {},
+): ActionApprovalRuntime {
+  return {
+    repository: {} as ActionApprovalRuntime["repository"],
+    canUseActionApprovalsForSourceGroup: vi.fn(() => true),
     start: vi.fn(),
     getStatus: vi.fn(),
     close: vi.fn(async () => undefined),

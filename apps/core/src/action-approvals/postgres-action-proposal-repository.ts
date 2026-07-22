@@ -46,6 +46,8 @@ import type {
   ActionRoleGrant,
   ApplyActionProposalActionInput,
   ApplyActionProposalActionResult,
+  ApplyActionProposalGovernanceDispositionInput,
+  ApplyActionProposalGovernanceDispositionResult,
   CancelStaleActionProposalsInput,
   CancelStaleActionProposalsResult,
   CreateActionProposalInput,
@@ -269,6 +271,9 @@ export function createPostgresActionProposalRepository({
     },
     applyApprovalAction(input) {
       return applyApprovalAction(dataSource, input);
+    },
+    applyGovernanceDisposition(input) {
+      return applyGovernanceDisposition(dataSource, input);
     },
     inspectApprovalActionReplay(input) {
       return inspectApprovalActionReplay(dataSource, input);
@@ -1171,6 +1176,200 @@ async function inspectApprovalActionReplay(
   const normalized = normalizeApplyActionInput(input);
   const fingerprint = actionApprovalFingerprint(normalized);
   return inspectNormalizedApprovalActionReplay(dataSource, normalized, fingerprint);
+}
+
+async function applyGovernanceDisposition(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: ApplyActionProposalGovernanceDispositionInput,
+): Promise<ApplyActionProposalGovernanceDispositionResult> {
+  const normalized = normalizeGovernanceDispositionInput(input);
+  const { at: _auditTimestamp, ...intent } = normalized;
+  const fingerprint = operationFingerprint({
+    operation: "apply_action_proposal_governance_disposition",
+    ...intent,
+  });
+  return withTransaction(dataSource, async (client) => {
+    await lockOperation(client, normalized.operationKey);
+    const eventType = normalized.action === "request_revision" ? "revision_requested" : "rejected";
+    const replay = await client.query<{
+      draft_id: string;
+      event_type: string;
+      operation_fingerprint: string;
+      to_version: string | number;
+    }>(
+      `SELECT draft_id, event_type, operation_fingerprint, to_version
+       FROM knowledge_draft_events WHERE operation_key = $1`,
+      [normalized.operationKey],
+    );
+    if (replay.rows[0] !== undefined) {
+      const proposal = await requireProposal(client, normalized.proposalId);
+      if (
+        replay.rows[0].draft_id !== proposal.subjectId ||
+        replay.rows[0].event_type !== eventType ||
+        replay.rows[0].operation_fingerprint !== fingerprint
+      ) throw new ActionProposalOperationConflictError();
+      const draft = await requireDraftState(client, proposal.subjectId);
+      return {
+        outcome: "already_applied",
+        action: normalized.action,
+        proposal,
+        draftStatus: draft.status,
+        draftVersion: Number(replay.rows[0].to_version),
+      };
+    }
+
+    const proposal = await lockProposal(client, normalized.proposalId);
+    if (
+      proposal.status !== "pending_approval" ||
+      Number(proposal.version) !== normalized.expectedProposalVersion ||
+      Number(proposal.subject_revision) !== normalized.expectedSubjectRevision ||
+      Number(proposal.subject_version) !== normalized.expectedSubjectVersion
+    ) throw new ActionProposalVersionConflictError();
+    const draft = await lockDraftRevision(client, proposal.subject_id);
+    if (
+      draft.status !== "pending_review" ||
+      Number(draft.current_revision_number) !== normalized.expectedSubjectRevision ||
+      Number(draft.version) !== normalized.expectedSubjectVersion
+    ) throw new ActionProposalVersionConflictError();
+
+    const presentations = await client.query<ApprovalPresentationRow>(
+      `${approvalPresentationSelect()} WHERE proposal_id = $1
+       AND state IN ('pending_send', 'active') FOR UPDATE`,
+      [proposal.id],
+    );
+    if (presentations.rows.length > 0) {
+      const externalAttempt = await client.query<{ present: boolean }>(
+        `SELECT EXISTS (
+          SELECT 1 FROM action_approval_presentation_outbox
+          WHERE presentation_id = ANY($1::TEXT[]) AND state = 'external_attempting'
+          FOR UPDATE
+        ) AS present`,
+        [presentations.rows.map((item) => item.id)],
+      );
+      if (externalAttempt.rows[0]?.present === true) {
+        throw new ActionProposalPersistenceConflictError();
+      }
+    }
+
+    const draftStatus: KnowledgeDraftStatus = normalized.action === "request_revision"
+      ? "needs_revision"
+      : "rejected";
+    const nextDraftVersion = normalized.expectedSubjectVersion + 1;
+    if (normalized.action === "request_revision") {
+      await client.query(
+        `UPDATE knowledge_drafts
+         SET status = 'needs_revision', version = version + 1, updated_at = $2
+         WHERE id = $1 AND version = $3 AND status = 'pending_review'`,
+        [proposal.subject_id, normalized.at, normalized.expectedSubjectVersion],
+      );
+    } else {
+      await client.query(
+        `UPDATE knowledge_drafts
+         SET status = 'rejected', version = version + 1, rejected_at = $2,
+             rejected_by = $3, rejection_reason = $4, updated_at = $2
+         WHERE id = $1 AND version = $5 AND status = 'pending_review'`,
+        [
+          proposal.subject_id,
+          normalized.at,
+          normalized.operator,
+          normalized.reason,
+          normalized.expectedSubjectVersion,
+        ],
+      );
+    }
+    await client.query(
+      `INSERT INTO knowledge_draft_events (
+        id, draft_id, event_type, from_version, to_version, operation_key,
+        operation_fingerprint, actor, reason, revision_number, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        randomUUID(),
+        proposal.subject_id,
+        eventType,
+        normalized.expectedSubjectVersion,
+        nextDraftVersion,
+        normalized.operationKey,
+        fingerprint,
+        normalized.operator,
+        normalized.reason,
+        normalized.expectedSubjectRevision,
+        normalized.at,
+      ],
+    );
+    await client.query(
+      `UPDATE action_approval_requirements
+       SET state = 'invalidated', satisfied_actor_open_id = NULL,
+           satisfied_source_type = NULL, satisfied_source_id = NULL,
+           version = version + 1, updated_at = $2
+       WHERE proposal_id = $1 AND state <> 'invalidated'`,
+      [proposal.id, normalized.at],
+    );
+    const nextProposalVersion = normalized.expectedProposalVersion + 1;
+    await client.query(
+      `UPDATE action_proposals
+       SET status = 'cancelled', version = version + 1, updated_at = $2
+       WHERE id = $1 AND version = $3 AND status = 'pending_approval'`,
+      [proposal.id, normalized.at, normalized.expectedProposalVersion],
+    );
+    await client.query(
+      `INSERT INTO action_events (
+        id, proposal_id, event_type, actor_open_id, operation_key,
+        from_version, to_version, reason_code, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        randomUUID(),
+        proposal.id,
+        eventType,
+        normalized.operator,
+        derivedOperationKey(`governance-${eventType}`, normalized.operationKey),
+        normalized.expectedProposalVersion,
+        nextProposalVersion,
+        normalized.action === "request_revision"
+          ? "operator_requested_revision"
+          : "operator_rejected",
+        normalized.at,
+      ],
+    );
+    for (const presentation of presentations.rows) {
+      const fromVersion = Number(presentation.version);
+      await client.query(
+        `UPDATE action_approval_presentations
+         SET state = 'closed', version = version + 1, closed_at = $2
+         WHERE id = $1 AND version = $3 AND state IN ('pending_send', 'active')`,
+        [presentation.id, normalized.at, fromVersion],
+      );
+      await client.query(
+        `INSERT INTO action_approval_presentation_events (
+          id, presentation_id, event_type, actor_open_id, operation_key,
+          callback_event_id, from_version, to_version, created_at
+        ) VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8)`,
+        [
+          randomUUID(),
+          presentation.id,
+          eventType,
+          normalized.operator,
+          derivedOperationKey(`governance-presentation-${eventType}`, `${normalized.operationKey}:${presentation.id}`),
+          fromVersion,
+          fromVersion + 1,
+          normalized.at,
+        ],
+      );
+      await client.query(
+        `UPDATE action_approval_presentation_outbox
+         SET state = 'failed', worker_id = NULL, lease_until = NULL, retry_at = NULL,
+             error_code = 'governance_disposition', updated_at = $2
+         WHERE presentation_id = $1 AND state IN ('pending', 'processing')`,
+        [presentation.id, normalized.at],
+      );
+    }
+    return {
+      outcome: "applied",
+      action: normalized.action,
+      proposal: await requireProposal(client, proposal.id),
+      draftStatus,
+      draftVersion: nextDraftVersion,
+    };
+  });
 }
 
 function actionApprovalFingerprint(
@@ -2279,6 +2478,34 @@ function normalizeApplyActionInput(input: ApplyActionProposalActionInput) {
     ...(reason === undefined ? {} : { reason }),
     ...(action === "reject" ? { rejectionConfirmed: true as const } : {}),
     operationKey: requireReference("operationKey", input.operationKey),
+    at: requireDate(input.at),
+  };
+}
+
+function normalizeGovernanceDispositionInput(
+  input: ApplyActionProposalGovernanceDispositionInput,
+) {
+  if (!(input.action === "request_revision" || input.action === "reject")) {
+    throw new Error("governance disposition action is invalid");
+  }
+  return {
+    proposalId: requireReference("proposalId", input.proposalId),
+    expectedProposalVersion: requirePositiveInteger(
+      "expectedProposalVersion",
+      input.expectedProposalVersion,
+    ),
+    expectedSubjectRevision: requirePositiveInteger(
+      "expectedSubjectRevision",
+      input.expectedSubjectRevision,
+    ),
+    expectedSubjectVersion: requirePositiveInteger(
+      "expectedSubjectVersion",
+      input.expectedSubjectVersion,
+    ),
+    action: input.action,
+    reason: requireBoundedReason(input.reason),
+    operationKey: requireReference("operationKey", input.operationKey),
+    operator: requireReference("operator", input.operator),
     at: requireDate(input.at),
   };
 }

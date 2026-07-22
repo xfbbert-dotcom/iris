@@ -17,6 +17,66 @@ describe("KnowledgeCardRuntime", () => {
     expect(dependencies.createRedisClient).not.toHaveBeenCalled();
   });
 
+  it("wires durable interaction intents and a fail-closed action worker bridge", async () => {
+    const dependencies = runtimeDependencies();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+    const interactionDependencies = dependencies.createInteractionWorker.mock.calls[0]?.[0];
+
+    expect(dependencies.createApprovalInteractionIntentStore).toHaveBeenCalledWith({
+      dataSource: dependencies.pool,
+    });
+    await expect(interactionDependencies?.actionApprovalWorker?.processActionApproval(
+      {} as never,
+    )).resolves.toEqual({ status: "denied", code: "runtime_disabled" });
+
+    const actionWorker = {
+      processActionApproval: vi.fn(async () => ({
+        status: "applied" as const,
+        code: "action_approval_applied" as const,
+      })),
+    };
+    runtime.bindActionApprovalWorker(actionWorker);
+    await expect(interactionDependencies?.actionApprovalWorker?.processActionApproval(
+      {} as never,
+    )).resolves.toEqual({ status: "applied", code: "action_approval_applied" });
+    expect(actionWorker.processActionApproval).toHaveBeenCalledOnce();
+    expect(() => runtime.bindActionApprovalWorker(actionWorker)).toThrow(/already bound/iu);
+
+    await runtime.close();
+  });
+
+  it("persists a revision reason before enqueueing the opaque callback job", async () => {
+    const dependencies = runtimeDependencies();
+    const runtime = createKnowledgeCardRuntime({
+      env: enabledEnv(),
+      runtimeController: enabledController(),
+      dependencies,
+    })!;
+    const payload = cardAction();
+    const event = payload.event as Record<string, unknown>;
+    const action = event.action as Record<string, unknown>;
+    action.value = {
+      ...(action.value as Record<string, unknown>),
+      action: "request_revision",
+    };
+    action.name = "request_revision";
+    action.form_value = { reason: "Clarify the rollback owner." };
+
+    await expect(runtime.gateway.handleCallback(encryptedRequest(payload))).resolves.toMatchObject({
+      statusCode: 200,
+    });
+    expect(dependencies.intentStore.persistIntent).toHaveBeenCalledOnce();
+    expect(dependencies.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      intentId: "intent-1",
+    }));
+
+    await runtime.close();
+  });
+
   it("routes content-free callback diagnostics through the runtime observer", async () => {
     const dependencies = runtimeDependencies();
     const onCardCallbackDiagnostic = vi.fn();
@@ -714,6 +774,11 @@ function runtimeDependencies(overrides: {
     replayDeadLetter: vi.fn(async () => "not_found" as const),
     deleteDeadLetter: vi.fn(async () => "not_found" as const),
   };
+  const intentStore = {
+    persistIntent: vi.fn(async () => ({ id: "intent-1" })),
+    resolveIntent: vi.fn(),
+    deleteIntent: vi.fn(),
+  };
   const dispatcherLoop = {
     start: overrides.dispatcherStart ?? vi.fn(),
     stop: overrides.dispatcherStop ?? vi.fn(async () => undefined),
@@ -733,6 +798,11 @@ function runtimeDependencies(overrides: {
     createKnowledgeDraftRepository: vi.fn(() => drafts),
     createKnowledgeCardRepository: vi.fn(() => repository),
     createApprovalInteractionQueue: vi.fn(() => queue),
+    createApprovalInteractionIntentStore: vi.fn(() => intentStore),
+    createInteractionWorker: vi.fn((input) => ({
+      processBatch: vi.fn(async () => []),
+      dependencies: input,
+    })),
     createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
     createFeishuInteractiveCardClient: overrides.createCardClient ?? vi.fn(() => ({
       sendCard: vi.fn(),
@@ -752,6 +822,7 @@ function runtimeDependencies(overrides: {
     repository,
     drafts,
     queue,
+    intentStore,
     dispatcherLoop,
     interactionLoop,
   });

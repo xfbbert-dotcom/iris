@@ -1,5 +1,6 @@
 import {
   readAnswerDraftRuntimeConfig,
+  readActionApprovalRuntimeConfig,
   readDocumentSyncWorkerRuntimeConfig,
   readEmbeddingProviderConfig,
   readEventWorkerRuntimeConfig,
@@ -50,6 +51,14 @@ type KnowledgeCardOutboxReadinessStatus = {
   outcome_unknown: number;
   terminalFailed: number;
 };
+type ActionApprovalOutboxReadinessStatus = {
+  pending: number;
+  processing: number;
+  external_attempting: number;
+  sent: number;
+  failed: number;
+  outcome_unknown: number;
+};
 export type InternalRolloutReadinessContext = {
   knowledgeCardStatus?: {
     ok: boolean;
@@ -58,6 +67,15 @@ export type InternalRolloutReadinessContext = {
     dispatcher?: { running: boolean };
     worker?: { running: boolean };
     outbox?: KnowledgeCardOutboxReadinessStatus;
+    degradedReason?: string;
+  };
+  actionApprovalStatus?: {
+    ok: boolean;
+    enabled: boolean;
+    running: boolean;
+    planner?: { running: boolean };
+    dispatcher?: { running: boolean };
+    outbox?: ActionApprovalOutboxReadinessStatus;
     degradedReason?: string;
   };
 };
@@ -362,7 +380,60 @@ const checkDefinitions: CheckDefinition[] = [
       return pass("Knowledge-card dispatcher and interaction worker are running.");
     },
   },
+  {
+    id: "actionApprovals",
+    title: "Action proposal approval runtime",
+    envVars: [
+      "IRIS_APPROVAL_ACTIONS_ENABLED",
+      "IRIS_APPROVAL_ACTION_GROUP_IDS",
+      "IRIS_ACTION_PROPOSAL_PLANNER_INTERVAL_MS",
+      "IRIS_ACTION_PROPOSAL_PLANNER_BATCH_LIMIT",
+      "IRIS_ACTION_APPROVAL_DISPATCHER_INTERVAL_MS",
+      "IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT",
+      "IRIS_REVIEW_PUBLIC_ORIGIN",
+      "DATABASE_URL",
+    ],
+    evaluate(env, context) {
+      const config = readActionApprovalRuntimeConfig(env);
+      if (!config.enabled) return pass("Action approvals are safely disabled.");
+      const status = context.actionApprovalStatus;
+      if (status === undefined) return fail("Action-approval runtime status is unavailable.");
+      if (!status.ok) return fail("Action-approval runtime status is unreadable.");
+      if (!status.enabled) {
+        return fail("Action-approval runtime is not available while configured enabled.");
+      }
+      if (
+        !status.running ||
+        status.planner?.running !== true ||
+        status.dispatcher?.running !== true
+      ) return fail("Action-proposal planner and approval dispatcher must both be running.");
+      if (!isValidActionApprovalOutboxStatus(status.outbox)) {
+        return fail("Action-approval outbox status is unavailable.");
+      }
+      if (status.outbox.outcome_unknown > 0) {
+        return fail("Action-approval outbox has unresolved outcome-unknown rows.");
+      }
+      if (status.outbox.failed > 0) {
+        return fail("Action-approval outbox has terminal failed rows.");
+      }
+      return pass("Action-proposal planner and approval dispatcher are running.");
+    },
+  },
 ];
+
+function isValidActionApprovalOutboxStatus(
+  value: ActionApprovalOutboxReadinessStatus | undefined,
+): value is ActionApprovalOutboxReadinessStatus {
+  if (value === undefined) return false;
+  return [
+    value.pending,
+    value.processing,
+    value.external_attempting,
+    value.sent,
+    value.failed,
+    value.outcome_unknown,
+  ].every((count) => Number.isSafeInteger(count) && count >= 0);
+}
 
 function isValidKnowledgeCardOutboxStatus(
   value: KnowledgeCardOutboxReadinessStatus | undefined,

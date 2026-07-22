@@ -4,6 +4,48 @@ import { buildInternalRolloutReadinessReport } from "../src/admin/internal-rollo
 import type { EnvLike } from "../src/config/env.js";
 
 describe("buildInternalRolloutReadinessReport", () => {
+  it("treats action approvals as safely disabled by default", () => {
+    const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
+    expect(report.checks.find((check) => check.id === "actionApprovals")).toMatchObject({
+      status: "pass",
+      detail: "Action approvals are safely disabled.",
+    });
+  });
+
+  it("blocks enabled action approvals when loops or durable outbox facts are unsafe", () => {
+    const env = readyRolloutEnv({
+      IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+    });
+    const missing = buildInternalRolloutReadinessReport(env);
+    expect(missing.checks.find((check) => check.id === "actionApprovals")).toMatchObject({
+      status: "fail",
+      detail: "Action-approval runtime status is unavailable.",
+    });
+
+    const unsafe = buildInternalRolloutReadinessReport(env, {
+      actionApprovalStatus: {
+        ok: true,
+        enabled: true,
+        running: true,
+        planner: { running: true },
+        dispatcher: { running: true },
+        outbox: {
+          pending: 0,
+          processing: 0,
+          external_attempting: 0,
+          sent: 1,
+          failed: 0,
+          outcome_unknown: 1,
+        },
+      },
+    });
+    expect(unsafe.checks.find((check) => check.id === "actionApprovals")).toMatchObject({
+      status: "fail",
+      detail: "Action-approval outbox has unresolved outcome-unknown rows.",
+    });
+  });
+
   it("marks the internal rollout profile ready when core chat, document, and answer dependencies are configured", () => {
     const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
 

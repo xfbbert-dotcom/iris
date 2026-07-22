@@ -245,6 +245,26 @@ export type ApplyActionProposalActionResult = {
   draftVersion: number;
 };
 
+export type ApplyActionProposalGovernanceDispositionInput = {
+  proposalId: string;
+  expectedProposalVersion: number;
+  expectedSubjectRevision: number;
+  expectedSubjectVersion: number;
+  action: "request_revision" | "reject";
+  reason: string;
+  operationKey: string;
+  operator: string;
+  at: Date;
+};
+
+export type ApplyActionProposalGovernanceDispositionResult = {
+  outcome: "applied" | "already_applied";
+  action: ApplyActionProposalGovernanceDispositionInput["action"];
+  proposal: ActionProposal;
+  draftStatus: KnowledgeDraftStatus;
+  draftVersion: number;
+};
+
 export type ActionApprovalReplayInspection = {
   result: ApplyActionProposalActionResult;
   sourceGroupId?: string;
@@ -275,6 +295,9 @@ export interface ActionProposalRepository {
   applyApprovalAction(
     input: ApplyActionProposalActionInput,
   ): Promise<ApplyActionProposalActionResult>;
+  applyGovernanceDisposition(
+    input: ApplyActionProposalGovernanceDispositionInput,
+  ): Promise<ApplyActionProposalGovernanceDispositionResult>;
   inspectApprovalActionReplay(
     input: ApplyActionProposalActionInput,
   ): Promise<ActionApprovalReplayInspection | undefined>;

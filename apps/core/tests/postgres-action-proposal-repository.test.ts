@@ -949,6 +949,56 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
     ]);
   });
 
+  it("applies an operator governance disposition without fabricating a human approval", async () => {
+    const acceptance = await createPendingOwnerApprovalCase("proposal-governance-revision");
+    const input = {
+      proposalId: acceptance.proposal.id,
+      expectedProposalVersion: acceptance.proposal.version,
+      expectedSubjectRevision: acceptance.proposal.subjectRevision,
+      expectedSubjectVersion: acceptance.proposal.subjectVersion,
+      action: "request_revision" as const,
+      reason: "Clarify the rollback owner.",
+      operationKey: `governance-revision:${suffix}`,
+      operator: "operator@example.com",
+      at: plusSeconds(1),
+    };
+
+    await expect(acceptance.repository.applyGovernanceDisposition(input)).resolves.toMatchObject({
+      outcome: "applied",
+      action: "request_revision",
+      proposal: { status: "cancelled", version: 2 },
+      draftStatus: "needs_revision",
+      draftVersion: 3,
+    });
+    await expect(acceptance.repository.applyGovernanceDisposition({
+      ...input,
+      at: plusSeconds(60),
+    })).resolves.toMatchObject({
+      outcome: "already_applied",
+      action: "request_revision",
+      proposal: { status: "cancelled" },
+    });
+    await expect(acceptance.repository.applyGovernanceDisposition({
+      ...input,
+      operator: "conflicting-operator@example.com",
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
+
+    const approvalCount = await pool.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM action_approvals WHERE proposal_id = $1",
+      [acceptance.proposal.id],
+    );
+    expect(approvalCount.rows[0]?.count).toBe(0);
+    await expect(acceptance.repository.listEvents(acceptance.proposal.id)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "revision_requested",
+          actorOpenId: "operator@example.com",
+          reasonCode: "operator_requested_revision",
+        }),
+      ]),
+    );
+  });
+
   it("requires explicit rejection confirmation and rejects without an approval fact", async () => {
     const acceptance = await createPendingOwnerApprovalCase("proposal-reject");
     const input = {

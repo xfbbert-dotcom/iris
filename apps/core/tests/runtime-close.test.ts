@@ -156,6 +156,8 @@ function fakeKnowledgeCardRuntime(
       delete: vi.fn(async () => "not_found" as const),
     },
     canUseKnowledgeCards: vi.fn(() => true),
+    approvalInteractions: {} as KnowledgeCardRuntime["approvalInteractions"],
+    bindActionApprovalWorker: vi.fn(),
     start: vi.fn(),
     getStatus: vi.fn(),
     close: vi.fn(async () => undefined),

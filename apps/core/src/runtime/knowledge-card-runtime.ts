@@ -24,7 +24,11 @@ import {
   type FeishuCardActionCallbackRequest,
 } from "../feishu/feishu-card-action-gateway.js";
 import { createFeishuGroupMembershipChecker } from "../feishu/feishu-group-membership-checker.js";
-import { createFeishuInteractiveCardClient } from "../feishu/feishu-interactive-card-client.js";
+import type { FeishuGroupMembershipChecker } from "../feishu/feishu-group-membership-checker.js";
+import {
+  createFeishuInteractiveCardClient,
+  type FeishuInteractiveCardClient,
+} from "../feishu/feishu-interactive-card-client.js";
 import { createFeishuTenantAccessTokenProvider } from "../feishu/feishu-tenant-access-token-provider.js";
 import type { KnowledgeDraftRepository } from "../knowledge-governance/knowledge-draft-repository.js";
 import {
@@ -32,7 +36,13 @@ import {
   type PostgresKnowledgeDraftDataSource,
 } from "../knowledge-governance/postgres-knowledge-draft-repository.js";
 import type { ApprovalInteractionQueue } from "../knowledge-cards/approval-interaction-queue.js";
-import { createApprovalInteractionWorker } from "../knowledge-cards/approval-interaction-worker.js";
+import {
+  createApprovalInteractionWorker,
+  type ApprovalInteractionWorkerDependencies,
+} from "../knowledge-cards/approval-interaction-worker.js";
+import {
+  createPostgresApprovalInteractionIntentStore,
+} from "../knowledge-cards/postgres-approval-interaction-intent-store.js";
 import {
   createApprovalInteractionWorkerLoop,
   type ApprovalInteractionWorkerLoop,
@@ -98,6 +108,14 @@ export type KnowledgeCardRuntime = {
     delete(id: string): ReturnType<ApprovalInteractionQueue["deleteDeadLetter"]>;
   };
   canUseKnowledgeCards(groupId: string): boolean;
+  approvalInteractions: {
+    cardClient: Pick<FeishuInteractiveCardClient, "sendCardToUser" | "updateCard">;
+    membershipChecker: FeishuGroupMembershipChecker;
+    botOpenId: string;
+  };
+  bindActionApprovalWorker(
+    worker: NonNullable<ApprovalInteractionWorkerDependencies["actionApprovalWorker"]>,
+  ): void;
   start(): Promise<void>;
   getStatus(): Promise<KnowledgeCardRuntimeStatus>;
   close(): Promise<void>;
@@ -115,6 +133,8 @@ export type KnowledgeCardRuntimeDependencies = {
   createApprovalInteractionQueue?: (input: {
     client: RedisApprovalInteractionQueueClient;
   }) => ApprovalInteractionQueue;
+  createApprovalInteractionIntentStore?: typeof createPostgresApprovalInteractionIntentStore;
+  createInteractionWorker?: typeof createApprovalInteractionWorker;
   createFeishuTenantAccessTokenProvider?: typeof createFeishuTenantAccessTokenProvider;
   createFeishuInteractiveCardClient?: typeof createFeishuInteractiveCardClient;
   createFeishuGroupMembershipChecker?: typeof createFeishuGroupMembershipChecker;
@@ -151,6 +171,10 @@ export function createKnowledgeCardRuntime({
     createPostgresKnowledgeCardRepository;
   const createQueue = dependencies.createApprovalInteractionQueue ??
     createRedisApprovalInteractionQueue;
+  const createIntentStore = dependencies.createApprovalInteractionIntentStore ??
+    createPostgresApprovalInteractionIntentStore;
+  const createInteractionWorker = dependencies.createInteractionWorker ??
+    createApprovalInteractionWorker;
   const createTokenProvider = dependencies.createFeishuTenantAccessTokenProvider ??
     createFeishuTenantAccessTokenProvider;
   const createCardClient = dependencies.createFeishuInteractiveCardClient ??
@@ -175,6 +199,7 @@ export function createKnowledgeCardRuntime({
       return redisClient!;
     }));
     const queue = createQueue({ client: createLazyRedisQueueClient(redisConnection) });
+    const intentStore = createIntentStore({ dataSource: pool });
     const cardRepository = createRepository({ dataSource: pool });
     const drafts = createDrafts({ dataSource: pool });
     const repository: KnowledgeCardRuntimeRepository = {
@@ -212,7 +237,20 @@ export function createKnowledgeCardRuntime({
       leaseMs: EXTERNAL_LEASE_MS,
       retryDelayMs: SEND_RETRY_DELAY_MS,
     });
-    const interactionWorker = createApprovalInteractionWorker({
+    let boundActionApprovalWorker:
+      | NonNullable<ApprovalInteractionWorkerDependencies["actionApprovalWorker"]>
+      | undefined;
+    const actionApprovalWorker: NonNullable<
+      ApprovalInteractionWorkerDependencies["actionApprovalWorker"]
+    > = {
+      processActionApproval(job, intent) {
+        return boundActionApprovalWorker?.processActionApproval(job, intent) ?? Promise.resolve({
+          status: "denied" as const,
+          code: "runtime_disabled" as const,
+        });
+      },
+    };
+    const interactionWorker = createInteractionWorker({
       queue,
       repository,
       membershipChecker,
@@ -221,6 +259,8 @@ export function createKnowledgeCardRuntime({
       botOpenId: config.botOpenId,
       workerId: INTERACTION_WORKER_ID,
       leaseMs: EXTERNAL_LEASE_MS,
+      intentStore,
+      actionApprovalWorker,
     });
     dispatcherLoop = createDispatcherPollingLoop({
       worker: dispatcher,
@@ -255,6 +295,7 @@ export function createKnowledgeCardRuntime({
     };
     const gateway = createFeishuCardActionGateway({
       queue,
+      intentStore,
       verifyRequest: verifyFeishuEnvelopeWithDiagnostics,
       allowUnsignedEncryptedUrlVerification: feishuAuthConfig.encryptKey !== undefined,
       onDiagnostic: dependencies.onCardCallbackDiagnostic ?? reportCardCallbackDiagnostic,
@@ -294,6 +335,16 @@ export function createKnowledgeCardRuntime({
         delete: (id) => queue.deleteDeadLetter(id),
       },
       canUseKnowledgeCards,
+      approvalInteractions: { cardClient, membershipChecker, botOpenId: config.botOpenId },
+      bindActionApprovalWorker(worker) {
+        if (boundActionApprovalWorker !== undefined) {
+          throw new Error("action approval worker is already bound");
+        }
+        if (lifecycle !== "idle") {
+          throw new Error("action approval worker must be bound before runtime start");
+        }
+        boundActionApprovalWorker = worker;
+      },
       start() {
         if (lifecycle === "closed") {
           closedStartPromise ??= observeStartupPromise(Promise.reject(

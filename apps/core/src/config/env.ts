@@ -84,6 +84,19 @@ export type KnowledgeCardRuntimeConfig =
       botOpenId: string;
     };
 
+export type ActionApprovalRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      databaseUrl: string;
+      enabledGroupIds: string[];
+      plannerIntervalMs: number;
+      plannerBatchLimit: number;
+      dispatcherIntervalMs: number;
+      dispatcherBatchLimit: number;
+      reviewPublicOrigin?: string;
+    };
+
 export type FeishuOpenApiConfig = {
   appId: string;
   appSecret: string;
@@ -390,6 +403,49 @@ export function readKnowledgeCardRuntimeConfig(
       100,
     ),
     botOpenId,
+  };
+}
+
+export function readActionApprovalRuntimeConfig(
+  env: EnvLike = process.env,
+): ActionApprovalRuntimeConfig {
+  if (env.IRIS_APPROVAL_ACTIONS_ENABLED !== "true") return { enabled: false };
+
+  const enabledGroupIds = readRequiredUniqueGroupIdListEnv(
+    "IRIS_APPROVAL_ACTION_GROUP_IDS",
+    env.IRIS_APPROVAL_ACTION_GROUP_IDS,
+  );
+  const { databaseUrl } = readDatabaseConfig(env);
+  const reviewPublicOrigin = readOptionalEnv(env.IRIS_REVIEW_PUBLIC_ORIGIN);
+  return {
+    enabled: true,
+    databaseUrl,
+    enabledGroupIds,
+    plannerIntervalMs: readTimerDelayEnv(
+      "IRIS_ACTION_PROPOSAL_PLANNER_INTERVAL_MS",
+      env.IRIS_ACTION_PROPOSAL_PLANNER_INTERVAL_MS,
+      1000,
+    ),
+    plannerBatchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_ACTION_PROPOSAL_PLANNER_BATCH_LIMIT",
+      env.IRIS_ACTION_PROPOSAL_PLANNER_BATCH_LIMIT,
+      10,
+      100,
+    ),
+    dispatcherIntervalMs: readTimerDelayEnv(
+      "IRIS_ACTION_APPROVAL_DISPATCHER_INTERVAL_MS",
+      env.IRIS_ACTION_APPROVAL_DISPATCHER_INTERVAL_MS,
+      1000,
+    ),
+    dispatcherBatchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT",
+      env.IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT,
+      10,
+      100,
+    ),
+    ...(reviewPublicOrigin === undefined
+      ? {}
+      : { reviewPublicOrigin: readHttpBaseUrlEnv("IRIS_REVIEW_PUBLIC_ORIGIN", reviewPublicOrigin) }),
   };
 }
 

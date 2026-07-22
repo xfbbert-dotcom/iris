@@ -88,7 +88,12 @@ import {
   createKnowledgeCardRuntime as createDefaultKnowledgeCardRuntime,
   type KnowledgeCardRuntime,
 } from "./runtime/knowledge-card-runtime.js";
+import {
+  createActionApprovalRuntime as createDefaultActionApprovalRuntime,
+  type ActionApprovalRuntime,
+} from "./runtime/action-approval-runtime.js";
 import { registerKnowledgeCardApi } from "./knowledge-cards/knowledge-card-api.js";
+import { registerActionProposalApi } from "./action-approvals/action-proposal-api.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
@@ -141,6 +146,9 @@ export type BuildAppDependencies = {
   createKnowledgeCardRuntime?: (
     input?: Parameters<typeof createDefaultKnowledgeCardRuntime>[0],
   ) => KnowledgeCardRuntime | undefined;
+  createActionApprovalRuntime?: (
+    input?: Parameters<typeof createDefaultActionApprovalRuntime>[0],
+  ) => ActionApprovalRuntime | undefined;
 };
 
 export type StartServerOptions = {
@@ -286,7 +294,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
   let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
+  let actionApprovalRuntime: ActionApprovalRuntime | undefined;
   let knowledgeCardStartup: Promise<void> | undefined;
+  let actionApprovalStartup: Promise<void> | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   let startupApp: FastifyInstance | undefined;
   let appOwnsRuntimeResources = false;
@@ -319,6 +329,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     knowledgeCardRuntime = (
       dependencies.createKnowledgeCardRuntime ?? createDefaultKnowledgeCardRuntime
     )({ runtimeController });
+    actionApprovalRuntime = (
+      dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
+    )({ runtimeController, knowledgeCardRuntime });
+    actionApprovalStartup = actionApprovalRuntime?.start();
     knowledgeCardStartup = knowledgeCardRuntime?.start();
     eventWorkerRuntime =
       (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
@@ -361,8 +375,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const app = Fastify({ logger: false, bodyLimit: maxJsonBodyBytes });
   startupApp = app;
 
-  if (knowledgeCardStartup !== undefined) {
+  if (knowledgeCardStartup !== undefined || actionApprovalStartup !== undefined) {
     app.addHook("onReady", async () => {
+      await actionApprovalStartup;
       await knowledgeCardStartup;
     });
   }
@@ -416,6 +431,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     now,
   });
   registerKnowledgeCardApi(app, knowledgeCardRuntime, { now });
+  registerActionProposalApi(app, actionApprovalRuntime, {
+    authenticationConfigured: internalApiToken !== undefined,
+    now,
+  });
 
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
@@ -470,6 +489,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       service: runtimeControlService,
     });
     const knowledgeCards = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
     const components = {
       audit: {
         ok: true,
@@ -508,6 +528,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
+      actionApprovals: actionApprovals ?? { ok: true, enabled: false, running: false },
     };
 
     return buildInternalStatusSnapshot({ components, generatedAt: now(), knowledgeCards });
@@ -515,9 +536,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
 
   app.get("/internal/readiness", async () => {
     const knowledgeCardStatus = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const actionApprovalStatus = await getActionApprovalStatus(actionApprovalRuntime);
     return buildInternalRolloutReadinessReport(
       dependencies.readinessEnv ?? process.env,
-      { knowledgeCardStatus },
+      { knowledgeCardStatus, actionApprovalStatus },
     );
   });
 
@@ -1495,6 +1517,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => answerDraftRuntime?.close(),
       () => conversationStateInspectionRuntime?.close(),
       () => knowledgeCardRuntime?.close(),
+      () => actionApprovalRuntime?.close(),
       () => knowledgeDraftRuntime?.close(),
       () => dependencies.closeRuntimeControl?.(),
     ]);
@@ -1513,6 +1536,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       documentSyncRuntime,
       conversationStateInspectionRuntime,
       knowledgeCardRuntime,
+      actionApprovalRuntime,
       knowledgeDraftRuntime,
     });
     dependencies.onRuntimeStartupCleanup?.(cleanup);
@@ -1544,6 +1568,20 @@ async function getKnowledgeCardStatus(runtime: KnowledgeCardRuntime | undefined)
       enabled: true,
       running: false,
       degradedReason: "knowledge_card_status_unavailable" as const,
+    };
+  }
+}
+
+async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefined) {
+  if (runtime === undefined) return undefined;
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "action_approval_status_unavailable" as const,
     };
   }
 }
@@ -1663,6 +1701,7 @@ function scheduleRuntimeStartupCleanup({
   documentSyncRuntime,
   conversationStateInspectionRuntime,
   knowledgeCardRuntime,
+  actionApprovalRuntime,
   knowledgeDraftRuntime,
 }: {
   app: Pick<FastifyInstance, "close"> | undefined;
@@ -1674,6 +1713,7 @@ function scheduleRuntimeStartupCleanup({
   documentSyncRuntime: DocumentSyncRuntime | undefined;
   conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
+  actionApprovalRuntime: ActionApprovalRuntime | undefined;
   knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
 }): Promise<void> {
   const cleanup = closeRuntimeResources([
@@ -1685,6 +1725,7 @@ function scheduleRuntimeStartupCleanup({
     () => answerDraftRuntime?.close(),
     () => conversationStateInspectionRuntime?.close(),
     () => knowledgeCardRuntime?.close(),
+    () => actionApprovalRuntime?.close(),
     () => knowledgeDraftRuntime?.close(),
     () => app?.close(),
   ]);
