@@ -25,6 +25,10 @@ export function registerActionReviewApi(
   if (runtime === undefined) return;
 
   void app.register(async (reviewApp) => {
+    reviewApp.setErrorHandler((error, _request, reply) => {
+      const statusCode = readErrorStatusCode(error) === 413 ? 413 : 500;
+      return sendUnavailable(reply, statusCode);
+    });
     reviewApp.addContentTypeParser(
       "application/x-www-form-urlencoded",
       { parseAs: "string", bodyLimit: maxFormBytes },
@@ -198,4 +202,11 @@ function sameString(expected: string, actual: string): boolean {
   const expectedBytes = Buffer.from(expected, "utf8");
   const actualBytes = Buffer.from(actual, "utf8");
   return expectedBytes.length === actualBytes.length && timingSafeEqual(expectedBytes, actualBytes);
+}
+
+function readErrorStatusCode(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("statusCode" in error)) {
+    return undefined;
+  }
+  return typeof error.statusCode === "number" ? error.statusCode : undefined;
 }

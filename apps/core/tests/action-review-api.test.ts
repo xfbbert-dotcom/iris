@@ -142,6 +142,17 @@ describe("action review API", () => {
     });
     expect(malformed.statusCode).toBe(400);
     expect(malformed.body).toContain("审阅不可用");
+    const oversized = await app.inject({
+      method: "POST",
+      url: "/review/action-proposals/proposal-1/attest",
+      headers: { cookie: sessionCookie, "content-type": "application/x-www-form-urlencoded" },
+      payload: "x".repeat(2_049),
+    });
+    expect(oversized.statusCode).toBe(413);
+    expect(oversized.headers["content-type"]).toContain("text/html");
+    expect(oversized.headers["cache-control"]).toBe("no-store");
+    expect(oversized.body).toContain("审阅不可用");
+    expect(oversized.body).not.toContain("FST_ERR_CTP_BODY_TOO_LARGE");
     const unrelated = await app.inject({
       method: "POST",
       url: "/unrelated",
