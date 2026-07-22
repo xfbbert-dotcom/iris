@@ -13,6 +13,25 @@ describe("FeishuReviewOAuthClient", () => {
     );
   });
 
+  it.each([
+    ["hostile Open API origin", { baseUrl: "https://attacker.example" }],
+    ["explicit default Open API port", { baseUrl: "https://open.feishu.cn:443" }],
+    ["non-root Open API base path", { baseUrl: "https://open.feishu.cn/open-apis" }],
+    ["query-bearing Open API base URL", { baseUrl: "https://open.feishu.cn/?target=attacker" }],
+    ["hostile authorization origin", { authorizeUrl: "https://accounts.attacker.example/open-apis/authen/v1/authorize" }],
+    ["explicit default authorization port", { authorizeUrl: "https://accounts.feishu.cn:443/open-apis/authen/v1/authorize" }],
+    ["wrong authorization path", { authorizeUrl: "https://accounts.feishu.cn/open-apis/authen/v1/authorize/extra" }],
+    ["query-bearing authorization URL", { authorizeUrl: "https://accounts.feishu.cn/open-apis/authen/v1/authorize?target=attacker" }],
+    ["non-root public origin", { publicOrigin: "https://iris.quello.cn/review" }],
+    ["explicit default public-origin port", { publicOrigin: "https://iris.quello.cn:443" }],
+    ["query-bearing public origin", { publicOrigin: "https://iris.quello.cn?target=attacker" }],
+  ])("rejects a %s before any OAuth request can be made", (_name, overrides) => {
+    const fetch = vi.fn();
+
+    expect(() => createClient({ ...overrides, fetch })).toThrow(/Feishu review OAuth/u);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("exchanges the code and reads the Feishu actor Open ID using separate bounded requests", async () => {
     const fetch = vi
       .fn()
@@ -125,7 +144,7 @@ function createClient(overrides: Partial<Parameters<typeof createFeishuReviewOAu
   return createFeishuReviewOAuthClient({
     baseUrl: "https://open.feishu.cn/",
     authorizeUrl: "https://accounts.feishu.cn/open-apis/authen/v1/authorize",
-    redirectUri: "https://iris.quello.cn/review/oauth/callback",
+    publicOrigin: "https://iris.quello.cn",
     appId: "cli_review",
     appSecret: "app-secret",
     ...overrides,

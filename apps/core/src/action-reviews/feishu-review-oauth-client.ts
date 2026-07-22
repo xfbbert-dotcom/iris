@@ -8,7 +8,7 @@ export type FeishuReviewOAuthClient = {
 export type FeishuReviewOAuthClientDependencies = {
   baseUrl: string;
   authorizeUrl: string;
-  redirectUri: string;
+  publicOrigin: string;
   appId: string;
   appSecret: string;
   fetch?: typeof fetch;
@@ -22,12 +22,12 @@ const maxOpenIdChars = 512;
 export function createFeishuReviewOAuthClient({
   baseUrl,
   authorizeUrl,
-  redirectUri,
+  publicOrigin,
   appId,
   appSecret,
   fetch = globalThis.fetch,
 }: FeishuReviewOAuthClientDependencies): FeishuReviewOAuthClient {
-  const urls = readUrls({ baseUrl, authorizeUrl, redirectUri });
+  const urls = readUrls({ baseUrl, authorizeUrl, publicOrigin });
   const clientId = readRequiredValue(appId, "app ID");
   const clientSecret = readRequiredValue(appSecret, "app secret");
 
@@ -163,26 +163,83 @@ function isToken(value: unknown): value is string {
 function readUrls(input: {
   baseUrl: string;
   authorizeUrl: string;
-  redirectUri: string;
+  publicOrigin: string;
 }): { openBaseUrl: string; authorizeUrl: string; redirectUri: string } {
   return {
-    openBaseUrl: readAbsoluteUrl(input.baseUrl, "open API base URL").replace(/\/+$/u, ""),
-    authorizeUrl: readAbsoluteUrl(input.authorizeUrl, "authorization URL"),
-    redirectUri: readAbsoluteUrl(input.redirectUri, "redirect URI"),
+    openBaseUrl: readOpenApiBaseUrl(input.baseUrl),
+    authorizeUrl: readAuthorizationUrl(input.authorizeUrl),
+    redirectUri: `${readPublicOrigin(input.publicOrigin)}/review/oauth/callback`,
   };
 }
 
-function readAbsoluteUrl(value: string, name: string): string {
+function readOpenApiBaseUrl(value: string): string {
+  const url = readUrl(value, "open API base URL");
+  if (
+    !isRootHttpsUrl(url) ||
+    (url.origin !== "https://open.feishu.cn" && url.origin !== "https://open.larksuite.com")
+  ) {
+    throw new Error("Feishu review OAuth open API base URL must be a supported root HTTPS origin");
+  }
+  return url.origin;
+}
+
+function readAuthorizationUrl(value: string): string {
+  const url = readUrl(value, "authorization URL");
+  if (
+    !isExactHttpsUrl(url, "/open-apis/authen/v1/authorize") ||
+    (url.origin !== "https://accounts.feishu.cn" && url.origin !== "https://accounts.larksuite.com")
+  ) {
+    throw new Error("Feishu review OAuth authorization URL must be a supported exact HTTPS endpoint");
+  }
+  return url.toString();
+}
+
+function readPublicOrigin(value: string): string {
+  const url = readUrl(value, "public origin");
+  if (!isRootHttpsUrl(url)) {
+    throw new Error("Feishu review OAuth public origin must be a root HTTPS origin");
+  }
+  return url.origin;
+}
+
+function readUrl(value: string, name: string): URL {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     throw new Error(`Feishu review OAuth ${name} must be an absolute URL`);
   }
-  if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "") {
-    throw new Error(`Feishu review OAuth ${name} must be an absolute HTTPS URL without credentials or fragment`);
+  if (hasExplicitPort(value)) {
+    throw new Error(`Feishu review OAuth ${name} must not include a port`);
   }
-  return url.toString();
+  return url;
+}
+
+function hasExplicitPort(value: string): boolean {
+  const authorityMatch = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]*)/u.exec(value);
+  if (authorityMatch === null) {
+    return false;
+  }
+  const authority = authorityMatch[1].slice(authorityMatch[1].lastIndexOf("@") + 1);
+  return authority.startsWith("[")
+    ? /^\[[^\]]+\]:/u.test(authority)
+    : authority.includes(":");
+}
+
+function isRootHttpsUrl(url: URL): boolean {
+  return isExactHttpsUrl(url, "/");
+}
+
+function isExactHttpsUrl(url: URL, pathname: string): boolean {
+  return (
+    url.protocol === "https:" &&
+    url.port === "" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.pathname === pathname &&
+    url.search === "" &&
+    url.hash === ""
+  );
 }
 
 function readRequiredValue(value: string, name: string): string {
