@@ -17,7 +17,9 @@ describe("createActionReviewRuntime", () => {
   });
 
   it("shares the action-approval repository and has idempotent independent cleanup", async () => {
-    const repository = {} as ActionApprovalRuntime["repository"];
+    const repository = {
+      hasActionReviewMigration: vi.fn(async () => true),
+    } as unknown as ActionApprovalRuntime["repository"];
     const actionApprovalRuntime = { repository } as ActionApprovalRuntime;
     const close = vi.fn(async () => undefined);
     const runtime = createActionReviewRuntime({
@@ -27,9 +29,38 @@ describe("createActionReviewRuntime", () => {
     });
 
     expect(runtime?.repository).toBe(repository);
+    await expect(runtime?.getStatus()).resolves.toEqual({
+      configured: true,
+      running: true,
+      migration0034Applied: true,
+    });
     await runtime?.close();
     await runtime?.close();
+    await expect(runtime?.getStatus()).resolves.toEqual({
+      configured: true,
+      running: false,
+      migration0034Applied: true,
+    });
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("fails readiness closed when migration status is unavailable", async () => {
+    const repository = {
+      hasActionReviewMigration: vi.fn(async () => {
+        throw new Error("database unavailable");
+      }),
+    } as unknown as ActionApprovalRuntime["repository"];
+    const runtime = createActionReviewRuntime({
+      env,
+      actionApprovalRuntime: { repository } as ActionApprovalRuntime,
+    });
+
+    await expect(runtime?.getStatus()).resolves.toEqual({
+      configured: true,
+      running: true,
+      migration0034Applied: false,
+    });
+    await runtime?.close();
   });
 
   it("fails closed when enabled without the action-approval runtime", () => {

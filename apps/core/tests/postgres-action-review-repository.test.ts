@@ -56,6 +56,11 @@ runIfDatabase("PostgresActionReviewRepository with Postgres", () => {
     await adminPool?.end();
   });
 
+  it("reports the applied action-review migration from schema history", async () => {
+    const repository = createPostgresActionProposalRepository({ dataSource: pool });
+    await expect(repository.hasActionReviewMigration?.()).resolves.toBe(true);
+  });
+
   it("returns the full current review context only to the designated owner", async () => {
     const acceptance = await createReviewCase("context", "medium", `ou_owner_${suffix}`);
 

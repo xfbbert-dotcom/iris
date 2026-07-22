@@ -570,9 +570,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   app.get("/internal/readiness", async () => {
     const knowledgeCardStatus = await getKnowledgeCardStatus(knowledgeCardRuntime);
     const actionApprovalStatus = await getActionApprovalStatus(actionApprovalRuntime);
+    const actionReviewStatus = await getActionReviewStatus(actionReviewRuntime);
     return buildInternalRolloutReadinessReport(
       dependencies.readinessEnv ?? process.env,
-      { knowledgeCardStatus, actionApprovalStatus },
+      { knowledgeCardStatus, actionApprovalStatus, actionReviewStatus },
     );
   });
 
@@ -1617,6 +1618,19 @@ async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefine
       enabled: true,
       running: false,
       degradedReason: "action_approval_status_unavailable" as const,
+    };
+  }
+}
+
+async function getActionReviewStatus(runtime: ActionReviewRuntime | undefined) {
+  if (runtime === undefined) return undefined;
+  try {
+    return await runtime.getStatus();
+  } catch {
+    return {
+      configured: true,
+      running: false,
+      migration0034Applied: false,
     };
   }
 }

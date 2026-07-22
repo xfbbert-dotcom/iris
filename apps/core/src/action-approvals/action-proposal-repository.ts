@@ -356,6 +356,7 @@ export interface ActionProposalRepository {
     input: RecordActionReviewAttestationInput,
   ): Promise<{ outcome: "applied" | "already_applied" }>;
   hasCurrentReviewAttestation(input: CurrentActionReviewAttestationInput): Promise<boolean>;
+  hasActionReviewMigration?(): Promise<boolean>;
   listApprovalPresentations(input: {
     proposalId: string;
     afterId?: string;

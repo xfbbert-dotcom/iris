@@ -17,7 +17,14 @@ export type ActionReviewRuntime = {
   repository: ActionProposalRepository;
   codec: ActionReviewSessionCodec;
   oauthClient: FeishuReviewOAuthClient;
+  getStatus(): Promise<ActionReviewRuntimeStatus>;
   close(): Promise<void>;
+};
+
+export type ActionReviewRuntimeStatus = {
+  configured: true;
+  running: boolean;
+  migration0034Applied: boolean;
 };
 
 export type ActionReviewRuntimeDependencies = {
@@ -52,12 +59,27 @@ export function createActionReviewRuntime({
     appSecret: config.feishuOpenApi.appSecret,
   });
   let closePromise: Promise<void> | undefined;
+  let closed = false;
 
   return {
     repository: actionApprovalRuntime.repository,
     codec,
     oauthClient,
+    async getStatus() {
+      let migration0034Applied = false;
+      try {
+        migration0034Applied = await actionApprovalRuntime.repository.hasActionReviewMigration?.() === true;
+      } catch {
+        migration0034Applied = false;
+      }
+      return {
+        configured: true,
+        running: !closed,
+        migration0034Applied,
+      };
+    },
     close() {
+      closed = true;
       closePromise ??= dependencies.close?.() ?? Promise.resolve();
       return closePromise;
     },

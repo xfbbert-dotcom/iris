@@ -4,6 +4,9 @@ import { buildApp } from "../src/app.js";
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import type { EnvLike } from "../src/config/env.js";
 import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
+import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
+import type { ActionApprovalRuntime } from "../src/runtime/action-approval-runtime.js";
+import type { ActionReviewRuntime } from "../src/runtime/action-review-runtime.js";
 import { isolateEnvVar } from "./test-env.js";
 
 let restoreInternalApiToken: () => void = () => undefined;
@@ -60,6 +63,50 @@ describe("GET /internal/readiness", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ ok: true, status: "ready" });
+    await app.close();
+  });
+
+  it("uses live action-review runtime and migration facts when the feature is enabled", async () => {
+    const app = buildApp({
+      readinessEnv: readyActionReviewEnv(),
+      ...readyActionReviewRuntimeDependencies(true),
+      createAnswerDraftRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createKnowledgeDraftRuntime: () => undefined,
+    });
+
+    const response = await app.inject({ method: "GET", url: "/internal/readiness" });
+    const report = response.json();
+    expect(report).toMatchObject({ ok: true, status: "ready" });
+    expect(report.checks).toContainEqual(expect.objectContaining({
+      id: "actionReviews",
+      status: "pass",
+    }));
+    await app.close();
+  });
+
+  it("blocks live action-review readiness when migration 0034 is missing", async () => {
+    const app = buildApp({
+      readinessEnv: readyActionReviewEnv(),
+      ...readyActionReviewRuntimeDependencies(false),
+      createAnswerDraftRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createKnowledgeDraftRuntime: () => undefined,
+    });
+
+    const report = (await app.inject({ method: "GET", url: "/internal/readiness" })).json();
+    expect(report).toMatchObject({ ok: false, status: "blocked" });
+    expect(report.checks).toContainEqual(expect.objectContaining({
+      id: "actionReviews",
+      status: "fail",
+      detail: "Action-review migration 0034 is not applied.",
+    }));
     await app.close();
   });
 });
@@ -666,5 +713,63 @@ function readyRolloutEnv(): EnvLike {
     IRIS_EMBEDDING_API_KEY: "embedding-key",
     IRIS_EMBEDDING_MODEL: "embedding-model",
     IRIS_EMBEDDING_DIMENSIONS: "1536",
+  };
+}
+
+function readyActionReviewEnv(): EnvLike {
+  return {
+    ...readyRolloutEnv(),
+    FEISHU_ENCRYPT_KEY: "encrypt-key",
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+    IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+    IRIS_ACTION_REVIEW_ENABLED: "true",
+    IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+    IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+  };
+}
+
+function readyActionReviewRuntimeDependencies(migration0034Applied: boolean) {
+  const zeroOutbox = {
+    pending: 0,
+    processing: 0,
+    external_attempting: 0,
+    sent: 0,
+    failed: 0,
+    outcome_unknown: 0,
+    terminalFailed: 0,
+  };
+  const knowledgeCardRuntime = {
+    start: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+    getStatus: vi.fn(async () => ({
+      enabled: true,
+      running: true,
+      dispatcher: { running: true },
+      worker: { running: true },
+      outbox: zeroOutbox,
+    })),
+  } as unknown as KnowledgeCardRuntime;
+  const actionApprovalRuntime = {
+    repository: {},
+    start: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+    getStatus: vi.fn(async () => ({
+      enabled: true,
+      running: true,
+      planner: { running: true },
+      dispatcher: { running: true },
+      outbox: zeroOutbox,
+    })),
+  } as unknown as ActionApprovalRuntime;
+  const actionReviewRuntime = {
+    close: vi.fn(async () => undefined),
+    getStatus: vi.fn(async () => ({ configured: true, running: true, migration0034Applied })),
+  } as unknown as ActionReviewRuntime;
+  return {
+    createKnowledgeCardRuntime: () => knowledgeCardRuntime,
+    createActionApprovalRuntime: () => actionApprovalRuntime,
+    createActionReviewRuntime: () => actionReviewRuntime,
   };
 }

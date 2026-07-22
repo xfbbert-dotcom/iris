@@ -831,6 +831,11 @@ function fakeActionReviewRuntime(
     repository: {} as ActionReviewRuntime["repository"],
     codec: {} as ActionReviewRuntime["codec"],
     oauthClient: {} as ActionReviewRuntime["oauthClient"],
+    getStatus: vi.fn(async () => ({
+      configured: true as const,
+      running: true,
+      migration0034Applied: true,
+    })),
     close: vi.fn(async () => undefined),
     ...overrides,
   };

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
 
 const compose = loadPilotCompose();
@@ -209,6 +210,83 @@ test("proxies only exact public action-review methods and paths", () => {
   }
   assert.doesNotMatch(caddyfile, /path \/review\/\*|handle_path \/review|@review\s+path/iu);
   assert.match(caddyfile, /handle\s*\{\s*respond 404\s*\}/su);
+});
+
+test("enforces the action-review boundary in the pinned Caddy runtime", async (t) => {
+  const docker = process.platform === "win32" ? "docker.exe" : "docker";
+  const daemon = spawnSync(docker, ["version", "--format", "{{.Server.Version}}"], {
+    encoding: "utf8",
+  });
+  if (daemon.status !== 0) {
+    t.skip("Docker daemon is unavailable for the executable Caddy boundary probe");
+    return;
+  }
+
+  const name = `iris-caddy-review-${process.pid}-${Date.now()}`;
+  const image = compose.services.caddy.image;
+  const caddyPath = resolve("deploy/pilot/Caddyfile");
+  const run = spawnSync(docker, [
+    "run",
+    "--rm",
+    "--detach",
+    "--name",
+    name,
+    "--publish",
+    "127.0.0.1::80",
+    "--add-host",
+    "core:127.0.0.1",
+    "--env",
+    "CADDY_EMAIL=review-probe@example.invalid",
+    "--env",
+    "IRIS_PUBLIC_HOSTNAME=:80",
+    "--env",
+    "IRIS_INGRESS_HEALTH_TOKEN=review-probe-token",
+    "--volume",
+    `${caddyPath}:/etc/caddy/Caddyfile:ro`,
+    image,
+  ], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+
+  try {
+    const portResult = spawnSync(docker, ["port", name, "80/tcp"], { encoding: "utf8" });
+    assert.equal(portResult.status, 0, portResult.stderr || portResult.stdout);
+    const port = /:(\d+)\s*$/u.exec(portResult.stdout)?.[1];
+    assert.ok(port, `Unable to read Caddy probe port: ${portResult.stdout}`);
+    const origin = `http://127.0.0.1:${port}`;
+    await waitForHttp(origin);
+
+    for (const request of [
+      { method: "GET", path: "/review/action-proposals/proposal-1" },
+      { method: "GET", path: "/review/oauth/callback" },
+      { method: "POST", path: "/review/action-proposals/proposal-1/attest" },
+    ]) {
+      const response = await fetch(`${origin}${request.path}`, {
+        method: request.method,
+        redirect: "manual",
+      });
+      assert.equal(response.status, 502, `${request.method} ${request.path} must reach reverse_proxy`);
+      await response.body?.cancel();
+    }
+
+    for (const request of [
+      { method: "POST", path: "/review/action-proposals/proposal-1" },
+      { method: "GET", path: "/review/action-proposals/proposal-1/attest" },
+      { method: "GET", path: "/review" },
+      { method: "GET", path: "/review/action-proposals/proposal-1/" },
+      { method: "GET", path: "/review/action-proposals/proposal-1/extra" },
+      { method: "GET", path: "/review/oauth/callback/extra" },
+      { method: "GET", path: "/internal/status" },
+    ]) {
+      const response = await fetch(`${origin}${request.path}`, {
+        method: request.method,
+        redirect: "manual",
+      });
+      assert.equal(response.status, 404, `${request.method} ${request.path} must fail closed at Caddy`);
+      await response.body?.cancel();
+    }
+  } finally {
+    spawnSync(docker, ["rm", "--force", name], { encoding: "utf8" });
+  }
 });
 
 test("keeps action review default-off and does not track a review session secret", () => {
@@ -487,6 +565,21 @@ function readEnvAssignment(contents, name) {
   const match = new RegExp(`^${escapeRegExp(name)}=(.*)$`, "mu").exec(contents);
   assert.ok(match, `${name} must be present`);
   return match[1].trim();
+}
+
+async function waitForHttp(origin) {
+  let lastError;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const response = await fetch(`${origin}/review`, { redirect: "manual" });
+      await response.body?.cancel();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    }
+  }
+  throw new Error(`Caddy probe did not become ready: ${String(lastError)}`);
 }
 
 function assertMarkersInOrder(contents, markers) {

@@ -314,6 +314,15 @@ export function createPostgresActionProposalRepository({
     hasCurrentReviewAttestation(input) {
       return hasCurrentReviewAttestation(dataSource, input);
     },
+    async hasActionReviewMigration() {
+      const result = await dataSource.query<{ present: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM schema_migrations
+           WHERE name = '0034_action_review_attestations.sql'
+         ) AS present`,
+      );
+      return result.rows[0]?.present === true;
+    },
     async listApprovalPresentations(input) {
       const afterId = input.afterId === undefined
         ? undefined
