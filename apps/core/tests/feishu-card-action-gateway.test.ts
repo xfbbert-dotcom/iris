@@ -214,6 +214,17 @@ describe("FeishuCardActionGateway", () => {
         nameType: "string",
         hasTimezone: true,
         timezoneType: "string",
+        schemaV2: false,
+        eventTypeCardAction: false,
+        hostImMessage: false,
+        actionTagButton: false,
+        callbackKindRecognized: false,
+        callbackActionRecognized: false,
+        nameMatchesCallbackAction: false,
+        callbackIdentifiersValid: false,
+        callbackVersionsCanonical: false,
+        reasonLength: null,
+        reasonNonEmpty: false,
       },
     });
     expect(JSON.stringify(onDiagnostic.mock.calls)).not.toMatch(

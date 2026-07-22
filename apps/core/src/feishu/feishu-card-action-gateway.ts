@@ -73,6 +73,17 @@ type FeishuCardActionShapeDiagnostic = {
   nameType: string;
   hasTimezone: boolean;
   timezoneType: string;
+  schemaV2: boolean;
+  eventTypeCardAction: boolean;
+  hostImMessage: boolean;
+  actionTagButton: boolean;
+  callbackKindRecognized: boolean;
+  callbackActionRecognized: boolean;
+  nameMatchesCallbackAction: boolean;
+  callbackIdentifiersValid: boolean;
+  callbackVersionsCanonical: boolean;
+  reasonLength: number | null;
+  reasonNonEmpty: boolean;
 };
 
 export type FeishuCardActionGatewayDependencies = {
@@ -246,6 +257,9 @@ function describeActionShape(body: unknown): FeishuCardActionShapeDiagnostic {
   const action = asRecord(event?.action);
   const callbackValue = asRecord(action?.value);
   const formValue = asRecord(action?.form_value);
+  const callbackKind = callbackValue?.kind;
+  const callbackAction = callbackValue?.action;
+  const reason = formValue?.reason;
 
   return {
     bodyRecord: bodyRecord !== undefined,
@@ -271,7 +285,66 @@ function describeActionShape(body: unknown): FeishuCardActionShapeDiagnostic {
     nameType: valueType(action?.name),
     hasTimezone: action !== undefined && Object.hasOwn(action, "timezone"),
     timezoneType: valueType(action?.timezone),
+    schemaV2: bodyRecord?.schema === "2.0",
+    eventTypeCardAction: header?.event_type === "card.action.trigger",
+    hostImMessage: event?.host === "im_message",
+    actionTagButton: action?.tag === "button",
+    callbackKindRecognized:
+      callbackKind === "knowledge_draft_confirmation" || callbackKind === "action_proposal_approval",
+    callbackActionRecognized: isRecognizedDiagnosticAction(callbackKind, callbackAction),
+    nameMatchesCallbackAction:
+      typeof action?.name === "string" && action.name === callbackAction,
+    callbackIdentifiersValid: hasValidDiagnosticIdentifiers(callbackValue),
+    callbackVersionsCanonical: hasCanonicalDiagnosticVersions(callbackValue),
+    reasonLength: typeof reason === "string" ? [...reason.trim()].length : null,
+    reasonNonEmpty: typeof reason === "string" && reason.trim().length > 0,
   };
+}
+
+function isRecognizedDiagnosticAction(kind: unknown, action: unknown): boolean {
+  if (kind === "knowledge_draft_confirmation") {
+    return action === "confirm" || action === "request_revision" || action === "reject";
+  }
+  if (kind === "action_proposal_approval") {
+    return action === "approve" || action === "request_revision" || action === "reject";
+  }
+  return false;
+}
+
+function hasValidDiagnosticIdentifiers(value: Record<string, unknown> | undefined): boolean {
+  if (value?.kind === "knowledge_draft_confirmation") {
+    return [value.presentationId, value.draftId].every(isDiagnosticReference);
+  }
+  if (value?.kind === "action_proposal_approval") {
+    return [value.presentationId, value.proposalId, value.requirementId].every(isDiagnosticReference);
+  }
+  return false;
+}
+
+function hasCanonicalDiagnosticVersions(value: Record<string, unknown> | undefined): boolean {
+  if (value?.kind === "knowledge_draft_confirmation") {
+    return [value.revisionNumber, value.draftVersion].every(isCanonicalPositiveIntegerString);
+  }
+  if (value?.kind === "action_proposal_approval") {
+    return [
+      value.proposalVersion,
+      value.subjectRevision,
+      value.subjectVersion,
+      value.targetPolicyVersion,
+    ].every(isCanonicalPositiveIntegerString);
+  }
+  return false;
+}
+
+function isDiagnosticReference(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim();
+  return normalized.length >= 1 && normalized.length <= 512;
+}
+
+function isCanonicalPositiveIntegerString(value: unknown): boolean {
+  if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value)) return false;
+  return Number.isSafeInteger(Number(value));
 }
 
 function safelyDescribeActionShape(body: unknown): FeishuCardActionShapeDiagnostic | undefined {
