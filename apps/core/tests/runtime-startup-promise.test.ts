@@ -366,6 +366,7 @@ function knowledgeCardDependencies({ connect }: { connect: ReturnType<typeof vi.
     createFeishuTenantAccessTokenProvider: vi.fn(() => ({ getTenantAccessToken: vi.fn() })),
     createFeishuInteractiveCardClient: vi.fn(() => ({
       sendCard: vi.fn(),
+      sendCardToUser: vi.fn(),
       updateCard: vi.fn(),
     })),
     createFeishuGroupMembershipChecker: vi.fn(() => ({ isCurrentMember: vi.fn() })),

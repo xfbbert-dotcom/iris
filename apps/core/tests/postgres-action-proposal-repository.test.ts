@@ -263,6 +263,20 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
         },
       ],
     });
+    await expect(pool.query(
+      `SELECT presentation.recipient_open_id, presentation.state, outbox.state AS outbox_state
+       FROM action_approval_presentations presentation
+       JOIN action_approval_presentation_outbox outbox
+         ON outbox.presentation_id = presentation.id
+       WHERE presentation.proposal_id = $1`,
+      [result.proposal.id],
+    )).resolves.toMatchObject({
+      rows: [{
+        recipient_open_id: `ou_owner_${suffix}`,
+        state: "pending_send",
+        outbox_state: "pending",
+      }],
+    });
   });
 
   it("keeps high risk pending for an explicitly bound authorized owner", async () => {
@@ -323,6 +337,10 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
         },
       ],
     });
+    await expect(pool.query(
+      "SELECT count(*)::int AS count FROM action_approval_presentations WHERE proposal_id = $1",
+      [result.proposal.id],
+    )).resolves.toMatchObject({ rows: [{ count: 0 }] });
   });
 
   it("requires a designated owner for a company-scoped medium-risk draft", async () => {
@@ -356,6 +374,115 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
         roleRef: reviewerOpenId,
       }],
     });
+  });
+
+  it("claims, retries, and atomically activates one approval presentation", async () => {
+    await pool.query(
+      `UPDATE action_approval_presentation_outbox
+       SET state = 'failed', error_code = 'test_isolation'
+       WHERE state = 'pending'`,
+    );
+    const label = "proposal-delivery";
+    const ownerOpenId = `ou_delivery_owner_${suffix}`;
+    const policy = await createEnabledPolicy(label, ["medium"]);
+    const draft = await createConfirmedDraft(label, "medium", ownerOpenId);
+    const repository = actionRepository();
+    const proposal = (await repository.createProposal({
+      proposalId: `proposal-delivery-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: 2,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${suffix}:delivery`,
+      at,
+    })).proposal;
+    const firstClaim = await repository.claimApprovalPresentationSend({
+      workerId: "approval-delivery-worker",
+      at,
+      leaseUntil: plusSeconds(30),
+    });
+    expect(firstClaim).toMatchObject({
+      workerId: "approval-delivery-worker",
+      attempts: 1,
+      presentation: {
+        proposalId: proposal.id,
+        proposalVersion: proposal.version,
+        recipientOpenId: ownerOpenId,
+        state: "pending_send",
+      },
+    });
+    const context = await repository.getApprovalDeliveryContext(firstClaim!.presentation.id);
+    expect(context).toMatchObject({
+      context: { proposal: { id: proposal.id }, approvals: [] },
+      requirement: { state: "pending", roleRef: ownerOpenId },
+      policy: { id: policy.id, displayName: policy.displayName },
+      presentation: { id: firstClaim!.presentation.id },
+    });
+    expect(JSON.stringify(context)).not.toMatch(/Title proposal-delivery|Content proposal-delivery|approval evidence/iu);
+
+    await repository.beginApprovalExternalAttempt({
+      presentationId: firstClaim!.presentation.id,
+      workerId: "approval-delivery-worker",
+      at,
+    });
+    await repository.failApprovalPresentationSend({
+      presentationId: firstClaim!.presentation.id,
+      workerId: "approval-delivery-worker",
+      classification: "retryable",
+      errorCode: "retryable_remote_failure",
+      retryAt: plusSeconds(60),
+      at,
+    });
+    await expect(repository.claimApprovalPresentationSend({
+      workerId: "approval-delivery-worker",
+      at: plusSeconds(59),
+      leaseUntil: plusSeconds(89),
+    })).resolves.toBeUndefined();
+    const secondClaim = await repository.claimApprovalPresentationSend({
+      workerId: "approval-delivery-worker",
+      at: plusSeconds(60),
+      leaseUntil: plusSeconds(90),
+    });
+    expect(secondClaim).toMatchObject({
+      attempts: 2,
+      presentation: { id: firstClaim!.presentation.id, state: "pending_send" },
+    });
+    await repository.beginApprovalExternalAttempt({
+      presentationId: secondClaim!.presentation.id,
+      workerId: "approval-delivery-worker",
+      at: plusSeconds(60),
+    });
+    await repository.completeApprovalPresentationSend({
+      presentationId: secondClaim!.presentation.id,
+      workerId: "approval-delivery-worker",
+      messageId: `om-delivery-${suffix}`,
+      at: plusSeconds(61),
+    });
+    await expect(repository.getApprovalDeliveryContext(secondClaim!.presentation.id)).resolves.toMatchObject({
+      presentation: {
+        state: "active",
+        messageId: `om-delivery-${suffix}`,
+        version: 2,
+      },
+    });
+    await expect(repository.getApprovalOutboxStatusCounts()).resolves.toMatchObject({
+      sent: 1,
+      external_attempting: 0,
+      outcome_unknown: 0,
+    });
+    await expect(repository.completeApprovalPresentationSend({
+      presentationId: secondClaim!.presentation.id,
+      workerId: "approval-delivery-worker",
+      messageId: `om-delivery-${suffix}`,
+      at: plusSeconds(62),
+    })).resolves.toBeUndefined();
+    await expect(pool.query(
+      `SELECT count(*)::int AS count
+       FROM action_approval_presentation_events
+       WHERE presentation_id = $1 AND event_type = 'send_succeeded'`,
+      [secondClaim!.presentation.id],
+    )).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });
 
   it("fails closed without persisting when the current policy rejects the risk", async () => {

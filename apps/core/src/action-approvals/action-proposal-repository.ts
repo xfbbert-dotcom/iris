@@ -96,6 +96,51 @@ export type ActionProposalContext = {
   approvals: ActionApproval[];
 };
 
+export type ActionApprovalPresentationState =
+  | "pending_send"
+  | "active"
+  | "superseded"
+  | "closed"
+  | "send_failed";
+
+export type ActionApprovalPresentation = {
+  id: string;
+  proposalId: string;
+  requirementId: string;
+  proposalVersion: number;
+  recipientOpenId: string;
+  state: ActionApprovalPresentationState;
+  messageId?: string;
+  operationKey: string;
+  version: number;
+  createdAt: Date;
+  activatedAt?: Date;
+  closedAt?: Date;
+};
+
+export type ActionApprovalSendClaim = {
+  presentation: ActionApprovalPresentation;
+  workerId: string;
+  leaseUntil: Date;
+  attempts: number;
+};
+
+export type ActionApprovalDeliveryContext = {
+  context: ActionProposalContext;
+  requirement: ActionApprovalRequirement;
+  policy: PublicationTargetPolicy;
+  presentation: ActionApprovalPresentation;
+};
+
+export type ActionApprovalOutboxStatusCounts = {
+  pending: number;
+  processing: number;
+  external_attempting: number;
+  sent: number;
+  failed: number;
+  outcome_unknown: number;
+};
+
 export type ActionProposalDraftCandidate = {
   id: string;
   sourceGroupId?: string;
@@ -213,6 +258,38 @@ export interface ActionProposalRepository {
   applyApprovalAction(
     input: ApplyActionProposalActionInput,
   ): Promise<ApplyActionProposalActionResult>;
+  claimApprovalPresentationSend(input: {
+    workerId: string;
+    leaseUntil: Date;
+    at: Date;
+  }): Promise<ActionApprovalSendClaim | undefined>;
+  getApprovalDeliveryContext(id: string): Promise<ActionApprovalDeliveryContext | undefined>;
+  beginApprovalExternalAttempt(input: {
+    presentationId: string;
+    workerId: string;
+    at: Date;
+  }): Promise<void>;
+  failApprovalPresentationPreparation(input: {
+    presentationId: string;
+    workerId: string;
+    errorCode: string;
+    at: Date;
+  }): Promise<void>;
+  completeApprovalPresentationSend(input: {
+    presentationId: string;
+    workerId: string;
+    messageId: string;
+    at: Date;
+  }): Promise<void>;
+  failApprovalPresentationSend(input: {
+    presentationId: string;
+    workerId: string;
+    classification: "retryable" | "permanent" | "outcome_unknown";
+    errorCode: string;
+    retryAt?: Date;
+    at: Date;
+  }): Promise<void>;
+  getApprovalOutboxStatusCounts(): Promise<ActionApprovalOutboxStatusCounts>;
   getProposal(id: string): Promise<ActionProposalContext | undefined>;
   listEligibleDrafts(input: {
     groupIds?: string[];

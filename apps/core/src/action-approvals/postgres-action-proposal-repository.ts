@@ -22,6 +22,7 @@ import {
   ACTION_PROPOSAL_STATUSES,
   ACTION_ROLE_GRANT_TYPES,
   buildApprovalRequirementSnapshot,
+  type ActionApprovalRequirementSnapshot,
   type ActionApprovalRequirementKind,
   type ActionApprovalRoleRefType,
   type ActionProposal,
@@ -30,7 +31,11 @@ import {
 } from "./action-proposal.js";
 import type {
   ActionApproval,
+  ActionApprovalDeliveryContext,
+  ActionApprovalOutboxStatusCounts,
+  ActionApprovalPresentation,
   ActionApprovalRequirement,
+  ActionApprovalSendClaim,
   ActionProposalContext,
   ActionProposalDraftCandidate,
   ActionProposalEvent,
@@ -128,7 +133,26 @@ type ApprovalPresentationRow = {
   proposal_version: string | number;
   recipient_open_id: string;
   state: "pending_send" | "active" | "superseded" | "closed" | "send_failed";
+  message_id: string | null;
+  operation_key: string;
   version: string | number;
+  created_at: Date;
+  activated_at: Date | null;
+  closed_at: Date | null;
+};
+
+type ApprovalOutboxRow = {
+  id: string;
+  presentation_id: string;
+  idempotency_key: string;
+  state: "pending" | "processing" | "external_attempting" | "sent" | "failed" | "outcome_unknown";
+  attempts: number;
+  worker_id: string | null;
+  lease_until: Date | null;
+  retry_at: Date | null;
+  error_code: string | null;
+  created_at: Date;
+  updated_at: Date;
 };
 
 type DraftRevisionRow = {
@@ -243,6 +267,39 @@ export function createPostgresActionProposalRepository({
     },
     applyApprovalAction(input) {
       return applyApprovalAction(dataSource, input);
+    },
+    claimApprovalPresentationSend(input) {
+      return claimApprovalPresentationSend(dataSource, input);
+    },
+    getApprovalDeliveryContext(id) {
+      return getApprovalDeliveryContext(dataSource, requireReference("id", id));
+    },
+    beginApprovalExternalAttempt(input) {
+      return beginApprovalExternalAttempt(dataSource, input);
+    },
+    failApprovalPresentationPreparation(input) {
+      return failApprovalPresentationPreparation(dataSource, input);
+    },
+    completeApprovalPresentationSend(input) {
+      return completeApprovalPresentationSend(dataSource, input);
+    },
+    failApprovalPresentationSend(input) {
+      return failApprovalPresentationSend(dataSource, input);
+    },
+    async getApprovalOutboxStatusCounts() {
+      const result = await dataSource.query<{ state: ApprovalOutboxRow["state"]; count: string | number }>(
+        "SELECT state, count(*) AS count FROM action_approval_presentation_outbox GROUP BY state",
+      );
+      const counts: ActionApprovalOutboxStatusCounts = {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 0,
+        outcome_unknown: 0,
+      };
+      for (const row of result.rows) counts[row.state] = Number(row.count);
+      return counts;
     },
     getProposal(id) {
       return loadProposalContext(dataSource, requireReference("id", id));
@@ -362,6 +419,309 @@ export function createPostgresActionProposalRepository({
       );
       return result.rows.map(mapGrant);
     },
+  };
+}
+
+async function claimApprovalPresentationSend(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: { workerId: string; leaseUntil: Date; at: Date },
+): Promise<ActionApprovalSendClaim | undefined> {
+  const workerId = requireReference("workerId", input.workerId);
+  const at = requireDate(input.at);
+  const leaseUntil = requireDate(input.leaseUntil);
+  if (leaseUntil.getTime() <= at.getTime()) throw new Error("leaseUntil is invalid");
+  return withTransaction(dataSource, async (client) => {
+    const selected = await client.query<ApprovalOutboxRow>(
+      `${approvalOutboxSelect("outbox")}
+       JOIN action_approval_presentations presentation
+         ON presentation.id = outbox.presentation_id
+       WHERE presentation.state = 'pending_send'
+         AND (
+           (outbox.state = 'pending' AND (outbox.retry_at IS NULL OR outbox.retry_at <= $1))
+           OR (outbox.state = 'processing' AND outbox.lease_until <= $1)
+         )
+       ORDER BY outbox.created_at ASC, outbox.id ASC
+       FOR UPDATE OF outbox SKIP LOCKED
+       LIMIT 1`,
+      [at],
+    );
+    const outbox = selected.rows[0];
+    if (outbox === undefined) return undefined;
+    const updated = await client.query<{ attempts: number }>(
+      `UPDATE action_approval_presentation_outbox
+       SET state = 'processing', attempts = attempts + 1, worker_id = $2,
+           lease_until = $3, retry_at = NULL, error_code = NULL, updated_at = $4
+       WHERE id = $1
+       RETURNING attempts`,
+      [outbox.id, workerId, leaseUntil, at],
+    );
+    const presentation = await lockApprovalPresentation(client, outbox.presentation_id);
+    return {
+      presentation: mapApprovalPresentation(presentation),
+      workerId,
+      leaseUntil,
+      attempts: updated.rows[0]?.attempts ?? outbox.attempts + 1,
+    };
+  });
+}
+
+async function getApprovalDeliveryContext(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  id: string,
+): Promise<ActionApprovalDeliveryContext | undefined> {
+  const presentationResult = await dataSource.query<ApprovalPresentationRow>(
+    `${approvalPresentationSelect()} WHERE id = $1`,
+    [id],
+  );
+  const presentationRow = presentationResult.rows[0];
+  if (presentationRow === undefined) return undefined;
+  const context = await loadProposalContext(dataSource, presentationRow.proposal_id);
+  if (context === undefined) return undefined;
+  const requirement = context.requirements.find((item) => item.id === presentationRow.requirement_id);
+  if (requirement === undefined) return undefined;
+  const policyResult = await dataSource.query<PolicyRow>(
+    `${policySelect()} WHERE id = $1`,
+    [context.proposal.targetPolicyId],
+  );
+  if (policyResult.rows[0] === undefined) return undefined;
+  return {
+    context,
+    requirement,
+    policy: mapPolicy(policyResult.rows[0]),
+    presentation: mapApprovalPresentation(presentationRow),
+  };
+}
+
+async function beginApprovalExternalAttempt(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: { presentationId: string; workerId: string; at: Date },
+): Promise<void> {
+  const normalized = normalizeApprovalDeliveryMutation(input);
+  await withTransaction(dataSource, async (client) => {
+    const presentation = await lockApprovalPresentation(client, normalized.presentationId);
+    const outbox = await lockApprovalOutbox(client, normalized.presentationId);
+    const proposal = await lockProposal(client, presentation.proposal_id);
+    const requirement = await lockRequirement(client, presentation.requirement_id);
+    const policy = await lockPolicy(client, proposal.target_policy_id);
+    if (
+      presentation.state !== "pending_send" ||
+      outbox.state !== "processing" ||
+      outbox.worker_id !== normalized.workerId ||
+      proposal.status !== "pending_approval" ||
+      Number(proposal.version) !== Number(presentation.proposal_version) ||
+      requirement.proposal_id !== proposal.id ||
+      requirement.state !== "pending" ||
+      !policy.enabled ||
+      policy.id !== proposal.target_policy_id ||
+      Number(policy.version) !== Number(proposal.target_policy_version) ||
+      requirement.target_policy_id !== policy.id ||
+      Number(requirement.target_policy_version) !== Number(policy.version)
+    ) {
+      throw new ActionProposalPersistenceConflictError();
+    }
+    try {
+      await requireApprovalAuthorization(client, requirement, presentation.recipient_open_id);
+    } catch {
+      throw new ActionProposalPersistenceConflictError();
+    }
+    await client.query(
+      `UPDATE action_approval_presentation_outbox
+       SET state = 'external_attempting', lease_until = NULL, updated_at = $3
+       WHERE presentation_id = $1 AND worker_id = $2 AND state = 'processing'`,
+      [normalized.presentationId, normalized.workerId, normalized.at],
+    );
+  });
+}
+
+async function failApprovalPresentationPreparation(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: { presentationId: string; workerId: string; errorCode: string; at: Date },
+): Promise<void> {
+  const normalized = {
+    ...normalizeApprovalDeliveryMutation(input),
+    errorCode: requireReference("errorCode", input.errorCode),
+  };
+  await withTransaction(dataSource, async (client) => {
+    const presentation = await lockApprovalPresentation(client, normalized.presentationId);
+    const outbox = await lockApprovalOutbox(client, normalized.presentationId);
+    if (outbox.state !== "processing" || outbox.worker_id !== normalized.workerId) {
+      throw new ActionProposalPersistenceConflictError();
+    }
+    if (presentation.state === "pending_send") {
+      await markApprovalPresentationSendFailed(client, presentation, normalized.errorCode, normalized.at);
+    }
+    await client.query(
+      `UPDATE action_approval_presentation_outbox
+       SET state = 'failed', worker_id = NULL, lease_until = NULL, retry_at = NULL,
+           error_code = $3, updated_at = $4
+       WHERE presentation_id = $1 AND worker_id = $2 AND state = 'processing'`,
+      [normalized.presentationId, normalized.workerId, normalized.errorCode, normalized.at],
+    );
+  });
+}
+
+async function completeApprovalPresentationSend(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: { presentationId: string; workerId: string; messageId: string; at: Date },
+): Promise<void> {
+  const normalized = {
+    ...normalizeApprovalDeliveryMutation(input),
+    messageId: requireReference("messageId", input.messageId),
+  };
+  await withTransaction(dataSource, async (client) => {
+    const presentation = await lockApprovalPresentation(client, normalized.presentationId);
+    const outbox = await lockApprovalOutbox(client, normalized.presentationId);
+    if (
+      outbox.state === "sent" &&
+      presentation.state === "active" &&
+      presentation.message_id === normalized.messageId
+    ) return;
+    if (
+      presentation.state !== "pending_send" ||
+      outbox.state !== "external_attempting" ||
+      outbox.worker_id !== normalized.workerId
+    ) throw new ActionProposalPersistenceConflictError();
+    const fromVersion = Number(presentation.version);
+    await client.query(
+      `UPDATE action_approval_presentations
+       SET state = 'active', message_id = $2, activated_at = $3, version = version + 1
+       WHERE id = $1 AND state = 'pending_send' AND version = $4`,
+      [normalized.presentationId, normalized.messageId, normalized.at, fromVersion],
+    );
+    await client.query(
+      `INSERT INTO action_approval_presentation_events (
+        id, presentation_id, event_type, operation_key, from_version, to_version, created_at
+      ) VALUES ($1, $2, 'send_succeeded', $3, $4, $5, $6)`,
+      [
+        randomUUID(),
+        normalized.presentationId,
+        derivedOperationKey("action-presentation-send-succeeded", {
+          presentationId: normalized.presentationId,
+          messageId: normalized.messageId,
+          fromVersion,
+        }),
+        fromVersion,
+        fromVersion + 1,
+        normalized.at,
+      ],
+    );
+    await client.query(
+      `UPDATE action_approval_presentation_outbox
+       SET state = 'sent', worker_id = NULL, lease_until = NULL, retry_at = NULL,
+           error_code = NULL, updated_at = $3
+       WHERE presentation_id = $1 AND worker_id = $2 AND state = 'external_attempting'`,
+      [normalized.presentationId, normalized.workerId, normalized.at],
+    );
+  });
+}
+
+async function failApprovalPresentationSend(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: {
+    presentationId: string;
+    workerId: string;
+    classification: "retryable" | "permanent" | "outcome_unknown";
+    errorCode: string;
+    retryAt?: Date;
+    at: Date;
+  },
+): Promise<void> {
+  const classification = input.classification;
+  if (!(classification === "retryable" || classification === "permanent" || classification === "outcome_unknown")) {
+    throw new Error("classification is invalid");
+  }
+  const normalized = {
+    ...normalizeApprovalDeliveryMutation(input),
+    classification,
+    errorCode: requireReference("errorCode", input.errorCode),
+    ...(input.retryAt === undefined ? {} : { retryAt: requireDate(input.retryAt) }),
+  };
+  if (
+    (classification === "retryable") !== (normalized.retryAt !== undefined) ||
+    (normalized.retryAt !== undefined && normalized.retryAt.getTime() <= normalized.at.getTime())
+  ) throw new Error("retryAt is invalid");
+  await withTransaction(dataSource, async (client) => {
+    const presentation = await lockApprovalPresentation(client, normalized.presentationId);
+    const outbox = await lockApprovalOutbox(client, normalized.presentationId);
+    if (outbox.state !== "external_attempting" || outbox.worker_id !== normalized.workerId) {
+      throw new ActionProposalPersistenceConflictError();
+    }
+    if (classification === "permanent" && presentation.state === "pending_send") {
+      await markApprovalPresentationSendFailed(client, presentation, normalized.errorCode, normalized.at);
+    }
+    const state = classification === "retryable"
+      ? "pending"
+      : classification === "permanent" ? "failed" : "outcome_unknown";
+    await client.query(
+      `UPDATE action_approval_presentation_outbox
+       SET state = $3, worker_id = NULL, lease_until = NULL, retry_at = $4,
+           error_code = $5, updated_at = $6
+       WHERE presentation_id = $1 AND worker_id = $2 AND state = 'external_attempting'`,
+      [
+        normalized.presentationId,
+        normalized.workerId,
+        state,
+        normalized.retryAt ?? null,
+        normalized.errorCode,
+        normalized.at,
+      ],
+    );
+  });
+}
+
+async function markApprovalPresentationSendFailed(
+  client: KnowledgeDraftTransactionClient,
+  presentation: ApprovalPresentationRow,
+  errorCode: string,
+  at: Date,
+): Promise<void> {
+  const fromVersion = Number(presentation.version);
+  await client.query(
+    `UPDATE action_approval_presentations
+     SET state = 'send_failed', version = version + 1
+     WHERE id = $1 AND state = 'pending_send' AND version = $2`,
+    [presentation.id, fromVersion],
+  );
+  await client.query(
+    `INSERT INTO action_approval_presentation_events (
+      id, presentation_id, event_type, operation_key, from_version, to_version, created_at
+    ) VALUES ($1, $2, 'send_failed', $3, $4, $5, $6)`,
+    [
+      randomUUID(),
+      presentation.id,
+      derivedOperationKey("action-presentation-send-failed", {
+        presentationId: presentation.id,
+        errorCode,
+        fromVersion,
+      }),
+      fromVersion,
+      fromVersion + 1,
+      at,
+    ],
+  );
+}
+
+async function lockApprovalOutbox(
+  client: KnowledgeDraftTransactionClient,
+  presentationId: string,
+): Promise<ApprovalOutboxRow> {
+  const result = await client.query<ApprovalOutboxRow>(
+    `${approvalOutboxSelect()} WHERE presentation_id = $1 FOR UPDATE`,
+    [presentationId],
+  );
+  if (result.rows[0] === undefined) throw new ActionProposalPersistenceConflictError();
+  return result.rows[0];
+}
+
+function normalizeApprovalDeliveryMutation(input: {
+  presentationId: string;
+  workerId: string;
+  at: Date;
+}) {
+  return {
+    presentationId: requireReference("presentationId", input.presentationId),
+    workerId: requireReference("workerId", input.workerId),
+    at: requireDate(input.at),
   };
 }
 
@@ -816,8 +1176,7 @@ async function lockApprovalPresentation(
   id: string,
 ): Promise<ApprovalPresentationRow> {
   const result = await client.query<ApprovalPresentationRow>(
-    `SELECT id, proposal_id, requirement_id, proposal_version, recipient_open_id, state, version
-     FROM action_approval_presentations WHERE id = $1 FOR UPDATE`,
+    `${approvalPresentationSelect()} WHERE id = $1 FOR UPDATE`,
     [id],
   );
   if (result.rows[0] === undefined) throw new ActionProposalAuthorizationError();
@@ -1256,6 +1615,7 @@ async function createProposal(
       ],
     );
     for (const requirement of requirements) {
+      const requirementId = randomUUID();
       await client.query(
         `INSERT INTO action_approval_requirements (
           id, proposal_id, requirement_kind, role_ref_type, role_ref,
@@ -1264,7 +1624,7 @@ async function createProposal(
           version, created_at, updated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, $12)`,
         [
-          randomUUID(),
+          requirementId,
           normalized.proposalId,
           requirement.kind,
           requirement.roleRefType,
@@ -1278,6 +1638,59 @@ async function createProposal(
           normalized.at,
         ],
       );
+      const recipients = await listApprovalPresentationRecipients(client, requirement);
+      for (const recipientOpenId of recipients) {
+        const presentationId = randomUUID();
+        const presentationOperationKey = derivedOperationKey("action-approval-presentation", {
+          proposalId: normalized.proposalId,
+          requirementId,
+          recipientOpenId,
+          proposalVersion: 1,
+        });
+        const presentationFingerprint = operationFingerprint({
+          proposalId: normalized.proposalId,
+          requirementId,
+          recipientOpenId,
+          proposalVersion: 1,
+        });
+        await client.query(
+          `INSERT INTO action_approval_presentations (
+            id, proposal_id, requirement_id, proposal_version, recipient_open_id,
+            state, operation_key, operation_fingerprint, version, created_at
+          ) VALUES ($1, $2, $3, 1, $4, 'pending_send', $5, $6, 1, $7)`,
+          [
+            presentationId,
+            normalized.proposalId,
+            requirementId,
+            recipientOpenId,
+            presentationOperationKey,
+            presentationFingerprint,
+            normalized.at,
+          ],
+        );
+        await client.query(
+          `INSERT INTO action_approval_presentation_events (
+            id, presentation_id, event_type, operation_key, from_version, to_version, created_at
+          ) VALUES ($1, $2, 'created', $3, NULL, 1, $4)`,
+          [
+            randomUUID(),
+            presentationId,
+            derivedOperationKey("action-approval-presentation-created", presentationOperationKey),
+            normalized.at,
+          ],
+        );
+        await client.query(
+          `INSERT INTO action_approval_presentation_outbox (
+            id, presentation_id, idempotency_key, state, attempts, created_at, updated_at
+          ) VALUES ($1, $2, $3, 'pending', 0, $4, $4)`,
+          [
+            randomUUID(),
+            presentationId,
+            `action-approval-send:${presentationId}`,
+            normalized.at,
+          ],
+        );
+      }
     }
     await client.query(
       `INSERT INTO action_events (
@@ -1300,6 +1713,30 @@ async function createProposal(
       proposal: await requireProposal(client, normalized.proposalId),
     };
   });
+}
+
+async function listApprovalPresentationRecipients(
+  client: KnowledgeDraftTransactionClient,
+  requirement: ActionApprovalRequirementSnapshot,
+): Promise<string[]> {
+  if (requirement.satisfiedBy !== undefined) return [];
+  if (requirement.kind === "designated_owner") {
+    return requirement.roleRefType === "feishu_user" && requirement.roleRef !== undefined
+      ? [requirement.roleRef]
+      : [];
+  }
+  if (requirement.kind !== "iris_admin_or_authorized_owner") return [];
+  const result = await client.query<{ actor_open_id: string }>(
+    `SELECT actor_open_id
+     FROM action_role_grants
+     WHERE enabled = TRUE AND (
+       role_type = 'iris_admin'
+       OR (role_type = 'authorized_high_risk_owner' AND actor_open_id = $1)
+     )
+     ORDER BY actor_open_id ASC`,
+    [requirement.roleRefType === "feishu_user" ? requirement.roleRef ?? null : null],
+  );
+  return [...new Set(result.rows.map((row) => row.actor_open_id))];
 }
 
 async function loadProposalContext(
@@ -1498,6 +1935,23 @@ function actionEventSelect(): string {
           FROM action_events`;
 }
 
+function approvalPresentationSelect(): string {
+  return `SELECT id, proposal_id, requirement_id, proposal_version, recipient_open_id,
+                 state, message_id, operation_key, version, created_at, activated_at, closed_at
+          FROM action_approval_presentations`;
+}
+
+function approvalOutboxSelect(alias?: string): string {
+  const prefix = alias === undefined ? "" : `${alias}.`;
+  const from = alias === undefined
+    ? "action_approval_presentation_outbox"
+    : `action_approval_presentation_outbox ${alias}`;
+  return `SELECT ${prefix}id, ${prefix}presentation_id, ${prefix}idempotency_key,
+                 ${prefix}state, ${prefix}attempts, ${prefix}worker_id, ${prefix}lease_until,
+                 ${prefix}retry_at, ${prefix}error_code, ${prefix}created_at, ${prefix}updated_at
+          FROM ${from}`;
+}
+
 function mapPolicy(row: PolicyRow): PublicationTargetPolicy {
   return {
     id: row.id,
@@ -1591,6 +2045,23 @@ function mapActionEvent(row: ActionEventRow): ActionProposalEvent {
     toVersion: Number(row.to_version),
     ...(row.reason_code === null ? {} : { reasonCode: row.reason_code }),
     createdAt: requireDate(row.created_at),
+  };
+}
+
+function mapApprovalPresentation(row: ApprovalPresentationRow): ActionApprovalPresentation {
+  return {
+    id: row.id,
+    proposalId: row.proposal_id,
+    requirementId: row.requirement_id,
+    proposalVersion: Number(row.proposal_version),
+    recipientOpenId: row.recipient_open_id,
+    state: row.state,
+    ...(row.message_id === null ? {} : { messageId: row.message_id }),
+    operationKey: row.operation_key,
+    version: Number(row.version),
+    createdAt: requireDate(row.created_at),
+    ...(row.activated_at === null ? {} : { activatedAt: requireDate(row.activated_at) }),
+    ...(row.closed_at === null ? {} : { closedAt: requireDate(row.closed_at) }),
   };
 }
 

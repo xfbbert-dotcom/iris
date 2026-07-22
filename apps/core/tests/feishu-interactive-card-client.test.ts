@@ -39,6 +39,34 @@ describe("FeishuInteractiveCardClient", () => {
     );
   });
 
+  it("sends approval cards to an exact Feishu user Open ID", async () => {
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
+    const fetch = vi.fn(async () => jsonResponse({ code: 0, data: { message_id: "om-user-card-1" } }));
+    const client = createFeishuInteractiveCardClient({
+      baseUrl: "https://open.feishu.cn/",
+      tokenProvider,
+      fetch,
+    });
+
+    await expect(client.sendCardToUser({
+      recipientOpenId: "ou_owner",
+      cardJson: '{"schema":"2.0"}',
+      uuid: "approval-send-1",
+    })).resolves.toEqual({ messageId: "om-user-card-1" });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          receive_id: "ou_owner",
+          msg_type: "interactive",
+          content: '{"schema":"2.0"}',
+          uuid: "approval-send-1",
+        }),
+      }),
+    );
+  });
+
   it("updates an existing interactive card using the exact Feishu message contract", async () => {
     const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
     const fetch = vi.fn(async () => jsonResponse({ code: 0 }));
@@ -101,6 +129,8 @@ describe("FeishuInteractiveCardClient", () => {
     ["sendCard", { chatId: "oc_group", cardJson: " ", uuid: "send-1" }],
     ["sendCard", { chatId: "oc_group", cardJson: "{}", uuid: " " }],
     ["sendCard", { chatId: "oc_group", cardJson: "{}", uuid: "u".repeat(51) }],
+    ["sendCardToUser", { recipientOpenId: " ", cardJson: "{}", uuid: "send-1" }],
+    ["sendCardToUser", { recipientOpenId: "o".repeat(513), cardJson: "{}", uuid: "send-1" }],
     ["updateCard", { messageId: " ", cardJson: "{}" }],
     ["updateCard", { messageId: "m".repeat(513), cardJson: "{}" }],
     ["updateCard", { messageId: "om-card-1", cardJson: " " }],

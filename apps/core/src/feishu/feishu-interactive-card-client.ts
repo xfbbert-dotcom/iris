@@ -4,6 +4,11 @@ import { readBoundedJsonResponse } from "../integrations/bounded-json-response.j
 
 export type FeishuInteractiveCardClient = {
   sendCard(input: { chatId: string; cardJson: string; uuid: string }): Promise<{ messageId: string }>;
+  sendCardToUser(input: {
+    recipientOpenId: string;
+    cardJson: string;
+    uuid: string;
+  }): Promise<{ messageId: string }>;
   updateCard(input: { messageId: string; cardJson: string }): Promise<void>;
 };
 
@@ -72,6 +77,32 @@ export function createFeishuInteractiveCardClient({
         timeoutMs: safeTimeoutMs,
       });
 
+      return { messageId: readSentMessageId(responseBody) };
+    },
+
+    async sendCardToUser(input) {
+      const recipientOpenId = readRequiredIdentifier(input.recipientOpenId);
+      const cardJson = readCardJson(input.cardJson);
+      const uuid = readUuid(input.uuid);
+      const tenantAccessToken = await readTenantAccessToken(tokenProvider);
+      const responseBody = await requestFeishuJson({
+        fetch,
+        url: `${trimTrailingSlash(baseUrl)}/open-apis/im/v1/messages?receive_id_type=open_id`,
+        init: {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${tenantAccessToken}`,
+            "content-type": "application/json; charset=utf-8",
+          },
+          body: JSON.stringify({
+            receive_id: recipientOpenId,
+            msg_type: "interactive",
+            content: cardJson,
+            uuid,
+          }),
+        },
+        timeoutMs: safeTimeoutMs,
+      });
       return { messageId: readSentMessageId(responseBody) };
     },
 

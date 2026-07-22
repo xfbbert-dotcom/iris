@@ -49,7 +49,7 @@ export type KnowledgeCardDispatcherDependencies = {
     | "completePresentationSend"
     | "failPresentationSend"
   >;
-  cardClient: FeishuInteractiveCardClient;
+  cardClient: Pick<FeishuInteractiveCardClient, "sendCard" | "updateCard">;
   renderer?: (input: KnowledgeDraftCardRenderInput) => KnowledgeDraftCardRenderResult;
   canUseKnowledgeCards(groupId: string): boolean;
   targetDisplayName: string;
@@ -106,7 +106,7 @@ export function createKnowledgeCardDispatcher({
 async function dispatchClaim(input: {
   claim: KnowledgeCardSendClaim;
   repository: KnowledgeCardDispatcherDependencies["repository"];
-  cardClient: FeishuInteractiveCardClient;
+  cardClient: KnowledgeCardDispatcherDependencies["cardClient"];
   renderer: NonNullable<KnowledgeCardDispatcherDependencies["renderer"]>;
   canUseKnowledgeCards(groupId: string): boolean;
   targetDisplayName: string;

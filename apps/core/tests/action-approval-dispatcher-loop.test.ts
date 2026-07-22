@@ -1,0 +1,62 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { createActionApprovalDispatcherLoop } from "../src/action-approvals/action-approval-dispatcher-loop.js";
+
+describe("ActionApprovalDispatcherLoop", () => {
+  it("runs bounded non-overlapping batches and records content-free counts", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = { processBatch: vi.fn(async () => [
+        { status: "sent" as const, presentationId: "p-1", code: "send_succeeded" as const },
+        { status: "retrying" as const, presentationId: "p-2", code: "request_not_sent" as const },
+      ]) };
+      const loop = createActionApprovalDispatcherLoop({
+        worker,
+        intervalMs: 1_000,
+        batchLimit: 5,
+        now: () => new Date("2026-07-20T00:00:00.000Z"),
+      });
+      loop.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(worker.processBatch).toHaveBeenCalledWith({ limit: 5 });
+      expect(loop.getSnapshot()).toMatchObject({
+        running: true,
+        latestBatch: {
+          status: "succeeded",
+          sentCount: 1,
+          retryingCount: 1,
+          permanentFailureCount: 0,
+          outcomeUnknownCount: 0,
+        },
+      });
+      expect(JSON.stringify(loop.getSnapshot())).not.toMatch(/p-1|p-2/u);
+      await loop.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("isolates worker failure and stops cleanly", async () => {
+    vi.useFakeTimers();
+    try {
+      const onError = vi.fn();
+      const loop = createActionApprovalDispatcherLoop({
+        worker: { processBatch: vi.fn(async () => { throw new Error("private failure"); }) },
+        intervalMs: 1_000,
+        batchLimit: 1,
+        onError,
+      });
+      loop.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(loop.getSnapshot()).toMatchObject({
+        latestBatch: { status: "failed", errorCode: "worker_failed" },
+      });
+      expect(JSON.stringify(loop.getSnapshot())).not.toContain("private failure");
+      expect(onError).toHaveBeenCalledOnce();
+      await loop.stop();
+      expect(loop.isRunning()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
