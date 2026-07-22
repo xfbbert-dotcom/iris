@@ -34,6 +34,7 @@ import type {
   ActionApprovalDeliveryContext,
   ActionApprovalOutboxStatusCounts,
   ActionApprovalPresentation,
+  ActionApprovalReplayInspection,
   ActionApprovalRequirement,
   ActionApprovalSendClaim,
   ActionProposalContext,
@@ -269,14 +270,21 @@ export function createPostgresActionProposalRepository({
     applyApprovalAction(input) {
       return applyApprovalAction(dataSource, input);
     },
+    inspectApprovalActionReplay(input) {
+      return inspectApprovalActionReplay(dataSource, input);
+    },
     preflightApprovalAction(input) {
       return preflightApprovalAction(dataSource, input);
     },
     async listApprovalPresentations(input) {
+      const afterId = input.afterId === undefined
+        ? undefined
+        : requireReference("afterId", input.afterId);
       const result = await dataSource.query<ApprovalPresentationRow>(
         `${approvalPresentationSelect()} WHERE proposal_id = $1
-         ORDER BY created_at ASC, id ASC LIMIT $2`,
-        [requireReference("proposalId", input.proposalId), requireLimit(input.limit)],
+           AND ($2::TEXT IS NULL OR id > $2)
+         ORDER BY id ASC LIMIT $3`,
+        [requireReference("proposalId", input.proposalId), afterId ?? null, requireLimit(input.limit)],
       );
       return result.rows.map(mapApprovalPresentation);
     },
@@ -969,66 +977,8 @@ async function applyApprovalAction(
   const fingerprint = operationFingerprint({ operation: "apply_action_proposal_action", ...normalized });
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, normalized.operationKey);
-    if (normalized.action === "approve") {
-      const replay = await client.query<ApprovalRow>(
-        `${approvalSelect()} WHERE operation_key = $1 OR callback_event_id = $2
-         ORDER BY CASE WHEN operation_key = $1 THEN 0 ELSE 1 END LIMIT 1`,
-        [normalized.operationKey, normalized.callbackEventId],
-      );
-      if (replay.rows[0] !== undefined) {
-        if (
-          replay.rows[0].operation_key !== normalized.operationKey ||
-          replay.rows[0].operation_fingerprint !== fingerprint
-        ) throw new ActionProposalOperationConflictError();
-        const proposal = await requireProposal(client, replay.rows[0].proposal_id);
-        const draft = await requireDraftState(client, proposal.subjectId);
-        return {
-          outcome: "already_applied",
-          action: normalized.action,
-          proposal,
-          draftStatus: draft.status,
-          draftVersion: draft.version,
-        };
-      }
-    } else {
-      const replay = await client.query<{
-        draft_id: string;
-        event_type: "revision_requested" | "rejected";
-        operation_fingerprint: string;
-        to_version: string | number;
-      }>(
-        `SELECT draft_id, event_type, operation_fingerprint, to_version
-         FROM knowledge_draft_events WHERE operation_key = $1`,
-        [normalized.operationKey],
-      );
-      if (replay.rows[0] !== undefined) {
-        const expectedEventType = normalized.action === "request_revision"
-          ? "revision_requested"
-          : "rejected";
-        if (
-          replay.rows[0].event_type !== expectedEventType ||
-          replay.rows[0].operation_fingerprint !== fingerprint
-        ) throw new ActionProposalOperationConflictError();
-        const proposal = await requireProposal(client, normalized.proposalId);
-        if (replay.rows[0].draft_id !== proposal.subjectId) {
-          throw new ActionProposalOperationConflictError();
-        }
-        const draft = await requireDraftState(client, proposal.subjectId);
-        return {
-          outcome: "already_applied",
-          action: normalized.action,
-          proposal,
-          draftStatus: draft.status,
-          draftVersion: Number(replay.rows[0].to_version),
-        };
-      }
-      const callbackReplay = await client.query<{ operation_key: string }>(
-        `SELECT operation_key FROM action_approval_presentation_events
-         WHERE callback_event_id = $1`,
-        [normalized.callbackEventId],
-      );
-      if (callbackReplay.rows[0] !== undefined) throw new ActionProposalOperationConflictError();
-    }
+    const replay = await inspectNormalizedApprovalActionReplay(client, normalized, fingerprint);
+    if (replay !== undefined) return replay.result;
 
     const proposal = await lockProposal(client, normalized.proposalId);
     if (
@@ -1213,6 +1163,100 @@ async function applyApprovalAction(
   });
 }
 
+async function inspectApprovalActionReplay(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: ApplyActionProposalActionInput,
+): Promise<ActionApprovalReplayInspection | undefined> {
+  const normalized = normalizeApplyActionInput(input);
+  const fingerprint = operationFingerprint({ operation: "apply_action_proposal_action", ...normalized });
+  return inspectNormalizedApprovalActionReplay(dataSource, normalized, fingerprint);
+}
+
+async function inspectNormalizedApprovalActionReplay(
+  queryable: Pick<PostgresKnowledgeDraftDataSource, "query">,
+  normalized: ReturnType<typeof normalizeApplyActionInput>,
+  fingerprint: string,
+): Promise<ActionApprovalReplayInspection | undefined> {
+  if (normalized.action === "approve") {
+    const replay = await queryable.query<ApprovalRow>(
+      `${approvalSelect()} WHERE operation_key = $1 OR callback_event_id = $2
+       ORDER BY CASE WHEN operation_key = $1 THEN 0 ELSE 1 END LIMIT 1`,
+      [normalized.operationKey, normalized.callbackEventId],
+    );
+    if (replay.rows[0] === undefined) return undefined;
+    if (
+      replay.rows[0].operation_key !== normalized.operationKey ||
+      replay.rows[0].operation_fingerprint !== fingerprint
+    ) throw new ActionProposalOperationConflictError();
+    return buildApprovalReplayInspection(
+      queryable,
+      replay.rows[0].proposal_id,
+      normalized.action,
+    );
+  }
+
+  const replay = await queryable.query<{
+    draft_id: string;
+    event_type: "revision_requested" | "rejected";
+    operation_fingerprint: string;
+    to_version: string | number;
+  }>(
+    `SELECT draft_id, event_type, operation_fingerprint, to_version
+     FROM knowledge_draft_events WHERE operation_key = $1`,
+    [normalized.operationKey],
+  );
+  if (replay.rows[0] !== undefined) {
+    const expectedEventType = normalized.action === "request_revision"
+      ? "revision_requested"
+      : "rejected";
+    if (
+      replay.rows[0].event_type !== expectedEventType ||
+      replay.rows[0].operation_fingerprint !== fingerprint
+    ) throw new ActionProposalOperationConflictError();
+    const proposal = await requireProposal(queryable, normalized.proposalId);
+    if (replay.rows[0].draft_id !== proposal.subjectId) {
+      throw new ActionProposalOperationConflictError();
+    }
+    const draft = await requireDraftState(queryable, proposal.subjectId);
+    return {
+      result: {
+        outcome: "already_applied",
+        action: normalized.action,
+        proposal,
+        draftStatus: draft.status,
+        draftVersion: Number(replay.rows[0].to_version),
+      },
+      ...(draft.sourceGroupId === undefined ? {} : { sourceGroupId: draft.sourceGroupId }),
+    };
+  }
+  const callbackReplay = await queryable.query<{ operation_key: string }>(
+    `SELECT operation_key FROM action_approval_presentation_events
+     WHERE callback_event_id = $1`,
+    [normalized.callbackEventId],
+  );
+  if (callbackReplay.rows[0] !== undefined) throw new ActionProposalOperationConflictError();
+  return undefined;
+}
+
+async function buildApprovalReplayInspection(
+  queryable: Pick<PostgresKnowledgeDraftDataSource, "query">,
+  proposalId: string,
+  action: ApplyActionProposalActionInput["action"],
+): Promise<ActionApprovalReplayInspection> {
+  const proposal = await requireProposal(queryable, proposalId);
+  const draft = await requireDraftState(queryable, proposal.subjectId);
+  return {
+    result: {
+      outcome: "already_applied",
+      action,
+      proposal,
+      draftStatus: draft.status,
+      draftVersion: draft.version,
+    },
+    ...(draft.sourceGroupId === undefined ? {} : { sourceGroupId: draft.sourceGroupId }),
+  };
+}
+
 async function lockProposal(
   client: KnowledgeDraftTransactionClient,
   id: string,
@@ -1291,18 +1335,26 @@ function policyMatchesDraft(policy: PolicyRow, draft: DraftRevisionRow): boolean
 }
 
 async function requireDraftState(
-  client: KnowledgeDraftTransactionClient,
+  client: Pick<PostgresKnowledgeDraftDataSource, "query">,
   id: string,
-): Promise<{ status: KnowledgeDraftStatus; version: number }> {
-  const result = await client.query<{ status: string; version: string | number }>(
-    "SELECT status, version FROM knowledge_drafts WHERE id = $1",
+): Promise<{ status: KnowledgeDraftStatus; version: number; sourceGroupId?: string }> {
+  const result = await client.query<{
+    status: string;
+    version: string | number;
+    source_group_id: string | null;
+  }>(
+    "SELECT status, version, source_group_id FROM knowledge_drafts WHERE id = $1",
     [id],
   );
   const row = result.rows[0];
   if (row === undefined || !KNOWLEDGE_DRAFT_STATUSES.includes(row.status as KnowledgeDraftStatus)) {
     throw new ActionProposalPersistenceConflictError();
   }
-  return { status: row.status as KnowledgeDraftStatus, version: Number(row.version) };
+  return {
+    status: row.status as KnowledgeDraftStatus,
+    version: Number(row.version),
+    ...(row.source_group_id === null ? {} : { sourceGroupId: row.source_group_id }),
+  };
 }
 
 async function applyProposalDisposition(

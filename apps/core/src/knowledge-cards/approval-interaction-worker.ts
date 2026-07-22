@@ -7,10 +7,16 @@ import type {
 import { KnowledgeDraftEvidenceError } from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
 
 import type { ApprovalInteractionQueue } from "./approval-interaction-queue.js";
+import {
+  ApprovalInteractionIntentConflictError,
+  type ApprovalInteractionIntent,
+  type ApprovalInteractionIntentStore,
+} from "./approval-interaction-intent-store.js";
 import type {
   ApprovalInteractionJob,
   KnowledgeDraftConfirmationInteractionJob,
 } from "./knowledge-card.js";
+import { toApprovalInteractionIntentIdentity } from "./knowledge-card.js";
 import { renderKnowledgeCardCommittedResult } from "./knowledge-card-renderer.js";
 import type {
   ApplyKnowledgeCardInteractionInput,
@@ -63,8 +69,12 @@ export type ApprovalInteractionWorkerDependencies = {
   workerId: string;
   leaseMs: number;
   now?: () => Date;
+  intentStore?: Pick<ApprovalInteractionIntentStore, "resolveIntent" | "deleteIntent">;
   actionApprovalWorker?: {
-    processActionApproval(job: Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>):
+    processActionApproval(
+      job: Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>,
+      intent?: ApprovalInteractionIntent,
+    ):
       Promise<ActionApprovalWorkerResult>;
   };
 };
@@ -79,6 +89,7 @@ export function createApprovalInteractionWorker({
   workerId,
   leaseMs,
   now = () => new Date(),
+  intentStore,
   actionApprovalWorker,
 }: ApprovalInteractionWorkerDependencies) {
   const safeBotOpenId = requireIdentifier("botOpenId", botOpenId);
@@ -106,6 +117,7 @@ export function createApprovalInteractionWorker({
           botOpenId: safeBotOpenId,
           workerId: safeWorkerId,
           now,
+          intentStore,
           actionApprovalWorker,
         }));
       }
@@ -114,7 +126,7 @@ export function createApprovalInteractionWorker({
   };
 }
 
-async function processJob(input: {
+type ProcessJobInput = {
   job: ApprovalInteractionJob;
   queue: Pick<ApprovalInteractionQueue, "acknowledge" | "handleFailure">;
   repository: Pick<
@@ -127,8 +139,30 @@ async function processJob(input: {
   botOpenId: string;
   workerId: string;
   now: () => Date;
+  intentStore?: ApprovalInteractionWorkerDependencies["intentStore"];
+  resolvedIntent?: ApprovalInteractionIntent;
   actionApprovalWorker?: ApprovalInteractionWorkerDependencies["actionApprovalWorker"];
-}): Promise<ApprovalInteractionWorkerResult> {
+};
+
+async function processJob(rawInput: ProcessJobInput): Promise<ApprovalInteractionWorkerResult> {
+  const resolution = await resolveSensitiveIntent(rawInput);
+  if (resolution.status === "retryable") {
+    return handleTransientFailure(rawInput, "repository_unavailable");
+  }
+  if (resolution.status === "conflict") {
+    await attemptCommittedResultDisplay(rawInput);
+    const ackFailure = await acknowledge(rawInput, false);
+    if (ackFailure !== undefined) return ackFailure;
+    return {
+      status: "denied",
+      idempotencyKey: rawInput.job.idempotencyKey,
+      code: "immutable_intent_conflict",
+    };
+  }
+  const input: ProcessJobInput = {
+    ...rawInput,
+    ...(resolution.intent === undefined ? {} : { resolvedIntent: resolution.intent }),
+  };
   const { job } = input;
   let presentation: KnowledgeDraftPresentation | undefined;
 
@@ -183,6 +217,7 @@ async function processJob(input: {
   try {
     mutation = await input.repository.applyInteraction(toRepositoryInput(
       job,
+      input.resolvedIntent,
       membershipCheckedAt,
       requireDate(input.now()),
     ));
@@ -221,7 +256,7 @@ async function processActionApprovalJob(
   if (input.actionApprovalWorker === undefined) return handleTransientFailure(input, "internal_error");
   let result: ActionApprovalWorkerResult;
   try {
-    result = await input.actionApprovalWorker.processActionApproval(input.job);
+    result = await input.actionApprovalWorker.processActionApproval(input.job, input.resolvedIntent);
   } catch {
     return handleTransientFailure(input, "internal_error");
   }
@@ -241,6 +276,7 @@ async function processActionApprovalJob(
 
 function toRepositoryInput(
   job: KnowledgeDraftConfirmationInteractionJob,
+  intent: ApprovalInteractionIntent | undefined,
   membershipCheckedAt: Date,
   at: Date,
 ): ApplyKnowledgeCardInteractionInput {
@@ -257,13 +293,13 @@ function toRepositoryInput(
   };
   if (job.action === "confirm") return { ...common, action: "confirm" };
   if (job.action === "request_revision") {
-    return { ...common, action: "request_revision", reason: requireJobReason(job.reason) };
+    return { ...common, action: "request_revision", reason: requireIntentReason(intent) };
   }
   return {
     ...common,
     action: "reject",
-    reason: requireJobReason(job.reason),
-    rejectionConfirmed: true,
+    reason: requireIntentReason(intent),
+    rejectionConfirmed: requireRejectionConfirmation(intent),
   };
 }
 
@@ -329,12 +365,47 @@ async function denyAndAcknowledge(
 
 async function acknowledge(
   input: Parameters<typeof processJob>[0],
+  deleteIntent = true,
 ): Promise<ApprovalInteractionWorkerResult | undefined> {
   try {
     await input.queue.acknowledge({ job: input.job, workerId: input.workerId });
-    return undefined;
   } catch {
     return handleTransientFailure(input, "redis_unavailable");
+  }
+  if (deleteIntent) await deleteSensitiveIntentAfterAck(input);
+  return undefined;
+}
+
+async function resolveSensitiveIntent(
+  input: ProcessJobInput,
+): Promise<
+  | { status: "resolved"; intent?: ApprovalInteractionIntent }
+  | { status: "retryable" }
+  | { status: "conflict" }
+> {
+  if (input.job.intentId === undefined) return { status: "resolved" };
+  if (input.intentStore === undefined) return { status: "retryable" };
+  try {
+    const intent = await input.intentStore.resolveIntent({
+      id: input.job.intentId,
+      interaction: toApprovalInteractionIntentIdentity(input.job),
+    });
+    return intent === undefined
+      ? { status: "conflict" }
+      : { status: "resolved", intent };
+  } catch (error) {
+    return error instanceof ApprovalInteractionIntentConflictError
+      ? { status: "conflict" }
+      : { status: "retryable" };
+  }
+}
+
+async function deleteSensitiveIntentAfterAck(input: ProcessJobInput): Promise<void> {
+  if (input.job.intentId === undefined || input.intentStore === undefined) return;
+  try {
+    await input.intentStore.deleteIntent(input.job.intentId);
+  } catch {
+    // The queue fact is already acknowledged; cleanup must not replay a committed action.
   }
 }
 
@@ -477,9 +548,14 @@ function requireIdentifier(name: string, value: string): string {
   return normalized;
 }
 
-function requireJobReason(value: string | undefined): string {
-  if (value === undefined) throw new Error("normalized approval action reason is missing");
-  return value;
+function requireIntentReason(value: ApprovalInteractionIntent | undefined): string {
+  if (value === undefined) throw new Error("approval interaction intent is missing");
+  return value.reason;
+}
+
+function requireRejectionConfirmation(value: ApprovalInteractionIntent | undefined): true {
+  if (value?.rejectionConfirmed !== true) throw new Error("rejection confirmation is missing");
+  return true;
 }
 
 function requireDate(value: Date): Date {

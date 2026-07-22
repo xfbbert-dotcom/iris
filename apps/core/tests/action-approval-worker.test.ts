@@ -9,6 +9,7 @@ import type {
 import {
   ActionProposalAuthorizationError,
   ActionProposalIneligibleError,
+  ActionProposalOperationConflictError,
   ActionProposalVersionConflictError,
 } from "../src/action-approvals/postgres-action-proposal-repository.js";
 import type {
@@ -49,7 +50,7 @@ describe("ActionApprovalWorker", () => {
       actorOpenId: "ou_owner",
       action: "approve",
       operationKey: "action-approval:cli_app:event-1",
-      at,
+      at: job().receivedAt,
     });
   });
 
@@ -111,7 +112,7 @@ describe("ActionApprovalWorker", () => {
     ["reject", { reason: "Conflicts with policy.", rejectionConfirmed: true }],
   ] as const)("passes a normalized %s decision to the atomic repository", async (action, extra) => {
     const harness = createHarness({ apply: async () => mutation("applied", action) });
-    await harness.worker.processActionApproval(job({ action, ...extra }));
+    await harness.worker.processActionApproval(job({ action }), { id: "intent-1", ...extra });
     expect(harness.repository.applyApprovalAction).toHaveBeenCalledWith(expect.objectContaining({
       action,
       ...extra,
@@ -133,6 +134,76 @@ describe("ActionApprovalWorker", () => {
     expect(result).toEqual({ status: "already_applied", code: "duplicate_callback" });
     expect(JSON.stringify(result)).not.toMatch(/ou_owner|draft body|secret evidence|event-1/iu);
   });
+
+  it("re-authorizes an exact sequential replay after its presentation closes", async () => {
+    const replay = mutation("already_applied");
+    const harness = createHarness({
+      getContext: async () => {
+        const value = context();
+        return {
+          ...value,
+          context: {
+            ...value.context,
+            proposal: { ...value.context.proposal, status: "approved", version: 6 },
+          },
+          presentation: { ...value.presentation, state: "closed", closedAt: at },
+        };
+      },
+      inspectReplay: async () => ({ result: replay, sourceGroupId: "oc_source" }),
+    });
+
+    await expect(harness.worker.processActionApproval(job())).resolves.toEqual({
+      status: "already_applied",
+      code: "duplicate_callback",
+    });
+    expect(harness.repository.inspectApprovalActionReplay).toHaveBeenCalledOnce();
+    expect(harness.membershipChecker.isCurrentMember).toHaveBeenCalledWith({
+      chatId: "oc_source",
+      openId: "ou_owner",
+    });
+    expect(harness.repository.applyApprovalAction).not.toHaveBeenCalled();
+  });
+
+  it("denies a conflicting sequential callback replay after the presentation closes", async () => {
+    const harness = createHarness({
+      inspectReplay: async () => { throw new ActionProposalOperationConflictError(); },
+    });
+
+    await expect(harness.worker.processActionApproval(job())).resolves.toEqual({
+      status: "denied",
+      code: "immutable_intent_conflict",
+    });
+    expect(harness.repository.applyApprovalAction).not.toHaveBeenCalled();
+  });
+
+  it("refreshes every proposal card through bounded cursor pages", async () => {
+    const presentations = Array.from({ length: 101 }, (_, index) => ({
+      ...context().presentation,
+      id: `proposal-presentation-${String(index + 1).padStart(3, "0")}`,
+      messageId: `om_approval_${index + 1}`,
+    }));
+    const listPresentations = vi.fn(async (input: { afterId?: string; limit: number }) => {
+      const start = input.afterId === undefined
+        ? 0
+        : presentations.findIndex((item) => item.id === input.afterId) + 1;
+      return presentations.slice(start, start + input.limit);
+    });
+    const harness = createHarness({ listPresentations });
+
+    await expect(harness.worker.processActionApproval(job())).resolves.toMatchObject({
+      status: "applied",
+    });
+    expect(harness.cardClient.updateCard).toHaveBeenCalledTimes(101);
+    expect(listPresentations).toHaveBeenNthCalledWith(1, {
+      proposalId: "proposal-1",
+      limit: 100,
+    });
+    expect(listPresentations).toHaveBeenNthCalledWith(2, {
+      proposalId: "proposal-1",
+      afterId: "proposal-presentation-100",
+      limit: 100,
+    });
+  });
 });
 
 type Overrides = {
@@ -141,8 +212,15 @@ type Overrides = {
   groupEnabled?: () => boolean;
   getContext?: () => Promise<ActionApprovalDeliveryContext | undefined>;
   preflight?: () => Promise<{ sourceGroupId?: string }>;
+  inspectReplay?: () => Promise<{
+    result: ReturnType<typeof mutation>;
+    sourceGroupId?: string;
+  } | undefined>;
   membership?: () => Promise<boolean>;
   apply?: () => Promise<ReturnType<typeof mutation>>;
+  listPresentations?: (input: { proposalId: string; afterId?: string; limit: number }) => Promise<
+    ActionApprovalDeliveryContext["presentation"][]
+  >;
   update?: () => Promise<void>;
 };
 
@@ -150,8 +228,9 @@ function createHarness(overrides: Overrides = {}) {
   const repository = {
     getApprovalDeliveryContext: vi.fn(overrides.getContext ?? (async () => context())),
     preflightApprovalAction: vi.fn(overrides.preflight ?? (async () => ({ sourceGroupId: "oc_source" }))),
+    inspectApprovalActionReplay: vi.fn(overrides.inspectReplay ?? (async () => undefined)),
     applyApprovalAction: vi.fn(overrides.apply ?? (async () => mutation("applied"))),
-    listApprovalPresentations: vi.fn(async () => [context().presentation]),
+    listApprovalPresentations: vi.fn(overrides.listPresentations ?? (async () => [context().presentation])),
   };
   const membershipChecker = {
     isCurrentMember: vi.fn(overrides.membership ?? (async () => true)),

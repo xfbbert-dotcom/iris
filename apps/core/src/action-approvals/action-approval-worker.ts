@@ -2,6 +2,7 @@ import type { FeishuGroupMembershipChecker } from "../feishu/feishu-group-member
 import type { FeishuInteractiveCardClient } from "../feishu/feishu-interactive-card-client.js";
 import { KnowledgeDraftEvidenceError } from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
 import type { ActionProposalApprovalInteractionJob } from "../knowledge-cards/knowledge-card.js";
+import type { ApprovalInteractionIntent } from "../knowledge-cards/approval-interaction-intent-store.js";
 
 import type {
   ActionApprovalDeliveryContext,
@@ -46,6 +47,7 @@ export function createActionApprovalWorker({
 }: {
   repository: Pick<ActionProposalRepository,
     | "getApprovalDeliveryContext"
+    | "inspectApprovalActionReplay"
     | "preflightApprovalAction"
     | "applyApprovalAction"
     | "listApprovalPresentations"
@@ -61,9 +63,39 @@ export function createActionApprovalWorker({
   return {
     async processActionApproval(
       job: ActionProposalApprovalInteractionJob,
+      intent?: ApprovalInteractionIntent,
     ): Promise<ActionApprovalWorkerResult> {
       if (!readGate(isActionApprovalRuntimeEnabled)) return denied("runtime_disabled");
       if (job.actorOpenId === safeBotOpenId) return denied("bot_actor");
+
+      let replay;
+      try {
+        replay = await repository.inspectApprovalActionReplay(toMutationInput(job, intent));
+      } catch (error) {
+        return classifyStableOrRetryable(error);
+      }
+      if (replay !== undefined) {
+        if (!readGroupGate(canUseActionApprovalsForSourceGroup, replay.sourceGroupId)) {
+          return denied("runtime_disabled");
+        }
+        if (replay.sourceGroupId !== undefined) {
+          try {
+            if (!await membershipChecker.isCurrentMember({
+              chatId: replay.sourceGroupId,
+              openId: job.actorOpenId,
+            })) return denied("not_current_member");
+          } catch {
+            return retryable("membership_unavailable");
+          }
+        }
+        if (
+          !readGate(isActionApprovalRuntimeEnabled) ||
+          !readGroupGate(canUseActionApprovalsForSourceGroup, replay.sourceGroupId)
+        ) return denied("runtime_disabled");
+        await updateProposalCards(repository, cardClient, replay.result);
+        return { status: "already_applied", code: "duplicate_callback" };
+      }
+
       let context: ActionApprovalDeliveryContext | undefined;
       try {
         context = await repository.getApprovalDeliveryContext(job.presentationId);
@@ -99,7 +131,7 @@ export function createActionApprovalWorker({
 
       let mutation: ApplyActionProposalActionResult;
       try {
-        mutation = await repository.applyApprovalAction(toMutationInput(job, requireDate(now())));
+        mutation = await repository.applyApprovalAction(toMutationInput(job, intent));
       } catch (error) {
         return classifyStableOrRetryable(error);
       }
@@ -153,23 +185,26 @@ function toPreflightInput(job: ActionProposalApprovalInteractionJob) {
   };
 }
 
-function toMutationInput(job: ActionProposalApprovalInteractionJob, at: Date) {
+function toMutationInput(
+  job: ActionProposalApprovalInteractionJob,
+  intent?: ApprovalInteractionIntent,
+) {
   const common = {
     ...toPreflightInput(job),
     callbackEventId: job.eventId,
     operationKey: `action-approval:${job.appId}:${job.eventId}`,
-    at,
+    at: requireDate(job.receivedAt),
   };
   const { expectedTargetPolicyVersion: _policyVersion, ...mutationCommon } = common;
   if (job.action === "approve") return { ...mutationCommon, action: "approve" as const };
   if (job.action === "request_revision") {
-    return { ...mutationCommon, action: "request_revision" as const, reason: requireReason(job.reason) };
+    return { ...mutationCommon, action: "request_revision" as const, reason: requireReason(intent?.reason) };
   }
   return {
     ...mutationCommon,
     action: "reject" as const,
-    reason: requireReason(job.reason),
-    rejectionConfirmed: true,
+    reason: requireReason(intent?.reason),
+    rejectionConfirmed: requireRejectionConfirmation(intent),
   };
 }
 
@@ -178,23 +213,31 @@ async function updateProposalCards(
   cardClient: Pick<FeishuInteractiveCardClient, "updateCard">,
   mutation: ApplyActionProposalActionResult,
 ): Promise<void> {
-  let presentations;
-  try {
-    presentations = await repository.listApprovalPresentations({
-      proposalId: mutation.proposal.id,
-      limit: 100,
-    });
-  } catch {
-    return;
-  }
   const cardJson = renderCommittedResult(mutation);
-  for (const presentation of presentations) {
-    if (presentation.messageId === undefined) continue;
+  let afterId: string | undefined;
+  while (true) {
+    let presentations;
     try {
-      await cardClient.updateCard({ messageId: presentation.messageId, cardJson });
+      presentations = await repository.listApprovalPresentations({
+        proposalId: mutation.proposal.id,
+        ...(afterId === undefined ? {} : { afterId }),
+        limit: 100,
+      });
     } catch {
-      // PostgreSQL approval facts are authoritative; display repair can run separately.
+      return;
     }
+    for (const presentation of presentations) {
+      if (presentation.messageId === undefined) continue;
+      try {
+        await cardClient.updateCard({ messageId: presentation.messageId, cardJson });
+      } catch {
+        // PostgreSQL approval facts are authoritative; display repair can run separately.
+      }
+    }
+    if (presentations.length < 100) return;
+    const nextAfterId = presentations.at(-1)?.id;
+    if (nextAfterId === undefined || nextAfterId === afterId) return;
+    afterId = nextAfterId;
   }
 }
 
@@ -264,6 +307,11 @@ function requireIdentifier(name: string, value: string): string {
 function requireReason(value: string | undefined): string {
   if (value === undefined) throw new Error("action approval reason is missing");
   return value;
+}
+
+function requireRejectionConfirmation(value: ApprovalInteractionIntent | undefined): true {
+  if (value?.rejectionConfirmed !== true) throw new Error("action approval rejection confirmation is missing");
+  return true;
 }
 
 function requireDate(value: Date): Date {

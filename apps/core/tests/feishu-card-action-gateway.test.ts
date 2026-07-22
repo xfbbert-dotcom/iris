@@ -416,6 +416,71 @@ describe("FeishuCardActionGateway", () => {
     });
   });
 
+  it("persists a normalized sensitive intent before enqueueing only its opaque id", async () => {
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const sampleReason = "Keep  internal spacing exactly.";
+    const order: string[] = [];
+    const intentStore = {
+      persistIntent: vi.fn(async () => {
+        order.push("persist");
+        return { id: "2d3c5f18-61d4-4dc7-9d87-35f076d54c4e" };
+      }),
+    };
+    const queue = {
+      enqueue: vi.fn(async () => {
+        order.push("enqueue");
+        return "enqueued" as const;
+      }),
+    };
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      intentStore,
+      verifyRequest: () => true,
+      now: () => now,
+    });
+    const body = cardAction();
+    const event = body.event as Record<string, unknown>;
+    const action = event.action as Record<string, unknown>;
+    action.name = "request_revision";
+    action.form_value = { reason: `  ${sampleReason}  ` };
+    action.value = {
+      kind: "action_proposal_approval",
+      action: "request_revision",
+      presentationId: "proposal-presentation-1",
+      proposalId: "proposal-1",
+      requirementId: "requirement-1",
+      proposalVersion: "4",
+      subjectRevision: "2",
+      subjectVersion: "7",
+      targetPolicyVersion: "3",
+    };
+
+    await expect(gateway.handleCallback({ headers: {}, body })).resolves.toMatchObject({
+      statusCode: 200,
+    });
+
+    expect(order).toEqual(["persist", "enqueue"]);
+    expect(intentStore.persistIntent).toHaveBeenCalledWith({
+      interaction: expect.objectContaining({
+        kind: "action_proposal_approval",
+        idempotencyKey: "feishu-card:cli_approval:event-1",
+        eventId: "event-1",
+        action: "request_revision",
+        presentationId: "proposal-presentation-1",
+        proposalId: "proposal-1",
+      }),
+      reason: sampleReason,
+      at: now,
+    });
+    expect(queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      action: "request_revision",
+      intentId: "2d3c5f18-61d4-4dc7-9d87-35f076d54c4e",
+    }));
+    const serializedQueueCall = JSON.stringify(queue.enqueue.mock.calls);
+    expect(serializedQueueCall).not.toContain(sampleReason);
+    expect(serializedQueueCall).not.toContain("rejectionConfirmed");
+  });
+
   it("returns an uncertainty toast after one second when enqueue does not settle", async () => {
     vi.useFakeTimers();
     try {
@@ -432,6 +497,51 @@ describe("FeishuCardActionGateway", () => {
         body: { toast: { type: "error", content: "\u63d0\u4ea4\u72b6\u6001\u672a\u786e\u8ba4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\uff1b\u8bf7\u4ee5\u5361\u7247\u6700\u7ec8\u72b6\u6001\u4e3a\u51c6" } },
       });
       expect(queue.enqueue).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds sensitive intent persistence and enqueue in the same one-second deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const intentStore = {
+        persistIntent: vi.fn(() => new Promise<{ id: string }>(() => undefined)),
+      };
+      const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+      const gateway = createFeishuCardActionGateway({
+        queue,
+        intentStore,
+        verifyRequest: () => true,
+      });
+      const body = cardAction();
+      const event = body.event as Record<string, unknown>;
+      const action = event.action as Record<string, unknown>;
+      action.name = "request_revision";
+      action.form_value = { reason: "Clarify the deployment owner." };
+      action.value = {
+        kind: "action_proposal_approval",
+        action: "request_revision",
+        presentationId: "proposal-presentation-1",
+        proposalId: "proposal-1",
+        requirementId: "requirement-1",
+        proposalVersion: "4",
+        subjectRevision: "2",
+        subjectVersion: "7",
+        targetPolicyVersion: "3",
+      };
+
+      const response = gateway.handleCallback({ headers: {}, body });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(intentStore.persistIntent).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(response).resolves.toEqual({
+        statusCode: 200,
+        body: { toast: { type: "error", content: "\u63d0\u4ea4\u72b6\u6001\u672a\u786e\u8ba4\uff0c\u8bf7\u52ff\u91cd\u590d\u70b9\u51fb\uff1b\u8bf7\u4ee5\u5361\u7247\u6700\u7ec8\u72b6\u6001\u4e3a\u51c6" } },
+      });
+      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }

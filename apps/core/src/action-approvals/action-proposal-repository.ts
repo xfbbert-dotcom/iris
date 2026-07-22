@@ -244,6 +244,11 @@ export type ApplyActionProposalActionResult = {
   draftVersion: number;
 };
 
+export type ActionApprovalReplayInspection = {
+  result: ApplyActionProposalActionResult;
+  sourceGroupId?: string;
+};
+
 export type PreflightActionApprovalInput = {
   proposalId: string;
   requirementId: string;
@@ -269,11 +274,15 @@ export interface ActionProposalRepository {
   applyApprovalAction(
     input: ApplyActionProposalActionInput,
   ): Promise<ApplyActionProposalActionResult>;
+  inspectApprovalActionReplay(
+    input: ApplyActionProposalActionInput,
+  ): Promise<ActionApprovalReplayInspection | undefined>;
   preflightApprovalAction(
     input: PreflightActionApprovalInput,
   ): Promise<{ sourceGroupId?: string }>;
   listApprovalPresentations(input: {
     proposalId: string;
+    afterId?: string;
     limit: number;
   }): Promise<ActionApprovalPresentation[]>;
   claimApprovalPresentationSend(input: {

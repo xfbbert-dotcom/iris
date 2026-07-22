@@ -347,7 +347,7 @@ describe("knowledge card API", () => {
           revisionNumber: 3,
           draftVersion: 7,
           action: "request_revision",
-          reason: "raw secret reason",
+          intentId: "intent-1",
           receivedAt: new Date("2026-07-19T08:00:00.000Z"),
           attempts: 2,
         },

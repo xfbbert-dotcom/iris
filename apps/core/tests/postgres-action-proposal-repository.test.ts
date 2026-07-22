@@ -21,6 +21,10 @@ import {
 } from "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
 import { createPostgresKnowledgeCardRepository } from "../src/knowledge-cards/postgres-knowledge-card-repository.js";
 import {
+  ApprovalInteractionIntentConflictError,
+  createPostgresApprovalInteractionIntentStore,
+} from "../src/knowledge-cards/postgres-approval-interaction-intent-store.js";
+import {
   defaultMigrationsDir,
   runMigrations,
   type MigrationClient,
@@ -36,6 +40,10 @@ const at = new Date("2026-07-20T12:00:00.000Z");
 describe("action approval migration contract", () => {
   const migration = readFileSync(
     new URL("../migrations/0032_action_approval_facts.sql", import.meta.url),
+    "utf8",
+  );
+  const interactionIntentMigration = readFileSync(
+    new URL("../migrations/0033_approval_interaction_intents.sql", import.meta.url),
     "utf8",
   );
 
@@ -65,6 +73,9 @@ describe("action approval migration contract", () => {
     expect(migration).toMatch(/action_execution_events_append_only/iu);
     expect(migration).toMatch(/review_approved/iu);
     expect(migration).toMatch(/approval_invalidated/iu);
+    expect(interactionIntentMigration).toMatch(/create table approval_interaction_intents/iu);
+    expect(interactionIntentMigration).toMatch(/operation_fingerprint/iu);
+    expect(interactionIntentMigration).toMatch(/callback_key.*unique/isu);
   });
 
   it("keeps repository status counts content free", () => {
@@ -105,6 +116,61 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
     await pool?.end();
     await adminPool?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
     await adminPool?.end();
+  });
+
+  it("durably preserves exact sensitive intent and rejects a conflicting callback replay", async () => {
+    const intentId = "66ec104d-7e24-4dae-bad5-3bcb64968a7a";
+    const exactReason = "Preserve  interior spacing\nand exact case.";
+    const store = createPostgresApprovalInteractionIntentStore({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+      idGenerator: () => intentId,
+    });
+    const interaction = {
+      kind: "action_proposal_approval" as const,
+      idempotencyKey: `feishu-card:cli_intent:event-intent-${suffix}`,
+      eventId: `event-intent-${suffix}`,
+      appId: "cli_intent",
+      actorOpenId: `ou_intent_${suffix}`,
+      chatId: `oc_intent_${suffix}`,
+      messageId: `om_intent_${suffix}`,
+      presentationId: `presentation-intent-${suffix}`,
+      proposalId: `proposal-intent-${suffix}`,
+      requirementId: `requirement-intent-${suffix}`,
+      proposalVersion: 4,
+      subjectRevision: 2,
+      subjectVersion: 7,
+      targetPolicyVersion: 3,
+      action: "reject" as const,
+    };
+    const input = {
+      interaction,
+      reason: exactReason,
+      rejectionConfirmed: true as const,
+      at,
+    };
+
+    await expect(store.persistIntent(input)).resolves.toEqual({ id: intentId });
+    await expect(store.persistIntent(input)).resolves.toEqual({ id: intentId });
+    await expect(pool.query(
+      `SELECT reason, rejection_confirmed FROM approval_interaction_intents WHERE id = $1`,
+      [intentId],
+    )).resolves.toMatchObject({
+      rows: [{ reason: exactReason, rejection_confirmed: true }],
+    });
+    await expect(store.resolveIntent({ id: intentId, interaction })).resolves.toEqual({
+      id: intentId,
+      reason: exactReason,
+      rejectionConfirmed: true,
+    });
+    await expect(store.resolveIntent({
+      id: intentId,
+      interaction: { ...interaction, action: "request_revision" },
+    })).rejects.toBeInstanceOf(ApprovalInteractionIntentConflictError);
+    await expect(store.persistIntent({ ...input, reason: `${exactReason} changed` }))
+      .rejects.toBeInstanceOf(ApprovalInteractionIntentConflictError);
+
+    await expect(store.deleteIntent(intentId)).resolves.toBeUndefined();
+    await expect(store.resolveIntent({ id: intentId, interaction })).resolves.toBeUndefined();
   });
 
   it("upserts target policies with exact replay and version checks", async () => {
@@ -662,6 +728,19 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       draftStatus: "pending_review",
       draftVersion: 3,
     });
+    await expect(repository.inspectApprovalActionReplay(baseInput)).resolves.toMatchObject({
+      result: {
+        outcome: "already_applied",
+        action: "approve",
+        proposal: { id: proposal.id, status: "approved" },
+        draftVersion: 3,
+      },
+      sourceGroupId: groupId,
+    });
+    await expect(repository.inspectApprovalActionReplay({
+      ...baseInput,
+      actorOpenId: `ou_conflicting_${suffix}`,
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
     await expect(repository.applyApprovalAction(baseInput)).resolves.toMatchObject({
       outcome: "already_applied",
       proposal: { status: "approved", version: 3 },
@@ -814,6 +893,20 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       draftStatus: "needs_revision",
       draftVersion: 3,
     });
+    await expect(acceptance.repository.inspectApprovalActionReplay(input)).resolves.toMatchObject({
+      result: {
+        outcome: "already_applied",
+        action: "request_revision",
+        proposal: { status: "cancelled" },
+        draftStatus: "needs_revision",
+        draftVersion: 3,
+      },
+      sourceGroupId: groupId,
+    });
+    await expect(acceptance.repository.inspectApprovalActionReplay({
+      ...input,
+      reason: "Conflicting revision reason.",
+    })).rejects.toBeInstanceOf(ActionProposalOperationConflictError);
     await expect(acceptance.repository.applyApprovalAction(input)).resolves.toMatchObject({
       outcome: "already_applied",
       proposal: { status: "cancelled", version: 2 },

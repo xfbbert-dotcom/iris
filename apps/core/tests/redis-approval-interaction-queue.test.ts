@@ -112,7 +112,7 @@ describe("Redis approval interaction queue", () => {
     const queued = normalizeApprovalInteractionJob({
       ...jobFixture({ eventId: "event-lease-expired" }),
       action: "request_revision",
-      reason: "private revision reason",
+      intentId: "intent-lease-expired",
     });
     await queue.enqueue(queued);
 
@@ -720,6 +720,37 @@ describe("Redis approval interaction queue", () => {
 
     expect(parseApprovalInteractionJob(serializeApprovalInteractionJob(job))).toEqual(job);
     expect(JSON.stringify(job)).not.toMatch(/draft body|knowledge content|evidence text/iu);
+  });
+
+  it("serializes a sensitive action and its replayable DLQ record with only an opaque intent id", async () => {
+    const sampleReason = "Private sample reason that must remain in PostgreSQL.";
+    const durableIntent = { reason: sampleReason };
+    const client = new StatefulRedisClient();
+    const queue = createQueue(client, { maxAttempts: 1 });
+    const queued = normalizeApprovalInteractionJob({
+      ...jobFixture({ eventId: "event-opaque-intent" }),
+      action: "request_revision",
+      intentId: "0fe3bdb1-b1d1-48f7-8a79-afd2c17e2bf0",
+    });
+
+    const serializedJob = serializeApprovalInteractionJob(queued);
+    expect(serializedJob).toContain(durableIntent.reason === sampleReason ? queued.intentId! : "unreachable");
+    expect(serializedJob).not.toContain(sampleReason);
+    expect(serializedJob).not.toContain("rejectionConfirmed");
+
+    await queue.enqueue(queued);
+    const [claimed] = await claim(queue);
+    await expect(queue.handleFailure({
+      job: claimed!,
+      workerId: "worker-a",
+      errorCode: "repository_unavailable",
+      at: new Date("2026-07-19T00:00:01.000Z"),
+    })).resolves.toEqual({ action: "dead_lettered" });
+    const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
+    const serializedDeadLetter = JSON.stringify(deadLetter);
+    expect(serializedDeadLetter).toContain(queued.intentId!);
+    expect(serializedDeadLetter).not.toContain(sampleReason);
+    expect(serializedDeadLetter).not.toContain("rejectionConfirmed");
   });
 });
 

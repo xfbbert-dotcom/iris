@@ -1,7 +1,10 @@
 import {
   normalizeApprovalInteractionJob,
+  normalizeApprovalInteractionIntentIdentity,
+  type ApprovalInteractionIntentIdentity,
   type ApprovalInteractionJob,
 } from "../knowledge-cards/knowledge-card.js";
+import type { ApprovalInteractionIntentStore } from "../knowledge-cards/approval-interaction-intent-store.js";
 import {
   parseFeishuCardAction,
   type ParsedFeishuCardAction,
@@ -74,6 +77,7 @@ type FeishuCardActionShapeDiagnostic = {
 
 export type FeishuCardActionGatewayDependencies = {
   queue: ApprovalInteractionEnqueuer;
+  intentStore?: Pick<ApprovalInteractionIntentStore, "persistIntent">;
   verifyRequest: RequestVerifier;
   decodeRequest?: RequestDecoder;
   verifyDecodedRequest?: RequestVerifier;
@@ -188,8 +192,12 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
         return rejectedResponse(400);
       }
 
-      const job = createJob(action, now());
-      const outcome = await enqueueWithinDeadline(dependencies.queue, job);
+      const outcome = await submitWithinDeadline({
+        action,
+        receivedAt: now(),
+        queue: dependencies.queue,
+        intentStore: dependencies.intentStore,
+      });
       if (outcome === "accepted") return acceptedResponse();
       return outcome === "rejected" ? enqueueFailureResponse() : enqueueUncertaintyResponse();
     },
@@ -312,7 +320,11 @@ async function passesVerifier(
   }
 }
 
-function createJob(action: ParsedFeishuCardAction, receivedAt: Date): ApprovalInteractionJob {
+async function createJob(
+  action: ParsedFeishuCardAction,
+  receivedAt: Date,
+  intentStore: Pick<ApprovalInteractionIntentStore, "persistIntent"> | undefined,
+): Promise<ApprovalInteractionJob> {
   const common = {
     kind: action.kind,
     idempotencyKey: `feishu-card:${action.appId}:${action.eventId}`,
@@ -323,39 +335,65 @@ function createJob(action: ParsedFeishuCardAction, receivedAt: Date): ApprovalIn
     ...(action.messageId === undefined ? {} : { messageId: action.messageId }),
     presentationId: action.presentationId,
     action: action.action,
-    ...(action.reason === undefined ? {} : { reason: action.reason }),
-    ...(action.rejectionConfirmed === undefined ? {} : { rejectionConfirmed: action.rejectionConfirmed }),
-    receivedAt,
-    attempts: 0,
   };
+  let interaction: ApprovalInteractionIntentIdentity;
   if (action.kind === "knowledge_draft_confirmation") {
-    return normalizeApprovalInteractionJob({
+    interaction = normalizeApprovalInteractionIntentIdentity({
       ...common,
       kind: action.kind,
       draftId: action.draftId,
       revisionNumber: action.revisionNumber,
       draftVersion: action.draftVersion,
     });
+  } else {
+    interaction = normalizeApprovalInteractionIntentIdentity({
+      ...common,
+      kind: action.kind,
+      proposalId: action.proposalId,
+      requirementId: action.requirementId,
+      proposalVersion: action.proposalVersion,
+      subjectRevision: action.subjectRevision,
+      subjectVersion: action.subjectVersion,
+      targetPolicyVersion: action.targetPolicyVersion,
+    });
   }
+  if (action.reason === undefined) {
+    return normalizeApprovalInteractionJob({ ...interaction, receivedAt, attempts: 0 });
+  }
+  if (intentStore === undefined) throw new Error("approval interaction intent store is unavailable");
+  const persisted = await intentStore.persistIntent({
+    interaction,
+    reason: action.reason,
+    ...(action.rejectionConfirmed === undefined
+      ? {}
+      : { rejectionConfirmed: action.rejectionConfirmed }),
+    at: receivedAt,
+  });
   return normalizeApprovalInteractionJob({
-    ...common,
-    kind: action.kind,
-    proposalId: action.proposalId,
-    requirementId: action.requirementId,
-    proposalVersion: action.proposalVersion,
-    subjectRevision: action.subjectRevision,
-    subjectVersion: action.subjectVersion,
-    targetPolicyVersion: action.targetPolicyVersion,
+    ...interaction,
+    intentId: persisted.id,
+    receivedAt,
+    attempts: 0,
   });
 }
 
-async function enqueueWithinDeadline(
-  queue: ApprovalInteractionEnqueuer,
-  job: ApprovalInteractionJob,
-): Promise<"accepted" | "rejected" | "uncertain"> {
+async function submitWithinDeadline({
+  action,
+  receivedAt,
+  queue,
+  intentStore,
+}: {
+  action: ParsedFeishuCardAction;
+  receivedAt: Date;
+  queue: ApprovalInteractionEnqueuer;
+  intentStore: Pick<ApprovalInteractionIntentStore, "persistIntent"> | undefined;
+}): Promise<"accepted" | "rejected" | "uncertain"> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const enqueue = Promise.resolve()
-    .then(() => queue.enqueue(job))
+  const submission = Promise.resolve()
+    .then(async () => {
+      const job = await createJob(action, receivedAt, intentStore);
+      await queue.enqueue(job);
+    })
     .then(
       () => "accepted" as const,
       () => "rejected" as const,
@@ -365,7 +403,7 @@ async function enqueueWithinDeadline(
   });
 
   try {
-    return await Promise.race([enqueue, timeout]);
+    return await Promise.race([submission, timeout]);
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId);
   }

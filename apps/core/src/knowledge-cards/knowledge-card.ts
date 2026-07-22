@@ -31,8 +31,7 @@ type ApprovalInteractionJobCommon = {
   chatId: string;
   messageId?: string;
   presentationId: string;
-  reason?: string;
-  rejectionConfirmed?: true;
+  intentId?: string;
   receivedAt: Date;
   attempts: number;
 };
@@ -60,6 +59,10 @@ export type ApprovalInteractionJob =
   | KnowledgeDraftConfirmationInteractionJob
   | ActionProposalApprovalInteractionJob;
 
+export type ApprovalInteractionIntentIdentity =
+  | Omit<KnowledgeDraftConfirmationInteractionJob, "intentId" | "receivedAt" | "attempts">
+  | Omit<ActionProposalApprovalInteractionJob, "intentId" | "receivedAt" | "attempts">;
+
 export class KnowledgeCardValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -80,8 +83,7 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
     "messageId",
     "presentationId",
     "action",
-    "reason",
-    "rejectionConfirmed",
+    "intentId",
     "receivedAt",
     "attempts",
   ];
@@ -98,8 +100,7 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
       ]);
 
   const action = requireAction(input.action, kind);
-  const reason = normalizeReason(input.reason, action);
-  const rejectionConfirmed = normalizeRejectionConfirmed(input.rejectionConfirmed, action);
+  const intentId = normalizeIntentId(input.intentId, action);
   const common = {
     kind,
     idempotencyKey: requireReference("idempotencyKey", input.idempotencyKey),
@@ -111,8 +112,7 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
       ? {}
       : { messageId: requireReference("messageId", input.messageId) }),
     presentationId: requireReference("presentationId", input.presentationId),
-    ...(reason === undefined ? {} : { reason }),
-    ...(rejectionConfirmed === undefined ? {} : { rejectionConfirmed }),
+    ...(intentId === undefined ? {} : { intentId }),
     receivedAt: requireDate("receivedAt", input.receivedAt),
     attempts: requireNonnegativeInteger("attempts", input.attempts),
   };
@@ -136,6 +136,58 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
     subjectVersion: requirePositiveInteger("subjectVersion", input.subjectVersion),
     targetPolicyVersion: requirePositiveInteger("targetPolicyVersion", input.targetPolicyVersion),
     action: action as ActionProposalCardAction,
+  };
+}
+
+export function normalizeApprovalInteractionIntentIdentity(
+  input: unknown,
+): ApprovalInteractionIntentIdentity {
+  if (!isRecord(input)) throw validationError("approval interaction intent must be an object");
+  const action = input.action;
+  const requiresIntent = action === "request_revision" || action === "reject";
+  const normalized = normalizeApprovalInteractionJob({
+    ...input,
+    ...(requiresIntent ? { intentId: "intent-validation-reference" } : {}),
+    receivedAt: new Date(0),
+    attempts: 0,
+  });
+  return toApprovalInteractionIntentIdentity(normalized);
+}
+
+export function toApprovalInteractionIntentIdentity(
+  job: ApprovalInteractionJob,
+): ApprovalInteractionIntentIdentity {
+  const common = {
+    kind: job.kind,
+    idempotencyKey: job.idempotencyKey,
+    eventId: job.eventId,
+    appId: job.appId,
+    actorOpenId: job.actorOpenId,
+    chatId: job.chatId,
+    ...(job.messageId === undefined ? {} : { messageId: job.messageId }),
+    presentationId: job.presentationId,
+    action: job.action,
+  };
+  if (job.kind === "knowledge_draft_confirmation") {
+    return {
+      ...common,
+      kind: job.kind,
+      draftId: job.draftId,
+      revisionNumber: job.revisionNumber,
+      draftVersion: job.draftVersion,
+      action: job.action,
+    };
+  }
+  return {
+    ...common,
+    kind: job.kind,
+    proposalId: job.proposalId,
+    requirementId: job.requirementId,
+    proposalVersion: job.proposalVersion,
+    subjectRevision: job.subjectRevision,
+    subjectVersion: job.subjectVersion,
+    targetPolicyVersion: job.targetPolicyVersion,
+    action: job.action,
   };
 }
 
@@ -165,33 +217,15 @@ function requireAction(
   return value as KnowledgeCardAction | ActionProposalCardAction;
 }
 
-function normalizeReason(
+function normalizeIntentId(
   value: unknown,
   action: KnowledgeCardAction | ActionProposalCardAction,
 ): string | undefined {
   if (action === "confirm" || action === "approve") {
-    if (value !== undefined) throw validationError("reason is not allowed for this action");
+    if (value !== undefined) throw validationError("intentId is not allowed for this action");
     return undefined;
   }
-  if (typeof value !== "string") throw validationError("reason must be a string");
-  const normalized = value.trim();
-  const codePointLength = [...normalized].length;
-  if (codePointLength < 1 || codePointLength > KNOWLEDGE_CARD_REASON_MAX_CHARS) {
-    throw validationError("reason length is invalid");
-  }
-  return normalized;
-}
-
-function normalizeRejectionConfirmed(
-  value: unknown,
-  action: KnowledgeCardAction | ActionProposalCardAction,
-): true | undefined {
-  if (action !== "reject") {
-    if (value !== undefined) throw validationError("rejectionConfirmed is not allowed for this action");
-    return undefined;
-  }
-  if (value !== true) throw validationError("rejectionConfirmed must be true");
-  return true;
+  return requireReference("intentId", value);
 }
 
 function requireReference(name: string, value: unknown): string {

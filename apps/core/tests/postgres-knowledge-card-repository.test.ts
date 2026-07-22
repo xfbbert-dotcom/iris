@@ -6,7 +6,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createApprovalInteractionWorker } from "../src/knowledge-cards/approval-interaction-worker.js";
 import { createKnowledgeCardDispatcher } from "../src/knowledge-cards/knowledge-card-dispatcher.js";
-import type { ApprovalInteractionJob } from "../src/knowledge-cards/knowledge-card.js";
+import {
+  toApprovalInteractionIntentIdentity,
+  type ApprovalInteractionJob,
+} from "../src/knowledge-cards/knowledge-card.js";
+import { createPostgresApprovalInteractionIntentStore } from
+  "../src/knowledge-cards/postgres-approval-interaction-intent-store.js";
 import {
   KnowledgeCardMembershipProofError,
   KnowledgeCardOperationConflictError,
@@ -1637,10 +1642,19 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       revisionNumber: 1,
       draftVersion: 1,
       action: "request_revision",
-      reason,
+      intentId: id("worker-redelivery-intent"),
       receivedAt: plusSeconds(5),
       attempts: 0,
     };
+    const intentStore = createPostgresApprovalInteractionIntentStore({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+      idGenerator: () => callbackJob.intentId!,
+    });
+    await intentStore.persistIntent({
+      interaction: toApprovalInteractionIntentIdentity(callbackJob),
+      reason,
+      at: callbackJob.receivedAt,
+    });
     const canUseKnowledgeCards = vi.fn((groupId: string) => groupId === sourceGroupId);
     const isCurrentMember = vi.fn(async (input: { chatId: string; openId: string }) =>
       input.chatId === sourceGroupId && input.openId === callbackJob.actorOpenId
@@ -1668,6 +1682,7 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
         workerId: id(`worker-redelivery-${attempts}`),
         leaseMs: 30_000,
         now: () => new Date(attemptAt),
+        intentStore,
       });
       return { result: await worker.processBatch({ limit: 1 }), queue };
     };
@@ -1777,10 +1792,20 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       revisionNumber: 1,
       draftVersion: 1,
       action: "request_revision",
-      reason,
+      intentId: id("closed-redelivery-display-intent"),
       receivedAt: plusSeconds(5),
       attempts: 0,
     };
+    const intentStore = createPostgresApprovalInteractionIntentStore({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+      idGenerator: () => callbackJob.intentId!,
+    });
+    const persistBaselineIntent = () => intentStore.persistIntent({
+      interaction: toApprovalInteractionIntentIdentity(callbackJob),
+      reason,
+      at: callbackJob.receivedAt,
+    });
+    await persistBaselineIntent();
     let attemptedCommittedJson: string | undefined;
     const missingUpdateClient = {
       updateCard: vi.fn(async (input: { messageId: string; cardJson: string }) => {
@@ -1807,6 +1832,7 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
         workerId: id("closed-redelivery-first-worker"),
         leaseMs: 30_000,
         now: () => plusSeconds(10),
+        intentStore,
       });
       await expect(firstWorker.processBatch({ limit: 1 })).resolves.toEqual([{
         status: "retrying",
@@ -1826,6 +1852,7 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
         membership?: "member" | "denied" | "error";
       }) => {
         redeliveryNumber += 1;
+        await persistBaselineIntent();
         const redeliveryJob = {
           ...callbackJob,
           attempts: redeliveryNumber,
@@ -1857,6 +1884,7 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
           workerId: id(`closed-redelivery-worker-${redeliveryNumber}`),
           leaseMs: 30_000,
           now: () => plusSeconds(40 + redeliveryNumber),
+          intentStore,
         });
         const result = await worker.processBatch({ limit: 1 });
         expect(visibleUpdates).toHaveLength(beforeUpdates + 1);
@@ -1879,7 +1907,7 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       }).then(({ result }) => result)).resolves.toEqual([{
         status: "denied",
         idempotencyKey: callbackJob.idempotencyKey,
-        code: "bot_actor",
+        code: "immutable_intent_conflict",
       }]);
       await expect(runRedelivery({ membership: "error" }).then(({ result }) => result)).resolves.toEqual([{
         status: "retrying",
@@ -1888,8 +1916,8 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       }]);
       for (const jobOverride of [
         { actorOpenId: "ou_changed_member" },
-        { action: "reject" as const, reason: "Changed action.", rejectionConfirmed: true as const },
-        { reason: "Changed immutable reason." },
+        { action: "reject" as const },
+        { intentId: "missing-immutable-intent" },
       ]) {
         await expect(runRedelivery({ job: jobOverride }).then(({ result }) => result)).resolves.toEqual([{
           status: "denied",
@@ -1902,7 +1930,7 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
       }).then(({ result }) => result)).resolves.toEqual([{
         status: "denied",
         idempotencyKey: callbackJob.idempotencyKey,
-        code: "stale_presentation",
+        code: "immutable_intent_conflict",
       }]);
 
       expect(visibleUpdates).toHaveLength(8);

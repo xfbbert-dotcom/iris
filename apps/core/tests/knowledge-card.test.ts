@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ACTION_PROPOSAL_CARD_ACTIONS,
@@ -11,8 +11,13 @@ import {
   KNOWLEDGE_CARD_REASON_MAX_CHARS,
   KnowledgeCardValidationError,
   normalizeApprovalInteractionJob,
+  normalizeApprovalInteractionIntentIdentity,
 } from "../src/knowledge-cards/knowledge-card.js";
+import { createPostgresApprovalInteractionIntentStore } from
+  "../src/knowledge-cards/postgres-approval-interaction-intent-store.js";
 import type { ApplyKnowledgeCardInteractionInput } from "../src/knowledge-cards/knowledge-card-repository.js";
+import type { PostgresKnowledgeDraftDataSource } from
+  "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
 
 describe("knowledge card contracts", () => {
   it("publishes the bounded card constants", () => {
@@ -106,44 +111,59 @@ describe("knowledge card contracts", () => {
   });
 
   it.each([
-    ["request_revision", { reason: "  Add rollback steps.  " }],
-    ["reject", { reason: "  Unsafe.  ", rejectionConfirmed: true }],
-  ] as const)("requires the bounded payload for %s", (action, extra) => {
+    ["request_revision", { intentId: " intent-revision " }],
+    ["reject", { intentId: " intent-rejection " }],
+  ] as const)("requires an opaque intent reference for %s", (action, extra) => {
     expect(normalizeApprovalInteractionJob({
       ...validJob(),
       action,
       ...extra,
-    })).toMatchObject({ action, reason: extra.reason.trim() });
+    })).toMatchObject({ action, intentId: extra.intentId.trim() });
   });
 
   it.each([
-    ["request revision without a reason", { action: "request_revision" }],
-    ["rejection without a reason", { action: "reject", rejectionConfirmed: true }],
-    ["rejection without confirmation", { action: "reject", reason: "Unsafe" }],
+    ["request revision without an intent", { action: "request_revision" }],
+    ["rejection without an intent", { action: "reject" }],
     ["unsafe integer", { revisionNumber: 1.5 }],
     ["unknown field", { content: "draft body" }],
     ["missing interaction kind", { kind: undefined }],
     ["mixed proposal field", { proposalId: "proposal-1" }],
-    ["reason on confirmation", { reason: "not allowed" }],
+    ["reason in the queue", { action: "request_revision", intentId: "intent-1", reason: "not allowed" }],
+    ["rejection confirmation in the queue", {
+      action: "reject",
+      intentId: "intent-1",
+      rejectionConfirmed: true,
+    }],
+    ["intent on confirmation", { intentId: "not allowed" }],
   ])("rejects %s", (_label, extra) => {
     expect(() => normalizeApprovalInteractionJob({ ...validJob(), ...extra }))
       .toThrow(KnowledgeCardValidationError);
   });
 
-  it("counts revision reasons by Unicode code points", () => {
+  it("bounds durable revision reasons by Unicode code points outside the queue", async () => {
     const acceptedReason = "\u{1F680}".repeat(KNOWLEDGE_CARD_REASON_MAX_CHARS);
     const rejectedReason = "\u{1F680}".repeat(KNOWLEDGE_CARD_REASON_MAX_CHARS + 1);
+    const query = vi.fn(async () => ({ rows: [{ id: "intent-1" }] }));
+    const store = createPostgresApprovalInteractionIntentStore({
+      dataSource: { query } as unknown as PostgresKnowledgeDraftDataSource,
+      idGenerator: () => "intent-1",
+    });
+    const interaction = normalizeApprovalInteractionIntentIdentity({
+      ...validJob(),
+      action: "request_revision",
+    });
 
-    expect(normalizeApprovalInteractionJob({
-      ...validJob(),
-      action: "request_revision",
+    await expect(store.persistIntent({
+      interaction,
       reason: acceptedReason,
-    })).toMatchObject({ reason: acceptedReason });
-    expect(() => normalizeApprovalInteractionJob({
-      ...validJob(),
-      action: "request_revision",
+      at: new Date("2026-07-19T00:00:00.000Z"),
+    })).resolves.toEqual({ id: "intent-1" });
+    await expect(store.persistIntent({
+      interaction,
       reason: rejectedReason,
-    })).toThrow(KnowledgeCardValidationError);
+      at: new Date("2026-07-19T00:00:00.000Z"),
+    })).rejects.toThrow(/reason length is invalid/iu);
+    expect(query).toHaveBeenCalledOnce();
   });
 });
 

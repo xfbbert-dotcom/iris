@@ -210,10 +210,16 @@ describe("ApprovalInteractionWorker", () => {
 
   it("passes normalized revision and rejection decisions to the atomic repository action", async () => {
     const revision = createHarness({
-      job: job({ action: "request_revision", reason: "Clarify ownership." }),
+      job: job({ action: "request_revision", intentId: "intent-revision" }),
+      resolveIntent: async () => ({ id: "intent-revision", reason: "Clarify ownership." }),
     });
     const rejection = createHarness({
-      job: job({ action: "reject", reason: "Conflicts with policy.", rejectionConfirmed: true }),
+      job: job({ action: "reject", intentId: "intent-rejection" }),
+      resolveIntent: async () => ({
+        id: "intent-rejection",
+        reason: "Conflicts with policy.",
+        rejectionConfirmed: true,
+      }),
     });
 
     await revision.worker.processBatch({ limit: 1 });
@@ -230,10 +236,127 @@ describe("ApprovalInteractionWorker", () => {
     }));
   });
 
+  it("resolves a sensitive intent in memory and deletes it only after the queue ack", async () => {
+    const order: string[] = [];
+    const sensitiveJob = job({
+      action: "request_revision",
+      intentId: "f31bed07-5772-4a26-bdf0-a472f0b5bc7b",
+    });
+    const harness = createHarness({
+      job: sensitiveJob,
+      resolveIntent: async () => {
+        order.push("resolve");
+        return {
+          id: sensitiveJob.intentId!,
+          reason: "Preserved  normalized reason.",
+        };
+      },
+      applyInteraction: async (input) => {
+        order.push("apply");
+        expect(input).toMatchObject({
+          action: "request_revision",
+          reason: "Preserved  normalized reason.",
+        });
+        return mutationResult("applied", {
+          action: "request_revision",
+          state: "needs_revision",
+          reason: "Preserved  normalized reason.",
+        });
+      },
+      acknowledge: async () => {
+        order.push("ack");
+      },
+      deleteIntent: async () => {
+        order.push("delete");
+      },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toMatchObject([{
+      status: "applied",
+      code: "action_applied",
+    }]);
+    expect(order).toEqual(["resolve", "apply", "ack", "delete"]);
+    expect(harness.queue.handleFailure).not.toHaveBeenCalled();
+  });
+
+  it("retains a sensitive intent across transient failure", async () => {
+    const sensitiveJob = job({
+      action: "reject",
+      intentId: "e7d06a67-5ea4-4da0-a9ac-911cceae0b1e",
+    });
+    const harness = createHarness({
+      job: sensitiveJob,
+      resolveIntent: async () => { throw new Error("postgres unavailable"); },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      idempotencyKey: sensitiveJob.idempotencyKey,
+      code: "repository_unavailable",
+    }]);
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+    expect(harness.intentStore.deleteIntent).not.toHaveBeenCalled();
+    expect(harness.queue.handleFailure).toHaveBeenCalledOnce();
+  });
+
+  it("restores a committed card without deleting an immutable conflicting intent", async () => {
+    const sensitiveJob = job({
+      action: "request_revision",
+      intentId: "intent-conflicting-redelivery",
+    });
+    const harness = createHarness({
+      job: sensitiveJob,
+      getPresentationContext: async () => committedContext(),
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "denied",
+      idempotencyKey: sensitiveJob.idempotencyKey,
+      code: "immutable_intent_conflict",
+    }]);
+    expect(harness.cardClient.updateCard).toHaveBeenCalledOnce();
+    expect(harness.cardClient.updateCard.mock.calls[0]?.[0]?.cardJson).toContain(
+      "Iris / revision_requested",
+    );
+    expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
+    expect(harness.intentStore.deleteIntent).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a committed mutation when post-ack intent cleanup fails", async () => {
+    const sensitiveJob = job({
+      action: "reject",
+      intentId: "85777560-95e0-4566-b2c5-e86f9c12d12a",
+    });
+    const harness = createHarness({
+      job: sensitiveJob,
+      resolveIntent: async () => ({
+        id: sensitiveJob.intentId!,
+        reason: "Durable rejection reason.",
+        rejectionConfirmed: true,
+      }),
+      deleteIntent: async () => { throw new Error("cleanup unavailable"); },
+      applyInteraction: async () => mutationResult("applied", {
+        action: "reject",
+        state: "rejected",
+        reason: "Durable rejection reason.",
+      }),
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toMatchObject([{
+      status: "applied",
+      code: "action_applied",
+    }]);
+    expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
+    expect(harness.intentStore.deleteIntent).toHaveBeenCalledOnce();
+    expect(harness.queue.handleFailure).not.toHaveBeenCalled();
+    expect(harness.repository.applyInteraction).toHaveBeenCalledOnce();
+  });
+
   it.each([
     [
       "confirm",
       { action: "confirm" },
+      undefined,
       {
         action: "confirm",
         actorOpenId: "ou_committed_actor",
@@ -244,7 +367,8 @@ describe("ApprovalInteractionWorker", () => {
     ],
     [
       "request revision",
-      { action: "request_revision", reason: "UNTRUSTED callback revision reason" },
+      { action: "request_revision", intentId: "intent-committed-revision" },
+      { id: "intent-committed-revision", reason: "UNTRUSTED callback revision reason" },
       {
         action: "request_revision",
         state: "needs_revision",
@@ -256,6 +380,10 @@ describe("ApprovalInteractionWorker", () => {
       "reject",
       {
         action: "reject",
+        intentId: "intent-committed-rejection",
+      },
+      {
+        id: "intent-committed-rejection",
         reason: "UNTRUSTED callback rejection reason",
         rejectionConfirmed: true,
       },
@@ -269,11 +397,13 @@ describe("ApprovalInteractionWorker", () => {
   ] as const)("immediately renders the committed %s result instead of callback text", async (
     _label,
     jobOverrides,
+    resolvedIntent,
     committedResult,
     expectedText,
   ) => {
     const harness = createHarness({
       job: job(jobOverrides as Partial<ApprovalInteractionJob>),
+      ...(resolvedIntent === undefined ? {} : { resolveIntent: async () => resolvedIntent }),
       applyInteraction: async () => mutationResult("applied", committedResult),
     });
 
@@ -337,7 +467,7 @@ describe("ApprovalInteractionWorker", () => {
       idempotencyKey: actionJob().idempotencyKey,
       code: "action_approval_applied",
     }]);
-    expect(processActionApproval).toHaveBeenCalledWith(actionJob());
+    expect(processActionApproval).toHaveBeenCalledWith(actionJob(), undefined);
     expect(harness.repository.getPresentation).not.toHaveBeenCalled();
     expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
     expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
@@ -436,6 +566,8 @@ type HarnessOverrides = {
   actionApprovalWorker?: {
     processActionApproval: (job: Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>) => Promise<any>;
   };
+  resolveIntent?: (...args: any[]) => Promise<any>;
+  deleteIntent?: (...args: any[]) => Promise<void>;
 };
 
 function createHarness(overrides: HarnessOverrides = {}) {
@@ -459,11 +591,16 @@ function createHarness(overrides: HarnessOverrides = {}) {
   const cardClient = {
     updateCard: vi.fn(overrides.updateCard ?? (async () => undefined)),
   };
+  const intentStore = {
+    resolveIntent: vi.fn(overrides.resolveIntent ?? (async () => undefined)),
+    deleteIntent: vi.fn(overrides.deleteIntent ?? (async () => undefined)),
+  };
   return {
     queue,
     repository,
     membershipChecker,
     cardClient,
+    intentStore,
     worker: createApprovalInteractionWorker({
       queue,
       repository,
@@ -475,6 +612,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
       leaseMs: 30_000,
       now: () => new Date(at),
       actionApprovalWorker: overrides.actionApprovalWorker,
+      intentStore,
     }),
   };
 }
