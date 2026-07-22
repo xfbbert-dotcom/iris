@@ -213,6 +213,7 @@ describe("KnowledgeCardRuntime", () => {
       body: { toast: { type: "info", content: "\u5df2\u6536\u5230\uff0c\u6b63\u5728\u6838\u9a8c" } },
     });
     expect(dependencies.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "knowledge_draft_confirmation",
       idempotencyKey: "feishu-card:app-id:event-1",
       eventId: "event-1",
       appId: "app-id",
@@ -636,6 +637,7 @@ function cardAction(): Record<string, unknown> {
       token: "card-token",
       action: {
         value: {
+          kind: "knowledge_draft_confirmation",
           action: "confirm",
           presentationId: "presentation-1",
           draftId: "draft-1",

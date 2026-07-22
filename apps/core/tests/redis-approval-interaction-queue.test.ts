@@ -696,6 +696,31 @@ describe("Redis approval interaction queue", () => {
     expect(() => parseApprovalInteractionJob(JSON.stringify({ ...JSON.parse(payload), content: "draft" })))
       .toThrow("Invalid approval interaction job payload");
   });
+
+  it("round-trips a content-free action proposal approval job", () => {
+    const job = normalizeApprovalInteractionJob({
+      kind: "action_proposal_approval",
+      idempotencyKey: "feishu-card:cli_a:event-proposal",
+      eventId: "event-proposal",
+      appId: "cli_a",
+      actorOpenId: "ou_owner",
+      chatId: "oc_group",
+      messageId: "om_proposal",
+      presentationId: "proposal-presentation-1",
+      proposalId: "proposal-1",
+      requirementId: "requirement-1",
+      proposalVersion: 4,
+      subjectRevision: 2,
+      subjectVersion: 7,
+      targetPolicyVersion: 3,
+      action: "approve",
+      receivedAt: new Date("2026-07-19T00:00:00.000Z"),
+      attempts: 0,
+    });
+
+    expect(parseApprovalInteractionJob(serializeApprovalInteractionJob(job))).toEqual(job);
+    expect(JSON.stringify(job)).not.toMatch(/draft body|knowledge content|evidence text/iu);
+  });
 });
 
 type QueueOptions = {
@@ -733,6 +758,7 @@ function claim(
 function jobFixture(input: { eventId?: string; receivedAt?: string } = {}) {
   const eventId = input.eventId ?? "event-1";
   return normalizeApprovalInteractionJob({
+    kind: "knowledge_draft_confirmation",
     idempotencyKey: `feishu-card:cli_a:${eventId}`,
     eventId,
     appId: "cli_a",

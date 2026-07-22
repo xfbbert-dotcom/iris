@@ -350,6 +350,7 @@ describe("FeishuCardActionGateway", () => {
     });
     expect(queue.enqueue).toHaveBeenCalledTimes(1);
     expect(queue.enqueue).toHaveBeenCalledWith({
+      kind: "knowledge_draft_confirmation",
       idempotencyKey: "feishu-card:cli_approval:event-1",
       eventId: "event-1",
       appId: "cli_approval",
@@ -361,6 +362,55 @@ describe("FeishuCardActionGateway", () => {
       revisionNumber: 7,
       draftVersion: 11,
       action: "confirm",
+      receivedAt: now,
+      attempts: 0,
+    });
+  });
+
+  it("enqueues a content-free action proposal approval job", async () => {
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: () => true,
+      now: () => now,
+    });
+    const body = cardAction();
+    const event = body.event as Record<string, unknown>;
+    const action = event.action as Record<string, unknown>;
+    action.name = "approve";
+    action.form_value = { reason: "" };
+    action.value = {
+      kind: "action_proposal_approval",
+      action: "approve",
+      presentationId: "proposal-presentation-1",
+      proposalId: "proposal-1",
+      requirementId: "requirement-1",
+      proposalVersion: "4",
+      subjectRevision: "2",
+      subjectVersion: "7",
+      targetPolicyVersion: "3",
+    };
+
+    await expect(gateway.handleCallback({ headers: {}, body })).resolves.toMatchObject({
+      statusCode: 200,
+    });
+    expect(queue.enqueue).toHaveBeenCalledWith({
+      kind: "action_proposal_approval",
+      idempotencyKey: "feishu-card:cli_approval:event-1",
+      eventId: "event-1",
+      appId: "cli_approval",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_approval",
+      messageId: "om_approval",
+      presentationId: "proposal-presentation-1",
+      proposalId: "proposal-1",
+      requirementId: "requirement-1",
+      proposalVersion: 4,
+      subjectRevision: 2,
+      subjectVersion: 7,
+      targetPolicyVersion: 3,
+      action: "approve",
       receivedAt: now,
       attempts: 0,
     });
@@ -472,6 +522,7 @@ function cardAction(): Record<string, unknown> {
       token: "card-token",
       action: {
         value: {
+          kind: "knowledge_draft_confirmation",
           action: "confirm",
           presentationId: "presentation-1",
           draftId: "draft-1",

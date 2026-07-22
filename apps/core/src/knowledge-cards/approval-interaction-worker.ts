@@ -3,7 +3,10 @@ import type { FeishuInteractiveCardClient } from "../feishu/feishu-interactive-c
 import { KnowledgeDraftEvidenceError } from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
 
 import type { ApprovalInteractionQueue } from "./approval-interaction-queue.js";
-import type { ApprovalInteractionJob } from "./knowledge-card.js";
+import type {
+  ApprovalInteractionJob,
+  KnowledgeDraftConfirmationInteractionJob,
+} from "./knowledge-card.js";
 import { renderKnowledgeCardCommittedResult } from "./knowledge-card-renderer.js";
 import type {
   ApplyKnowledgeCardInteractionInput,
@@ -117,6 +120,10 @@ async function processJob(input: {
   const { job } = input;
   let presentation: KnowledgeDraftPresentation | undefined;
 
+  if (job.kind !== "knowledge_draft_confirmation") {
+    return handleTransientFailure(input, "internal_error");
+  }
+
   const initiallyEnabled = readRuntimeGate(input.canUseKnowledgeCards, job.chatId);
   if (initiallyEnabled === undefined) {
     return handleTransientFailure(input, "internal_error");
@@ -195,7 +202,7 @@ async function processJob(input: {
 }
 
 function toRepositoryInput(
-  job: ApprovalInteractionJob,
+  job: KnowledgeDraftConfirmationInteractionJob,
   membershipCheckedAt: Date,
   at: Date,
 ): ApplyKnowledgeCardInteractionInput {
@@ -224,7 +231,7 @@ function toRepositoryInput(
 
 function isExactActionPresentation(
   presentation: KnowledgeDraftPresentation | undefined,
-  job: ApprovalInteractionJob,
+  job: KnowledgeDraftConfirmationInteractionJob,
 ): presentation is KnowledgeDraftPresentation & { messageId: string } {
   return presentation !== undefined &&
     (presentation.state === "active" || presentation.state === "closed") &&

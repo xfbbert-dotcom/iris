@@ -40,6 +40,7 @@ describe("renderKnowledgeDraftCard", () => {
 
     expect(buttonCallbackValues(body.elements)).toEqual([
       {
+        kind: "knowledge_draft_confirmation",
         action: "confirm",
         presentationId: "presentation-1",
         draftId: "draft-1",
@@ -47,6 +48,7 @@ describe("renderKnowledgeDraftCard", () => {
         draftVersion: "11",
       },
       {
+        kind: "knowledge_draft_confirmation",
         action: "request_revision",
         presentationId: "presentation-1",
         draftId: "draft-1",
@@ -54,6 +56,7 @@ describe("renderKnowledgeDraftCard", () => {
         draftVersion: "11",
       },
       {
+        kind: "knowledge_draft_confirmation",
         action: "reject",
         presentationId: "presentation-1",
         draftId: "draft-1",
@@ -144,6 +147,7 @@ describe("renderKnowledgeDraftCard", () => {
           },
         },
       })).toMatchObject({
+        kind: "knowledge_draft_confirmation",
         action: button.name,
         presentationId: "presentation-1",
         draftId: "draft-1",

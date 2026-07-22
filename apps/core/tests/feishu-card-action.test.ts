@@ -5,6 +5,7 @@ import { parseFeishuCardAction } from "../src/feishu/feishu-card-action.js";
 describe("parseFeishuCardAction", () => {
   it("parses an exact Feishu schema 2 card action fixture", () => {
     expect(parseFeishuCardAction(cardAction())).toEqual({
+      kind: "knowledge_draft_confirmation",
       eventId: "event-1",
       appId: "cli_approval",
       actorOpenId: "ou_reviewer",
@@ -17,6 +18,33 @@ describe("parseFeishuCardAction", () => {
       action: "reject",
       reason: "Unsafe rollout plan.",
       rejectionConfirmed: true,
+    });
+  });
+
+  it("parses an exact action proposal approval without draft fields", () => {
+    expect(parseFeishuCardAction(cardAction({
+      event: {
+        action: {
+          name: "approve",
+          value: proposalActionValue({ action: "approve" }),
+          form_value: { reason: "" },
+        },
+      },
+    }))).toEqual({
+      kind: "action_proposal_approval",
+      eventId: "event-1",
+      appId: "cli_approval",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_approval",
+      messageId: "om_approval",
+      presentationId: "proposal-presentation-1",
+      proposalId: "proposal-1",
+      requirementId: "requirement-1",
+      proposalVersion: 4,
+      subjectRevision: 2,
+      subjectVersion: 7,
+      targetPolicyVersion: 3,
+      action: "approve",
     });
   });
 
@@ -52,6 +80,8 @@ describe("parseFeishuCardAction", () => {
 
   it.each([
     ["an unknown callback-value field", cardAction({ event: { action: { value: { ...actionValue(), unexpected: true } } } })],
+    ["a legacy callback without kind", cardAction({ event: { action: { value: { ...actionValue(), kind: undefined } } } })],
+    ["mixed draft and proposal fields", cardAction({ event: { action: { value: { ...actionValue(), proposalId: "proposal-1" } } } })],
     ["an unknown form field", cardAction({ event: { action: { form_value: { reason: "Unsafe rollout plan.", unexpected: "value" } } } })],
     ["a legacy checkbox field", cardAction({ event: { action: { form_value: { reason: "Unsafe rollout plan.", rejectionConfirmed: ["true"] } } } })],
     ["a wrong callback-value type", cardAction({ event: { action: { value: { ...actionValue(), revisionNumber: 7 } } } })],
@@ -62,6 +92,8 @@ describe("parseFeishuCardAction", () => {
     ["a non-string action timezone", cardAction({ event: { action: { timezone: 8 } } })],
     ["a missing revision reason", cardAction({ event: { action: { name: "request_revision", value: actionValue({ action: "request_revision" }), form_value: { reason: "" } } } })],
     ["a missing rejection reason", cardAction({ event: { action: { form_value: { reason: "" } } } })],
+    ["an approval reason", cardAction({ event: { action: { name: "approve", value: proposalActionValue({ action: "approve" }), form_value: { reason: "not allowed" } } } })],
+    ["a non-canonical proposal version", cardAction({ event: { action: { name: "approve", value: proposalActionValue({ action: "approve", proposalVersion: "04" }), form_value: { reason: "" } } } })],
   ])("rejects %s", (_label, body) => {
     expect(parseFeishuCardAction(body)).toBeUndefined();
   });
@@ -104,11 +136,30 @@ function cardAction(overrides: Record<string, unknown> = {}): Record<string, unk
 
 function actionValue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    kind: "knowledge_draft_confirmation",
     action: "reject",
     presentationId: "presentation-1",
     draftId: "draft-1",
     revisionNumber: "7",
     draftVersion: "11",
+    ...overrides,
+  };
+}
+
+function proposalActionValue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    draftId: undefined,
+    revisionNumber: undefined,
+    draftVersion: undefined,
+    kind: "action_proposal_approval",
+    action: "approve",
+    presentationId: "proposal-presentation-1",
+    proposalId: "proposal-1",
+    requirementId: "requirement-1",
+    proposalVersion: "4",
+    subjectRevision: "2",
+    subjectVersion: "7",
+    targetPolicyVersion: "3",
     ...overrides,
   };
 }

@@ -1,6 +1,11 @@
 import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/knowledge-draft.js";
 
 export const KNOWLEDGE_CARD_ACTIONS = ["confirm", "request_revision", "reject"] as const;
+export const ACTION_PROPOSAL_CARD_ACTIONS = ["approve", "request_revision", "reject"] as const;
+export const APPROVAL_INTERACTION_KINDS = [
+  "knowledge_draft_confirmation",
+  "action_proposal_approval",
+] as const;
 export const KNOWLEDGE_CARD_PRESENTATION_STATES = [
   "pending_send",
   "active",
@@ -14,9 +19,11 @@ export const KNOWLEDGE_CARD_JSON_MAX_BYTES = 24 * 1024;
 export const KNOWLEDGE_CARD_MAX_COMPONENTS = 100;
 
 export type KnowledgeCardAction = (typeof KNOWLEDGE_CARD_ACTIONS)[number];
+export type ActionProposalCardAction = (typeof ACTION_PROPOSAL_CARD_ACTIONS)[number];
+export type ApprovalInteractionKind = (typeof APPROVAL_INTERACTION_KINDS)[number];
 export type KnowledgeCardPresentationState = (typeof KNOWLEDGE_CARD_PRESENTATION_STATES)[number];
 
-export type ApprovalInteractionJob = {
+type ApprovalInteractionJobCommon = {
   idempotencyKey: string;
   eventId: string;
   appId: string;
@@ -24,15 +31,34 @@ export type ApprovalInteractionJob = {
   chatId: string;
   messageId?: string;
   presentationId: string;
-  draftId: string;
-  revisionNumber: number;
-  draftVersion: number;
-  action: "confirm" | "request_revision" | "reject";
   reason?: string;
   rejectionConfirmed?: true;
   receivedAt: Date;
   attempts: number;
 };
+
+export type KnowledgeDraftConfirmationInteractionJob = ApprovalInteractionJobCommon & {
+  kind: "knowledge_draft_confirmation";
+  draftId: string;
+  revisionNumber: number;
+  draftVersion: number;
+  action: KnowledgeCardAction;
+};
+
+export type ActionProposalApprovalInteractionJob = ApprovalInteractionJobCommon & {
+  kind: "action_proposal_approval";
+  proposalId: string;
+  requirementId: string;
+  proposalVersion: number;
+  subjectRevision: number;
+  subjectVersion: number;
+  targetPolicyVersion: number;
+  action: ActionProposalCardAction;
+};
+
+export type ApprovalInteractionJob =
+  | KnowledgeDraftConfirmationInteractionJob
+  | ActionProposalApprovalInteractionJob;
 
 export class KnowledgeCardValidationError extends Error {
   constructor(message: string) {
@@ -43,7 +69,9 @@ export class KnowledgeCardValidationError extends Error {
 
 export function normalizeApprovalInteractionJob(input: unknown): ApprovalInteractionJob {
   if (!isRecord(input)) throw validationError("approval interaction job must be an object");
-  assertKnownFields(input, [
+  const kind = requireKind(input.kind);
+  const commonFields = [
+    "kind",
     "idempotencyKey",
     "eventId",
     "appId",
@@ -51,21 +79,29 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
     "chatId",
     "messageId",
     "presentationId",
-    "draftId",
-    "revisionNumber",
-    "draftVersion",
     "action",
     "reason",
     "rejectionConfirmed",
     "receivedAt",
     "attempts",
-  ]);
+  ];
+  assertKnownFields(input, kind === "knowledge_draft_confirmation"
+    ? [...commonFields, "draftId", "revisionNumber", "draftVersion"]
+    : [
+        ...commonFields,
+        "proposalId",
+        "requirementId",
+        "proposalVersion",
+        "subjectRevision",
+        "subjectVersion",
+        "targetPolicyVersion",
+      ]);
 
-  const action = requireAction(input.action);
+  const action = requireAction(input.action, kind);
   const reason = normalizeReason(input.reason, action);
   const rejectionConfirmed = normalizeRejectionConfirmed(input.rejectionConfirmed, action);
-
-  return {
+  const common = {
+    kind,
     idempotencyKey: requireReference("idempotencyKey", input.idempotencyKey),
     eventId: requireReference("eventId", input.eventId),
     appId: requireReference("appId", input.appId),
@@ -75,14 +111,31 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
       ? {}
       : { messageId: requireReference("messageId", input.messageId) }),
     presentationId: requireReference("presentationId", input.presentationId),
-    draftId: requireReference("draftId", input.draftId),
-    revisionNumber: requirePositiveInteger("revisionNumber", input.revisionNumber),
-    draftVersion: requirePositiveInteger("draftVersion", input.draftVersion),
-    action,
     ...(reason === undefined ? {} : { reason }),
     ...(rejectionConfirmed === undefined ? {} : { rejectionConfirmed }),
     receivedAt: requireDate("receivedAt", input.receivedAt),
     attempts: requireNonnegativeInteger("attempts", input.attempts),
+  };
+  if (kind === "knowledge_draft_confirmation") {
+    return {
+      ...common,
+      kind,
+      draftId: requireReference("draftId", input.draftId),
+      revisionNumber: requirePositiveInteger("revisionNumber", input.revisionNumber),
+      draftVersion: requirePositiveInteger("draftVersion", input.draftVersion),
+      action: action as KnowledgeCardAction,
+    };
+  }
+  return {
+    ...common,
+    kind,
+    proposalId: requireReference("proposalId", input.proposalId),
+    requirementId: requireReference("requirementId", input.requirementId),
+    proposalVersion: requirePositiveInteger("proposalVersion", input.proposalVersion),
+    subjectRevision: requirePositiveInteger("subjectRevision", input.subjectRevision),
+    subjectVersion: requirePositiveInteger("subjectVersion", input.subjectVersion),
+    targetPolicyVersion: requirePositiveInteger("targetPolicyVersion", input.targetPolicyVersion),
+    action: action as ActionProposalCardAction,
   };
 }
 
@@ -92,15 +145,34 @@ function assertKnownFields(value: Record<string, unknown>, allowedFields: string
   }
 }
 
-function requireAction(value: unknown): KnowledgeCardAction {
-  if (!KNOWLEDGE_CARD_ACTIONS.includes(value as KnowledgeCardAction)) {
-    throw validationError("action is invalid");
+function requireKind(value: unknown): ApprovalInteractionKind {
+  if (!APPROVAL_INTERACTION_KINDS.includes(value as ApprovalInteractionKind)) {
+    throw validationError("kind is invalid");
   }
-  return value as KnowledgeCardAction;
+  return value as ApprovalInteractionKind;
 }
 
-function normalizeReason(value: unknown, action: KnowledgeCardAction): string | undefined {
-  if (action === "confirm") return undefined;
+function requireAction(
+  value: unknown,
+  kind: ApprovalInteractionKind,
+): KnowledgeCardAction | ActionProposalCardAction {
+  const actions = kind === "knowledge_draft_confirmation"
+    ? KNOWLEDGE_CARD_ACTIONS
+    : ACTION_PROPOSAL_CARD_ACTIONS;
+  if (!(actions as readonly unknown[]).includes(value)) {
+    throw validationError("action is invalid");
+  }
+  return value as KnowledgeCardAction | ActionProposalCardAction;
+}
+
+function normalizeReason(
+  value: unknown,
+  action: KnowledgeCardAction | ActionProposalCardAction,
+): string | undefined {
+  if (action === "confirm" || action === "approve") {
+    if (value !== undefined) throw validationError("reason is not allowed for this action");
+    return undefined;
+  }
   if (typeof value !== "string") throw validationError("reason must be a string");
   const normalized = value.trim();
   const codePointLength = [...normalized].length;
@@ -112,9 +184,12 @@ function normalizeReason(value: unknown, action: KnowledgeCardAction): string | 
 
 function normalizeRejectionConfirmed(
   value: unknown,
-  action: KnowledgeCardAction,
+  action: KnowledgeCardAction | ActionProposalCardAction,
 ): true | undefined {
-  if (action !== "reject") return undefined;
+  if (action !== "reject") {
+    if (value !== undefined) throw validationError("rejectionConfirmed is not allowed for this action");
+    return undefined;
+  }
   if (value !== true) throw validationError("rejectionConfirmed must be true");
   return true;
 }

@@ -73,6 +73,7 @@ export function renderKnowledgeDraftCard(
     return value;
   };
   const callbackValue = (action: KnowledgeCardAction) => ({
+    kind: "knowledge_draft_confirmation",
     action,
     presentationId: input.presentation.id,
     draftId: input.draft.id,

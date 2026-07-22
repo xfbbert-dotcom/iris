@@ -313,7 +313,8 @@ async function passesVerifier(
 }
 
 function createJob(action: ParsedFeishuCardAction, receivedAt: Date): ApprovalInteractionJob {
-  return normalizeApprovalInteractionJob({
+  const common = {
+    kind: action.kind,
     idempotencyKey: `feishu-card:${action.appId}:${action.eventId}`,
     eventId: action.eventId,
     appId: action.appId,
@@ -321,14 +322,30 @@ function createJob(action: ParsedFeishuCardAction, receivedAt: Date): ApprovalIn
     chatId: action.chatId,
     ...(action.messageId === undefined ? {} : { messageId: action.messageId }),
     presentationId: action.presentationId,
-    draftId: action.draftId,
-    revisionNumber: action.revisionNumber,
-    draftVersion: action.draftVersion,
     action: action.action,
     ...(action.reason === undefined ? {} : { reason: action.reason }),
     ...(action.rejectionConfirmed === undefined ? {} : { rejectionConfirmed: action.rejectionConfirmed }),
     receivedAt,
     attempts: 0,
+  };
+  if (action.kind === "knowledge_draft_confirmation") {
+    return normalizeApprovalInteractionJob({
+      ...common,
+      kind: action.kind,
+      draftId: action.draftId,
+      revisionNumber: action.revisionNumber,
+      draftVersion: action.draftVersion,
+    });
+  }
+  return normalizeApprovalInteractionJob({
+    ...common,
+    kind: action.kind,
+    proposalId: action.proposalId,
+    requirementId: action.requirementId,
+    proposalVersion: action.proposalVersion,
+    subjectRevision: action.subjectRevision,
+    subjectVersion: action.subjectVersion,
+    targetPolicyVersion: action.targetPolicyVersion,
   });
 }
 

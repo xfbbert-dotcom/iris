@@ -1625,6 +1625,7 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     const repository = cardRepository();
     const reason = "Clarify durable retry ownership.";
     const callbackJob: ApprovalInteractionJob = {
+      kind: "knowledge_draft_confirmation",
       idempotencyKey: id("worker-redelivery-idempotency"),
       eventId: id("callback-worker-redelivery"),
       appId: "cli_test_app",
@@ -1764,6 +1765,7 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     const repository = cardRepository();
     const reason = "Preserve the committed display result.";
     const callbackJob: ApprovalInteractionJob = {
+      kind: "knowledge_draft_confirmation",
       idempotencyKey: id("closed-redelivery-display-idempotency"),
       eventId: id("callback-closed-redelivery-display"),
       appId: "cli_test_app",

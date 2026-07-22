@@ -437,6 +437,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
 
 function job(overrides: Partial<ApprovalInteractionJob> = {}): ApprovalInteractionJob {
   return {
+    kind: "knowledge_draft_confirmation",
     idempotencyKey: "card-action:event-1",
     eventId: "event-1",
     appId: "cli_app",

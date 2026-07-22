@@ -1,18 +1,27 @@
 import {
+  ACTION_PROPOSAL_CARD_ACTIONS,
   KNOWLEDGE_CARD_ACTIONS,
   KNOWLEDGE_CARD_REASON_MAX_CHARS,
+  type ActionProposalCardAction,
   type KnowledgeCardAction,
 } from "../knowledge-cards/knowledge-card.js";
 import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/knowledge-draft.js";
 
 const FEISHU_CARD_ACTION_EVENT_TYPE = "card.action.trigger";
 
-export type ParsedFeishuCardAction = {
+type ParsedFeishuCardActionCommon = {
   eventId: string;
   appId: string;
   actorOpenId: string;
   chatId: string;
   messageId?: string;
+  presentationId: string;
+  reason?: string;
+  rejectionConfirmed?: true;
+};
+
+type ParsedKnowledgeActionPayload = {
+  kind: "knowledge_draft_confirmation";
   presentationId: string;
   draftId: string;
   revisionNumber: number;
@@ -22,6 +31,27 @@ export type ParsedFeishuCardAction = {
   rejectionConfirmed?: true;
 };
 
+type ParsedActionProposalPayload = {
+  kind: "action_proposal_approval";
+  presentationId: string;
+  proposalId: string;
+  requirementId: string;
+  proposalVersion: number;
+  subjectRevision: number;
+  subjectVersion: number;
+  targetPolicyVersion: number;
+  action: ActionProposalCardAction;
+  reason?: string;
+  rejectionConfirmed?: true;
+};
+
+type ParsedActionPayload = ParsedKnowledgeActionPayload | ParsedActionProposalPayload;
+type ParsedCallbackValue =
+  | Omit<ParsedKnowledgeActionPayload, "reason" | "rejectionConfirmed">
+  | Omit<ParsedActionProposalPayload, "reason" | "rejectionConfirmed">;
+
+export type ParsedFeishuCardAction = ParsedFeishuCardActionCommon & ParsedActionPayload;
+
 export function parseFeishuCardAction(body: unknown): ParsedFeishuCardAction | undefined {
   if (!isRecord(body) || !hasOnlyKeys(body, ["schema", "header", "event"]) || body.schema !== "2.0") {
     return undefined;
@@ -29,24 +59,8 @@ export function parseFeishuCardAction(body: unknown): ParsedFeishuCardAction | u
 
   const header = parseHeader(body.header);
   const event = parseEvent(body.event);
-  if (header === undefined || event === undefined) {
-    return undefined;
-  }
-
-  return {
-    eventId: header.eventId,
-    appId: header.appId,
-    actorOpenId: event.actorOpenId,
-    chatId: event.chatId,
-    ...(event.messageId === undefined ? {} : { messageId: event.messageId }),
-    presentationId: event.presentationId,
-    draftId: event.draftId,
-    revisionNumber: event.revisionNumber,
-    draftVersion: event.draftVersion,
-    action: event.action,
-    ...(event.reason === undefined ? {} : { reason: event.reason }),
-    ...(event.rejectionConfirmed === undefined ? {} : { rejectionConfirmed: event.rejectionConfirmed }),
-  };
+  if (header === undefined || event === undefined) return undefined;
+  return { ...header, ...event } as ParsedFeishuCardAction;
 }
 
 function parseHeader(value: unknown): { eventId: string; appId: string } | undefined {
@@ -63,7 +77,6 @@ function parseHeader(value: unknown): { eventId: string; appId: string } | undef
   if (eventId === undefined || appId === undefined || !areOptionalStrings(value, ["token", "create_time", "tenant_key"])) {
     return undefined;
   }
-
   return { eventId, appId };
 }
 
@@ -80,43 +93,33 @@ function parseEvent(value: unknown): Omit<ParsedFeishuCardAction, "eventId" | "a
   const actorOpenId = parseOperator(value.operator);
   const context = parseContext(value.context);
   const action = parseAction(value.action);
-  if (actorOpenId === undefined || context === undefined || action === undefined) {
-    return undefined;
-  }
-
+  if (actorOpenId === undefined || context === undefined || action === undefined) return undefined;
   return {
     actorOpenId,
     chatId: context.chatId,
     ...(context.messageId === undefined ? {} : { messageId: context.messageId }),
     ...action,
-  };
+  } as Omit<ParsedFeishuCardAction, "eventId" | "appId">;
 }
 
 function parseOperator(value: unknown): string | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, ["tenant_key", "user_id", "open_id", "union_id"])) {
     return undefined;
   }
-
   return areOptionalStrings(value, ["tenant_key", "user_id", "union_id"])
     ? parseReference(value.open_id)
     : undefined;
 }
 
 function parseContext(value: unknown): { chatId: string; messageId?: string } | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["open_message_id", "open_chat_id"])) {
-    return undefined;
-  }
-
+  if (!isRecord(value) || !hasOnlyKeys(value, ["open_message_id", "open_chat_id"])) return undefined;
   const chatId = parseReference(value.open_chat_id);
   const messageId = value.open_message_id === undefined ? undefined : parseReference(value.open_message_id);
-  if (chatId === undefined || (value.open_message_id !== undefined && messageId === undefined)) {
-    return undefined;
-  }
-
+  if (chatId === undefined || (value.open_message_id !== undefined && messageId === undefined)) return undefined;
   return { chatId, ...(messageId === undefined ? {} : { messageId }) };
 }
 
-function parseAction(value: unknown): Omit<ParsedFeishuCardAction, "eventId" | "appId" | "actorOpenId" | "chatId" | "messageId"> | undefined {
+function parseAction(value: unknown): ParsedActionPayload | undefined {
   if (
     !isRecord(value) ||
     !hasOnlyKeys(value, ["value", "tag", "name", "timezone", "form_value"]) ||
@@ -132,43 +135,44 @@ function parseAction(value: unknown): Omit<ParsedFeishuCardAction, "eventId" | "
     return undefined;
   }
 
-  if (callbackValue.action === "confirm") {
+  if (callbackValue.action === "confirm" || callbackValue.action === "approve") {
     return formValue.reason === "" ? callbackValue : undefined;
   }
   if (callbackValue.action === "request_revision") {
-    return formValue.reason !== ""
-      ? { ...callbackValue, reason: formValue.reason }
-      : undefined;
+    return formValue.reason === "" ? undefined : { ...callbackValue, reason: formValue.reason };
   }
-
-  return formValue.reason !== ""
-    ? { ...callbackValue, reason: formValue.reason, rejectionConfirmed: true }
-    : undefined;
+  return formValue.reason === ""
+    ? undefined
+    : { ...callbackValue, reason: formValue.reason, rejectionConfirmed: true };
 }
 
-function parseCallbackValue(value: unknown): Pick<ParsedFeishuCardAction, "presentationId" | "draftId" | "revisionNumber" | "draftVersion" | "action"> | undefined {
+function parseCallbackValue(value: unknown): ParsedCallbackValue | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.kind === "knowledge_draft_confirmation") {
+    return parseKnowledgeDraftCallbackValue(value);
+  }
+  if (value.kind === "action_proposal_approval") {
+    return parseActionProposalCallbackValue(value);
+  }
+  return undefined;
+}
+
+function parseKnowledgeDraftCallbackValue(value: Record<string, unknown>): ParsedCallbackValue | undefined {
   if (
-    !isRecord(value) ||
-    !hasOnlyKeys(value, ["action", "presentationId", "draftId", "revisionNumber", "draftVersion"]) ||
+    !hasOnlyKeys(value, ["kind", "action", "presentationId", "draftId", "revisionNumber", "draftVersion"]) ||
     !KNOWLEDGE_CARD_ACTIONS.includes(value.action as KnowledgeCardAction)
   ) {
     return undefined;
   }
-
   const presentationId = parseReference(value.presentationId);
   const draftId = parseReference(value.draftId);
   const revisionNumber = parsePositiveIntegerString(value.revisionNumber);
   const draftVersion = parsePositiveIntegerString(value.draftVersion);
-  if (
-    presentationId === undefined ||
-    draftId === undefined ||
-    revisionNumber === undefined ||
-    draftVersion === undefined
-  ) {
+  if (presentationId === undefined || draftId === undefined || revisionNumber === undefined || draftVersion === undefined) {
     return undefined;
   }
-
   return {
+    kind: "knowledge_draft_confirmation",
     action: value.action as KnowledgeCardAction,
     presentationId,
     draftId,
@@ -177,21 +181,60 @@ function parseCallbackValue(value: unknown): Pick<ParsedFeishuCardAction, "prese
   };
 }
 
-function parseFormValue(value: unknown): { reason: string } | undefined {
+function parseActionProposalCallbackValue(value: Record<string, unknown>): ParsedCallbackValue | undefined {
   if (
-    !isRecord(value) ||
-    !hasOnlyKeys(value, ["reason"]) ||
-    typeof value.reason !== "string"
+    !hasOnlyKeys(value, [
+      "kind",
+      "action",
+      "presentationId",
+      "proposalId",
+      "requirementId",
+      "proposalVersion",
+      "subjectRevision",
+      "subjectVersion",
+      "targetPolicyVersion",
+    ]) ||
+    !ACTION_PROPOSAL_CARD_ACTIONS.includes(value.action as ActionProposalCardAction)
   ) {
     return undefined;
   }
-
-  const reason = value.reason.trim();
-  if ([...reason].length > KNOWLEDGE_CARD_REASON_MAX_CHARS) {
+  const presentationId = parseReference(value.presentationId);
+  const proposalId = parseReference(value.proposalId);
+  const requirementId = parseReference(value.requirementId);
+  const proposalVersion = parsePositiveIntegerString(value.proposalVersion);
+  const subjectRevision = parsePositiveIntegerString(value.subjectRevision);
+  const subjectVersion = parsePositiveIntegerString(value.subjectVersion);
+  const targetPolicyVersion = parsePositiveIntegerString(value.targetPolicyVersion);
+  if (
+    presentationId === undefined ||
+    proposalId === undefined ||
+    requirementId === undefined ||
+    proposalVersion === undefined ||
+    subjectRevision === undefined ||
+    subjectVersion === undefined ||
+    targetPolicyVersion === undefined
+  ) {
     return undefined;
   }
+  return {
+    kind: "action_proposal_approval",
+    action: value.action as ActionProposalCardAction,
+    presentationId,
+    proposalId,
+    requirementId,
+    proposalVersion,
+    subjectRevision,
+    subjectVersion,
+    targetPolicyVersion,
+  };
+}
 
-  return { reason };
+function parseFormValue(value: unknown): { reason: string } | undefined {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["reason"]) || typeof value.reason !== "string") {
+    return undefined;
+  }
+  const reason = value.reason.trim();
+  return [...reason].length <= KNOWLEDGE_CARD_REASON_MAX_CHARS ? { reason } : undefined;
 }
 
 function parseReference(value: unknown): string | undefined {

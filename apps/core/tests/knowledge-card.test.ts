@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ACTION_PROPOSAL_CARD_ACTIONS,
+  APPROVAL_INTERACTION_KINDS,
   KNOWLEDGE_CARD_ACTIONS,
   KNOWLEDGE_CARD_BODY_MAX_CODE_POINTS,
   KNOWLEDGE_CARD_JSON_MAX_BYTES,
@@ -15,6 +17,11 @@ import type { ApplyKnowledgeCardInteractionInput } from "../src/knowledge-cards/
 describe("knowledge card contracts", () => {
   it("publishes the bounded card constants", () => {
     expect(KNOWLEDGE_CARD_ACTIONS).toEqual(["confirm", "request_revision", "reject"]);
+    expect(ACTION_PROPOSAL_CARD_ACTIONS).toEqual(["approve", "request_revision", "reject"]);
+    expect(APPROVAL_INTERACTION_KINDS).toEqual([
+      "knowledge_draft_confirmation",
+      "action_proposal_approval",
+    ]);
     expect(KNOWLEDGE_CARD_PRESENTATION_STATES).toEqual([
       "pending_send",
       "active",
@@ -31,6 +38,7 @@ describe("knowledge card contracts", () => {
   it("normalizes a confirmation job without carrying draft content", () => {
     const receivedAt = new Date("2026-07-19T00:00:00.000Z");
     const job = normalizeApprovalInteractionJob({
+      kind: "knowledge_draft_confirmation",
       idempotencyKey: " feishu-card:cli_a:event-1 ",
       eventId: " event-1 ",
       appId: " cli_a ",
@@ -46,12 +54,45 @@ describe("knowledge card contracts", () => {
     });
 
     expect(job).toMatchObject({
+      kind: "knowledge_draft_confirmation",
       action: "confirm",
       draftId: "draft-1",
       idempotencyKey: "feishu-card:cli_a:event-1",
     });
     expect(job.receivedAt).toEqual(receivedAt);
     expect(job.receivedAt).not.toBe(receivedAt);
+    expect(job).not.toHaveProperty("content");
+  });
+
+  it("normalizes a content-free action proposal approval job", () => {
+    const job = normalizeApprovalInteractionJob({
+      kind: "action_proposal_approval",
+      idempotencyKey: "feishu-card:cli_a:event-2",
+      eventId: "event-2",
+      appId: "cli_a",
+      actorOpenId: "ou_owner",
+      chatId: "oc_group",
+      messageId: "om_proposal",
+      presentationId: "proposal-presentation-1",
+      proposalId: "proposal-1",
+      requirementId: "requirement-1",
+      proposalVersion: 4,
+      subjectRevision: 2,
+      subjectVersion: 7,
+      targetPolicyVersion: 3,
+      action: "approve",
+      receivedAt: new Date("2026-07-19T00:00:00.000Z"),
+      attempts: 0,
+    });
+
+    expect(job).toMatchObject({
+      kind: "action_proposal_approval",
+      action: "approve",
+      proposalId: "proposal-1",
+      proposalVersion: 4,
+      targetPolicyVersion: 3,
+    });
+    expect(job).not.toHaveProperty("draftId");
     expect(job).not.toHaveProperty("content");
   });
 
@@ -81,6 +122,9 @@ describe("knowledge card contracts", () => {
     ["rejection without confirmation", { action: "reject", reason: "Unsafe" }],
     ["unsafe integer", { revisionNumber: 1.5 }],
     ["unknown field", { content: "draft body" }],
+    ["missing interaction kind", { kind: undefined }],
+    ["mixed proposal field", { proposalId: "proposal-1" }],
+    ["reason on confirmation", { reason: "not allowed" }],
   ])("rejects %s", (_label, extra) => {
     expect(() => normalizeApprovalInteractionJob({ ...validJob(), ...extra }))
       .toThrow(KnowledgeCardValidationError);
@@ -148,6 +192,7 @@ void missingRejectionConfirmation;
 
 function validJob() {
   return {
+    kind: "knowledge_draft_confirmation" as const,
     idempotencyKey: "feishu-card:cli_a:event-1",
     eventId: "event-1",
     appId: "cli_a",

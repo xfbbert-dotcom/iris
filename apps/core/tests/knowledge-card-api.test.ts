@@ -335,6 +335,7 @@ describe("knowledge card API", () => {
         errorCode: "membership_unavailable",
         failedAt: new Date("2026-07-19T08:01:00.000Z"),
         job: {
+          kind: "knowledge_draft_confirmation",
           idempotencyKey: "feishu-card:app:event-1",
           eventId: "event-1",
           appId: "app-id",
@@ -349,6 +350,31 @@ describe("knowledge card API", () => {
           reason: "raw secret reason",
           receivedAt: new Date("2026-07-19T08:00:00.000Z"),
           attempts: 2,
+        },
+      },
+      {
+        id: "dlq-proposal",
+        replayable: true,
+        errorCode: "repository_unavailable",
+        failedAt: new Date("2026-07-19T08:01:30.000Z"),
+        job: {
+          kind: "action_proposal_approval",
+          idempotencyKey: "feishu-card:app:event-2",
+          eventId: "event-2",
+          appId: "app-id",
+          actorOpenId: "ou_owner_secret",
+          chatId: "oc_pilot",
+          messageId: "message-2",
+          presentationId: "proposal-presentation-1",
+          proposalId: "proposal-1",
+          requirementId: "requirement-1",
+          proposalVersion: 4,
+          subjectRevision: 2,
+          subjectVersion: 7,
+          targetPolicyVersion: 3,
+          action: "approve",
+          receivedAt: new Date("2026-07-19T08:01:00.000Z"),
+          attempts: 1,
         },
       },
       {
@@ -400,12 +426,29 @@ describe("knowledge card API", () => {
           replayable: true,
           errorCode: "membership_unavailable",
           failedAt: "2026-07-19T08:01:00.000Z",
+          kind: "knowledge_draft_confirmation",
           presentationId: "presentation-1",
           draftId: "draft-1",
           revisionNumber: 3,
           draftVersion: 7,
           action: "request_revision",
           attempts: 2,
+        },
+        {
+          id: "dlq-proposal",
+          replayable: true,
+          errorCode: "repository_unavailable",
+          failedAt: "2026-07-19T08:01:30.000Z",
+          kind: "action_proposal_approval",
+          presentationId: "proposal-presentation-1",
+          proposalId: "proposal-1",
+          requirementId: "requirement-1",
+          proposalVersion: 4,
+          subjectRevision: 2,
+          subjectVersion: 7,
+          targetPolicyVersion: 3,
+          action: "approve",
+          attempts: 1,
         },
         {
           id: "dlq-lease-expired",
@@ -424,7 +467,7 @@ describe("knowledge card API", () => {
         },
       ],
     });
-    expect(list.body).not.toMatch(/ou_actor_secret|raw secret reason|token-secret|idempotencyKey/u);
+    expect(list.body).not.toMatch(/ou_(?:actor|owner)_secret|raw secret reason|token-secret|idempotencyKey/u);
     expect(replay.json()).toEqual({ ok: true, status: "replayed" });
     expect(deleted.json()).toEqual({ ok: true, status: "deleted" });
 

@@ -297,17 +297,34 @@ function toDeadLetterResponse(deadLetter: ApprovalInteractionDeadLetter) {
       attempts: deadLetter.attempts,
     };
   }
-  return {
+  const common = {
     id: deadLetter.id,
     replayable: true,
     errorCode: deadLetter.errorCode,
     failedAt: deadLetter.failedAt.toISOString(),
+    kind: deadLetter.job.kind,
     presentationId: deadLetter.job.presentationId,
-    draftId: deadLetter.job.draftId,
-    revisionNumber: deadLetter.job.revisionNumber,
-    draftVersion: deadLetter.job.draftVersion,
     action: deadLetter.job.action,
     attempts: deadLetter.job.attempts,
+  };
+  if (deadLetter.job.kind === "knowledge_draft_confirmation") {
+    return {
+      ...common,
+      kind: deadLetter.job.kind,
+      draftId: deadLetter.job.draftId,
+      revisionNumber: deadLetter.job.revisionNumber,
+      draftVersion: deadLetter.job.draftVersion,
+    };
+  }
+  return {
+    ...common,
+    kind: deadLetter.job.kind,
+    proposalId: deadLetter.job.proposalId,
+    requirementId: deadLetter.job.requirementId,
+    proposalVersion: deadLetter.job.proposalVersion,
+    subjectRevision: deadLetter.job.subjectRevision,
+    subjectVersion: deadLetter.job.subjectVersion,
+    targetPolicyVersion: deadLetter.job.targetPolicyVersion,
   };
 }
 
