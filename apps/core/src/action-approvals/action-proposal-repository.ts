@@ -96,6 +96,45 @@ export type ActionProposalContext = {
   approvals: ActionApproval[];
 };
 
+export type ActionReviewContext = {
+  proposalId: string;
+  proposalVersion: number;
+  draftId: string;
+  subjectRevision: number;
+  subjectVersion: number;
+  title: string;
+  content: string;
+  contentHash: string;
+  riskLevel: KnowledgeDraftRiskLevel;
+  targetDisplayName: string;
+  requirements: Array<{
+    kind: ActionApprovalRequirementKind;
+    state: "pending" | "satisfied" | "invalidated";
+  }>;
+};
+
+export type RecordActionReviewAttestationInput = {
+  proposalId: string;
+  actorOpenId: string;
+  expectedProposalVersion: number;
+  expectedSubjectRevision: number;
+  expectedSubjectVersion: number;
+  expectedContentHash: string;
+  sessionIdHash: string;
+  operationKey: string;
+  at: Date;
+};
+
+export type CurrentActionReviewAttestationInput = Pick<
+  RecordActionReviewAttestationInput,
+  | "proposalId"
+  | "actorOpenId"
+  | "expectedProposalVersion"
+  | "expectedSubjectRevision"
+  | "expectedSubjectVersion"
+  | "expectedContentHash"
+>;
+
 export type ActionApprovalPresentationState =
   | "pending_send"
   | "active"
@@ -306,6 +345,14 @@ export interface ActionProposalRepository {
   preflightApprovalAction(
     input: PreflightActionApprovalInput,
   ): Promise<{ sourceGroupId?: string }>;
+  getAuthorizedReviewContext(input: {
+    proposalId: string;
+    actorOpenId: string;
+  }): Promise<ActionReviewContext | undefined>;
+  recordReviewAttestation(
+    input: RecordActionReviewAttestationInput,
+  ): Promise<{ outcome: "applied" | "already_applied" }>;
+  hasCurrentReviewAttestation(input: CurrentActionReviewAttestationInput): Promise<boolean>;
   listApprovalPresentations(input: {
     proposalId: string;
     afterId?: string;

@@ -37,6 +37,7 @@ import type {
   ActionApprovalReplayInspection,
   ActionApprovalRequirement,
   ActionApprovalSendClaim,
+  ActionReviewContext,
   ActionProposalContext,
   ActionProposalDraftCandidate,
   ActionProposalEvent,
@@ -54,6 +55,8 @@ import type {
   PolicyMutationResult,
   PreflightActionApprovalInput,
   PublicationTargetPolicy,
+  CurrentActionReviewAttestationInput,
+  RecordActionReviewAttestationInput,
   RoleGrantMutationResult,
   UpsertActionRoleGrantInput,
   UpsertPublicationTargetPolicyInput,
@@ -165,6 +168,8 @@ type DraftRevisionRow = {
   status: string;
   current_revision_number: string | number;
   version: string | number;
+  title: string;
+  content: string;
   risk_level: KnowledgeDraftRiskLevel;
   reviewer_type: "feishu_user" | "text_label" | "admin_role" | null;
   reviewer_ref: string | null;
@@ -204,6 +209,18 @@ type ActionEventRow = {
   to_version: string | number;
   reason_code: string | null;
   created_at: Date;
+};
+
+type ActionReviewAttestationRow = {
+  proposal_id: string;
+  actor_open_id: string;
+  subject_revision: string | number;
+  subject_version: string | number;
+  proposal_version: string | number;
+  content_hash: string;
+  session_id_hash: string;
+  operation_key: string;
+  operation_fingerprint: string;
 };
 
 export class ActionProposalOperationConflictError extends Error {
@@ -280,6 +297,15 @@ export function createPostgresActionProposalRepository({
     },
     preflightApprovalAction(input) {
       return preflightApprovalAction(dataSource, input);
+    },
+    getAuthorizedReviewContext(input) {
+      return getAuthorizedReviewContext(dataSource, input);
+    },
+    recordReviewAttestation(input) {
+      return recordReviewAttestation(dataSource, input);
+    },
+    hasCurrentReviewAttestation(input) {
+      return hasCurrentReviewAttestation(dataSource, input);
     },
     async listApprovalPresentations(input) {
       const afterId = input.afterId === undefined
@@ -579,6 +605,197 @@ async function preflightApprovalAction(
     await requireApprovalAuthorization(client, requirement, normalized.actorOpenId);
     return draft.source_group_id === null ? {} : { sourceGroupId: draft.source_group_id };
   });
+}
+
+async function getAuthorizedReviewContext(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: { proposalId: string; actorOpenId: string },
+): Promise<ActionReviewContext | undefined> {
+  const normalized = {
+    proposalId: requireReference("proposalId", input.proposalId),
+    actorOpenId: requireReference("actorOpenId", input.actorOpenId),
+  };
+  return withTransaction(dataSource, (client) => loadAuthorizedReviewContext(client, normalized));
+}
+
+async function recordReviewAttestation(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: RecordActionReviewAttestationInput,
+): Promise<{ outcome: "applied" | "already_applied" }> {
+  const normalized = normalizeReviewAttestationInput(input);
+  const { at: _auditTimestamp, ...intent } = normalized;
+  const fingerprint = operationFingerprint({ operation: "record_action_review_attestation", ...intent });
+  return withTransaction(dataSource, async (client) => {
+    await lockOperation(client, normalized.operationKey);
+    const operation = await client.query<ActionReviewAttestationRow>(
+      `${actionReviewAttestationSelect()} WHERE operation_key = $1`,
+      [normalized.operationKey],
+    );
+    if (operation.rows[0] !== undefined) {
+      if (operation.rows[0].operation_fingerprint !== fingerprint) {
+        throw new ActionProposalOperationConflictError();
+      }
+      return { outcome: "already_applied" };
+    }
+
+    const context = await loadAuthorizedReviewContext(client, normalized);
+    if (
+      context === undefined ||
+      context.proposalVersion !== normalized.expectedProposalVersion ||
+      context.subjectRevision !== normalized.expectedSubjectRevision ||
+      context.subjectVersion !== normalized.expectedSubjectVersion ||
+      context.contentHash !== normalized.expectedContentHash
+    ) throw new ActionProposalVersionConflictError();
+
+    const existing = await client.query<ActionReviewAttestationRow>(
+      `${actionReviewAttestationSelect()}
+       WHERE proposal_id = $1 AND proposal_version = $2 AND actor_open_id = $3 AND content_hash = $4
+       FOR UPDATE`,
+      [
+        normalized.proposalId,
+        normalized.expectedProposalVersion,
+        normalized.actorOpenId,
+        normalized.expectedContentHash,
+      ],
+    );
+    if (existing.rows[0] !== undefined) throw new ActionProposalOperationConflictError();
+
+    await client.query(
+      `INSERT INTO action_review_attestations (
+        id, proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
+        content_hash, session_id_hash, operation_key, operation_fingerprint, reviewed_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        randomUUID(),
+        normalized.proposalId,
+        normalized.actorOpenId,
+        normalized.expectedSubjectRevision,
+        normalized.expectedSubjectVersion,
+        normalized.expectedProposalVersion,
+        normalized.expectedContentHash,
+        normalized.sessionIdHash,
+        normalized.operationKey,
+        fingerprint,
+        normalized.at,
+      ],
+    );
+    return { outcome: "applied" };
+  });
+}
+
+async function hasCurrentReviewAttestation(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: CurrentActionReviewAttestationInput,
+): Promise<boolean> {
+  const normalized = normalizeCurrentReviewAttestationInput(input);
+  return withTransaction(dataSource, async (client) => {
+    const context = await loadAuthorizedReviewContext(client, normalized);
+    if (
+      context === undefined ||
+      context.proposalVersion !== normalized.expectedProposalVersion ||
+      context.subjectRevision !== normalized.expectedSubjectRevision ||
+      context.subjectVersion !== normalized.expectedSubjectVersion ||
+      context.contentHash !== normalized.expectedContentHash
+    ) return false;
+    const result = await client.query<{ present: boolean }>(
+      `SELECT EXISTS (
+        SELECT 1 FROM action_review_attestations
+        WHERE proposal_id = $1 AND proposal_version = $2 AND actor_open_id = $3
+          AND subject_revision = $4 AND subject_version = $5 AND content_hash = $6
+      ) AS present`,
+      [
+        normalized.proposalId,
+        normalized.expectedProposalVersion,
+        normalized.actorOpenId,
+        normalized.expectedSubjectRevision,
+        normalized.expectedSubjectVersion,
+        normalized.expectedContentHash,
+      ],
+    );
+    return result.rows[0]?.present === true;
+  });
+}
+
+async function loadAuthorizedReviewContext(
+  client: KnowledgeDraftTransactionClient,
+  input: { proposalId: string; actorOpenId: string },
+): Promise<ActionReviewContext | undefined> {
+  try {
+    const proposal = await lockProposal(client, input.proposalId);
+    if (proposal.status !== "pending_approval") return undefined;
+    const draft = await lockDraftRevision(client, proposal.subject_id);
+    if (
+      draft.status !== "pending_review" ||
+      Number(draft.current_revision_number) !== Number(proposal.subject_revision) ||
+      Number(draft.version) !== Number(proposal.subject_version) ||
+      draft.risk_level !== proposal.risk_level
+    ) return undefined;
+    const policy = await lockPolicy(client, proposal.target_policy_id);
+    if (
+      !policy.enabled ||
+      Number(policy.version) !== Number(proposal.target_policy_version) ||
+      !policyMatchesDraft(policy, draft)
+    ) return undefined;
+    const requirements = await client.query<RequirementRow>(
+      `${requirementSelect()} WHERE proposal_id = $1 FOR UPDATE`,
+      [proposal.id],
+    );
+    if (requirements.rows.some((requirement) =>
+      requirement.target_policy_id !== policy.id ||
+      Number(requirement.target_policy_version) !== Number(policy.version)
+    )) return undefined;
+    const hasAuthorizedPendingRequirement = await hasAuthorizedPendingReviewRequirement(
+      client,
+      requirements.rows,
+      input.actorOpenId,
+    );
+    if (!hasAuthorizedPendingRequirement) return undefined;
+    const evidence = await loadDraftEvidence(client, draft.id, Number(draft.current_revision_number));
+    const invalidEvidence = await findInvalidKnowledgeDraftEvidence({
+      queryable: client,
+      sourceGroupId: draft.source_group_id ?? undefined,
+      evidence,
+    });
+    if (invalidEvidence !== undefined) return undefined;
+    return {
+      proposalId: proposal.id,
+      proposalVersion: Number(proposal.version),
+      draftId: draft.id,
+      subjectRevision: Number(draft.current_revision_number),
+      subjectVersion: Number(draft.version),
+      title: draft.title,
+      content: draft.content,
+      contentHash: createHash("sha256").update(draft.content).digest("hex"),
+      riskLevel: draft.risk_level,
+      targetDisplayName: policy.display_name,
+      requirements: requirements.rows.map((requirement) => ({
+        kind: requirement.requirement_kind,
+        state: requirement.state,
+      })),
+    };
+  } catch (error) {
+    if (error instanceof ActionProposalIneligibleError || error instanceof ActionProposalAuthorizationError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function hasAuthorizedPendingReviewRequirement(
+  client: KnowledgeDraftTransactionClient,
+  requirements: RequirementRow[],
+  actorOpenId: string,
+): Promise<boolean> {
+  for (const requirement of requirements) {
+    if (requirement.state !== "pending") continue;
+    try {
+      await requireApprovalAuthorization(client, requirement, actorOpenId);
+      return true;
+    } catch (error) {
+      if (!(error instanceof ActionProposalAuthorizationError)) throw error;
+    }
+  }
+  return false;
 }
 
 async function getApprovalDeliveryContext(
@@ -2151,7 +2368,8 @@ async function lockDraftRevision(
 ): Promise<DraftRevisionRow> {
   const result = await client.query<DraftRevisionRow>(
     `SELECT draft.id, draft.source_group_id, draft.status, draft.current_revision_number,
-            draft.version, revision.risk_level, revision.reviewer_type, revision.reviewer_ref,
+            draft.version, revision.title, revision.content, revision.risk_level,
+            revision.reviewer_type, revision.reviewer_ref,
             revision.suggested_space_id, revision.suggested_parent_node_token
      FROM knowledge_drafts draft
      JOIN knowledge_draft_revisions revision
@@ -2304,6 +2522,12 @@ function approvalSelect(): string {
                  callback_event_id, subject_revision, subject_version, operation_key,
                  operation_fingerprint, created_at
           FROM action_approvals`;
+}
+
+function actionReviewAttestationSelect(): string {
+  return `SELECT proposal_id, actor_open_id, subject_revision, subject_version, proposal_version,
+                 content_hash, session_id_hash, operation_key, operation_fingerprint
+          FROM action_review_attestations`;
 }
 
 function actionEventSelect(): string {
@@ -2537,6 +2761,35 @@ function normalizeApplyActionInput(input: ApplyActionProposalActionInput) {
   };
 }
 
+function normalizeReviewAttestationInput(input: RecordActionReviewAttestationInput) {
+  return {
+    ...normalizeCurrentReviewAttestationInput(input),
+    sessionIdHash: requireSha256("sessionIdHash", input.sessionIdHash),
+    operationKey: requireReference("operationKey", input.operationKey),
+    at: requireDate(input.at),
+  };
+}
+
+function normalizeCurrentReviewAttestationInput(input: CurrentActionReviewAttestationInput) {
+  return {
+    proposalId: requireReference("proposalId", input.proposalId),
+    actorOpenId: requireReference("actorOpenId", input.actorOpenId),
+    expectedProposalVersion: requirePositiveInteger(
+      "expectedProposalVersion",
+      input.expectedProposalVersion,
+    ),
+    expectedSubjectRevision: requirePositiveInteger(
+      "expectedSubjectRevision",
+      input.expectedSubjectRevision,
+    ),
+    expectedSubjectVersion: requirePositiveInteger(
+      "expectedSubjectVersion",
+      input.expectedSubjectVersion,
+    ),
+    expectedContentHash: requireSha256("expectedContentHash", input.expectedContentHash),
+  };
+}
+
 function normalizeGovernanceDispositionInput(
   input: ApplyActionProposalGovernanceDispositionInput,
 ) {
@@ -2657,6 +2910,13 @@ function requireBoundedString(name: string, value: unknown, max: number): string
     throw new Error(`${name} is invalid`);
   }
   return normalized;
+}
+
+function requireSha256(name: string, value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new Error(`${name} is invalid`);
+  }
+  return value;
 }
 
 function requirePositiveInteger(name: string, value: unknown): number {
