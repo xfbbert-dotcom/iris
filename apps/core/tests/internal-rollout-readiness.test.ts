@@ -37,6 +37,7 @@ describe("buildInternalRolloutReadinessReport", () => {
           sent: 1,
           failed: 0,
           outcome_unknown: 1,
+          terminalFailed: 0,
         },
       },
     });
@@ -44,6 +45,46 @@ describe("buildInternalRolloutReadinessReport", () => {
       status: "fail",
       detail: "Action-approval outbox has unresolved outcome-unknown rows.",
     });
+  });
+
+  it("blocks failed action batches but ignores governed historical outbox rows", () => {
+    const env = readyRolloutEnv({
+      IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+    });
+    const baseStatus = {
+      ok: true,
+      enabled: true,
+      running: true,
+      planner: { running: true },
+      dispatcher: { running: true },
+      outbox: {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 1,
+        outcome_unknown: 0,
+        terminalFailed: 0,
+      },
+    };
+
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      actionApprovalStatus: baseStatus,
+    })).actionApprovals).toMatchObject({ status: "pass" });
+
+    for (const [component, detail] of [
+      ["planner", "Action-proposal planner latest batch failed."],
+      ["dispatcher", "Action-approval dispatcher latest batch failed."],
+    ] as const) {
+      const status = {
+        ...baseStatus,
+        [component]: { running: true, latestBatch: { status: "failed" } },
+      };
+      expect(checksById(buildInternalRolloutReadinessReport(env, {
+        actionApprovalStatus: status,
+      })).actionApprovals).toMatchObject({ status: "fail", detail });
+    }
   });
 
   it("marks the internal rollout profile ready when core chat, document, and answer dependencies are configured", () => {

@@ -121,6 +121,25 @@ describe("ActionApprovalDispatcher", () => {
     expect(harness.cardClient.sendCardToUser).not.toHaveBeenCalled();
   });
 
+  it("rechecks the exact source-group gate before sending", async () => {
+    const canDeliver = vi.fn((sourceGroupId?: string) => sourceGroupId === "oc_group");
+    const harness = createHarness({
+      getContext: async () => ({
+        ...deliveryContext(),
+        sourceGroupId: "oc_group",
+      } as ActionApprovalDeliveryContext),
+      canDeliver,
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "sent",
+      presentationId: "proposal-presentation-1",
+      code: "send_succeeded",
+    }]);
+    expect(canDeliver).toHaveBeenNthCalledWith(1, "oc_group");
+    expect(canDeliver).toHaveBeenNthCalledWith(2, "oc_group");
+  });
+
   it("bounds batch size and claims sequentially", async () => {
     const harness = createHarness({ claim: undefined });
     await harness.dispatcher.processBatch({ limit: 1_000 });
@@ -137,7 +156,7 @@ describe("ActionApprovalDispatcher", () => {
 type HarnessOverrides = {
   claim?: ActionApprovalSendClaim;
   getContext?: () => Promise<ActionApprovalDeliveryContext | undefined>;
-  canDeliver?: () => boolean;
+  canDeliver?: (sourceGroupId?: string) => boolean;
   begin?: () => Promise<void>;
   send?: (input: { recipientOpenId: string; cardJson: string; uuid: string }) => Promise<{ messageId: string }>;
   complete?: () => Promise<void>;

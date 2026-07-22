@@ -40,12 +40,16 @@ describe("ActionApprovalRuntime", () => {
       databaseUrl: "postgres://iris:secret@postgres:5432/iris",
     });
     expect(knowledgeCards.bindActionApprovalWorker).toHaveBeenCalledWith(dependencies.actionWorker);
+    const dispatcherGate = dependencies.createDispatcher.mock.calls[0]?.[0].canDeliverApprovalCards;
+    expect(dispatcherGate?.("oc_pilot")).toBe(false);
     expect(runtime.canUseActionApprovalsForSourceGroup("oc_pilot")).toBe(false);
 
     await runtime.start();
     expect(order).toEqual(["planner-start", "dispatcher-start"]);
     expect(runtime.canUseActionApprovalsForSourceGroup("oc_pilot")).toBe(true);
     expect(runtime.canUseActionApprovalsForSourceGroup("oc_other")).toBe(false);
+    expect(dispatcherGate?.("oc_pilot")).toBe(true);
+    expect(dispatcherGate?.("oc_other")).toBe(false);
     await expect(runtime.getStatus()).resolves.toEqual({
       enabled: true,
       running: true,
@@ -162,7 +166,9 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     createPostgresPool: vi.fn(() => pool),
     createRepository: vi.fn(() => repository),
     createPlanner: vi.fn(() => ({ planBatch: vi.fn() })),
-    createDispatcher: vi.fn(() => ({ processBatch: vi.fn() })),
+    createDispatcher: vi.fn((
+      _input: Parameters<NonNullable<ActionApprovalRuntimeDependencies["createDispatcher"]>>[0],
+    ) => ({ processBatch: vi.fn() })),
     createActionWorker: vi.fn(() => actionWorker),
     createPlannerLoop: vi.fn(() => plannerLoop),
     createDispatcherLoop: vi.fn(() => dispatcherLoop),

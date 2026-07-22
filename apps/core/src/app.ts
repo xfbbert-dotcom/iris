@@ -94,6 +94,7 @@ import {
 } from "./runtime/action-approval-runtime.js";
 import { registerKnowledgeCardApi } from "./knowledge-cards/knowledge-card-api.js";
 import { registerActionProposalApi } from "./action-approvals/action-proposal-api.js";
+import { observeStartupPromise } from "./runtime/startup-promise.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
@@ -297,6 +298,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let actionApprovalRuntime: ActionApprovalRuntime | undefined;
   let knowledgeCardStartup: Promise<void> | undefined;
   let actionApprovalStartup: Promise<void> | undefined;
+  let eventWorkerStartup: Promise<void> | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
   let startupApp: FastifyInstance | undefined;
   let appOwnsRuntimeResources = false;
@@ -332,8 +334,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     actionApprovalRuntime = (
       dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
     )({ runtimeController, knowledgeCardRuntime });
-    actionApprovalStartup = actionApprovalRuntime?.start();
     knowledgeCardStartup = knowledgeCardRuntime?.start();
+    actionApprovalStartup = actionApprovalRuntime === undefined
+      ? undefined
+      : observeStartupPromise(
+          (knowledgeCardStartup ?? Promise.resolve()).then(() => actionApprovalRuntime!.start()),
+        );
     eventWorkerRuntime =
       (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
         runtimeController,
@@ -344,7 +350,16 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
           ? {}
           : { memoryExtractionPlanner: memoryExtractionRuntime.planner }),
       });
-    eventWorkerRuntime?.start();
+    const eventWorkerPrerequisite = actionApprovalStartup ?? knowledgeCardStartup;
+    if (eventWorkerPrerequisite === undefined) {
+      eventWorkerRuntime?.start();
+    } else {
+      eventWorkerStartup = observeStartupPromise(
+        eventWorkerPrerequisite.then(() => {
+          eventWorkerRuntime?.start();
+        }),
+      );
+    }
     documentSyncRuntime =
       (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
     documentSyncRuntime?.start();
@@ -375,10 +390,15 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const app = Fastify({ logger: false, bodyLimit: maxJsonBodyBytes });
   startupApp = app;
 
-  if (knowledgeCardStartup !== undefined || actionApprovalStartup !== undefined) {
+  if (
+    knowledgeCardStartup !== undefined ||
+    actionApprovalStartup !== undefined ||
+    eventWorkerStartup !== undefined
+  ) {
     app.addHook("onReady", async () => {
-      await actionApprovalStartup;
       await knowledgeCardStartup;
+      await actionApprovalStartup;
+      await eventWorkerStartup;
     });
   }
 
@@ -1516,8 +1536,8 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
       () => conversationStateInspectionRuntime?.close(),
-      () => knowledgeCardRuntime?.close(),
       () => actionApprovalRuntime?.close(),
+      () => knowledgeCardRuntime?.close(),
       () => knowledgeDraftRuntime?.close(),
       () => dependencies.closeRuntimeControl?.(),
     ]);
@@ -1724,8 +1744,8 @@ function scheduleRuntimeStartupCleanup({
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
     () => conversationStateInspectionRuntime?.close(),
-    () => knowledgeCardRuntime?.close(),
     () => actionApprovalRuntime?.close(),
+    () => knowledgeCardRuntime?.close(),
     () => knowledgeDraftRuntime?.close(),
     () => app?.close(),
   ]);

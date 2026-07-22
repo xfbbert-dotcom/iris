@@ -130,6 +130,7 @@ export type ActionApprovalDeliveryContext = {
   requirement: ActionApprovalRequirement;
   policy: PublicationTargetPolicy;
   presentation: ActionApprovalPresentation;
+  sourceGroupId?: string;
 };
 
 export type ActionApprovalOutboxStatusCounts = {
@@ -139,6 +140,7 @@ export type ActionApprovalOutboxStatusCounts = {
   sent: number;
   failed: number;
   outcome_unknown: number;
+  terminalFailed: number;
 };
 
 export type ActionProposalDraftCandidate = {

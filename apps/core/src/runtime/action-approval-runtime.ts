@@ -118,7 +118,7 @@ export function createActionApprovalRuntime({
     const dispatcher = createDispatcher({
       repository,
       cardClient: knowledgeCardRuntime.approvalInteractions.cardClient,
-      canDeliverApprovalCards: anyGroupEnabled,
+      canDeliverApprovalCards: canUseGroup,
       ...(config.reviewPublicOrigin === undefined
         ? {}
         : { reviewPublicOrigin: config.reviewPublicOrigin }),

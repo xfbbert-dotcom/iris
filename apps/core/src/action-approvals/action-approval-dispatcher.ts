@@ -46,7 +46,7 @@ export type ActionApprovalDispatcherDependencies = {
   >;
   cardClient: Pick<FeishuInteractiveCardClient, "sendCardToUser">;
   renderer?: (input: ActionApprovalCardRenderInput) => ActionApprovalCardRenderResult;
-  canDeliverApprovalCards(): boolean;
+  canDeliverApprovalCards(sourceGroupId?: string): boolean;
   reviewPublicOrigin?: string;
   workerId: string;
   leaseMs: number;
@@ -100,7 +100,7 @@ async function dispatchClaim(input: {
   repository: ActionApprovalDispatcherDependencies["repository"];
   cardClient: ActionApprovalDispatcherDependencies["cardClient"];
   renderer: NonNullable<ActionApprovalDispatcherDependencies["renderer"]>;
-  canDeliverApprovalCards(): boolean;
+  canDeliverApprovalCards(sourceGroupId?: string): boolean;
   reviewPublicOrigin?: string;
   retryDelayMs: number;
   now: () => Date;
@@ -127,13 +127,17 @@ async function dispatchClaim(input: {
     }
     throw error;
   }
-  if (!readRuntimeGate(input)) return failPreparation(input, "runtime_disabled");
+  if (!readRuntimeGate(input, context.sourceGroupId)) {
+    return failPreparation(input, "runtime_disabled");
+  }
   await input.repository.beginApprovalExternalAttempt({
     presentationId: context.presentation.id,
     workerId: input.claim.workerId,
     at: requireDate(input.now()),
   });
-  if (!readRuntimeGate(input)) return failExternalAttempt(input, "permanent", "runtime_disabled");
+  if (!readRuntimeGate(input, context.sourceGroupId)) {
+    return failExternalAttempt(input, "permanent", "runtime_disabled");
+  }
 
   let sent: { messageId: string };
   try {
@@ -238,9 +242,12 @@ function isExactClaimContext(
     current.messageId === claimed.messageId;
 }
 
-function readRuntimeGate(input: Parameters<typeof dispatchClaim>[0]): boolean {
+function readRuntimeGate(
+  input: Parameters<typeof dispatchClaim>[0],
+  sourceGroupId?: string,
+): boolean {
   try {
-    return input.canDeliverApprovalCards();
+    return input.canDeliverApprovalCards(sourceGroupId);
   } catch {
     return false;
   }

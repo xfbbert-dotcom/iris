@@ -591,6 +591,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       operationKey: `proposal:${suffix}:stale`,
       at,
     })).proposal;
+    const outboxBeforeInvalidation = await repository.getApprovalOutboxStatusCounts();
     const draftRepository = createPostgresKnowledgeDraftRepository({
       dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
     });
@@ -634,6 +635,10 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       outcome: "applied",
       cancelledProposalIds: [proposal.id],
       draftVersion: 5,
+    });
+    await expect(repository.getApprovalOutboxStatusCounts()).resolves.toMatchObject({
+      failed: outboxBeforeInvalidation.failed + 1,
+      terminalFailed: outboxBeforeInvalidation.terminalFailed,
     });
     await expect(repository.cancelStaleProposals(input)).resolves.toEqual({
       outcome: "already_applied",
@@ -988,6 +993,26 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       [acceptance.proposal.id],
     );
     expect(approvalCount.rows[0]?.count).toBe(0);
+    const governedOutbox = await pool.query<{ state: string; error_code: string | null }>(
+      `SELECT outbox.state, outbox.error_code
+       FROM action_approval_presentation_outbox outbox
+       JOIN action_approval_presentations presentation
+         ON presentation.id = outbox.presentation_id
+       WHERE presentation.proposal_id = $1`,
+      [acceptance.proposal.id],
+    );
+    expect(governedOutbox.rows.length).toBeGreaterThan(0);
+    expect(governedOutbox.rows.every((row) =>
+      row.state === "failed" && row.error_code === "governance_disposition")).toBe(true);
+    const terminalFailures = await pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM action_approval_presentation_outbox
+       WHERE state = 'failed'
+         AND error_code IS DISTINCT FROM 'governance_disposition'
+         AND error_code IS DISTINCT FROM 'presentation_superseded'`,
+    );
+    await expect(acceptance.repository.getApprovalOutboxStatusCounts()).resolves.toMatchObject({
+      terminalFailed: terminalFailures.rows[0]?.count,
+    });
     await expect(acceptance.repository.listEvents(acceptance.proposal.id)).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1105,23 +1130,95 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
         hasCurrentGroupConfirmation: true,
         evidenceState: { status: "invalidated", reason: "message_deleted" },
       }),
-      expect.objectContaining({
-        id: `draft-proposal-company-${suffix}`,
-        hasCurrentGroupConfirmation: false,
-        evidenceState: { status: "current" },
-      }),
     ]));
+    expect(candidates.every((candidate) => candidate.sourceGroupId === groupId)).toBe(true);
     expect(JSON.stringify(candidates)).not.toMatch(/Title |Content |approval evidence/iu);
     await expect(repository.listEligibleDrafts({
       groupIds: [`oc_not_allowed_${suffix}`],
       limit: 100,
-    })).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: `draft-proposal-company-${suffix}` }),
-    ]));
-    expect((await repository.listEligibleDrafts({
-      groupIds: [`oc_not_allowed_${suffix}`],
-      limit: 100,
-    })).some((candidate) => candidate.sourceGroupId !== undefined)).toBe(false);
+    })).resolves.toEqual([]);
+  });
+
+  it("skips a presentation locked by governance instead of reversing the lock order", async () => {
+    const acceptance = await createPendingOwnerApprovalCase("proposal-claim-lock-order");
+    const blocker = await pool.connect();
+    let claim: Promise<Awaited<ReturnType<typeof acceptance.repository.claimApprovalPresentationSend>>> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      const locked = await blocker.query<{ id: string; proposal_id: string }>(
+        `SELECT presentation.id, presentation.proposal_id
+         FROM action_approval_presentations presentation
+         JOIN action_approval_presentation_outbox outbox
+           ON outbox.presentation_id = presentation.id
+         WHERE presentation.state = 'pending_send'
+           AND (
+             (outbox.state = 'pending' AND (outbox.retry_at IS NULL OR outbox.retry_at <= $1))
+             OR (outbox.state = 'processing' AND outbox.lease_until <= $1)
+           )
+         FOR UPDATE OF presentation`,
+        [plusSeconds(1)],
+      );
+      expect(locked.rows.some((row) => row.proposal_id === acceptance.proposal.id)).toBe(true);
+      claim = acceptance.repository.claimApprovalPresentationSend({
+        workerId: `lock-order-worker-${suffix}`,
+        at: plusSeconds(1),
+        leaseUntil: plusSeconds(31),
+      });
+      const result = await Promise.race([
+        claim,
+        new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 250)),
+      ]);
+      expect(result).toBeUndefined();
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+      await claim;
+    }
+  });
+
+  it("locks the proposal before the presentation when beginning an external attempt", async () => {
+    const acceptance = await createPendingOwnerApprovalCase("proposal-begin-lock-order");
+    const pendingPresentation = await pool.query<{ id: string }>(
+      `SELECT id FROM action_approval_presentations
+       WHERE proposal_id = $1 AND state = 'pending_send'`,
+      [acceptance.proposal.id],
+    );
+    const presentationId = pendingPresentation.rows[0]?.id;
+    expect(presentationId).toBeDefined();
+    const workerId = `begin-lock-order-worker-${suffix}`;
+    await pool.query(
+      `UPDATE action_approval_presentation_outbox
+       SET state = 'processing', worker_id = $2, lease_until = $3, updated_at = $4
+       WHERE presentation_id = $1`,
+      [presentationId, workerId, plusSeconds(30), at],
+    );
+
+    const blocker = await pool.connect();
+    let begin: Promise<void> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SET LOCAL lock_timeout = '500ms'");
+      await blocker.query("SELECT id FROM action_proposals WHERE id = $1 FOR UPDATE", [acceptance.proposal.id]);
+      begin = acceptance.repository.beginApprovalExternalAttempt({
+        presentationId: presentationId!,
+        workerId,
+        at: plusSeconds(1),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await blocker.query(
+        "SELECT id FROM action_approval_presentations WHERE id = $1 FOR UPDATE",
+        [presentationId],
+      );
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+      await begin;
+    }
+
+    await expect(pool.query(
+      "SELECT state FROM action_approval_presentation_outbox WHERE presentation_id = $1",
+      [presentationId],
+    )).resolves.toMatchObject({ rows: [{ state: "external_attempting" }] });
   });
 
   function actionRepository() {

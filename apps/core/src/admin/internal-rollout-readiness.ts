@@ -58,6 +58,7 @@ type ActionApprovalOutboxReadinessStatus = {
   sent: number;
   failed: number;
   outcome_unknown: number;
+  terminalFailed: number;
 };
 export type InternalRolloutReadinessContext = {
   knowledgeCardStatus?: {
@@ -73,8 +74,8 @@ export type InternalRolloutReadinessContext = {
     ok: boolean;
     enabled: boolean;
     running: boolean;
-    planner?: { running: boolean };
-    dispatcher?: { running: boolean };
+    planner?: { running: boolean; latestBatch?: { status: "succeeded" | "failed" } };
+    dispatcher?: { running: boolean; latestBatch?: { status: "succeeded" | "failed" } };
     outbox?: ActionApprovalOutboxReadinessStatus;
     degradedReason?: string;
   };
@@ -407,13 +408,19 @@ const checkDefinitions: CheckDefinition[] = [
         status.planner?.running !== true ||
         status.dispatcher?.running !== true
       ) return fail("Action-proposal planner and approval dispatcher must both be running.");
+      if (status.planner.latestBatch?.status === "failed") {
+        return fail("Action-proposal planner latest batch failed.");
+      }
+      if (status.dispatcher.latestBatch?.status === "failed") {
+        return fail("Action-approval dispatcher latest batch failed.");
+      }
       if (!isValidActionApprovalOutboxStatus(status.outbox)) {
         return fail("Action-approval outbox status is unavailable.");
       }
       if (status.outbox.outcome_unknown > 0) {
         return fail("Action-approval outbox has unresolved outcome-unknown rows.");
       }
-      if (status.outbox.failed > 0) {
+      if (status.outbox.terminalFailed > 0) {
         return fail("Action-approval outbox has terminal failed rows.");
       }
       return pass("Action-proposal planner and approval dispatcher are running.");
@@ -425,14 +432,17 @@ function isValidActionApprovalOutboxStatus(
   value: ActionApprovalOutboxReadinessStatus | undefined,
 ): value is ActionApprovalOutboxReadinessStatus {
   if (value === undefined) return false;
-  return [
+  const counts = [
     value.pending,
     value.processing,
     value.external_attempting,
     value.sent,
     value.failed,
     value.outcome_unknown,
-  ].every((count) => Number.isSafeInteger(count) && count >= 0);
+    value.terminalFailed,
+  ];
+  return counts.every((count) => Number.isSafeInteger(count) && count >= 0) &&
+    value.terminalFailed <= value.failed;
 }
 
 function isValidKnowledgeCardOutboxStatus(

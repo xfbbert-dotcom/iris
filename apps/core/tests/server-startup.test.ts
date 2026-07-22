@@ -267,15 +267,15 @@ describe("Core server startup", () => {
       },
     });
 
-    expect(order).toEqual(["start-action-approvals", "start-knowledge-cards", "start-event"]);
+    expect(order).toEqual(["start-knowledge-cards", "start-action-approvals", "start-event"]);
     await app.close();
     expect(order).toEqual([
-      "start-action-approvals",
       "start-knowledge-cards",
+      "start-action-approvals",
       "start-event",
       "close-event",
-      "close-knowledge-cards",
       "close-action-approvals",
+      "close-knowledge-cards",
       "close-runtime-control",
     ]);
     expect(createKnowledgeCardRuntime).toHaveBeenCalledOnce();

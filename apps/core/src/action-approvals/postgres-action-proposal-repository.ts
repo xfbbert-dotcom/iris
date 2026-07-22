@@ -312,19 +312,40 @@ export function createPostgresActionProposalRepository({
       return failApprovalPresentationSend(dataSource, input);
     },
     async getApprovalOutboxStatusCounts() {
-      const result = await dataSource.query<{ state: ApprovalOutboxRow["state"]; count: string | number }>(
-        "SELECT state, count(*) AS count FROM action_approval_presentation_outbox GROUP BY state",
+      const result = await dataSource.query<{
+        pending: string | number;
+        processing: string | number;
+        external_attempting: string | number;
+        sent: string | number;
+        failed: string | number;
+        outcome_unknown: string | number;
+        terminal_failed: string | number;
+      }>(
+        `SELECT
+           count(*) FILTER (WHERE state = 'pending') AS pending,
+           count(*) FILTER (WHERE state = 'processing') AS processing,
+           count(*) FILTER (WHERE state = 'external_attempting') AS external_attempting,
+           count(*) FILTER (WHERE state = 'sent') AS sent,
+           count(*) FILTER (WHERE state = 'failed') AS failed,
+           count(*) FILTER (WHERE state = 'outcome_unknown') AS outcome_unknown,
+           count(*) FILTER (
+             WHERE state = 'failed'
+               AND error_code IS DISTINCT FROM 'governance_disposition'
+               AND error_code IS DISTINCT FROM 'presentation_superseded'
+           ) AS terminal_failed
+         FROM action_approval_presentation_outbox`,
       );
-      const counts: ActionApprovalOutboxStatusCounts = {
-        pending: 0,
-        processing: 0,
-        external_attempting: 0,
-        sent: 0,
-        failed: 0,
-        outcome_unknown: 0,
-      };
-      for (const row of result.rows) counts[row.state] = Number(row.count);
-      return counts;
+      const row = result.rows[0];
+      if (row === undefined) throw new Error("action approval outbox status unavailable");
+      return {
+        pending: approvalStatusCount(row.pending),
+        processing: approvalStatusCount(row.processing),
+        external_attempting: approvalStatusCount(row.external_attempting),
+        sent: approvalStatusCount(row.sent),
+        failed: approvalStatusCount(row.failed),
+        outcome_unknown: approvalStatusCount(row.outcome_unknown),
+        terminalFailed: approvalStatusCount(row.terminal_failed),
+      } satisfies ActionApprovalOutboxStatusCounts;
     },
     getProposal(id) {
       return loadProposalContext(dataSource, requireReference("id", id));
@@ -349,7 +370,7 @@ export function createPostgresActionProposalRepository({
            ON revision.draft_id = draft.id
           AND revision.revision_number = draft.current_revision_number
          WHERE draft.status = 'pending_review'
-           AND ($1::TEXT[] IS NULL OR draft.source_group_id IS NULL OR draft.source_group_id = ANY($1))
+           AND ($1::TEXT[] IS NULL OR draft.source_group_id = ANY($1))
          ORDER BY draft.updated_at ASC, draft.id ASC
          LIMIT $2`,
         [groupIds ?? null, requireLimit(input.limit)],
@@ -447,6 +468,14 @@ export function createPostgresActionProposalRepository({
   };
 }
 
+function approvalStatusCount(value: string | number): number {
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error("invalid action approval status count");
+  }
+  return count;
+}
+
 async function claimApprovalPresentationSend(
   dataSource: PostgresKnowledgeDraftDataSource,
   input: { workerId: string; leaseUntil: Date; at: Date },
@@ -466,12 +495,15 @@ async function claimApprovalPresentationSend(
            OR (outbox.state = 'processing' AND outbox.lease_until <= $1)
          )
        ORDER BY outbox.created_at ASC, outbox.id ASC
-       FOR UPDATE OF outbox SKIP LOCKED
+       FOR UPDATE OF presentation SKIP LOCKED
        LIMIT 1`,
       [at],
     );
-    const outbox = selected.rows[0];
-    if (outbox === undefined) return undefined;
+    const selectedOutbox = selected.rows[0];
+    if (selectedOutbox === undefined) return undefined;
+    const presentation = await lockApprovalPresentation(client, selectedOutbox.presentation_id);
+    const outbox = await lockApprovalOutbox(client, selectedOutbox.presentation_id);
+    if (!isApprovalOutboxClaimable(outbox, at)) return undefined;
     const updated = await client.query<{ attempts: number }>(
       `UPDATE action_approval_presentation_outbox
        SET state = 'processing', attempts = attempts + 1, worker_id = $2,
@@ -480,7 +512,6 @@ async function claimApprovalPresentationSend(
        RETURNING attempts`,
       [outbox.id, workerId, leaseUntil, at],
     );
-    const presentation = await lockApprovalPresentation(client, outbox.presentation_id);
     return {
       presentation: mapApprovalPresentation(presentation),
       workerId,
@@ -488,6 +519,15 @@ async function claimApprovalPresentationSend(
       attempts: updated.rows[0]?.attempts ?? outbox.attempts + 1,
     };
   });
+}
+
+function isApprovalOutboxClaimable(outbox: ApprovalOutboxRow, at: Date): boolean {
+  if (outbox.state === "pending") {
+    return outbox.retry_at === null || outbox.retry_at.getTime() <= at.getTime();
+  }
+  return outbox.state === "processing" &&
+    outbox.lease_until !== null &&
+    outbox.lease_until.getTime() <= at.getTime();
 }
 
 async function preflightApprovalAction(
@@ -553,6 +593,12 @@ async function getApprovalDeliveryContext(
   if (presentationRow === undefined) return undefined;
   const context = await loadProposalContext(dataSource, presentationRow.proposal_id);
   if (context === undefined) return undefined;
+  const draftResult = await dataSource.query<{ source_group_id: string | null }>(
+    "SELECT source_group_id FROM knowledge_drafts WHERE id = $1",
+    [context.proposal.subjectId],
+  );
+  const draft = draftResult.rows[0];
+  if (draft === undefined) return undefined;
   const requirement = context.requirements.find((item) => item.id === presentationRow.requirement_id);
   if (requirement === undefined) return undefined;
   const policyResult = await dataSource.query<PolicyRow>(
@@ -565,6 +611,7 @@ async function getApprovalDeliveryContext(
     requirement,
     policy: mapPolicy(policyResult.rows[0]),
     presentation: mapApprovalPresentation(presentationRow),
+    ...(draft.source_group_id === null ? {} : { sourceGroupId: draft.source_group_id }),
   };
 }
 
@@ -574,15 +621,23 @@ async function beginApprovalExternalAttempt(
 ): Promise<void> {
   const normalized = normalizeApprovalDeliveryMutation(input);
   await withTransaction(dataSource, async (client) => {
+    const identityResult = await client.query<{ proposal_id: string; requirement_id: string }>(
+      "SELECT proposal_id, requirement_id FROM action_approval_presentations WHERE id = $1",
+      [normalized.presentationId],
+    );
+    const identity = identityResult.rows[0];
+    if (identity === undefined) throw new ActionProposalPersistenceConflictError();
+    const proposal = await lockProposal(client, identity.proposal_id);
+    const policy = await lockPolicy(client, proposal.target_policy_id);
+    const requirement = await lockRequirement(client, identity.requirement_id);
     const presentation = await lockApprovalPresentation(client, normalized.presentationId);
     const outbox = await lockApprovalOutbox(client, normalized.presentationId);
-    const proposal = await lockProposal(client, presentation.proposal_id);
-    const requirement = await lockRequirement(client, presentation.requirement_id);
-    const policy = await lockPolicy(client, proposal.target_policy_id);
     if (
       presentation.state !== "pending_send" ||
       outbox.state !== "processing" ||
       outbox.worker_id !== normalized.workerId ||
+      presentation.proposal_id !== proposal.id ||
+      presentation.requirement_id !== requirement.id ||
       proposal.status !== "pending_approval" ||
       Number(proposal.version) !== Number(presentation.proposal_version) ||
       requirement.proposal_id !== proposal.id ||
