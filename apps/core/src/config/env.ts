@@ -97,6 +97,20 @@ export type ActionApprovalRuntimeConfig =
       reviewPublicOrigin?: string;
     };
 
+export type ActionReviewRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      publicOrigin: string;
+      sessionSecret: string;
+      authorizeUrl: string;
+      feishuOpenApi: {
+        appId: string;
+        appSecret: string;
+        baseUrl: string;
+      };
+    };
+
 export type FeishuOpenApiConfig = {
   appId: string;
   appSecret: string;
@@ -449,6 +463,45 @@ export function readActionApprovalRuntimeConfig(
   };
 }
 
+export function readActionReviewRuntimeConfig(
+  env: EnvLike = process.env,
+): ActionReviewRuntimeConfig {
+  if (env.IRIS_ACTION_REVIEW_ENABLED !== "true") return { enabled: false };
+
+  const publicOrigin = readExactHttpsOriginEnv(
+    "IRIS_REVIEW_PUBLIC_ORIGIN",
+    env.IRIS_REVIEW_PUBLIC_ORIGIN,
+  );
+  const sessionSecret = readRequiredEnv(
+    "IRIS_REVIEW_SESSION_SECRET",
+    env.IRIS_REVIEW_SESSION_SECRET,
+  );
+  if (Buffer.byteLength(sessionSecret, "utf8") < 32) {
+    throw new Error("IRIS_REVIEW_SESSION_SECRET must be at least 32 UTF-8 bytes");
+  }
+  if (Buffer.byteLength(sessionSecret, "utf8") > 4096) {
+    throw new Error("IRIS_REVIEW_SESSION_SECRET must be at most 4096 UTF-8 bytes");
+  }
+
+  const appId = readRequiredEnv("FEISHU_APP_ID", env.FEISHU_APP_ID);
+  const appSecret = readRequiredEnv("FEISHU_APP_SECRET", env.FEISHU_APP_SECRET);
+  const baseUrl = readOfficialFeishuOpenApiOrigin(env.FEISHU_OPEN_BASE_URL);
+  const defaultAuthorizeUrl = baseUrl === "https://open.larksuite.com"
+    ? "https://accounts.larksuite.com/open-apis/authen/v1/authorize"
+    : "https://accounts.feishu.cn/open-apis/authen/v1/authorize";
+  const authorizeUrl = readOfficialFeishuAuthorizeUrl(
+    env.IRIS_FEISHU_OAUTH_AUTHORIZE_URL ?? defaultAuthorizeUrl,
+  );
+
+  return {
+    enabled: true,
+    publicOrigin,
+    sessionSecret,
+    authorizeUrl,
+    feishuOpenApi: { appId, appSecret, baseUrl },
+  };
+}
+
 export function readFeishuOpenApiConfig(env: EnvLike = process.env): FeishuOpenApiConfig {
   return {
     appId: readRequiredEnv("FEISHU_APP_ID", env.FEISHU_APP_ID),
@@ -627,6 +680,68 @@ function readGroupIdListEnv(name: string, value: string | undefined): string[] {
     throw new Error(`${name} group IDs must be at most 512 characters`);
   }
   return groupIds;
+}
+
+function readExactHttpsOriginEnv(name: string, value: string | undefined): string {
+  const raw = readRequiredEnv(name, value);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${name} must be an exact HTTPS origin`);
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.port !== "" ||
+    parsed.pathname !== "/" ||
+    parsed.search !== "" ||
+    parsed.hash !== ""
+  ) {
+    throw new Error(`${name} must be an exact HTTPS origin`);
+  }
+  return parsed.origin;
+}
+
+function readOfficialFeishuOpenApiOrigin(value: string | undefined): string {
+  const origin = readExactHttpsOriginEnv(
+    "FEISHU_OPEN_BASE_URL",
+    readOptionalEnv(value) ?? "https://open.feishu.cn",
+  );
+  if (origin !== "https://open.feishu.cn" && origin !== "https://open.larksuite.com") {
+    throw new Error("FEISHU_OPEN_BASE_URL must be an official Feishu Open API origin");
+  }
+  return origin;
+}
+
+function readOfficialFeishuAuthorizeUrl(value: string): string {
+  const raw = readRequiredEnv("IRIS_FEISHU_OAUTH_AUTHORIZE_URL", value);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(
+      "IRIS_FEISHU_OAUTH_AUTHORIZE_URL must be the official Feishu OAuth authorization endpoint",
+    );
+  }
+  const validOrigin = parsed.origin === "https://accounts.feishu.cn" ||
+    parsed.origin === "https://accounts.larksuite.com";
+  if (
+    !validOrigin ||
+    parsed.protocol !== "https:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.port !== "" ||
+    parsed.pathname !== "/open-apis/authen/v1/authorize" ||
+    parsed.search !== "" ||
+    parsed.hash !== ""
+  ) {
+    throw new Error(
+      "IRIS_FEISHU_OAUTH_AUTHORIZE_URL must be the official Feishu OAuth authorization endpoint",
+    );
+  }
+  return parsed.toString();
 }
 
 function readRequiredUniqueGroupIdListEnv(name: string, value: string | undefined): string[] {

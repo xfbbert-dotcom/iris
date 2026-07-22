@@ -15,6 +15,7 @@ import { RuntimeController } from "../src/admin/runtime-controller.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import type { ActionApprovalRuntime } from "../src/runtime/action-approval-runtime.js";
+import type { ActionReviewRuntime } from "../src/runtime/action-review-runtime.js";
 import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
@@ -235,6 +236,11 @@ describe("Core server startup", () => {
         order.push("close-action-approvals");
       }),
     });
+    const actionReviewRuntime = fakeActionReviewRuntime({
+      close: vi.fn(async () => {
+        order.push("close-action-reviews");
+      }),
+    });
     const eventWorkerRuntime = fakeEventWorkerRuntime({
       start: vi.fn(() => order.push("start-event")),
       close: vi.fn(async () => {
@@ -252,6 +258,10 @@ describe("Core server startup", () => {
       });
       return actionApprovalRuntime;
     });
+    const createActionReviewRuntime = vi.fn((input) => {
+      expect(input).toEqual({ actionApprovalRuntime });
+      return actionReviewRuntime;
+    });
 
     const app = await startServer({
       createRuntimeControlRuntime: async () => runtimeControlRuntime,
@@ -262,6 +272,7 @@ describe("Core server startup", () => {
         createKnowledgeDraftRuntime: () => undefined,
         createKnowledgeCardRuntime,
         createActionApprovalRuntime,
+        createActionReviewRuntime,
         createEventWorkerRuntime: () => eventWorkerRuntime,
         createDocumentSyncRuntime: () => undefined,
       },
@@ -274,12 +285,14 @@ describe("Core server startup", () => {
       "start-action-approvals",
       "start-event",
       "close-event",
+      "close-action-reviews",
       "close-action-approvals",
       "close-knowledge-cards",
       "close-runtime-control",
     ]);
     expect(createKnowledgeCardRuntime).toHaveBeenCalledOnce();
     expect(createActionApprovalRuntime).toHaveBeenCalledOnce();
+    expect(createActionReviewRuntime).toHaveBeenCalledOnce();
   });
 
   it("surfaces a rejected knowledge-card startup through buildApp readiness and closes once", async () => {
@@ -806,6 +819,18 @@ function fakeActionApprovalRuntime(
     canUseActionApprovalsForSourceGroup: vi.fn(() => true),
     start: vi.fn(),
     getStatus: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeActionReviewRuntime(
+  overrides: Partial<ActionReviewRuntime> = {},
+): ActionReviewRuntime {
+  return {
+    repository: {} as ActionReviewRuntime["repository"],
+    codec: {} as ActionReviewRuntime["codec"],
+    oauthClient: {} as ActionReviewRuntime["oauthClient"],
     close: vi.fn(async () => undefined),
     ...overrides,
   };

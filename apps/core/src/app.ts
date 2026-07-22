@@ -92,8 +92,13 @@ import {
   createActionApprovalRuntime as createDefaultActionApprovalRuntime,
   type ActionApprovalRuntime,
 } from "./runtime/action-approval-runtime.js";
+import {
+  createActionReviewRuntime as createDefaultActionReviewRuntime,
+  type ActionReviewRuntime,
+} from "./runtime/action-review-runtime.js";
 import { registerKnowledgeCardApi } from "./knowledge-cards/knowledge-card-api.js";
 import { registerActionProposalApi } from "./action-approvals/action-proposal-api.js";
+import { registerActionReviewApi } from "./action-reviews/action-review-api.js";
 import { observeStartupPromise } from "./runtime/startup-promise.js";
 
 type EventWorkerRuntimeFactoryInput = {
@@ -150,6 +155,9 @@ export type BuildAppDependencies = {
   createActionApprovalRuntime?: (
     input?: Parameters<typeof createDefaultActionApprovalRuntime>[0],
   ) => ActionApprovalRuntime | undefined;
+  createActionReviewRuntime?: (
+    input?: Parameters<typeof createDefaultActionReviewRuntime>[0],
+  ) => ActionReviewRuntime | undefined;
 };
 
 export type StartServerOptions = {
@@ -296,6 +304,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
   let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   let actionApprovalRuntime: ActionApprovalRuntime | undefined;
+  let actionReviewRuntime: ActionReviewRuntime | undefined;
   let knowledgeCardStartup: Promise<void> | undefined;
   let actionApprovalStartup: Promise<void> | undefined;
   let eventWorkerStartup: Promise<void> | undefined;
@@ -334,6 +343,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     actionApprovalRuntime = (
       dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
     )({ runtimeController, knowledgeCardRuntime });
+    actionReviewRuntime = (
+      dependencies.createActionReviewRuntime ?? createDefaultActionReviewRuntime
+    )({ actionApprovalRuntime });
     knowledgeCardStartup = knowledgeCardRuntime?.start();
     actionApprovalStartup = actionApprovalRuntime === undefined
       ? undefined
@@ -455,6 +467,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     authenticationConfigured: internalApiToken !== undefined,
     now,
   });
+  registerActionReviewApi(app, actionReviewRuntime, { now });
 
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
@@ -1536,6 +1549,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
       () => conversationStateInspectionRuntime?.close(),
+      () => actionReviewRuntime?.close(),
       () => actionApprovalRuntime?.close(),
       () => knowledgeCardRuntime?.close(),
       () => knowledgeDraftRuntime?.close(),
@@ -1557,6 +1571,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       conversationStateInspectionRuntime,
       knowledgeCardRuntime,
       actionApprovalRuntime,
+      actionReviewRuntime,
       knowledgeDraftRuntime,
     });
     dependencies.onRuntimeStartupCleanup?.(cleanup);
@@ -1722,6 +1737,7 @@ function scheduleRuntimeStartupCleanup({
   conversationStateInspectionRuntime,
   knowledgeCardRuntime,
   actionApprovalRuntime,
+  actionReviewRuntime,
   knowledgeDraftRuntime,
 }: {
   app: Pick<FastifyInstance, "close"> | undefined;
@@ -1734,6 +1750,7 @@ function scheduleRuntimeStartupCleanup({
   conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   actionApprovalRuntime: ActionApprovalRuntime | undefined;
+  actionReviewRuntime: ActionReviewRuntime | undefined;
   knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
 }): Promise<void> {
   const cleanup = closeRuntimeResources([
@@ -1744,6 +1761,7 @@ function scheduleRuntimeStartupCleanup({
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
     () => conversationStateInspectionRuntime?.close(),
+    () => actionReviewRuntime?.close(),
     () => actionApprovalRuntime?.close(),
     () => knowledgeCardRuntime?.close(),
     () => knowledgeDraftRuntime?.close(),

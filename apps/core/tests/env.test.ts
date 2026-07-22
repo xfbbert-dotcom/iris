@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   readActionApprovalRuntimeConfig,
+  readActionReviewRuntimeConfig,
   readAnswerDraftRuntimeConfig,
   readEmbeddingProviderConfig,
   readEventWorkerRuntimeConfig,
@@ -15,6 +16,61 @@ import {
   readReindexWorkerRuntimeConfig,
   readServerPort,
 } from "../src/config/env.js";
+
+describe("readActionReviewRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_ACTION_REVIEW_ENABLED: "true",
+    IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+    IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+    FEISHU_APP_ID: "cli_review",
+    FEISHU_APP_SECRET: "review-secret",
+  };
+
+  it("is disabled by default without reading enabled-only secrets", () => {
+    expect(readActionReviewRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readActionReviewRuntimeConfig({ IRIS_ACTION_REVIEW_ENABLED: value })).toEqual({
+        enabled: false,
+      });
+    }
+  });
+
+  it("requires the exact HTTPS review OAuth configuration when enabled", () => {
+    expect(() => readActionReviewRuntimeConfig({ IRIS_ACTION_REVIEW_ENABLED: "true" })).toThrow(
+      "IRIS_REVIEW_PUBLIC_ORIGIN is required",
+    );
+    expect(() => readActionReviewRuntimeConfig({
+      ...enabledEnv,
+      IRIS_REVIEW_PUBLIC_ORIGIN: "http://iris.example.com",
+    })).toThrow("IRIS_REVIEW_PUBLIC_ORIGIN must be an exact HTTPS origin");
+    expect(() => readActionReviewRuntimeConfig({
+      ...enabledEnv,
+      IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com/review",
+    })).toThrow("IRIS_REVIEW_PUBLIC_ORIGIN must be an exact HTTPS origin");
+    expect(() => readActionReviewRuntimeConfig({
+      ...enabledEnv,
+      IRIS_REVIEW_SESSION_SECRET: "x".repeat(31),
+    })).toThrow("IRIS_REVIEW_SESSION_SECRET must be at least 32 UTF-8 bytes");
+    expect(() => readActionReviewRuntimeConfig({
+      ...enabledEnv,
+      IRIS_FEISHU_OAUTH_AUTHORIZE_URL: "https://accounts.feishu.cn/not-authorize",
+    })).toThrow("IRIS_FEISHU_OAUTH_AUTHORIZE_URL must be the official Feishu OAuth authorization endpoint");
+  });
+
+  it("normalizes the default official endpoints and enabled credentials", () => {
+    expect(readActionReviewRuntimeConfig(enabledEnv)).toMatchObject({
+      enabled: true,
+      publicOrigin: "https://iris.example.com",
+      sessionSecret: "s".repeat(32),
+      authorizeUrl: "https://accounts.feishu.cn/open-apis/authen/v1/authorize",
+      feishuOpenApi: {
+        appId: "cli_review",
+        appSecret: "review-secret",
+        baseUrl: "https://open.feishu.cn",
+      },
+    });
+  });
+});
 
 describe("readActionApprovalRuntimeConfig", () => {
   const enabledEnv = {
