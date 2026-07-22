@@ -91,10 +91,15 @@ Phase 5B 分为三个连续、都必须完成的子阶段。拆分用于控制�
 
 - Phase 5A 已使用 `0030_knowledge_draft_facts.sql`。
 - Phase 5B-1 使用 `0031_knowledge_draft_presentations.sql`。
-- Phase 5B-2 使用 `0032_action_approval_facts.sql`。
-- Phase 5B-3 使用 `0033_knowledge_publications.sql`。
+- Phase 5B-2A 使用 `0032_action_approval_facts.sql` 和
+  `0033_approval_interaction_intents.sql`。
+- Phase 5B-2B 使用 `0034_action_review_attestations.sql`。
+- Phase 5B-3 使用 `0035_knowledge_publications.sql`。
 
-Phase 5B-1 尚未部署，因此其 `external_attempting` outbox 约束直接包含在 `0031_knowledge_draft_presentations.sql` 中；不得为它占用或新增任何 `0032_*` 迁移，`0032` 继续专用于 Phase 5B-2。
+Phase 5B-1 的 `external_attempting` outbox 约束直接包含在
+`0031_knowledge_draft_presentations.sql` 中；不得为它占用或新增任何
+`0032_*` 迁移，`0032` 继续专用于 Phase 5B-2A。迁移编号以仓库已提交的
+append-only 顺序为准，禁止为了恢复旧编号重命名已部署迁移。
 
 每个子阶段都必须有自己的单元测试、真实 Postgres 测试、运行手册和明确退出条件。完成一个退出条件后进入下一核心能力；非阻断加固项进入后续清单，不能无限延长当前子阶段。
 
@@ -103,9 +108,9 @@ Phase 5B-1 尚未部署，因此其 `external_attempting` outbox 约束直接包
 | 子阶段 | 当前状态 | 不能越过的边界 |
 |---|---|---|
 | Phase 5A | 代码与事实层已实现 | 真实生产使用仍受 runtime 和群门禁控制 |
-| Phase 5B-1 | 群确认卡片代码已实现；真实 Feishu pilot 证据待补齐 | 只把草稿推进到 `pending_review`，不产生人工 owner/admin approval，不写知识库 |
-| Phase 5B-2A | `ActionProposal`、目标策略、角色 grant、low/medium/high 风险要求、审批卡片、实时授权、治理 API、运行时与 readiness 已实现；默认关闭；真实 Feishu pilot 待验收 | 单群 pilot 的生产 planner 只接收显式 allowlist 群；公司级草稿保留领域事实但在专用 runtime/policy 契约完成前不进入生产派送；不提供完整正文 Web 审阅，不创建 execution，不调用 Wiki 写 API |
-| Phase 5B-2B | 未实现 | 必须提供飞书 OAuth 身份、完整正文/哈希/风险/要求展示，并复用同一 proposal 事实；链接本身不是授权 |
+| Phase 5B-1 | 群确认卡片代码与真实 Feishu pilot 已通过，最终恢复默认关闭 | 只把草稿推进到 `pending_review`，不产生人工 owner/admin approval，不写知识库 |
+| Phase 5B-2A | `ActionProposal`、目标策略、角色 grant、low/medium/high 风险要求、审批卡片、实时授权、治理 API、运行时与 readiness 已实现；真实 Feishu pilot 已通过并恢复默认关闭 | 单群 pilot 的生产 planner 只接收显式 allowlist 群；公司级草稿保留领域事实但在专用 runtime/policy 契约完成前不进入生产派送；不提供完整正文 Web 审阅，不创建 execution，不调用 Wiki 写 API |
+| Phase 5B-2B | 聚焦设计与实施计划已写入 `2026-07-22-iris-oauth-review-page-design.md` 和对应 plan，代码未实现 | 必须提供飞书 OAuth 身份、完整正文/哈希/风险/要求展示，并复用同一 proposal 事实；链接本身不是授权 |
 | Phase 5B-3 | 未实现 | 只有 5B-1、5B-2A、5B-2B 各自门禁通过后才可增加执行器和 Wiki 写入 |
 
 5B-2A 的退出证据由 `docs/runbooks/iris-action-proposal-approval-acceptance.md` 定义。自动化门禁通过只能证明代码候选可进入默认关闭部署，不能替代真实飞书身份、撤权、stale card 和非 pilot 负向验收。
