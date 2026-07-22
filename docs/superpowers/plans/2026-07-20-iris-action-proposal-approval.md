@@ -8,6 +8,12 @@
 
 **Tech Stack:** TypeScript 5.5, Node.js 24, Fastify 5, Zod 4, PostgreSQL 16, Redis 7, Vitest 2, Feishu OpenAPI JSON 2.0 cards.
 
+## Execution Status (2026-07-20)
+
+- Tasks 1-7 are implemented through code commit `02179e4d`; the implementation remains default-off and does not write Feishu Wiki.
+- Task 8 documentation、fresh full-repository gates 和独立复审已完成。GitHub push/checks 与真实 Feishu pilot 仍需完成，5B-2A 在此之前不能标记为真实验收通过。
+- Phase 5B-2B and 5B-3 remain separate work. This plan must not be extended with non-blocking hardening after the Task 8 exit gates pass.
+
 ## Global Constraints
 
 - Build on exact Phase 5B-1 commit `e201ed321d7103cfb7919acefe1af5c6731b2c84`; do not change PR #11 or its deployed candidate.
@@ -19,6 +25,7 @@
 - A proposal binds exact `draft_id`, revision number, draft version, target-policy ID/version, risk level, and an immutable requirement snapshot. Any change cancels the unexecuted proposal and invalidates prior approvals.
 - Low risk with a current source-group confirmation requires no extra human approval. Medium risk requires the current exact `feishu_user` reviewer. High risk requires a current `iris_admin` grant or the exact reviewer with a current `authorized_high_risk_owner` grant.
 - Company-level drafts without a source group never auto-approve: low/medium require the exact `feishu_user` reviewer; high requires the same high-risk rule.
+- The initial single-group production runtime does not discover company-level drafts. Their domain contract remains covered, but production activation requires a separate explicit runtime/policy gate so no company proposal can be sent and then become unapprovable.
 - `text_label`, model output, display names, card labels, request parameters, and internal bearer tokens are never authorization identities.
 - Internal APIs may create/update target policies and role grants and may request revision/reject for governance, but no internal API accepts an actor Open ID to fabricate human approval.
 - Runtime, group allowlist, current evidence, proposal version, role grant, target policy, and approval requirement must all be re-read after callback receipt and immediately before mutation.
@@ -545,4 +552,3 @@ Back up Postgres, verify migration `0032`, deploy Core and AI Worker images at t
 - [ ] **Step 6: Record evidence and stop this subphase**
 
 Update the private VPS deployment log and the stacked PR with exact SHA, CI links, real pilot results, queue/DLQ counts, and final fail-closed state. Once all exit gates pass, proceed to Phase 5B-2B; do not continue cosmetic or batch hardening in 5B-2A.
-

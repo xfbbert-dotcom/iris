@@ -21,13 +21,13 @@
 | IRIS-CORE-004 | 在授权后跨群和跨数据源学习 | 部分实现 | 当前群文档、授权知识库、用户手动提交文档已接入统一文档源和权限策略 | 没有跨群授权关系、跨群记忆共享策略和跨群检索审计；默认必须保持群隔离 |
 | IRIS-CORE-005 | Iris 主动发现需要关注的信息并更新群成员 | 缺失实现 | 仅存在 `proactiveSpeech` capability 和运行时开关 | 需要信号扫描、候选评分、解释、频率限制、群级暂停、发送记录和审计 |
 | IRIS-CORE-006 | Iris 跟进沉寂但未解决的讨论或任务 | 缺失实现 | 已有当前群 thread/action 状态与检索，但没有主动发言、沉寂扫描或跟进调度器 | 需要沉寂判断、候选评分、重复抑制、限频、确认流和主动发送审计 |
-| IRIS-CORE-007 | Iris 将讨论整理成内容，先发群里让用户确认 | Phase 5B-1 代码已实现、默认关闭、本地门禁已通过（真实 Feishu pilot 待验收） | Phase 5A Postgres 知识草稿事实层；版本绑定 Feishu 确认/要求修改/拒绝卡片；ack-first callback、Redis durable queue/DLQ、当前运行时/成员资格/证据复验、原子确认事实和 content-free 状态；本地 typecheck/build/TS/Python/pilot/Compose/readiness 门禁 | 仍需由操作员执行一次真实 Feishu 单群验收；Phase 5B-2 `ActionProposal`、owner/admin approval、OAuth 审核页以及 Phase 5B-3 飞书知识库写入均未实现，不能把本阶段称为完整端到端知识发布 |
-| IRIS-CORE-008 | 用户确认后同步到飞书知识库 | 缺失实现（Phase 5B-3 明确排除） | 仅有默认关闭的 `writeKnowledgeBase` capability；Phase 5B-1 的确认只进入 `pending_review`，不调用知识库写入 | 仍需 5B-2 Approval & Action Layer 和 5B-3 飞书写入适配器、幂等、版本、失败恢复、回滚及真实验收；未经独立批准不得写入 |
+| IRIS-CORE-007 | Iris 将讨论整理成内容，先发群里让用户确认 | Phase 5B-1 与 5B-2A 代码已实现、默认关闭（真实 Feishu pilot 待验收） | Phase 5A Postgres 知识草稿事实层；5B-1 版本绑定群确认/修改/拒绝卡片；5B-2A `ActionProposal`、风险矩阵、目标策略、角色 grant、负责人/管理员审批卡片、实时授权、治理 API、幂等 callback 与 readiness；共享 ack-first callback、Redis durable queue/DLQ 和 append-only Postgres 事实 | 仍需完成 5B-1/5B-2A 真实 Feishu 单群验收；超长正文所需 5B-2B OAuth 审阅页和 5B-3 飞书知识库写入未实现，不能称为完整端到端知识发布 |
+| IRIS-CORE-008 | 用户确认后同步到飞书知识库 | 发布执行仍缺失；审批前置层已实现 | 5B-2A 已能把已确认草稿转为版本绑定 proposal 并收集 low/medium/high 风险所需批准；`writeKnowledgeBase`、publication runtime 和 execution 仍默认不存在/关闭，5B-2A 不创建 `action_executions` | 仍需 5B-2B 完整正文审阅和 5B-3 飞书写入适配器、execution、幂等、失败恢复、对账、回群结果及真实验收；未经全部批准不得写入 |
 | IRIS-CORE-009 | Iris 回答时读取授权飞书知识库 | 已实现 | 授权 Wiki 注册、解析、同步、向量检索、实时权限二次校验、引用和真实飞书验收 | 后续补充知识冲突识别和知识更新草稿，不影响当前已实现判定 |
 | IRIS-CORE-010 | Iris 读取所在群中出现过的可读文档正文 | 已实现 | 群文档链接发现、正文抓取、来源证据、同步、索引、群可见检索和真实飞书验收 | 后续扩展更多文件类型和解析质量 |
 | IRIS-CORE-011 | Iris 读取用户手动提供的文档 | 已实现基础 | 手动文档注册、同步、来源策略和回答检索 | 需要面向普通用户的提交入口和状态反馈；底层能力已存在 |
 | IRIS-CORE-012 | 文档/知识库权限撤销后不得继续泄露内容 | 已实现核心边界 | 答前实时 Feishu Permission Guard；拒绝审计；fail closed；权限回收真实验收 | 后续增加权限变更主动失效和批量回收，但答前安全边界已成立 |
-| IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 缺失通用实现 | 当前只有文档读取和回答；高影响能力未开放 | 需要统一 proposal -> approval -> execution -> result 状态机，所有写知识库、建任务、跨群通知均复用 |
+| IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 首个通用审批闭环已实现（真实 pilot 待验收） | 5B-2A 为 `publish_knowledge_draft` 建立通用 proposal -> requirements -> approval 事实层、风险矩阵、实时角色复验、版本失效和共享飞书回调；内部 API 不能伪造人工批准 | 本阶段尚无 execution/result；需真实 pilot 后在 5B-3 接入首个执行器，后续建任务、跨群通知复用同一契约而非复制审批逻辑 |
 | IRIS-CORE-014 | 管理员可以全局/按群开启关闭 Iris 和能力 | 后端已实现，界面缺失 | Postgres 持久化 runtime control；全局、群和 capability API；紧急停用真实验收 | 需要轻量 Admin Console，让非工程人员可操作并看到状态与审计 |
 | IRIS-CORE-015 | 多人安装和多公司使用 | 按白皮书延期 | 白皮书演进阶段 4 明确 multi-company / multi-tenant productization | 内部 MVP 稳定后增加 tenant ID、安装流程、租户密钥/数据隔离、租户管理员和计费 |
 
@@ -39,7 +39,7 @@
 
 1. 自动群级记忆、semantic thread/action 聚合与持续状态更新已经形成代码链路，但仍需经过真实飞书单群灰度；
 2. 主动信号发现和未解决讨论跟进；
-3. 知识草稿事实层与群内确认卡片的 5B-1 代码已经默认关闭并通过本地门禁，但真实 Feishu pilot、5B-2 管理员复核和 5B-3 知识库发布仍未完成；
+3. 知识草稿事实层、5B-1 群内确认和 5B-2A 行动提案/负责人管理员审批代码已形成默认关闭的本地闭环；真实 Feishu pilot、5B-2B 完整正文审阅页和 5B-3 知识库发布仍未完成；
 4. 面向非工程管理员的轻量控制台；
 5. 多公司自助安装和租户产品化。
 
