@@ -366,6 +366,11 @@ export type ApplyActionProposalGovernanceDispositionResult = {
 export type ClaimApprovedPublicationExecutionInput = {
   proposalId: string;
   expectedProposalVersion: number;
+  runtimeGate: {
+    globalEnabled: boolean;
+    writeKnowledgeBase: boolean;
+    enabledGroupIds: string[];
+  };
   workerId: string;
   operationKey: string;
   at: Date;

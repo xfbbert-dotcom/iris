@@ -330,6 +330,11 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
     const claim = await repository.claimApprovedPublicationExecution({
       proposalId: proposal.id,
       expectedProposalVersion: proposal.version,
+      runtimeGate: {
+        globalEnabled: true,
+        writeKnowledgeBase: true,
+        enabledGroupIds: [groupId],
+      },
       workerId: `worker-${label}`,
       operationKey: `publication-claim:${label}:${suffix}`,
       at,

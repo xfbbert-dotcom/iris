@@ -1584,6 +1584,11 @@ async function claimApprovedPublicationExecution(
       Number(draft.current_revision_number) !== Number(proposal.subject_revision) ||
       Number(draft.version) !== Number(proposal.subject_version)
     ) throw new ActionProposalVersionConflictError();
+    if (
+      !normalized.runtimeGate.globalEnabled ||
+      !normalized.runtimeGate.writeKnowledgeBase ||
+      (draft.source_group_id !== null && !normalized.runtimeGate.enabledGroupIds.includes(draft.source_group_id))
+    ) throw new ActionProposalIneligibleError();
     await validateDraftEvidence(client, draft);
     const policy = await lockPolicy(client, proposal.target_policy_id);
     if (
@@ -3367,9 +3372,21 @@ function normalizeClaimPublicationExecutionInput(input: ClaimApprovedPublication
       "expectedProposalVersion",
       input.expectedProposalVersion,
     ),
+    runtimeGate: normalizePublicationRuntimeGate(input.runtimeGate),
     workerId: requireReference("workerId", input.workerId),
     operationKey: requireReference("operationKey", input.operationKey),
     at: requireDate(input.at),
+  };
+}
+
+function normalizePublicationRuntimeGate(input: ClaimApprovedPublicationExecutionInput["runtimeGate"]) {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error("runtimeGate is invalid");
+  }
+  return {
+    globalEnabled: requireBoolean("runtimeGate.globalEnabled", input.globalEnabled),
+    writeKnowledgeBase: requireBoolean("runtimeGate.writeKnowledgeBase", input.writeKnowledgeBase),
+    enabledGroupIds: normalizeReferenceList("runtimeGate.enabledGroupIds", input.enabledGroupIds, true),
   };
 }
 
