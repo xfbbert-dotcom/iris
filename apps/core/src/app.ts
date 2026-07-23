@@ -80,6 +80,11 @@ import {
   type ConversationStateInspectionStore,
 } from "./conversation-state/conversation-state-api.js";
 import { registerProactiveSignalApi } from "./proactive-signals/proactive-signal-api.js";
+import {
+  createProactiveSignalRuntime,
+  type ProactiveSignalRepository,
+  type ProactiveSignalRuntime,
+} from "./proactive-signals/proactive-signal-repository.js";
 import { registerKnowledgeDraftApi } from "./knowledge-governance/knowledge-draft-api.js";
 import {
   createKnowledgeDraftRuntime as createDefaultKnowledgeDraftRuntime,
@@ -147,6 +152,8 @@ export type BuildAppDependencies = {
   groupMemoryService?: GroupMemoryService;
   conversationStateInspectionStore?: ConversationStateInspectionStore;
   createConversationStateInspectionRuntime?: () => ConversationStateInspectionRuntime | undefined;
+  proactiveSignalRepository?: ProactiveSignalRepository;
+  createProactiveSignalRuntime?: () => ProactiveSignalRuntime | undefined;
   createKnowledgeDraftRuntime?: (
     input?: Parameters<typeof createDefaultKnowledgeDraftRuntime>[0],
   ) => KnowledgeDraftRuntime | undefined;
@@ -302,6 +309,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let eventWorkerRuntime: EventWorkerRuntime | undefined;
   let documentSyncRuntime: DocumentSyncRuntime | undefined;
   let conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
+  let proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
   let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
   let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   let actionApprovalRuntime: ActionApprovalRuntime | undefined;
@@ -334,6 +342,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     memoryExtractionRuntime?.start();
     conversationStateInspectionRuntime = dependencies.conversationStateInspectionStore === undefined
       ? (dependencies.createConversationStateInspectionRuntime ?? createConversationStateInspectionRuntime)()
+      : undefined;
+    proactiveSignalRuntime = dependencies.proactiveSignalRepository === undefined
+      ? (dependencies.createProactiveSignalRuntime ?? createProactiveSignalRuntime)()
       : undefined;
     knowledgeDraftRuntime = (
       dependencies.createKnowledgeDraftRuntime ?? createDefaultKnowledgeDraftRuntime
@@ -462,6 +473,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   registerProactiveSignalApi(
     app,
     dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
+    dependencies.proactiveSignalRepository ?? proactiveSignalRuntime?.repository,
     runtimeController,
     { authenticationConfigured: internalApiToken !== undefined, now },
   );
@@ -1557,6 +1569,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
       () => conversationStateInspectionRuntime?.close(),
+      () => proactiveSignalRuntime?.close(),
       () => actionReviewRuntime?.close(),
       () => actionApprovalRuntime?.close(),
       () => knowledgeCardRuntime?.close(),
@@ -1577,6 +1590,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       eventWorkerRuntime,
       documentSyncRuntime,
       conversationStateInspectionRuntime,
+      proactiveSignalRuntime,
       knowledgeCardRuntime,
       actionApprovalRuntime,
       actionReviewRuntime,
@@ -1756,6 +1770,7 @@ function scheduleRuntimeStartupCleanup({
   eventWorkerRuntime,
   documentSyncRuntime,
   conversationStateInspectionRuntime,
+  proactiveSignalRuntime,
   knowledgeCardRuntime,
   actionApprovalRuntime,
   actionReviewRuntime,
@@ -1769,6 +1784,7 @@ function scheduleRuntimeStartupCleanup({
   eventWorkerRuntime: EventWorkerRuntime | undefined;
   documentSyncRuntime: DocumentSyncRuntime | undefined;
   conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
+  proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
   knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   actionApprovalRuntime: ActionApprovalRuntime | undefined;
   actionReviewRuntime: ActionReviewRuntime | undefined;
@@ -1782,6 +1798,7 @@ function scheduleRuntimeStartupCleanup({
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
     () => conversationStateInspectionRuntime?.close(),
+    () => proactiveSignalRuntime?.close(),
     () => actionReviewRuntime?.close(),
     () => actionApprovalRuntime?.close(),
     () => knowledgeCardRuntime?.close(),

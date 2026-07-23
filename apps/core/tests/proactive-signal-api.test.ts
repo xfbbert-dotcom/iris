@@ -4,6 +4,7 @@ import { RuntimeController } from "../src/admin/runtime-controller.js";
 import { buildApp } from "../src/app.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { ConversationStateInspectionStore } from "../src/conversation-state/conversation-state-api.js";
+import type { ProactiveSignalRepository } from "../src/proactive-signals/proactive-signal-repository.js";
 
 const authorization = { authorization: "Bearer operator-secret" };
 
@@ -94,21 +95,78 @@ describe("proactive signal API", () => {
     expect(response.body).not.toContain("raw message text");
     await app.close();
   });
+
+  it("records previewed candidates through the scan route without sending messages", async () => {
+    const store = createStore();
+    const repository = {
+      recordCandidates: vi.fn<ProactiveSignalRepository["recordCandidates"]>().mockResolvedValue({
+        recordedCount: 1,
+        existingCount: 0,
+        recordedKeys: ["quiet_open_thread:thread-quiet:2"],
+      }),
+    };
+    store.listThreads.mockResolvedValue([
+      {
+        id: "thread-quiet",
+        groupId: "group-a",
+        title: "Launch decision",
+        summary: "Waiting for a final launch call.",
+        status: "open",
+        confidence: 0.9,
+        version: 2,
+        firstEvidenceAt: new Date("2026-07-23T06:00:00.000Z"),
+        lastActivityAt: new Date("2026-07-23T07:00:00.000Z"),
+        createdAt: new Date("2026-07-23T06:00:00.000Z"),
+        updatedAt: new Date("2026-07-23T07:00:00.000Z"),
+        evidenceMessageIds: ["message-thread"],
+      },
+    ]);
+    const app = createApp({ store, proactiveSignalRepository: repository });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/proactive-signals/groups/group-a/scan",
+      headers: authorization,
+      payload: { quietThreadAfterMinutes: 60 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.recordCandidates).toHaveBeenCalledWith({
+      signals: [expect.objectContaining({
+        idempotencyKey: "quiet_open_thread:thread-quiet:2",
+        kind: "quiet_open_thread",
+      })],
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+    expect(response.json()).toEqual({
+      ok: true,
+      groupId: "group-a",
+      generatedAt: "2026-07-23T10:00:00.000Z",
+      recordedCount: 1,
+      existingCount: 0,
+      recordedKeys: ["quiet_open_thread:thread-quiet:2"],
+      signals: [expect.objectContaining({ entityId: "thread-quiet" })],
+    });
+    await app.close();
+  });
 });
 
 function createApp({
   store,
   controller = new RuntimeController(createDefaultRuntimeConfig({})),
   now = () => new Date("2026-07-23T10:00:00.000Z"),
+  proactiveSignalRepository,
 }: {
   store: ConversationStateInspectionStore;
   controller?: RuntimeController;
   now?: () => Date;
+  proactiveSignalRepository?: ProactiveSignalRepository;
 }) {
   return buildApp({
     internalApiToken: "operator-secret",
     runtimeController: controller,
     conversationStateInspectionStore: store,
+    proactiveSignalRepository,
     now,
     createAnswerDraftRuntime: () => undefined,
     createMemoryExtractionRuntime: () => undefined,

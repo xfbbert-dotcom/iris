@@ -1,0 +1,157 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import { describe, expect, it, vi } from "vitest";
+
+import { defaultMigrationsDir } from "../src/database/migrate.js";
+import {
+  createPostgresProactiveSignalRepository,
+  type ProactiveSignalDataSource,
+} from "../src/proactive-signals/proactive-signal-repository.js";
+import type { ProactiveSignalCandidate } from "../src/proactive-signals/proactive-signal-planner.js";
+
+describe("proactive signal persistence", () => {
+  it("defines version-bound candidate facts, evidence, events, and append-only event guards", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0037_proactive_signal_candidates.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table proactive_signal_candidates");
+    expect(normalized).toContain("idempotency_key text primary key");
+    expect(normalized).toContain("entity_version bigint not null check (entity_version >= 1)");
+    expect(normalized).toContain("status text not null check (status in ('pending', 'dismissed', 'superseded'))");
+    expect(normalized).toContain("create table proactive_signal_candidate_evidence");
+    expect(normalized).toContain("conversation_message_id text not null");
+    expect(normalized).toContain("create table proactive_signal_candidate_events");
+    expect(normalized).toContain("proactive_signal_candidate_events_append_only");
+    expect(normalized).not.toMatch(/raw_(message|payload|response)|message_text/u);
+  });
+
+  it("records only new version-bound candidates and creates append-only creation events", async () => {
+    const client = createClient([
+      { rows: [{ idempotency_key: "quiet_open_thread:thread-a:1" }] },
+      { rows: [] },
+      { rows: [] },
+    ]);
+    const dataSource = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    const result = await repository.recordCandidates({
+      signals: [signal({ idempotencyKey: "quiet_open_thread:thread-a:1" })],
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    expect(result).toEqual({
+      recordedCount: 1,
+      existingCount: 0,
+      recordedKeys: ["quiet_open_thread:thread-a:1"],
+    });
+    expect(client.query).toHaveBeenCalledWith("begin");
+    expect(client.query).toHaveBeenCalledWith("commit");
+    const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("insert into proactive_signal_candidates");
+    expect(sql).toContain("on conflict (idempotency_key) do nothing");
+    expect(sql).toContain("insert into proactive_signal_candidate_events");
+    expect(sql).toContain("insert into proactive_signal_candidate_evidence");
+    expect(sql).not.toContain("raw message text");
+  });
+
+  it("uses non-overlapping SQL placeholders when recording multiple new candidates", async () => {
+    const client = createClient([{ rows: [
+      { idempotency_key: "quiet_open_thread:thread-a:1" },
+      { idempotency_key: "overdue_action:action-a:1" },
+    ] }, { rows: [] }, { rows: [] }]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await repository.recordCandidates({
+      signals: [
+        signal({ idempotencyKey: "quiet_open_thread:thread-a:1" }),
+        signal({
+          idempotencyKey: "overdue_action:action-a:1",
+          kind: "overdue_action",
+          priority: "high",
+          entityId: "action-a",
+          reasonCode: "action_due_at_elapsed",
+          suggestedMode: "ask_for_status",
+          evidenceMessageIds: ["message-c"],
+        }),
+      ],
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    for (const [statement, values] of client.query.mock.calls) {
+      if (String(statement).toLowerCase().includes("insert into proactive_signal")) {
+        expectPlaceholdersToBeUnique(String(statement), values as unknown[]);
+      }
+    }
+  });
+
+  it("reports existing candidates without duplicating evidence or events", async () => {
+    const client = createClient([{ rows: [] }]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    const result = await repository.recordCandidates({
+      signals: [signal({ idempotencyKey: "overdue_action:action-a:2" })],
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    expect(result).toEqual({
+      recordedCount: 0,
+      existingCount: 1,
+      recordedKeys: [],
+    });
+    expect(client.query.mock.calls).toHaveLength(3);
+  });
+});
+
+function signal(overrides: Partial<ProactiveSignalCandidate> = {}): ProactiveSignalCandidate {
+  return {
+    idempotencyKey: "quiet_open_thread:thread-a:1",
+    kind: "quiet_open_thread",
+    priority: "medium",
+    groupId: "group-a",
+    entityId: "thread-a",
+    entityVersion: 1,
+    reasonCode: "thread_quiet_threshold_elapsed",
+    suggestedMode: "ask_for_thread_update",
+    lastRelevantAt: new Date("2026-07-23T08:00:00.000Z"),
+    evidenceMessageIds: ["message-a", "message-b"],
+    ...overrides,
+  };
+}
+
+function createClient(results: Array<{ rows: Array<Record<string, unknown>> }>) {
+  let index = 0;
+  return {
+    query: vi.fn(async (statement: string, _values?: unknown[]) => {
+      if (statement === "begin" || statement === "commit" || statement === "rollback") {
+        return { rows: [] };
+      }
+      return results[index++] ?? { rows: [] };
+    }),
+    release: vi.fn(),
+  };
+}
+
+function expectPlaceholdersToBeUnique(statement: string, values: unknown[]) {
+  const placeholders = Array.from(statement.matchAll(/\$(\d+)/gu), (match) => Number(match[1]));
+  expect(new Set(placeholders).size).toBe(placeholders.length);
+  expect(Math.max(...placeholders)).toBe(values.length);
+}

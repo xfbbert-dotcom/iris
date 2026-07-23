@@ -6,6 +6,7 @@ import {
   planProactiveSignals,
   type ProactiveSignalCandidate,
 } from "./proactive-signal-planner.js";
+import type { ProactiveSignalRepository } from "./proactive-signal-repository.js";
 
 const MAX_IDENTIFIER_CHARS = 512;
 const DEFAULT_ENTITY_LIMIT = 20;
@@ -23,6 +24,7 @@ type PreviewRequest = {
 export function registerProactiveSignalApi(
   app: FastifyInstance,
   store: ConversationStateInspectionStore | undefined,
+  repository: ProactiveSignalRepository | undefined,
   runtimeController: RuntimeController,
   {
     authenticationConfigured,
@@ -69,6 +71,52 @@ export function registerProactiveSignalApi(
         };
       } catch {
         return reply.code(500).send({ ok: false, error: "proactive_signal_preview_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { groupId: string } }>(
+    "/internal/proactive-signals/groups/:groupId/scan",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (store === undefined) return unavailable(reply);
+      if (repository === undefined) {
+        return reply.code(503).send({ ok: false, error: "proactive_signal_repository_unavailable" });
+      }
+      const groupId = readBoundedId(request.params.groupId);
+      const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+      const parsedRequest = parsePreviewRequest(body);
+      if (groupId === undefined || parsedRequest === undefined) return invalidRequest(reply);
+      if (!runtimeController.canProactivelySpeak(groupId)) {
+        return reply.code(403).send({ ok: false, error: "proactive_speech_disabled" });
+      }
+
+      try {
+        const generatedAt = now();
+        const [threads, actions] = await Promise.all([
+          store.listThreads({ groupId, limit: DEFAULT_ENTITY_LIMIT }),
+          store.listActions({ groupId, limit: DEFAULT_ENTITY_LIMIT }),
+        ]);
+        const signals = planProactiveSignals({
+          groupId,
+          now: generatedAt,
+          threads,
+          actions,
+          quietThreadAfterMs: parsedRequest.quietThreadAfterMinutes * 60 * 1000,
+          overdueActionGraceMs: parsedRequest.overdueActionGraceMinutes * 60 * 1000,
+          limit: parsedRequest.limit,
+        });
+        const recorded = await repository.recordCandidates({ signals, now: generatedAt });
+
+        return {
+          ok: true,
+          groupId,
+          generatedAt: generatedAt.toISOString(),
+          ...recorded,
+          signals: signals.map(toResponseSignal),
+        };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "proactive_signal_scan_failed" });
       }
     },
   );
