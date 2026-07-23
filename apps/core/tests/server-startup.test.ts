@@ -17,6 +17,7 @@ import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js"
 import type { ActionApprovalRuntime } from "../src/runtime/action-approval-runtime.js";
 import type { ActionReviewRuntime } from "../src/runtime/action-review-runtime.js";
 import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
+import type { ProactiveSignalDeliveryRuntime } from "../src/runtime/proactive-signal-delivery-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
 import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
@@ -293,6 +294,72 @@ describe("Core server startup", () => {
     expect(createKnowledgeCardRuntime).toHaveBeenCalledOnce();
     expect(createActionApprovalRuntime).toHaveBeenCalledOnce();
     expect(createActionReviewRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("starts proactive signal delivery after approvals and before event workers", async () => {
+    const reservation = await occupyLoopbackPort();
+    const port = reservation.port;
+    await closeServer(reservation.server);
+    process.env.PORT = String(port);
+    const order: string[] = [];
+    const runtimeControlRuntime = fakeRuntimeControlRuntime({
+      onClose: () => order.push("close-runtime-control"),
+    });
+    const actionApprovalRuntime = fakeActionApprovalRuntime({
+      start: vi.fn(async () => {
+        order.push("start-action-approvals");
+      }),
+      close: vi.fn(async () => {
+        order.push("close-action-approvals");
+      }),
+    });
+    const proactiveRuntime = fakeProactiveSignalDeliveryRuntime({
+      start: vi.fn(async () => {
+        order.push("start-proactive-signals");
+      }),
+      close: vi.fn(async () => {
+        order.push("close-proactive-signals");
+      }),
+    });
+    const eventWorkerRuntime = fakeEventWorkerRuntime({
+      start: vi.fn(() => order.push("start-event")),
+      close: vi.fn(async () => {
+        order.push("close-event");
+      }),
+    });
+    const createProactiveSignalDeliveryRuntime = vi.fn((input) => {
+      expect(input).toEqual({ runtimeController: runtimeControlRuntime.runtimeControl.controller });
+      return proactiveRuntime;
+    });
+
+    const app = await startServer({
+      createRuntimeControlRuntime: async () => runtimeControlRuntime,
+      appDependencies: {
+        createAnswerDraftRuntime: () => undefined,
+        createReindexWorkerRuntime: () => undefined,
+        createMemoryExtractionRuntime: () => undefined,
+        createKnowledgeDraftRuntime: () => undefined,
+        createKnowledgeCardRuntime: () => undefined,
+        createActionApprovalRuntime: () => actionApprovalRuntime,
+        createActionReviewRuntime: () => undefined,
+        createProactiveSignalDeliveryRuntime,
+        createEventWorkerRuntime: () => eventWorkerRuntime,
+        createDocumentSyncRuntime: () => undefined,
+      },
+    });
+
+    expect(order).toEqual(["start-action-approvals", "start-proactive-signals", "start-event"]);
+    await app.close();
+    expect(order).toEqual([
+      "start-action-approvals",
+      "start-proactive-signals",
+      "start-event",
+      "close-event",
+      "close-proactive-signals",
+      "close-action-approvals",
+      "close-runtime-control",
+    ]);
+    expect(createProactiveSignalDeliveryRuntime).toHaveBeenCalledOnce();
   });
 
   it("surfaces a rejected knowledge-card startup through buildApp readiness and closes once", async () => {
@@ -835,6 +902,24 @@ function fakeActionReviewRuntime(
       configured: true as const,
       running: true,
       migration0034Applied: true,
+    })),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeProactiveSignalDeliveryRuntime(
+  overrides: Partial<ProactiveSignalDeliveryRuntime> = {},
+): ProactiveSignalDeliveryRuntime {
+  return {
+    repository: {} as ProactiveSignalDeliveryRuntime["repository"],
+    canUseProactiveSignalDelivery: vi.fn(() => true),
+    start: vi.fn(),
+    getStatus: vi.fn(async () => ({
+      enabled: true as const,
+      running: true,
+      enabledGroupCount: 1,
+      dispatcher: { running: true, intervalMs: 1000, batchLimit: 10 },
     })),
     close: vi.fn(async () => undefined),
     ...overrides,

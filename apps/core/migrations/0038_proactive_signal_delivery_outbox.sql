@@ -7,6 +7,13 @@ CREATE TABLE proactive_signal_delivery_outbox (
   status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'sent', 'failed', 'cancelled')),
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  lease_worker_id TEXT CHECK (
+    lease_worker_id IS NULL OR char_length(lease_worker_id) BETWEEN 1 AND 512
+  ),
+  lease_until TIMESTAMPTZ,
+  sent_message_id TEXT CHECK (
+    sent_message_id IS NULL OR char_length(sent_message_id) BETWEEN 1 AND 512
+  ),
   failure_classification TEXT CHECK (
     failure_classification IS NULL OR char_length(failure_classification) BETWEEN 1 AND 128
   ),

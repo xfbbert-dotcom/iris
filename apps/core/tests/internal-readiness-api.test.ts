@@ -135,12 +135,13 @@ describe("memory extraction internal API", () => {
       "documentSync",
       "reindex",
       "actionApprovals",
+      "proactiveSignals",
     ]);
     expect(consolidated.json().summary).toMatchObject({
-      componentCount: 9,
+      componentCount: 10,
       healthyComponentCount: 3,
       enabledComponentCount: 3,
-      disabledComponentCount: 6,
+      disabledComponentCount: 7,
       disabledComponents: [
         "answerDraft",
         "memoryExtraction",
@@ -148,10 +149,11 @@ describe("memory extraction internal API", () => {
         "documentSync",
         "reindex",
         "actionApprovals",
+        "proactiveSignals",
       ],
       componentStatusCounts: {
         healthy: 3,
-        disabled: 6,
+        disabled: 7,
         degraded: 0,
         stopped: 0,
       },

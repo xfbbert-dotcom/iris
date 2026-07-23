@@ -40,6 +40,9 @@ describe("proactive signal persistence", () => {
     expect(normalized).toContain("candidate_idempotency_key text not null");
     expect(normalized).toContain("delivery_channel text not null check (delivery_channel in ('feishu_group_card'))");
     expect(normalized).toContain("status text not null check (status in ('pending', 'processing', 'sent', 'failed', 'cancelled'))");
+    expect(normalized).toContain("lease_worker_id text");
+    expect(normalized).toContain("lease_until timestamptz");
+    expect(normalized).toContain("sent_message_id text");
     expect(normalized).toContain("unique (candidate_idempotency_key, delivery_channel)");
     expect(normalized).toContain("proactive_signal_delivery_events_append_only");
     expect(normalized).not.toMatch(/message_body|raw_(message|payload|response)|card_json/u);
@@ -246,6 +249,145 @@ describe("proactive signal persistence", () => {
       String(statement).toLowerCase().includes("insert into proactive_signal_delivery_outbox")
     );
     expect(String((insertCall?.[1] as unknown[])[2])).toMatch(/^proactive-delivery:[0-9a-f]{64}$/u);
+  });
+
+  it("claims one ready delivery with a bounded lease and candidate join", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [
+        {
+          id: "delivery-a",
+          candidate_idempotency_key: "quiet_open_thread:thread-a:1",
+          group_id: "group-a",
+          status: "processing",
+          attempt_count: 2,
+        },
+      ] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    const claim = await repository.claimProactiveSignalDelivery({
+      workerId: "worker-a",
+      at: new Date("2026-07-23T10:00:00.000Z"),
+      leaseUntil: new Date("2026-07-23T10:00:30.000Z"),
+    });
+
+    expect(claim).toEqual({
+      delivery: {
+        id: "delivery-a",
+        candidateIdempotencyKey: "quiet_open_thread:thread-a:1",
+        groupId: "group-a",
+        status: "processing",
+        attemptCount: 2,
+      },
+      workerId: "worker-a",
+      leaseUntil: new Date("2026-07-23T10:00:30.000Z"),
+      attempts: 2,
+    });
+    const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("for update skip locked");
+    expect(sql).toContain("candidate.status = 'pending'");
+    expect(sql).toContain("lease_worker_id = $1");
+  });
+
+  it("loads delivery context without selecting raw message text", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [
+        {
+          id: "delivery-a",
+          candidate_idempotency_key: "quiet_open_thread:thread-a:1",
+          delivery_group_id: "group-a",
+          delivery_status: "processing",
+          attempt_count: 1,
+          idempotency_key: "quiet_open_thread:thread-a:1",
+          group_id: "group-a",
+          kind: "quiet_open_thread",
+          priority: "medium",
+          entity_type: "thread",
+          entity_id: "thread-a",
+          entity_version: "1",
+          reason_code: "thread_quiet_threshold_elapsed",
+          suggested_mode: "ask_for_thread_update",
+          status: "pending",
+          last_relevant_at: new Date("2026-07-23T08:00:00.000Z"),
+          created_at: new Date("2026-07-23T10:00:00.000Z"),
+          updated_at: new Date("2026-07-23T10:00:00.000Z"),
+          evidence_message_ids: ["message-a"],
+        },
+      ] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    const context = await repository.getProactiveSignalDeliveryContext("delivery-a");
+
+    expect(context).toEqual(expect.objectContaining({
+      delivery: expect.objectContaining({ id: "delivery-a", status: "processing" }),
+      candidate: expect.objectContaining({ idempotencyKey: "quiet_open_thread:thread-a:1" }),
+    }));
+    const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).not.toContain("conversation_messages.text");
+    expect(sql).not.toContain("message_body");
+  });
+
+  it("completes a processing delivery with Feishu message id and append-only sent event", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await repository.completeProactiveSignalDelivery({
+      deliveryId: "delivery-a",
+      workerId: "worker-a",
+      messageId: "om_proactive",
+      at: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("status = 'sent'");
+    expect(sql).toContain("sent_message_id = $3");
+    expect(sql).toContain("'sent', 'sent'");
+    expect(sql).not.toContain("card_json");
+  });
+
+  it("returns retryable failures to pending and permanent failures to failed", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await repository.failProactiveSignalDelivery({
+      deliveryId: "delivery-a",
+      workerId: "worker-a",
+      classification: "retryable",
+      errorCode: "retryable_remote_failure",
+      retryAt: new Date("2026-07-23T10:01:00.000Z"),
+      at: new Date("2026-07-23T10:00:00.000Z"),
+    });
+    await repository.failProactiveSignalDelivery({
+      deliveryId: "delivery-b",
+      workerId: "worker-a",
+      classification: "permanent",
+      errorCode: "remote_rejected",
+      at: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    const retryValues = dataSource.query.mock.calls[0]?.[1] as unknown[] | undefined;
+    const permanentValues = dataSource.query.mock.calls[1]?.[1] as unknown[] | undefined;
+    expect(retryValues).toBeDefined();
+    expect(permanentValues).toBeDefined();
+    expect(retryValues![2]).toBe("pending");
+    expect(permanentValues![2]).toBe("failed");
   });
 });
 

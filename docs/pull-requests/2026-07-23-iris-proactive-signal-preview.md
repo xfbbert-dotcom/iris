@@ -1,4 +1,4 @@
-# Iris Phase 6A Proactive Signal Preview And Candidate Facts
+# Iris Phase 6A Proactive Signal Preview, Governance, And Delivery Gate
 
 ## Scope
 
@@ -14,13 +14,20 @@ This change starts the proactive behavior layer without enabling unsolicited Fei
 - Adds authenticated internal governance routes:
   - `GET /internal/proactive-signals/groups/:groupId/candidates`
   - `POST /internal/proactive-signals/groups/:groupId/candidates/:idempotencyKey/dismiss`
+  - `POST /internal/proactive-signals/groups/:groupId/candidates/:idempotencyKey/approve-delivery`
 - Adds `0037_proactive_signal_candidates.sql` for durable pending candidate facts, evidence IDs, and append-only candidate events.
-- Adds `0038_proactive_signal_delivery_outbox.sql` and an approve-delivery route to queue a future Feishu group card without sending it.
+- Adds `0038_proactive_signal_delivery_outbox.sql` for approved Feishu group-card delivery rows, leasing, sent message IDs, and append-only delivery events.
+- Adds a bounded proactive Feishu card renderer that does not include raw evidence text or card JSON in persisted facts.
+- Adds a proactive delivery dispatcher and polling runtime:
+  - disabled unless `IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED=true`;
+  - scoped by `IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS`;
+  - rechecks `runtimeController.canProactivelySpeak(groupId)` before external attempt and again immediately before send;
+  - records retryable, permanent, and outcome-unknown failures without exposing upstream details.
 - Reuses the current-group conversation-state inspection store.
 - Requires `runtimeController.canProactivelySpeak(groupId)` before scanning, so global disable, group disable, or proactive pause all fail closed.
 - Returns idempotency keys tied to entity type, entity ID, and entity version.
 
-This does not send Feishu messages, create formal tasks, write knowledge-base content, call external tools, or enable `proactiveSpeech` in production. It creates the default-off candidate and delivery facts needed before a governed proactive card worker exists.
+This still does not create formal tasks, write knowledge-base content, call external tools, or enable `proactiveSpeech` in production. Real Feishu group delivery remains default-off and requires both the new delivery env gate and runtime/group proactive permission.
 
 ## Verification
 
@@ -31,14 +38,17 @@ This does not send Feishu messages, create formal tasks, write knowledge-base co
   - `npm --workspace apps/core test -- proactive-signal-planner.test.ts proactive-signal-api.test.ts`
   - `npm --workspace apps/core test -- proactive-signal-repository.test.ts`
   - `npm --workspace apps/core test -- proactive-signal-planner.test.ts proactive-signal-api.test.ts proactive-signal-repository.test.ts conversation-state-api.test.ts migration-runner.test.ts`
+  - `npm --workspace apps/core test -- proactive-signal-planner.test.ts proactive-signal-api.test.ts proactive-signal-repository.test.ts proactive-signal-card-renderer.test.ts proactive-signal-dispatcher.test.ts proactive-signal-dispatcher-loop.test.ts proactive-signal-runtime.test.ts env.test.ts server-startup.test.ts migration-runner.test.ts`
   - `npm --workspace apps/core run typecheck`
   - `npm --workspace apps/core run build`
+  - `git diff --check`
 
 ## Next Gate
 
-The next product gate should turn pending candidates into a governed proactive outbox:
+The next product gate should validate the governed proactive delivery path in a real pilot group:
 
-1. Keep Feishu sending default-off and rate-limited.
-2. Add a delivery worker that claims only approved pending delivery rows.
-3. Render a bounded Feishu group card without raw evidence text.
-4. Only after real pilot approval, enable the worker for one group.
+1. Keep global Iris disabled and the proactive delivery env disabled on production until deployment checks are complete.
+2. Apply migrations and deploy the candidate build.
+3. Enable proactive delivery for one pilot group only.
+4. Create one overdue-action or quiet-thread candidate, approve delivery internally, and verify exactly one bounded Feishu card.
+5. Return to default-off if any queue, DLQ, permission, or runtime-control gate is not clean.

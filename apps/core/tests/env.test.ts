@@ -13,6 +13,7 @@ import {
   readModelProviderConfig,
   readMemoryExtractionRuntimeConfig,
   readKnowledgeCardRuntimeConfig,
+  readProactiveSignalDeliveryRuntimeConfig,
   readReindexWorkerRuntimeConfig,
   readServerPort,
 } from "../src/config/env.js";
@@ -69,6 +70,64 @@ describe("readActionReviewRuntimeConfig", () => {
         baseUrl: "https://open.feishu.cn",
       },
     });
+  });
+});
+
+describe("readProactiveSignalDeliveryRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED: "true",
+    IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS: " oc_pilot ,oc_review ",
+    DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
+    FEISHU_APP_ID: " app-id ",
+    FEISHU_APP_SECRET: " app-secret ",
+  };
+
+  it("is disabled unless explicitly enabled", () => {
+    expect(readProactiveSignalDeliveryRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readProactiveSignalDeliveryRuntimeConfig({
+        IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED: value,
+      })).toEqual({ enabled: false });
+    }
+  });
+
+  it("reads a bounded enabled config with explicit group allowlist", () => {
+    expect(readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_PROACTIVE_SIGNAL_DELIVERY_INTERVAL_MS: "2500",
+      IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT: "12",
+    })).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@postgres:5432/iris",
+      enabledGroupIds: ["oc_pilot", "oc_review"],
+      intervalMs: 2500,
+      batchLimit: 12,
+    });
+  });
+
+  it("requires an enabled group allowlist, database, and Feishu credentials only when enabled", () => {
+    for (const [name, message] of [
+      ["IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS", "IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS must contain at least one group"],
+      ["DATABASE_URL", "DATABASE_URL is required for database operations"],
+      ["FEISHU_APP_ID", "FEISHU_APP_ID is required"],
+      ["FEISHU_APP_SECRET", "FEISHU_APP_SECRET is required"],
+    ] as const) {
+      expect(() => readProactiveSignalDeliveryRuntimeConfig({
+        ...enabledEnv,
+        [name]: " ",
+      })).toThrow(message);
+    }
+  });
+
+  it("rejects duplicate groups and unsafe batch settings", () => {
+    expect(() => readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS: "oc_one,oc_one",
+    })).toThrow("IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS must contain unique group IDs");
+    expect(() => readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT: "101",
+    })).toThrow("IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT must not exceed 100");
   });
 });
 

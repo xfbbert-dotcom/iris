@@ -27,6 +27,28 @@ export type PersistedProactiveSignalCandidate = {
   evidenceMessageIds: string[];
 };
 
+export type ProactiveSignalDeliveryStatus = "pending" | "processing" | "sent" | "failed" | "cancelled";
+
+export type ProactiveSignalDelivery = {
+  id: string;
+  candidateIdempotencyKey: string;
+  groupId: string;
+  status: ProactiveSignalDeliveryStatus;
+  attemptCount: number;
+};
+
+export type ProactiveSignalDeliveryClaim = {
+  delivery: ProactiveSignalDelivery;
+  workerId: string;
+  leaseUntil: Date;
+  attempts: number;
+};
+
+export type ProactiveSignalDeliveryContext = {
+  delivery: ProactiveSignalDelivery;
+  candidate: PersistedProactiveSignalCandidate;
+};
+
 export type ProactiveSignalRepository = {
   recordCandidates(input: {
     signals: ProactiveSignalCandidate[];
@@ -52,6 +74,37 @@ export type ProactiveSignalRepository = {
     | { status: "already_queued"; deliveryId: string }
     | { status: "not_found" }
   >;
+  claimProactiveSignalDelivery(input: {
+    workerId: string;
+    at: Date;
+    leaseUntil: Date;
+  }): Promise<ProactiveSignalDeliveryClaim | undefined>;
+  getProactiveSignalDeliveryContext(deliveryId: string): Promise<ProactiveSignalDeliveryContext | undefined>;
+  beginProactiveSignalDeliveryAttempt(input: {
+    deliveryId: string;
+    workerId: string;
+    at: Date;
+  }): Promise<void>;
+  failProactiveSignalDeliveryPreparation(input: {
+    deliveryId: string;
+    workerId: string;
+    errorCode: string;
+    at: Date;
+  }): Promise<void>;
+  completeProactiveSignalDelivery(input: {
+    deliveryId: string;
+    workerId: string;
+    messageId: string;
+    at: Date;
+  }): Promise<void>;
+  failProactiveSignalDelivery(input: {
+    deliveryId: string;
+    workerId: string;
+    classification: "retryable" | "permanent" | "outcome_unknown";
+    errorCode: string;
+    retryAt?: Date;
+    at: Date;
+  }): Promise<void>;
 };
 
 export type ProactiveSignalRuntime = {
@@ -92,6 +145,24 @@ export function createPostgresProactiveSignalRepository({
     },
     approveCandidateForDelivery(input) {
       return approveCandidateForDelivery(dataSource, input);
+    },
+    claimProactiveSignalDelivery(input) {
+      return claimProactiveSignalDelivery(dataSource, input);
+    },
+    getProactiveSignalDeliveryContext(input) {
+      return getProactiveSignalDeliveryContext(dataSource, input);
+    },
+    beginProactiveSignalDeliveryAttempt(input) {
+      return beginProactiveSignalDeliveryAttempt(dataSource, input);
+    },
+    failProactiveSignalDeliveryPreparation(input) {
+      return failProactiveSignalDeliveryPreparation(dataSource, input);
+    },
+    completeProactiveSignalDelivery(input) {
+      return completeProactiveSignalDelivery(dataSource, input);
+    },
+    failProactiveSignalDelivery(input) {
+      return failProactiveSignalDelivery(dataSource, input);
     },
   };
 }
@@ -139,6 +210,193 @@ async function listPendingCandidates(
     [groupId, limit],
   );
   return result.rows.map(mapCandidateRow);
+}
+
+async function claimProactiveSignalDelivery(
+  dataSource: Queryable,
+  input: { workerId: string; at: Date; leaseUntil: Date },
+): Promise<ProactiveSignalDeliveryClaim | undefined> {
+  const workerId = requireBoundedString("workerId", input.workerId);
+  const at = requireDate(input.at, "at");
+  const leaseUntil = requireDate(input.leaseUntil, "leaseUntil");
+  const result = await dataSource.query<Record<string, unknown>>(
+    `
+    UPDATE proactive_signal_delivery_outbox delivery
+    SET status = 'processing',
+        attempt_count = delivery.attempt_count + 1,
+        lease_worker_id = $1,
+        lease_until = $3,
+        updated_at = $2
+    WHERE delivery.id = (
+      SELECT candidate_delivery.id
+      FROM proactive_signal_delivery_outbox candidate_delivery
+      JOIN proactive_signal_candidates candidate
+        ON candidate.idempotency_key = candidate_delivery.candidate_idempotency_key
+       AND candidate.group_id = candidate_delivery.group_id
+      WHERE candidate.status = 'pending'
+        AND (
+          candidate_delivery.status = 'pending'
+          OR (candidate_delivery.status = 'failed' AND candidate_delivery.next_attempt_at <= $2)
+          OR (
+            candidate_delivery.status = 'processing'
+            AND candidate_delivery.lease_until IS NOT NULL
+            AND candidate_delivery.lease_until <= $2
+          )
+        )
+      ORDER BY candidate.priority DESC, candidate_delivery.next_attempt_at ASC, candidate_delivery.created_at ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id,
+      delivery.status, delivery.attempt_count
+    `,
+    [workerId, at, leaseUntil],
+  );
+  if (result.rows.length === 0) return undefined;
+  const delivery = mapDeliveryRow(result.rows[0]);
+  return { delivery, workerId, leaseUntil, attempts: delivery.attemptCount };
+}
+
+async function getProactiveSignalDeliveryContext(
+  queryable: Queryable,
+  deliveryId: string,
+): Promise<ProactiveSignalDeliveryContext | undefined> {
+  const safeDeliveryId = requireBoundedString("deliveryId", deliveryId);
+  const result = await queryable.query<Record<string, unknown>>(
+    `
+    SELECT delivery.id,
+      delivery.candidate_idempotency_key,
+      delivery.group_id AS delivery_group_id,
+      delivery.status AS delivery_status,
+      delivery.attempt_count,
+      candidate.*,
+      ARRAY(
+        SELECT evidence.conversation_message_id
+        FROM proactive_signal_candidate_evidence evidence
+        WHERE evidence.idempotency_key = candidate.idempotency_key
+          AND evidence.group_id = candidate.group_id
+        ORDER BY evidence.created_at ASC, evidence.conversation_message_id ASC
+        LIMIT 20
+      ) AS evidence_message_ids
+    FROM proactive_signal_delivery_outbox delivery
+    JOIN proactive_signal_candidates candidate
+      ON candidate.idempotency_key = delivery.candidate_idempotency_key
+     AND candidate.group_id = delivery.group_id
+    WHERE delivery.id = $1
+    LIMIT 1
+    `,
+    [safeDeliveryId],
+  );
+  if (result.rows.length === 0) return undefined;
+  const row = result.rows[0];
+  return {
+    delivery: {
+      id: requireBoundedString("deliveryId", row.id),
+      candidateIdempotencyKey: requireBoundedString("candidateIdempotencyKey", row.candidate_idempotency_key),
+      groupId: requireBoundedString("groupId", row.delivery_group_id),
+      status: requireDeliveryStatus(row.delivery_status),
+      attemptCount: requireNonNegativeInteger(row.attempt_count, "attemptCount"),
+    },
+    candidate: mapCandidateRow(row),
+  };
+}
+
+async function beginProactiveSignalDeliveryAttempt(
+  queryable: Queryable,
+  input: { deliveryId: string; workerId: string; at: Date },
+): Promise<void> {
+  const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
+  const workerId = requireBoundedString("workerId", input.workerId);
+  const at = requireDate(input.at, "at");
+  await queryable.query(
+    `
+    INSERT INTO proactive_signal_delivery_events (
+      id, delivery_id, candidate_idempotency_key, group_id, event_type,
+      delivery_status, created_at
+    )
+    SELECT $2, delivery.id, delivery.candidate_idempotency_key, delivery.group_id,
+      'processing', 'processing', $3
+    FROM proactive_signal_delivery_outbox delivery
+    WHERE delivery.id = $1
+      AND delivery.status = 'processing'
+      AND delivery.lease_worker_id = $4
+    ON CONFLICT (id) DO NOTHING
+    `,
+    [deliveryId, deliveryEventId(deliveryId, "processing", workerId, at), at, workerId],
+  );
+}
+
+async function failProactiveSignalDeliveryPreparation(
+  queryable: Queryable,
+  input: { deliveryId: string; workerId: string; errorCode: string; at: Date },
+): Promise<void> {
+  await markProactiveSignalDeliveryFailed(queryable, {
+    deliveryId: input.deliveryId,
+    workerId: input.workerId,
+    failureClassification: boundedFailureClassification(input.errorCode),
+    status: "failed",
+    nextAttemptAt: requireDate(input.at, "at"),
+    at: input.at,
+  });
+}
+
+async function completeProactiveSignalDelivery(
+  queryable: Queryable,
+  input: { deliveryId: string; workerId: string; messageId: string; at: Date },
+): Promise<void> {
+  const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
+  const workerId = requireBoundedString("workerId", input.workerId);
+  const messageId = requireBoundedString("messageId", input.messageId);
+  const at = requireDate(input.at, "at");
+  await queryable.query(
+    `
+    WITH updated AS (
+      UPDATE proactive_signal_delivery_outbox delivery
+      SET status = 'sent',
+          sent_message_id = $3,
+          failure_classification = NULL,
+          updated_at = $4
+      WHERE delivery.id = $1
+        AND delivery.status = 'processing'
+        AND delivery.lease_worker_id = $2
+      RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id
+    )
+    INSERT INTO proactive_signal_delivery_events (
+      id, delivery_id, candidate_idempotency_key, group_id, event_type,
+      delivery_status, created_at
+    )
+    SELECT $5, updated.id, updated.candidate_idempotency_key, updated.group_id,
+      'sent', 'sent', $4
+    FROM updated
+    ON CONFLICT (id) DO NOTHING
+    `,
+    [deliveryId, workerId, messageId, at, deliveryEventId(deliveryId, "sent", workerId, at)],
+  );
+}
+
+async function failProactiveSignalDelivery(
+  queryable: Queryable,
+  input: {
+    deliveryId: string;
+    workerId: string;
+    classification: "retryable" | "permanent" | "outcome_unknown";
+    errorCode: string;
+    retryAt?: Date;
+    at: Date;
+  },
+): Promise<void> {
+  const at = requireDate(input.at, "at");
+  const retryAt = input.classification === "retryable"
+    ? requireDate(input.retryAt ?? at, "retryAt")
+    : at;
+  await markProactiveSignalDeliveryFailed(queryable, {
+    deliveryId: input.deliveryId,
+    workerId: input.workerId,
+    failureClassification: boundedFailureClassification(input.errorCode),
+    status: input.classification === "retryable" ? "pending" : "failed",
+    nextAttemptAt: retryAt,
+    at,
+  });
 }
 
 async function dismissCandidate(
@@ -443,6 +701,65 @@ function mapCandidateRow(row: Record<string, unknown>): PersistedProactiveSignal
   };
 }
 
+function mapDeliveryRow(row: Record<string, unknown>): ProactiveSignalDelivery {
+  return {
+    id: requireBoundedString("deliveryId", row.id),
+    candidateIdempotencyKey: requireBoundedString("candidateIdempotencyKey", row.candidate_idempotency_key),
+    groupId: requireBoundedString("groupId", row.group_id),
+    status: requireDeliveryStatus(row.status),
+    attemptCount: requireNonNegativeInteger(row.attempt_count, "attemptCount"),
+  };
+}
+
+async function markProactiveSignalDeliveryFailed(
+  queryable: Queryable,
+  input: {
+    deliveryId: string;
+    workerId: string;
+    failureClassification: string;
+    status: Extract<ProactiveSignalDeliveryStatus, "pending" | "failed">;
+    nextAttemptAt: Date;
+    at: Date;
+  },
+): Promise<void> {
+  const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
+  const workerId = requireBoundedString("workerId", input.workerId);
+  const at = requireDate(input.at, "at");
+  const nextAttemptAt = requireDate(input.nextAttemptAt, "nextAttemptAt");
+  await queryable.query(
+    `
+    WITH updated AS (
+      UPDATE proactive_signal_delivery_outbox delivery
+      SET status = $3,
+          next_attempt_at = $4,
+          failure_classification = $5,
+          updated_at = $6
+      WHERE delivery.id = $1
+        AND delivery.status = 'processing'
+        AND delivery.lease_worker_id = $2
+      RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id, delivery.status
+    )
+    INSERT INTO proactive_signal_delivery_events (
+      id, delivery_id, candidate_idempotency_key, group_id, event_type,
+      delivery_status, created_at
+    )
+    SELECT $7, updated.id, updated.candidate_idempotency_key, updated.group_id,
+      'failed', updated.status, $6
+    FROM updated
+    ON CONFLICT (id) DO NOTHING
+    `,
+    [
+      deliveryId,
+      workerId,
+      input.status,
+      nextAttemptAt,
+      input.failureClassification,
+      at,
+      deliveryEventId(deliveryId, `failed:${input.status}`, workerId, at),
+    ],
+  );
+}
+
 function entityTypeFor(kind: ProactiveSignalCandidate["kind"]): "thread" | "action" {
   return kind === "quiet_open_thread" ? "thread" : "action";
 }
@@ -516,6 +833,36 @@ function requireStatus(value: unknown): PersistedProactiveSignalCandidate["statu
   throw new Error("candidate status is invalid");
 }
 
+function requireDeliveryStatus(value: unknown): ProactiveSignalDeliveryStatus {
+  if (
+    value === "pending" ||
+    value === "processing" ||
+    value === "sent" ||
+    value === "failed" ||
+    value === "cancelled"
+  ) {
+    return value;
+  }
+  throw new Error("delivery status is invalid");
+}
+
+function requireNonNegativeInteger(value: unknown, label: string): number {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  if (!Number.isSafeInteger(parsed) || Number(parsed) < 0) throw new Error(`${label} is invalid`);
+  return Number(parsed);
+}
+
 function buildDeliveryId(idempotencyKey: string): string {
   return `proactive-delivery:${createHash("sha256").update(idempotencyKey).digest("hex")}`;
+}
+
+function boundedFailureClassification(value: string): string {
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 128 ? normalized : "internal_error";
+}
+
+function deliveryEventId(deliveryId: string, eventType: string, workerId: string, at: Date): string {
+  return `proactive-delivery-event:${createHash("sha256")
+    .update(`${deliveryId}:${eventType}:${workerId}:${at.toISOString()}`)
+    .digest("hex")}`;
 }

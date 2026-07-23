@@ -99,6 +99,16 @@ export type ActionApprovalRuntimeConfig =
       reviewPublicOrigin?: string;
     };
 
+export type ProactiveSignalDeliveryRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      databaseUrl: string;
+      enabledGroupIds: string[];
+      intervalMs: number;
+      batchLimit: number;
+    };
+
 export type ActionReviewRuntimeConfig =
   | { enabled: false }
   | {
@@ -473,6 +483,35 @@ export function readActionApprovalRuntimeConfig(
     ...(reviewPublicOrigin === undefined
       ? {}
       : { reviewPublicOrigin: readHttpBaseUrlEnv("IRIS_REVIEW_PUBLIC_ORIGIN", reviewPublicOrigin) }),
+  };
+}
+
+export function readProactiveSignalDeliveryRuntimeConfig(
+  env: EnvLike = process.env,
+): ProactiveSignalDeliveryRuntimeConfig {
+  if (env.IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED !== "true") return { enabled: false };
+
+  const enabledGroupIds = readRequiredUniqueGroupIdListEnv(
+    "IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS",
+    env.IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS,
+  );
+  const { databaseUrl } = readDatabaseConfig(env);
+  readFeishuOpenApiConfig(env);
+  return {
+    enabled: true,
+    databaseUrl,
+    enabledGroupIds,
+    intervalMs: readTimerDelayEnv(
+      "IRIS_PROACTIVE_SIGNAL_DELIVERY_INTERVAL_MS",
+      env.IRIS_PROACTIVE_SIGNAL_DELIVERY_INTERVAL_MS,
+      1000,
+    ),
+    batchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT",
+      env.IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT,
+      10,
+      100,
+    ),
   };
 }
 

@@ -111,7 +111,7 @@ describe("proactive signal API", () => {
       approveCandidateForDelivery: vi.fn<ProactiveSignalRepository["approveCandidateForDelivery"]>().mockResolvedValue({
         status: "not_found",
       }),
-    };
+    } as unknown as ProactiveSignalRepository;
     store.listThreads.mockResolvedValue([
       {
         id: "thread-quiet",
@@ -186,7 +186,7 @@ describe("proactive signal API", () => {
         status: "queued",
         deliveryId: "delivery-a",
       }),
-    };
+    } as unknown as ProactiveSignalRepository;
     const app = createApp({ store, proactiveSignalRepository: repository });
 
     const list = await app.inject({
@@ -234,7 +234,7 @@ describe("proactive signal API", () => {
         status: "queued",
         deliveryId: "delivery-a",
       }),
-    };
+    } as unknown as ProactiveSignalRepository;
     const app = createApp({ store, proactiveSignalRepository: repository });
 
     const response = await app.inject({
