@@ -333,7 +333,7 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       runtimeGate: {
         globalEnabled: true,
         writeKnowledgeBase: true,
-        enabledGroupIds: [groupId],
+        disabledGroupIds: [],
       },
       workerId: `worker-${label}`,
       operationKey: `publication-claim:${label}:${suffix}`,

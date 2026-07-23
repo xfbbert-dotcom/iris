@@ -369,7 +369,7 @@ export type ClaimApprovedPublicationExecutionInput = {
   runtimeGate: {
     globalEnabled: boolean;
     writeKnowledgeBase: boolean;
-    enabledGroupIds: string[];
+    disabledGroupIds: string[];
   };
   workerId: string;
   operationKey: string;
