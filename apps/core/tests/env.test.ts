@@ -95,6 +95,8 @@ describe("readActionApprovalRuntimeConfig", () => {
       IRIS_ACTION_PROPOSAL_PLANNER_BATCH_LIMIT: "12",
       IRIS_ACTION_APPROVAL_DISPATCHER_INTERVAL_MS: "1500",
       IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT: "8",
+      IRIS_KNOWLEDGE_PUBLICATION_EXECUTOR_INTERVAL_MS: "1750",
+      IRIS_KNOWLEDGE_PUBLICATION_EXECUTOR_BATCH_LIMIT: "6",
       IRIS_REVIEW_PUBLIC_ORIGIN: " https://iris.example.com/review/ ",
     })).toEqual({
       enabled: true,
@@ -104,6 +106,8 @@ describe("readActionApprovalRuntimeConfig", () => {
       plannerBatchLimit: 12,
       dispatcherIntervalMs: 1500,
       dispatcherBatchLimit: 8,
+      publicationExecutorIntervalMs: 1750,
+      publicationExecutorBatchLimit: 6,
       reviewPublicOrigin: "https://iris.example.com/review",
     });
   });

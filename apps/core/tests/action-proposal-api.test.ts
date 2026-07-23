@@ -194,6 +194,7 @@ function createHarness() {
       enabledGroupCount: 1,
       planner: { running: true, intervalMs: 1000, batchLimit: 10 },
       dispatcher: { running: true, intervalMs: 1000, batchLimit: 10 },
+      publicationExecutor: { running: true, intervalMs: 1000, batchLimit: 10 },
       proposals: {
         pending_approval: 0,
         approved: 0,

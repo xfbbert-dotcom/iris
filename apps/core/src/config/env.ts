@@ -94,6 +94,8 @@ export type ActionApprovalRuntimeConfig =
       plannerBatchLimit: number;
       dispatcherIntervalMs: number;
       dispatcherBatchLimit: number;
+      publicationExecutorIntervalMs: number;
+      publicationExecutorBatchLimit: number;
       reviewPublicOrigin?: string;
     };
 
@@ -454,6 +456,17 @@ export function readActionApprovalRuntimeConfig(
     dispatcherBatchLimit: readBoundedPositiveIntegerEnv(
       "IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT",
       env.IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT,
+      10,
+      100,
+    ),
+    publicationExecutorIntervalMs: readTimerDelayEnv(
+      "IRIS_KNOWLEDGE_PUBLICATION_EXECUTOR_INTERVAL_MS",
+      env.IRIS_KNOWLEDGE_PUBLICATION_EXECUTOR_INTERVAL_MS,
+      1000,
+    ),
+    publicationExecutorBatchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_KNOWLEDGE_PUBLICATION_EXECUTOR_BATCH_LIMIT",
+      env.IRIS_KNOWLEDGE_PUBLICATION_EXECUTOR_BATCH_LIMIT,
       10,
       100,
     ),

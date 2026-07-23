@@ -39,6 +39,14 @@ describe("ActionApprovalRuntime", () => {
     expect(dependencies.createPostgresPool).toHaveBeenCalledWith({
       databaseUrl: "postgres://iris:secret@postgres:5432/iris",
     });
+    expect(dependencies.createFeishuTenantAccessTokenProvider).toHaveBeenCalledWith({
+      baseUrl: "https://open.feishu.cn",
+      appId: "app-id",
+      appSecret: "app-secret",
+    });
+    expect(dependencies.createPublicationPublisher).toHaveBeenCalledWith(expect.objectContaining({
+      tokenProvider: dependencies.tokenProvider,
+    }));
     expect(dependencies.createActionWorker).toHaveBeenCalledWith(expect.objectContaining({
       requireReviewAttestation: false,
     }));
@@ -48,7 +56,7 @@ describe("ActionApprovalRuntime", () => {
     expect(runtime.canUseActionApprovalsForSourceGroup("oc_pilot")).toBe(false);
 
     await runtime.start();
-    expect(order).toEqual(["planner-start", "dispatcher-start"]);
+    expect(order).toEqual(["planner-start", "dispatcher-start", "publication-start"]);
     expect(runtime.canUseActionApprovalsForSourceGroup("oc_pilot")).toBe(true);
     expect(runtime.canUseActionApprovalsForSourceGroup("oc_other")).toBe(false);
     expect(dispatcherGate?.("oc_pilot")).toBe(true);
@@ -59,6 +67,7 @@ describe("ActionApprovalRuntime", () => {
       enabledGroupCount: 2,
       planner: { running: true, intervalMs: 1000, batchLimit: 10 },
       dispatcher: { running: true, intervalMs: 1000, batchLimit: 10 },
+      publicationExecutor: { running: true, intervalMs: 1000, batchLimit: 10 },
       proposals: {
         pending_approval: 1,
         approved: 2,
@@ -84,6 +93,8 @@ describe("ActionApprovalRuntime", () => {
     expect(order).toEqual([
       "planner-start",
       "dispatcher-start",
+      "publication-start",
+      "publication-stop",
       "dispatcher-stop",
       "planner-stop",
       "pool-end",
@@ -110,6 +121,8 @@ function enabledEnv() {
     IRIS_APPROVAL_ACTIONS_ENABLED: "true",
     IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot,oc_review",
     DATABASE_URL: "postgres://iris:secret@postgres:5432/iris",
+    FEISHU_APP_ID: "app-id",
+    FEISHU_APP_SECRET: "app-secret",
   };
 }
 
@@ -178,7 +191,16 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     isRunning: vi.fn(() => true),
     getSnapshot: vi.fn(() => ({ running: true, intervalMs: 1000, batchLimit: 10 })),
   };
+  const publicationLoop = {
+    start: vi.fn(() => { order.push("publication-start"); }),
+    stop: vi.fn(async () => { order.push("publication-stop"); }),
+    isRunning: vi.fn(() => true),
+    getSnapshot: vi.fn(() => ({ running: true, intervalMs: 1000, batchLimit: 10 })),
+  };
   const actionWorker = { processActionApproval: vi.fn() };
+  const tokenProvider = { getTenantAccessToken: vi.fn() };
+  const publicationPublisher = { publish: vi.fn() };
+  const publicationExecutor = { processBatch: vi.fn() };
   const dependencies = {
     createPostgresPool: vi.fn(() => pool),
     createRepository: vi.fn(() => repository),
@@ -187,8 +209,22 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
       _input: Parameters<NonNullable<ActionApprovalRuntimeDependencies["createDispatcher"]>>[0],
     ) => ({ processBatch: vi.fn() })),
     createActionWorker: vi.fn(() => actionWorker),
+    createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
+    createPublicationPublisher: vi.fn(() => publicationPublisher),
+    createPublicationExecutor: vi.fn(() => publicationExecutor),
     createPlannerLoop: vi.fn(() => plannerLoop),
     createDispatcherLoop: vi.fn(() => dispatcherLoop),
+    createPublicationExecutorLoop: vi.fn(() => publicationLoop),
   } satisfies ActionApprovalRuntimeDependencies;
-  return Object.assign(dependencies, { pool, repository, plannerLoop, dispatcherLoop, actionWorker });
+  return Object.assign(dependencies, {
+    pool,
+    repository,
+    plannerLoop,
+    dispatcherLoop,
+    publicationLoop,
+    actionWorker,
+    tokenProvider,
+    publicationPublisher,
+    publicationExecutor,
+  });
 }
