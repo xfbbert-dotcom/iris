@@ -15,11 +15,12 @@ This change starts the proactive behavior layer without enabling unsolicited Fei
   - `GET /internal/proactive-signals/groups/:groupId/candidates`
   - `POST /internal/proactive-signals/groups/:groupId/candidates/:idempotencyKey/dismiss`
 - Adds `0037_proactive_signal_candidates.sql` for durable pending candidate facts, evidence IDs, and append-only candidate events.
+- Adds `0038_proactive_signal_delivery_outbox.sql` and an approve-delivery route to queue a future Feishu group card without sending it.
 - Reuses the current-group conversation-state inspection store.
 - Requires `runtimeController.canProactivelySpeak(groupId)` before scanning, so global disable, group disable, or proactive pause all fail closed.
 - Returns idempotency keys tied to entity type, entity ID, and entity version.
 
-This does not send Feishu messages, create formal tasks, write knowledge-base content, call external tools, or enable `proactiveSpeech` in production. It is the first product slice before a governed proactive outbox/card flow.
+This does not send Feishu messages, create formal tasks, write knowledge-base content, call external tools, or enable `proactiveSpeech` in production. It creates the default-off candidate and delivery facts needed before a governed proactive card worker exists.
 
 ## Verification
 
@@ -38,5 +39,6 @@ This does not send Feishu messages, create formal tasks, write knowledge-base co
 The next product gate should turn pending candidates into a governed proactive outbox:
 
 1. Keep Feishu sending default-off and rate-limited.
-2. Add a manual operator route to approve a candidate for a Feishu card or message.
-3. Only after real pilot approval, connect a Feishu group card or message surface.
+2. Add a delivery worker that claims only approved pending delivery rows.
+3. Render a bounded Feishu group card without raw evidence text.
+4. Only after real pilot approval, enable the worker for one group.

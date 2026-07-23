@@ -173,6 +173,36 @@ export function registerProactiveSignalApi(
       }
     },
   );
+
+  app.post<{ Params: { groupId: string; idempotencyKey: string } }>(
+    "/internal/proactive-signals/groups/:groupId/candidates/:idempotencyKey/approve-delivery",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (repository === undefined) {
+        return reply.code(503).send({ ok: false, error: "proactive_signal_repository_unavailable" });
+      }
+      const groupId = readBoundedId(request.params.groupId);
+      const idempotencyKey = readBoundedId(request.params.idempotencyKey);
+      const operatorHint = readBoundedId(request.headers["x-iris-operator"]);
+      if (groupId === undefined || idempotencyKey === undefined || operatorHint === undefined) {
+        return invalidRequest(reply);
+      }
+      try {
+        const result = await repository.approveCandidateForDelivery({
+          idempotencyKey,
+          groupId,
+          operatorHint,
+          now: now(),
+        });
+        if (result.status === "not_found") {
+          return reply.code(404).send({ ok: false, error: "proactive_signal_candidate_not_found" });
+        }
+        return { ok: true, ...result };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "proactive_signal_delivery_approval_failed" });
+      }
+    },
+  );
 }
 
 function toResponseSignal(signal: ProactiveSignalCandidate) {

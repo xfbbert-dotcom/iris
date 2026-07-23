@@ -29,6 +29,22 @@ describe("proactive signal persistence", () => {
     expect(normalized).not.toMatch(/raw_(message|payload|response)|message_text/u);
   });
 
+  it("defines a default-off proactive delivery outbox without message content", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0038_proactive_signal_delivery_outbox.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table proactive_signal_delivery_outbox");
+    expect(normalized).toContain("candidate_idempotency_key text not null");
+    expect(normalized).toContain("delivery_channel text not null check (delivery_channel in ('feishu_group_card'))");
+    expect(normalized).toContain("status text not null check (status in ('pending', 'processing', 'sent', 'failed', 'cancelled'))");
+    expect(normalized).toContain("unique (candidate_idempotency_key, delivery_channel)");
+    expect(normalized).toContain("proactive_signal_delivery_events_append_only");
+    expect(normalized).not.toMatch(/message_body|raw_(message|payload|response)|card_json/u);
+  });
+
   it("records only new version-bound candidates and creates append-only creation events", async () => {
     const client = createClient([
       { rows: [{ idempotency_key: "quiet_open_thread:thread-a:1" }] },
@@ -183,6 +199,53 @@ describe("proactive signal persistence", () => {
     expect(sql).toContain("status = 'dismissed'");
     expect(sql).toContain("insert into proactive_signal_candidate_events");
     expect(sql).not.toContain("operator-a");
+  });
+
+  it("approves one pending candidate into the delivery outbox idempotently", async () => {
+    const client = createClient([{ rows: [{ id: "delivery-a" }] }, { rows: [] }]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    const result = await repository.approveCandidateForDelivery({
+      idempotencyKey: "quiet_open_thread:thread-a:1",
+      groupId: "group-a",
+      operatorHint: "operator-a",
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    expect(result).toEqual({ status: "queued", deliveryId: "delivery-a" });
+    const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("insert into proactive_signal_delivery_outbox");
+    expect(sql).toContain("on conflict (candidate_idempotency_key, delivery_channel) do nothing");
+    expect(sql).toContain("insert into proactive_signal_delivery_events");
+    expect(sql).not.toContain("operator-a");
+  });
+
+  it("derives bounded delivery ids from long candidate keys", async () => {
+    const longKey = "quiet_open_thread:" + "x".repeat(480) + ":1";
+    const client = createClient([{ rows: [{ id: "proactive-delivery-expected" }] }, { rows: [] }]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await repository.approveCandidateForDelivery({
+      idempotencyKey: longKey,
+      groupId: "group-a",
+      operatorHint: "operator-a",
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    const insertCall = client.query.mock.calls.find(([statement]) =>
+      String(statement).toLowerCase().includes("insert into proactive_signal_delivery_outbox")
+    );
+    expect(String((insertCall?.[1] as unknown[])[2])).toMatch(/^proactive-delivery:[0-9a-f]{64}$/u);
   });
 });
 

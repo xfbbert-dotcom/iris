@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { ProactiveSignalCandidate } from "./proactive-signal-planner.js";
 import { readDatabaseConfig, type DatabaseEnv } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
@@ -40,6 +42,16 @@ export type ProactiveSignalRepository = {
     operatorHint: string;
     now: Date;
   }): Promise<{ status: "dismissed" | "not_found" }>;
+  approveCandidateForDelivery(input: {
+    idempotencyKey: string;
+    groupId: string;
+    operatorHint: string;
+    now: Date;
+  }): Promise<
+    | { status: "queued"; deliveryId: string }
+    | { status: "already_queued"; deliveryId: string }
+    | { status: "not_found" }
+  >;
 };
 
 export type ProactiveSignalRuntime = {
@@ -77,6 +89,9 @@ export function createPostgresProactiveSignalRepository({
     },
     dismissCandidate(input) {
       return dismissCandidate(dataSource, input);
+    },
+    approveCandidateForDelivery(input) {
+      return approveCandidateForDelivery(dataSource, input);
     },
   };
 }
@@ -170,6 +185,93 @@ async function dismissCandidate(
     );
     await client.query("commit");
     return { status: "dismissed" };
+  } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch {
+      // Preserve the original write failure.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function approveCandidateForDelivery(
+  dataSource: ProactiveSignalDataSource,
+  input: {
+    idempotencyKey: string;
+    groupId: string;
+    operatorHint: string;
+    now: Date;
+  },
+): Promise<
+  | { status: "queued"; deliveryId: string }
+  | { status: "already_queued"; deliveryId: string }
+  | { status: "not_found" }
+> {
+  const idempotencyKey = requireBoundedString("idempotencyKey", input.idempotencyKey);
+  const groupId = requireBoundedString("groupId", input.groupId);
+  requireBoundedString("operatorHint", input.operatorHint);
+  const now = requireDate(input.now, "now");
+  const deliveryId = buildDeliveryId(idempotencyKey);
+  const client = await dataSource.connect();
+  try {
+    await client.query("begin");
+    const inserted = await client.query<{ id: unknown }>(
+      `
+      INSERT INTO proactive_signal_delivery_outbox (
+        id, candidate_idempotency_key, group_id, delivery_channel, status,
+        attempt_count, next_attempt_at, created_at, updated_at
+      )
+      SELECT $3, candidate.idempotency_key, candidate.group_id, 'feishu_group_card',
+        'pending', 0, $4, $4, $4
+      FROM proactive_signal_candidates candidate
+      WHERE candidate.idempotency_key = $1
+        AND candidate.group_id = $2
+        AND candidate.status = 'pending'
+      ON CONFLICT (candidate_idempotency_key, delivery_channel) DO NOTHING
+      RETURNING id
+      `,
+      [idempotencyKey, groupId, deliveryId, now],
+    );
+    if (inserted.rows.length > 0) {
+      const queuedDeliveryId = requireBoundedString("delivery id", inserted.rows[0]?.id);
+      await client.query(
+        `
+        INSERT INTO proactive_signal_delivery_events (
+          id, delivery_id, candidate_idempotency_key, group_id, event_type,
+          delivery_status, created_at
+        )
+        VALUES ($1, $2, $3, $4, 'queued', 'pending', $5)
+        ON CONFLICT (id) DO NOTHING
+        `,
+        [`${queuedDeliveryId}:queued`, queuedDeliveryId, idempotencyKey, groupId, now],
+      );
+      await client.query("commit");
+      return { status: "queued", deliveryId: queuedDeliveryId };
+    }
+
+    const existing = await client.query<{ id: unknown }>(
+      `
+      SELECT delivery.id
+      FROM proactive_signal_delivery_outbox delivery
+      JOIN proactive_signal_candidates candidate
+        ON candidate.idempotency_key = delivery.candidate_idempotency_key
+      WHERE delivery.candidate_idempotency_key = $1
+        AND delivery.group_id = $2
+        AND delivery.delivery_channel = 'feishu_group_card'
+        AND candidate.status = 'pending'
+      LIMIT 1
+      `,
+      [idempotencyKey, groupId],
+    );
+    await client.query("commit");
+    if (existing.rows.length === 0) return { status: "not_found" };
+    return {
+      status: "already_queued",
+      deliveryId: requireBoundedString("delivery id", existing.rows[0]?.id),
+    };
   } catch (error) {
     try {
       await client.query("rollback");
@@ -412,4 +514,8 @@ function requireSuggestedMode(value: unknown): ProactiveSignalCandidate["suggest
 function requireStatus(value: unknown): PersistedProactiveSignalCandidate["status"] {
   if (value === "pending" || value === "dismissed" || value === "superseded") return value;
   throw new Error("candidate status is invalid");
+}
+
+function buildDeliveryId(idempotencyKey: string): string {
+  return `proactive-delivery:${createHash("sha256").update(idempotencyKey).digest("hex")}`;
 }

@@ -108,6 +108,9 @@ describe("proactive signal API", () => {
       dismissCandidate: vi.fn<ProactiveSignalRepository["dismissCandidate"]>().mockResolvedValue({
         status: "not_found",
       }),
+      approveCandidateForDelivery: vi.fn<ProactiveSignalRepository["approveCandidateForDelivery"]>().mockResolvedValue({
+        status: "not_found",
+      }),
     };
     store.listThreads.mockResolvedValue([
       {
@@ -179,6 +182,10 @@ describe("proactive signal API", () => {
       dismissCandidate: vi.fn<ProactiveSignalRepository["dismissCandidate"]>().mockResolvedValue({
         status: "dismissed",
       }),
+      approveCandidateForDelivery: vi.fn<ProactiveSignalRepository["approveCandidateForDelivery"]>().mockResolvedValue({
+        status: "queued",
+        deliveryId: "delivery-a",
+      }),
     };
     const app = createApp({ store, proactiveSignalRepository: repository });
 
@@ -212,6 +219,39 @@ describe("proactive signal API", () => {
       now: new Date("2026-07-23T10:00:00.000Z"),
     });
     expect(dismiss.json()).toEqual({ ok: true, status: "dismissed" });
+    await app.close();
+  });
+
+  it("queues an approved proactive candidate for a future Feishu card without sending it", async () => {
+    const store = createStore();
+    const repository = {
+      recordCandidates: vi.fn<ProactiveSignalRepository["recordCandidates"]>(),
+      listPendingCandidates: vi.fn<ProactiveSignalRepository["listPendingCandidates"]>().mockResolvedValue([]),
+      dismissCandidate: vi.fn<ProactiveSignalRepository["dismissCandidate"]>().mockResolvedValue({
+        status: "not_found",
+      }),
+      approveCandidateForDelivery: vi.fn<ProactiveSignalRepository["approveCandidateForDelivery"]>().mockResolvedValue({
+        status: "queued",
+        deliveryId: "delivery-a",
+      }),
+    };
+    const app = createApp({ store, proactiveSignalRepository: repository });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/proactive-signals/groups/group-a/candidates/quiet_open_thread%3Athread-a%3A1/approve-delivery",
+      headers: { ...authorization, "x-iris-operator": "operator-a" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.approveCandidateForDelivery).toHaveBeenCalledWith({
+      idempotencyKey: "quiet_open_thread:thread-a:1",
+      groupId: "group-a",
+      operatorHint: "operator-a",
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+    expect(response.json()).toEqual({ ok: true, status: "queued", deliveryId: "delivery-a" });
     await app.close();
   });
 });
