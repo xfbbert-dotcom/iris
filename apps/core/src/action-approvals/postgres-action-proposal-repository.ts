@@ -51,9 +51,17 @@ import type {
   ApplyActionProposalGovernanceDispositionResult,
   CancelStaleActionProposalsInput,
   CancelStaleActionProposalsResult,
+  ClaimApprovedPublicationExecutionInput,
+  ClaimApprovedPublicationExecutionResult,
+  ClaimedPublicationDraft,
+  CompletePublicationExecutionInput,
+  CompletePublicationExecutionResult,
   CreateActionProposalInput,
+  KnowledgePublication,
   PolicyMutationResult,
   PreflightActionApprovalInput,
+  PublicationExecution,
+  PublicationExecutionState,
   PublicationTargetPolicy,
   CurrentActionReviewAttestationInput,
   RecordActionReviewAttestationInput,
@@ -223,6 +231,43 @@ type ActionReviewAttestationRow = {
   operation_fingerprint: string;
 };
 
+type PublicationExecutionRow = {
+  id: string;
+  proposal_id: string;
+  attempt_number: string | number;
+  state: PublicationExecutionState;
+  request_fingerprint: string;
+  provider: "feishu_wiki";
+  response_classification: string | null;
+  remote_node_token: string | null;
+  remote_document_token: string | null;
+  version: string | number;
+  retry_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type KnowledgePublicationRow = {
+  id: string;
+  proposal_id: string;
+  execution_id: string;
+  draft_id: string;
+  revision_number: string | number;
+  draft_version: string | number;
+  target_policy_id: string;
+  target_policy_version: string | number;
+  space_id: string;
+  remote_node_token: string;
+  remote_document_token: string;
+  remote_document_type: string;
+  remote_document_version: string | number | null;
+  content_hash: string;
+  permission_check_summary: string;
+  operation_key: string;
+  published_at: Date;
+  created_at: Date;
+};
+
 export class ActionProposalOperationConflictError extends Error {
   constructor() {
     super("action proposal operation conflict");
@@ -298,6 +343,12 @@ export function createPostgresActionProposalRepository({
     },
     applyGovernanceDisposition(input) {
       return applyGovernanceDisposition(dataSource, input);
+    },
+    claimApprovedPublicationExecution(input) {
+      return claimApprovedPublicationExecution(dataSource, input);
+    },
+    completePublicationExecution(input) {
+      return completePublicationExecution(dataSource, input);
     },
     inspectApprovalActionReplay(input) {
       return inspectApprovalActionReplay(dataSource, input);
@@ -1505,6 +1556,299 @@ async function inspectApprovalActionReplay(
   return inspectNormalizedApprovalActionReplay(dataSource, normalized, fingerprint);
 }
 
+async function claimApprovedPublicationExecution(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: ClaimApprovedPublicationExecutionInput,
+): Promise<ClaimApprovedPublicationExecutionResult> {
+  const normalized = normalizeClaimPublicationExecutionInput(input);
+  return withTransaction(dataSource, async (client) => {
+    await lockOperation(client, normalized.operationKey);
+    const replay = await client.query<PublicationExecutionRow>(
+      `${publicationExecutionSelect()} execution
+       JOIN action_execution_events event ON event.execution_id = execution.id
+       WHERE event.operation_key = $1`,
+      [normalized.operationKey],
+    );
+    if (replay.rows[0] !== undefined) {
+      return buildPublicationExecutionClaimResult(client, replay.rows[0]);
+    }
+
+    const proposal = await lockProposal(client, normalized.proposalId);
+    if (
+      proposal.status !== "approved" ||
+      Number(proposal.version) !== normalized.expectedProposalVersion
+    ) throw new ActionProposalVersionConflictError();
+    const draft = await lockDraftRevision(client, proposal.subject_id);
+    if (
+      draft.status !== "pending_review" ||
+      Number(draft.current_revision_number) !== Number(proposal.subject_revision) ||
+      Number(draft.version) !== Number(proposal.subject_version)
+    ) throw new ActionProposalVersionConflictError();
+    await validateDraftEvidence(client, draft);
+    const policy = await lockPolicy(client, proposal.target_policy_id);
+    if (
+      !policy.enabled ||
+      Number(policy.version) !== Number(proposal.target_policy_version) ||
+      !policyMatchesDraft(policy, draft)
+    ) throw new ActionProposalIneligibleError();
+    await requireNoPublicationForDraftRevision(
+      client,
+      proposal.subject_id,
+      Number(proposal.subject_revision),
+    );
+    await requireAllRequirementsSatisfied(client, proposal.id);
+    const existingLiveExecution = await client.query<{ id: string }>(
+      `SELECT id FROM action_executions
+       WHERE proposal_id = $1 AND state IN ('executing', 'succeeded', 'outcome_unknown', 'reconciliation_required')
+       FOR UPDATE`,
+      [proposal.id],
+    );
+    if (existingLiveExecution.rows[0] !== undefined) throw new ActionProposalIneligibleError();
+
+    const executionId = randomUUID();
+    const requestFingerprint = operationFingerprint({
+      operation: "feishu_wiki_publish_request",
+      proposalId: proposal.id,
+      draftId: proposal.subject_id,
+      revisionNumber: Number(proposal.subject_revision),
+      draftVersion: Number(proposal.subject_version),
+      targetPolicyId: policy.id,
+      targetPolicyVersion: Number(policy.version),
+    });
+    await client.query(
+      `INSERT INTO action_executions (
+        id, proposal_id, attempt_number, state, request_fingerprint, provider,
+        version, created_at, updated_at
+      ) VALUES ($1, $2, 1, 'executing', $3, 'feishu_wiki', 1, $4, $4)`,
+      [executionId, proposal.id, requestFingerprint, normalized.at],
+    );
+    await client.query(
+      `INSERT INTO action_execution_events (
+        id, execution_id, event_type, operation_key, from_version, to_version, created_at
+      ) VALUES ($1, $2, 'started', $3, NULL, 1, $4)`,
+      [randomUUID(), executionId, normalized.operationKey, normalized.at],
+    );
+    const nextProposalVersion = normalized.expectedProposalVersion + 1;
+    await client.query(
+      `UPDATE action_proposals
+       SET status = 'executing', version = version + 1, updated_at = $2
+       WHERE id = $1 AND version = $3 AND status = 'approved'`,
+      [proposal.id, normalized.at, normalized.expectedProposalVersion],
+    );
+    await client.query(
+      `INSERT INTO action_events (
+        id, proposal_id, event_type, operation_key,
+        from_version, to_version, reason_code, created_at
+      ) VALUES ($1, $2, 'execution_started', $3, $4, $5,
+        'publication_execution_claimed', $6)`,
+      [
+        randomUUID(),
+        proposal.id,
+        derivedOperationKey("action-execution-started", normalized.operationKey),
+        normalized.expectedProposalVersion,
+        nextProposalVersion,
+        normalized.at,
+      ],
+    );
+
+    const execution = await requirePublicationExecution(client, executionId);
+    return {
+      outcome: "applied",
+      proposal: await requireProposal(client, proposal.id),
+      execution,
+      draft: mapClaimedPublicationDraft(draft),
+      policy: mapPolicy(policy),
+    };
+  });
+}
+
+async function completePublicationExecution(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: CompletePublicationExecutionInput,
+): Promise<CompletePublicationExecutionResult> {
+  const normalized = normalizeCompletePublicationExecutionInput(input);
+  const fingerprint = operationFingerprint({
+    operation: "complete_publication_execution",
+    ...normalized,
+  });
+  return withTransaction(dataSource, async (client) => {
+    await lockOperation(client, normalized.operationKey);
+    const replay = await client.query<KnowledgePublicationRow>(
+      `${knowledgePublicationSelect()} WHERE operation_key = $1`,
+      [normalized.operationKey],
+    );
+    if (replay.rows[0] !== undefined) {
+      const publication = mapKnowledgePublication(replay.rows[0]);
+      if (
+        publication.proposalId !== normalized.proposalId ||
+        publication.executionId !== normalized.executionId
+      ) throw new ActionProposalOperationConflictError();
+      return {
+        outcome: "already_applied",
+        proposal: await requireProposal(client, normalized.proposalId),
+        execution: await requirePublicationExecution(client, normalized.executionId),
+        ...(await publicationDraftResult(client, publication.draftId)),
+        publication,
+      };
+    }
+
+    const proposal = await lockProposal(client, normalized.proposalId);
+    if (
+      proposal.status !== "executing" ||
+      Number(proposal.version) !== normalized.expectedProposalVersion ||
+      Number(proposal.subject_revision) !== normalized.expectedSubjectRevision
+    ) throw new ActionProposalVersionConflictError();
+    const execution = await lockPublicationExecution(client, normalized.executionId);
+    if (
+      execution.proposal_id !== proposal.id ||
+      execution.state !== "executing" ||
+      Number(execution.version) !== normalized.expectedExecutionVersion
+    ) throw new ActionProposalVersionConflictError();
+    const draft = await lockDraftRevision(client, proposal.subject_id);
+    if (
+      draft.status !== "pending_review" ||
+      Number(draft.current_revision_number) !== normalized.expectedSubjectRevision ||
+      Number(draft.version) !== normalized.expectedDraftVersion ||
+      Number(draft.version) !== Number(proposal.subject_version)
+    ) throw new ActionProposalVersionConflictError();
+    await validateDraftEvidence(client, draft);
+    const policy = await lockPolicy(client, proposal.target_policy_id);
+    if (
+      !policy.enabled ||
+      Number(policy.version) !== Number(proposal.target_policy_version) ||
+      !policyMatchesDraft(policy, draft)
+    ) throw new ActionProposalIneligibleError();
+    await requireNoPublicationForDraftRevision(
+      client,
+      proposal.subject_id,
+      Number(proposal.subject_revision),
+    );
+
+    const publicationId = randomUUID();
+    await client.query(
+      `INSERT INTO knowledge_publications (
+        id, proposal_id, execution_id, draft_id, revision_number, draft_version,
+        target_policy_id, target_policy_version, space_id, remote_node_token,
+        remote_document_token, remote_document_type, remote_document_version,
+        content_hash, permission_check_summary, operation_key, operation_fingerprint,
+        published_at, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12, $13, $14, $15, $16, $17, $18, $18)`,
+      [
+        publicationId,
+        proposal.id,
+        execution.id,
+        proposal.subject_id,
+        Number(proposal.subject_revision),
+        normalized.expectedDraftVersion,
+        policy.id,
+        Number(policy.version),
+        policy.space_id,
+        normalized.remoteNodeToken,
+        normalized.remoteDocumentToken,
+        normalized.remoteDocumentType,
+        normalized.remoteDocumentVersion ?? null,
+        normalized.contentHash,
+        normalized.permissionCheckSummary,
+        normalized.operationKey,
+        fingerprint,
+        normalized.at,
+      ],
+    );
+    const nextExecutionVersion = normalized.expectedExecutionVersion + 1;
+    await client.query(
+      `UPDATE action_executions
+       SET state = 'succeeded', response_classification = 'success',
+           remote_node_token = $2, remote_document_token = $3,
+           version = version + 1, updated_at = $4
+       WHERE id = $1 AND version = $5 AND state = 'executing'`,
+      [
+        execution.id,
+        normalized.remoteNodeToken,
+        normalized.remoteDocumentToken,
+        normalized.at,
+        normalized.expectedExecutionVersion,
+      ],
+    );
+    await client.query(
+      `INSERT INTO action_execution_events (
+        id, execution_id, event_type, operation_key, from_version, to_version,
+        response_classification, created_at
+      ) VALUES ($1, $2, 'succeeded', $3, $4, $5, 'success', $6)`,
+      [
+        randomUUID(),
+        execution.id,
+        derivedOperationKey("action-execution-succeeded", normalized.operationKey),
+        normalized.expectedExecutionVersion,
+        nextExecutionVersion,
+        normalized.at,
+      ],
+    );
+    const nextDraftVersion = normalized.expectedDraftVersion + 1;
+    await client.query(
+      `UPDATE knowledge_drafts
+       SET status = 'published', version = version + 1, published_at = $2,
+           published_by = 'iris_publication_executor', updated_at = $2
+       WHERE id = $1 AND version = $3 AND status = 'pending_review'`,
+      [proposal.subject_id, normalized.at, normalized.expectedDraftVersion],
+    );
+    await client.query(
+      `INSERT INTO knowledge_draft_events (
+        id, draft_id, event_type, from_version, to_version, operation_key,
+        operation_fingerprint, actor, revision_number, created_at
+      ) VALUES ($1, $2, 'publication_succeeded', $3, $4, $5, $6,
+        'iris_publication_executor', $7, $8)`,
+      [
+        randomUUID(),
+        proposal.subject_id,
+        normalized.expectedDraftVersion,
+        nextDraftVersion,
+        derivedOperationKey("knowledge-draft-publication-succeeded", normalized.operationKey),
+        operationFingerprint({
+          operation: "knowledge_draft_publication_succeeded",
+          proposalId: proposal.id,
+          executionId: execution.id,
+          publicationOperationKey: normalized.operationKey,
+        }),
+        normalized.expectedSubjectRevision,
+        normalized.at,
+      ],
+    );
+    const nextProposalVersion = normalized.expectedProposalVersion + 1;
+    await client.query(
+      `UPDATE action_proposals
+       SET status = 'succeeded', version = version + 1, updated_at = $2
+       WHERE id = $1 AND version = $3 AND status = 'executing'`,
+      [proposal.id, normalized.at, normalized.expectedProposalVersion],
+    );
+    await client.query(
+      `INSERT INTO action_events (
+        id, proposal_id, event_type, operation_key,
+        from_version, to_version, reason_code, created_at
+      ) VALUES ($1, $2, 'execution_succeeded', $3, $4, $5,
+        'publication_created', $6)`,
+      [
+        randomUUID(),
+        proposal.id,
+        derivedOperationKey("action-execution-succeeded", normalized.operationKey),
+        normalized.expectedProposalVersion,
+        nextProposalVersion,
+        normalized.at,
+      ],
+    );
+
+    const publication = await requireKnowledgePublication(client, publicationId);
+    return {
+      outcome: "applied",
+      proposal: await requireProposal(client, proposal.id),
+      execution: await requirePublicationExecution(client, execution.id),
+      draftStatus: "published",
+      draftVersion: nextDraftVersion,
+      publication,
+    };
+  });
+}
+
 async function applyGovernanceDisposition(
   dataSource: PostgresKnowledgeDraftDataSource,
   input: ApplyActionProposalGovernanceDispositionInput,
@@ -1800,6 +2144,18 @@ async function lockProposal(
   return result.rows[0];
 }
 
+async function lockPublicationExecution(
+  client: KnowledgeDraftTransactionClient,
+  id: string,
+): Promise<PublicationExecutionRow> {
+  const result = await client.query<PublicationExecutionRow>(
+    `${publicationExecutionSelect()} WHERE id = $1 FOR UPDATE`,
+    [id],
+  );
+  if (result.rows[0] === undefined) throw new ActionProposalIneligibleError();
+  return result.rows[0];
+}
+
 async function lockRequirement(
   client: KnowledgeDraftTransactionClient,
   id: string,
@@ -1889,6 +2245,83 @@ async function requireDraftState(
     version: Number(row.version),
     ...(row.source_group_id === null ? {} : { sourceGroupId: row.source_group_id }),
   };
+}
+
+async function requireNoPublicationForDraftRevision(
+  client: KnowledgeDraftTransactionClient,
+  draftId: string,
+  revisionNumber: number,
+): Promise<void> {
+  const result = await client.query<{ present: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM knowledge_publications
+       WHERE draft_id = $1 AND revision_number = $2
+     ) AS present`,
+    [draftId, revisionNumber],
+  );
+  if (result.rows[0]?.present === true) throw new ActionProposalIneligibleError();
+}
+
+async function requireAllRequirementsSatisfied(
+  client: KnowledgeDraftTransactionClient,
+  proposalId: string,
+): Promise<void> {
+  const result = await client.query<{ present: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM action_approval_requirements
+       WHERE proposal_id = $1 AND state <> 'satisfied'
+     ) AS present`,
+    [proposalId],
+  );
+  if (result.rows[0]?.present !== false) throw new ActionProposalIneligibleError();
+}
+
+async function buildPublicationExecutionClaimResult(
+  client: KnowledgeDraftTransactionClient,
+  executionRow: PublicationExecutionRow,
+): Promise<ClaimApprovedPublicationExecutionResult> {
+  const proposal = await requireProposal(client, executionRow.proposal_id);
+  const draft = await lockDraftRevision(client, proposal.subjectId);
+  const policy = await requirePolicy(client, proposal.targetPolicyId);
+  return {
+    outcome: "already_applied",
+    proposal,
+    execution: mapPublicationExecution(executionRow),
+    draft: mapClaimedPublicationDraft(draft),
+    policy,
+  };
+}
+
+async function requirePublicationExecution(
+  queryable: Pick<PostgresKnowledgeDraftDataSource, "query">,
+  id: string,
+): Promise<PublicationExecution> {
+  const result = await queryable.query<PublicationExecutionRow>(
+    `${publicationExecutionSelect()} WHERE id = $1`,
+    [id],
+  );
+  if (result.rows[0] === undefined) throw new ActionProposalPersistenceConflictError();
+  return mapPublicationExecution(result.rows[0]);
+}
+
+async function requireKnowledgePublication(
+  queryable: Pick<PostgresKnowledgeDraftDataSource, "query">,
+  id: string,
+): Promise<KnowledgePublication> {
+  const result = await queryable.query<KnowledgePublicationRow>(
+    `${knowledgePublicationSelect()} WHERE id = $1`,
+    [id],
+  );
+  if (result.rows[0] === undefined) throw new ActionProposalPersistenceConflictError();
+  return mapKnowledgePublication(result.rows[0]);
+}
+
+async function publicationDraftResult(
+  queryable: Pick<PostgresKnowledgeDraftDataSource, "query">,
+  draftId: string,
+): Promise<{ draftStatus: KnowledgeDraftStatus; draftVersion: number }> {
+  const draft = await requireDraftState(queryable, draftId);
+  return { draftStatus: draft.status, draftVersion: draft.version };
 }
 
 async function applyProposalDisposition(
@@ -2608,6 +3041,21 @@ function approvalOutboxSelect(alias?: string): string {
           FROM ${from}`;
 }
 
+function publicationExecutionSelect(): string {
+  return `SELECT id, proposal_id, attempt_number, state, request_fingerprint, provider,
+                 response_classification, remote_node_token, remote_document_token,
+                 version, retry_at, created_at, updated_at
+          FROM action_executions`;
+}
+
+function knowledgePublicationSelect(): string {
+  return `SELECT id, proposal_id, execution_id, draft_id, revision_number, draft_version,
+                 target_policy_id, target_policy_version, space_id, remote_node_token,
+                 remote_document_token, remote_document_type, remote_document_version,
+                 content_hash, permission_check_summary, operation_key, published_at, created_at
+          FROM knowledge_publications`;
+}
+
 function mapPolicy(row: PolicyRow): PublicationTargetPolicy {
   return {
     id: row.id,
@@ -2620,6 +3068,69 @@ function mapPolicy(row: PolicyRow): PublicationTargetPolicy {
     version: Number(row.version),
     createdAt: requireDate(row.created_at),
     updatedAt: requireDate(row.updated_at),
+  };
+}
+
+function mapClaimedPublicationDraft(row: DraftRevisionRow): ClaimedPublicationDraft {
+  const suggestedPublication = row.suggested_space_id === null &&
+    row.suggested_parent_node_token === null
+    ? undefined
+    : {
+        ...(row.suggested_space_id === null ? {} : { spaceId: row.suggested_space_id }),
+        ...(row.suggested_parent_node_token === null
+          ? {}
+          : { parentNodeToken: row.suggested_parent_node_token }),
+      };
+  return {
+    id: row.id,
+    ...(row.source_group_id === null ? {} : { sourceGroupId: row.source_group_id }),
+    revisionNumber: Number(row.current_revision_number),
+    version: Number(row.version),
+    title: row.title,
+    content: row.content,
+    riskLevel: row.risk_level,
+    ...(suggestedPublication === undefined ? {} : { suggestedPublication }),
+  };
+}
+
+function mapPublicationExecution(row: PublicationExecutionRow): PublicationExecution {
+  return {
+    id: row.id,
+    proposalId: row.proposal_id,
+    attemptNumber: Number(row.attempt_number),
+    state: row.state,
+    requestFingerprint: row.request_fingerprint,
+    provider: row.provider,
+    ...(row.response_classification === null ? {} : { responseClassification: row.response_classification }),
+    ...(row.remote_node_token === null ? {} : { remoteNodeToken: row.remote_node_token }),
+    ...(row.remote_document_token === null ? {} : { remoteDocumentToken: row.remote_document_token }),
+    version: Number(row.version),
+    ...(row.retry_at === null ? {} : { retryAt: requireDate(row.retry_at) }),
+    createdAt: requireDate(row.created_at),
+    updatedAt: requireDate(row.updated_at),
+  };
+}
+
+function mapKnowledgePublication(row: KnowledgePublicationRow): KnowledgePublication {
+  return {
+    id: row.id,
+    proposalId: row.proposal_id,
+    executionId: row.execution_id,
+    draftId: row.draft_id,
+    revisionNumber: Number(row.revision_number),
+    draftVersion: Number(row.draft_version),
+    targetPolicyId: row.target_policy_id,
+    targetPolicyVersion: Number(row.target_policy_version),
+    spaceId: row.space_id,
+    remoteNodeToken: row.remote_node_token,
+    remoteDocumentToken: row.remote_document_token,
+    remoteDocumentType: row.remote_document_type,
+    ...(row.remote_document_version === null ? {} : { remoteDocumentVersion: Number(row.remote_document_version) }),
+    contentHash: row.content_hash,
+    permissionCheckSummary: row.permission_check_summary,
+    operationKey: row.operation_key,
+    publishedAt: requireDate(row.published_at),
+    createdAt: requireDate(row.created_at),
   };
 }
 
@@ -2847,6 +3358,67 @@ function normalizeCurrentReviewAttestationInput(input: CurrentActionReviewAttest
     ),
     expectedContentHash: requireSha256("expectedContentHash", input.expectedContentHash),
   };
+}
+
+function normalizeClaimPublicationExecutionInput(input: ClaimApprovedPublicationExecutionInput) {
+  return {
+    proposalId: requireReference("proposalId", input.proposalId),
+    expectedProposalVersion: requirePositiveInteger(
+      "expectedProposalVersion",
+      input.expectedProposalVersion,
+    ),
+    workerId: requireReference("workerId", input.workerId),
+    operationKey: requireReference("operationKey", input.operationKey),
+    at: requireDate(input.at),
+  };
+}
+
+function normalizeCompletePublicationExecutionInput(input: CompletePublicationExecutionInput) {
+  return {
+    proposalId: requireReference("proposalId", input.proposalId),
+    executionId: requireReference("executionId", input.executionId),
+    expectedProposalVersion: requirePositiveInteger(
+      "expectedProposalVersion",
+      input.expectedProposalVersion,
+    ),
+    expectedExecutionVersion: requirePositiveInteger(
+      "expectedExecutionVersion",
+      input.expectedExecutionVersion,
+    ),
+    expectedDraftVersion: requirePositiveInteger("expectedDraftVersion", input.expectedDraftVersion),
+    expectedSubjectRevision: requirePositiveInteger(
+      "expectedSubjectRevision",
+      input.expectedSubjectRevision,
+    ),
+    remoteNodeToken: requireReference("remoteNodeToken", input.remoteNodeToken),
+    remoteDocumentToken: requireReference("remoteDocumentToken", input.remoteDocumentToken),
+    remoteDocumentType: requireRemoteDocumentType(input.remoteDocumentType),
+    ...(input.remoteDocumentVersion === undefined
+      ? {}
+      : { remoteDocumentVersion: requirePositiveInteger(
+          "remoteDocumentVersion",
+          input.remoteDocumentVersion,
+        ) }),
+    contentHash: requireSha256("contentHash", input.contentHash),
+    permissionCheckSummary: requireBoundedString(
+      "permissionCheckSummary",
+      input.permissionCheckSummary,
+      512,
+    ),
+    operationKey: requireReference("operationKey", input.operationKey),
+    at: requireDate(input.at),
+  };
+}
+
+function requireRemoteDocumentType(value: unknown): "doc" | "docx" | "sheet" | "bitable" | "wiki" {
+  if (
+    value === "doc" ||
+    value === "docx" ||
+    value === "sheet" ||
+    value === "bitable" ||
+    value === "wiki"
+  ) return value;
+  throw new Error("remoteDocumentType is invalid");
 }
 
 function normalizeGovernanceDispositionInput(

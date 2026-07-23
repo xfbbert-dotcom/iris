@@ -182,6 +182,62 @@ export type ActionApprovalOutboxStatusCounts = {
   terminalFailed: number;
 };
 
+export type PublicationExecutionState =
+  | "pending"
+  | "executing"
+  | "succeeded"
+  | "failed"
+  | "outcome_unknown"
+  | "reconciliation_required";
+
+export type PublicationExecution = {
+  id: string;
+  proposalId: string;
+  attemptNumber: number;
+  state: PublicationExecutionState;
+  requestFingerprint: string;
+  provider: "feishu_wiki";
+  responseClassification?: string;
+  remoteNodeToken?: string;
+  remoteDocumentToken?: string;
+  version: number;
+  retryAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type ClaimedPublicationDraft = {
+  id: string;
+  sourceGroupId?: string;
+  revisionNumber: number;
+  version: number;
+  title: string;
+  content: string;
+  riskLevel: KnowledgeDraftRiskLevel;
+  suggestedPublication?: { spaceId?: string; parentNodeToken?: string };
+};
+
+export type KnowledgePublication = {
+  id: string;
+  proposalId: string;
+  executionId: string;
+  draftId: string;
+  revisionNumber: number;
+  draftVersion: number;
+  targetPolicyId: string;
+  targetPolicyVersion: number;
+  spaceId: string;
+  remoteNodeToken: string;
+  remoteDocumentToken: string;
+  remoteDocumentType: string;
+  remoteDocumentVersion?: number;
+  contentHash: string;
+  permissionCheckSummary: string;
+  operationKey: string;
+  publishedAt: Date;
+  createdAt: Date;
+};
+
 export type ActionProposalDraftCandidate = {
   id: string;
   sourceGroupId?: string;
@@ -307,6 +363,48 @@ export type ApplyActionProposalGovernanceDispositionResult = {
   draftVersion: number;
 };
 
+export type ClaimApprovedPublicationExecutionInput = {
+  proposalId: string;
+  expectedProposalVersion: number;
+  workerId: string;
+  operationKey: string;
+  at: Date;
+};
+
+export type ClaimApprovedPublicationExecutionResult = {
+  outcome: "applied" | "already_applied";
+  proposal: ActionProposal;
+  execution: PublicationExecution;
+  draft: ClaimedPublicationDraft;
+  policy: PublicationTargetPolicy;
+};
+
+export type CompletePublicationExecutionInput = {
+  proposalId: string;
+  executionId: string;
+  expectedProposalVersion: number;
+  expectedExecutionVersion: number;
+  expectedDraftVersion: number;
+  expectedSubjectRevision: number;
+  remoteNodeToken: string;
+  remoteDocumentToken: string;
+  remoteDocumentType: "doc" | "docx" | "sheet" | "bitable" | "wiki";
+  remoteDocumentVersion?: number;
+  contentHash: string;
+  permissionCheckSummary: string;
+  operationKey: string;
+  at: Date;
+};
+
+export type CompletePublicationExecutionResult = {
+  outcome: "applied" | "already_applied";
+  proposal: ActionProposal;
+  execution: PublicationExecution;
+  draftStatus: KnowledgeDraftStatus;
+  draftVersion: number;
+  publication: KnowledgePublication;
+};
+
 export type ActionApprovalReplayInspection = {
   result: ApplyActionProposalActionResult;
   sourceGroupId?: string;
@@ -342,6 +440,12 @@ export interface ActionProposalRepository {
   applyGovernanceDisposition(
     input: ApplyActionProposalGovernanceDispositionInput,
   ): Promise<ApplyActionProposalGovernanceDispositionResult>;
+  claimApprovedPublicationExecution(
+    input: ClaimApprovedPublicationExecutionInput,
+  ): Promise<ClaimApprovedPublicationExecutionResult>;
+  completePublicationExecution(
+    input: CompletePublicationExecutionInput,
+  ): Promise<CompletePublicationExecutionResult>;
   inspectApprovalActionReplay(
     input: ApplyActionProposalActionInput,
   ): Promise<ActionApprovalReplayInspection | undefined>;

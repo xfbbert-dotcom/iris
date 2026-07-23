@@ -94,6 +94,16 @@ describe("action approval migration contract", () => {
     expect(counts).not.toHaveProperty("content");
     expect(repository).not.toHaveProperty("approveAsActor");
   });
+
+  it("exposes publication execution as the only path from approved proposal to published draft", () => {
+    const repository = createPostgresActionProposalRepository({
+      dataSource: { query: async () => ({ rows: [], rowCount: 0 }) } as unknown as PostgresKnowledgeDraftDataSource,
+    });
+
+    expect(repository.claimApprovedPublicationExecution).toBeTypeOf("function");
+    expect(repository.completePublicationExecution).toBeTypeOf("function");
+    expect(repository).not.toHaveProperty("publishDraftDirectly");
+  });
 });
 
 runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
@@ -299,6 +309,109 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
       }],
       approvals: [],
     });
+  });
+
+  it("claims an approved publication execution and completes it into durable publication facts", async () => {
+    const label = "proposal-publication-execution";
+    const policy = await createEnabledPolicy(label, ["low"]);
+    const draft = await createConfirmedDraft(label, "low");
+    const repository = actionRepository();
+    const proposal = (await repository.createProposal({
+      proposalId: `${label}-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: draft.version,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${label}:${suffix}`,
+      at,
+    })).proposal;
+
+    const claim = await repository.claimApprovedPublicationExecution({
+      proposalId: proposal.id,
+      expectedProposalVersion: proposal.version,
+      workerId: `worker-${label}`,
+      operationKey: `publication-claim:${label}:${suffix}`,
+      at,
+    });
+
+    expect(claim).toMatchObject({
+      outcome: "applied",
+      execution: {
+        proposalId: proposal.id,
+        attemptNumber: 1,
+        state: "executing",
+        provider: "feishu_wiki",
+      },
+      proposal: { status: "executing", version: proposal.version + 1 },
+      draft: {
+        id: draft.id,
+        revisionNumber: proposal.subjectRevision,
+        version: proposal.subjectVersion,
+        title: `Title ${label}`,
+        content: `Content ${label}`,
+      },
+      policy: {
+        id: policy.id,
+        version: policy.version,
+        spaceId: policy.spaceId,
+      },
+    });
+
+    const completion = await repository.completePublicationExecution({
+      proposalId: proposal.id,
+      executionId: claim.execution.id,
+      expectedProposalVersion: claim.proposal.version,
+      expectedExecutionVersion: claim.execution.version,
+      expectedDraftVersion: claim.draft.version,
+      expectedSubjectRevision: claim.draft.revisionNumber,
+      remoteNodeToken: `node-${label}-${suffix}`,
+      remoteDocumentToken: `doc-${label}-${suffix}`,
+      remoteDocumentType: "docx",
+      remoteDocumentVersion: 7,
+      contentHash: "c".repeat(64),
+      permissionCheckSummary: "feishu_write_access_verified",
+      operationKey: `publication-complete:${label}:${suffix}`,
+      at,
+    });
+
+    expect(completion).toMatchObject({
+      outcome: "applied",
+      proposal: { status: "succeeded", version: claim.proposal.version + 1 },
+      execution: {
+        id: claim.execution.id,
+        state: "succeeded",
+        version: claim.execution.version + 1,
+        remoteNodeToken: `node-${label}-${suffix}`,
+        remoteDocumentToken: `doc-${label}-${suffix}`,
+      },
+      draftStatus: "published",
+      draftVersion: claim.draft.version + 1,
+      publication: {
+        proposalId: proposal.id,
+        executionId: claim.execution.id,
+        draftId: draft.id,
+        revisionNumber: proposal.subjectRevision,
+        draftVersion: claim.draft.version,
+      },
+    });
+
+    await expect(repository.getProposal(proposal.id)).resolves.toMatchObject({
+      proposal: { status: "succeeded", version: claim.proposal.version + 1 },
+    });
+    const draftRepository = createPostgresKnowledgeDraftRepository({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+    });
+    await expect(draftRepository.getDraft(draft.id)).resolves.toMatchObject({
+      status: "published",
+      version: claim.draft.version + 1,
+    });
+    await expect(repository.listEvents(proposal.id)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ eventType: "execution_started", toVersion: claim.proposal.version }),
+        expect.objectContaining({ eventType: "execution_succeeded", toVersion: claim.proposal.version + 1 }),
+      ]),
+    );
   });
 
   it("keeps a medium-risk proposal pending for the exact owner", async () => {
