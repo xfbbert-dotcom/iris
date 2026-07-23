@@ -35,7 +35,7 @@ describe("FeishuReviewOAuthClient", () => {
   it("exchanges the code and reads the Feishu actor Open ID using separate bounded requests", async () => {
     const fetch = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { access_token: "user-token", token_type: "Bearer" } }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, access_token: "user-token", token_type: "Bearer" }))
       .mockResolvedValueOnce(jsonResponse({ code: 0, data: { open_id: "ou_owner" } }));
     const client = createClient({ fetch });
 
@@ -72,6 +72,18 @@ describe("FeishuReviewOAuthClient", () => {
     expect((fetch.mock.calls[0]?.[1] as RequestInit).signal).not.toBe(
       (fetch.mock.calls[1]?.[1] as RequestInit).signal,
     );
+  });
+
+  it("also accepts the legacy nested token payload without weakening user-info parsing", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { access_token: "user-token", token_type: "Bearer" } }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, data: { open_id: "ou_owner" } }));
+    const client = createClient({ fetch });
+
+    await expect(
+      client.exchangeCode({ code: "authorization-code", codeVerifier: "verifier-value" }),
+    ).resolves.toEqual({ actorOpenId: "ou_owner" });
   });
 
   it.each([

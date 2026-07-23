@@ -129,7 +129,8 @@ function readAccessToken(response: unknown): string {
   if (!isSuccessfulResponse(response)) {
     throw new Error(`Feishu review OAuth token response was rejected (${safeResponseStatus(response)})`);
   }
-  const data = response.data;
+  const responseRecord = response as Record<string, unknown>;
+  const data = isRecord(responseRecord.data) ? responseRecord.data : responseRecord;
   if (!isRecord(data) || data.token_type !== "Bearer" || !isToken(data.access_token)) {
     throw new Error("Feishu review OAuth token response was invalid");
   }
@@ -152,8 +153,8 @@ function readActorOpenId(response: unknown): string {
   return openId;
 }
 
-function isSuccessfulResponse(value: unknown): value is { code: number; data: unknown } {
-  return isRecord(value) && value.code === 0 && Object.hasOwn(value, "data");
+function isSuccessfulResponse(value: unknown): value is { code: number; data?: unknown } {
+  return isRecord(value) && value.code === 0;
 }
 
 function safeResponseStatus(value: unknown): string {
@@ -161,18 +162,7 @@ function safeResponseStatus(value: unknown): string {
   const code = typeof value.code === "number" || typeof value.code === "string"
     ? String(value.code).slice(0, 64)
     : "missing_code";
-  const message = readSafeMessage(value);
-  return message === undefined ? `code=${code}` : `code=${code} message=${message}`;
-}
-
-function readSafeMessage(value: Record<string, unknown>): string | undefined {
-  for (const key of ["msg", "message", "error", "error_description"]) {
-    const candidate = value[key];
-    if (typeof candidate === "string" && candidate.trim().length > 0) {
-      return candidate.trim().slice(0, 256).replaceAll(/\s+/gu, " ");
-    }
-  }
-  return undefined;
+  return `code=${code}`;
 }
 
 function isToken(value: unknown): value is string {
