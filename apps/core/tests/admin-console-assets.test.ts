@@ -62,4 +62,18 @@ describe("admin console assets", () => {
     expect(script).toContain("/reject");
     expect(script).not.toContain("currentRevision.content");
   });
+
+  it("renders proactive candidate governance without direct Feishu send controls", () => {
+    const html = renderAdminConsoleHtml();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("Proactive Candidates");
+    expect(html).toContain("proactive-candidate-table");
+    expect(script).toContain("/internal/proactive-signals/groups/");
+    expect(script).toContain("/scan");
+    expect(script).toContain("/candidates?limit=20");
+    expect(script).toContain("/dismiss");
+    expect(script).toContain("/approve-delivery");
+    expect(script).not.toContain("sendMessage");
+  });
 });

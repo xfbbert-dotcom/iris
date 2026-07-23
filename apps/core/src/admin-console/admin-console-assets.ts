@@ -160,6 +160,45 @@ export function renderAdminConsoleHtml(): string {
       <div id="knowledge-draft-empty" class="empty-state">Connect to load knowledge drafts.</div>
     </section>
 
+    <section class="proactive-candidate-panel" aria-labelledby="proactive-candidates-heading">
+      <div class="panel-heading">
+        <div>
+          <h2 id="proactive-candidates-heading">Proactive Candidates</h2>
+          <p>Scan one group, review pending suggestions, then dismiss or approve delivery.</p>
+        </div>
+        <div class="button-row">
+          <button id="proactive-candidate-scan" type="button">Scan Group</button>
+          <button id="proactive-candidate-refresh" type="button" class="secondary">Refresh Candidates</button>
+        </div>
+      </div>
+      <div class="source-filters">
+        <label>
+          Feishu group id
+          <input id="proactive-candidate-group" placeholder="oc_xxx">
+        </label>
+        <label>
+          Limit
+          <input id="proactive-candidate-limit" inputmode="numeric" placeholder="20">
+        </label>
+      </div>
+      <div class="table-wrap">
+        <table id="proactive-candidate-table">
+          <thead>
+            <tr>
+              <th>Candidate</th>
+              <th>Priority</th>
+              <th>Entity</th>
+              <th>Suggested mode</th>
+              <th>Last relevant</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="proactive-candidate-rows"></tbody>
+        </table>
+      </div>
+      <div id="proactive-candidate-empty" class="empty-state">Enter a group id to load proactive candidates.</div>
+    </section>
+
     <section class="event-panel" aria-labelledby="events-heading">
       <h2 id="events-heading">Recent Operator Events</h2>
       <ol id="event-log"></ol>
@@ -278,6 +317,7 @@ h2 {
 .control-grid > article,
 .document-source-panel,
 .knowledge-draft-panel,
+.proactive-candidate-panel,
 .event-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -393,6 +433,11 @@ dd {
 }
 
 .knowledge-draft-panel {
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.proactive-candidate-panel {
   margin-top: 16px;
   padding: 16px;
 }
@@ -530,6 +575,12 @@ const knowledgeDraftStatusFilter = document.getElementById("knowledge-draft-stat
 const knowledgeDraftGroupFilter = document.getElementById("knowledge-draft-group-filter");
 const knowledgeDraftRows = document.getElementById("knowledge-draft-rows");
 const knowledgeDraftEmpty = document.getElementById("knowledge-draft-empty");
+const proactiveCandidateScan = document.getElementById("proactive-candidate-scan");
+const proactiveCandidateRefresh = document.getElementById("proactive-candidate-refresh");
+const proactiveCandidateGroup = document.getElementById("proactive-candidate-group");
+const proactiveCandidateLimit = document.getElementById("proactive-candidate-limit");
+const proactiveCandidateRows = document.getElementById("proactive-candidate-rows");
+const proactiveCandidateEmpty = document.getElementById("proactive-candidate-empty");
 
 const capabilityLabels = {
   readGroupContext: "Read group context",
@@ -547,6 +598,11 @@ const documentSourceListBasePath = "/internal/document-sync/sources?includeLates
 const knowledgeDraftListBasePath = "/internal/knowledge-drafts?limit=20";
 const knowledgeDraftRequestRevisionPath = "/request-revision";
 const knowledgeDraftRejectPath = "/reject";
+const proactiveSignalGroupBasePath = "/internal/proactive-signals/groups/";
+const proactiveCandidateListSuffix = "/candidates?limit=20";
+const proactiveCandidateScanSuffix = "/scan";
+const proactiveCandidateDismissSuffix = "/dismiss";
+const proactiveCandidateApproveSuffix = "/approve-delivery";
 
 function readToken() {
   return sessionStorage.getItem("iris_admin_token") || "";
@@ -857,6 +913,125 @@ async function transitionKnowledgeDraft(draft, action) {
   });
 }
 
+function readProactiveGroupId() {
+  const groupId = proactiveCandidateGroup.value.trim();
+  if (groupId.length === 0) {
+    addEvent("Proactive group id is required");
+    return undefined;
+  }
+  return groupId;
+}
+
+function proactiveCandidateLimitValue() {
+  const raw = proactiveCandidateLimit.value.trim();
+  if (raw.length === 0) return "20";
+  return /^\\d+$/u.test(raw) ? raw : "20";
+}
+
+function proactiveCandidatePath(groupId, suffix) {
+  return proactiveSignalGroupBasePath + encodeURIComponent(groupId) + suffix;
+}
+
+function proactiveCandidateListPath(groupId) {
+  const limit = proactiveCandidateLimitValue();
+  if (limit === "20") return proactiveCandidatePath(groupId, proactiveCandidateListSuffix);
+  return proactiveCandidatePath(groupId, "/candidates?limit=" + encodeURIComponent(limit));
+}
+
+function renderProactiveCandidates(candidates) {
+  proactiveCandidateRows.replaceChildren();
+  for (const candidate of candidates || []) {
+    const row = document.createElement("tr");
+
+    const candidateCell = document.createElement("td");
+    candidateCell.className = "source-title";
+    const kind = document.createElement("strong");
+    kind.textContent = text(candidate.kind);
+    const key = document.createElement("div");
+    key.className = "source-uri";
+    key.textContent = text(candidate.idempotencyKey);
+    candidateCell.append(kind, key);
+
+    const priorityCell = document.createElement("td");
+    priorityCell.textContent = text(candidate.priority);
+
+    const entityCell = document.createElement("td");
+    entityCell.textContent = text(candidate.entityType) + " " + text(candidate.entityId) + " v" + text(candidate.entityVersion, "?");
+
+    const modeCell = document.createElement("td");
+    modeCell.textContent = text(candidate.suggestedMode);
+
+    const lastRelevantCell = document.createElement("td");
+    lastRelevantCell.textContent = text(candidate.lastRelevantAt);
+
+    const actionsCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "source-actions";
+    for (const [suffix, label, danger] of [
+      [proactiveCandidateDismissSuffix, "Dismiss", true],
+      [proactiveCandidateApproveSuffix, "Approve delivery", false],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = danger ? "danger" : "secondary";
+      button.textContent = label;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          await transitionProactiveCandidate(candidate, suffix);
+          addEvent(label + " recorded for " + candidate.idempotencyKey);
+          await refreshProactiveCandidates();
+        } catch (error) {
+          addEvent(label + " failed: " + error.message);
+          setConnection("Request failed", "warn");
+        } finally {
+          button.disabled = false;
+        }
+      });
+      actions.append(button);
+    }
+    actionsCell.append(actions);
+
+    row.append(candidateCell, priorityCell, entityCell, modeCell, lastRelevantCell, actionsCell);
+    proactiveCandidateRows.append(row);
+  }
+  proactiveCandidateEmpty.textContent = (candidates || []).length === 0 ? "No pending proactive candidates for this group." : "";
+}
+
+async function refreshProactiveCandidates() {
+  const groupId = readProactiveGroupId();
+  if (groupId === undefined) return;
+  const body = await requestJson(proactiveCandidateListPath(groupId));
+  renderProactiveCandidates(body.candidates || []);
+}
+
+async function scanProactiveCandidates() {
+  const groupId = readProactiveGroupId();
+  if (groupId === undefined) return;
+  await requestJson(proactiveCandidatePath(groupId, proactiveCandidateScanSuffix), {
+    method: "POST",
+    body: JSON.stringify({ limit: Number(proactiveCandidateLimitValue()) }),
+  });
+  addEvent("Proactive scan completed for " + groupId);
+  await refreshProactiveCandidates();
+}
+
+async function transitionProactiveCandidate(candidate, suffix) {
+  const groupId = readProactiveGroupId();
+  if (groupId === undefined) throw new Error("group_required");
+  return requestJson(
+    proactiveSignalGroupBasePath +
+      encodeURIComponent(groupId) +
+      "/candidates/" +
+      encodeURIComponent(candidate.idempotencyKey) +
+      suffix,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
 function renderCapabilityControls(capabilities) {
   capabilityControls.replaceChildren();
   for (const [name, enabled] of Object.entries(capabilities || {})) {
@@ -1016,6 +1191,31 @@ knowledgeDraftGroupFilter.addEventListener("input", async () => {
     await refreshKnowledgeDrafts();
   } catch (error) {
     addEvent("Knowledge draft filter failed: " + error.message);
+  }
+});
+
+proactiveCandidateScan.addEventListener("click", async () => {
+  proactiveCandidateScan.disabled = true;
+  try {
+    await scanProactiveCandidates();
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Proactive scan failed: " + error.message);
+  } finally {
+    proactiveCandidateScan.disabled = false;
+  }
+});
+
+proactiveCandidateRefresh.addEventListener("click", async () => {
+  proactiveCandidateRefresh.disabled = true;
+  try {
+    await refreshProactiveCandidates();
+    addEvent("Proactive candidates refreshed");
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Proactive candidate refresh failed: " + error.message);
+  } finally {
+    proactiveCandidateRefresh.disabled = false;
   }
 });
 
