@@ -1,0 +1,134 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { RuntimeController } from "../src/admin/runtime-controller.js";
+import { buildApp } from "../src/app.js";
+import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
+import type { ConversationStateInspectionStore } from "../src/conversation-state/conversation-state-api.js";
+
+const authorization = { authorization: "Bearer operator-secret" };
+
+describe("proactive signal API", () => {
+  it("fails closed when proactive speech is paused for the group", async () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig({}));
+    controller.pauseProactiveBehavior();
+    const store = createStore();
+    const app = createApp({ store, controller });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/proactive-signals/groups/group-a/preview",
+      headers: authorization,
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "proactive_speech_disabled" });
+    expect(store.listThreads).not.toHaveBeenCalled();
+    expect(store.listActions).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("previews bounded current-group proactive candidates without sending messages", async () => {
+    const store = createStore();
+    store.listThreads.mockResolvedValue([
+      {
+        id: "thread-quiet",
+        groupId: "group-a",
+        title: "Launch decision",
+        summary: "Waiting for a final launch call.",
+        status: "open",
+        confidence: 0.9,
+        version: 2,
+        firstEvidenceAt: new Date("2026-07-23T06:00:00.000Z"),
+        lastActivityAt: new Date("2026-07-23T07:00:00.000Z"),
+        createdAt: new Date("2026-07-23T06:00:00.000Z"),
+        updatedAt: new Date("2026-07-23T07:00:00.000Z"),
+        evidenceMessageIds: ["message-thread"],
+      },
+    ]);
+    store.listActions.mockResolvedValue([
+      {
+        id: "action-overdue",
+        groupId: "group-a",
+        description: "Bob sends the risk note.",
+        ownerRefType: "text_label",
+        ownerRef: "Bob",
+        dueAt: new Date("2026-07-23T08:00:00.000Z"),
+        status: "open",
+        confidence: 0.9,
+        version: 1,
+        createdAt: new Date("2026-07-23T06:00:00.000Z"),
+        updatedAt: new Date("2026-07-23T07:00:00.000Z"),
+        evidenceMessageIds: ["message-action"],
+      },
+    ]);
+    const app = createApp({ store, now: () => new Date("2026-07-23T10:00:00.000Z") });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/proactive-signals/groups/group-a/preview",
+      headers: authorization,
+      payload: { quietThreadAfterMinutes: 60, overdueActionGraceMinutes: 5, limit: 5 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(store.listThreads).toHaveBeenCalledWith({ groupId: "group-a", limit: 20 });
+    expect(store.listActions).toHaveBeenCalledWith({ groupId: "group-a", limit: 20 });
+    expect(response.json()).toEqual({
+      ok: true,
+      groupId: "group-a",
+      generatedAt: "2026-07-23T10:00:00.000Z",
+      signals: [
+        expect.objectContaining({
+          kind: "overdue_action",
+          entityId: "action-overdue",
+          suggestedMode: "ask_for_status",
+        }),
+        expect.objectContaining({
+          kind: "quiet_open_thread",
+          entityId: "thread-quiet",
+          suggestedMode: "ask_for_thread_update",
+        }),
+      ],
+    });
+    expect(response.body).not.toContain("raw message text");
+    await app.close();
+  });
+});
+
+function createApp({
+  store,
+  controller = new RuntimeController(createDefaultRuntimeConfig({})),
+  now = () => new Date("2026-07-23T10:00:00.000Z"),
+}: {
+  store: ConversationStateInspectionStore;
+  controller?: RuntimeController;
+  now?: () => Date;
+}) {
+  return buildApp({
+    internalApiToken: "operator-secret",
+    runtimeController: controller,
+    conversationStateInspectionStore: store,
+    now,
+    createAnswerDraftRuntime: () => undefined,
+    createMemoryExtractionRuntime: () => undefined,
+    createEventWorkerRuntime: () => undefined,
+    createDocumentSyncRuntime: () => undefined,
+    createReindexWorkerRuntime: () => undefined,
+  });
+}
+
+function createStore() {
+  return {
+    getStatus: vi.fn<ConversationStateInspectionStore["getStatus"]>().mockResolvedValue({
+      threads: { candidate: 0, open: 0, resolved: 0, merged: 0 },
+      actions: { open: 0, completed: 0, cancelled: 0 },
+      projectionRepairs: { pending: 0, processing: 0, completed: 0, failed: 0 },
+    }),
+    listThreads: vi.fn<ConversationStateInspectionStore["listThreads"]>().mockResolvedValue([]),
+    listActions: vi.fn<ConversationStateInspectionStore["listActions"]>().mockResolvedValue([]),
+    listThreadEvents: vi.fn<ConversationStateInspectionStore["listThreadEvents"]>().mockResolvedValue([]),
+    listActionEvents: vi.fn<ConversationStateInspectionStore["listActionEvents"]>().mockResolvedValue([]),
+    deleteMessageEvidence: vi.fn().mockResolvedValue({ status: "not_found" }),
+  };
+}

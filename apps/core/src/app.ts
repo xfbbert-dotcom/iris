@@ -79,6 +79,7 @@ import {
   type ConversationStateInspectionRuntime,
   type ConversationStateInspectionStore,
 } from "./conversation-state/conversation-state-api.js";
+import { registerProactiveSignalApi } from "./proactive-signals/proactive-signal-api.js";
 import { registerKnowledgeDraftApi } from "./knowledge-governance/knowledge-draft-api.js";
 import {
   createKnowledgeDraftRuntime as createDefaultKnowledgeDraftRuntime,
@@ -457,6 +458,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     app,
     dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
     { authenticationConfigured: internalApiToken !== undefined },
+  );
+  registerProactiveSignalApi(
+    app,
+    dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
+    runtimeController,
+    { authenticationConfigured: internalApiToken !== undefined, now },
   );
   registerKnowledgeDraftApi(app, knowledgeDraftRuntime, {
     authenticationConfigured: internalApiToken !== undefined,

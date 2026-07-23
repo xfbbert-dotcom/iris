@@ -1,0 +1,159 @@
+import type { FastifyInstance, FastifyReply } from "fastify";
+
+import type { RuntimeController } from "../admin/runtime-controller.js";
+import type { ConversationStateInspectionStore } from "../conversation-state/conversation-state-api.js";
+import {
+  planProactiveSignals,
+  type ProactiveSignalCandidate,
+} from "./proactive-signal-planner.js";
+
+const MAX_IDENTIFIER_CHARS = 512;
+const DEFAULT_ENTITY_LIMIT = 20;
+const MAX_ENTITY_LIMIT = 100;
+const DEFAULT_SIGNAL_LIMIT = 10;
+const DEFAULT_QUIET_THREAD_MINUTES = 24 * 60;
+const DEFAULT_OVERDUE_ACTION_GRACE_MINUTES = 15;
+
+type PreviewRequest = {
+  quietThreadAfterMinutes?: number;
+  overdueActionGraceMinutes?: number;
+  limit?: number;
+};
+
+export function registerProactiveSignalApi(
+  app: FastifyInstance,
+  store: ConversationStateInspectionStore | undefined,
+  runtimeController: RuntimeController,
+  {
+    authenticationConfigured,
+    now,
+  }: {
+    authenticationConfigured: boolean;
+    now: () => Date;
+  },
+): void {
+  app.post<{ Params: { groupId: string } }>(
+    "/internal/proactive-signals/groups/:groupId/preview",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (store === undefined) return unavailable(reply);
+      const groupId = readBoundedId(request.params.groupId);
+      const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+      const parsedRequest = parsePreviewRequest(body);
+      if (groupId === undefined || parsedRequest === undefined) return invalidRequest(reply);
+      if (!runtimeController.canProactivelySpeak(groupId)) {
+        return reply.code(403).send({ ok: false, error: "proactive_speech_disabled" });
+      }
+
+      try {
+        const generatedAt = now();
+        const [threads, actions] = await Promise.all([
+          store.listThreads({ groupId, limit: DEFAULT_ENTITY_LIMIT }),
+          store.listActions({ groupId, limit: DEFAULT_ENTITY_LIMIT }),
+        ]);
+        const signals = planProactiveSignals({
+          groupId,
+          now: generatedAt,
+          threads,
+          actions,
+          quietThreadAfterMs: parsedRequest.quietThreadAfterMinutes * 60 * 1000,
+          overdueActionGraceMs: parsedRequest.overdueActionGraceMinutes * 60 * 1000,
+          limit: parsedRequest.limit,
+        });
+
+        return {
+          ok: true,
+          groupId,
+          generatedAt: generatedAt.toISOString(),
+          signals: signals.map(toResponseSignal),
+        };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "proactive_signal_preview_failed" });
+      }
+    },
+  );
+}
+
+function toResponseSignal(signal: ProactiveSignalCandidate) {
+  return {
+    ...signal,
+    lastRelevantAt: signal.lastRelevantAt.toISOString(),
+  };
+}
+
+function parsePreviewRequest(value: unknown): Required<PreviewRequest> | undefined {
+  if (value === undefined || value === null) {
+    return {
+      quietThreadAfterMinutes: DEFAULT_QUIET_THREAD_MINUTES,
+      overdueActionGraceMinutes: DEFAULT_OVERDUE_ACTION_GRACE_MINUTES,
+      limit: DEFAULT_SIGNAL_LIMIT,
+    };
+  }
+  if (!isRecord(value)) return undefined;
+  const quietThreadAfterMinutes = readMinuteValue(
+    value.quietThreadAfterMinutes,
+    DEFAULT_QUIET_THREAD_MINUTES,
+  );
+  const overdueActionGraceMinutes = readMinuteValue(
+    value.overdueActionGraceMinutes,
+    DEFAULT_OVERDUE_ACTION_GRACE_MINUTES,
+  );
+  const limit = readLimit(value.limit, DEFAULT_SIGNAL_LIMIT);
+  if (
+    quietThreadAfterMinutes === undefined ||
+    overdueActionGraceMinutes === undefined ||
+    limit === undefined
+  ) {
+    return undefined;
+  }
+  return { quietThreadAfterMinutes, overdueActionGraceMinutes, limit };
+}
+
+function readMinuteValue(value: unknown, fallback: number): number | undefined {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 60 * 24 * 30) {
+    return undefined;
+  }
+  return value;
+}
+
+function readLimit(value: unknown, fallback: number): number | undefined {
+  if (value === undefined) return fallback;
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAX_ENTITY_LIMIT
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+function readBoundedId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= MAX_IDENTIFIER_CHARS
+    ? normalized
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isParsedJsonBody(value: unknown): value is { parsedBody: unknown } {
+  return isRecord(value) && Object.hasOwn(value, "parsedBody");
+}
+
+function authenticationUnavailable(reply: FastifyReply) {
+  return reply.code(503).send({ ok: false, error: "proactive_signal_api_auth_unavailable" });
+}
+
+function unavailable(reply: FastifyReply) {
+  return reply.code(503).send({ ok: false, error: "proactive_signal_store_unavailable" });
+}
+
+function invalidRequest(reply: FastifyReply) {
+  return reply.code(400).send({ ok: false, error: "invalid_request" });
+}
