@@ -7,6 +7,10 @@ describe("knowledge publication migration contract", () => {
     new URL("../migrations/0035_knowledge_publications.sql", import.meta.url),
     "utf8",
   );
+  const draftPublicationMetadataMigration = readFileSync(
+    new URL("../migrations/0036_knowledge_draft_publication_metadata.sql", import.meta.url),
+    "utf8",
+  );
 
   it("defines append-only publication facts for exact approved draft revisions", () => {
     expect(migration).toMatch(/create table knowledge_publications/iu);
@@ -28,5 +32,11 @@ describe("knowledge publication migration contract", () => {
     expect(migration).toMatch(/knowledge_publications_append_only/iu);
     expect(migration).toMatch(/knowledge_publications_truncate_guard/iu);
     expect(migration).toMatch(/publication_succeeded/iu);
+  });
+
+  it("adds publication metadata columns to knowledge drafts", () => {
+    expect(draftPublicationMetadataMigration).toMatch(/alter table knowledge_drafts/iu);
+    expect(draftPublicationMetadataMigration).toMatch(/add column published_at timestamptz/iu);
+    expect(draftPublicationMetadataMigration).toMatch(/add column published_by text/iu);
   });
 });
