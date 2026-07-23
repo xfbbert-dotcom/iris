@@ -26,6 +26,15 @@ This change starts the proactive behavior layer without enabling unsolicited Fei
 - Reuses the current-group conversation-state inspection store.
 - Requires `runtimeController.canProactivelySpeak(groupId)` before scanning, so global disable, group disable, or proactive pause all fail closed.
 - Returns idempotency keys tied to entity type, entity ID, and entity version.
+- Adds a minimal `/admin` browser console for the 20-30 person internal rollout:
+  - reads `/internal/status`, `/internal/readiness`, and `/internal/runtime-control/status` after the operator supplies the existing internal bearer token;
+  - operates global, group, and capability runtime-control switches through existing APIs;
+  - keeps the page shell free of secrets and internal data.
+- Extends the pilot Caddy allowlist only for exact static console routes:
+  - `GET /admin`
+  - `GET /admin/console.css`
+  - `GET /admin/console.js`
+  - public `/internal/*` remains `404`.
 
 This still does not create formal tasks, write knowledge-base content, call external tools, or enable `proactiveSpeech` in production. Real Feishu group delivery remains default-off and requires both the new delivery env gate and runtime/group proactive permission.
 
@@ -41,6 +50,8 @@ This still does not create formal tasks, write knowledge-base content, call exte
   - `npm --workspace apps/core test -- proactive-signal-planner.test.ts proactive-signal-api.test.ts proactive-signal-repository.test.ts proactive-signal-card-renderer.test.ts proactive-signal-dispatcher.test.ts proactive-signal-dispatcher-loop.test.ts proactive-signal-runtime.test.ts env.test.ts server-startup.test.ts migration-runner.test.ts`
   - `npm --workspace apps/core run typecheck`
   - `npm --workspace apps/core run build`
+  - `npm --workspace apps/core test -- admin-console-api.test.ts admin-console-assets.test.ts answer-draft-api.test.ts runtime-control-api.test.ts`
+  - `node --test scripts/pilot-compose.test.mjs`
   - `git diff --check`
 
 ## Next Gate

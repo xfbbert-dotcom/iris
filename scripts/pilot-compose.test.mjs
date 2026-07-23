@@ -212,6 +212,17 @@ test("proxies only exact public action-review methods and paths", () => {
   assert.match(caddyfile, /handle\s*\{\s*respond 404\s*\}/su);
 });
 
+test("proxies only the static admin console shell and assets", () => {
+  assert.match(
+    caddyfile,
+    /@adminConsole\s*\{\s*method GET\s*path \/admin \/admin\/console\.css \/admin\/console\.js\s*\}/su,
+  );
+  assert.match(caddyfile, /handle @adminConsole\s*\{\s*reverse_proxy core:3000/su);
+  assert.doesNotMatch(caddyfile, /path \/admin\/\*|handle_path \/admin|@admin\s+path/iu);
+  assert.doesNotMatch(caddyfile, /path \/internal|@internal|handle_path \/internal/iu);
+  assert.match(caddyfile, /handle\s*\{\s*respond 404\s*\}/su);
+});
+
 test("enforces the action-review boundary in the pinned Caddy runtime", async (t) => {
   const docker = process.platform === "win32" ? "docker.exe" : "docker";
   const daemon = spawnSync(docker, ["version", "--format", "{{.Server.Version}}"], {
@@ -259,6 +270,9 @@ test("enforces the action-review boundary in the pinned Caddy runtime", async (t
       { method: "GET", path: "/review/action-proposals/proposal-1" },
       { method: "GET", path: "/review/oauth/callback" },
       { method: "POST", path: "/review/action-proposals/proposal-1/attest" },
+      { method: "GET", path: "/admin" },
+      { method: "GET", path: "/admin/console.css" },
+      { method: "GET", path: "/admin/console.js" },
     ]) {
       const response = await fetch(`${origin}${request.path}`, {
         method: request.method,
@@ -276,6 +290,9 @@ test("enforces the action-review boundary in the pinned Caddy runtime", async (t
       { method: "GET", path: "/review/action-proposals/proposal-1/" },
       { method: "GET", path: "/review/action-proposals/proposal-1/extra" },
       { method: "GET", path: "/review/oauth/callback/extra" },
+      { method: "POST", path: "/admin" },
+      { method: "GET", path: "/admin/" },
+      { method: "GET", path: "/admin/extra" },
       { method: "GET", path: "/internal/status" },
     ]) {
       const response = await fetch(`${origin}${request.path}`, {

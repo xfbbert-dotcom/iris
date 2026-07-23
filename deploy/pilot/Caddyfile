@@ -47,6 +47,14 @@
     reverse_proxy core:3000
   }
 
+  @adminConsole {
+    method GET
+    path /admin /admin/console.css /admin/console.js
+  }
+  handle @adminConsole {
+    reverse_proxy core:3000
+  }
+
   handle {
     respond 404
   }

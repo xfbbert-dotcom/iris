@@ -71,6 +71,11 @@ import {
 } from "./documents/feishu-document-body-fetcher.js";
 import { buildInternalStatusSnapshot } from "./admin/internal-status-snapshot.js";
 import { buildInternalRolloutReadinessReport } from "./admin/internal-rollout-readiness.js";
+import {
+  renderAdminConsoleCss,
+  renderAdminConsoleHtml,
+  renderAdminConsoleScript,
+} from "./admin-console/admin-console-assets.js";
 import { registerGroupMemoryApi } from "./memory/group-memory-api.js";
 import type { GroupMemoryService } from "./memory/group-memory-service.js";
 import {
@@ -508,6 +513,27 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     now,
   });
   registerActionReviewApi(app, actionReviewRuntime, { now });
+
+  app.get("/admin", async (_request, reply) => (
+    reply
+      .header("content-type", "text/html; charset=utf-8")
+      .header("cache-control", "no-store")
+      .send(renderAdminConsoleHtml())
+  ));
+
+  app.get("/admin/console.css", async (_request, reply) => (
+    reply
+      .header("content-type", "text/css; charset=utf-8")
+      .header("cache-control", "public, max-age=300")
+      .send(renderAdminConsoleCss())
+  ));
+
+  app.get("/admin/console.js", async (_request, reply) => (
+    reply
+      .header("content-type", "application/javascript; charset=utf-8")
+      .header("cache-control", "public, max-age=300")
+      .send(renderAdminConsoleScript())
+  ));
 
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
