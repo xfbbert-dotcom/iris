@@ -44,6 +44,7 @@ describe("KnowledgePublicationExecutor", () => {
           createdAt: at,
         },
       })),
+      failPublicationExecution: vi.fn(),
     };
     const publisher = {
       publish: vi.fn(async () => ({
@@ -105,11 +106,60 @@ describe("KnowledgePublicationExecutor", () => {
     }));
   });
 
+  it("marks a claimed execution failed when publishing is rejected before completion", async () => {
+    const proposal = actionProposal();
+    const claim = publicationClaim({ proposal });
+    const repository = {
+      listProposals: vi.fn(async () => [proposal]),
+      claimApprovedPublicationExecution: vi.fn(async () => claim),
+      completePublicationExecution: vi.fn(),
+      failPublicationExecution: vi.fn(async () => ({
+        outcome: "applied" as const,
+        proposal: { ...claim.proposal, status: "failed" as const, version: claim.proposal.version + 1 },
+        execution: { ...claim.execution, state: "failed" as const, version: claim.execution.version + 1 },
+      })),
+    };
+    const publisher = {
+      publish: vi.fn(async () => {
+        throw new Error("raw Feishu body with tenant-secret and draft text");
+      }),
+    };
+    const executor = createKnowledgePublicationExecutor({
+      repository,
+      publisher,
+      runtimeSnapshot: () => ({
+        globalEnabled: true,
+        disabledGroupIds: [],
+        capabilities: { writeKnowledgeBase: true },
+      }),
+      workerId: "publication-worker-1",
+      now: () => at,
+    });
+
+    await expect(executor.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "failed",
+      proposalId: proposal.id,
+      code: "publisher_failed",
+    }]);
+    expect(repository.failPublicationExecution).toHaveBeenCalledWith({
+      proposalId: claim.proposal.id,
+      executionId: claim.execution.id,
+      expectedProposalVersion: claim.proposal.version,
+      expectedExecutionVersion: claim.execution.version,
+      classification: "failed",
+      responseClassification: "publisher_failed",
+      operationKey: expect.stringMatching(/^publication-failed:/u),
+      at,
+    });
+    expect(JSON.stringify(await executor.processBatch({ limit: 1 }))).not.toMatch(/tenant-secret|draft text/iu);
+  });
+
   it("does not claim or publish while knowledge-base writing is disabled", async () => {
     const repository = {
       listProposals: vi.fn(),
       claimApprovedPublicationExecution: vi.fn(),
       completePublicationExecution: vi.fn(),
+      failPublicationExecution: vi.fn(),
     };
     const publisher = { publish: vi.fn() };
     const executor = createKnowledgePublicationExecutor({

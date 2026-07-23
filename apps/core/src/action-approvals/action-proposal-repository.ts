@@ -410,6 +410,23 @@ export type CompletePublicationExecutionResult = {
   publication: KnowledgePublication;
 };
 
+export type FailPublicationExecutionInput = {
+  proposalId: string;
+  executionId: string;
+  expectedProposalVersion: number;
+  expectedExecutionVersion: number;
+  classification: "failed" | "reconciliation_required";
+  responseClassification: string;
+  operationKey: string;
+  at: Date;
+};
+
+export type FailPublicationExecutionResult = {
+  outcome: "applied" | "already_applied";
+  proposal: ActionProposal;
+  execution: PublicationExecution;
+};
+
 export type ActionApprovalReplayInspection = {
   result: ApplyActionProposalActionResult;
   sourceGroupId?: string;
@@ -451,6 +468,9 @@ export interface ActionProposalRepository {
   completePublicationExecution(
     input: CompletePublicationExecutionInput,
   ): Promise<CompletePublicationExecutionResult>;
+  failPublicationExecution(
+    input: FailPublicationExecutionInput,
+  ): Promise<FailPublicationExecutionResult>;
   inspectApprovalActionReplay(
     input: ApplyActionProposalActionInput,
   ): Promise<ActionApprovalReplayInspection | undefined>;

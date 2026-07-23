@@ -43,6 +43,7 @@ export type KnowledgePublicationExecutorDependencies = {
     | "listProposals"
     | "claimApprovedPublicationExecution"
     | "completePublicationExecution"
+    | "failPublicationExecution"
   >;
   publisher: KnowledgePublicationPublisher;
   runtimeSnapshot(): {
@@ -122,6 +123,7 @@ async function publishClaim(input: {
       policy: input.claim.policy,
     });
   } catch {
+    await markExecutionFailed(input, "failed", "publisher_failed");
     return { status: "failed", proposalId: input.proposalId, code: "publisher_failed" };
   }
   try {
@@ -141,9 +143,39 @@ async function publishClaim(input: {
       at: requireDate(input.now()),
     });
   } catch {
+    await markExecutionFailed(input, "reconciliation_required", "completion_failed");
     return { status: "failed", proposalId: input.proposalId, code: "completion_failed" };
   }
   return { status: "published", proposalId: input.proposalId, code: "publication_succeeded" };
+}
+
+async function markExecutionFailed(
+  input: {
+    repository: KnowledgePublicationExecutorDependencies["repository"];
+    claim: ClaimApprovedPublicationExecutionResult;
+    now: () => Date;
+  },
+  classification: "failed" | "reconciliation_required",
+  responseClassification: "publisher_failed" | "completion_failed",
+): Promise<void> {
+  try {
+    await input.repository.failPublicationExecution({
+      proposalId: input.claim.proposal.id,
+      executionId: input.claim.execution.id,
+      expectedProposalVersion: input.claim.proposal.version,
+      expectedExecutionVersion: input.claim.execution.version,
+      classification,
+      responseClassification,
+      operationKey: stableOperationKey(
+        classification === "failed" ? "publication-failed" : "publication-reconciliation",
+        input.claim.proposal.id,
+        input.claim.proposal.version,
+      ),
+      at: requireDate(input.now()),
+    });
+  } catch {
+    // The result remains content-free; reconciliation can inspect durable executing facts.
+  }
 }
 
 function stableOperationKey(prefix: string, proposalId: string, proposalVersion: number): string {

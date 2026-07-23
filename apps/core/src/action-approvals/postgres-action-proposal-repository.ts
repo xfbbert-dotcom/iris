@@ -57,6 +57,8 @@ import type {
   CompletePublicationExecutionInput,
   CompletePublicationExecutionResult,
   CreateActionProposalInput,
+  FailPublicationExecutionInput,
+  FailPublicationExecutionResult,
   KnowledgePublication,
   PolicyMutationResult,
   PreflightActionApprovalInput,
@@ -349,6 +351,9 @@ export function createPostgresActionProposalRepository({
     },
     completePublicationExecution(input) {
       return completePublicationExecution(dataSource, input);
+    },
+    failPublicationExecution(input) {
+      return failPublicationExecution(dataSource, input);
     },
     inspectApprovalActionReplay(input) {
       return inspectApprovalActionReplay(dataSource, input);
@@ -1850,6 +1855,98 @@ async function completePublicationExecution(
       draftStatus: "published",
       draftVersion: nextDraftVersion,
       publication,
+    };
+  });
+}
+
+async function failPublicationExecution(
+  dataSource: PostgresKnowledgeDraftDataSource,
+  input: FailPublicationExecutionInput,
+): Promise<FailPublicationExecutionResult> {
+  const normalized = normalizeFailPublicationExecutionInput(input);
+  return withTransaction(dataSource, async (client) => {
+    await lockOperation(client, normalized.operationKey);
+    const replay = await client.query<PublicationExecutionRow>(
+      `${publicationExecutionSelect()} execution
+       JOIN action_execution_events event ON event.execution_id = execution.id
+       WHERE event.operation_key = $1`,
+      [normalized.operationKey],
+    );
+    if (replay.rows[0] !== undefined) {
+      return {
+        outcome: "already_applied",
+        proposal: await requireProposal(client, normalized.proposalId),
+        execution: mapPublicationExecution(replay.rows[0]),
+      };
+    }
+
+    const proposal = await lockProposal(client, normalized.proposalId);
+    if (
+      proposal.status !== "executing" ||
+      Number(proposal.version) !== normalized.expectedProposalVersion
+    ) throw new ActionProposalVersionConflictError();
+    const execution = await lockPublicationExecution(client, normalized.executionId);
+    if (
+      execution.proposal_id !== proposal.id ||
+      execution.state !== "executing" ||
+      Number(execution.version) !== normalized.expectedExecutionVersion
+    ) throw new ActionProposalVersionConflictError();
+    const nextExecutionVersion = normalized.expectedExecutionVersion + 1;
+    await client.query(
+      `UPDATE action_executions
+       SET state = $2, response_classification = $3, version = version + 1, updated_at = $4
+       WHERE id = $1 AND version = $5 AND state = 'executing'`,
+      [
+        execution.id,
+        normalized.classification,
+        normalized.responseClassification,
+        normalized.at,
+        normalized.expectedExecutionVersion,
+      ],
+    );
+    await client.query(
+      `INSERT INTO action_execution_events (
+        id, execution_id, event_type, operation_key, from_version, to_version,
+        response_classification, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        randomUUID(),
+        execution.id,
+        normalized.classification,
+        normalized.operationKey,
+        normalized.expectedExecutionVersion,
+        nextExecutionVersion,
+        normalized.responseClassification,
+        normalized.at,
+      ],
+    );
+    const nextProposalVersion = normalized.expectedProposalVersion + 1;
+    await client.query(
+      `UPDATE action_proposals
+       SET status = $2, version = version + 1, updated_at = $3
+       WHERE id = $1 AND version = $4 AND status = 'executing'`,
+      [proposal.id, normalized.classification, normalized.at, normalized.expectedProposalVersion],
+    );
+    await client.query(
+      `INSERT INTO action_events (
+        id, proposal_id, event_type, operation_key,
+        from_version, to_version, reason_code, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        randomUUID(),
+        proposal.id,
+        normalized.classification === "failed" ? "execution_failed" : "execution_reconciliation_required",
+        derivedOperationKey("action-execution-terminal", normalized.operationKey),
+        normalized.expectedProposalVersion,
+        nextProposalVersion,
+        normalized.responseClassification,
+        normalized.at,
+      ],
+    );
+    return {
+      outcome: "applied",
+      proposal: await requireProposal(client, proposal.id),
+      execution: await requirePublicationExecution(client, execution.id),
     };
   });
 }
@@ -3425,6 +3522,34 @@ function normalizeCompletePublicationExecutionInput(input: CompletePublicationEx
     operationKey: requireReference("operationKey", input.operationKey),
     at: requireDate(input.at),
   };
+}
+
+function normalizeFailPublicationExecutionInput(input: FailPublicationExecutionInput) {
+  return {
+    proposalId: requireReference("proposalId", input.proposalId),
+    executionId: requireReference("executionId", input.executionId),
+    expectedProposalVersion: requirePositiveInteger(
+      "expectedProposalVersion",
+      input.expectedProposalVersion,
+    ),
+    expectedExecutionVersion: requirePositiveInteger(
+      "expectedExecutionVersion",
+      input.expectedExecutionVersion,
+    ),
+    classification: requirePublicationFailureClassification(input.classification),
+    responseClassification: requireBoundedString(
+      "responseClassification",
+      input.responseClassification,
+      512,
+    ),
+    operationKey: requireReference("operationKey", input.operationKey),
+    at: requireDate(input.at),
+  };
+}
+
+function requirePublicationFailureClassification(value: unknown): "failed" | "reconciliation_required" {
+  if (value === "failed" || value === "reconciliation_required") return value;
+  throw new Error("classification is invalid");
 }
 
 function requireRemoteDocumentType(value: unknown): "doc" | "docx" | "sheet" | "bitable" | "wiki" {
