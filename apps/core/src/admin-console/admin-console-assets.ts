@@ -73,6 +73,48 @@ export function renderAdminConsoleHtml(): string {
       </article>
     </section>
 
+    <section class="document-source-panel" aria-labelledby="document-sources-heading">
+      <div class="panel-heading">
+        <div>
+          <h2 id="document-sources-heading">Document Sources</h2>
+          <p>Inspect Iris-visible sources and adjust answering or knowledge-draft policy.</p>
+        </div>
+        <button id="document-source-refresh" type="button" class="secondary">Refresh Sources</button>
+      </div>
+      <div class="source-filters">
+        <label>
+          Source type
+          <select id="document-source-type">
+            <option value="">All types</option>
+            <option value="group_visible_document">Group documents</option>
+            <option value="authorized_wiki">Authorized wiki</option>
+            <option value="user_submitted">User submitted</option>
+          </select>
+        </label>
+        <label>
+          Source id contains
+          <input id="document-source-id-filter" placeholder="document source id">
+        </label>
+      </div>
+      <div class="table-wrap">
+        <table id="document-source-table">
+          <thead>
+            <tr>
+              <th>Source</th>
+              <th>Type</th>
+              <th>Sync</th>
+              <th>Permission</th>
+              <th>Answering</th>
+              <th>Drafts</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="document-source-rows"></tbody>
+        </table>
+      </div>
+      <div id="document-source-empty" class="empty-state">Connect to load document sources.</div>
+    </section>
+
     <section class="event-panel" aria-labelledby="events-heading">
       <h2 id="events-heading">Recent Operator Events</h2>
       <ol id="event-log"></ol>
@@ -110,6 +152,10 @@ button, input {
   font: inherit;
 }
 
+select {
+  font: inherit;
+}
+
 button {
   min-height: 36px;
   border: 1px solid var(--accent);
@@ -136,6 +182,16 @@ button:disabled {
 }
 
 input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: #fff;
+  color: var(--text);
+}
+
+select {
   width: 100%;
   min-height: 36px;
   border: 1px solid var(--line);
@@ -175,6 +231,7 @@ h2 {
 .operator-panel,
 .status-grid > article,
 .control-grid > article,
+.document-source-panel,
 .event-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -284,6 +341,90 @@ dd {
   margin-top: 16px;
 }
 
+.document-source-panel {
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.panel-heading p,
+.empty-state {
+  color: var(--muted);
+}
+
+.source-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(220px, 1fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.table-wrap {
+  margin-top: 14px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 860px;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+td.source-title {
+  max-width: 300px;
+}
+
+.source-uri {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.policy-toggle {
+  display: inline-grid;
+  grid-template-columns: 18px auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.policy-toggle input {
+  min-height: auto;
+  width: 16px;
+}
+
+.empty-state {
+  margin-top: 10px;
+}
+
 #event-log {
   margin: 0;
   padding-left: 20px;
@@ -297,7 +438,8 @@ dd {
 @media (max-width: 880px) {
   .operator-panel,
   .status-grid,
-  .control-grid {
+  .control-grid,
+  .source-filters {
     grid-template-columns: 1fr;
   }
 
@@ -321,6 +463,11 @@ const readinessStatus = document.getElementById("readiness-status");
 const capabilityControls = document.getElementById("capability-controls");
 const groupIdInput = document.getElementById("group-id");
 const eventLog = document.getElementById("event-log");
+const documentSourceRefresh = document.getElementById("document-source-refresh");
+const documentSourceType = document.getElementById("document-source-type");
+const documentSourceIdFilter = document.getElementById("document-source-id-filter");
+const documentSourceRows = document.getElementById("document-source-rows");
+const documentSourceEmpty = document.getElementById("document-source-empty");
 
 const capabilityLabels = {
   readGroupContext: "Read group context",
@@ -334,6 +481,7 @@ const capabilityLabels = {
 };
 
 let cachedStatus = undefined;
+const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
 
 function readToken() {
   return sessionStorage.getItem("iris_admin_token") || "";
@@ -393,6 +541,11 @@ function addEvent(message) {
   }
 }
 
+function text(value, fallback = "unknown") {
+  if (value === undefined || value === null || value === "") return fallback;
+  return String(value);
+}
+
 function renderDefinitionList(target, entries) {
   target.replaceChildren();
   for (const [label, value] of entries) {
@@ -402,6 +555,130 @@ function renderDefinitionList(target, entries) {
     detail.textContent = String(value);
     target.append(term, detail);
   }
+}
+
+function sourceListPath() {
+  const [path, query] = documentSourceListBasePath.split("?");
+  const params = new URLSearchParams(query);
+  const type = documentSourceType.value;
+  if (type.length > 0) params.set("sourceType", type);
+  return path + "?" + params.toString();
+}
+
+function sourceMatchesFilter(source) {
+  const needle = documentSourceIdFilter.value.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  return text(source.id, "").toLowerCase().includes(needle);
+}
+
+function renderPolicyToggle(source, field, labelText) {
+  const label = document.createElement("label");
+  label.className = "policy-toggle";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = source[field] === true;
+  checkbox.addEventListener("change", async () => {
+    checkbox.disabled = true;
+    try {
+      await updateDocumentSourcePolicy(source.id, { [field]: checkbox.checked });
+      addEvent(labelText + " updated for " + source.id);
+      await refreshDocumentSources();
+    } catch (error) {
+      checkbox.checked = !checkbox.checked;
+      addEvent(labelText + " update failed: " + error.message);
+      setConnection("Request failed", "warn");
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+  const labelCopy = document.createElement("span");
+  labelCopy.textContent = labelText;
+  label.append(checkbox, labelCopy);
+  return label;
+}
+
+function renderDocumentSources(sources) {
+  documentSourceRows.replaceChildren();
+  const visibleSources = (sources || []).filter(sourceMatchesFilter);
+  for (const source of visibleSources) {
+    const row = document.createElement("tr");
+
+    const sourceCell = document.createElement("td");
+    sourceCell.className = "source-title";
+    const title = document.createElement("strong");
+    title.textContent = text(source.title, source.id);
+    const uri = document.createElement("div");
+    uri.className = "source-uri";
+    uri.textContent = text(source.sourceUri, source.id);
+    sourceCell.append(title, uri);
+
+    const typeCell = document.createElement("td");
+    typeCell.textContent = text(source.sourceType);
+
+    const syncCell = document.createElement("td");
+    syncCell.textContent = text(source.syncHealth?.status, source.syncState || "unknown");
+    const snapshotTime = source.latestSnapshot?.observedAt;
+    if (snapshotTime) {
+      const observed = document.createElement("div");
+      observed.className = "source-uri";
+      observed.textContent = snapshotTime;
+      syncCell.append(observed);
+    }
+
+    const permissionCell = document.createElement("td");
+    permissionCell.textContent = text(source.permissionState, "not recorded");
+
+    const answeringCell = document.createElement("td");
+    answeringCell.append(renderPolicyToggle(source, "answeringEnabled", "Answering"));
+
+    const draftsCell = document.createElement("td");
+    draftsCell.append(renderPolicyToggle(source, "knowledgeDraftsEnabled", "Drafts"));
+
+    const actionsCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "source-actions";
+    const syncButton = document.createElement("button");
+    syncButton.type = "button";
+    syncButton.className = "secondary";
+    syncButton.textContent = "Sync";
+    syncButton.addEventListener("click", async () => {
+      syncButton.disabled = true;
+      try {
+        await enqueueDocumentSource(source.id);
+        addEvent("Manual sync queued for " + source.id);
+      } catch (error) {
+        addEvent("Manual sync failed: " + error.message);
+        setConnection("Request failed", "warn");
+      } finally {
+        syncButton.disabled = false;
+      }
+    });
+    actions.append(syncButton);
+    actionsCell.append(actions);
+
+    row.append(sourceCell, typeCell, syncCell, permissionCell, answeringCell, draftsCell, actionsCell);
+    documentSourceRows.append(row);
+  }
+  documentSourceEmpty.textContent = visibleSources.length === 0 ? "No document sources match the current filters." : "";
+}
+
+async function refreshDocumentSources() {
+  const body = await requestJson(sourceListPath());
+  renderDocumentSources(body.sources || []);
+}
+
+async function updateDocumentSourcePolicy(sourceId, patch) {
+  return requestJson("/internal/document-sync/sources/" + encodeURIComponent(sourceId) + "/policy", {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+async function enqueueDocumentSource(sourceId) {
+  return requestJson("/internal/document-sync/sources/" + encodeURIComponent(sourceId) + "/enqueue", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 function renderCapabilityControls(capabilities) {
@@ -465,6 +742,7 @@ async function refresh() {
     requestJson("/internal/runtime-control/status"),
   ]);
   render(status, readiness, runtime);
+  await refreshDocumentSources();
   setConnection(status.ok === true ? "Connected" : "Attention needed", status.ok === true ? "ok" : "warn");
 }
 
@@ -499,6 +777,37 @@ connectButton.addEventListener("click", async () => {
   } catch (error) {
     setConnection("Unauthorized or unavailable", "warn");
     addEvent("Connect failed: " + error.message);
+  }
+});
+
+documentSourceRefresh.addEventListener("click", async () => {
+  documentSourceRefresh.disabled = true;
+  try {
+    await refreshDocumentSources();
+    addEvent("Document sources refreshed");
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Document source refresh failed: " + error.message);
+  } finally {
+    documentSourceRefresh.disabled = false;
+  }
+});
+
+documentSourceType.addEventListener("change", async () => {
+  if (readToken().length === 0) return;
+  try {
+    await refreshDocumentSources();
+  } catch (error) {
+    addEvent("Document source filter failed: " + error.message);
+  }
+});
+
+documentSourceIdFilter.addEventListener("input", async () => {
+  if (readToken().length === 0) return;
+  try {
+    await refreshDocumentSources();
+  } catch (error) {
+    addEvent("Document source filter failed: " + error.message);
   }
 });
 

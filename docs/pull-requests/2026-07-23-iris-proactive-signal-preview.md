@@ -29,6 +29,7 @@ This change starts the proactive behavior layer without enabling unsolicited Fei
 - Adds a minimal `/admin` browser console for the 20-30 person internal rollout:
   - reads `/internal/status`, `/internal/readiness`, and `/internal/runtime-control/status` after the operator supplies the existing internal bearer token;
   - operates global, group, and capability runtime-control switches through existing APIs;
+  - lists document sources with latest snapshot health and lets operators toggle answering / knowledge-draft policy or enqueue a manual sync through existing document-sync APIs;
   - keeps the page shell free of secrets and internal data.
 - Extends the pilot Caddy allowlist only for exact static console routes:
   - `GET /admin`
@@ -51,6 +52,7 @@ This still does not create formal tasks, write knowledge-base content, call exte
   - `npm --workspace apps/core run typecheck`
   - `npm --workspace apps/core run build`
   - `npm --workspace apps/core test -- admin-console-api.test.ts admin-console-assets.test.ts answer-draft-api.test.ts runtime-control-api.test.ts`
+  - `npm --workspace apps/core test -- admin-console-api.test.ts admin-console-assets.test.ts`
   - `node --test scripts/pilot-compose.test.mjs`
   - `git diff --check`
 

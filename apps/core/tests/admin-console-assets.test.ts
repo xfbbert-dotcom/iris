@@ -35,4 +35,18 @@ describe("admin console assets", () => {
     expect(css).toContain(".status-grid");
     expect(css).not.toContain("url(");
   });
+
+  it("renders document source governance regions without document body text", () => {
+    const html = renderAdminConsoleHtml();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("Document Sources");
+    expect(html).toContain("document-source-table");
+    expect(script).toContain("/internal/document-sync/sources?includeLatestSnapshot=true");
+    expect(script).toContain("/internal/document-sync/sources/");
+    expect(script).toContain("/policy");
+    expect(script).toContain("/enqueue");
+    expect(script).not.toContain("bodyText");
+    expect(script).not.toContain("rawContent");
+  });
 });

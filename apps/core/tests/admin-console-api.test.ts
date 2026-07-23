@@ -37,4 +37,23 @@ describe("Admin Console routes", () => {
 
     await app.close();
   });
+
+  it("does not expose document-source governance without the internal bearer token", async () => {
+    const app = buildApp({ internalApiToken: "operator-secret" });
+
+    const unauthorizedList = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources?includeLatestSnapshot=true",
+    });
+    const unauthorizedPolicy = await app.inject({
+      method: "PATCH",
+      url: "/internal/document-sync/sources/source-1/policy",
+      payload: { answeringEnabled: false },
+    });
+
+    expect(unauthorizedList.statusCode).toBe(401);
+    expect(unauthorizedPolicy.statusCode).toBe(401);
+
+    await app.close();
+  });
 });
