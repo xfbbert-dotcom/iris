@@ -119,6 +119,71 @@ describe("proactive signal persistence", () => {
     });
     expect(client.query.mock.calls).toHaveLength(3);
   });
+
+  it("lists pending candidates for one group without selecting raw message content", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [
+        {
+          idempotency_key: "quiet_open_thread:thread-a:1",
+          group_id: "group-a",
+          kind: "quiet_open_thread",
+          priority: "medium",
+          entity_type: "thread",
+          entity_id: "thread-a",
+          entity_version: "1",
+          reason_code: "thread_quiet_threshold_elapsed",
+          suggested_mode: "ask_for_thread_update",
+          status: "pending",
+          last_relevant_at: new Date("2026-07-23T08:00:00.000Z"),
+          created_at: new Date("2026-07-23T10:00:00.000Z"),
+          updated_at: new Date("2026-07-23T10:00:00.000Z"),
+          evidence_message_ids: ["message-a"],
+        },
+      ] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    const candidates = await repository.listPendingCandidates({ groupId: "group-a", limit: 10 });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        idempotencyKey: "quiet_open_thread:thread-a:1",
+        entityId: "thread-a",
+        evidenceMessageIds: ["message-a"],
+      }),
+    ]);
+    const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("candidate.group_id = $1");
+    expect(sql).toContain("candidate.status = 'pending'");
+    expect(sql).not.toContain("conversation_messages.text");
+  });
+
+  it("dismisses a pending candidate with an append-only event and no content payload", async () => {
+    const client = createClient([{ rows: [{ idempotency_key: "quiet_open_thread:thread-a:1" }] }, { rows: [] }]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    const result = await repository.dismissCandidate({
+      idempotencyKey: "quiet_open_thread:thread-a:1",
+      groupId: "group-a",
+      operatorHint: "operator-a",
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    expect(result).toEqual({ status: "dismissed" });
+    const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("update proactive_signal_candidates");
+    expect(sql).toContain("status = 'dismissed'");
+    expect(sql).toContain("insert into proactive_signal_candidate_events");
+    expect(sql).not.toContain("operator-a");
+  });
 });
 
 function signal(overrides: Partial<ProactiveSignalCandidate> = {}): ProactiveSignalCandidate {

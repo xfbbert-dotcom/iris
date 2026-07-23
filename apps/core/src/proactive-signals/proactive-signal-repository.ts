@@ -8,11 +8,38 @@ export type ProactiveSignalRecordResult = {
   recordedKeys: string[];
 };
 
+export type PersistedProactiveSignalCandidate = {
+  idempotencyKey: string;
+  groupId: string;
+  kind: ProactiveSignalCandidate["kind"];
+  priority: ProactiveSignalCandidate["priority"];
+  entityType: "thread" | "action";
+  entityId: string;
+  entityVersion: number;
+  reasonCode: ProactiveSignalCandidate["reasonCode"];
+  suggestedMode: ProactiveSignalCandidate["suggestedMode"];
+  status: "pending" | "dismissed" | "superseded";
+  lastRelevantAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  evidenceMessageIds: string[];
+};
+
 export type ProactiveSignalRepository = {
   recordCandidates(input: {
     signals: ProactiveSignalCandidate[];
     now: Date;
   }): Promise<ProactiveSignalRecordResult>;
+  listPendingCandidates(input: {
+    groupId: string;
+    limit: number;
+  }): Promise<PersistedProactiveSignalCandidate[]>;
+  dismissCandidate(input: {
+    idempotencyKey: string;
+    groupId: string;
+    operatorHint: string;
+    now: Date;
+  }): Promise<{ status: "dismissed" | "not_found" }>;
 };
 
 export type ProactiveSignalRuntime = {
@@ -45,6 +72,12 @@ export function createPostgresProactiveSignalRepository({
     recordCandidates(input) {
       return recordCandidates(dataSource, input);
     },
+    listPendingCandidates(input) {
+      return listPendingCandidates(dataSource, input);
+    },
+    dismissCandidate(input) {
+      return dismissCandidate(dataSource, input);
+    },
   };
 }
 
@@ -63,6 +96,90 @@ export function createProactiveSignalRuntime({
     repository: createPostgresProactiveSignalRepository({ dataSource: pool as never }),
     close: () => pool.end(),
   };
+}
+
+async function listPendingCandidates(
+  queryable: Queryable,
+  input: { groupId: string; limit: number },
+): Promise<PersistedProactiveSignalCandidate[]> {
+  const groupId = requireBoundedString("groupId", input.groupId);
+  const limit = requireLimit(input.limit);
+  const result = await queryable.query<Record<string, unknown>>(
+    `
+    SELECT candidate.*,
+      ARRAY(
+        SELECT evidence.conversation_message_id
+        FROM proactive_signal_candidate_evidence evidence
+        WHERE evidence.idempotency_key = candidate.idempotency_key
+          AND evidence.group_id = candidate.group_id
+        ORDER BY evidence.created_at ASC, evidence.conversation_message_id ASC
+        LIMIT 20
+      ) AS evidence_message_ids
+    FROM proactive_signal_candidates candidate
+    WHERE candidate.group_id = $1
+      AND candidate.status = 'pending'
+    ORDER BY candidate.priority DESC, candidate.last_relevant_at ASC, candidate.idempotency_key ASC
+    LIMIT $2
+    `,
+    [groupId, limit],
+  );
+  return result.rows.map(mapCandidateRow);
+}
+
+async function dismissCandidate(
+  dataSource: ProactiveSignalDataSource,
+  input: {
+    idempotencyKey: string;
+    groupId: string;
+    operatorHint: string;
+    now: Date;
+  },
+): Promise<{ status: "dismissed" | "not_found" }> {
+  const idempotencyKey = requireBoundedString("idempotencyKey", input.idempotencyKey);
+  const groupId = requireBoundedString("groupId", input.groupId);
+  requireBoundedString("operatorHint", input.operatorHint);
+  const now = requireDate(input.now, "now");
+  const client = await dataSource.connect();
+  try {
+    await client.query("begin");
+    const updated = await client.query<{ idempotency_key: unknown }>(
+      `
+      UPDATE proactive_signal_candidates
+      SET status = 'dismissed',
+          updated_at = $3
+      WHERE idempotency_key = $1
+        AND group_id = $2
+        AND status = 'pending'
+      RETURNING idempotency_key
+      `,
+      [idempotencyKey, groupId, now],
+    );
+    if (updated.rows.length === 0) {
+      await client.query("commit");
+      return { status: "not_found" };
+    }
+    await client.query(
+      `
+      INSERT INTO proactive_signal_candidate_events (
+        id, idempotency_key, group_id, event_type, candidate_status, created_at
+      )
+      VALUES ($1, $2, $3, 'dismissed', 'dismissed', $4)
+      ON CONFLICT (id) DO NOTHING
+      `,
+      [`${idempotencyKey}:dismissed`, idempotencyKey, groupId, now],
+    );
+    await client.query("commit");
+    return { status: "dismissed" };
+  } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch {
+      // Preserve the original write failure.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function recordCandidates(
@@ -204,6 +321,26 @@ function normalizeSignals(signals: ProactiveSignalCandidate[]): ProactiveSignalC
   });
 }
 
+function mapCandidateRow(row: Record<string, unknown>): PersistedProactiveSignalCandidate {
+  const kind = requireSignalKind(row.kind);
+  return {
+    idempotencyKey: requireBoundedString("idempotencyKey", row.idempotency_key),
+    groupId: requireBoundedString("groupId", row.group_id),
+    kind,
+    priority: requirePriority(row.priority),
+    entityType: requireEntityType(row.entity_type),
+    entityId: requireBoundedString("entityId", row.entity_id),
+    entityVersion: requireVersion(row.entity_version),
+    reasonCode: requireReasonCode(row.reason_code),
+    suggestedMode: requireSuggestedMode(row.suggested_mode),
+    status: requireStatus(row.status),
+    lastRelevantAt: requireDateValue(row.last_relevant_at, "lastRelevantAt"),
+    createdAt: requireDateValue(row.created_at, "createdAt"),
+    updatedAt: requireDateValue(row.updated_at, "updatedAt"),
+    evidenceMessageIds: requireStringArray(row.evidence_message_ids),
+  };
+}
+
 function entityTypeFor(kind: ProactiveSignalCandidate["kind"]): "thread" | "action" {
   return kind === "quiet_open_thread" ? "thread" : "action";
 }
@@ -218,12 +355,61 @@ function requireBoundedString(label: string, value: unknown): string {
 }
 
 function requireVersion(value: unknown): number {
-  if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error("entity version is invalid");
-  return Number(value);
+  const parsed = typeof value === "string" ? Number(value) : value;
+  if (!Number.isSafeInteger(parsed) || Number(parsed) < 1) throw new Error("entity version is invalid");
+  return Number(parsed);
 }
 
 function requireDate(value: Date, label: string): Date {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) throw new Error(`${label} is invalid`);
   return date;
+}
+
+function requireDateValue(value: unknown, label: string): Date {
+  const date = value instanceof Date ? new Date(value) : new Date(String(value));
+  if (!Number.isFinite(date.getTime())) throw new Error(`${label} is invalid`);
+  return date;
+}
+
+function requireLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_BATCH_SIZE) {
+    throw new Error("limit is invalid");
+  }
+  return value;
+}
+
+function requireStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => requireBoundedString("evidenceMessageId", item));
+}
+
+function requireSignalKind(value: unknown): ProactiveSignalCandidate["kind"] {
+  if (value === "quiet_open_thread" || value === "overdue_action") return value;
+  throw new Error("signal kind is invalid");
+}
+
+function requirePriority(value: unknown): ProactiveSignalCandidate["priority"] {
+  if (value === "medium" || value === "high") return value;
+  throw new Error("signal priority is invalid");
+}
+
+function requireEntityType(value: unknown): "thread" | "action" {
+  if (value === "thread" || value === "action") return value;
+  throw new Error("entity type is invalid");
+}
+
+function requireReasonCode(value: unknown): ProactiveSignalCandidate["reasonCode"] {
+  if (value === "thread_quiet_threshold_elapsed" || value === "action_due_at_elapsed") return value;
+  throw new Error("reason code is invalid");
+}
+
+function requireSuggestedMode(value: unknown): ProactiveSignalCandidate["suggestedMode"] {
+  if (value === "ask_for_thread_update" || value === "ask_for_status") return value;
+  throw new Error("suggested mode is invalid");
+}
+
+function requireStatus(value: unknown): PersistedProactiveSignalCandidate["status"] {
+  if (value === "pending" || value === "dismissed" || value === "superseded") return value;
+  throw new Error("candidate status is invalid");
 }

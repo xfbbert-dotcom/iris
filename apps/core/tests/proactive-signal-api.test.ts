@@ -104,6 +104,10 @@ describe("proactive signal API", () => {
         existingCount: 0,
         recordedKeys: ["quiet_open_thread:thread-quiet:2"],
       }),
+      listPendingCandidates: vi.fn<ProactiveSignalRepository["listPendingCandidates"]>().mockResolvedValue([]),
+      dismissCandidate: vi.fn<ProactiveSignalRepository["dismissCandidate"]>().mockResolvedValue({
+        status: "not_found",
+      }),
     };
     store.listThreads.mockResolvedValue([
       {
@@ -147,6 +151,67 @@ describe("proactive signal API", () => {
       recordedKeys: ["quiet_open_thread:thread-quiet:2"],
       signals: [expect.objectContaining({ entityId: "thread-quiet" })],
     });
+    await app.close();
+  });
+
+  it("lists and dismisses pending candidates through authenticated operator routes", async () => {
+    const store = createStore();
+    const repository = {
+      recordCandidates: vi.fn<ProactiveSignalRepository["recordCandidates"]>(),
+      listPendingCandidates: vi.fn<ProactiveSignalRepository["listPendingCandidates"]>().mockResolvedValue([
+        {
+          idempotencyKey: "quiet_open_thread:thread-a:1",
+          groupId: "group-a",
+          kind: "quiet_open_thread",
+          priority: "medium",
+          entityType: "thread",
+          entityId: "thread-a",
+          entityVersion: 1,
+          reasonCode: "thread_quiet_threshold_elapsed",
+          suggestedMode: "ask_for_thread_update",
+          status: "pending",
+          lastRelevantAt: new Date("2026-07-23T08:00:00.000Z"),
+          createdAt: new Date("2026-07-23T10:00:00.000Z"),
+          updatedAt: new Date("2026-07-23T10:00:00.000Z"),
+          evidenceMessageIds: ["message-a"],
+        },
+      ]),
+      dismissCandidate: vi.fn<ProactiveSignalRepository["dismissCandidate"]>().mockResolvedValue({
+        status: "dismissed",
+      }),
+    };
+    const app = createApp({ store, proactiveSignalRepository: repository });
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/internal/proactive-signals/groups/group-a/candidates?limit=5",
+      headers: authorization,
+    });
+    const dismiss = await app.inject({
+      method: "POST",
+      url: "/internal/proactive-signals/groups/group-a/candidates/quiet_open_thread%3Athread-a%3A1/dismiss",
+      headers: { ...authorization, "x-iris-operator": "operator-a" },
+      payload: {},
+    });
+
+    expect(list.statusCode).toBe(200);
+    expect(repository.listPendingCandidates).toHaveBeenCalledWith({ groupId: "group-a", limit: 5 });
+    expect(list.json()).toEqual({
+      ok: true,
+      groupId: "group-a",
+      candidates: [expect.objectContaining({
+        idempotencyKey: "quiet_open_thread:thread-a:1",
+        lastRelevantAt: "2026-07-23T08:00:00.000Z",
+      })],
+    });
+    expect(dismiss.statusCode).toBe(200);
+    expect(repository.dismissCandidate).toHaveBeenCalledWith({
+      idempotencyKey: "quiet_open_thread:thread-a:1",
+      groupId: "group-a",
+      operatorHint: "operator-a",
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+    expect(dismiss.json()).toEqual({ ok: true, status: "dismissed" });
     await app.close();
   });
 });

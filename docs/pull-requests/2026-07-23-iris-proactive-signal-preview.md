@@ -11,6 +11,9 @@ This change starts the proactive behavior layer without enabling unsolicited Fei
   - `POST /internal/proactive-signals/groups/:groupId/preview`
 - Adds authenticated internal scan route:
   - `POST /internal/proactive-signals/groups/:groupId/scan`
+- Adds authenticated internal governance routes:
+  - `GET /internal/proactive-signals/groups/:groupId/candidates`
+  - `POST /internal/proactive-signals/groups/:groupId/candidates/:idempotencyKey/dismiss`
 - Adds `0037_proactive_signal_candidates.sql` for durable pending candidate facts, evidence IDs, and append-only candidate events.
 - Reuses the current-group conversation-state inspection store.
 - Requires `runtimeController.canProactivelySpeak(groupId)` before scanning, so global disable, group disable, or proactive pause all fail closed.
@@ -34,7 +37,6 @@ This does not send Feishu messages, create formal tasks, write knowledge-base co
 
 The next product gate should turn pending candidates into a governed proactive outbox:
 
-1. Add bounded listing and dismissal for pending proactive candidates.
-2. Keep Feishu sending default-off and rate-limited.
-3. Add a manual operator route to approve a candidate for a Feishu card or message.
-4. Only after real pilot approval, connect a Feishu group card or message surface.
+1. Keep Feishu sending default-off and rate-limited.
+2. Add a manual operator route to approve a candidate for a Feishu card or message.
+3. Only after real pilot approval, connect a Feishu group card or message surface.

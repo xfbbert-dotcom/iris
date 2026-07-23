@@ -120,12 +120,74 @@ export function registerProactiveSignalApi(
       }
     },
   );
+
+  app.get<{ Params: { groupId: string } }>(
+    "/internal/proactive-signals/groups/:groupId/candidates",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (repository === undefined) {
+        return reply.code(503).send({ ok: false, error: "proactive_signal_repository_unavailable" });
+      }
+      const groupId = readBoundedId(request.params.groupId);
+      const limit = readLimitFromQuery(request.query, DEFAULT_SIGNAL_LIMIT);
+      if (groupId === undefined || limit === undefined) return invalidRequest(reply);
+      try {
+        const candidates = await repository.listPendingCandidates({ groupId, limit });
+        return {
+          ok: true,
+          groupId,
+          candidates: candidates.map(toResponseCandidate),
+        };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "proactive_signal_candidate_list_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { groupId: string; idempotencyKey: string } }>(
+    "/internal/proactive-signals/groups/:groupId/candidates/:idempotencyKey/dismiss",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (repository === undefined) {
+        return reply.code(503).send({ ok: false, error: "proactive_signal_repository_unavailable" });
+      }
+      const groupId = readBoundedId(request.params.groupId);
+      const idempotencyKey = readBoundedId(request.params.idempotencyKey);
+      const operatorHint = readBoundedId(request.headers["x-iris-operator"]);
+      if (groupId === undefined || idempotencyKey === undefined || operatorHint === undefined) {
+        return invalidRequest(reply);
+      }
+      try {
+        const result = await repository.dismissCandidate({
+          idempotencyKey,
+          groupId,
+          operatorHint,
+          now: now(),
+        });
+        if (result.status === "not_found") {
+          return reply.code(404).send({ ok: false, error: "proactive_signal_candidate_not_found" });
+        }
+        return { ok: true, status: result.status };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "proactive_signal_candidate_dismiss_failed" });
+      }
+    },
+  );
 }
 
 function toResponseSignal(signal: ProactiveSignalCandidate) {
   return {
     ...signal,
     lastRelevantAt: signal.lastRelevantAt.toISOString(),
+  };
+}
+
+function toResponseCandidate(candidate: Awaited<ReturnType<ProactiveSignalRepository["listPendingCandidates"]>>[number]) {
+  return {
+    ...candidate,
+    lastRelevantAt: candidate.lastRelevantAt.toISOString(),
+    createdAt: candidate.createdAt.toISOString(),
+    updatedAt: candidate.updatedAt.toISOString(),
   };
 }
 
@@ -176,6 +238,13 @@ function readLimit(value: unknown, fallback: number): number | undefined {
     return undefined;
   }
   return value;
+}
+
+function readLimitFromQuery(value: unknown, fallback: number): number | undefined {
+  if (!isRecord(value) || value.limit === undefined) return fallback;
+  if (typeof value.limit !== "string" || !/^[1-9]\d*$/u.test(value.limit)) return undefined;
+  const parsed = Number(value.limit);
+  return Number.isSafeInteger(parsed) && parsed <= MAX_ENTITY_LIMIT ? parsed : undefined;
 }
 
 function readBoundedId(value: unknown): string | undefined {
