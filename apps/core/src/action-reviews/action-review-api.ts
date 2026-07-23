@@ -59,9 +59,13 @@ export function registerActionReviewApi(
           proposalId,
           actorOpenId: session.actorOpenId,
         });
-        if (context === undefined) return sendUnavailable(reply, 403);
+        if (context === undefined) {
+          logReviewDiagnostic("session_context_unavailable", { proposalId, actorOpenId: session.actorOpenId });
+          return sendUnavailable(reply, 403);
+        }
         return sendHtml(reply, 200, renderActionReviewPage({ context, csrfToken: session.csrfToken }));
-      } catch {
+      } catch (error) {
+        logReviewDiagnostic("session_context_error", { proposalId, error });
         return sendUnavailable(reply, 403);
       }
     });
@@ -76,6 +80,12 @@ export function registerActionReviewApi(
         ? undefined
         : runtime.codec.readOAuthTransaction(oauthCookie, state);
       if (transaction === undefined || code === undefined || query.error !== undefined) {
+        logReviewDiagnostic("oauth_callback_invalid", {
+          hasState: state !== undefined,
+          hasCode: code !== undefined,
+          hasOAuthCookie: oauthCookie !== undefined,
+          hasOAuthError: query.error !== undefined,
+        });
         reply.header("set-cookie", clearCookie);
         return sendUnavailable(reply, 403);
       }
@@ -90,6 +100,10 @@ export function registerActionReviewApi(
           actorOpenId,
         });
         if (context === undefined) {
+          logReviewDiagnostic("oauth_context_unavailable", {
+            proposalId: transaction.proposalId,
+            actorOpenId,
+          });
           reply.header("set-cookie", clearCookie);
           return sendUnavailable(reply, 403);
         }
@@ -103,7 +117,11 @@ export function registerActionReviewApi(
             runtime.codec.serializeReviewSessionCookie(session.cookieValue),
           ])
           .redirect(`/review/action-proposals/${encodeURIComponent(transaction.proposalId)}`, 303);
-      } catch {
+      } catch (error) {
+        logReviewDiagnostic("oauth_exchange_or_context_error", {
+          proposalId: transaction.proposalId,
+          error,
+        });
         reply.header("set-cookie", clearCookie);
         return sendUnavailable(reply, 403);
       }
@@ -151,6 +169,40 @@ export function registerActionReviewApi(
       },
     );
   });
+}
+
+function logReviewDiagnostic(
+  reason: string,
+  input: {
+    proposalId?: string;
+    actorOpenId?: string;
+    hasState?: boolean;
+    hasCode?: boolean;
+    hasOAuthCookie?: boolean;
+    hasOAuthError?: boolean;
+    error?: unknown;
+  },
+): void {
+  const fields = {
+    reason,
+    ...(input.proposalId === undefined ? {} : { proposalHash: shortHash(input.proposalId) }),
+    ...(input.actorOpenId === undefined ? {} : { actorHash: shortHash(input.actorOpenId) }),
+    ...(input.hasState === undefined ? {} : { hasState: input.hasState }),
+    ...(input.hasCode === undefined ? {} : { hasCode: input.hasCode }),
+    ...(input.hasOAuthCookie === undefined ? {} : { hasOAuthCookie: input.hasOAuthCookie }),
+    ...(input.hasOAuthError === undefined ? {} : { hasOAuthError: input.hasOAuthError }),
+    ...(input.error === undefined ? {} : { error: safeErrorName(input.error) }),
+  };
+  console.warn(`iris_action_review_unavailable ${JSON.stringify(fields)}`);
+}
+
+function shortHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+function safeErrorName(error: unknown): string {
+  if (error instanceof Error) return `${error.name}:${error.message}`;
+  return typeof error;
 }
 
 function sendUnavailable(reply: FastifyReply, statusCode: number) {
