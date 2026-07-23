@@ -52,7 +52,15 @@ describe("knowledge draft state machine", () => {
     })).toEqual({ ok: false, code: "knowledge_draft_terminal" });
   });
 
-  it("does not expose a Phase 5A publication transition", () => {
+  it("allows an approved publication execution to publish the current draft", () => {
+    expect(validateKnowledgeDraftTransition({
+      from: "pending_review",
+      to: "published",
+      eventType: "publication_succeeded",
+    })).toEqual({ ok: true });
+  });
+
+  it("does not publish through non-publication events", () => {
     expect(validateKnowledgeDraftTransition({
       from: "pending_review",
       to: "published",

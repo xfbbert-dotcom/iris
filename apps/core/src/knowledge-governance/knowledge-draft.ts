@@ -21,6 +21,7 @@ export const KNOWLEDGE_DRAFT_EVENT_TYPES = [
   "group_confirmed",
   "review_approved",
   "approval_invalidated",
+  "publication_succeeded",
   "revision_requested",
   "rejected",
 ] as const;

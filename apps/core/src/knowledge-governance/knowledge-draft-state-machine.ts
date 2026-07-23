@@ -35,6 +35,11 @@ export function validateKnowledgeDraftTransition(input: {
     input.to === "needs_revision" &&
     (input.from === "pending_confirmation" || input.from === "pending_review")
   ) return { ok: true };
+  if (
+    input.eventType === "publication_succeeded" &&
+    input.from === "pending_review" &&
+    input.to === "published"
+  ) return { ok: true };
   if (input.eventType === "revised") {
     const requiredStatus = input.sourceGroupId?.trim()
       ? "pending_confirmation"
