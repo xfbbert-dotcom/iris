@@ -115,6 +115,51 @@ export function renderAdminConsoleHtml(): string {
       <div id="document-source-empty" class="empty-state">Connect to load document sources.</div>
     </section>
 
+    <section class="knowledge-draft-panel" aria-labelledby="knowledge-drafts-heading">
+      <div class="panel-heading">
+        <div>
+          <h2 id="knowledge-drafts-heading">Knowledge Drafts</h2>
+          <p>Review queue state and route safe revision or rejection decisions.</p>
+        </div>
+        <button id="knowledge-draft-refresh" type="button" class="secondary">Refresh Drafts</button>
+      </div>
+      <dl id="knowledge-draft-status" class="compact-status"></dl>
+      <div class="source-filters">
+        <label>
+          Draft status
+          <select id="knowledge-draft-status-filter">
+            <option value="">Open statuses</option>
+            <option value="pending_confirmation">Pending confirmation</option>
+            <option value="pending_review">Pending review</option>
+            <option value="needs_revision">Needs revision</option>
+            <option value="rejected">Rejected</option>
+            <option value="published">Published</option>
+          </select>
+        </label>
+        <label>
+          Group id
+          <input id="knowledge-draft-group-filter" placeholder="oc_xxx">
+        </label>
+      </div>
+      <div class="table-wrap">
+        <table id="knowledge-draft-table">
+          <thead>
+            <tr>
+              <th>Draft</th>
+              <th>Group</th>
+              <th>Status</th>
+              <th>Risk</th>
+              <th>Version</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="knowledge-draft-rows"></tbody>
+        </table>
+      </div>
+      <div id="knowledge-draft-empty" class="empty-state">Connect to load knowledge drafts.</div>
+    </section>
+
     <section class="event-panel" aria-labelledby="events-heading">
       <h2 id="events-heading">Recent Operator Events</h2>
       <ol id="event-log"></ol>
@@ -232,6 +277,7 @@ h2 {
 .status-grid > article,
 .control-grid > article,
 .document-source-panel,
+.knowledge-draft-panel,
 .event-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -346,6 +392,11 @@ dd {
   padding: 16px;
 }
 
+.knowledge-draft-panel {
+  margin-top: 16px;
+  padding: 16px;
+}
+
 .panel-heading {
   display: flex;
   align-items: flex-start;
@@ -425,6 +476,11 @@ td.source-title {
   margin-top: 10px;
 }
 
+.compact-status {
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  margin-top: 12px;
+}
+
 #event-log {
   margin: 0;
   padding-left: 20px;
@@ -468,6 +524,12 @@ const documentSourceType = document.getElementById("document-source-type");
 const documentSourceIdFilter = document.getElementById("document-source-id-filter");
 const documentSourceRows = document.getElementById("document-source-rows");
 const documentSourceEmpty = document.getElementById("document-source-empty");
+const knowledgeDraftRefresh = document.getElementById("knowledge-draft-refresh");
+const knowledgeDraftStatus = document.getElementById("knowledge-draft-status");
+const knowledgeDraftStatusFilter = document.getElementById("knowledge-draft-status-filter");
+const knowledgeDraftGroupFilter = document.getElementById("knowledge-draft-group-filter");
+const knowledgeDraftRows = document.getElementById("knowledge-draft-rows");
+const knowledgeDraftEmpty = document.getElementById("knowledge-draft-empty");
 
 const capabilityLabels = {
   readGroupContext: "Read group context",
@@ -482,6 +544,9 @@ const capabilityLabels = {
 
 let cachedStatus = undefined;
 const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
+const knowledgeDraftListBasePath = "/internal/knowledge-drafts?limit=20";
+const knowledgeDraftRequestRevisionPath = "/request-revision";
+const knowledgeDraftRejectPath = "/reject";
 
 function readToken() {
   return sessionStorage.getItem("iris_admin_token") || "";
@@ -681,6 +746,117 @@ async function enqueueDocumentSource(sourceId) {
   });
 }
 
+function knowledgeDraftListPath() {
+  const [path, query] = knowledgeDraftListBasePath.split("?");
+  const params = new URLSearchParams(query);
+  const status = knowledgeDraftStatusFilter.value;
+  if (status.length > 0) params.set("status", status);
+  const groupId = knowledgeDraftGroupFilter.value.trim();
+  if (groupId.length > 0) params.set("groupId", groupId);
+  return path + "?" + params.toString();
+}
+
+function renderKnowledgeDraftStatus(status) {
+  const counts = status.counts || {};
+  renderDefinitionList(knowledgeDraftStatus, [
+    ["Enabled", status.enabled === true ? "yes" : "no"],
+    ["Pending confirmation", counts.pending_confirmation ?? 0],
+    ["Pending review", counts.pending_review ?? 0],
+    ["Needs revision", counts.needs_revision ?? 0],
+    ["Published", counts.published ?? 0],
+  ]);
+}
+
+function draftTitle(draft) {
+  return text(draft.currentRevision?.title, draft.id);
+}
+
+function renderKnowledgeDrafts(drafts) {
+  knowledgeDraftRows.replaceChildren();
+  for (const draft of drafts || []) {
+    const row = document.createElement("tr");
+
+    const draftCell = document.createElement("td");
+    draftCell.className = "source-title";
+    const title = document.createElement("strong");
+    title.textContent = draftTitle(draft);
+    const id = document.createElement("div");
+    id.className = "source-uri";
+    id.textContent = text(draft.id);
+    draftCell.append(title, id);
+
+    const groupCell = document.createElement("td");
+    groupCell.textContent = text(draft.sourceGroupId, "company");
+
+    const statusCell = document.createElement("td");
+    statusCell.textContent = text(draft.status);
+
+    const riskCell = document.createElement("td");
+    riskCell.textContent = text(draft.currentRevision?.riskLevel, "unknown");
+
+    const versionCell = document.createElement("td");
+    versionCell.textContent = text(draft.version, "unknown") + " / r" + text(draft.currentRevisionNumber, "?");
+
+    const updatedCell = document.createElement("td");
+    updatedCell.textContent = text(draft.updatedAt);
+
+    const actionsCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "source-actions";
+    for (const [action, label, danger] of [
+      [knowledgeDraftRequestRevisionPath, "Request revision", false],
+      [knowledgeDraftRejectPath, "Reject", true],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = danger ? "danger" : "secondary";
+      button.textContent = label;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          await transitionKnowledgeDraft(draft, action);
+          addEvent(label + " recorded for " + draft.id);
+          await refreshKnowledgeDrafts();
+        } catch (error) {
+          addEvent(label + " failed: " + error.message);
+          setConnection("Request failed", "warn");
+        } finally {
+          button.disabled = false;
+        }
+      });
+      actions.append(button);
+    }
+    actionsCell.append(actions);
+
+    row.append(draftCell, groupCell, statusCell, riskCell, versionCell, updatedCell, actionsCell);
+    knowledgeDraftRows.append(row);
+  }
+  knowledgeDraftEmpty.textContent = (drafts || []).length === 0 ? "No knowledge drafts match the current filters." : "";
+}
+
+async function refreshKnowledgeDrafts() {
+  const [status, list] = await Promise.all([
+    requestJson("/internal/knowledge-drafts/status"),
+    requestJson(knowledgeDraftListPath()),
+  ]);
+  renderKnowledgeDraftStatus(status);
+  renderKnowledgeDrafts(list.drafts || []);
+}
+
+async function transitionKnowledgeDraft(draft, action) {
+  const reason = window.prompt("Reason for " + action.slice(1).replace("-", " ") + ":", "Needs operator follow-up");
+  if (reason === null || reason.trim().length === 0) throw new Error("reason_required");
+  return requestJson("/internal/knowledge-drafts/" + encodeURIComponent(draft.id) + action, {
+    method: "POST",
+    body: JSON.stringify({
+      expectedVersion: draft.version,
+      operationKey: "admin-console-" + action.slice(1) + "-" + draft.id + "-" + Date.now(),
+      actor: readOperator() || "admin_console",
+      reason: reason.trim(),
+    }),
+  });
+}
+
 function renderCapabilityControls(capabilities) {
   capabilityControls.replaceChildren();
   for (const [name, enabled] of Object.entries(capabilities || {})) {
@@ -743,6 +919,7 @@ async function refresh() {
   ]);
   render(status, readiness, runtime);
   await refreshDocumentSources();
+  await refreshKnowledgeDrafts();
   setConnection(status.ok === true ? "Connected" : "Attention needed", status.ok === true ? "ok" : "warn");
 }
 
@@ -808,6 +985,37 @@ documentSourceIdFilter.addEventListener("input", async () => {
     await refreshDocumentSources();
   } catch (error) {
     addEvent("Document source filter failed: " + error.message);
+  }
+});
+
+knowledgeDraftRefresh.addEventListener("click", async () => {
+  knowledgeDraftRefresh.disabled = true;
+  try {
+    await refreshKnowledgeDrafts();
+    addEvent("Knowledge drafts refreshed");
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Knowledge draft refresh failed: " + error.message);
+  } finally {
+    knowledgeDraftRefresh.disabled = false;
+  }
+});
+
+knowledgeDraftStatusFilter.addEventListener("change", async () => {
+  if (readToken().length === 0) return;
+  try {
+    await refreshKnowledgeDrafts();
+  } catch (error) {
+    addEvent("Knowledge draft filter failed: " + error.message);
+  }
+});
+
+knowledgeDraftGroupFilter.addEventListener("input", async () => {
+  if (readToken().length === 0) return;
+  try {
+    await refreshKnowledgeDrafts();
+  } catch (error) {
+    addEvent("Knowledge draft filter failed: " + error.message);
   }
 });
 

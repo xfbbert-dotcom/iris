@@ -49,4 +49,17 @@ describe("admin console assets", () => {
     expect(script).not.toContain("bodyText");
     expect(script).not.toContain("rawContent");
   });
+
+  it("renders a redacted knowledge draft governance queue", () => {
+    const html = renderAdminConsoleHtml();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("Knowledge Drafts");
+    expect(html).toContain("knowledge-draft-table");
+    expect(script).toContain("/internal/knowledge-drafts/status");
+    expect(script).toContain("/internal/knowledge-drafts?limit=20");
+    expect(script).toContain("/request-revision");
+    expect(script).toContain("/reject");
+    expect(script).not.toContain("currentRevision.content");
+  });
 });
