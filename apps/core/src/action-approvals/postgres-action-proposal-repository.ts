@@ -1569,7 +1569,7 @@ async function claimApprovedPublicationExecution(
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, normalized.operationKey);
     const replay = await client.query<PublicationExecutionRow>(
-      `${publicationExecutionSelect()} execution
+      `${publicationExecutionSelect("execution")}
        JOIN action_execution_events event ON event.execution_id = execution.id
        WHERE event.operation_key = $1`,
       [normalized.operationKey],
@@ -1867,7 +1867,7 @@ async function failPublicationExecution(
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, normalized.operationKey);
     const replay = await client.query<PublicationExecutionRow>(
-      `${publicationExecutionSelect()} execution
+      `${publicationExecutionSelect("execution")}
        JOIN action_execution_events event ON event.execution_id = execution.id
        WHERE event.operation_key = $1`,
       [normalized.operationKey],
@@ -3143,11 +3143,15 @@ function approvalOutboxSelect(alias?: string): string {
           FROM ${from}`;
 }
 
-function publicationExecutionSelect(): string {
-  return `SELECT id, proposal_id, attempt_number, state, request_fingerprint, provider,
-                 response_classification, remote_node_token, remote_document_token,
-                 version, retry_at, created_at, updated_at
-          FROM action_executions`;
+function publicationExecutionSelect(alias?: string): string {
+  const prefix = alias === undefined ? "" : `${alias}.`;
+  const from = alias === undefined ? "action_executions" : `action_executions ${alias}`;
+  return `SELECT ${prefix}id, ${prefix}proposal_id, ${prefix}attempt_number, ${prefix}state,
+                 ${prefix}request_fingerprint, ${prefix}provider,
+                 ${prefix}response_classification, ${prefix}remote_node_token,
+                 ${prefix}remote_document_token, ${prefix}version, ${prefix}retry_at,
+                 ${prefix}created_at, ${prefix}updated_at
+          FROM ${from}`;
 }
 
 function knowledgePublicationSelect(): string {

@@ -104,6 +104,16 @@ describe("action approval migration contract", () => {
     expect(repository.completePublicationExecution).toBeTypeOf("function");
     expect(repository).not.toHaveProperty("publishDraftDirectly");
   });
+
+  it("qualifies publication execution replay columns when joined with execution events", () => {
+    const source = readFileSync(
+      new URL("../src/action-approvals/postgres-action-proposal-repository.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toMatch(/publicationExecutionSelect\("execution"\)\}\s+JOIN action_execution_events event/iu);
+    expect(source).not.toMatch(/publicationExecutionSelect\(\) execution\s+JOIN action_execution_events event/iu);
+  });
 });
 
 runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
@@ -361,6 +371,22 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
         version: policy.version,
         spaceId: policy.spaceId,
       },
+    });
+
+    await expect(repository.claimApprovedPublicationExecution({
+      proposalId: proposal.id,
+      expectedProposalVersion: proposal.version,
+      runtimeGate: {
+        globalEnabled: true,
+        writeKnowledgeBase: true,
+        disabledGroupIds: [],
+      },
+      workerId: `worker-${label}`,
+      operationKey: `publication-claim:${label}:${suffix}`,
+      at,
+    })).resolves.toMatchObject({
+      outcome: "already_applied",
+      execution: { id: claim.execution.id },
     });
 
     const completion = await repository.completePublicationExecution({
