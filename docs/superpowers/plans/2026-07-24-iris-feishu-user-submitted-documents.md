@@ -15,6 +15,8 @@
 - [x] Submission enqueues sync through the existing document sync planner.
 - [x] Iris replies with a short confirmation and does not call the model.
 - [x] Ordinary @ questions that contain a Feishu document link still call the answer draft path.
+- [x] Explicit submission commands with no readable Feishu link reply with a link request and do not call the model.
+- [x] Explicit submission commands while document reading is disabled reply fail-closed and do not call the model.
 - [x] Event Worker wires the same link extractor, runtime document capability gate, registry, and sync planner into the responder.
 - [x] Existing group-visible document discovery remains unchanged.
 
@@ -22,6 +24,11 @@
 
 - Red observed: `npm --workspace apps/core test -- tests/feishu-mention-answer-responder.test.ts` failed because the command still entered the model answer path.
 - Green observed:
+  - `npm --workspace apps/core test -- tests/feishu-mention-answer-responder.test.ts`
+  - `npm --workspace apps/core test -- tests/feishu-mention-answer-responder.test.ts tests/feishu-message-event-processor.test.ts tests/event-worker-runtime.test.ts tests/runtime-startup-promise.test.ts`
+  - `npm --workspace apps/core run typecheck`
+- Follow-up red observed: `npm --workspace apps/core test -- tests/feishu-mention-answer-responder.test.ts` failed because explicit malformed or disabled submission commands fell through to the model path.
+- Follow-up green observed:
   - `npm --workspace apps/core test -- tests/feishu-mention-answer-responder.test.ts`
   - `npm --workspace apps/core test -- tests/feishu-mention-answer-responder.test.ts tests/feishu-message-event-processor.test.ts tests/event-worker-runtime.test.ts tests/runtime-startup-promise.test.ts`
   - `npm --workspace apps/core run typecheck`

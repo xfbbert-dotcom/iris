@@ -61,6 +61,12 @@ const MAX_RECENT_REPLY_MESSAGE_IDS = 1000;
 const TRUNCATION_MARKER = " ... [truncated]";
 const USER_SUBMITTED_DOCUMENT_CONFIRMATION =
   "\u5df2\u6536\u5230\u8fd9\u4e2a\u6587\u6863\uff0c\u6211\u4f1a\u540c\u6b65\u5b83\u7684\u5185\u5bb9\u3002\u540c\u6b65\u5b8c\u6210\u540e\uff0c\u4f60\u53ef\u4ee5\u76f4\u63a5 @\u6211\u63d0\u95ee\u3002";
+const USER_SUBMITTED_DOCUMENT_LINK_REQUIRED =
+  "\u8bf7\u53d1\u9001\u4e00\u4e2a\u6211\u53ef\u4ee5\u8bfb\u53d6\u7684\u98de\u4e66\u6587\u6863\u94fe\u63a5\uff0c\u7136\u540e\u518d\u8ba9\u6211\u6536\u5f55\u3002";
+const USER_SUBMITTED_DOCUMENT_DISABLED =
+  "\u5f53\u524d\u6587\u6863\u8bfb\u53d6\u80fd\u529b\u5df2\u5173\u95ed\uff0c\u6211\u4e0d\u4f1a\u6536\u5f55\u8fd9\u4e2a\u6587\u6863\u3002";
+const USER_SUBMITTED_DOCUMENT_SENDER_REQUIRED =
+  "\u6211\u6682\u65f6\u65e0\u6cd5\u786e\u8ba4\u63d0\u4ea4\u4eba\uff0c\u4e0d\u80fd\u6536\u5f55\u8fd9\u4e2a\u6587\u6863\u3002";
 const userSubmittedDocumentIntentPatterns = [
   /\b(?:add|submit|register|index)\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
   /\bread\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
@@ -113,19 +119,63 @@ export function createFeishuMentionAnswerResponder({
         }
 
         const fullQuestion = stripMentionKeys(input.text, botMentionKeys);
-        const userSubmittedDocumentUri = detectUserSubmittedDocumentUri({
+        const userSubmittedDocumentCommand = detectUserSubmittedDocumentCommand({
           text: fullQuestion,
           documentLinkExtractor,
         });
         const normalizedSenderId = normalizeOptionalText(input.senderId);
-        if (
-          userSubmittedDocumentUri !== undefined &&
-          userSubmittedDocumentRegistrar !== undefined &&
-          normalizedSenderId !== undefined &&
-          canRegisterUserSubmittedDocuments(input.chatId)
-        ) {
+        if (userSubmittedDocumentCommand.intent) {
+          if (documentLinkExtractor === undefined || userSubmittedDocumentRegistrar === undefined) {
+            const result = toRepliedResult(
+              await replier.replyText({
+                messageId: input.messageId,
+                text: USER_SUBMITTED_DOCUMENT_DISABLED,
+                replyInThread: true,
+                uuid: replyUuid,
+              }),
+            );
+            replyDeduper.markHandled(input.messageId);
+            return result;
+          }
+          if (!canRegisterUserSubmittedDocuments(input.chatId)) {
+            const result = toRepliedResult(
+              await replier.replyText({
+                messageId: input.messageId,
+                text: USER_SUBMITTED_DOCUMENT_DISABLED,
+                replyInThread: true,
+                uuid: replyUuid,
+              }),
+            );
+            replyDeduper.markHandled(input.messageId);
+            return result;
+          }
+          if (userSubmittedDocumentCommand.sourceUri === undefined) {
+            const result = toRepliedResult(
+              await replier.replyText({
+                messageId: input.messageId,
+                text: USER_SUBMITTED_DOCUMENT_LINK_REQUIRED,
+                replyInThread: true,
+                uuid: replyUuid,
+              }),
+            );
+            replyDeduper.markHandled(input.messageId);
+            return result;
+          }
+          if (normalizedSenderId === undefined) {
+            const result = toRepliedResult(
+              await replier.replyText({
+                messageId: input.messageId,
+                text: USER_SUBMITTED_DOCUMENT_SENDER_REQUIRED,
+                replyInThread: true,
+                uuid: replyUuid,
+              }),
+            );
+            replyDeduper.markHandled(input.messageId);
+            return result;
+          }
+
           await userSubmittedDocumentRegistrar.registerUserSubmittedDocument({
-            sourceUri: userSubmittedDocumentUri,
+            sourceUri: userSubmittedDocumentCommand.sourceUri,
             submittedByUserId: normalizedSenderId,
             observedAt: input.observedAt ?? new Date(),
           });
@@ -270,21 +320,21 @@ function stripMentionKeys(text: string, mentionKeys: string[]): string {
   return question.replace(/\s+/gu, " ").trim();
 }
 
-function detectUserSubmittedDocumentUri({
+function detectUserSubmittedDocumentCommand({
   text,
   documentLinkExtractor,
 }: {
   text: string;
   documentLinkExtractor: Pick<FeishuDocumentLinkExtractor, "extractLinks"> | undefined;
-}): string | undefined {
-  if (documentLinkExtractor === undefined) {
-    return undefined;
-  }
+}): { intent: true; sourceUri?: string } | { intent: false } {
   if (!userSubmittedDocumentIntentPatterns.some((pattern) => pattern.test(text))) {
-    return undefined;
+    return { intent: false };
+  }
+  if (documentLinkExtractor === undefined) {
+    return { intent: true };
   }
 
-  return documentLinkExtractor.extractLinks(text)[0]?.sourceUri;
+  return { intent: true, sourceUri: documentLinkExtractor.extractLinks(text)[0]?.sourceUri };
 }
 
 function truncateQuestion(value: string): string {

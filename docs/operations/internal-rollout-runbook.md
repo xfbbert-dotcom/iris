@@ -826,7 +826,10 @@ Expected result:
 
 Fail-closed behavior:
 
-- If document reading is disabled, Iris must not register the submitted document.
+- If the explicit submission command has no readable Feishu document link, Iris replies with a
+  request for a readable Feishu document link and must not invoke the model answer path.
+- If document reading is disabled, Iris replies that document reading is disabled and must not
+  register the submitted document or invoke the model answer path.
 - If the URL is unsupported or contaminated, Iris must not add a source.
 - If registration or sync enqueue fails, the Feishu event remains retryable through the normal raw
   event worker path; do not manually mark the submission accepted until the source appears.

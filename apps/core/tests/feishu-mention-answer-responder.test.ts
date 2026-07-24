@@ -205,6 +205,73 @@ describe("FeishuMentionAnswerResponder", () => {
     });
   });
 
+  it("asks for a Feishu document link when an explicit document submission command has no readable link", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const registerUserSubmittedDocument = vi.fn();
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-doc-link" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+      documentLinkExtractor: createFeishuDocumentLinkExtractor(),
+      userSubmittedDocumentRegistrar: { registerUserSubmittedDocument },
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_user_doc_submission_without_link",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 please register document",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-doc-link" });
+
+    expect(registerUserSubmittedDocument).not.toHaveBeenCalled();
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_user_doc_submission_without_link",
+      text: "\u8bf7\u53d1\u9001\u4e00\u4e2a\u6211\u53ef\u4ee5\u8bfb\u53d6\u7684\u98de\u4e66\u6587\u6863\u94fe\u63a5\uff0c\u7136\u540e\u518d\u8ba9\u6211\u6536\u5f55\u3002",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
+  it("does not register or answer explicit document submission commands when document reading is disabled", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const registerUserSubmittedDocument = vi.fn();
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-doc-disabled" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+      canRegisterUserSubmittedDocuments: vi.fn(() => false),
+      documentLinkExtractor: createFeishuDocumentLinkExtractor(),
+      userSubmittedDocumentRegistrar: { registerUserSubmittedDocument },
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_user_doc_submission_disabled",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 please register document https://docs.feishu.cn/docx/user_doc_token_1",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-doc-disabled" });
+
+    expect(registerUserSubmittedDocument).not.toHaveBeenCalled();
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_user_doc_submission_disabled",
+      text: "\u5f53\u524d\u6587\u6863\u8bfb\u53d6\u80fd\u529b\u5df2\u5173\u95ed\uff0c\u6211\u4e0d\u4f1a\u6536\u5f55\u8fd9\u4e2a\u6587\u6863\u3002",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
   it("keeps ordinary mentioned questions with Feishu document links on the answer path", async () => {
     const answerDraftOrchestrator = {
       generateDraft: vi.fn(async () => ({
