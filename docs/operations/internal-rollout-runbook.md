@@ -803,6 +803,34 @@ Invoke-RestMethod `
   -Body '{"sourceUri":"https://example.feishu.cn/docx/doc_token","title":"User Guide","submittedByUserId":"ou_1"}'
 ```
 
+Feishu in-chat user-submitted document acceptance:
+
+1. Confirm Iris is enabled for the pilot group and document reading is enabled.
+2. In the pilot group, send an explicit mention command such as:
+
+```text
+@Iris please register document https://example.feishu.cn/docx/doc_token
+```
+
+Chinese command variants such as `@Iris 请收录这个文档 https://...` and
+`@Iris 请同步这个文档 https://...` are also supported. Keep the command explicit; ordinary
+questions like `@Iris what does this document say? https://...` must remain on the answer path.
+
+Expected result:
+
+- Iris replies in-thread with a short confirmation that the document was received for sync.
+- The message does not invoke the model answer path.
+- `/internal/document-sync/sources?includeLatestSnapshot=true` shows a
+  `user_submitted_document` source for the canonical Feishu URL.
+- The document sync queue receives work through the existing sync planner.
+
+Fail-closed behavior:
+
+- If document reading is disabled, Iris must not register the submitted document.
+- If the URL is unsupported or contaminated, Iris must not add a source.
+- If registration or sync enqueue fails, the Feishu event remains retryable through the normal raw
+  event worker path; do not manually mark the submission accepted until the source appears.
+
 Use the clean Feishu document URL for manual registration. Iris strips query strings and fragments,
 but rejects obvious pasted-text contamination such as `https://example.feishu.cn/docx/doc_token,please`
 before it can enter the registry or sync queue.
