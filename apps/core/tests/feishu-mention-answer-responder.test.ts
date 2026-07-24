@@ -205,6 +205,41 @@ describe("FeishuMentionAnswerResponder", () => {
     });
   });
 
+  it("registers a user-submitted Feishu document from an explicit Chinese mention command", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const registerUserSubmittedDocument = vi.fn(async () => ({
+      source: { id: "doc-source-cn" },
+      enqueue: { status: "enqueued" as const, jobId: "sync-job-cn" },
+    }));
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-doc-cn" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+      documentLinkExtractor: createFeishuDocumentLinkExtractor(),
+      userSubmittedDocumentRegistrar: { registerUserSubmittedDocument },
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_user_doc_submission_cn",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 \u8bf7\u6536\u5f55\u8fd9\u4e2a\u6587\u6863 https://tcnmvzw006k7.feishu.cn/wiki/N2cswiBleiiyOokzJotcnDTunxe?fromScene=spaceOverview",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+        observedAt: new Date("2026-07-24T03:00:00.000Z"),
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-doc-cn" });
+
+    expect(registerUserSubmittedDocument).toHaveBeenCalledWith({
+      sourceUri: "https://tcnmvzw006k7.feishu.cn/wiki/N2cswiBleiiyOokzJotcnDTunxe",
+      submittedByUserId: "ou_alice",
+      observedAt: new Date("2026-07-24T03:00:00.000Z"),
+    });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
   it("asks for a Feishu document link when an explicit document submission command has no readable link", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const registerUserSubmittedDocument = vi.fn();
