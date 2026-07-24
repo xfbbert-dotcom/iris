@@ -3,6 +3,10 @@
 This runbook is for the first 20-30 person company rollout. The goal is to keep Iris usable and
 recoverable before a full admin UI exists.
 
+Use `docs/runbooks/iris-internal-mvp-gray-checklist.md` as the product-level real-Feishu gate before
+calling the internal MVP ready for daily use. This runbook remains the operational deployment and
+recovery guide.
+
 ## Pilot-First Rollout Gate
 
 Do not wait for exhaustive hardening before anyone uses Iris. Roll out in two stages:
