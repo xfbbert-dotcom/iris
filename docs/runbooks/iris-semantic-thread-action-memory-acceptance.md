@@ -456,6 +456,47 @@ known group disables; proactive disable; Caddy stop; bounded in-flight drain; bl
 allowlists; memory-extraction disable; private Core rebuild; persisted fail-closed verification; and
 queue/DLQ/repair no-growth verification. A primary failure never skips cleanup.
 
+## Provider-Recovery Gate And Ordered DLQ Replay
+
+If the semantic gray gate is blocked by Gemini capacity or provider availability, do not keep
+probing. Each recovery window allows exactly one minimal V2 JSON Schema probe before any DLQ replay.
+The probe must use the AI Worker private endpoint and the configured `IRIS_AI_WORKER_TOKEN`; do not
+send it through Caddy, Feishu, or the public Core boundary.
+
+If the probe returns any non-success status, including `429`, `502 invalid_model_response`, `503`, or
+timeout, stop the recovery window immediately:
+
+- keep `globalEnabled=false` and `desiredGlobalEnabled=false`;
+- keep pilot, control, and historical groups disabled;
+- keep Caddy stopped;
+- do not replay semantic DLQ items;
+- do not make additional model requests in the same window;
+- record only the bounded classification and upstream status, never prompt or model body content.
+
+If the probe succeeds, continue with Caddy still stopped. For DLQ replay only, the operator may
+briefly open a private processing window by enabling global runtime and enabling the approved pilot
+group while keeping every non-pilot group disabled and `proactiveSpeech=false`. This is required
+because memory extraction runtime gates require both `canProcessIncomingEvent(groupId)` and
+`canReadGroupContext(groupId)`. Do not start Caddy during this private window.
+
+Replay semantic DLQ entries one at a time in original `enqueuedAt` order. After each replay, wait for
+memory extraction `pendingJobCount`, `processingJobCount`, and `delayedJobCount` to return to zero
+before replaying the next item. If any replay produces a new DLQ, invalid response, rate limit,
+timeout, stale input, duplicate state, cross-group state, or projection repair failure, stop
+immediately and run the fail-closed rollback. Never batch the six semantic DLQ items into one replay,
+because doing so can hide whether later evidence correctly references the newly created thread or
+action from earlier evidence.
+
+After all replayable semantic DLQ entries are processed, require:
+
+- semantic DLQ count is zero;
+- the pilot group has the expected evidence-bound thread/action lifecycle with no duplicates;
+- the control group has no new messages, memories, threads, actions, or projections;
+- every event/document/reindex/memory pending, processing, delayed, DLQ, and projection-repair count
+  is zero;
+- global runtime and all known groups are returned to fail-closed state unless a controller has
+  explicitly approved the next real Feishu gray step.
+
 ## Control-Group Negative Test
 
 The wrapper selects the non-approved `$controlGroupId` and captures `$controlBefore` after global
