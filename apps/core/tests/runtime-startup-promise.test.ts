@@ -175,7 +175,10 @@ function eventWorkerDependencies({ connect }: { connect: ReturnType<typeof vi.fn
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
     })),
-    createDocumentSourceRegistry: vi.fn(() => ({ registerGroupVisibleDocument: vi.fn() })),
+    createDocumentSourceRegistry: vi.fn(() => ({
+      registerGroupVisibleDocument: vi.fn(),
+      registerUserSubmittedDocument: vi.fn(),
+    })),
     createDocumentLinkExtractor: vi.fn(() => ({ extractLinks: vi.fn(() => []) })),
     createDocumentSyncQueue: vi.fn(() => ({
       enqueue: vi.fn(async () => undefined),

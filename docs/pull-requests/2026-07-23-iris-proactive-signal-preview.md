@@ -31,6 +31,7 @@ This change starts the proactive behavior layer without enabling unsolicited Fei
   - operates global, group, and capability runtime-control switches through existing APIs;
   - lists document sources with latest snapshot health and lets operators toggle answering / knowledge-draft policy or enqueue a manual sync through existing document-sync APIs;
   - registers user-submitted Feishu document links through the existing document-sync API, then refreshes source status without rendering document body content;
+  - lets employees explicitly @Iris in Feishu with a user-document submission command and link, registering a `user_submitted_document` and enqueueing sync without invoking the model answer path;
   - lists knowledge-draft status counts and queue summaries, with safe request-revision / reject transitions through existing governance APIs;
   - lists publication/action proposal work across pending, approved, executing, failed, and reconciliation states, with safe request-revision / reject transitions through existing action-proposal APIs and no direct approval path;
   - scans one explicit group for proactive candidates, lists pending candidates, and routes dismiss / approve-delivery through existing proactive-signal APIs;

@@ -406,6 +406,7 @@ describe("FeishuMessageEventProcessor", () => {
       senderId: "open-1",
       text: "@_user_1 帮我总结",
       mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      observedAt: new Date("2026-07-01T17:00:00.000Z"),
     });
   });
 
@@ -651,6 +652,7 @@ describe("FeishuMessageEventProcessor", () => {
       senderId: "open-1",
       text: "Hello",
       mentions: [],
+      observedAt: new Date("2026-07-01T17:00:00.000Z"),
     });
   });
 
@@ -696,6 +698,7 @@ describe("FeishuMessageEventProcessor", () => {
       senderId: "open-1",
       text: "Hello",
       mentions: [],
+      observedAt: new Date("2026-07-01T17:00:00.000Z"),
     });
   });
 
@@ -764,6 +767,7 @@ describe("FeishuMessageEventProcessor", () => {
       senderId: "open-1",
       text: "@_user_1 please read https://docs.feishu.cn/docx/a",
       mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      observedAt: new Date("2026-07-01T17:00:00.000Z"),
     });
     expect(groupVisibleDocumentRegistrar.registerDiscoveredLinks).toHaveBeenCalledOnce();
   });
@@ -825,6 +829,7 @@ describe("FeishuMessageEventProcessor", () => {
       senderId: "open-1",
       text: "@_user_1 please help",
       mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      observedAt: new Date("2026-07-01T17:00:00.000Z"),
     });
     expect(documentLinkExtractor.extractLinks).not.toHaveBeenCalled();
   });

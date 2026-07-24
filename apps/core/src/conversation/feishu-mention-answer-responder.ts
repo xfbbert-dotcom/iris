@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 import type { AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
+import type { RegisterUserSubmittedDocumentInput } from "../documents/document-source-registry.js";
+import type { FeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
 import type { FeishuMessageReplier } from "../feishu/feishu-message-replier.js";
 import { isModelProviderCapacityError } from "../model/model-provider-error.js";
 
@@ -16,6 +18,7 @@ export type FeishuMentionAnswerInput = {
   senderId?: string;
   text?: string;
   mentions: FeishuMessageMention[];
+  observedAt?: Date;
 };
 
 export type FeishuMentionAnswerResult =
@@ -34,6 +37,16 @@ export type FeishuMentionAnswerResponderDependencies = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">;
   replier: Pick<FeishuMessageReplier, "replyText">;
   canReplyWhenMentioned?: (chatId: string) => boolean;
+  canRegisterUserSubmittedDocuments?: (chatId: string) => boolean;
+  documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
+  userSubmittedDocumentRegistrar?: Pick<
+    UserSubmittedDocumentRegistrar,
+    "registerUserSubmittedDocument"
+  >;
+};
+
+type UserSubmittedDocumentRegistrar = {
+  registerUserSubmittedDocument(input: RegisterUserSubmittedDocumentInput): Promise<unknown>;
 };
 
 const BLANK_MENTION_CLARIFICATION = "我在，直接告诉我你想让我处理什么。";
@@ -46,12 +59,22 @@ const BLANK_MODEL_ANSWER_ERROR_MESSAGE = "model answer draft must not be blank";
 const MAX_MENTION_QUESTION_CHARS = 4000;
 const MAX_RECENT_REPLY_MESSAGE_IDS = 1000;
 const TRUNCATION_MARKER = " ... [truncated]";
+const USER_SUBMITTED_DOCUMENT_CONFIRMATION =
+  "\u5df2\u6536\u5230\u8fd9\u4e2a\u6587\u6863\uff0c\u6211\u4f1a\u540c\u6b65\u5b83\u7684\u5185\u5bb9\u3002\u540c\u6b65\u5b8c\u6210\u540e\uff0c\u4f60\u53ef\u4ee5\u76f4\u63a5 @\u6211\u63d0\u95ee\u3002";
+const userSubmittedDocumentIntentPatterns = [
+  /\b(?:add|submit|register|index)\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
+  /\bread\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
+  /(?:\u63d0\u4ea4|\u6536\u5f55|\u8bfb\u53d6|\u540c\u6b65|\u5b66\u4e60|\u8bb0\u4f4f)(?:\u8fd9\u4e2a|\u8fd9\u4efd)?\u6587\u6863/u,
+] as const;
 
 export function createFeishuMentionAnswerResponder({
   botOpenId,
   answerDraftOrchestrator,
   replier,
   canReplyWhenMentioned = () => true,
+  canRegisterUserSubmittedDocuments = () => true,
+  documentLinkExtractor,
+  userSubmittedDocumentRegistrar,
 }: FeishuMentionAnswerResponderDependencies): FeishuMentionAnswerResponder {
   const normalizedBotOpenId = normalizeRequiredOpenId(botOpenId);
   const replyDeduper = new RecentReplyDeduper(MAX_RECENT_REPLY_MESSAGE_IDS);
@@ -89,7 +112,36 @@ export function createFeishuMentionAnswerResponder({
           return result;
         }
 
-        const question = truncateQuestion(stripMentionKeys(input.text, botMentionKeys));
+        const fullQuestion = stripMentionKeys(input.text, botMentionKeys);
+        const userSubmittedDocumentUri = detectUserSubmittedDocumentUri({
+          text: fullQuestion,
+          documentLinkExtractor,
+        });
+        const normalizedSenderId = normalizeOptionalText(input.senderId);
+        if (
+          userSubmittedDocumentUri !== undefined &&
+          userSubmittedDocumentRegistrar !== undefined &&
+          normalizedSenderId !== undefined &&
+          canRegisterUserSubmittedDocuments(input.chatId)
+        ) {
+          await userSubmittedDocumentRegistrar.registerUserSubmittedDocument({
+            sourceUri: userSubmittedDocumentUri,
+            submittedByUserId: normalizedSenderId,
+            observedAt: input.observedAt ?? new Date(),
+          });
+          const result = toRepliedResult(
+            await replier.replyText({
+              messageId: input.messageId,
+              text: USER_SUBMITTED_DOCUMENT_CONFIRMATION,
+              replyInThread: true,
+              uuid: replyUuid,
+            }),
+          );
+          replyDeduper.markHandled(input.messageId);
+          return result;
+        }
+
+        const question = truncateQuestion(fullQuestion);
         if (question.length === 0) {
           const result = toRepliedResult(
             await replier.replyText({
@@ -216,6 +268,23 @@ function stripMentionKeys(text: string, mentionKeys: string[]): string {
   }
 
   return question.replace(/\s+/gu, " ").trim();
+}
+
+function detectUserSubmittedDocumentUri({
+  text,
+  documentLinkExtractor,
+}: {
+  text: string;
+  documentLinkExtractor: Pick<FeishuDocumentLinkExtractor, "extractLinks"> | undefined;
+}): string | undefined {
+  if (documentLinkExtractor === undefined) {
+    return undefined;
+  }
+  if (!userSubmittedDocumentIntentPatterns.some((pattern) => pattern.test(text))) {
+    return undefined;
+  }
+
+  return documentLinkExtractor.extractLinks(text)[0]?.sourceUri;
 }
 
 function truncateQuestion(value: string): string {

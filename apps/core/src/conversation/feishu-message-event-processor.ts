@@ -167,6 +167,7 @@ function maybeRespondToMention(
     senderId: parsed.senderId,
     text: parsed.text,
     mentions: parsed.mentions,
+    observedAt: parsed.sentAt,
   }) ?? Promise.resolve(undefined);
 }
 

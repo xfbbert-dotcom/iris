@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { FeishuMentionAnswerResponderDependencies } from "../src/conversation/feishu-mention-answer-responder.js";
+import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import { createEventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 
 describe("createEventWorkerRuntime", () => {
@@ -84,6 +86,7 @@ describe("createEventWorkerRuntime", () => {
     };
     const documentSources = {
       registerGroupVisibleDocument: vi.fn(),
+      registerUserSubmittedDocument: vi.fn(),
     };
     const documentLinkExtractor = {
       extractLinks: vi.fn(() => []),
@@ -223,6 +226,26 @@ describe("createEventWorkerRuntime", () => {
     const replier = { replyText: vi.fn() };
     const mentionAnswerResponder = { maybeRespond: vi.fn() };
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const registeredUserSubmittedSource: DocumentSource = {
+      id: "user-source-1",
+      sourceType: "user_submitted_document",
+      sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+      submittedByUserId: "ou_alice",
+      permissionState: "unknown",
+      syncState: "pending",
+      canUseForAnswering: true,
+      canUseForKnowledgeDrafts: false,
+      createdAt: new Date("2026-07-24T02:30:00.000Z"),
+      updatedAt: new Date("2026-07-24T02:30:00.000Z"),
+      evidence: [],
+    };
+    const documentSources = {
+      registerGroupVisibleDocument: vi.fn(),
+      registerUserSubmittedDocument: vi.fn(async () => registeredUserSubmittedSource),
+    };
+    const documentSyncPlanner = {
+      planRegisteredSources: vi.fn(async () => ({ enqueuedCount: 1, skippedCount: 0 })),
+    };
     const runtimeController = {
       canProcessIncomingEvent: vi.fn(() => true),
       canReadGroupContext: vi.fn(() => true),
@@ -233,22 +256,26 @@ describe("createEventWorkerRuntime", () => {
       createPostgresPool: vi.fn(() => pool),
       createRedisClient: vi.fn(() => redisClient),
       createConversationMessageRepository: vi.fn(() => messages),
-      createDocumentSourceRegistry: vi.fn(() => ({ registerGroupVisibleDocument: vi.fn() })),
+      createDocumentSourceRegistry: vi.fn(() => documentSources),
       createDocumentLinkExtractor: vi.fn(() => ({ extractLinks: vi.fn(() => []) })),
       createDocumentSyncQueue: vi.fn(() => ({ enqueue: vi.fn() })),
-      createDiscoveredDocumentSyncPlanner: vi.fn(() => ({
-        planRegisteredSources: vi.fn(async () => ({ enqueuedCount: 0, skippedCount: 0 })),
-      })),
+      createDiscoveredDocumentSyncPlanner: vi.fn(() => documentSyncPlanner),
       createGroupVisibleDocumentRegistrar: vi.fn(() => ({
         registerDiscoveredLinks: vi.fn(),
       })),
       createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
       createFeishuMessageReplier: vi.fn(() => replier),
-      createMentionAnswerResponder: vi.fn(() => mentionAnswerResponder),
+      createMentionAnswerResponder: vi.fn(
+        (input: FeishuMentionAnswerResponderDependencies) => {
+          mentionResponderInput = input;
+          return mentionAnswerResponder;
+        },
+      ),
       createProcessor: vi.fn(() => ({ process: vi.fn() })),
       createWorkerLoop: vi.fn(() => loop),
     };
 
+    let mentionResponderInput: FeishuMentionAnswerResponderDependencies | undefined;
     const runtime = createEventWorkerRuntime({
       env: {
         ...enabledEnv(),
@@ -279,7 +306,28 @@ describe("createEventWorkerRuntime", () => {
       answerDraftOrchestrator,
       replier,
       canReplyWhenMentioned: expect.any(Function),
+      canRegisterUserSubmittedDocuments: expect.any(Function),
+      documentLinkExtractor: expect.any(Object),
+      userSubmittedDocumentRegistrar: expect.objectContaining({
+        registerUserSubmittedDocument: expect.any(Function),
+      }),
     });
+    expect(mentionResponderInput?.userSubmittedDocumentRegistrar).toBeDefined();
+    await expect(
+      mentionResponderInput?.userSubmittedDocumentRegistrar?.registerUserSubmittedDocument({
+        sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+        submittedByUserId: "ou_alice",
+        observedAt: new Date("2026-07-24T02:30:00.000Z"),
+      }),
+    ).resolves.toBe(registeredUserSubmittedSource);
+    expect(documentSources.registerUserSubmittedDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+      submittedByUserId: "ou_alice",
+      observedAt: new Date("2026-07-24T02:30:00.000Z"),
+    });
+    expect(documentSyncPlanner.planRegisteredSources).toHaveBeenCalledWith([
+      registeredUserSubmittedSource,
+    ]);
     expect(dependencies.createProcessor).toHaveBeenCalledWith(
       expect.objectContaining({
         messages,
@@ -317,7 +365,10 @@ describe("createEventWorkerRuntime", () => {
         upsertMessage: vi.fn(),
         listRecentByChat: vi.fn(),
       })),
-      createDocumentSourceRegistry: vi.fn(() => ({ registerGroupVisibleDocument: vi.fn() })),
+      createDocumentSourceRegistry: vi.fn(() => ({
+        registerGroupVisibleDocument: vi.fn(),
+        registerUserSubmittedDocument: vi.fn(),
+      })),
       createDocumentLinkExtractor: vi.fn(() => ({ extractLinks: vi.fn(() => []) })),
       createDocumentSyncQueue: vi.fn(() => ({ enqueue: vi.fn() })),
       createDiscoveredDocumentSyncPlanner: vi.fn(() => ({

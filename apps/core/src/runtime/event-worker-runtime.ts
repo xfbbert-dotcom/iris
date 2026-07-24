@@ -103,7 +103,7 @@ type RuntimeGate = {
 };
 type GroupVisibleDocumentRegistry = Pick<
   AsyncDocumentSourceRegistry,
-  "registerGroupVisibleDocument"
+  "registerGroupVisibleDocument" | "registerUserSubmittedDocument"
 >;
 
 export type EventWorkerRuntimeDependencies = {
@@ -196,11 +196,25 @@ function createEnabledEventWorkerRuntime({
     dependencies.createMentionAnswerResponder ?? createFeishuMentionAnswerResponder;
   const createProcessor = dependencies.createProcessor ?? createFeishuMessageEventProcessor;
   const createLoop = dependencies.createWorkerLoop ?? createRawEventWorkerLoop;
+  const documentLinkExtractor = createDocumentLinkExtractor();
+  let userSubmittedDocumentRegistrar:
+    | Pick<AsyncDocumentSourceRegistry, "registerUserSubmittedDocument">
+    | undefined;
 
   const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
     env,
     answerDraftOrchestrator,
     runtimeController,
+    documentLinkExtractor,
+    userSubmittedDocumentRegistrar: {
+      registerUserSubmittedDocument(input) {
+        if (userSubmittedDocumentRegistrar === undefined) {
+          throw new Error("user submitted document registrar unavailable");
+        }
+
+        return userSubmittedDocumentRegistrar.registerUserSubmittedDocument(input);
+      },
+    },
     createTokenProvider,
     createMessageReplier,
     createMentionResponder,
@@ -212,11 +226,17 @@ function createEnabledEventWorkerRuntime({
   const messages = createMessages({ queryable: pool });
   const messageReplayGuard = createMessageReplayGuard({ dataSource: pool as never });
   const documentSources = createDocumentSources(pool);
-  const documentLinkExtractor = createDocumentLinkExtractor();
   const documentSyncQueue = createDocumentSyncQueue(
     createLazyRedisDocumentSyncQueueClient(redisConnection),
   );
   const syncPlanner = createDiscoveredSyncPlanner({ queue: documentSyncQueue });
+  userSubmittedDocumentRegistrar = {
+    async registerUserSubmittedDocument(input) {
+      const source = await documentSources.registerUserSubmittedDocument(input);
+      await syncPlanner.planRegisteredSources([source]);
+      return source;
+    },
+  };
   const groupVisibleDocumentRegistrar = createGroupVisibleRegistrar({
     registry: documentSources,
     syncPlanner,
@@ -301,6 +321,8 @@ function createOptionalMentionAnswerResponder({
   env,
   answerDraftOrchestrator,
   runtimeController,
+  documentLinkExtractor,
+  userSubmittedDocumentRegistrar,
   createTokenProvider,
   createMessageReplier,
   createMentionResponder,
@@ -308,6 +330,8 @@ function createOptionalMentionAnswerResponder({
   env: EnvLike;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
   runtimeController: RuntimeGate | undefined;
+  documentLinkExtractor: ReturnType<typeof createFeishuDocumentLinkExtractor>;
+  userSubmittedDocumentRegistrar: Pick<AsyncDocumentSourceRegistry, "registerUserSubmittedDocument">;
   createTokenProvider: typeof createFeishuTenantAccessTokenProvider;
   createMessageReplier: typeof createFeishuMessageReplier;
   createMentionResponder: typeof createFeishuMentionAnswerResponder;
@@ -345,9 +369,17 @@ function createOptionalMentionAnswerResponder({
       botOpenId,
       answerDraftOrchestrator,
       replier,
+      documentLinkExtractor,
+      userSubmittedDocumentRegistrar,
       ...(runtimeController?.canReplyWhenMentioned === undefined
         ? {}
         : { canReplyWhenMentioned: runtimeController.canReplyWhenMentioned.bind(runtimeController) }),
+      ...(runtimeController?.canReadDocuments === undefined
+        ? {}
+        : {
+            canRegisterUserSubmittedDocuments:
+              runtimeController.canReadDocuments.bind(runtimeController),
+          }),
     }),
   };
 }

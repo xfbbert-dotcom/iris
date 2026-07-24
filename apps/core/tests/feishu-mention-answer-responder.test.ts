@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
 import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-mention-answer-responder.js";
+import { createFeishuDocumentLinkExtractor } from "../src/documents/feishu-document-link-extractor.js";
 import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
 import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
 
@@ -160,6 +161,92 @@ describe("FeishuMentionAnswerResponder", () => {
       question: "summarize this",
       chatId: "oc_group_1",
       liveChatMessages: [{ speaker: "ou_alice", text: "summarize this" }],
+    });
+  });
+
+  it("registers a user-submitted Feishu document from an explicit mention command without drafting an answer", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const registerUserSubmittedDocument = vi.fn(async () => ({
+      source: { id: "doc-source-1" },
+      enqueue: { status: "enqueued" as const, jobId: "sync-job-1" },
+    }));
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-doc" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+      documentLinkExtractor: createFeishuDocumentLinkExtractor(),
+      userSubmittedDocumentRegistrar: { registerUserSubmittedDocument },
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_user_doc_submission",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 please register document https://docs.feishu.cn/docx/user_doc_token_1?from=chat",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+        observedAt: new Date("2026-07-24T02:30:00.000Z"),
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-doc" });
+
+    expect(registerUserSubmittedDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
+      submittedByUserId: "ou_alice",
+      observedAt: new Date("2026-07-24T02:30:00.000Z"),
+    });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_user_doc_submission",
+      text: "\u5df2\u6536\u5230\u8fd9\u4e2a\u6587\u6863\uff0c\u6211\u4f1a\u540c\u6b65\u5b83\u7684\u5185\u5bb9\u3002\u540c\u6b65\u5b8c\u6210\u540e\uff0c\u4f60\u53ef\u4ee5\u76f4\u63a5 @\u6211\u63d0\u95ee\u3002",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
+  it("keeps ordinary mentioned questions with Feishu document links on the answer path", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Iris answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const registerUserSubmittedDocument = vi.fn();
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-answer" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+      documentLinkExtractor: createFeishuDocumentLinkExtractor(),
+      userSubmittedDocumentRegistrar: { registerUserSubmittedDocument },
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_doc_question",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 what does this document say? https://docs.feishu.cn/docx/user_doc_token_1",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-answer" });
+
+    expect(registerUserSubmittedDocument).not.toHaveBeenCalled();
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      question: "what does this document say? https://docs.feishu.cn/docx/user_doc_token_1",
+      chatId: "oc_group_1",
+      liveChatMessages: [
+        {
+          speaker: "ou_alice",
+          text: "what does this document say? https://docs.feishu.cn/docx/user_doc_token_1",
+        },
+      ],
     });
   });
 
