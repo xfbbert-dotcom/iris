@@ -78,6 +78,22 @@ Record non-blocking hardening as backlog instead of extending the gate.
     - Public `/health` remains available; public `/internal/*` remains `404`.
     - Queues drain or remain safely retryable after re-enable.
 
+## Current Status - 2026-07-24
+
+- Loops 3, 4, 5, 6, 7, and 10 have real Feishu pilot evidence for their core safety or product
+  path: group/wiki document answering, permission revocation, knowledge draft confirmation,
+  approval-before-action, first knowledge-base publication, and runtime fail-closed behavior.
+- Loops 1 and 2 are code-complete for current-group message ingestion, semantic memory, threads,
+  and actions, but their real Feishu gray gate is still pending. The current blocker is external
+  Gemini availability: the latest minimal V2 JSON Schema probe returned `503 provider_unavailable`.
+  Until that probe succeeds, semantic DLQ replay must not run.
+- Loops 8 and 9 are code-complete and locally verified for governed proactive candidates and
+  delivery gating, but real Feishu proactive card delivery remains default-off and must wait until
+  the semantic thread/action loop has passed in the pilot group.
+- This status means the product is not "only a chatbot", but it also is not yet a complete daily
+  Iris rollout. The next release gate is provider recovery followed by ordered semantic DLQ replay
+  and one controlled real Feishu semantic gray pass.
+
 ## Not Required For The First 20-30 Person MVP
 
 - self-service multi-company installation;
