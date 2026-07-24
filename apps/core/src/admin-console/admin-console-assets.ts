@@ -160,6 +160,57 @@ export function renderAdminConsoleHtml(): string {
       <div id="knowledge-draft-empty" class="empty-state">Connect to load knowledge drafts.</div>
     </section>
 
+    <section class="publication-queue-panel" aria-labelledby="publication-queue-heading">
+      <div class="panel-heading">
+        <div>
+          <h2 id="publication-queue-heading">Publication Queue</h2>
+          <p>Inspect approval and publication execution state without exposing draft body content.</p>
+        </div>
+        <button id="publication-queue-refresh" type="button" class="secondary">Refresh Queue</button>
+      </div>
+      <div class="source-filters">
+        <label>
+          Proposal status
+          <select id="publication-queue-status">
+            <option value="pending_approval,approved,executing,failed,reconciliation_required">Open publication work</option>
+            <option value="pending_approval">Pending approval</option>
+            <option value="approved">Approved</option>
+            <option value="executing">Executing</option>
+            <option value="failed">Failed</option>
+            <option value="reconciliation_required">Needs reconciliation</option>
+            <option value="succeeded">Succeeded</option>
+            <option value="cancelled,expired">Closed without publication</option>
+          </select>
+        </label>
+        <label>
+          Draft id
+          <input id="publication-queue-subject" placeholder="optional draft id">
+        </label>
+        <label>
+          Limit
+          <input id="publication-queue-limit" inputmode="numeric" placeholder="20">
+        </label>
+      </div>
+      <div class="table-wrap">
+        <table id="publication-queue-table">
+          <thead>
+            <tr>
+              <th>Proposal</th>
+              <th>Draft</th>
+              <th>Status</th>
+              <th>Risk</th>
+              <th>Target</th>
+              <th>Version</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="publication-queue-rows"></tbody>
+        </table>
+      </div>
+      <div id="publication-queue-empty" class="empty-state">Connect to load publication proposals.</div>
+    </section>
+
     <section class="proactive-candidate-panel" aria-labelledby="proactive-candidates-heading">
       <div class="panel-heading">
         <div>
@@ -366,6 +417,7 @@ h2 {
 .control-grid > article,
 .document-source-panel,
 .knowledge-draft-panel,
+.publication-queue-panel,
 .proactive-candidate-panel,
 .audit-summary-panel,
 .event-panel {
@@ -483,6 +535,11 @@ dd {
 }
 
 .knowledge-draft-panel {
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.publication-queue-panel {
   margin-top: 16px;
   padding: 16px;
 }
@@ -630,6 +687,12 @@ const knowledgeDraftStatusFilter = document.getElementById("knowledge-draft-stat
 const knowledgeDraftGroupFilter = document.getElementById("knowledge-draft-group-filter");
 const knowledgeDraftRows = document.getElementById("knowledge-draft-rows");
 const knowledgeDraftEmpty = document.getElementById("knowledge-draft-empty");
+const publicationQueueRefresh = document.getElementById("publication-queue-refresh");
+const publicationQueueStatus = document.getElementById("publication-queue-status");
+const publicationQueueSubject = document.getElementById("publication-queue-subject");
+const publicationQueueLimit = document.getElementById("publication-queue-limit");
+const publicationQueueRows = document.getElementById("publication-queue-rows");
+const publicationQueueEmpty = document.getElementById("publication-queue-empty");
 const proactiveCandidateScan = document.getElementById("proactive-candidate-scan");
 const proactiveCandidateRefresh = document.getElementById("proactive-candidate-refresh");
 const proactiveCandidateGroup = document.getElementById("proactive-candidate-group");
@@ -660,6 +723,7 @@ const documentSourceListBasePath = "/internal/document-sync/sources?includeLates
 const knowledgeDraftListBasePath = "/internal/knowledge-drafts?limit=20";
 const knowledgeDraftRequestRevisionPath = "/request-revision";
 const knowledgeDraftRejectPath = "/reject";
+const publicationQueueBasePath = "/internal/action-proposals?status=pending_approval,approved,executing,failed,reconciliation_required&limit=20";
 const proactiveSignalGroupBasePath = "/internal/proactive-signals/groups/";
 const proactiveCandidateListSuffix = "/candidates?limit=20";
 const proactiveCandidateScanSuffix = "/scan";
@@ -985,6 +1049,110 @@ async function transitionKnowledgeDraft(draft, action) {
   });
 }
 
+function publicationQueuePath() {
+  const [path, query] = publicationQueueBasePath.split("?");
+  const params = new URLSearchParams(query);
+  params.set("status", publicationQueueStatus.value);
+  params.set("limit", boundedNumericInputValue(publicationQueueLimit, "20"));
+  const subjectId = publicationQueueSubject.value.trim();
+  if (subjectId.length > 0) params.set("subjectId", subjectId);
+  return path + "?" + params.toString();
+}
+
+function canGovernPublicationProposal(proposal) {
+  return proposal.status === "pending_approval" || proposal.status === "approved";
+}
+
+function renderPublicationQueue(proposals) {
+  publicationQueueRows.replaceChildren();
+  for (const proposal of proposals || []) {
+    const row = document.createElement("tr");
+
+    const proposalCell = document.createElement("td");
+    proposalCell.className = "source-title";
+    const proposalId = document.createElement("strong");
+    proposalId.textContent = text(proposal.id);
+    const operation = document.createElement("div");
+    operation.className = "source-uri";
+    operation.textContent = text(proposal.actionType);
+    proposalCell.append(proposalId, operation);
+
+    const subjectCell = document.createElement("td");
+    subjectCell.textContent =
+      text(proposal.subjectId) + " r" + text(proposal.subjectRevision, "?");
+
+    const statusCell = document.createElement("td");
+    statusCell.textContent = text(proposal.status);
+
+    const riskCell = document.createElement("td");
+    riskCell.textContent = text(proposal.riskLevel);
+
+    const targetCell = document.createElement("td");
+    targetCell.textContent =
+      text(proposal.targetPolicyId) + " v" + text(proposal.targetPolicyVersion, "?");
+
+    const versionCell = document.createElement("td");
+    versionCell.textContent =
+      "p" + text(proposal.version, "?") + " / d" + text(proposal.subjectVersion, "?");
+
+    const updatedCell = document.createElement("td");
+    updatedCell.textContent = text(proposal.updatedAt);
+
+    const actionsCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "source-actions";
+    for (const [action, label, danger] of [
+      [knowledgeDraftRequestRevisionPath, "Request revision", false],
+      [knowledgeDraftRejectPath, "Reject", true],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = danger ? "danger" : "secondary";
+      button.textContent = label;
+      button.disabled = !canGovernPublicationProposal(proposal);
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          await transitionPublicationProposal(proposal, action);
+          addEvent(label + " recorded for proposal " + proposal.id);
+          await refreshPublicationQueue();
+        } catch (error) {
+          addEvent(label + " failed: " + error.message);
+          setConnection("Request failed", "warn");
+        } finally {
+          button.disabled = !canGovernPublicationProposal(proposal);
+        }
+      });
+      actions.append(button);
+    }
+    actionsCell.append(actions);
+
+    row.append(proposalCell, subjectCell, statusCell, riskCell, targetCell, versionCell, updatedCell, actionsCell);
+    publicationQueueRows.append(row);
+  }
+  publicationQueueEmpty.textContent = (proposals || []).length === 0 ? "No publication proposals match the current filters." : "";
+}
+
+async function refreshPublicationQueue() {
+  const body = await requestJson(publicationQueuePath());
+  renderPublicationQueue(body.proposals || []);
+}
+
+async function transitionPublicationProposal(proposal, action) {
+  const reason = window.prompt("Reason for " + action.slice(1).replace("-", " ") + ":", "Needs operator follow-up");
+  if (reason === null || reason.trim().length === 0) throw new Error("reason_required");
+  return requestJson("/internal/action-proposals/" + encodeURIComponent(proposal.id) + action, {
+    method: "POST",
+    body: JSON.stringify({
+      expectedProposalVersion: proposal.version,
+      expectedSubjectRevision: proposal.subjectRevision,
+      expectedSubjectVersion: proposal.subjectVersion,
+      reason: reason.trim(),
+      operationKey: "admin-console-proposal-" + action.slice(1) + "-" + proposal.id + "-" + Date.now(),
+    }),
+  });
+}
+
 function readProactiveGroupId() {
   const groupId = proactiveCandidateGroup.value.trim();
   if (groupId.length === 0) {
@@ -1227,6 +1395,7 @@ async function refresh() {
   render(status, readiness, runtime);
   await refreshDocumentSources();
   await refreshKnowledgeDrafts();
+  await refreshPublicationQueue();
   await refreshAuditSummaries();
   setConnection(status.ok === true ? "Connected" : "Attention needed", status.ok === true ? "ok" : "warn");
 }
@@ -1326,6 +1495,39 @@ knowledgeDraftGroupFilter.addEventListener("input", async () => {
     addEvent("Knowledge draft filter failed: " + error.message);
   }
 });
+
+publicationQueueRefresh.addEventListener("click", async () => {
+  publicationQueueRefresh.disabled = true;
+  try {
+    await refreshPublicationQueue();
+    addEvent("Publication queue refreshed");
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Publication queue refresh failed: " + error.message);
+  } finally {
+    publicationQueueRefresh.disabled = false;
+  }
+});
+
+publicationQueueStatus.addEventListener("change", async () => {
+  if (readToken().length === 0) return;
+  try {
+    await refreshPublicationQueue();
+  } catch (error) {
+    addEvent("Publication queue filter failed: " + error.message);
+  }
+});
+
+for (const input of [publicationQueueSubject, publicationQueueLimit]) {
+  input.addEventListener("input", async () => {
+    if (readToken().length === 0) return;
+    try {
+      await refreshPublicationQueue();
+    } catch (error) {
+      addEvent("Publication queue filter failed: " + error.message);
+    }
+  });
+}
 
 proactiveCandidateScan.addEventListener("click", async () => {
   proactiveCandidateScan.disabled = true;

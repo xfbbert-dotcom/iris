@@ -90,4 +90,20 @@ describe("admin console assets", () => {
     expect(script).not.toContain("messageBody");
     expect(script).not.toContain("rawText");
   });
+
+  it("renders publication queue governance without direct approval or content disclosure", () => {
+    const html = renderAdminConsoleHtml();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("Publication Queue");
+    expect(html).toContain("publication-queue-table");
+    expect(script).toContain("/internal/action-proposals?status=pending_approval,approved,executing,failed,reconciliation_required&limit=20");
+    expect(script).toContain("/internal/action-proposals/");
+    expect(script).toContain("/request-revision");
+    expect(script).toContain("/reject");
+    expect(script).not.toContain("/internal/action-proposals/approve");
+    expect(script).not.toContain("Approve publication");
+    expect(script).not.toContain("draft.content");
+    expect(script).not.toContain("currentRevision.content");
+  });
 });
