@@ -32,6 +32,7 @@ This change starts the proactive behavior layer without enabling unsolicited Fei
   - lists document sources with latest snapshot health and lets operators toggle answering / knowledge-draft policy or enqueue a manual sync through existing document-sync APIs;
   - lists knowledge-draft status counts and queue summaries, with safe request-revision / reject transitions through existing governance APIs;
   - scans one explicit group for proactive candidates, lists pending candidates, and routes dismiss / approve-delivery through existing proactive-signal APIs;
+  - shows aggregate audit summaries from existing audit APIs without rendering raw message bodies;
   - keeps the page shell free of secrets and internal data.
 - Extends the pilot Caddy allowlist only for exact static console routes:
   - `GET /admin`
@@ -57,6 +58,7 @@ This still does not create formal tasks, write knowledge-base content, call exte
   - `npm --workspace apps/core test -- admin-console-api.test.ts admin-console-assets.test.ts`
   - `npm --workspace apps/core test -- admin-console-assets.test.ts admin-console-api.test.ts knowledge-draft-api.test.ts`
   - `npm --workspace apps/core test -- admin-console-assets.test.ts admin-console-api.test.ts proactive-signal-api.test.ts`
+  - `npm --workspace apps/core test -- admin-console-assets.test.ts admin-console-api.test.ts answer-draft-api.test.ts`
   - `node --test scripts/pilot-compose.test.mjs`
   - `git diff --check`
 

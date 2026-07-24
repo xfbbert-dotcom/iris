@@ -199,6 +199,55 @@ export function renderAdminConsoleHtml(): string {
       <div id="proactive-candidate-empty" class="empty-state">Enter a group id to load proactive candidates.</div>
     </section>
 
+    <section class="audit-summary-panel" aria-labelledby="audit-summary-heading">
+      <div class="panel-heading">
+        <div>
+          <h2 id="audit-summary-heading">Audit Summary</h2>
+          <p>Inspect recent security and operator events without exposing raw message bodies.</p>
+        </div>
+        <button id="audit-summary-refresh" type="button" class="secondary">Refresh Audit</button>
+      </div>
+      <div class="source-filters">
+        <label>
+          Event type
+          <select id="audit-summary-type">
+            <option value="">All audit types</option>
+            <option value="permission_guard_denied">Permission denied</option>
+            <option value="permission_guard_error">Permission error</option>
+            <option value="runtime_control_updated">Runtime control updated</option>
+            <option value="group_memory_created">Memory created</option>
+            <option value="group_memory_corrected">Memory corrected</option>
+            <option value="group_memory_deleted">Memory deleted</option>
+            <option value="memory_extraction_failed">Memory extraction failed</option>
+          </select>
+        </label>
+        <label>
+          Document id
+          <input id="audit-summary-document" placeholder="optional source id">
+        </label>
+        <label>
+          Limit
+          <input id="audit-summary-limit" inputmode="numeric" placeholder="20">
+        </label>
+      </div>
+      <dl id="audit-summary-meta" class="compact-status"></dl>
+      <div class="table-wrap">
+        <table id="audit-summary-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Document</th>
+              <th>Events</th>
+              <th>Fragments</th>
+              <th>Window</th>
+            </tr>
+          </thead>
+          <tbody id="audit-summary-rows"></tbody>
+        </table>
+      </div>
+      <div id="audit-summary-empty" class="empty-state">Connect to load audit summaries.</div>
+    </section>
+
     <section class="event-panel" aria-labelledby="events-heading">
       <h2 id="events-heading">Recent Operator Events</h2>
       <ol id="event-log"></ol>
@@ -318,6 +367,7 @@ h2 {
 .document-source-panel,
 .knowledge-draft-panel,
 .proactive-candidate-panel,
+.audit-summary-panel,
 .event-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -438,6 +488,11 @@ dd {
 }
 
 .proactive-candidate-panel {
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.audit-summary-panel {
   margin-top: 16px;
   padding: 16px;
 }
@@ -581,6 +636,13 @@ const proactiveCandidateGroup = document.getElementById("proactive-candidate-gro
 const proactiveCandidateLimit = document.getElementById("proactive-candidate-limit");
 const proactiveCandidateRows = document.getElementById("proactive-candidate-rows");
 const proactiveCandidateEmpty = document.getElementById("proactive-candidate-empty");
+const auditSummaryRefresh = document.getElementById("audit-summary-refresh");
+const auditSummaryType = document.getElementById("audit-summary-type");
+const auditSummaryDocument = document.getElementById("audit-summary-document");
+const auditSummaryLimit = document.getElementById("audit-summary-limit");
+const auditSummaryMeta = document.getElementById("audit-summary-meta");
+const auditSummaryRows = document.getElementById("audit-summary-rows");
+const auditSummaryEmpty = document.getElementById("audit-summary-empty");
 
 const capabilityLabels = {
   readGroupContext: "Read group context",
@@ -603,6 +665,16 @@ const proactiveCandidateListSuffix = "/candidates?limit=20";
 const proactiveCandidateScanSuffix = "/scan";
 const proactiveCandidateDismissSuffix = "/dismiss";
 const proactiveCandidateApproveSuffix = "/approve-delivery";
+const auditSummaryBasePath = "/internal/audit/events/summary?limit=20";
+const auditSummaryAllowedTypes = new Set([
+  "permission_guard_denied",
+  "permission_guard_error",
+  "runtime_control_updated",
+  "group_memory_created",
+  "group_memory_corrected",
+  "group_memory_deleted",
+  "memory_extraction_failed",
+]);
 
 function readToken() {
   return sessionStorage.getItem("iris_admin_token") || "";
@@ -1032,6 +1104,66 @@ async function transitionProactiveCandidate(candidate, suffix) {
   );
 }
 
+function boundedNumericInputValue(input, fallback) {
+  const raw = input.value.trim();
+  if (raw.length === 0) return fallback;
+  return /^\\d+$/u.test(raw) ? raw : fallback;
+}
+
+function auditSummaryPath() {
+  const [path, query] = auditSummaryBasePath.split("?");
+  const params = new URLSearchParams(query);
+  params.set("limit", boundedNumericInputValue(auditSummaryLimit, "20"));
+  const type = auditSummaryType.value;
+  if (type.length > 0 && auditSummaryAllowedTypes.has(type)) params.set("type", type);
+  const documentId = auditSummaryDocument.value.trim();
+  if (documentId.length > 0) params.set("documentId", documentId);
+  return path + "?" + params.toString();
+}
+
+function renderAuditSummaryMeta(meta) {
+  renderDefinitionList(auditSummaryMeta, [
+    ["Retained", meta?.retainedEventCount ?? 0],
+    ["Dropped", meta?.droppedEventCount ?? 0],
+    ["Inspected", meta?.inspectedEventCount ?? 0],
+    ["Matching", meta?.matchingEventCount ?? 0],
+    ["Limit", meta?.limit ?? "unknown"],
+  ]);
+}
+
+function renderAuditSummaries(summaries) {
+  auditSummaryRows.replaceChildren();
+  for (const summary of summaries || []) {
+    const row = document.createElement("tr");
+
+    const typeCell = document.createElement("td");
+    typeCell.textContent = text(summary.type);
+
+    const documentCell = document.createElement("td");
+    documentCell.textContent = text(summary.documentId, "none");
+
+    const eventCountCell = document.createElement("td");
+    eventCountCell.textContent = text(summary.eventCount, "0");
+
+    const fragmentCell = document.createElement("td");
+    fragmentCell.textContent = text(summary.affectedFragmentCount, "0");
+
+    const windowCell = document.createElement("td");
+    windowCell.textContent =
+      text(summary.firstRecordedAt, "unknown") + " -> " + text(summary.latestRecordedAt, "unknown");
+
+    row.append(typeCell, documentCell, eventCountCell, fragmentCell, windowCell);
+    auditSummaryRows.append(row);
+  }
+  auditSummaryEmpty.textContent = (summaries || []).length === 0 ? "No audit summaries match the current filters." : "";
+}
+
+async function refreshAuditSummaries() {
+  const body = await requestJson(auditSummaryPath());
+  renderAuditSummaryMeta(body.meta || {});
+  renderAuditSummaries(body.summaries || []);
+}
+
 function renderCapabilityControls(capabilities) {
   capabilityControls.replaceChildren();
   for (const [name, enabled] of Object.entries(capabilities || {})) {
@@ -1095,6 +1227,7 @@ async function refresh() {
   render(status, readiness, runtime);
   await refreshDocumentSources();
   await refreshKnowledgeDrafts();
+  await refreshAuditSummaries();
   setConnection(status.ok === true ? "Connected" : "Attention needed", status.ok === true ? "ok" : "warn");
 }
 
@@ -1218,6 +1351,39 @@ proactiveCandidateRefresh.addEventListener("click", async () => {
     proactiveCandidateRefresh.disabled = false;
   }
 });
+
+auditSummaryRefresh.addEventListener("click", async () => {
+  auditSummaryRefresh.disabled = true;
+  try {
+    await refreshAuditSummaries();
+    addEvent("Audit summaries refreshed");
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Audit summary refresh failed: " + error.message);
+  } finally {
+    auditSummaryRefresh.disabled = false;
+  }
+});
+
+auditSummaryType.addEventListener("change", async () => {
+  if (readToken().length === 0) return;
+  try {
+    await refreshAuditSummaries();
+  } catch (error) {
+    addEvent("Audit summary filter failed: " + error.message);
+  }
+});
+
+for (const input of [auditSummaryDocument, auditSummaryLimit]) {
+  input.addEventListener("input", async () => {
+    if (readToken().length === 0) return;
+    try {
+      await refreshAuditSummaries();
+    } catch (error) {
+      addEvent("Audit summary filter failed: " + error.message);
+    }
+  });
+}
 
 for (const button of document.querySelectorAll("[data-global]")) {
   button.addEventListener("click", async () => {

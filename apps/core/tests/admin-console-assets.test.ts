@@ -76,4 +76,18 @@ describe("admin console assets", () => {
     expect(script).toContain("/approve-delivery");
     expect(script).not.toContain("sendMessage");
   });
+
+  it("renders audit summary governance without raw message bodies", () => {
+    const html = renderAdminConsoleHtml();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("Audit Summary");
+    expect(html).toContain("audit-summary-table");
+    expect(script).toContain("/internal/audit/events/summary?limit=20");
+    expect(script).toContain("audit-summary-type");
+    expect(script).toContain("permission_guard_denied");
+    expect(script).toContain("runtime_control_updated");
+    expect(script).not.toContain("messageBody");
+    expect(script).not.toContain("rawText");
+  });
 });
