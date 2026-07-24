@@ -27,7 +27,7 @@
 | IRIS-CORE-010 | Iris 读取所在群中出现过的可读文档正文 | 已实现 | 群文档链接发现、正文抓取、来源证据、同步、索引、群可见检索和真实飞书验收 | 后续扩展更多文件类型和解析质量 |
 | IRIS-CORE-011 | Iris 读取用户手动提供的文档 | 代码已实现（真实飞书灰度待验收） | 手动文档注册、同步、来源策略和回答检索；Admin Console 可提交用户提供的飞书文档链接、填写提交人、入队同步并刷新来源状态；普通员工可在飞书群里 @Iris 并发送明确的“提交/收录/读取/同步文档”命令加飞书文档链接，Iris 会登记为 `user_submitted_document`、入队同步并回复确认，普通带链接问答仍走回答路径 | 仍需真实飞书小群验证自助提交、同步状态提示和后续引用质量；更细的用户级文档治理进入 backlog |
 | IRIS-CORE-012 | 文档/知识库权限撤销后不得继续泄露内容 | 已实现核心边界 | 答前实时 Feishu Permission Guard；拒绝审计；fail closed；权限回收真实验收 | 后续增加权限变更主动失效和批量回收，但答前安全边界已成立 |
-| IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 首个通用审批闭环已通过真实 pilot；完整正文审阅代码候选完成 | 5B-2A 为 `publish_knowledge_draft` 建立 proposal -> requirements -> approval 事实层、风险矩阵、实时角色复验、版本失效和共享飞书回调；5B-2B 要求批准前存在当前精确审阅事实；内部 API 不能伪造人工批准 | 5B-2B 仍需真实 OAuth pilot；本阶段尚无 execution/result，5B-3 才接入首个执行器；后续建任务、跨群通知复用同一契约而非复制审批逻辑 |
+| IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 首个通用审批闭环、完整正文审阅和首个执行器已通过真实 pilot | 5B-2A 为 `publish_knowledge_draft` 建立 proposal -> requirements -> approval 事实层、风险矩阵、实时角色复验、版本失效和共享飞书回调；5B-2B 要求批准前存在当前精确审阅事实，并已通过真实 Feishu OAuth review pilot；5B-3 已把首个批准后的 `publish_knowledge_draft` proposal 幂等发布到授权 Feishu wiki root；内部 API 不能伪造人工批准 | 后续建任务、跨群通知复用同一契约而非复制审批逻辑；批量审批、复杂协作编辑和更细 reviewer 映射进入 backlog |
 | IRIS-CORE-014 | 管理员可以全局/按群开启关闭 Iris 和能力 | 最小 Admin Console 已实现 | Postgres 持久化 runtime control；全局、群和 capability API；紧急停用真实验收；`/admin` 浏览器控制台可读取系统状态、readiness、runtime control，并可操作全局、群和 capability 开关；同一控制台可查看文档源摘要、同步健康、权限状态，并可按源切换回答/知识草稿策略与触发手动同步；知识草稿队列可查看状态计数和摘要并执行请求修改/拒绝；发布队列可查看 pending/approved/executing/failed/reconciliation action proposals 并执行安全请求修改/拒绝；主动候选治理可扫描单个显式群、查看候选并执行 dismiss / approve delivery；审计摘要视图可按事件类型/文档过滤查看 retained/dropped/inspected/matching 与聚合事件窗口；Caddy 仅放行精确静态 console 路由，`/internal/*` 仍保持 404 | 仍需增加持久化审计仓库和正式管理员身份模型；当前版本先满足 20-30 人内部运行控制 |
 | IRIS-CORE-015 | 多人安装和多公司使用 | 按白皮书延期 | 白皮书演进阶段 4 明确 multi-company / multi-tenant productization | 内部 MVP 稳定后增加 tenant ID、安装流程、租户密钥/数据隔离、租户管理员和计费 |
 
@@ -71,3 +71,10 @@
 - Phase 5B-3 real Feishu publication acceptance is complete for the first internal pilot write loop: one approved `publish_knowledge_draft` proposal produced a succeeded `feishu_wiki` execution and one `knowledge_publications` fact with Feishu wiki/docx remote identifiers.
 - The production runtime was rechecked in fail-closed state after these gates: `globalEnabled=false`, `desiredGlobalEnabled=false`, all known pilot groups disabled, `writeKnowledgeBase=false`, `proactiveSpeech=false`, and all event/document/reindex/knowledge-card/action-approval pending and DLQ counts at zero.
 - The next core product gap is not more Phase 5B hardening. It is real Feishu gray acceptance for the group semantic memory/thread/action loop and then the proactive signal loop, both still default-off unless explicitly allowlisted.
+
+## Status Amendment - 2026-07-24 Semantic Gray Gate
+
+- A single minimal Gemini V2 JSON Schema probe for semantic memory/thread/action gray acceptance returned `503 provider_unavailable`; the AI Worker safe log recorded `upstream_status=503 classification=provider_unavailable`.
+- No semantic DLQ replay was performed after that failed probe, and no additional model requests were made in the same window.
+- Production remained fail-closed after the probe: `globalEnabled=false`, `desiredGlobalEnabled=false`, pilot/control/historical groups disabled, Caddy stopped, event/document/reindex queues and DLQs at zero, and the six semantic DLQ entries preserved for ordered replay after provider recovery.
+- Non-model proactive candidate governance was reverified locally while waiting for provider recovery: focused proactive/admin tests, full Core test suite, typecheck, build, pilot compose contract checks, and `git diff --check` all passed.
