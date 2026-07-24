@@ -87,8 +87,8 @@ export function renderAdminConsoleHtml(): string {
           <select id="document-source-type">
             <option value="">All types</option>
             <option value="group_visible_document">Group documents</option>
-            <option value="authorized_wiki">Authorized wiki</option>
-            <option value="user_submitted">User submitted</option>
+            <option value="authorized_wiki_document">Authorized wiki</option>
+            <option value="user_submitted_document">User submitted</option>
           </select>
         </label>
         <label>
@@ -96,6 +96,21 @@ export function renderAdminConsoleHtml(): string {
           <input id="document-source-id-filter" placeholder="document source id">
         </label>
       </div>
+      <form id="user-document-form" class="manual-source-form">
+        <label>
+          User document URL
+          <input id="user-document-source-uri" placeholder="https://docs.feishu.cn/docx/...">
+        </label>
+        <label>
+          Title
+          <input id="user-document-title" placeholder="optional display title">
+        </label>
+        <label>
+          Submitted by
+          <input id="user-document-submitter" placeholder="Feishu user id or operator">
+        </label>
+        <button id="user-document-submit" type="submit" class="secondary">Submit Document</button>
+      </form>
       <div class="table-wrap">
         <table id="document-source-table">
           <thead>
@@ -573,6 +588,18 @@ dd {
   margin-top: 14px;
 }
 
+.manual-source-form {
+  display: grid;
+  grid-template-columns: minmax(280px, 2fr) minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-top: 14px;
+}
+
+.manual-source-form button {
+  min-height: 42px;
+}
+
 .table-wrap {
   margin-top: 14px;
   overflow-x: auto;
@@ -652,7 +679,8 @@ td.source-title {
   .operator-panel,
   .status-grid,
   .control-grid,
-  .source-filters {
+  .source-filters,
+  .manual-source-form {
     grid-template-columns: 1fr;
   }
 
@@ -679,6 +707,11 @@ const eventLog = document.getElementById("event-log");
 const documentSourceRefresh = document.getElementById("document-source-refresh");
 const documentSourceType = document.getElementById("document-source-type");
 const documentSourceIdFilter = document.getElementById("document-source-id-filter");
+const userDocumentForm = document.getElementById("user-document-form");
+const userDocumentSourceUri = document.getElementById("user-document-source-uri");
+const userDocumentTitle = document.getElementById("user-document-title");
+const userDocumentSubmitter = document.getElementById("user-document-submitter");
+const userDocumentSubmit = document.getElementById("user-document-submit");
 const documentSourceRows = document.getElementById("document-source-rows");
 const documentSourceEmpty = document.getElementById("document-source-empty");
 const knowledgeDraftRefresh = document.getElementById("knowledge-draft-refresh");
@@ -720,6 +753,7 @@ const capabilityLabels = {
 
 let cachedStatus = undefined;
 const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
+const userSubmittedDocumentPath = "/internal/document-sync/user-submitted-documents";
 const knowledgeDraftListBasePath = "/internal/knowledge-drafts?limit=20";
 const knowledgeDraftRequestRevisionPath = "/request-revision";
 const knowledgeDraftRejectPath = "/reject";
@@ -935,6 +969,22 @@ async function enqueueDocumentSource(sourceId) {
   return requestJson("/internal/document-sync/sources/" + encodeURIComponent(sourceId) + "/enqueue", {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+async function registerUserSubmittedDocument() {
+  const sourceUri = userDocumentSourceUri.value.trim();
+  const title = userDocumentTitle.value.trim();
+  const submittedByUserId = userDocumentSubmitter.value.trim() || readOperator();
+  if (sourceUri.length === 0) throw new Error("source_uri_required");
+  if (submittedByUserId.length === 0) throw new Error("submitted_by_required");
+  return requestJson(userSubmittedDocumentPath, {
+    method: "POST",
+    body: JSON.stringify({
+      sourceUri,
+      submittedByUserId,
+      ...(title.length === 0 ? {} : { title }),
+    }),
   });
 }
 
@@ -1462,6 +1512,23 @@ documentSourceIdFilter.addEventListener("input", async () => {
     await refreshDocumentSources();
   } catch (error) {
     addEvent("Document source filter failed: " + error.message);
+  }
+});
+
+userDocumentForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  userDocumentSubmit.disabled = true;
+  try {
+    const body = await registerUserSubmittedDocument();
+    userDocumentSourceUri.value = "";
+    userDocumentTitle.value = "";
+    addEvent("User document registered: " + text(body.source?.id, "unknown source"));
+    await refreshDocumentSources();
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("User document registration failed: " + error.message);
+  } finally {
+    userDocumentSubmit.disabled = false;
   }
 });
 

@@ -25,7 +25,7 @@
 | IRIS-CORE-008 | 用户确认后同步到飞书知识库 | 已实现 | 5B-3 飞书知识库发布执行器、授权 wiki root、幂等 publication execution、失败恢复/对账、回群结果和真实 Feishu pilot；未经确认、审阅和所需批准不会写入 | 后续补充批量发布、冲突检测、发布模板和更友好的发布历史页面；核心写入闭环已成立 |
 | IRIS-CORE-009 | Iris 回答时读取授权飞书知识库 | 已实现 | 授权 Wiki 注册、解析、同步、向量检索、实时权限二次校验、引用和真实飞书验收 | 后续补充知识冲突识别和知识更新草稿，不影响当前已实现判定 |
 | IRIS-CORE-010 | Iris 读取所在群中出现过的可读文档正文 | 已实现 | 群文档链接发现、正文抓取、来源证据、同步、索引、群可见检索和真实飞书验收 | 后续扩展更多文件类型和解析质量 |
-| IRIS-CORE-011 | Iris 读取用户手动提供的文档 | 已实现基础 | 手动文档注册、同步、来源策略和回答检索 | 需要面向普通用户的提交入口和状态反馈；底层能力已存在 |
+| IRIS-CORE-011 | Iris 读取用户手动提供的文档 | 内部运营入口已实现 | 手动文档注册、同步、来源策略和回答检索；Admin Console 可提交用户提供的飞书文档链接、填写提交人、入队同步并刷新来源状态 | 仍需要面向普通员工的飞书内自助提交入口和更友好的同步状态反馈；底层能力与内部运营入口已存在 |
 | IRIS-CORE-012 | 文档/知识库权限撤销后不得继续泄露内容 | 已实现核心边界 | 答前实时 Feishu Permission Guard；拒绝审计；fail closed；权限回收真实验收 | 后续增加权限变更主动失效和批量回收，但答前安全边界已成立 |
 | IRIS-CORE-013 | 高影响行动执行前必须询问并获得确认 | 首个通用审批闭环已通过真实 pilot；完整正文审阅代码候选完成 | 5B-2A 为 `publish_knowledge_draft` 建立 proposal -> requirements -> approval 事实层、风险矩阵、实时角色复验、版本失效和共享飞书回调；5B-2B 要求批准前存在当前精确审阅事实；内部 API 不能伪造人工批准 | 5B-2B 仍需真实 OAuth pilot；本阶段尚无 execution/result，5B-3 才接入首个执行器；后续建任务、跨群通知复用同一契约而非复制审批逻辑 |
 | IRIS-CORE-014 | 管理员可以全局/按群开启关闭 Iris 和能力 | 最小 Admin Console 已实现 | Postgres 持久化 runtime control；全局、群和 capability API；紧急停用真实验收；`/admin` 浏览器控制台可读取系统状态、readiness、runtime control，并可操作全局、群和 capability 开关；同一控制台可查看文档源摘要、同步健康、权限状态，并可按源切换回答/知识草稿策略与触发手动同步；知识草稿队列可查看状态计数和摘要并执行请求修改/拒绝；发布队列可查看 pending/approved/executing/failed/reconciliation action proposals 并执行安全请求修改/拒绝；主动候选治理可扫描单个显式群、查看候选并执行 dismiss / approve delivery；审计摘要视图可按事件类型/文档过滤查看 retained/dropped/inspected/matching 与聚合事件窗口；Caddy 仅放行精确静态 console 路由，`/internal/*` 仍保持 404 | 仍需增加持久化审计仓库和正式管理员身份模型；当前版本先满足 20-30 人内部运行控制 |

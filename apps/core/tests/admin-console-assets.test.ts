@@ -42,8 +42,13 @@ describe("admin console assets", () => {
 
     expect(html).toContain("Document Sources");
     expect(html).toContain("document-source-table");
+    expect(html).toContain('value="authorized_wiki_document"');
+    expect(html).toContain('value="user_submitted_document"');
+    expect(html).toContain("user-document-source-uri");
+    expect(html).toContain("user-document-submitter");
     expect(script).toContain("/internal/document-sync/sources?includeLatestSnapshot=true");
     expect(script).toContain("/internal/document-sync/sources/");
+    expect(script).toContain("/internal/document-sync/user-submitted-documents");
     expect(script).toContain("/policy");
     expect(script).toContain("/enqueue");
     expect(script).not.toContain("bodyText");

@@ -30,6 +30,7 @@ This change starts the proactive behavior layer without enabling unsolicited Fei
   - reads `/internal/status`, `/internal/readiness`, and `/internal/runtime-control/status` after the operator supplies the existing internal bearer token;
   - operates global, group, and capability runtime-control switches through existing APIs;
   - lists document sources with latest snapshot health and lets operators toggle answering / knowledge-draft policy or enqueue a manual sync through existing document-sync APIs;
+  - registers user-submitted Feishu document links through the existing document-sync API, then refreshes source status without rendering document body content;
   - lists knowledge-draft status counts and queue summaries, with safe request-revision / reject transitions through existing governance APIs;
   - lists publication/action proposal work across pending, approved, executing, failed, and reconciliation states, with safe request-revision / reject transitions through existing action-proposal APIs and no direct approval path;
   - scans one explicit group for proactive candidates, lists pending candidates, and routes dismiss / approve-delivery through existing proactive-signal APIs;
