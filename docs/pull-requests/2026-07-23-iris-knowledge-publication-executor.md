@@ -50,3 +50,14 @@ The next step is not more generic hardening. The next product gate is a tightly 
 4. Confirm the executor writes exactly one Feishu wiki/docx node under the authorized target.
 5. Confirm duplicate execution is idempotent and revoked runtime/role gates fail closed.
 6. Return runtime to disabled and record zero queue/DLQ counts.
+
+## Real Publication Acceptance - 2026-07-23 / Rechecked 2026-07-24
+
+- Migration `0035_knowledge_publications.sql` was applied exactly once in the pilot database.
+- A real Feishu publication succeeded for an approved `publish_knowledge_draft` proposal.
+- The successful execution reached `state=succeeded` with provider `feishu_wiki` and response classification `success`.
+- The publication fact recorded a Feishu wiki node token, document token, `docx` document type, content hash, target policy, target policy version, and permission check summary.
+- The corresponding draft reached `published`; failed publication attempts remained `failed` with bounded classification and did not create publication facts.
+- Recheck on 2026-07-24 confirmed current runtime is fail-closed: `globalEnabled=false`, `desiredGlobalEnabled=false`, all known pilot groups disabled, `writeKnowledgeBase=false`, `proactiveSpeech=false`, `callExternalTools=false`.
+- Recheck on 2026-07-24 confirmed event/document/reindex pending and DLQ counts are zero, knowledge-card queue/DLQ is zero, and action approval outbox has no pending/processing/outcome_unknown/terminalFailed work.
+- Phase 5B-3 is therefore accepted for the first internal pilot write loop. Follow-up work should target bulk publication governance, conflict detection, friendlier publication history, and reconciliation UX rather than extending this acceptance gate.

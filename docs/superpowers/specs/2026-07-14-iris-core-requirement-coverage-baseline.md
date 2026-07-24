@@ -64,3 +64,10 @@
 - 主动候选、知识草稿和高影响行动必须有独立状态，不允许模型输出直接触发外部写操作。
 - 所有新增异步队列必须具备幂等、重试、DLQ、状态观测和停用语义。
 - capability 名称不得被当作功能完成证据；每项完成必须有自动化测试和真实飞书验收脚本。
+
+## Status Amendment - 2026-07-24
+
+- Phase 5B-2B real Feishu OAuth review acceptance is complete: the current proposal's full-draft review page recorded an append-only review attestation for the exact proposal version, subject revision, subject version, and content hash; the same Feishu approval card then satisfied the designated-owner approval requirement.
+- Phase 5B-3 real Feishu publication acceptance is complete for the first internal pilot write loop: one approved `publish_knowledge_draft` proposal produced a succeeded `feishu_wiki` execution and one `knowledge_publications` fact with Feishu wiki/docx remote identifiers.
+- The production runtime was rechecked in fail-closed state after these gates: `globalEnabled=false`, `desiredGlobalEnabled=false`, all known pilot groups disabled, `writeKnowledgeBase=false`, `proactiveSpeech=false`, and all event/document/reindex/knowledge-card/action-approval pending and DLQ counts at zero.
+- The next core product gap is not more Phase 5B hardening. It is real Feishu gray acceptance for the group semantic memory/thread/action loop and then the proactive signal loop, both still default-off unless explicitly allowlisted.
