@@ -56,3 +56,15 @@
 - Head：`codex/iris-oauth-review-page`
 - 类型：Stacked Draft PR
 - 合并：PR #12 与本 PR 均不得在没有用户明确授权时合并
+
+## Real Pilot Acceptance - 2026-07-24
+
+- Candidate SHA: `3d6797cbaee5c94d85ebc546a776b403bcda8153`.
+- PR #13 head SHA matched the deployed candidate; GitHub checks `Core` and `AI Worker` were both `SUCCESS`.
+- Running Core and AI Worker image tags matched the candidate SHA.
+- Public boundary verified: `https://iris.quello.cn/health` returned `200`; public `/internal/status` returned `404`.
+- Real Feishu OAuth review gate passed for the current action proposal: the designated reviewer opened the full-draft review route, completed OAuth review, and an append-only `action_review_attestations` fact was recorded for the current proposal version, subject revision, subject version, and content hash.
+- The same Feishu approval card was then approved by the designated owner; the proposal reached `approved`, the owner requirement was satisfied, and the presentation was closed.
+- No `action_executions` or `knowledge_publications` rows were created because `writeKnowledgeBase=false`; this PR still does not execute Feishu Wiki publication.
+- Final fail-closed state restored: `globalEnabled=false`, `desiredGlobalEnabled=false`, the three known groups disabled, `proactiveSpeech=false`, `writeKnowledgeBase=false`, `callExternalTools=false`.
+- Final queues/DLQs verified empty for event ingestion, document sync, reindex, knowledge cards, and action approval outbox.
