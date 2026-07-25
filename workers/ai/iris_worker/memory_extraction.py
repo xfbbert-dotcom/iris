@@ -112,7 +112,6 @@ def _v2_response_schema() -> dict[str, object]:
         "type": "array",
         "items": identifier,
         "minItems": 1,
-        "maxItems": MAX_EVIDENCE_MESSAGE_IDS,
     }
     common_operation_properties = {
         "operation_key": identifier,
@@ -163,7 +162,6 @@ def _v2_response_schema() -> dict[str, object]:
                 "type": "array",
                 "items": _enum("title", "summary"),
                 "minItems": 1,
-                "maxItems": 2,
             },
         },
         common_operation_required,
@@ -191,7 +189,6 @@ def _v2_response_schema() -> dict[str, object]:
                 "type": "array",
                 "items": _enum("description", "thread_id", "owner"),
                 "minItems": 1,
-                "maxItems": 3,
             },
         },
         common_operation_required,
@@ -225,17 +222,14 @@ def _v2_response_schema() -> dict[str, object]:
             "candidates": {
                 "type": "array",
                 "items": candidate,
-                "maxItems": MAX_CANDIDATES,
             },
             "thread_operations": {
                 "type": "array",
                 "items": thread_operation,
-                "maxItems": MAX_OPERATIONS_PER_FAMILY,
             },
             "action_operations": {
                 "type": "array",
                 "items": action_operation,
-                "maxItems": MAX_OPERATIONS_PER_FAMILY,
             },
         },
         [

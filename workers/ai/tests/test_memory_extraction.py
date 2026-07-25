@@ -597,8 +597,8 @@ async def test_v2_service_requests_the_strict_response_contract_as_json_schema()
     properties = response_schema["properties"]
     assert isinstance(properties, dict)
     assert properties["schema_version"] == {"type": "integer", "enum": [2]}
-    assert properties["thread_operations"]["maxItems"] == 8
-    assert properties["action_operations"]["maxItems"] == 8
+    assert "maxItems" not in properties["thread_operations"]
+    assert "maxItems" not in properties["action_operations"]
 
 
 def test_v2_response_schema_uses_only_gemini_supported_keywords() -> None:
@@ -612,7 +612,6 @@ def test_v2_response_schema_uses_only_gemini_supported_keywords() -> None:
         "format",
         "items",
         "maximum",
-        "maxItems",
         "minimum",
         "minItems",
         "oneOf",
@@ -642,6 +641,14 @@ def test_v2_response_schema_uses_only_gemini_supported_keywords() -> None:
                     assert_supported(child)
 
     assert_supported(_v2_response_schema())
+
+
+def test_v2_response_schema_omits_gemini_openai_incompatible_max_items() -> None:
+    from iris_worker.memory_extraction import _v2_response_schema
+
+    encoded = json.dumps(_v2_response_schema(), separators=(",", ":"), sort_keys=True)
+
+    assert '"maxItems"' not in encoded
 
 
 def test_v2_response_schema_flattens_operation_variants_for_gemini() -> None:
