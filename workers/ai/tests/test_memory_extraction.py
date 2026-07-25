@@ -651,7 +651,7 @@ def test_v2_response_schema_omits_gemini_openai_incompatible_max_items() -> None
     assert '"maxItems"' not in encoded
 
 
-def test_v2_response_schema_flattens_operation_variants_for_gemini() -> None:
+def test_v2_response_schema_keeps_operation_variants_provider_enforced() -> None:
     from iris_worker.memory_extraction import _v2_response_schema
 
     schema = _v2_response_schema()
@@ -659,60 +659,90 @@ def test_v2_response_schema_flattens_operation_variants_for_gemini() -> None:
     assert isinstance(properties, dict)
 
     thread_item = properties["thread_operations"]["items"]
-    assert thread_item["type"] == "object"
-    assert thread_item["additionalProperties"] is False
-    assert "anyOf" not in thread_item
-    assert set(thread_item["properties"]["operation"]["enum"]) == {
-        "create",
-        "attach_evidence",
-        "promote",
-        "merge",
-        "resolve",
-        "reopen",
-        "update_summary",
-        "correct",
+    assert set(thread_item) == {"oneOf"}
+    thread_variants = thread_item["oneOf"]
+    assert isinstance(thread_variants, list)
+    assert len(thread_variants) == 8
+    thread_by_operation = {
+        variant["properties"]["operation"]["enum"][0]: variant
+        for variant in thread_variants
     }
-    assert set(thread_item["required"]) == {
+    assert set(thread_by_operation) == {
+        "create", "attach_evidence", "promote", "merge", "resolve",
+        "reopen", "update_summary", "correct",
+    }
+    assert set(thread_by_operation["create"]["required"]) == {
         "operation",
         "operation_key",
         "confidence",
         "evidence_message_ids",
         "evidence_span",
+        "title",
+        "summary",
+        "initial_status",
+    }
+    assert set(thread_by_operation["resolve"]["required"]) == {
+        "operation", "operation_key", "confidence", "evidence_message_ids",
+        "evidence_span", "thread_id", "expected_version",
+    }
+    assert set(thread_by_operation["promote"]["required"]) == {
+        "operation", "operation_key", "confidence", "evidence_message_ids",
+        "evidence_span", "thread_id", "expected_version", "summary",
     }
 
     action_item = properties["action_operations"]["items"]
-    assert action_item["type"] == "object"
-    assert action_item["additionalProperties"] is False
-    assert "anyOf" not in action_item
-    assert set(action_item["properties"]["operation"]["enum"]) == {
-        "create",
-        "complete",
-        "cancel",
-        "reopen",
-        "resolve_owner",
-        "correct",
+    assert set(action_item) == {"oneOf"}
+    action_variants = action_item["oneOf"]
+    assert isinstance(action_variants, list)
+    assert len(action_variants) == 6
+    action_by_operation = {
+        variant["properties"]["operation"]["enum"][0]: variant
+        for variant in action_variants
     }
-    assert set(action_item["required"]) == {
+    assert set(action_by_operation) == {
+        "create", "complete", "cancel", "reopen", "resolve_owner", "correct",
+    }
+    assert set(action_by_operation["create"]["required"]) == {
         "operation",
         "operation_key",
         "confidence",
         "evidence_message_ids",
         "evidence_span",
+        "description",
+        "owner",
+    }
+    assert set(action_by_operation["complete"]["required"]) == {
+        "operation", "operation_key", "confidence", "evidence_message_ids",
+        "evidence_span", "action_id", "expected_version",
+    }
+    assert set(action_by_operation["resolve_owner"]["required"]) == {
+        "operation", "operation_key", "confidence", "evidence_message_ids",
+        "evidence_span", "action_id", "expected_version", "owner",
     }
 
-    owner = action_item["properties"]["owner"]
-    assert owner["type"] == "object"
-    assert owner["additionalProperties"] is False
-    assert "anyOf" not in owner
-    assert owner["required"] == ["owner_type", "message_id"]
-    assert set(owner["properties"]["owner_type"]["enum"]) == {
-        "sender",
-        "mention",
-        "text_label",
+    owner = action_by_operation["create"]["properties"]["owner"]
+    assert set(owner) == {"oneOf"}
+    owner_variants = owner["oneOf"]
+    assert isinstance(owner_variants, list)
+    owner_by_type = {
+        variant["properties"]["owner_type"]["enum"][0]: variant
+        for variant in owner_variants
     }
+    assert set(owner_by_type) == {"sender", "mention", "text_label"}
+    assert owner_by_type["sender"]["required"] == ["owner_type", "message_id"]
+    assert owner_by_type["mention"]["required"] == [
+        "owner_type",
+        "message_id",
+        "mention_key",
+    ]
+    assert owner_by_type["text_label"]["required"] == [
+        "owner_type",
+        "message_id",
+        "label",
+    ]
 
     encoded = json.dumps(schema, separators=(",", ":"), sort_keys=True)
-    assert len(encoded.encode("utf-8")) <= 7_000
+    assert len(encoded.encode("utf-8")) <= 12_000
 
 
 @pytest.mark.asyncio

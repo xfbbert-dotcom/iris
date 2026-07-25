@@ -127,71 +127,184 @@ def _v2_response_schema() -> dict[str, object]:
         "evidence_span",
     ]
 
-    # Keep provider-facing variants flat; Pydantic enforces operation-specific fields locally.
-    owner = _closed_object(
-        {
-            "owner_type": _enum("sender", "mention", "text_label"),
-            "message_id": identifier,
-            "mention_key": identifier,
-            "label": memory_text,
-        },
-        ["owner_type", "message_id"],
+    owner = _one_of(
+        [
+            _closed_object(
+                {
+                    "owner_type": _enum("sender"),
+                    "message_id": identifier,
+                },
+                ["owner_type", "message_id"],
+            ),
+            _closed_object(
+                {
+                    "owner_type": _enum("mention"),
+                    "message_id": identifier,
+                    "mention_key": identifier,
+                },
+                ["owner_type", "message_id", "mention_key"],
+            ),
+            _closed_object(
+                {
+                    "owner_type": _enum("text_label"),
+                    "message_id": identifier,
+                    "label": memory_text,
+                },
+                ["owner_type", "message_id", "label"],
+            ),
+        ]
     )
 
-    thread_operation = _closed_object(
-        {
-            **common_operation_properties,
-            "operation": _enum(
+    thread_operation = _one_of(
+        [
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
                 "create",
+                {
+                    "title": memory_text,
+                    "summary": memory_text,
+                    "initial_status": _enum("candidate", "open"),
+                },
+                ["title", "summary", "initial_status"],
+            ),
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
                 "attach_evidence",
-                "promote",
-                "merge",
-                "resolve",
-                "reopen",
-                "update_summary",
-                "correct",
+                {"thread_id": identifier, "expected_version": _positive_integer()},
+                ["thread_id", "expected_version"],
             ),
-            "title": memory_text,
-            "summary": memory_text,
-            "initial_status": _enum("candidate", "open"),
-            "thread_id": identifier,
-            "expected_version": _positive_integer(),
-            "source_thread_id": identifier,
-            "target_thread_id": identifier,
-            "corrected_fields": {
-                "type": "array",
-                "items": _enum("title", "summary"),
-                "minItems": 1,
-            },
-        },
-        common_operation_required,
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "promote",
+                {
+                    "thread_id": identifier,
+                    "expected_version": _positive_integer(),
+                    "summary": memory_text,
+                },
+                ["thread_id", "expected_version", "summary"],
+            ),
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "merge",
+                {
+                    "source_thread_id": identifier,
+                    "target_thread_id": identifier,
+                    "expected_version": _positive_integer(),
+                },
+                ["source_thread_id", "target_thread_id", "expected_version"],
+            ),
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "resolve",
+                {"thread_id": identifier, "expected_version": _positive_integer()},
+                ["thread_id", "expected_version"],
+            ),
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "reopen",
+                {"thread_id": identifier, "expected_version": _positive_integer()},
+                ["thread_id", "expected_version"],
+            ),
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "update_summary",
+                {
+                    "thread_id": identifier,
+                    "expected_version": _positive_integer(),
+                    "summary": memory_text,
+                },
+                ["thread_id", "expected_version", "summary"],
+            ),
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "correct",
+                {
+                    "thread_id": identifier,
+                    "expected_version": _positive_integer(),
+                    "corrected_fields": {
+                        "type": "array",
+                        "items": _enum("title", "summary"),
+                        "minItems": 1,
+                    },
+                    "title": memory_text,
+                    "summary": memory_text,
+                },
+                ["thread_id", "expected_version", "corrected_fields"],
+            ),
+        ]
     )
 
-    action_operation = _closed_object(
-        {
-            **common_operation_properties,
-            "operation": _enum(
+    action_operation = _one_of(
+        [
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
                 "create",
-                "complete",
-                "cancel",
-                "reopen",
-                "resolve_owner",
-                "correct",
+                {
+                    "thread_id": {"anyOf": [identifier, {"type": "null"}]},
+                    "description": memory_text,
+                    "owner": owner,
+                    "due_at": _string_schema(),
+                    "due_evidence_span": memory_text,
+                },
+                ["description", "owner"],
             ),
-            "action_id": identifier,
-            "expected_version": _positive_integer(),
-            "thread_id": {"anyOf": [identifier, {"type": "null"}]},
-            "description": memory_text,
-            "owner": owner,
-            "due_at": _string_schema(),
-            "due_evidence_span": memory_text,
-            "corrected_fields": {
-                "type": "array",
-                "items": _enum("description", "thread_id", "owner"),
-                "minItems": 1,
-            },
-        },
-        common_operation_required,
+            _existing_action_operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "complete",
+                identifier,
+            ),
+            _existing_action_operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "cancel",
+                identifier,
+            ),
+            _existing_action_operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "reopen",
+                identifier,
+            ),
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "resolve_owner",
+                {
+                    "action_id": identifier,
+                    "expected_version": _positive_integer(),
+                    "owner": owner,
+                },
+                ["action_id", "expected_version", "owner"],
+            ),
+            _operation_schema(
+                common_operation_properties,
+                common_operation_required,
+                "correct",
+                {
+                    "action_id": identifier,
+                    "expected_version": _positive_integer(),
+                    "corrected_fields": {
+                        "type": "array",
+                        "items": _enum("description", "thread_id", "owner"),
+                        "minItems": 1,
+                    },
+                    "description": memory_text,
+                    "thread_id": {"anyOf": [identifier, {"type": "null"}]},
+                    "owner": owner,
+                },
+                ["action_id", "expected_version", "corrected_fields"],
+            ),
+        ]
     )
 
     candidate = _closed_object(
@@ -251,6 +364,42 @@ def _closed_object(
         "required": required,
         "additionalProperties": False,
     }
+
+
+def _operation_schema(
+    common_properties: dict[str, object],
+    common_required: list[str],
+    operation: str,
+    specific_properties: dict[str, object],
+    specific_required: list[str],
+) -> dict[str, object]:
+    return _closed_object(
+        {
+            **common_properties,
+            "operation": _enum(operation),
+            **specific_properties,
+        },
+        [*common_required, *specific_required],
+    )
+
+
+def _existing_action_operation_schema(
+    common_properties: dict[str, object],
+    common_required: list[str],
+    operation: str,
+    identifier: dict[str, object],
+) -> dict[str, object]:
+    return _operation_schema(
+        common_properties,
+        common_required,
+        operation,
+        {"action_id": identifier, "expected_version": _positive_integer()},
+        ["action_id", "expected_version"],
+    )
+
+
+def _one_of(variants: list[dict[str, object]]) -> dict[str, object]:
+    return {"oneOf": variants}
 
 
 def _string_schema() -> dict[str, object]:
