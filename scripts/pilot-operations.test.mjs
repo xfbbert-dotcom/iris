@@ -286,6 +286,9 @@ test("semantic seed helper backfills real pilot messages without opening public 
   assert.match(script, /IRIS_SEMANTIC_SEED_PILOT_GROUP_ID/u);
   assert.match(script, /IRIS_SEMANTIC_SEED_MARKER/u);
   assert.match(script, /IRIS_SEMANTIC_SEED_LIMIT/u);
+  assert.equal(script.includes('marker" == *"_"*'), false);
+  assert.match(script, /escapeSqlLikePattern/u);
+  assert.match(script, /LIKE '%' \|\| \$2 \|\| '%' ESCAPE '\\\\'/u);
   assert.match(script, /exec -T\s+\\?\s+-e IRIS_SEMANTIC_SEED_PILOT_GROUP_ID/u);
   assert.match(script, /-e IRIS_SEMANTIC_SEED_MARKER/u);
   assert.match(script, /-e IRIS_SEMANTIC_SEED_LIMIT/u);

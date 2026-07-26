@@ -18,8 +18,8 @@ if [[ -z "$pilot_group_id" || "$pilot_group_id" == *"<"* || "$pilot_group_id" ==
 fi
 
 marker="${IRIS_SEMANTIC_SEED_MARKER:-}"
-if [[ -z "$marker" || "$marker" == *"%"* || "$marker" == *"_"* ]]; then
-  echo "Set IRIS_SEMANTIC_SEED_MARKER to a nonblank literal marker without SQL wildcards." >&2
+if [[ -z "$marker" ]]; then
+  echo "Set IRIS_SEMANTIC_SEED_MARKER to a nonblank literal marker." >&2
   exit 64
 fi
 
@@ -44,6 +44,7 @@ import { createRedisMemoryExtractionQueue } from "/app/apps/core/dist/memory-ext
 
 const groupId = requireEnv("IRIS_SEMANTIC_SEED_PILOT_GROUP_ID");
 const marker = requireEnv("IRIS_SEMANTIC_SEED_MARKER");
+const escapedMarker = escapeSqlLikePattern(marker);
 const limit = readLimit(requireEnv("IRIS_SEMANTIC_SEED_LIMIT"));
 
 const pool = createPostgresPool({ databaseUrl: requireEnv("DATABASE_URL") });
@@ -63,11 +64,11 @@ try {
     FROM conversation_messages
     WHERE chat_id = $1
       AND text IS NOT NULL
-      AND text LIKE '%' || $2 || '%'
+      AND text LIKE '%' || $2 || '%' ESCAPE '\\'
     ORDER BY sent_at ASC, created_at ASC, id ASC
     LIMIT $3
     `,
-    [groupId, marker, limit],
+    [groupId, escapedMarker, limit],
   );
 
   let createdCount = 0;
@@ -130,5 +131,9 @@ function requireString(value, name) {
     throw new Error(`${name} must be a nonblank string`);
   }
   return value;
+}
+
+function escapeSqlLikePattern(value) {
+  return value.replace(/[\\%_]/gu, "\\$&");
 }
 NODE
