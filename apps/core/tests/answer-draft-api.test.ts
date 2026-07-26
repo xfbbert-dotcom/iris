@@ -1,3 +1,5 @@
+import { createCipheriv, createHash } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
@@ -1710,6 +1712,73 @@ describe("GET /internal/status", () => {
       status: "degraded",
     });
     expect(statusResponse.json().summary.attentionSeverity).toBe("critical");
+  });
+
+  it("decrypts signed Feishu event callbacks before enqueueing raw message events", async () => {
+    const restoreVerificationToken = isolateEnvVar("FEISHU_VERIFICATION_TOKEN");
+    const restoreEncryptKey = isolateEnvVar("FEISHU_ENCRYPT_KEY");
+    process.env.FEISHU_VERIFICATION_TOKEN = "event-verification-token";
+    process.env.FEISHU_ENCRYPT_KEY = "event-encrypt-key";
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => undefined),
+    };
+    const app = buildApp({
+      rawEventQueue,
+      now: () => new Date("2026-07-26T06:00:00.000Z"),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+    const payload = {
+      schema: "2.0",
+      token: "event-verification-token",
+      header: {
+        event_id: "event-encrypted-message",
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
+          message_id: "om_encrypted_real_message",
+          chat_id: "oc_637a9aca45f01943477f4e17f1fc5b9a",
+          message_type: "text",
+          content: "{\"text\":\"@Iris 客户反馈看板上线讨论现在是什么状态？\"}",
+        },
+      },
+    };
+    const body = { encrypt: encryptFeishuPayload(payload, "event-encrypt-key") };
+    const rawBody = JSON.stringify(body);
+    const timestamp = String(Math.floor(Date.now() / 1_000));
+    const nonce = "event-nonce";
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/feishu/events",
+        headers: {
+          "content-type": "application/json",
+          "x-lark-request-timestamp": timestamp,
+          "x-lark-request-nonce": nonce,
+          "x-lark-signature": signFeishuEvent(timestamp, nonce, "event-encrypt-key", rawBody),
+        },
+        payload: rawBody,
+      });
+      await flushDeferredEnqueue();
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true });
+      expect(rawEventQueue.enqueue).toHaveBeenCalledWith({
+        idempotencyKey: "raw-event:feishu:event-encrypted-message",
+        provider: "feishu",
+        eventType: "im.message.receive_v1",
+        rawBody: payload,
+        receivedAt: expect.any(Date),
+        attempts: 0,
+      });
+    } finally {
+      restoreVerificationToken();
+      restoreEncryptKey();
+    }
   });
 
   it("bounds Feishu gateway enqueue failure messages in the consolidated status", async () => {
@@ -5510,4 +5579,23 @@ async function flushDeferredEnqueue(): Promise<void> {
     setTimeout(resolve, 0);
   });
   await Promise.resolve();
+}
+
+function encryptFeishuPayload(payload: unknown, encryptKey: string): string {
+  const iv = Buffer.alloc(16, 1);
+  const cipher = createCipheriv("aes-256-cbc", createHash("sha256").update(encryptKey).digest(), iv);
+  return Buffer.concat([
+    iv,
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]).toString("base64");
+}
+
+function signFeishuEvent(
+  timestamp: string,
+  nonce: string,
+  encryptKey: string,
+  rawBody: string,
+): string {
+  return createHash("sha256").update(timestamp + nonce + encryptKey + rawBody).digest("hex");
 }

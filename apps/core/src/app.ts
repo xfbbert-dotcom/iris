@@ -27,7 +27,7 @@ import {
 } from "./admin/runtime-control-service.js";
 import { normalizeInternalStatusErrorMessage } from "./admin/internal-status-error-message.js";
 import { createDefaultRuntimeConfig } from "./config/runtime-config.js";
-import { createFeishuRequestVerifier } from "./feishu/feishu-auth.js";
+import { createFeishuRequestVerifier, decodeFeishuPayload } from "./feishu/feishu-auth.js";
 import type { EventQueue } from "./queues/event-queue.js";
 import { InMemoryEventQueue } from "./queues/in-memory-event-queue.js";
 import type { RawEventQueue } from "./events/raw-event-queue.js";
@@ -538,9 +538,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
     const rawBody = isParsedJsonBody(request.body) ? request.body.rawBody : undefined;
+    const decodedBody = decodeFeishuPayload(body, feishuAuthConfig.encryptKey);
     const response = await gateway.handleCallback({
       headers: normalizeHeaders(request.headers),
-      body,
+      body: decodedBody,
       rawBody
     });
 
