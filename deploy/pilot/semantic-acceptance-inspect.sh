@@ -14,7 +14,10 @@ fi
 
 control_group_id="${IRIS_SEMANTIC_ACCEPTANCE_CONTROL_GROUP_ID:-}"
 
-PILOT_GROUP_ID="$pilot_group_id" CONTROL_GROUP_ID="$control_group_id" "${compose[@]}" exec -T core node --input-type=module <<'NODE'
+"${compose[@]}" exec -T \
+  -e PILOT_GROUP_ID="$pilot_group_id" \
+  -e CONTROL_GROUP_ID="$control_group_id" \
+  core node --input-type=module <<'NODE'
 const internalToken = requireNonEmptyEnv("IRIS_INTERNAL_API_TOKEN");
 const pilotGroupId = requireNonEmptyEnv("PILOT_GROUP_ID");
 const controlGroupId = process.env.CONTROL_GROUP_ID?.trim() ?? "";

@@ -310,7 +310,8 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   const script = readFileSync(semanticAcceptanceInspectPath, "utf8");
   assert.match(script, /IRIS_SEMANTIC_ACCEPTANCE_PILOT_GROUP_ID/u);
   assert.match(script, /IRIS_SEMANTIC_ACCEPTANCE_CONTROL_GROUP_ID/u);
-  assert.match(script, /exec -T core node --input-type=module/u);
+  assert.match(script, /exec -T\s+\\?\s+-e PILOT_GROUP_ID/u);
+  assert.match(script, /-e CONTROL_GROUP_ID/u);
   assert.match(script, /\/internal\/runtime-control\/status/u);
   assert.match(script, /\/internal\/status/u);
   assert.match(script, /\/internal\/memory-extraction\/status/u);
