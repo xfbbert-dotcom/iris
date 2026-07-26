@@ -5,19 +5,20 @@ import test from "node:test";
 
 const backupPath = "deploy/pilot/backup.sh";
 const restorePath = "deploy/pilot/restore-from-stdin.sh";
+const semanticRecoveryProbePath = "deploy/pilot/semantic-recovery-probe.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
 const ciWorkflowPath = ".github/workflows/ci.yml";
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
-  for (const scriptPath of [backupPath, restorePath, postgresInitPath]) {
+  for (const scriptPath of [backupPath, restorePath, semanticRecoveryProbePath, postgresInitPath]) {
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   }
 });
 
 test("pilot shell scripts use LF endings for direct Linux execution", () => {
-  for (const scriptPath of [backupPath, restorePath, postgresInitPath]) {
+  for (const scriptPath of [backupPath, restorePath, semanticRecoveryProbePath, postgresInitPath]) {
     const script = readFileSync(scriptPath, "utf8");
     assert.equal(script.includes("\r"), false, `${scriptPath} contains a CR byte`);
     assert.ok(script.startsWith("#!/usr/bin/env bash\n"), `${scriptPath} has an invalid shebang`);
@@ -214,6 +215,26 @@ test("pilot runbook documents bounded backup cleanup controls", () => {
   assert.match(readme, /IRIS_BACKUP_COMMAND_TIMEOUT_SECONDS.*30.*1.*300/isu);
   assert.match(readme, /IRIS_BACKUP_CLEANUP_RETRY_DELAY_SECONDS.*2.*0.*10/isu);
   assert.match(readme, /exactly three Caddy stop attempts/iu);
+});
+
+test("semantic recovery probe checks fail-closed state and never replays DLQ entries", () => {
+  const script = readFileSync(semanticRecoveryProbePath, "utf8");
+  assert.match(script, /docker compose --env-file/u);
+  assert.match(script, /exec -T core node --input-type=module/u);
+  assert.match(script, /\/internal\/status/u);
+  assert.match(script, /\/internal\/runtime-control\/status/u);
+  assert.match(script, /\/internal\/memory-extraction\/status/u);
+  assert.match(script, /\/internal\/memory-extraction\/dead-letters\?limit=20/u);
+  assert.match(script, /\/v1\/memory\/extract/u);
+  assert.match(script, /schema_version: 2/u);
+  assert.match(script, /globalEnabled !== false/u);
+  assert.match(script, /desiredGlobalEnabled !== false/u);
+  assert.match(script, /proactiveSpeech !== false/u);
+  assert.match(script, /dlq\.deadLetters\.length !== 6/u);
+  assert.match(script, /classifyProbeFailure/u);
+  assert.doesNotMatch(script, /\/replay/u);
+  assert.doesNotMatch(script, /console\.log\(.*internalToken/u);
+  assert.doesNotMatch(script, /console\.log\(.*aiWorkerToken/u);
 });
 
 test("pilot rollback documents decrypted stdin restore and Caddy-last reactivation", () => {

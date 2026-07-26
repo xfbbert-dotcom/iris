@@ -463,6 +463,14 @@ probing. Each recovery window allows exactly one minimal V2 JSON Schema probe be
 The probe must use the AI Worker private endpoint and the configured `IRIS_AI_WORKER_TOKEN`; do not
 send it through Caddy, Feishu, or the public Core boundary.
 
+On the VPS, the bounded helper below performs the fail-closed preflight and exactly one private AI
+Worker V2 probe from inside the `core` container. It does not replay DLQ entries and prints only
+status code, safe classification, optional retry-after, and DLQ count:
+
+```bash
+IRIS_PILOT_ENV_FILE=.env.pilot ./deploy/pilot/semantic-recovery-probe.sh
+```
+
 If the probe returns any non-success status, including `429`, `502 invalid_model_response`, `503`, or
 timeout, stop the recovery window immediately:
 
