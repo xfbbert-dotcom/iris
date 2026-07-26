@@ -8,6 +8,7 @@ const restorePath = "deploy/pilot/restore-from-stdin.sh";
 const semanticRecoveryProbePath = "deploy/pilot/semantic-recovery-probe.sh";
 const semanticOrderedReplayPath = "deploy/pilot/semantic-dlq-replay-one-by-one.sh";
 const semanticAcceptanceInspectPath = "deploy/pilot/semantic-acceptance-inspect.sh";
+const semanticSeedFromMessagesPath = "deploy/pilot/semantic-seed-from-messages.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
 const ciWorkflowPath = ".github/workflows/ci.yml";
@@ -19,6 +20,7 @@ test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined 
     semanticRecoveryProbePath,
     semanticOrderedReplayPath,
     semanticAcceptanceInspectPath,
+    semanticSeedFromMessagesPath,
     postgresInitPath,
   ]) {
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });
@@ -33,6 +35,7 @@ test("pilot shell scripts use LF endings for direct Linux execution", () => {
     semanticRecoveryProbePath,
     semanticOrderedReplayPath,
     semanticAcceptanceInspectPath,
+    semanticSeedFromMessagesPath,
     postgresInitPath,
   ]) {
     const script = readFileSync(scriptPath, "utf8");
@@ -274,6 +277,30 @@ test("semantic ordered replay helper gates execution and replays one DLQ at a ti
   assert.match(script, /stop caddy/u);
   assert.doesNotMatch(script, /dead-letters\/replay/u);
   assert.doesNotMatch(script, /\/v1\/memory\/extract/u);
+});
+
+test("semantic seed helper backfills real pilot messages without opening public ingress", () => {
+  const script = readFileSync(semanticSeedFromMessagesPath, "utf8");
+  assert.match(script, /IRIS_SEMANTIC_SEED_CONFIRM/u);
+  assert.match(script, /SEED_SEMANTIC_MESSAGES/u);
+  assert.match(script, /IRIS_SEMANTIC_SEED_PILOT_GROUP_ID/u);
+  assert.match(script, /IRIS_SEMANTIC_SEED_MARKER/u);
+  assert.match(script, /IRIS_SEMANTIC_SEED_LIMIT/u);
+  assert.match(script, /exec -T\s+\\?\s+-e IRIS_SEMANTIC_SEED_PILOT_GROUP_ID/u);
+  assert.match(script, /-e IRIS_SEMANTIC_SEED_MARKER/u);
+  assert.match(script, /-e IRIS_SEMANTIC_SEED_LIMIT/u);
+  assert.match(script, /FROM conversation_messages/u);
+  assert.match(script, /ORDER BY sent_at ASC, created_at ASC, id ASC/u);
+  assert.match(script, /createPostgresMemoryExtractionRepository/u);
+  assert.match(script, /createRedisMemoryExtractionQueue/u);
+  assert.match(script, /registerRequest/u);
+  assert.match(script, /createMemoryExtractionJob/u);
+  assert.match(script, /queue\.enqueue/u);
+  assert.match(script, /createdCount/u);
+  assert.match(script, /enqueuedCount/u);
+  assert.doesNotMatch(script, /runtime-control\/global/u);
+  assert.doesNotMatch(script, /up .*caddy/u);
+  assert.doesNotMatch(script, /stop caddy/u);
 });
 
 test("semantic acceptance inspector validates lifecycle without mutating runtime or public ingress", () => {
