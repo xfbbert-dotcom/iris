@@ -79,3 +79,12 @@
 - Real internal replay remains blocked by provider availability: the Gamma internal acceptance replay created the first candidate thread, then the second model call failed with `upstream_status=503` and `classification=provider_unavailable`.
 - Fail-closed state was restored and verified after the blocked replay: `globalEnabled=false`, `desiredGlobalEnabled=false`, `proactiveSpeech=false`, Caddy inactive, Core/Postgres/Redis/AI Worker healthy, and memory DLQ empty.
 - Do not mark the semantic thread/action gate complete until Gemini is available and a fresh ordered replay passes the lifecycle/action inspector.
+
+## Semantic Thread/Action Heartbeat - 2026-07-27 03:31 CST
+
+- Read-only safety check passed before any model call: `globalEnabled=false`, `desiredGlobalEnabled=false`, `proactiveSpeech=false`, Caddy inactive, Core/Postgres/Redis/AI Worker healthy, memory extraction disabled/running=false, and memory DLQ empty.
+- PR #13 checks were still green and the deployed VPS candidate remained `c2bd13ca0f959d83eb8a877948748183a150d736`.
+- A single minimal provider probe succeeded with `status=200`, so a fresh isolated Delta internal acceptance marker was seeded.
+- Ordered Delta replay did not pass: the first message created a candidate thread, then the second model call hit `upstream_status=429` with `classification=provider_rate_limited`.
+- The replay stopped immediately; no further model retries were made. Delta request 02 was marked `skipped/provider_rate_limited_429`; later Delta requests remain pending for a future controlled replay.
+- Final state remained fail-closed: `globalEnabled=false`, `desiredGlobalEnabled=false`, `proactiveSpeech=false`, Caddy inactive, memory extraction disabled/running=false, and memory DLQ empty.
