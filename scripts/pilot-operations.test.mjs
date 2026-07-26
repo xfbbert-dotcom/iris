@@ -9,6 +9,7 @@ const semanticRecoveryProbePath = "deploy/pilot/semantic-recovery-probe.sh";
 const semanticOrderedReplayPath = "deploy/pilot/semantic-dlq-replay-one-by-one.sh";
 const semanticAcceptanceInspectPath = "deploy/pilot/semantic-acceptance-inspect.sh";
 const semanticSeedFromMessagesPath = "deploy/pilot/semantic-seed-from-messages.sh";
+const semanticReseedFromMessagesPath = "deploy/pilot/semantic-reseed-from-messages-one-by-one.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
 const ciWorkflowPath = ".github/workflows/ci.yml";
@@ -21,6 +22,7 @@ test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined 
     semanticOrderedReplayPath,
     semanticAcceptanceInspectPath,
     semanticSeedFromMessagesPath,
+    semanticReseedFromMessagesPath,
     postgresInitPath,
   ]) {
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });
@@ -36,6 +38,7 @@ test("pilot shell scripts use LF endings for direct Linux execution", () => {
     semanticOrderedReplayPath,
     semanticAcceptanceInspectPath,
     semanticSeedFromMessagesPath,
+    semanticReseedFromMessagesPath,
     postgresInitPath,
   ]) {
     const script = readFileSync(scriptPath, "utf8");
@@ -304,6 +307,40 @@ test("semantic seed helper backfills real pilot messages without opening public 
   assert.doesNotMatch(script, /runtime-control\/global/u);
   assert.doesNotMatch(script, /up .*caddy/u);
   assert.doesNotMatch(script, /stop caddy/u);
+});
+
+test("semantic reseed helper resets approved marker messages one at a time", () => {
+  const script = readFileSync(semanticReseedFromMessagesPath, "utf8");
+  assert.match(script, /IRIS_SEMANTIC_RESEED_CONFIRM/u);
+  assert.match(script, /RESET_SEMANTIC_MESSAGES_ONE_BY_ONE/u);
+  assert.match(script, /IRIS_SEMANTIC_RESEED_PILOT_GROUP_ID/u);
+  assert.match(script, /IRIS_SEMANTIC_RESEED_MARKER/u);
+  assert.match(script, /LIKE '%' \|\| \$2 \|\| '%' ESCAPE '\\\\'/u);
+  assert.match(script, /ORDER BY cm\.sent_at ASC, cm\.created_at ASC, cm\.id ASC/u);
+  assert.match(script, /FOR UPDATE/u);
+  assert.match(script, /DELETE FROM group_memory_extraction_conflict_evidence/u);
+  assert.match(script, /DELETE FROM group_memory_extraction_conflict_candidates/u);
+  assert.match(script, /DELETE FROM group_memory_extraction_run_evidence/u);
+  assert.match(script, /DELETE FROM group_memory_extraction_run_context/u);
+  assert.match(script, /DELETE FROM group_memory_extraction_run_memories/u);
+  assert.match(script, /DELETE FROM group_memory_extraction_run_threads/u);
+  assert.match(script, /DELETE FROM group_memory_extraction_run_actions/u);
+  assert.match(script, /UPDATE group_memory_extraction_requests/u);
+  assert.match(script, /status = 'pending'/u);
+  assert.match(script, /createMemoryExtractionJob/u);
+  assert.match(script, /queue\.enqueue/u);
+  assert.match(script, /await waitForMemoryDrain/u);
+  assert.match(script, /for \(const row of messages\)/u);
+  assert.match(script, /\/internal\/runtime-control\/global/u);
+  assert.match(script, /\/internal\/runtime-control\/groups\/\$\{groupId\}/u);
+  assert.match(script, /finally \{/u);
+  assert.match(script, /globalEnabled !== false/u);
+  assert.match(script, /desiredGlobalEnabled !== false/u);
+  assert.match(script, /proactiveSpeech/u);
+  assert.match(script, /stop caddy/u);
+  assert.match(script, /resetCount/u);
+  assert.match(script, /enqueuedCount/u);
+  assert.doesNotMatch(script, /up .*caddy/u);
 });
 
 test("semantic acceptance inspector validates lifecycle without mutating runtime or public ingress", () => {

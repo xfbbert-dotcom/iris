@@ -456,10 +456,10 @@ known group disables; proactive disable; Caddy stop; bounded in-flight drain; bl
 allowlists; memory-extraction disable; private Core rebuild; persisted fail-closed verification; and
 queue/DLQ/repair no-growth verification. A primary failure never skips cleanup.
 
-## Provider-Recovery Gate And Ordered DLQ Replay
+## Provider-Recovery Gate And Ordered Replay
 
 If the semantic gray gate is blocked by Gemini capacity or provider availability, do not keep
-probing. Each recovery window allows exactly one minimal V2 JSON Schema probe before any DLQ replay.
+probing. Each recovery window allows exactly one minimal V2 JSON Schema probe before any replay.
 The probe must use the AI Worker private endpoint and the configured `IRIS_AI_WORKER_TOKEN`; do not
 send it through Caddy, Feishu, or the public Core boundary.
 
@@ -481,13 +481,13 @@ timeout, stop the recovery window immediately:
 - do not make additional model requests in the same window;
 - record only the bounded classification and upstream status, never prompt or model body content.
 
-If the probe succeeds, continue with Caddy still stopped. For DLQ replay only, the operator may
+If the probe succeeds, continue with Caddy still stopped. For replay only, the operator may
 briefly open a private processing window by enabling global runtime and enabling the approved pilot
 group while keeping every non-pilot group disabled and `proactiveSpeech=false`. This is required
 because memory extraction runtime gates require both `canProcessIncomingEvent(groupId)` and
 `canReadGroupContext(groupId)`. Do not start Caddy during this private window.
 
-Use the bounded ordered helper for the replay window:
+If the six gray messages are present as semantic DLQ entries, use the bounded ordered DLQ helper:
 
 ```bash
 IRIS_PILOT_ENV_FILE=.env.pilot \
@@ -500,6 +500,24 @@ The helper first runs the single-probe preflight, stops Caddy, opens only the pr
 window, replays each original DLQ item individually, and returns the runtime to fail-closed. It must
 not be used as evidence that the public Feishu path passed; real Feishu gray acceptance still needs
 the separate human-sent messages below.
+
+If there are no semantic DLQ entries, but the gray marker messages already have extraction requests
+with `skipped` or stale `completed` results from an earlier fail-closed window, use the bounded
+ordered reseed helper instead:
+
+```bash
+IRIS_PILOT_ENV_FILE=.env.pilot \
+IRIS_SEMANTIC_RESEED_CONFIRM=RESET_SEMANTIC_MESSAGES_ONE_BY_ONE \
+IRIS_SEMANTIC_RESEED_PILOT_GROUP_ID=<approved-pilot-group-id> \
+IRIS_SEMANTIC_RESEED_MARKER=<literal-gray-marker> \
+./deploy/pilot/semantic-reseed-from-messages-one-by-one.sh
+```
+
+The reseed helper resets only extraction request/run metadata for messages in the approved pilot
+group containing the literal marker, rejects runs that include non-marker requests, keeps Caddy
+stopped, opens only the private pilot processing window, enqueues one marker request at a time, waits
+for drain after each request, and returns runtime to fail-closed. It must not be used for arbitrary
+production messages.
 
 Replay semantic DLQ entries one at a time in original `enqueuedAt` order. After each replay, wait for
 memory extraction `pendingJobCount`, `processingJobCount`, and `delayedJobCount` to return to zero
