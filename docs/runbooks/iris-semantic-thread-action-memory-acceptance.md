@@ -487,6 +487,20 @@ group while keeping every non-pilot group disabled and `proactiveSpeech=false`. 
 because memory extraction runtime gates require both `canProcessIncomingEvent(groupId)` and
 `canReadGroupContext(groupId)`. Do not start Caddy during this private window.
 
+Use the bounded ordered helper for the replay window:
+
+```bash
+IRIS_PILOT_ENV_FILE=.env.pilot \
+IRIS_SEMANTIC_REPLAY_CONFIRM=REPLAY_SEMANTIC_DLQ_ONE_BY_ONE \
+IRIS_SEMANTIC_REPLAY_PILOT_GROUP_ID=<approved-pilot-group-id> \
+./deploy/pilot/semantic-dlq-replay-one-by-one.sh
+```
+
+The helper first runs the single-probe preflight, stops Caddy, opens only the private pilot processing
+window, replays each original DLQ item individually, and returns the runtime to fail-closed. It must
+not be used as evidence that the public Feishu path passed; real Feishu gray acceptance still needs
+the separate human-sent messages below.
+
 Replay semantic DLQ entries one at a time in original `enqueuedAt` order. After each replay, wait for
 memory extraction `pendingJobCount`, `processingJobCount`, and `delayedJobCount` to return to zero
 before replaying the next item. If any replay produces a new DLQ, invalid response, rate limit,

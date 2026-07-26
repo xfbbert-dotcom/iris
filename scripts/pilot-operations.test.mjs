@@ -6,19 +6,32 @@ import test from "node:test";
 const backupPath = "deploy/pilot/backup.sh";
 const restorePath = "deploy/pilot/restore-from-stdin.sh";
 const semanticRecoveryProbePath = "deploy/pilot/semantic-recovery-probe.sh";
+const semanticOrderedReplayPath = "deploy/pilot/semantic-dlq-replay-one-by-one.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
 const ciWorkflowPath = ".github/workflows/ci.yml";
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
-  for (const scriptPath of [backupPath, restorePath, semanticRecoveryProbePath, postgresInitPath]) {
+  for (const scriptPath of [
+    backupPath,
+    restorePath,
+    semanticRecoveryProbePath,
+    semanticOrderedReplayPath,
+    postgresInitPath,
+  ]) {
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   }
 });
 
 test("pilot shell scripts use LF endings for direct Linux execution", () => {
-  for (const scriptPath of [backupPath, restorePath, semanticRecoveryProbePath, postgresInitPath]) {
+  for (const scriptPath of [
+    backupPath,
+    restorePath,
+    semanticRecoveryProbePath,
+    semanticOrderedReplayPath,
+    postgresInitPath,
+  ]) {
     const script = readFileSync(scriptPath, "utf8");
     assert.equal(script.includes("\r"), false, `${scriptPath} contains a CR byte`);
     assert.ok(script.startsWith("#!/usr/bin/env bash\n"), `${scriptPath} has an invalid shebang`);
@@ -235,6 +248,29 @@ test("semantic recovery probe checks fail-closed state and never replays DLQ ent
   assert.doesNotMatch(script, /\/replay/u);
   assert.doesNotMatch(script, /console\.log\(.*internalToken/u);
   assert.doesNotMatch(script, /console\.log\(.*aiWorkerToken/u);
+});
+
+test("semantic ordered replay helper gates execution and replays one DLQ at a time", () => {
+  const script = readFileSync(semanticOrderedReplayPath, "utf8");
+  assert.match(script, /IRIS_SEMANTIC_REPLAY_CONFIRM/u);
+  assert.match(script, /semantic-recovery-probe\.sh/u);
+  assert.match(script, /\/internal\/runtime-control\/global/u);
+  assert.match(script, /\/internal\/runtime-control\/groups\/\$\{groupId\}/u);
+  assert.match(script, /\/internal\/memory-extraction\/dead-letters\?limit=20/u);
+  assert.match(script, /sort\(\(a, b\) => String\(a\.enqueuedAt/u);
+  assert.match(script, /\/internal\/memory-extraction\/dead-letters\/\$\{encodeURIComponent\(deadLetter\.id\)\}\/replay/u);
+  assert.match(script, /await waitForMemoryDrain/u);
+  assert.match(script, /for \(const deadLetter of orderedDeadLetters\)/u);
+  assert.match(script, /remainingAllowedIds\.delete\(deadLetter\.id\)/u);
+  assert.match(script, /assertOnlyRemainingOriginalDlq\(remainingAllowedIds\)/u);
+  assert.match(script, /unexpectedIds\.length > 0/u);
+  assert.match(script, /finally \{/u);
+  assert.match(script, /globalEnabled !== false/u);
+  assert.match(script, /desiredGlobalEnabled !== false/u);
+  assert.match(script, /proactiveSpeech/u);
+  assert.match(script, /stop caddy/u);
+  assert.doesNotMatch(script, /dead-letters\/replay/u);
+  assert.doesNotMatch(script, /\/v1\/memory\/extract/u);
 });
 
 test("pilot rollback documents decrypted stdin restore and Caddy-last reactivation", () => {
