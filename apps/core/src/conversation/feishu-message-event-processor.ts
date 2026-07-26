@@ -75,9 +75,13 @@ export function createFeishuMessageEventProcessor({
           identity: parsed,
           effect: () => maybeRespondToMention(parsed, mentionAnswerResponder),
         });
+        if (mentionResult.status === "active") {
+          logMentionAnswerResult(parsed, mentionResult.value);
+        }
         if (mentionResult.status === "deleted") return;
       } catch (error) {
         mentionResponseError = error;
+        logMentionAnswerFailure(parsed, error);
       }
 
       const { senderOpenId } = parsed;
@@ -169,6 +173,32 @@ function maybeRespondToMention(
     mentions: parsed.mentions,
     observedAt: parsed.sentAt,
   }) ?? Promise.resolve(undefined);
+}
+
+function logMentionAnswerResult(parsed: ParsedFeishuMessageEvent, result: unknown): void {
+  if (!isRecord(result) || typeof result.status !== "string") return;
+  const payload: Record<string, unknown> = {
+    event: "iris_mention_answer_result",
+    messageId: parsed.providerMessageId,
+    chatId: parsed.chatId,
+    status: result.status,
+  };
+  if (typeof result.reason === "string") {
+    payload.reason = result.reason;
+  }
+  if (typeof result.replyMessageId === "string" && result.replyMessageId.trim().length > 0) {
+    payload.replyMessageId = result.replyMessageId.trim();
+  }
+  console.info(JSON.stringify(payload));
+}
+
+function logMentionAnswerFailure(parsed: ParsedFeishuMessageEvent, error: unknown): void {
+  console.warn(JSON.stringify({
+    event: "iris_mention_answer_failure",
+    messageId: parsed.providerMessageId,
+    chatId: parsed.chatId,
+    error: error instanceof Error ? error.message : String(error),
+  }));
 }
 
 function extractDocumentLinks(
