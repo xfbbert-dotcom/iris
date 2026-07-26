@@ -74,6 +74,9 @@ describe("admin console assets", () => {
 
     expect(html).toContain("Proactive Candidates");
     expect(html).toContain("proactive-candidate-table");
+    expect(script).toContain("Proactive planner");
+    expect(script).toContain("summarizeProactivePlanner");
+    expect(script).toContain("summarizeProactiveDelivery");
     expect(script).toContain("/internal/proactive-signals/groups/");
     expect(script).toContain("/scan");
     expect(script).toContain("/candidates?limit=20");

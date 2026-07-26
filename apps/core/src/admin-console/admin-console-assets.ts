@@ -1415,11 +1415,14 @@ function renderCapabilityControls(capabilities) {
 
 function render(status, readiness, runtime) {
   cachedStatus = { status, readiness, runtime };
+  const proactiveSignals = status.components?.proactiveSignals || {};
   renderDefinitionList(systemStatus, [
     ["Overall", status.status || "unknown"],
     ["Needs attention", status.summary?.requiresOperatorAttention === true ? "yes" : "no"],
     ["Primary attention", status.summary?.primaryAttentionComponent?.name || "none"],
     ["Components", status.summary?.componentCount ?? "unknown"],
+    ["Proactive planner", summarizeProactivePlanner(proactiveSignals)],
+    ["Proactive delivery", summarizeProactiveDelivery(proactiveSignals)],
   ]);
   renderDefinitionList(runtimeStatus, [
     ["Global enabled", runtime.globalEnabled === true ? "yes" : "no"],
@@ -1434,6 +1437,24 @@ function render(status, readiness, runtime) {
     ["Checks", Array.isArray(readiness.checks) ? readiness.checks.length : "unknown"],
   ]);
   renderCapabilityControls(runtime.capabilities || {});
+}
+
+function summarizeProactivePlanner(proactiveSignals) {
+  const planner = proactiveSignals.planner;
+  if (!planner) return proactiveSignals.enabled === true ? "unknown" : "disabled";
+  const enabled = planner.enabled === true ? "enabled" : "disabled";
+  const running = planner.running === true ? "running" : "stopped";
+  const groups = planner.enabledGroupCount ?? 0;
+  return enabled + " / " + running + " / groups " + groups;
+}
+
+function summarizeProactiveDelivery(proactiveSignals) {
+  const delivery = proactiveSignals.delivery;
+  if (!delivery) return proactiveSignals.enabled === true ? "unknown" : "disabled";
+  const enabled = delivery.enabled === true ? "enabled" : "disabled";
+  const running = delivery.running === true ? "running" : "stopped";
+  const dispatcher = delivery.dispatcher?.running === true ? "dispatcher running" : "dispatcher stopped";
+  return enabled + " / " + running + " / " + dispatcher;
 }
 
 async function refresh() {
