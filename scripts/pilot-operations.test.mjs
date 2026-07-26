@@ -250,6 +250,7 @@ test("semantic recovery probe checks fail-closed state and never replays DLQ ent
   assert.match(script, /\/internal\/memory-extraction\/dead-letters\?limit=20/u);
   assert.match(script, /IRIS_SEMANTIC_RECOVERY_EXPECTED_DLQ_COUNT/u);
   assert.match(script, /expectedDlqCount/u);
+  assert.match(script, /zeroIfMissing/u);
   assert.match(script, /\/v1\/memory\/extract/u);
   assert.match(script, /schema_version: 2/u);
   assert.match(script, /globalEnabled !== false/u);

@@ -105,9 +105,9 @@ function assertFailClosed({ status, runtime, extraction, dlq }) {
     throw new Error("proactiveSpeech is not disabled");
   }
   const counts = {
-    pendingJobCount: extraction.pendingJobCount,
-    processingJobCount: extraction.processingJobCount,
-    delayedJobCount: extraction.delayedJobCount,
+    pendingJobCount: zeroIfMissing(extraction.pendingJobCount),
+    processingJobCount: zeroIfMissing(extraction.processingJobCount),
+    delayedJobCount: zeroIfMissing(extraction.delayedJobCount),
   };
   for (const [name, value] of Object.entries(counts)) {
     if (value !== 0) throw new Error(`Memory extraction ${name} is not zero`);
@@ -115,6 +115,10 @@ function assertFailClosed({ status, runtime, extraction, dlq }) {
   if (!Array.isArray(dlq.deadLetters) || dlq.deadLetters.length !== expectedDlqCount) {
     throw new Error(`Expected semantic DLQ count ${expectedDlqCount} before recovery probe`);
   }
+}
+
+function zeroIfMissing(value) {
+  return value ?? 0;
 }
 
 function readExpectedDlqCount(raw) {
