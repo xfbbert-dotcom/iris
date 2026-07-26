@@ -78,3 +78,10 @@
 - No semantic DLQ replay was performed after that failed probe, and no additional model requests were made in the same window.
 - Production remained fail-closed after the probe: `globalEnabled=false`, `desiredGlobalEnabled=false`, pilot/control/historical groups disabled, Caddy stopped, event/document/reindex queues and DLQs at zero, and the six semantic DLQ entries preserved for ordered replay after provider recovery.
 - Non-model proactive candidate governance was reverified locally while waiting for provider recovery: focused proactive/admin tests, full Core test suite, typecheck, build, pilot compose contract checks, and `git diff --check` all passed.
+
+## Status Amendment - 2026-07-26 Proactive Planner Runtime
+
+- Phase 6A proactive signal planning no longer depends only on manual Admin Console scans. Commit `9abf977463b2fad43ce1aed488d5d58f0090b9a0` adds a default-off planner runtime that periodically scans explicitly allowlisted groups for quiet open threads and overdue actions, then records proactive candidates without sending Feishu messages.
+- The planner remains fail-closed: it requires `IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED=true`, a non-empty planner group allowlist, started runtime lifecycle, and `runtimeController.canProactivelySpeak(groupId)` before reading conversation state or recording candidates.
+- Proactive delivery is still separate and independently gated. This amendment does not mark real Feishu proactive delivery complete; the next product gate remains semantic memory/thread/action gray acceptance, followed by one controlled proactive candidate and delivery gray pass.
+- Verification for this amendment: `git diff --check`, `npm run pilot:config`, `apps/core npm run typecheck`, `apps/core npm run build`, focused proactive/startup/status suites, and full `apps/core npm test -- --reporter=dot` with 140 files passed, 2 skipped, 2328 tests passed, and 165 skipped.
