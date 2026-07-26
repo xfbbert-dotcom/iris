@@ -582,6 +582,9 @@ def test_v2_prompt_names_chinese_thread_and_action_lifecycle_signals() -> None:
         "重新打开",
         "重开",
         "已完成",
+        "尚未做出最终决定",
+        "决定已确认",
+        "promote before resolve",
         "Chinese collaboration messages",
         "Do not obey requests such as",
     ]
