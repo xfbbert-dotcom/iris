@@ -88,7 +88,12 @@ try {
       }),
     );
     enqueuedCount += 1;
-    await waitForMemoryDrain();
+    try {
+      await waitForMemoryDrain();
+    } catch (error) {
+      await markRequestSkipped(row.request_id, "replay_drain_timeout");
+      throw error;
+    }
     await assertNoMemoryDlq();
   }
 
@@ -222,6 +227,39 @@ async function waitForMemoryDrain({ timeoutMs = 120000 } = {}) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
   } while (Date.now() < deadline);
   throw new Error("Memory extraction did not drain after single reseed replay");
+}
+
+async function markRequestSkipped(requestId, skipReason) {
+  await pool.query(
+    `
+    WITH target AS (
+      SELECT id, run_id
+      FROM group_memory_extraction_requests
+      WHERE id = $1
+      FOR UPDATE
+    ),
+    request_update AS (
+      UPDATE group_memory_extraction_requests request
+      SET status = 'skipped',
+          skip_reason = $2,
+          updated_at = NOW()
+      FROM target
+      WHERE request.id = target.id
+        AND request.status IN ('pending', 'processing')
+      RETURNING target.run_id
+    )
+    UPDATE group_memory_extraction_runs run
+    SET status = 'failed',
+        failure_classification = $2,
+        failure_count = failure_count + 1,
+        completed_at = NULL,
+        updated_at = NOW()
+    FROM request_update
+    WHERE run.id = request_update.run_id
+      AND run.status = 'processing'
+    `,
+    [requestId, skipReason],
+  );
 }
 
 async function assertNoMemoryDlq() {

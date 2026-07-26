@@ -335,6 +335,8 @@ test("semantic reseed helper resets approved marker messages one at a time", () 
   assert.match(script, /createMemoryExtractionJob/u);
   assert.match(script, /queue\.enqueue/u);
   assert.match(script, /await waitForMemoryDrain/u);
+  assert.match(script, /await markRequestSkipped/u);
+  assert.match(script, /replay_drain_timeout/u);
   assert.match(script, /for \(const row of messages\)/u);
   assert.match(script, /\/internal\/runtime-control\/global/u);
   assert.match(script, /\/internal\/runtime-control\/groups\/\$\{groupId\}/u);
