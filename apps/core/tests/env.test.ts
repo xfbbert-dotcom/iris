@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  readAgentExecutionLedgerRuntimeConfig,
   readActionApprovalRuntimeConfig,
   readActionReviewRuntimeConfig,
   readAnswerDraftRuntimeConfig,
@@ -17,6 +18,30 @@ import {
   readReindexWorkerRuntimeConfig,
   readServerPort,
 } from "../src/config/env.js";
+
+describe("readAgentExecutionLedgerRuntimeConfig", () => {
+  it("is disabled unless explicitly enabled", () => {
+    expect(readAgentExecutionLedgerRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readAgentExecutionLedgerRuntimeConfig({
+        IRIS_AGENT_EXECUTION_LEDGER_ENABLED: value,
+      })).toEqual({ enabled: false });
+    }
+  });
+
+  it("requires and normalizes the database URL when enabled", () => {
+    expect(readAgentExecutionLedgerRuntimeConfig({
+      IRIS_AGENT_EXECUTION_LEDGER_ENABLED: "true",
+      DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
+    })).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@postgres:5432/iris",
+    });
+    expect(() => readAgentExecutionLedgerRuntimeConfig({
+      IRIS_AGENT_EXECUTION_LEDGER_ENABLED: "true",
+    })).toThrow("DATABASE_URL is required for database operations");
+  });
+});
 
 describe("readActionReviewRuntimeConfig", () => {
   const enabledEnv = {

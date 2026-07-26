@@ -23,6 +23,10 @@ export type EmbeddingProviderConfig = {
 
 export type AnswerDraftPermissionMode = "allow-indexed" | "source-policy";
 
+export type AgentExecutionLedgerRuntimeConfig =
+  | { enabled: false }
+  | { enabled: true; databaseUrl: string };
+
 export type AnswerDraftRuntimeConfig =
   | { enabled: false }
   | { enabled: true; permissionMode: AnswerDraftPermissionMode };
@@ -145,6 +149,19 @@ export type FeishuOpenApiConfig = {
 
 const MAX_FEISHU_BOT_OPEN_ID_CHARS = 512;
 const MAX_FEISHU_ENCRYPT_KEY_CHARS = 512;
+
+export function readAgentExecutionLedgerRuntimeConfig(
+  env: EnvLike = process.env,
+): AgentExecutionLedgerRuntimeConfig {
+  if (env.IRIS_AGENT_EXECUTION_LEDGER_ENABLED !== "true") {
+    return { enabled: false };
+  }
+
+  return {
+    enabled: true,
+    databaseUrl: readDatabaseConfig(env).databaseUrl,
+  };
+}
 
 export function readFeishuAuthConfig(env: EnvLike = process.env): FeishuAuthConfig {
   return {
