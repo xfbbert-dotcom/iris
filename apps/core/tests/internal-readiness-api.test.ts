@@ -167,6 +167,19 @@ describe("memory extraction internal API", () => {
     await app.close();
   });
 
+  it("keeps the memory dead-letter list observable when extraction runtime is disabled", async () => {
+    const app = buildTestApp({ createMemoryExtractionRuntime: () => undefined });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/memory-extraction/dead-letters?limit=20",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, deadLetters: [] });
+    await app.close();
+  });
+
   it("requires the exact configured bearer token for every recovery surface", async () => {
     const runtime = fakeMemoryExtractionRuntime();
     const app = buildTestApp({

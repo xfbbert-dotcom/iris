@@ -942,16 +942,16 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   app.get("/internal/memory-extraction/dead-letters", async (request, reply) => {
-    if (memoryExtractionRuntime === undefined) {
-      return reply.code(503).send({
-        ok: false,
-        error: "memory_extraction_runtime_unavailable",
-      });
-    }
-
     const limit = parseMemoryExtractionDeadLetterLimit(request.query);
     if (limit === undefined) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    if (memoryExtractionRuntime === undefined) {
+      return {
+        ok: true,
+        deadLetters: [],
+      };
     }
 
     try {
