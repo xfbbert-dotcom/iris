@@ -519,6 +519,20 @@ After all replayable semantic DLQ entries are processed, require:
 - global runtime and all known groups are returned to fail-closed state unless a controller has
   explicitly approved the next real Feishu gray step.
 
+The read-only internal inspector can check the replay result without opening Caddy, replaying DLQ
+items, or making another model request:
+
+```bash
+IRIS_PILOT_ENV_FILE=.env.pilot \
+IRIS_SEMANTIC_ACCEPTANCE_PILOT_GROUP_ID=<approved-pilot-group-id> \
+IRIS_SEMANTIC_ACCEPTANCE_CONTROL_GROUP_ID=<optional-empty-control-group-id> \
+./deploy/pilot/semantic-acceptance-inspect.sh
+```
+
+It requires one reopened pilot thread with append-only evidence, one completed action bound to that
+thread, zero semantic DLQ, zero queue/repair counts, fail-closed runtime, and an empty control group
+when `IRIS_SEMANTIC_ACCEPTANCE_CONTROL_GROUP_ID` is provided.
+
 ## Control-Group Negative Test
 
 The wrapper selects the non-approved `$controlGroupId` and captures `$controlBefore` after global

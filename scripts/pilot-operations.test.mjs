@@ -7,6 +7,7 @@ const backupPath = "deploy/pilot/backup.sh";
 const restorePath = "deploy/pilot/restore-from-stdin.sh";
 const semanticRecoveryProbePath = "deploy/pilot/semantic-recovery-probe.sh";
 const semanticOrderedReplayPath = "deploy/pilot/semantic-dlq-replay-one-by-one.sh";
+const semanticAcceptanceInspectPath = "deploy/pilot/semantic-acceptance-inspect.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
 const ciWorkflowPath = ".github/workflows/ci.yml";
@@ -17,6 +18,7 @@ test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined 
     restorePath,
     semanticRecoveryProbePath,
     semanticOrderedReplayPath,
+    semanticAcceptanceInspectPath,
     postgresInitPath,
   ]) {
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });
@@ -30,6 +32,7 @@ test("pilot shell scripts use LF endings for direct Linux execution", () => {
     restorePath,
     semanticRecoveryProbePath,
     semanticOrderedReplayPath,
+    semanticAcceptanceInspectPath,
     postgresInitPath,
   ]) {
     const script = readFileSync(scriptPath, "utf8");
@@ -270,6 +273,33 @@ test("semantic ordered replay helper gates execution and replays one DLQ at a ti
   assert.match(script, /proactiveSpeech/u);
   assert.match(script, /stop caddy/u);
   assert.doesNotMatch(script, /dead-letters\/replay/u);
+  assert.doesNotMatch(script, /\/v1\/memory\/extract/u);
+});
+
+test("semantic acceptance inspector validates lifecycle without mutating runtime or public ingress", () => {
+  const script = readFileSync(semanticAcceptanceInspectPath, "utf8");
+  assert.match(script, /IRIS_SEMANTIC_ACCEPTANCE_PILOT_GROUP_ID/u);
+  assert.match(script, /IRIS_SEMANTIC_ACCEPTANCE_CONTROL_GROUP_ID/u);
+  assert.match(script, /exec -T core node --input-type=module/u);
+  assert.match(script, /\/internal\/runtime-control\/status/u);
+  assert.match(script, /\/internal\/status/u);
+  assert.match(script, /\/internal\/memory-extraction\/status/u);
+  assert.match(script, /\/internal\/memory-extraction\/dead-letters\?limit=20/u);
+  assert.match(script, /\/internal\/conversation-state\/groups\/\$\{encodeURIComponent\(pilotGroupId\)\}\/threads/u);
+  assert.match(script, /\/internal\/conversation-state\/groups\/\$\{encodeURIComponent\(pilotGroupId\)\}\/actions/u);
+  assert.match(script, /\/internal\/conversation-state\/threads\/\$\{encodeURIComponent\(thread\.id\)\}\/events/u);
+  assert.match(script, /\/internal\/conversation-state\/actions\/\$\{encodeURIComponent\(action\.id\)\}\/events/u);
+  assert.match(script, /created/u);
+  assert.match(script, /promoted/u);
+  assert.match(script, /resolved/u);
+  assert.match(script, /reopened/u);
+  assert.match(script, /completed/u);
+  assert.match(script, /hasDuplicateLifecycleVersions/u);
+  assert.match(script, /projectionRepairs/u);
+  assert.match(script, /controlGroupId/u);
+  assert.doesNotMatch(script, /\/internal\/runtime-control\/global/u);
+  assert.doesNotMatch(script, /\/internal\/memory-extraction\/dead-letters\/.*\/replay/u);
+  assert.doesNotMatch(script, /stop caddy/u);
   assert.doesNotMatch(script, /\/v1\/memory\/extract/u);
 });
 
