@@ -111,6 +111,10 @@ import {
   createProactiveSignalDeliveryRuntime as createDefaultProactiveSignalDeliveryRuntime,
   type ProactiveSignalDeliveryRuntime,
 } from "./runtime/proactive-signal-delivery-runtime.js";
+import {
+  createProactiveSignalPlannerRuntime as createDefaultProactiveSignalPlannerRuntime,
+  type ProactiveSignalPlannerRuntime,
+} from "./runtime/proactive-signal-planner-runtime.js";
 import { registerKnowledgeCardApi } from "./knowledge-cards/knowledge-card-api.js";
 import { registerActionProposalApi } from "./action-approvals/action-proposal-api.js";
 import { registerActionReviewApi } from "./action-reviews/action-review-api.js";
@@ -178,6 +182,9 @@ export type BuildAppDependencies = {
   createProactiveSignalDeliveryRuntime?: (
     input?: Parameters<typeof createDefaultProactiveSignalDeliveryRuntime>[0],
   ) => ProactiveSignalDeliveryRuntime | undefined;
+  createProactiveSignalPlannerRuntime?: (
+    input?: Parameters<typeof createDefaultProactiveSignalPlannerRuntime>[0],
+  ) => ProactiveSignalPlannerRuntime | undefined;
 };
 
 export type StartServerOptions = {
@@ -326,9 +333,11 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   let actionApprovalRuntime: ActionApprovalRuntime | undefined;
   let actionReviewRuntime: ActionReviewRuntime | undefined;
+  let proactiveSignalPlannerRuntime: ProactiveSignalPlannerRuntime | undefined;
   let proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
   let knowledgeCardStartup: Promise<void> | undefined;
   let actionApprovalStartup: Promise<void> | undefined;
+  let proactiveSignalPlannerStartup: Promise<void> | undefined;
   let proactiveSignalDeliveryStartup: Promise<void> | undefined;
   let eventWorkerStartup: Promise<void> | undefined;
   let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
@@ -372,6 +381,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     actionReviewRuntime = (
       dependencies.createActionReviewRuntime ?? createDefaultActionReviewRuntime
     )({ actionApprovalRuntime });
+    proactiveSignalPlannerRuntime = (
+      dependencies.createProactiveSignalPlannerRuntime ?? createDefaultProactiveSignalPlannerRuntime
+    )({
+      runtimeController,
+      store: dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
+      now,
+    });
     proactiveSignalDeliveryRuntime = (
       dependencies.createProactiveSignalDeliveryRuntime ?? createDefaultProactiveSignalDeliveryRuntime
     )({ runtimeController });
@@ -381,10 +397,16 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       : observeStartupPromise(
           (knowledgeCardStartup ?? Promise.resolve()).then(() => actionApprovalRuntime!.start()),
         );
-    proactiveSignalDeliveryStartup = proactiveSignalDeliveryRuntime === undefined
+    proactiveSignalPlannerStartup = proactiveSignalPlannerRuntime === undefined
       ? undefined
       : observeStartupPromise(
           (actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
+            .then(() => proactiveSignalPlannerRuntime!.start()),
+        );
+    proactiveSignalDeliveryStartup = proactiveSignalDeliveryRuntime === undefined
+      ? undefined
+      : observeStartupPromise(
+          (proactiveSignalPlannerStartup ?? actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
             .then(() => proactiveSignalDeliveryRuntime!.start()),
         );
     eventWorkerRuntime =
@@ -398,7 +420,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
           : { memoryExtractionPlanner: memoryExtractionRuntime.planner }),
       });
     const eventWorkerPrerequisite =
-      proactiveSignalDeliveryStartup ?? actionApprovalStartup ?? knowledgeCardStartup;
+      proactiveSignalDeliveryStartup ??
+      proactiveSignalPlannerStartup ??
+      actionApprovalStartup ??
+      knowledgeCardStartup;
     if (eventWorkerPrerequisite === undefined) {
       eventWorkerRuntime?.start();
     } else {
@@ -441,12 +466,14 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   if (
     knowledgeCardStartup !== undefined ||
     actionApprovalStartup !== undefined ||
+    proactiveSignalPlannerStartup !== undefined ||
     proactiveSignalDeliveryStartup !== undefined ||
     eventWorkerStartup !== undefined
   ) {
     app.addHook("onReady", async () => {
       await knowledgeCardStartup;
       await actionApprovalStartup;
+      await proactiveSignalPlannerStartup;
       await proactiveSignalDeliveryStartup;
       await eventWorkerStartup;
     });
@@ -590,7 +617,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     });
     const knowledgeCards = await getKnowledgeCardStatus(knowledgeCardRuntime);
     const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
-    const proactiveSignals = await getProactiveSignalDeliveryStatus(proactiveSignalDeliveryRuntime);
+    const proactiveSignals = await getProactiveSignalsStatus({
+      planner: proactiveSignalPlannerRuntime,
+      delivery: proactiveSignalDeliveryRuntime,
+    });
     const components = {
       audit: {
         ok: true,
@@ -1622,6 +1652,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => proactiveSignalRuntime?.close(),
       () => actionReviewRuntime?.close(),
       () => proactiveSignalDeliveryRuntime?.close(),
+      () => proactiveSignalPlannerRuntime?.close(),
       () => actionApprovalRuntime?.close(),
       () => knowledgeCardRuntime?.close(),
       () => knowledgeDraftRuntime?.close(),
@@ -1642,6 +1673,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       documentSyncRuntime,
       conversationStateInspectionRuntime,
       proactiveSignalRuntime,
+      proactiveSignalPlannerRuntime,
       knowledgeCardRuntime,
       actionApprovalRuntime,
       actionReviewRuntime,
@@ -1691,6 +1723,46 @@ async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefine
       enabled: true,
       running: false,
       degradedReason: "action_approval_status_unavailable" as const,
+    };
+  }
+}
+
+async function getProactiveSignalsStatus({
+  planner,
+  delivery,
+}: {
+  planner: ProactiveSignalPlannerRuntime | undefined;
+  delivery: ProactiveSignalDeliveryRuntime | undefined;
+}) {
+  const plannerStatus = await getProactiveSignalPlannerStatus(planner);
+  const deliveryStatus = await getProactiveSignalDeliveryStatus(delivery);
+  const enabled = plannerStatus.enabled || deliveryStatus.enabled;
+  if (!enabled) {
+    return { ok: true, enabled: false, running: false };
+  }
+  const running = (!plannerStatus.enabled || plannerStatus.running) &&
+    (!deliveryStatus.enabled || deliveryStatus.running);
+  const ok = plannerStatus.ok && deliveryStatus.ok && (!enabled || running);
+  return {
+    ok,
+    enabled,
+    running,
+    planner: plannerStatus,
+    delivery: deliveryStatus,
+    ...(!ok ? { degradedReason: "proactive_signal_runtime_degraded" as const } : {}),
+  };
+}
+
+async function getProactiveSignalPlannerStatus(runtime: ProactiveSignalPlannerRuntime | undefined) {
+  if (runtime === undefined) return { ok: true, enabled: false, running: false };
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "proactive_signal_planner_status_unavailable" as const,
     };
   }
 }
@@ -1837,6 +1909,7 @@ function scheduleRuntimeStartupCleanup({
   documentSyncRuntime,
   conversationStateInspectionRuntime,
   proactiveSignalRuntime,
+  proactiveSignalPlannerRuntime,
   knowledgeCardRuntime,
   actionApprovalRuntime,
   actionReviewRuntime,
@@ -1852,6 +1925,7 @@ function scheduleRuntimeStartupCleanup({
   documentSyncRuntime: DocumentSyncRuntime | undefined;
   conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
+  proactiveSignalPlannerRuntime: ProactiveSignalPlannerRuntime | undefined;
   knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   actionApprovalRuntime: ActionApprovalRuntime | undefined;
   actionReviewRuntime: ActionReviewRuntime | undefined;
@@ -1869,6 +1943,7 @@ function scheduleRuntimeStartupCleanup({
     () => proactiveSignalRuntime?.close(),
     () => actionReviewRuntime?.close(),
     () => proactiveSignalDeliveryRuntime?.close(),
+    () => proactiveSignalPlannerRuntime?.close(),
     () => actionApprovalRuntime?.close(),
     () => knowledgeCardRuntime?.close(),
     () => knowledgeDraftRuntime?.close(),

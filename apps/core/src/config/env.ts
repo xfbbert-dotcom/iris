@@ -109,6 +109,18 @@ export type ProactiveSignalDeliveryRuntimeConfig =
       batchLimit: number;
     };
 
+export type ProactiveSignalPlannerRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      databaseUrl: string;
+      enabledGroupIds: string[];
+      intervalMs: number;
+      batchLimit: number;
+      quietThreadAfterMinutes: number;
+      overdueActionGraceMinutes: number;
+    };
+
 export type ActionReviewRuntimeConfig =
   | { enabled: false }
   | {
@@ -511,6 +523,44 @@ export function readProactiveSignalDeliveryRuntimeConfig(
       env.IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT,
       10,
       100,
+    ),
+  };
+}
+
+export function readProactiveSignalPlannerRuntimeConfig(
+  env: EnvLike = process.env,
+): ProactiveSignalPlannerRuntimeConfig {
+  if (env.IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED !== "true") return { enabled: false };
+
+  const enabledGroupIds = readRequiredUniqueGroupIdListEnv(
+    "IRIS_PROACTIVE_SIGNAL_PLANNER_GROUP_IDS",
+    env.IRIS_PROACTIVE_SIGNAL_PLANNER_GROUP_IDS,
+  );
+  const { databaseUrl } = readDatabaseConfig(env);
+  return {
+    enabled: true,
+    databaseUrl,
+    enabledGroupIds,
+    intervalMs: readTimerDelayEnv(
+      "IRIS_PROACTIVE_SIGNAL_PLANNER_INTERVAL_MS",
+      env.IRIS_PROACTIVE_SIGNAL_PLANNER_INTERVAL_MS,
+      60000,
+    ),
+    batchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_PROACTIVE_SIGNAL_PLANNER_BATCH_LIMIT",
+      env.IRIS_PROACTIVE_SIGNAL_PLANNER_BATCH_LIMIT,
+      10,
+      100,
+    ),
+    quietThreadAfterMinutes: readPositiveIntegerEnv(
+      "IRIS_PROACTIVE_SIGNAL_PLANNER_QUIET_THREAD_MINUTES",
+      env.IRIS_PROACTIVE_SIGNAL_PLANNER_QUIET_THREAD_MINUTES,
+      24 * 60,
+    ),
+    overdueActionGraceMinutes: readPositiveIntegerEnv(
+      "IRIS_PROACTIVE_SIGNAL_PLANNER_OVERDUE_ACTION_GRACE_MINUTES",
+      env.IRIS_PROACTIVE_SIGNAL_PLANNER_OVERDUE_ACTION_GRACE_MINUTES,
+      15,
     ),
   };
 }

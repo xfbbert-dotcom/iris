@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
-import { readMemoryExtractionRuntimeConfig } from "../src/config/env.js";
+import { readMemoryExtractionRuntimeConfig, readProactiveSignalPlannerRuntimeConfig } from "../src/config/env.js";
 
 describe("createDefaultRuntimeConfig", () => {
   it("keeps the development default enabled when startup configuration is absent", () => {
@@ -65,6 +65,40 @@ describe("memory extraction rollout configuration", () => {
       IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR: "0.85",
       IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE: "0.85",
     })).toThrow("IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR must be less than IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE");
+  });
+});
+
+describe("proactive signal planner rollout configuration", () => {
+  it("stays disabled by default and parses an explicit group allowlist", () => {
+    expect(readProactiveSignalPlannerRuntimeConfig({})).toEqual({ enabled: false });
+
+    expect(readProactiveSignalPlannerRuntimeConfig({
+      IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED: "true",
+      IRIS_PROACTIVE_SIGNAL_PLANNER_GROUP_IDS: " group-a,group-b ",
+      DATABASE_URL: "postgres://example/iris",
+    })).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://example/iris",
+      enabledGroupIds: ["group-a", "group-b"],
+      intervalMs: 60000,
+      batchLimit: 10,
+      quietThreadAfterMinutes: 1440,
+      overdueActionGraceMinutes: 15,
+    });
+  });
+
+  it("requires at least one group and bounds scan timing while enabled", () => {
+    expect(() => readProactiveSignalPlannerRuntimeConfig({
+      IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED: "true",
+      DATABASE_URL: "postgres://example/iris",
+    })).toThrow("IRIS_PROACTIVE_SIGNAL_PLANNER_GROUP_IDS must contain at least one group");
+
+    expect(() => readProactiveSignalPlannerRuntimeConfig({
+      IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED: "true",
+      IRIS_PROACTIVE_SIGNAL_PLANNER_GROUP_IDS: "group-a",
+      IRIS_PROACTIVE_SIGNAL_PLANNER_QUIET_THREAD_MINUTES: "0",
+      DATABASE_URL: "postgres://example/iris",
+    })).toThrow("IRIS_PROACTIVE_SIGNAL_PLANNER_QUIET_THREAD_MINUTES must be a positive integer");
   });
 });
 

@@ -18,6 +18,7 @@ import type { ActionApprovalRuntime } from "../src/runtime/action-approval-runti
 import type { ActionReviewRuntime } from "../src/runtime/action-review-runtime.js";
 import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
 import type { ProactiveSignalDeliveryRuntime } from "../src/runtime/proactive-signal-delivery-runtime.js";
+import type { ProactiveSignalPlannerRuntime } from "../src/runtime/proactive-signal-planner-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
 import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
@@ -360,6 +361,80 @@ describe("Core server startup", () => {
       "close-runtime-control",
     ]);
     expect(createProactiveSignalDeliveryRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("starts proactive signal planner before delivery and event workers", async () => {
+    const reservation = await occupyLoopbackPort();
+    const port = reservation.port;
+    await closeServer(reservation.server);
+    process.env.PORT = String(port);
+    const order: string[] = [];
+    const runtimeControlRuntime = fakeRuntimeControlRuntime({
+      onClose: () => order.push("close-runtime-control"),
+    });
+    const proactivePlannerRuntime = fakeProactiveSignalPlannerRuntime({
+      start: vi.fn(async () => {
+        order.push("start-proactive-planner");
+      }),
+      close: vi.fn(async () => {
+        order.push("close-proactive-planner");
+      }),
+    });
+    const proactiveDeliveryRuntime = fakeProactiveSignalDeliveryRuntime({
+      start: vi.fn(async () => {
+        order.push("start-proactive-delivery");
+      }),
+      close: vi.fn(async () => {
+        order.push("close-proactive-delivery");
+      }),
+    });
+    const eventWorkerRuntime = fakeEventWorkerRuntime({
+      start: vi.fn(() => order.push("start-event")),
+      close: vi.fn(async () => {
+        order.push("close-event");
+      }),
+    });
+    const conversationStateInspectionStore = fakeConversationStateInspectionStore();
+    const createProactiveSignalPlannerRuntime = vi.fn((input) => {
+      expect(input?.runtimeController).toBe(runtimeControlRuntime.runtimeControl.controller);
+      expect(input?.store).toBe(conversationStateInspectionStore);
+      return proactivePlannerRuntime;
+    });
+
+    const app = await startServer({
+      createRuntimeControlRuntime: async () => runtimeControlRuntime,
+      appDependencies: {
+        createAnswerDraftRuntime: () => undefined,
+        createReindexWorkerRuntime: () => undefined,
+        createMemoryExtractionRuntime: () => undefined,
+        createKnowledgeDraftRuntime: () => undefined,
+        createKnowledgeCardRuntime: () => undefined,
+        createActionApprovalRuntime: () => undefined,
+        createActionReviewRuntime: () => undefined,
+        conversationStateInspectionStore,
+        createProactiveSignalPlannerRuntime,
+        createProactiveSignalDeliveryRuntime: () => proactiveDeliveryRuntime,
+        createEventWorkerRuntime: () => eventWorkerRuntime,
+        createDocumentSyncRuntime: () => undefined,
+      },
+    });
+
+    expect(order).toEqual([
+      "start-proactive-planner",
+      "start-proactive-delivery",
+      "start-event",
+    ]);
+    await app.close();
+    expect(order).toEqual([
+      "start-proactive-planner",
+      "start-proactive-delivery",
+      "start-event",
+      "close-event",
+      "close-proactive-delivery",
+      "close-proactive-planner",
+      "close-runtime-control",
+    ]);
+    expect(createProactiveSignalPlannerRuntime).toHaveBeenCalledOnce();
   });
 
   it("surfaces a rejected knowledge-card startup through buildApp readiness and closes once", async () => {
@@ -923,6 +998,35 @@ function fakeProactiveSignalDeliveryRuntime(
     })),
     close: vi.fn(async () => undefined),
     ...overrides,
+  };
+}
+
+function fakeProactiveSignalPlannerRuntime(
+  overrides: Partial<ProactiveSignalPlannerRuntime> = {},
+): ProactiveSignalPlannerRuntime {
+  return {
+    repository: {} as ProactiveSignalPlannerRuntime["repository"],
+    canUseProactiveSignalPlanning: vi.fn(() => true),
+    start: vi.fn(),
+    getStatus: vi.fn(async () => ({
+      enabled: true as const,
+      running: true,
+      enabledGroupCount: 1,
+      scanner: { running: true, intervalMs: 60000, batchLimit: 10 },
+    })),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeConversationStateInspectionStore() {
+  return {
+    getStatus: vi.fn(),
+    listThreads: vi.fn(),
+    listActions: vi.fn(),
+    listThreadEvents: vi.fn(),
+    listActionEvents: vi.fn(),
+    deleteMessageEvidence: vi.fn(),
   };
 }
 
