@@ -85,6 +85,31 @@ describe("admin console assets", () => {
     expect(script).not.toContain("sendMessage");
   });
 
+  it("renders an internal MVP gate summary from existing status without mutating runtime", () => {
+    const html = renderAdminConsoleHtml();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("Internal MVP Gate");
+    expect(html).toContain("mvp-gate-table");
+    expect(html).toContain("mvp-gate-summary");
+    expect(script).toContain("renderMvpGate");
+    expect(script).toContain("Shared group context");
+    expect(script).toContain("Semantic memory");
+    expect(script).toContain("Document reading");
+    expect(script).toContain("Knowledge publication");
+    expect(script).toContain("Proactive delivery");
+    expect(script).toContain("Emergency stop");
+    expect(script).toContain("semantic gray pending");
+    expect(script).toContain("real Feishu pending");
+    const mvpGateRenderer = script.slice(
+      script.indexOf("function renderMvpGate"),
+      script.indexOf("function renderCapabilityControls"),
+    );
+    expect(mvpGateRenderer).not.toContain("requestJson(");
+    expect(mvpGateRenderer).not.toContain("/internal/runtime-control/global");
+    expect(mvpGateRenderer).not.toContain("/internal/action-proposals/approve");
+  });
+
   it("renders audit summary governance without raw message bodies", () => {
     const html = renderAdminConsoleHtml();
     const script = renderAdminConsoleScript();

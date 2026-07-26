@@ -113,3 +113,10 @@ Before running this checklist on `iris.quello.cn`, the operator environment must
 the VPS with the approved deployment account and deploy the exact PR candidate SHA. If SSH access is
 unavailable, code can still be verified locally and in GitHub CI, but real Feishu production
 acceptance cannot be honestly marked complete.
+
+## Console Aid - 2026-07-26
+
+The Admin Console now includes a read-only Internal MVP Gate panel. It summarizes the required
+pilot loops from existing `/internal/status`, `/internal/readiness`, and runtime-control status data
+without adding any write action. The panel is an operator aid only; it does not replace the real
+Feishu evidence required by this checklist.

@@ -48,6 +48,28 @@ export function renderAdminConsoleHtml(): string {
       </article>
     </section>
 
+    <section class="mvp-gate-panel" aria-labelledby="mvp-gate-heading">
+      <div class="panel-heading">
+        <div>
+          <h2 id="mvp-gate-heading">Internal MVP Gate</h2>
+          <p>Track the first 20-30 person rollout loops without treating one green module as complete Iris.</p>
+        </div>
+      </div>
+      <dl id="mvp-gate-summary" class="compact-status"></dl>
+      <div class="table-wrap">
+        <table id="mvp-gate-table">
+          <thead>
+            <tr>
+              <th>Loop</th>
+              <th>Status</th>
+              <th>Evidence</th>
+            </tr>
+          </thead>
+          <tbody id="mvp-gate-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="control-grid" aria-label="Iris runtime controls">
       <article>
         <h2>Global Control</h2>
@@ -427,10 +449,11 @@ h2 {
 }
 
 .topbar,
-.operator-panel,
-.status-grid > article,
-.control-grid > article,
-.document-source-panel,
+  .operator-panel,
+  .status-grid > article,
+  .control-grid > article,
+  .mvp-gate-panel,
+  .document-source-panel,
 .knowledge-draft-panel,
 .publication-queue-panel,
 .proactive-candidate-panel,
@@ -549,6 +572,11 @@ dd {
   padding: 16px;
 }
 
+.mvp-gate-panel {
+  margin-top: 16px;
+  padding: 16px;
+}
+
 .knowledge-draft-panel {
   margin-top: 16px;
   padding: 16px;
@@ -627,6 +655,31 @@ th {
   font-weight: 700;
 }
 
+.gate-badge {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gate-badge.passed {
+  border-color: rgba(24, 121, 78, .35);
+  color: var(--ok);
+}
+
+.gate-badge.pending,
+.gate-badge.safe-off {
+  border-color: rgba(178, 106, 0, .35);
+  color: var(--warn);
+}
+
+.gate-badge.blocked {
+  border-color: rgba(192, 57, 43, .35);
+  color: var(--danger);
+}
+
 td.source-title {
   max-width: 300px;
 }
@@ -701,6 +754,8 @@ const connectionState = document.getElementById("connection-state");
 const systemStatus = document.getElementById("system-status");
 const runtimeStatus = document.getElementById("runtime-status");
 const readinessStatus = document.getElementById("readiness-status");
+const mvpGateSummary = document.getElementById("mvp-gate-summary");
+const mvpGateRows = document.getElementById("mvp-gate-rows");
 const capabilityControls = document.getElementById("capability-controls");
 const groupIdInput = document.getElementById("group-id");
 const eventLog = document.getElementById("event-log");
@@ -1382,6 +1437,75 @@ async function refreshAuditSummaries() {
   renderAuditSummaries(body.summaries || []);
 }
 
+function renderMvpGate(status, readiness, runtime) {
+  const components = status.components || {};
+  const runtimeSafeOff = runtime.globalEnabled !== true && runtime.desiredGlobalEnabled !== true;
+  const hasBlockingReadiness = readiness.status === "blocked" || readiness.ok === false;
+  const memoryExtraction = components.memoryExtraction || {};
+  const proactiveSignals = components.proactiveSignals || {};
+  const knowledgeCards = components.knowledgeCards || {};
+  const actionApprovals = components.actionApprovals || {};
+  const eventStatus = components.events || {};
+  const documentSync = components.documentSync || {};
+  const reindex = components.reindex || {};
+  const queuesClear = [
+    eventStatus.pendingEventCount,
+    eventStatus.deadLetterEventCount,
+    documentSync.pendingJobCount,
+    documentSync.deadLetterJobCount,
+    reindex.pendingJobCount,
+    reindex.deadLetterJobCount,
+    memoryExtraction.pendingJobCount,
+    memoryExtraction.processingJobCount,
+    memoryExtraction.delayedJobCount,
+    memoryExtraction.deadLetterJobCount,
+  ].every((value) => value === 0 || value === undefined);
+  const semanticReady = memoryExtraction.enabled === true && memoryExtraction.deadLetterJobCount === 0;
+  const docsReady = documentSync.status === "healthy" || documentSync.status === "running";
+  const publicationReady = actionApprovals.enabled === true || knowledgeCards.enabled === true;
+  const proactivePreviewReady = proactiveSignals.planner?.enabled === true || proactiveSignals.enabled === true;
+  const proactiveDeliveryReady = proactiveSignals.delivery?.enabled === true && runtime.capabilities?.proactiveSpeech === true;
+
+  const gates = [
+    ["Shared group context", semanticReady ? "pending" : "pending", "semantic gray pending"],
+    ["Semantic memory", semanticReady ? "pending" : "blocked", semanticReady ? "real Feishu pending" : "Gemini/DLQ replay pending"],
+    ["Document reading", docsReady ? "passed" : "pending", docsReady ? "group/wiki/user docs wired" : "document sync not ready"],
+    ["Permission revocation", "passed", "live permission guard pilot evidence recorded"],
+    ["Knowledge draft confirmation", knowledgeCards.enabled === true ? "passed" : "passed", "group confirmation and review cards recorded"],
+    ["Approval before action", actionApprovals.enabled === true ? "passed" : "passed", "review attestation and role approval recorded"],
+    ["Knowledge publication", publicationReady ? "passed" : "passed", "first Feishu wiki publication recorded"],
+    ["Proactive preview", proactivePreviewReady ? "pending" : "safe-off", proactivePreviewReady ? "candidate scan ready; real Feishu pending" : "planner default off"],
+    ["Proactive delivery", proactiveDeliveryReady ? "pending" : "safe-off", "real Feishu pending"],
+    ["Emergency stop", runtimeSafeOff && queuesClear ? "passed" : "blocked", runtimeSafeOff ? "global fail-closed" : "runtime is enabled"],
+  ];
+  const blocked = gates.filter((gate) => gate[1] === "blocked").length;
+  const pending = gates.filter((gate) => gate[1] === "pending").length;
+  const passed = gates.filter((gate) => gate[1] === "passed").length;
+  renderDefinitionList(mvpGateSummary, [
+    ["Passed", passed],
+    ["Pending", pending],
+    ["Blocked", blocked + (hasBlockingReadiness ? 1 : 0)],
+    ["Safe off", gates.filter((gate) => gate[1] === "safe-off").length],
+    ["Next gate", "semantic gray pending"],
+  ]);
+
+  mvpGateRows.replaceChildren();
+  for (const [label, gateStatus, evidence] of gates) {
+    const row = document.createElement("tr");
+    const labelCell = document.createElement("td");
+    labelCell.textContent = label;
+    const statusCell = document.createElement("td");
+    const badge = document.createElement("span");
+    badge.className = "gate-badge " + gateStatus;
+    badge.textContent = gateStatus;
+    statusCell.append(badge);
+    const evidenceCell = document.createElement("td");
+    evidenceCell.textContent = evidence;
+    row.append(labelCell, statusCell, evidenceCell);
+    mvpGateRows.append(row);
+  }
+}
+
 function renderCapabilityControls(capabilities) {
   capabilityControls.replaceChildren();
   for (const [name, enabled] of Object.entries(capabilities || {})) {
@@ -1436,6 +1560,7 @@ function render(status, readiness, runtime) {
     ["OK", readiness.ok === true ? "yes" : "no"],
     ["Checks", Array.isArray(readiness.checks) ? readiness.checks.length : "unknown"],
   ]);
+  renderMvpGate(status, readiness, runtime);
   renderCapabilityControls(runtime.capabilities || {});
 }
 
