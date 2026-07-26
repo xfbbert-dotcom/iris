@@ -317,6 +317,7 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   assert.match(script, /\/internal\/memory-extraction\/status/u);
   assert.match(script, /\/internal\/memory-extraction\/dead-letters\?limit=20/u);
   assert.match(script, /status\.components\?\.eventWorker/u);
+  assert.match(script, /zeroIfMissing/u);
   assert.match(script, /\/internal\/conversation-state\/groups\/\$\{encodeURIComponent\(pilotGroupId\)\}\/threads/u);
   assert.match(script, /\/internal\/conversation-state\/groups\/\$\{encodeURIComponent\(pilotGroupId\)\}\/actions/u);
   assert.match(script, /\/internal\/conversation-state\/threads\/\$\{encodeURIComponent\(thread\.id\)\}\/events/u);

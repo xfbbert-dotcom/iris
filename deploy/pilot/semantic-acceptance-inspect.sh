@@ -133,19 +133,19 @@ async function assertQueuesAndDlqClear() {
   const documentSync = status.components?.documentSync ?? {};
   const reindex = status.components?.reindex ?? {};
   const numericFields = {
-    pendingEventCount: eventStatus.pendingEventCount,
-    deadLetterEventCount: eventStatus.deadLetterEventCount,
-    documentPendingJobCount: documentSync.pendingJobCount,
-    documentDeadLetterJobCount: documentSync.deadLetterJobCount,
-    reindexPendingJobCount: reindex.pendingJobCount,
-    reindexDeadLetterJobCount: reindex.deadLetterJobCount,
-    memoryPendingJobCount: extraction.pendingJobCount,
-    memoryProcessingJobCount: extraction.processingJobCount,
-    memoryDelayedJobCount: extraction.delayedJobCount,
-    memoryDeadLetterJobCount: extraction.deadLetterJobCount,
-    memoryPendingProjectionRepairCount: extraction.pendingProjectionRepairCount,
-    memoryFailedProjectionRepairCount: extraction.failedProjectionRepairCount,
-    memoryDeadLetters: deadLetters.deadLetters?.length,
+    pendingEventCount: zeroIfMissing(eventStatus.pendingEventCount),
+    deadLetterEventCount: zeroIfMissing(eventStatus.deadLetterEventCount),
+    documentPendingJobCount: zeroIfMissing(documentSync.pendingJobCount),
+    documentDeadLetterJobCount: zeroIfMissing(documentSync.deadLetterJobCount),
+    reindexPendingJobCount: zeroIfMissing(reindex.pendingJobCount),
+    reindexDeadLetterJobCount: zeroIfMissing(reindex.deadLetterJobCount),
+    memoryPendingJobCount: zeroIfMissing(extraction.pendingJobCount),
+    memoryProcessingJobCount: zeroIfMissing(extraction.processingJobCount),
+    memoryDelayedJobCount: zeroIfMissing(extraction.delayedJobCount),
+    memoryDeadLetterJobCount: zeroIfMissing(extraction.deadLetterJobCount),
+    memoryPendingProjectionRepairCount: zeroIfMissing(extraction.pendingProjectionRepairCount),
+    memoryFailedProjectionRepairCount: zeroIfMissing(extraction.failedProjectionRepairCount),
+    memoryDeadLetters: zeroIfMissing(deadLetters.deadLetters?.length),
   };
   for (const [name, value] of Object.entries(numericFields)) {
     if (value !== 0) throw new Error(`Expected ${name} to be zero`);
@@ -180,6 +180,10 @@ function assertZeroCounts(counts, label) {
   for (const [key, value] of Object.entries(counts ?? {})) {
     if (value !== 0) throw new Error(`Expected ${label}.${key} to be zero`);
   }
+}
+
+function zeroIfMissing(value) {
+  return value ?? 0;
 }
 
 async function getJson(url) {
