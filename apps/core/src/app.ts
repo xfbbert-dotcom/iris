@@ -118,6 +118,11 @@ import {
 import { registerKnowledgeCardApi } from "./knowledge-cards/knowledge-card-api.js";
 import { registerActionProposalApi } from "./action-approvals/action-proposal-api.js";
 import { registerActionReviewApi } from "./action-reviews/action-review-api.js";
+import { registerAgentExecutionLedgerApi } from "./agent-runtime/agent-execution-ledger-api.js";
+import {
+  createAgentExecutionLedgerRuntime as createDefaultAgentExecutionLedgerRuntime,
+  type AgentExecutionLedgerRuntime,
+} from "./runtime/agent-execution-ledger-runtime.js";
 import { observeStartupPromise } from "./runtime/startup-promise.js";
 
 type EventWorkerRuntimeFactoryInput = {
@@ -148,6 +153,9 @@ export type BuildAppDependencies = {
   createAnswerDraftRuntime?: (
     input?: Parameters<typeof createDefaultAnswerDraftRuntime>[0],
   ) => AnswerDraftRuntime | undefined;
+  createAgentExecutionLedgerRuntime?: (
+    input?: Parameters<typeof createDefaultAgentExecutionLedgerRuntime>[0],
+  ) => AgentExecutionLedgerRuntime | undefined;
   createEventWorkerRuntime?: (input?: EventWorkerRuntimeFactoryInput) => EventWorkerRuntime | undefined;
   createMemoryExtractionRuntime?: (
     input?: MemoryExtractionRuntimeFactoryInput,
@@ -321,6 +329,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const runtimeControlService =
     dependencies.runtimeControl?.service ??
     createInMemoryRuntimeControlService(runtimeController, now);
+  let agentExecutionLedgerRuntime: AgentExecutionLedgerRuntime | undefined;
   let answerDraftRuntime: AnswerDraftRuntime | undefined;
   let answerDraftOrchestrator = dependencies.answerDraftOrchestrator;
   let reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
@@ -344,6 +353,10 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   let startupApp: FastifyInstance | undefined;
   let appOwnsRuntimeResources = false;
   try {
+    agentExecutionLedgerRuntime = (
+      dependencies.createAgentExecutionLedgerRuntime ??
+      createDefaultAgentExecutionLedgerRuntime
+    )({ now });
     answerDraftRuntime =
       answerDraftOrchestrator === undefined
         ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
@@ -540,6 +553,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     now,
   });
   registerActionReviewApi(app, actionReviewRuntime, { now });
+  registerAgentExecutionLedgerApi(app, agentExecutionLedgerRuntime);
 
   app.get("/admin", async (_request, reply) => (
     reply
@@ -651,6 +665,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ok: true,
         enabled: answerDraftOrchestrator !== undefined,
       },
+      agentExecutionLedger: getAgentExecutionLedgerStatus(agentExecutionLedgerRuntime),
       feishuGateway: getFeishuGatewayStatus(feishuGatewayStatus),
       memoryExtraction:
         memoryExtractionRuntime === undefined
@@ -1656,6 +1671,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       () => actionApprovalRuntime?.close(),
       () => knowledgeCardRuntime?.close(),
       () => knowledgeDraftRuntime?.close(),
+      () => agentExecutionLedgerRuntime?.close(),
       () => dependencies.closeRuntimeControl?.(),
     ]);
   });
@@ -1666,6 +1682,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     const cleanup = scheduleRuntimeStartupCleanup({
       app: startupApp,
       gateway: startupGateway,
+      agentExecutionLedgerRuntime,
       answerDraftRuntime,
       reindexWorkerRuntime,
       memoryExtractionRuntime,
@@ -1696,6 +1713,27 @@ function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
           degradedReason: enqueueFailuresPresentReason,
           latestEnqueueError: state.latestEnqueueError,
         }),
+  };
+}
+
+function getAgentExecutionLedgerStatus(
+  runtime: AgentExecutionLedgerRuntime | undefined,
+) {
+  if (runtime === undefined) {
+    return {
+      ok: true,
+      enabled: false,
+      writeFailureCount: 0,
+    };
+  }
+
+  const status = runtime.getStatus();
+  return {
+    ...status,
+    ok: status.writeFailureCount === 0,
+    ...(status.writeFailureCount === 0
+      ? {}
+      : { degradedReason: "agent_execution_ledger_write_failed" as const }),
   };
 }
 
@@ -1902,6 +1940,7 @@ async function closeRuntimeResources(
 function scheduleRuntimeStartupCleanup({
   app,
   gateway,
+  agentExecutionLedgerRuntime,
   answerDraftRuntime,
   reindexWorkerRuntime,
   memoryExtractionRuntime,
@@ -1918,6 +1957,7 @@ function scheduleRuntimeStartupCleanup({
 }: {
   app: Pick<FastifyInstance, "close"> | undefined;
   gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
+  agentExecutionLedgerRuntime: AgentExecutionLedgerRuntime | undefined;
   answerDraftRuntime: AnswerDraftRuntime | undefined;
   reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
   memoryExtractionRuntime: MemoryExtractionRuntime | undefined;
@@ -1947,6 +1987,7 @@ function scheduleRuntimeStartupCleanup({
     () => actionApprovalRuntime?.close(),
     () => knowledgeCardRuntime?.close(),
     () => knowledgeDraftRuntime?.close(),
+    () => agentExecutionLedgerRuntime?.close(),
     () => app?.close(),
   ]);
   void cleanup.catch(() => undefined);
