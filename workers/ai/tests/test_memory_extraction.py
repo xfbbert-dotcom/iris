@@ -593,6 +593,13 @@ def test_v2_prompt_names_chinese_thread_and_action_lifecycle_signals() -> None:
         assert phrase in V2_SYSTEM_INSTRUCTION
 
 
+def test_v2_prompt_forbids_reusing_unrelated_existing_actions() -> None:
+    from iris_worker.memory_extraction import V2_SYSTEM_INSTRUCTION
+
+    assert "Existing actions are candidates only when their thread topic and concrete task match" in V2_SYSTEM_INSTRUCTION
+    assert "create a new action bound to the current thread" in V2_SYSTEM_INSTRUCTION
+
+
 @pytest.mark.asyncio
 async def test_v2_service_requests_the_strict_response_contract_as_json_schema() -> None:
     from iris_worker.contracts import MemoryExtractionRequestV2
