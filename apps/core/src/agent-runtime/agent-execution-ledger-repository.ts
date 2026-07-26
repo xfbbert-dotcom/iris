@@ -376,10 +376,33 @@ async function lockOperation(
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
 }
 
-function operationFingerprint(value: unknown): string {
+function operationFingerprint(
+  value: ReturnType<typeof normalizeRecordEventInput>,
+): string {
+  const semantic: Record<string, unknown> = { ...value };
+  delete semantic.id;
+  delete semantic.at;
   return createHash("sha256")
-    .update(JSON.stringify(value, (_key, item) => item instanceof Date ? item.toISOString() : item))
+    .update(JSON.stringify(canonicalizeJson(semantic)))
     .digest("hex");
+}
+
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJson);
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, canonicalizeJson(item)]),
+  );
 }
 
 function requireRow<T>(value: T | undefined): T {

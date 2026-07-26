@@ -60,6 +60,54 @@ describe("agent execution ledger migration contract", () => {
   });
 });
 
+describe("PostgresAgentExecutionLedgerRepository replay semantics", () => {
+  it("treats row identity, observation time, and metadata key order as non-semantic", async () => {
+    const repository = createPostgresAgentExecutionLedgerRepository({
+      dataSource: createReplayDataSource(),
+    });
+    const original = eventInput("semantic-replay", {
+      operationKey: `ledger:${suffix}:semantic-replay`,
+      metadata: { route: "mention", attempt: 1 },
+    });
+
+    await expect(repository.recordEvent(original)).resolves.toMatchObject({
+      outcome: "applied",
+      event: { id: original.id },
+    });
+    await expect(repository.recordEvent({
+      ...original,
+      id: `semantic-replay-retry-${suffix}`,
+      at: new Date("2026-07-27T10:05:00.000Z"),
+      metadata: { attempt: 1, route: "mention" },
+    })).resolves.toMatchObject({
+      outcome: "already_applied",
+      event: {
+        id: original.id,
+        createdAt: original.at,
+      },
+    });
+  });
+
+  it("rejects replay when semantic outcome changes", async () => {
+    const repository = createPostgresAgentExecutionLedgerRepository({
+      dataSource: createReplayDataSource(),
+    });
+    const original = eventInput("semantic-conflict", {
+      operationKey: `ledger:${suffix}:semantic-conflict`,
+      outcome: "success",
+    });
+
+    await repository.recordEvent(original);
+
+    await expect(repository.recordEvent({
+      ...original,
+      id: `semantic-conflict-retry-${suffix}`,
+      at: new Date("2026-07-27T10:05:00.000Z"),
+      outcome: "error",
+    })).rejects.toBeInstanceOf(AgentExecutionLedgerOperationConflictError);
+  });
+});
+
 runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
   let adminPool: pg.Pool;
   let pool: pg.Pool;
@@ -159,4 +207,50 @@ function eventInput(
     at,
     ...overrides,
   };
+}
+
+function createReplayDataSource(): PostgresKnowledgeDraftDataSource {
+  let storedRow: Record<string, unknown> | undefined;
+  const query = async (sql: string, values: unknown[] = []) => {
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+    if (normalized.startsWith("select * from agent_execution_ledger_events")) {
+      return { rows: storedRow === undefined ? [] : [storedRow] };
+    }
+    if (normalized.startsWith("insert into agent_execution_ledger_events")) {
+      storedRow = {
+        id: values[0],
+        tenant_key: values[1],
+        group_id: values[2],
+        actor_open_id: values[3],
+        subject_type: values[4],
+        subject_id: values[5],
+        event_type: values[6],
+        phase: values[7],
+        tool_call_id: values[8],
+        tool_name: values[9],
+        model_id: values[10],
+        provider: values[11],
+        outcome: values[12],
+        decision_reason: values[13],
+        operation_key: values[14],
+        operation_fingerprint: values[15],
+        metadata: JSON.parse(String(values[16])) as Record<string, unknown>,
+        content_fingerprint: values[17],
+        duration_ms: values[18],
+        created_at: values[19],
+      };
+      return { rows: [storedRow] };
+    }
+    return { rows: [] };
+  };
+  const client = {
+    query,
+    release() {},
+  };
+  return {
+    query,
+    async connect() {
+      return client;
+    },
+  } as unknown as PostgresKnowledgeDraftDataSource;
 }
