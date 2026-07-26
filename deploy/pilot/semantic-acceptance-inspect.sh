@@ -129,7 +129,7 @@ async function assertQueuesAndDlqClear() {
     getJson("http://127.0.0.1:3000/internal/memory-extraction/status"),
     getJson("http://127.0.0.1:3000/internal/memory-extraction/dead-letters?limit=20"),
   ]);
-  const eventStatus = status.components?.events ?? {};
+  const eventStatus = status.components?.eventWorker ?? status.components?.events ?? {};
   const documentSync = status.components?.documentSync ?? {};
   const reindex = status.components?.reindex ?? {};
   const numericFields = {
