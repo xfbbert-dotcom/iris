@@ -6,10 +6,15 @@ env_file="${IRIS_PILOT_ENV_FILE:-$repo/.env.pilot}"
 compose_file="${IRIS_COMPOSE_FILE:-$repo/deploy/pilot/docker-compose.yml}"
 compose=(docker compose --env-file "$env_file" --file "$compose_file")
 
-"${compose[@]}" exec -T core node --input-type=module <<'NODE'
+expected_dlq_count="${IRIS_SEMANTIC_RECOVERY_EXPECTED_DLQ_COUNT:-6}"
+
+"${compose[@]}" exec -T \
+  -e IRIS_SEMANTIC_RECOVERY_EXPECTED_DLQ_COUNT="$expected_dlq_count" \
+  core node --input-type=module <<'NODE'
 const internalToken = requireNonEmptyEnv("IRIS_INTERNAL_API_TOKEN");
 const aiWorkerToken = requireNonEmptyEnv("IRIS_AI_WORKER_TOKEN");
 const aiWorkerBaseUrl = requireNonEmptyEnv("IRIS_AI_WORKER_BASE_URL").replace(/\/+$/u, "");
+const expectedDlqCount = readExpectedDlqCount(process.env.IRIS_SEMANTIC_RECOVERY_EXPECTED_DLQ_COUNT ?? "6");
 const headers = { authorization: `Bearer ${internalToken}` };
 
 const status = await getJson("http://127.0.0.1:3000/internal/status", headers);
@@ -107,9 +112,20 @@ function assertFailClosed({ status, runtime, extraction, dlq }) {
   for (const [name, value] of Object.entries(counts)) {
     if (value !== 0) throw new Error(`Memory extraction ${name} is not zero`);
   }
-  if (!Array.isArray(dlq.deadLetters) || dlq.deadLetters.length !== 6) {
-    throw new Error("Expected exactly six preserved semantic DLQ records before recovery probe");
+  if (!Array.isArray(dlq.deadLetters) || dlq.deadLetters.length !== expectedDlqCount) {
+    throw new Error(`Expected semantic DLQ count ${expectedDlqCount} before recovery probe`);
   }
+}
+
+function readExpectedDlqCount(raw) {
+  if (!/^[0-9]+$/u.test(raw)) {
+    throw new Error("IRIS_SEMANTIC_RECOVERY_EXPECTED_DLQ_COUNT must be decimal");
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 20) {
+    throw new Error("IRIS_SEMANTIC_RECOVERY_EXPECTED_DLQ_COUNT must be between 0 and 20");
+  }
+  return parsed;
 }
 
 function classifyProbeFailure(statusCode, body) {

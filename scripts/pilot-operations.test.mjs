@@ -242,17 +242,21 @@ test("pilot runbook documents bounded backup cleanup controls", () => {
 test("semantic recovery probe checks fail-closed state and never replays DLQ entries", () => {
   const script = readFileSync(semanticRecoveryProbePath, "utf8");
   assert.match(script, /docker compose --env-file/u);
-  assert.match(script, /exec -T core node --input-type=module/u);
+  assert.match(script, /exec -T\s+\\?\s+-e IRIS_SEMANTIC_RECOVERY_EXPECTED_DLQ_COUNT/u);
+  assert.match(script, /core node --input-type=module/u);
   assert.match(script, /\/internal\/status/u);
   assert.match(script, /\/internal\/runtime-control\/status/u);
   assert.match(script, /\/internal\/memory-extraction\/status/u);
   assert.match(script, /\/internal\/memory-extraction\/dead-letters\?limit=20/u);
+  assert.match(script, /IRIS_SEMANTIC_RECOVERY_EXPECTED_DLQ_COUNT/u);
+  assert.match(script, /expectedDlqCount/u);
   assert.match(script, /\/v1\/memory\/extract/u);
   assert.match(script, /schema_version: 2/u);
   assert.match(script, /globalEnabled !== false/u);
   assert.match(script, /desiredGlobalEnabled !== false/u);
   assert.match(script, /proactiveSpeech !== false/u);
-  assert.match(script, /dlq\.deadLetters\.length !== 6/u);
+  assert.match(script, /dlq\.deadLetters\.length !== expectedDlqCount/u);
+  assert.match(script, /Expected semantic DLQ count/u);
   assert.match(script, /classifyProbeFailure/u);
   assert.doesNotMatch(script, /\/replay/u);
   assert.doesNotMatch(script, /console\.log\(.*internalToken/u);
