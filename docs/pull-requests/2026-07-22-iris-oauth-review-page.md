@@ -68,3 +68,14 @@
 - No `action_executions` or `knowledge_publications` rows were created because `writeKnowledgeBase=false`; this PR still does not execute Feishu Wiki publication.
 - Final fail-closed state restored: `globalEnabled=false`, `desiredGlobalEnabled=false`, the three known groups disabled, `proactiveSpeech=false`, `writeKnowledgeBase=false`, `callExternalTools=false`.
 - Final queues/DLQs verified empty for event ingestion, document sync, reindex, knowledge cards, and action approval outbox.
+
+## Semantic Thread/Action Follow-up - 2026-07-26
+
+- Candidate SHA: `c2bd13ca0f959d83eb8a877948748183a150d736`.
+- PR #13 checks `Core` and `AI Worker` were both `SUCCESS` before deployment.
+- Running Core and AI Worker image tags matched the candidate SHA after deployment.
+- Fix added: V2 semantic extraction prompt now forbids reusing existing actions unless both the thread topic and concrete task match current evidence; otherwise it must create a new action bound to the current thread.
+- Local verification passed: `python -m pytest workers/ai/tests/test_memory_extraction.py -q` (`67 passed`), `node --test --test-concurrency=1 scripts/pilot-operations.test.mjs` (`25 passed`), and `npm run typecheck`.
+- Real internal replay remains blocked by provider availability: the Gamma internal acceptance replay created the first candidate thread, then the second model call failed with `upstream_status=503` and `classification=provider_unavailable`.
+- Fail-closed state was restored and verified after the blocked replay: `globalEnabled=false`, `desiredGlobalEnabled=false`, `proactiveSpeech=false`, Caddy inactive, Core/Postgres/Redis/AI Worker healthy, and memory DLQ empty.
+- Do not mark the semantic thread/action gate complete until Gemini is available and a fresh ordered replay passes the lifecycle/action inspector.
