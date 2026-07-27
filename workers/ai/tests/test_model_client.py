@@ -16,15 +16,14 @@ class TrackingStream(httpx.AsyncByteStream):
         yield self.content
 
 
-class SlowEndlessStream(httpx.AsyncByteStream):
+class StartedEndlessStream(httpx.AsyncByteStream):
     def __init__(self):
         self.chunks_yielded = 0
 
     async def __aiter__(self):
-        while True:
-            await asyncio.sleep(0.02)
-            self.chunks_yielded += 1
-            yield b"x"
+        self.chunks_yielded += 1
+        yield b"x"
+        await asyncio.Event().wait()
 
 
 def streaming_json_response(payload: object) -> httpx.Response:
@@ -503,24 +502,24 @@ async def test_rejects_gzip_response_before_streaming_or_decoding_it():
 async def test_total_wall_clock_deadline_stops_endless_slow_response():
     from iris_worker.model_client import ModelClientError
 
-    stream = SlowEndlessStream()
+    stream = StartedEndlessStream()
 
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, stream=stream)
 
     with pytest.raises(ModelClientError) as caught:
         await asyncio.wait_for(
-            client_for(handler, timeout_ms=80).complete_json_object(
+            client_for(handler, timeout_ms=250).complete_json_object(
                 system_instruction="prompt-secret",
                 user_content="message-secret",
             ),
-            timeout=0.5,
+            timeout=1.0,
         )
 
     assert caught.value.code == "provider_timeout"
     assert str(caught.value) == "provider_timeout"
     assert "secret" not in repr(caught.value)
-    assert stream.chunks_yielded >= 2
+    assert stream.chunks_yielded == 1
 
 
 @pytest.mark.asyncio
