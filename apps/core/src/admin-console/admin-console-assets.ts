@@ -269,7 +269,7 @@ export function renderAdminConsoleHtml(): string {
           <input id="proactive-candidate-limit" inputmode="numeric" placeholder="20">
         </label>
       </div>
-      <dl id="proactive-feedback-summary" class="compact-status"></dl>
+      <dl id="proactive-feedback-summary" class="proactive-feedback-summary"></dl>
       <div class="table-wrap">
         <table id="proactive-candidate-table">
           <thead>
@@ -719,6 +719,22 @@ td.source-title {
   margin-top: 12px;
 }
 
+.proactive-feedback-summary {
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.proactive-feedback-metric {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.proactive-feedback-summary.unavailable {
+  color: var(--muted);
+}
+
 #event-log {
   margin: 0;
   padding-left: 20px;
@@ -809,6 +825,7 @@ const capabilityLabels = {
 };
 
 let cachedStatus = undefined;
+let proactiveCandidateRefreshGeneration = 0;
 const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
 const userSubmittedDocumentPath = "/internal/document-sync/user-submitted-documents";
 const knowledgeDraftListBasePath = "/internal/knowledge-drafts?limit=20";
@@ -1290,21 +1307,42 @@ function renderProactiveFeedbackSummary(summary) {
   const helpfulRate = typeof summary?.helpfulRate === "number"
     ? (summary.helpfulRate * 100).toFixed(1) + "%"
     : "--";
-  renderDefinitionList(proactiveFeedbackSummary, [
-    ["Total feedback", summary?.totalCount ?? 0],
-    ["Helpful", summary?.helpfulCount ?? 0],
-    ["Irrelevant", summary?.irrelevantCount ?? 0],
+  proactiveFeedbackSummary.className = "proactive-feedback-summary" + (summary === undefined ? " unavailable" : "");
+  proactiveFeedbackSummary.replaceChildren();
+  for (const [label, value] of [
+    ["Total feedback", summary?.totalCount ?? "--"],
+    ["Helpful", summary?.helpfulCount ?? "--"],
+    ["Irrelevant", summary?.irrelevantCount ?? "--"],
     ["Helpful rate", helpfulRate],
-    ["Active suppressions", summary?.activeSuppressionCount ?? 0],
+    ["Active suppressions", summary?.activeSuppressionCount ?? "--"],
     ["Last feedback", summary?.lastFeedbackAt ?? "--"],
-  ]);
+  ]) {
+    const metric = document.createElement("div");
+    metric.className = "proactive-feedback-metric";
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = String(value);
+    metric.append(term, detail);
+    proactiveFeedbackSummary.append(metric);
+  }
 }
 
-async function refreshProactiveFeedbackSummary() {
-  const groupId = readProactiveGroupId();
-  if (groupId === undefined) return;
-  const body = await requestJson(proactiveCandidatePath(groupId, proactiveFeedbackSummarySuffix));
-  renderProactiveFeedbackSummary(body);
+function isCurrentProactiveCandidateRefresh(groupId, generation) {
+  return generation === proactiveCandidateRefreshGeneration && proactiveCandidateGroup.value.trim() === groupId;
+}
+
+async function refreshProactiveFeedbackSummary(groupId, generation) {
+  try {
+    const body = await requestJson(proactiveCandidatePath(groupId, proactiveFeedbackSummarySuffix));
+    if (!isCurrentProactiveCandidateRefresh(groupId, generation)) return;
+    renderProactiveFeedbackSummary(body);
+  } catch (error) {
+    if (!isCurrentProactiveCandidateRefresh(groupId, generation)) return;
+    renderProactiveFeedbackSummary(undefined);
+    setConnection("Refresh warning", "warn");
+    addEvent("Proactive feedback summary unavailable: " + error.message);
+  }
 }
 
 function renderProactiveCandidates(candidates) {
@@ -1370,9 +1408,13 @@ function renderProactiveCandidates(candidates) {
 async function refreshProactiveCandidates() {
   const groupId = readProactiveGroupId();
   if (groupId === undefined) return;
-  const candidateBody = await requestJson(proactiveCandidateListPath(groupId));
+  const generation = ++proactiveCandidateRefreshGeneration;
+  const candidateRefresh = requestJson(proactiveCandidateListPath(groupId));
+  const summaryRefresh = refreshProactiveFeedbackSummary(groupId, generation);
+  const candidateBody = await candidateRefresh;
+  if (!isCurrentProactiveCandidateRefresh(groupId, generation)) return;
   renderProactiveCandidates(candidateBody.candidates || []);
-  await refreshProactiveFeedbackSummary();
+  await summaryRefresh;
 }
 
 async function scanProactiveCandidates() {

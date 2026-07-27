@@ -299,6 +299,40 @@ describe("proactive signal API", () => {
     await app.close();
   });
 
+  it("returns an empty feedback summary without a rate or timestamp", async () => {
+    const repository = createRepository();
+    repository.getFeedbackSummary.mockResolvedValue({
+      groupId: "oc_pilot",
+      totalCount: 0,
+      helpfulCount: 0,
+      irrelevantCount: 0,
+      helpfulRate: null,
+      activeSuppressionCount: 0,
+    });
+    const app = createApp({
+      store: createStore(),
+      proactiveSignalRepository: repository as unknown as ProactiveSignalRepository,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/proactive-signals/groups/oc_pilot/feedback-summary",
+      headers: authorization,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      groupId: "oc_pilot",
+      totalCount: 0,
+      helpfulCount: 0,
+      irrelevantCount: 0,
+      helpfulRate: null,
+      activeSuppressionCount: 0,
+    });
+    await app.close();
+  });
+
   it("rejects unauthenticated and invalid feedback summary requests", async () => {
     const repository = createRepository();
     const app = createApp({
