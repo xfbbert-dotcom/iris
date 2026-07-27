@@ -85,6 +85,27 @@ describe("admin console assets", () => {
     expect(script).not.toContain("sendMessage");
   });
 
+  it("renders group-scoped proactive feedback aggregates without feedback details", () => {
+    const html = renderAdminConsoleHtml();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("proactive-feedback-summary");
+    expect(script).toContain("/feedback-summary");
+    expect(script).toContain("Total feedback");
+    expect(script).toContain("Helpful");
+    expect(script).toContain("Irrelevant");
+    expect(script).toContain("Helpful rate");
+    expect(script).toContain("Active suppressions");
+    expect(script).toContain("Last feedback");
+    expect(script).toContain("readProactiveGroupId");
+    expect(script).toContain("refreshProactiveFeedbackSummary");
+    expect(script).toContain("await refreshProactiveFeedbackSummary()");
+    expect(script).toContain("toFixed(1)");
+    expect(script).not.toContain("actorFingerprint");
+    expect(script).not.toContain("messageId");
+    expect(script).not.toContain("evidenceMessageIds");
+  });
+
   it("renders an internal MVP gate summary from existing status without mutating runtime", () => {
     const html = renderAdminConsoleHtml();
     const script = renderAdminConsoleScript();

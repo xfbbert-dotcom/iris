@@ -269,6 +269,7 @@ export function renderAdminConsoleHtml(): string {
           <input id="proactive-candidate-limit" inputmode="numeric" placeholder="20">
         </label>
       </div>
+      <dl id="proactive-feedback-summary" class="compact-status"></dl>
       <div class="table-wrap">
         <table id="proactive-candidate-table">
           <thead>
@@ -787,6 +788,7 @@ const proactiveCandidateGroup = document.getElementById("proactive-candidate-gro
 const proactiveCandidateLimit = document.getElementById("proactive-candidate-limit");
 const proactiveCandidateRows = document.getElementById("proactive-candidate-rows");
 const proactiveCandidateEmpty = document.getElementById("proactive-candidate-empty");
+const proactiveFeedbackSummary = document.getElementById("proactive-feedback-summary");
 const auditSummaryRefresh = document.getElementById("audit-summary-refresh");
 const auditSummaryType = document.getElementById("audit-summary-type");
 const auditSummaryDocument = document.getElementById("audit-summary-document");
@@ -815,6 +817,7 @@ const knowledgeDraftRejectPath = "/reject";
 const publicationQueueBasePath = "/internal/action-proposals?status=pending_approval,approved,executing,failed,reconciliation_required&limit=20";
 const proactiveSignalGroupBasePath = "/internal/proactive-signals/groups/";
 const proactiveCandidateListSuffix = "/candidates?limit=20";
+const proactiveFeedbackSummarySuffix = "/feedback-summary";
 const proactiveCandidateScanSuffix = "/scan";
 const proactiveCandidateDismissSuffix = "/dismiss";
 const proactiveCandidateApproveSuffix = "/approve-delivery";
@@ -1283,6 +1286,27 @@ function proactiveCandidateListPath(groupId) {
   return proactiveCandidatePath(groupId, "/candidates?limit=" + encodeURIComponent(limit));
 }
 
+function renderProactiveFeedbackSummary(summary) {
+  const helpfulRate = typeof summary?.helpfulRate === "number"
+    ? (summary.helpfulRate * 100).toFixed(1) + "%"
+    : "--";
+  renderDefinitionList(proactiveFeedbackSummary, [
+    ["Total feedback", summary?.totalCount ?? 0],
+    ["Helpful", summary?.helpfulCount ?? 0],
+    ["Irrelevant", summary?.irrelevantCount ?? 0],
+    ["Helpful rate", helpfulRate],
+    ["Active suppressions", summary?.activeSuppressionCount ?? 0],
+    ["Last feedback", summary?.lastFeedbackAt ?? "--"],
+  ]);
+}
+
+async function refreshProactiveFeedbackSummary() {
+  const groupId = readProactiveGroupId();
+  if (groupId === undefined) return;
+  const body = await requestJson(proactiveCandidatePath(groupId, proactiveFeedbackSummarySuffix));
+  renderProactiveFeedbackSummary(body);
+}
+
 function renderProactiveCandidates(candidates) {
   proactiveCandidateRows.replaceChildren();
   for (const candidate of candidates || []) {
@@ -1346,8 +1370,9 @@ function renderProactiveCandidates(candidates) {
 async function refreshProactiveCandidates() {
   const groupId = readProactiveGroupId();
   if (groupId === undefined) return;
-  const body = await requestJson(proactiveCandidateListPath(groupId));
-  renderProactiveCandidates(body.candidates || []);
+  const candidateBody = await requestJson(proactiveCandidateListPath(groupId));
+  renderProactiveCandidates(candidateBody.candidates || []);
+  await refreshProactiveFeedbackSummary();
 }
 
 async function scanProactiveCandidates() {

@@ -144,6 +144,35 @@ export function registerProactiveSignalApi(
     },
   );
 
+  app.get<{ Params: { groupId: string } }>(
+    "/internal/proactive-signals/groups/:groupId/feedback-summary",
+    async (request, reply) => {
+      if (!authenticationConfigured) return authenticationUnavailable(reply);
+      if (repository === undefined) {
+        return reply.code(503).send({ ok: false, error: "proactive_signal_repository_unavailable" });
+      }
+      const groupId = readBoundedId(request.params.groupId);
+      if (groupId === undefined) return invalidRequest(reply);
+      try {
+        const summary = await repository.getFeedbackSummary({ groupId, at: now() });
+        return {
+          ok: true,
+          groupId,
+          totalCount: summary.totalCount,
+          helpfulCount: summary.helpfulCount,
+          irrelevantCount: summary.irrelevantCount,
+          helpfulRate: summary.helpfulRate,
+          activeSuppressionCount: summary.activeSuppressionCount,
+          ...(summary.lastFeedbackAt === undefined
+            ? {}
+            : { lastFeedbackAt: summary.lastFeedbackAt.toISOString() }),
+        };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "proactive_signal_feedback_summary_failed" });
+      }
+    },
+  );
+
   app.post<{ Params: { groupId: string; idempotencyKey: string } }>(
     "/internal/proactive-signals/groups/:groupId/candidates/:idempotencyKey/dismiss",
     async (request, reply) => {

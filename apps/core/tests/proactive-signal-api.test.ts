@@ -256,7 +256,116 @@ describe("proactive signal API", () => {
     expect(response.json()).toEqual({ ok: true, status: "queued", deliveryId: "delivery-a" });
     await app.close();
   });
+
+  it("returns aggregate feedback effectiveness for an authenticated bounded group", async () => {
+    const repository = createRepository();
+    repository.getFeedbackSummary.mockResolvedValue({
+      groupId: "oc_pilot",
+      totalCount: 12,
+      helpfulCount: 9,
+      irrelevantCount: 3,
+      helpfulRate: 0.75,
+      activeSuppressionCount: 2,
+      lastFeedbackAt: new Date("2026-07-27T00:00:00.000Z"),
+    });
+    const now = () => new Date("2026-07-27T01:00:00.000Z");
+    const app = createApp({
+      store: createStore(),
+      proactiveSignalRepository: repository as unknown as ProactiveSignalRepository,
+      now,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/proactive-signals/groups/oc_pilot/feedback-summary",
+      headers: authorization,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.getFeedbackSummary).toHaveBeenCalledWith({
+      groupId: "oc_pilot",
+      at: now(),
+    });
+    expect(response.json()).toEqual({
+      ok: true,
+      groupId: "oc_pilot",
+      totalCount: 12,
+      helpfulCount: 9,
+      irrelevantCount: 3,
+      helpfulRate: 0.75,
+      activeSuppressionCount: 2,
+      lastFeedbackAt: "2026-07-27T00:00:00.000Z",
+    });
+    await app.close();
+  });
+
+  it("rejects unauthenticated and invalid feedback summary requests", async () => {
+    const repository = createRepository();
+    const app = createApp({
+      store: createStore(),
+      proactiveSignalRepository: repository as unknown as ProactiveSignalRepository,
+    });
+
+    const unauthenticated = await app.inject({
+      method: "GET",
+      url: "/internal/proactive-signals/groups/oc_pilot/feedback-summary",
+    });
+    const invalid = await app.inject({
+      method: "GET",
+      url: "/internal/proactive-signals/groups/%20/feedback-summary",
+      headers: authorization,
+    });
+
+    expect(unauthenticated.statusCode).toBe(401);
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(repository.getFeedbackSummary).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns stable feedback summary repository errors without leaking details", async () => {
+    const unavailableApp = createApp({ store: createStore() });
+    const unavailable = await unavailableApp.inject({
+      method: "GET",
+      url: "/internal/proactive-signals/groups/oc_pilot/feedback-summary",
+      headers: authorization,
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toEqual({ ok: false, error: "proactive_signal_repository_unavailable" });
+    await unavailableApp.close();
+
+    const repository = createRepository();
+    repository.getFeedbackSummary.mockRejectedValue(new Error("database password exposed"));
+    const failingApp = createApp({
+      store: createStore(),
+      proactiveSignalRepository: repository as unknown as ProactiveSignalRepository,
+    });
+    const failed = await failingApp.inject({
+      method: "GET",
+      url: "/internal/proactive-signals/groups/oc_pilot/feedback-summary",
+      headers: authorization,
+    });
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json()).toEqual({ ok: false, error: "proactive_signal_feedback_summary_failed" });
+    expect(failed.body).not.toContain("database password exposed");
+    await failingApp.close();
+  });
 });
+
+function createRepository() {
+  return {
+    recordCandidates: vi.fn<ProactiveSignalRepository["recordCandidates"]>(),
+    recordFeedback: vi.fn<ProactiveSignalRepository["recordFeedback"]>(),
+    getFeedbackSummary: vi.fn<ProactiveSignalRepository["getFeedbackSummary"]>(),
+    listPendingCandidates: vi.fn<ProactiveSignalRepository["listPendingCandidates"]>().mockResolvedValue([]),
+    dismissCandidate: vi.fn<ProactiveSignalRepository["dismissCandidate"]>().mockResolvedValue({
+      status: "not_found",
+    }),
+    approveCandidateForDelivery: vi.fn<ProactiveSignalRepository["approveCandidateForDelivery"]>().mockResolvedValue({
+      status: "not_found",
+    }),
+  };
+}
 
 function createApp({
   store,
