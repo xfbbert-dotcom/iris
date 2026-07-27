@@ -129,6 +129,7 @@ describe("memory extraction internal API", () => {
       "audit",
       "runtimeControl",
       "answerDraft",
+      "agentExecutionLedger",
       "feishuGateway",
       "memoryExtraction",
       "eventWorker",
@@ -138,12 +139,13 @@ describe("memory extraction internal API", () => {
       "proactiveSignals",
     ]);
     expect(consolidated.json().summary).toMatchObject({
-      componentCount: 10,
+      componentCount: 11,
       healthyComponentCount: 3,
       enabledComponentCount: 3,
-      disabledComponentCount: 7,
+      disabledComponentCount: 8,
       disabledComponents: [
         "answerDraft",
+        "agentExecutionLedger",
         "memoryExtraction",
         "eventWorker",
         "documentSync",
@@ -153,7 +155,7 @@ describe("memory extraction internal API", () => {
       ],
       componentStatusCounts: {
         healthy: 3,
-        disabled: 7,
+        disabled: 8,
         degraded: 0,
         stopped: 0,
       },
