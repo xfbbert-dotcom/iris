@@ -26,6 +26,7 @@ describe("knowledge card contracts", () => {
     expect(APPROVAL_INTERACTION_KINDS).toEqual([
       "knowledge_draft_confirmation",
       "action_proposal_approval",
+      "proactive_signal_feedback",
     ]);
     expect(KNOWLEDGE_CARD_PRESENTATION_STATES).toEqual([
       "pending_send",
