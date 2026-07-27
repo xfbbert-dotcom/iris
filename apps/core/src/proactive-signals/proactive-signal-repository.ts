@@ -7,7 +7,25 @@ import { createPostgresPool } from "../database/postgres.js";
 export type ProactiveSignalRecordResult = {
   recordedCount: number;
   existingCount: number;
+  suppressedCount?: number;
   recordedKeys: string[];
+};
+
+export type ProactiveSignalFeedback = "helpful" | "irrelevant";
+
+export type ProactiveSignalFeedbackResult =
+  | { status: "applied" }
+  | { status: "already_applied" }
+  | { status: "stale_binding" };
+
+export type ProactiveSignalFeedbackSummary = {
+  groupId: string;
+  totalCount: number;
+  helpfulCount: number;
+  irrelevantCount: number;
+  helpfulRate: number | null;
+  activeSuppressionCount: number;
+  lastFeedbackAt?: Date;
 };
 
 export type PersistedProactiveSignalCandidate = {
@@ -54,6 +72,22 @@ export type ProactiveSignalRepository = {
     signals: ProactiveSignalCandidate[];
     now: Date;
   }): Promise<ProactiveSignalRecordResult>;
+  recordFeedback(input: {
+    idempotencyKey: string;
+    deliveryId: string;
+    candidateIdempotencyKey: string;
+    groupId: string;
+    messageId?: string;
+    entityVersion: number;
+    actorFingerprint: string;
+    feedback: ProactiveSignalFeedback;
+    suppressUntil: Date;
+    at: Date;
+  }): Promise<ProactiveSignalFeedbackResult>;
+  getFeedbackSummary(input: {
+    groupId: string;
+    at: Date;
+  }): Promise<ProactiveSignalFeedbackSummary>;
   listPendingCandidates(input: {
     groupId: string;
     limit: number;
@@ -137,6 +171,12 @@ export function createPostgresProactiveSignalRepository({
     recordCandidates(input) {
       return recordCandidates(dataSource, input);
     },
+    recordFeedback(input) {
+      return recordFeedback(dataSource, input);
+    },
+    getFeedbackSummary(input) {
+      return getFeedbackSummary(dataSource, input);
+    },
     listPendingCandidates(input) {
       return listPendingCandidates(dataSource, input);
     },
@@ -210,6 +250,174 @@ async function listPendingCandidates(
     [groupId, limit],
   );
   return result.rows.map(mapCandidateRow);
+}
+
+async function recordFeedback(
+  dataSource: ProactiveSignalDataSource,
+  input: {
+    idempotencyKey: string;
+    deliveryId: string;
+    candidateIdempotencyKey: string;
+    groupId: string;
+    messageId?: string;
+    entityVersion: number;
+    actorFingerprint: string;
+    feedback: ProactiveSignalFeedback;
+    suppressUntil: Date;
+    at: Date;
+  },
+): Promise<ProactiveSignalFeedbackResult> {
+  const idempotencyKey = requireBoundedString("idempotencyKey", input.idempotencyKey);
+  const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
+  const candidateIdempotencyKey = requireBoundedString("candidateIdempotencyKey", input.candidateIdempotencyKey);
+  const groupId = requireBoundedString("groupId", input.groupId);
+  const messageId = input.messageId === undefined ? undefined : requireBoundedString("messageId", input.messageId);
+  const entityVersion = requireVersion(input.entityVersion);
+  const actorFingerprint = requireActorFingerprint(input.actorFingerprint);
+  const feedback = requireFeedback(input.feedback);
+  const suppressUntil = requireDate(input.suppressUntil, "suppressUntil");
+  const at = requireDate(input.at, "at");
+
+  const client = await dataSource.connect();
+  try {
+    await client.query("begin");
+    const binding = await client.query<{ kind: unknown; entity_id: unknown }>(
+      `
+      SELECT candidate.kind, candidate.entity_id
+      FROM proactive_signal_delivery_outbox delivery
+      JOIN proactive_signal_candidates candidate
+        ON candidate.idempotency_key = delivery.candidate_idempotency_key
+       AND candidate.group_id = delivery.group_id
+      WHERE delivery.id = $1
+        AND delivery.candidate_idempotency_key = $2
+        AND delivery.group_id = $3
+        AND ($4::text IS NULL OR delivery.sent_message_id = $4)
+        AND candidate.entity_version = $5
+        AND delivery.status = 'sent'
+      LIMIT 1
+      FOR KEY SHARE OF delivery
+      `,
+      [deliveryId, candidateIdempotencyKey, groupId, messageId, entityVersion],
+    );
+    if (binding.rows.length === 0) {
+      await client.query("commit");
+      return { status: "stale_binding" };
+    }
+
+    const inserted = await client.query<{ idempotency_key: unknown }>(
+      `
+      INSERT INTO proactive_signal_feedback_events (
+        idempotency_key, delivery_id, candidate_idempotency_key, group_id, message_id,
+        entity_version, actor_fingerprint, feedback, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT DO NOTHING
+      RETURNING idempotency_key
+      `,
+      [
+        idempotencyKey,
+        deliveryId,
+        candidateIdempotencyKey,
+        groupId,
+        messageId,
+        entityVersion,
+        actorFingerprint,
+        feedback,
+        at,
+      ],
+    );
+    if (inserted.rows.length === 0) {
+      const existing = await client.query<{ idempotency_key: unknown }>(
+        `
+        SELECT idempotency_key
+        FROM proactive_signal_feedback_events
+        WHERE delivery_id = $1
+          AND actor_fingerprint = $2
+        LIMIT 1
+        `,
+        [deliveryId, actorFingerprint],
+      );
+      await client.query("commit");
+      return existing.rows.length > 0 ? { status: "already_applied" } : { status: "stale_binding" };
+    }
+
+    if (feedback === "irrelevant") {
+      const bound = binding.rows[0];
+      await client.query(
+        `
+        INSERT INTO proactive_signal_suppressions (
+          group_id, kind, entity_id, suppress_until, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $5)
+        ON CONFLICT (group_id, kind, entity_id)
+        DO UPDATE SET
+          suppress_until = GREATEST(proactive_signal_suppressions.suppress_until, EXCLUDED.suppress_until),
+          updated_at = EXCLUDED.updated_at
+        `,
+        [
+          groupId,
+          requireSignalKind(bound?.kind),
+          requireBoundedString("entityId", bound?.entity_id),
+          suppressUntil,
+          at,
+        ],
+      );
+    }
+    await client.query("commit");
+    return { status: "applied" };
+  } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch {
+      // Preserve the original write failure.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function getFeedbackSummary(
+  queryable: Queryable,
+  input: { groupId: string; at: Date },
+): Promise<ProactiveSignalFeedbackSummary> {
+  const groupId = requireBoundedString("groupId", input.groupId);
+  const at = requireDate(input.at, "at");
+  const result = await queryable.query<Record<string, unknown>>(
+    `
+    SELECT
+      COUNT(feedback.idempotency_key) AS total_count,
+      COUNT(feedback.idempotency_key) FILTER (WHERE feedback.feedback = 'helpful') AS helpful_count,
+      COUNT(feedback.idempotency_key) FILTER (WHERE feedback.feedback = 'irrelevant') AS irrelevant_count,
+      MAX(feedback.created_at) AS last_feedback_at,
+      (
+        SELECT COUNT(*)
+        FROM proactive_signal_suppressions suppression
+        WHERE suppression.group_id = $1
+          AND suppression.suppress_until > $2
+      ) AS active_suppression_count
+    FROM proactive_signal_feedback_events feedback
+    WHERE feedback.group_id = $1
+    `,
+    [groupId, at],
+  );
+  const row = result.rows[0] ?? {};
+  const totalCount = requireNonNegativeInteger(row.total_count ?? 0, "totalCount");
+  const helpfulCount = requireNonNegativeInteger(row.helpful_count ?? 0, "helpfulCount");
+  const irrelevantCount = requireNonNegativeInteger(row.irrelevant_count ?? 0, "irrelevantCount");
+  const activeSuppressionCount = requireNonNegativeInteger(row.active_suppression_count ?? 0, "activeSuppressionCount");
+  const lastFeedbackAt = row.last_feedback_at === null || row.last_feedback_at === undefined
+    ? undefined
+    : requireDateValue(row.last_feedback_at, "lastFeedbackAt");
+  return {
+    groupId,
+    totalCount,
+    helpfulCount,
+    irrelevantCount,
+    helpfulRate: totalCount === 0 ? null : helpfulCount / totalCount,
+    activeSuppressionCount,
+    ...(lastFeedbackAt === undefined ? {} : { lastFeedbackAt }),
+  };
 }
 
 async function claimProactiveSignalDelivery(
@@ -549,14 +757,18 @@ async function recordCandidates(
   const signals = normalizeSignals(input.signals);
   const now = requireDate(input.now, "now");
   if (signals.length === 0) {
-    return { recordedCount: 0, existingCount: 0, recordedKeys: [] };
+    return { recordedCount: 0, existingCount: 0, suppressedCount: 0, recordedKeys: [] };
   }
 
   const client = await dataSource.connect();
   try {
     await client.query("begin");
     const inserted = await insertCandidates(client, signals, now);
-    const recordedKeys = inserted.rows.map((row) => requireBoundedString("idempotency_key", row.idempotency_key));
+    const recordedKeys = inserted.rows
+      .filter((row) => requireCandidateRecordOutcome(row.outcome) === "recorded")
+      .map((row) => requireBoundedString("idempotency_key", row.idempotency_key));
+    const existingCount = inserted.rows.filter((row) => requireCandidateRecordOutcome(row.outcome) === "existing").length;
+    const suppressedCount = inserted.rows.filter((row) => requireCandidateRecordOutcome(row.outcome) === "suppressed").length;
     if (recordedKeys.length > 0) {
       await insertCandidateEvidence(client, signals.filter((signal) => recordedKeys.includes(signal.idempotencyKey)), now);
       await insertCandidateEvents(client, signals.filter((signal) => recordedKeys.includes(signal.idempotencyKey)), now);
@@ -564,7 +776,8 @@ async function recordCandidates(
     await client.query("commit");
     return {
       recordedCount: recordedKeys.length,
-      existingCount: signals.length - recordedKeys.length,
+      existingCount,
+      suppressedCount,
       recordedKeys,
     };
   } catch (error) {
@@ -601,16 +814,52 @@ function insertCandidates(client: Queryable, signals: ProactiveSignalCandidate[]
     return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, $${offset + 11}, $${offset + 12}, $${offset + 13})`;
   });
 
-  return client.query<{ idempotency_key: unknown }>(
+  values.push(now);
+  return client.query<{ idempotency_key: unknown; outcome: unknown }>(
     `
-    INSERT INTO proactive_signal_candidates (
+    WITH incoming (
       idempotency_key, group_id, kind, priority, entity_type, entity_id,
       entity_version, reason_code, suggested_mode, status, last_relevant_at,
       created_at, updated_at
+    ) AS (
+      VALUES ${rows.join(", ")}
+    ), allowed AS (
+      SELECT incoming.*
+      FROM incoming
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM proactive_signal_suppressions suppression
+        WHERE suppression.group_id = incoming.group_id
+          AND suppression.kind = incoming.kind
+          AND suppression.entity_id = incoming.entity_id
+          AND suppression.suppress_until > $${values.length}
+      )
+    ), inserted AS (
+      INSERT INTO proactive_signal_candidates (
+        idempotency_key, group_id, kind, priority, entity_type, entity_id,
+        entity_version, reason_code, suggested_mode, status, last_relevant_at,
+        created_at, updated_at
+      )
+      SELECT
+        idempotency_key, group_id, kind, priority, entity_type, entity_id,
+        entity_version, reason_code, suggested_mode, status, last_relevant_at,
+        created_at, updated_at
+      FROM allowed
+      ON CONFLICT (idempotency_key) DO NOTHING
+      RETURNING idempotency_key
     )
-    VALUES ${rows.join(", ")}
-    ON CONFLICT (idempotency_key) DO NOTHING
-    RETURNING idempotency_key
+    SELECT incoming.idempotency_key,
+      CASE
+        WHEN EXISTS (
+          SELECT 1 FROM inserted WHERE inserted.idempotency_key = incoming.idempotency_key
+        ) THEN 'recorded'
+        WHEN EXISTS (
+          SELECT 1 FROM allowed WHERE allowed.idempotency_key = incoming.idempotency_key
+        ) THEN 'existing'
+        ELSE 'suppressed'
+      END AS outcome
+    FROM incoming
+    ORDER BY incoming.idempotency_key ASC
     `,
     values,
   );
@@ -779,6 +1028,18 @@ function requireVersion(value: unknown): number {
   return Number(parsed);
 }
 
+function requireActorFingerprint(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new Error("actorFingerprint is invalid");
+  }
+  return value;
+}
+
+function requireFeedback(value: unknown): ProactiveSignalFeedback {
+  if (value === "helpful" || value === "irrelevant") return value;
+  throw new Error("feedback is invalid");
+}
+
 function requireDate(value: Date, label: string): Date {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) throw new Error(`${label} is invalid`);
@@ -850,6 +1111,11 @@ function requireNonNegativeInteger(value: unknown, label: string): number {
   const parsed = typeof value === "string" ? Number(value) : value;
   if (!Number.isSafeInteger(parsed) || Number(parsed) < 0) throw new Error(`${label} is invalid`);
   return Number(parsed);
+}
+
+function requireCandidateRecordOutcome(value: unknown): "recorded" | "existing" | "suppressed" {
+  if (value === "recorded" || value === "existing" || value === "suppressed") return value;
+  throw new Error("candidate record outcome is invalid");
 }
 
 function buildDeliveryId(idempotencyKey: string): string {

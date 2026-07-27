@@ -6,11 +6,27 @@ import { describe, expect, it, vi } from "vitest";
 import { defaultMigrationsDir } from "../src/database/migrate.js";
 import {
   createPostgresProactiveSignalRepository,
+  type ProactiveSignalFeedback,
   type ProactiveSignalDataSource,
 } from "../src/proactive-signals/proactive-signal-repository.js";
 import type { ProactiveSignalCandidate } from "../src/proactive-signals/proactive-signal-planner.js";
 
 describe("proactive signal persistence", () => {
+  it("defines immutable feedback events and mutable suppression projections", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0040_proactive_signal_feedback.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table proactive_signal_feedback_events");
+    expect(normalized).toContain("create table proactive_signal_suppressions");
+    expect(normalized).toContain("unique (delivery_id, actor_fingerprint)");
+    expect(normalized).toContain("check (feedback in ('helpful', 'irrelevant'))");
+    expect(normalized).toContain("proactive_signal_feedback_events_append_only");
+    expect(normalized).toContain("proactive_signal_feedback_events_truncate_guard");
+  });
+
   it("defines version-bound candidate facts, evidence, events, and append-only event guards", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0037_proactive_signal_candidates.sql"),
@@ -48,9 +64,120 @@ describe("proactive signal persistence", () => {
     expect(normalized).not.toMatch(/message_body|raw_(message|payload|response)|card_json/u);
   });
 
+  it("records feedback transactionally against an exact sent delivery binding", async () => {
+    const client = createClient([
+      { rows: [{ kind: "quiet_open_thread", entity_id: "thread-a" }] },
+      { rows: [{ idempotency_key: "feishu-card:cli:event-1" }] },
+      { rows: [] },
+    ]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.recordFeedback(feedback())).resolves.toEqual({ status: "applied" });
+
+    expect(client.query).toHaveBeenCalledWith("begin");
+    expect(client.query).toHaveBeenCalledWith("commit");
+    const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("from proactive_signal_delivery_outbox delivery");
+    expect(sql).toContain("delivery.status = 'sent'");
+    expect(sql).toContain("delivery.candidate_idempotency_key = $2");
+    expect(sql).toContain("candidate.entity_version = $5");
+    expect(sql).toContain("insert into proactive_signal_feedback_events");
+    expect(sql).toContain("on conflict do nothing");
+    expect(sql).toContain("insert into proactive_signal_suppressions");
+    expect(sql).not.toContain("message body");
+  });
+
+  it("treats duplicate feedback as already applied only after the sent binding matches", async () => {
+    const client = createClient([
+      { rows: [{ kind: "quiet_open_thread", entity_id: "thread-a" }] },
+      { rows: [] },
+      { rows: [{ idempotency_key: "feishu-card:cli:event-1" }] },
+    ]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.recordFeedback(feedback())).resolves.toEqual({ status: "already_applied" });
+    expect(client.query.mock.calls.map(([statement]) => statement)).toContain("commit");
+  });
+
+  it("fails closed when feedback does not match a sent delivery binding", async () => {
+    const client = createClient([{ rows: [] }]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.recordFeedback(feedback())).resolves.toEqual({ status: "stale_binding" });
+    const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).not.toContain("insert into proactive_signal_feedback_events");
+  });
+
+  it("does not create suppressions for helpful feedback and validates actor fingerprints", async () => {
+    const client = createClient([
+      { rows: [{ kind: "quiet_open_thread", entity_id: "thread-a" }] },
+      { rows: [{ idempotency_key: "feishu-card:cli:event-1" }] },
+    ]);
+    const connect = vi.fn(async () => client);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: { connect, query: vi.fn() } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.recordFeedback(feedback({ feedback: "helpful" }))).resolves.toEqual({ status: "applied" });
+    const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).not.toContain("insert into proactive_signal_suppressions");
+    await expect(repository.recordFeedback(feedback({ actorFingerprint: "A".repeat(64) }))).rejects.toThrow(
+      "actorFingerprint is invalid",
+    );
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("summarizes feedback by group without selecting actor fingerprints", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [{
+        total_count: "3",
+        helpful_count: "1",
+        irrelevant_count: "2",
+        active_suppression_count: "1",
+        last_feedback_at: new Date("2026-07-27T00:00:00.000Z"),
+      }] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.getFeedbackSummary({
+      groupId: "group-a",
+      at: new Date("2026-07-27T01:00:00.000Z"),
+    })).resolves.toEqual({
+      groupId: "group-a",
+      totalCount: 3,
+      helpfulCount: 1,
+      irrelevantCount: 2,
+      helpfulRate: 1 / 3,
+      activeSuppressionCount: 1,
+      lastFeedbackAt: new Date("2026-07-27T00:00:00.000Z"),
+    });
+    const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("feedback.group_id = $1");
+    expect(sql).toContain("suppression.suppress_until > $2");
+    expect(sql).not.toContain("actor_fingerprint");
+  });
+
   it("records only new version-bound candidates and creates append-only creation events", async () => {
     const client = createClient([
-      { rows: [{ idempotency_key: "quiet_open_thread:thread-a:1" }] },
+      { rows: [{ idempotency_key: "quiet_open_thread:thread-a:1", outcome: "recorded" }] },
       { rows: [] },
       { rows: [] },
     ]);
@@ -70,6 +197,7 @@ describe("proactive signal persistence", () => {
     expect(result).toEqual({
       recordedCount: 1,
       existingCount: 0,
+      suppressedCount: 0,
       recordedKeys: ["quiet_open_thread:thread-a:1"],
     });
     expect(client.query).toHaveBeenCalledWith("begin");
@@ -84,8 +212,8 @@ describe("proactive signal persistence", () => {
 
   it("uses non-overlapping SQL placeholders when recording multiple new candidates", async () => {
     const client = createClient([{ rows: [
-      { idempotency_key: "quiet_open_thread:thread-a:1" },
-      { idempotency_key: "overdue_action:action-a:1" },
+      { idempotency_key: "quiet_open_thread:thread-a:1", outcome: "recorded" },
+      { idempotency_key: "overdue_action:action-a:1", outcome: "recorded" },
     ] }, { rows: [] }, { rows: [] }]);
     const repository = createPostgresProactiveSignalRepository({
       dataSource: {
@@ -118,7 +246,10 @@ describe("proactive signal persistence", () => {
   });
 
   it("reports existing candidates without duplicating evidence or events", async () => {
-    const client = createClient([{ rows: [] }]);
+    const client = createClient([{ rows: [{
+      idempotency_key: "overdue_action:action-a:2",
+      outcome: "existing",
+    }] }]);
     const repository = createPostgresProactiveSignalRepository({
       dataSource: {
         connect: vi.fn(async () => client),
@@ -134,9 +265,33 @@ describe("proactive signal persistence", () => {
     expect(result).toEqual({
       recordedCount: 0,
       existingCount: 1,
+      suppressedCount: 0,
       recordedKeys: [],
     });
     expect(client.query.mock.calls).toHaveLength(3);
+  });
+
+  it("excludes candidates with active database suppressions and reports them separately", async () => {
+    const client = createClient([{ rows: [{ idempotency_key: "quiet_open_thread:thread-a:1", outcome: "suppressed" }] }]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.recordCandidates({
+      signals: [signal()],
+      now: new Date("2026-07-27T00:00:00.000Z"),
+    })).resolves.toEqual({
+      recordedCount: 0,
+      existingCount: 0,
+      suppressedCount: 1,
+      recordedKeys: [],
+    });
+    const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("from proactive_signal_suppressions");
+    expect(sql).toContain("suppression.suppress_until > $");
   });
 
   it("lists pending candidates for one group without selecting raw message content", async () => {
@@ -403,6 +558,24 @@ function signal(overrides: Partial<ProactiveSignalCandidate> = {}): ProactiveSig
     suggestedMode: "ask_for_thread_update",
     lastRelevantAt: new Date("2026-07-23T08:00:00.000Z"),
     evidenceMessageIds: ["message-a", "message-b"],
+    ...overrides,
+  };
+}
+
+function feedback(
+  overrides: Partial<Parameters<ReturnType<typeof createPostgresProactiveSignalRepository>["recordFeedback"]>[0]> = {},
+): Parameters<ReturnType<typeof createPostgresProactiveSignalRepository>["recordFeedback"]>[0] {
+  return {
+    idempotencyKey: "feishu-card:cli:event-1",
+    deliveryId: "delivery-1",
+    candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+    groupId: "oc_pilot",
+    messageId: "om_card",
+    entityVersion: 2,
+    actorFingerprint: "a".repeat(64),
+    feedback: "irrelevant" as ProactiveSignalFeedback,
+    suppressUntil: new Date("2026-08-26T00:00:00.000Z"),
+    at: new Date("2026-07-27T00:00:00.000Z"),
     ...overrides,
   };
 }
