@@ -68,6 +68,7 @@ Never expose these endpoints directly to the public internet:
 - `/internal/memory-extraction/*`
 - `/internal/conversation-state/*`
 - `/internal/audit/*`
+- `/internal/agent-executions`
 - `/internal/answer-drafts`
 
 Every `/internal/*` request must include:
@@ -246,6 +247,11 @@ docker compose \
   --file deploy/pilot/docker-compose.yml \
   ps
 ```
+
+Migration `0039_agent_execution_ledger.sql` creates the append-only execution ledger. The migration
+job must apply it successfully before `IRIS_AGENT_EXECUTION_LEDGER_ENABLED=true` is used. Shipping
+the migration does not enable collection: activation is a separate fail-closed rollout step that
+must begin with Caddy stopped, Iris globally disabled, and private health and queue checks passing.
 
 The runtime-control probe must exit `0` before Caddy starts. Required state after Caddy starts:
 
@@ -693,6 +699,65 @@ Important status rules:
 - Disabled components are expected when the corresponding runtime is intentionally off.
 - `components.runtimeControl` mirrors the current global runtime gate. If its status is
   `"disabled"`, Iris is globally off even if worker processes are still reachable.
+
+## Agent Execution Ledger
+
+The execution ledger is disabled by default:
+
+```powershell
+$env:IRIS_AGENT_EXECUTION_LEDGER_ENABLED="false"
+```
+
+When enabled after migration `0039`, it records append-only lifecycle evidence for answer turns,
+provider calls, live permission decisions, approval actions, knowledge publication, and proactive
+delivery. Observer writes are best effort: a ledger outage must not change the authoritative
+answer, permission, approval, publication, or delivery result.
+
+Enable it only as a separate private rollout:
+
+1. Keep Caddy stopped and set global runtime control to disabled.
+2. Verify Core, Postgres, Redis, and enabled workers are healthy and all pending/DLQ counts are zero.
+3. Confirm `0039_agent_execution_ledger.sql` is present in `schema_migrations`.
+4. Set `IRIS_AGENT_EXECUTION_LEDGER_ENABLED=true`, recreate only Core, and re-check private status.
+5. Exercise one bounded internal case and inspect the ledger before restoring any public ingress.
+
+Do not enable Iris or Caddy merely because ledger startup succeeds. Restore ingress and runtime
+capabilities only through their existing acceptance gates.
+
+Query recent events for one group:
+
+```powershell
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/agent-executions?groupId=oc_group_id&limit=20"
+```
+
+Query the ordered lifecycle of one answer turn:
+
+```powershell
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/agent-executions?subjectType=turn&subjectId=om_message_id&limit=20"
+```
+
+Query one tool call:
+
+```powershell
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/agent-executions?toolCallId=delivery_id&limit=20"
+```
+
+`subjectType` and `subjectId` must be supplied together. `limit` defaults to `50` and must be from
+`1` through `100`. When the ledger is disabled, the route returns `404` with
+`agent_execution_ledger_unavailable`.
+
+The ledger is deliberately content-free. It may contain bounded identifiers, event type, phase,
+tool/model/provider names, outcome, stable decision codes, duration, content fingerprints, and
+small allowlisted metadata. It must never contain chat text, prompts, model responses, document or
+memory bodies, approval/revision comments, Feishu card JSON, credentials, access tokens, or raw
+provider error bodies. Use the source systems and governed facts for content inspection; do not
+expand this ledger into a transcript store.
 
 ## Runtime Control
 
