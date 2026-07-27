@@ -290,7 +290,9 @@ function describeActionShape(body: unknown): FeishuCardActionShapeDiagnostic {
     hostImMessage: event?.host === "im_message",
     actionTagButton: action?.tag === "button",
     callbackKindRecognized:
-      callbackKind === "knowledge_draft_confirmation" || callbackKind === "action_proposal_approval",
+      callbackKind === "knowledge_draft_confirmation" ||
+      callbackKind === "action_proposal_approval" ||
+      callbackKind === "proactive_signal_feedback",
     callbackActionRecognized: isRecognizedDiagnosticAction(callbackKind, callbackAction),
     nameMatchesCallbackAction:
       typeof action?.name === "string" && action.name === callbackAction,
@@ -308,6 +310,9 @@ function isRecognizedDiagnosticAction(kind: unknown, action: unknown): boolean {
   if (kind === "action_proposal_approval") {
     return action === "approve" || action === "request_revision" || action === "reject";
   }
+  if (kind === "proactive_signal_feedback") {
+    return action === "helpful" || action === "irrelevant";
+  }
   return false;
 }
 
@@ -317,6 +322,9 @@ function hasValidDiagnosticIdentifiers(value: Record<string, unknown> | undefine
   }
   if (value?.kind === "action_proposal_approval") {
     return [value.presentationId, value.proposalId, value.requirementId].every(isDiagnosticReference);
+  }
+  if (value?.kind === "proactive_signal_feedback") {
+    return [value.deliveryId, value.candidateIdempotencyKey].every(isDiagnosticReference);
   }
   return false;
 }
@@ -332,6 +340,9 @@ function hasCanonicalDiagnosticVersions(value: Record<string, unknown> | undefin
       value.subjectVersion,
       value.targetPolicyVersion,
     ].every(isCanonicalPositiveIntegerString);
+  }
+  if (value?.kind === "proactive_signal_feedback") {
+    return isCanonicalPositiveIntegerString(value.entityVersion);
   }
   return false;
 }
@@ -406,7 +417,9 @@ async function createJob(
     actorOpenId: action.actorOpenId,
     chatId: action.chatId,
     ...(action.messageId === undefined ? {} : { messageId: action.messageId }),
-    presentationId: action.presentationId,
+    presentationId: action.kind === "proactive_signal_feedback"
+      ? action.deliveryId
+      : action.presentationId,
     action: action.action,
   };
   let interaction: ApprovalInteractionIntentIdentity;
@@ -418,7 +431,7 @@ async function createJob(
       revisionNumber: action.revisionNumber,
       draftVersion: action.draftVersion,
     });
-  } else {
+  } else if (action.kind === "action_proposal_approval") {
     interaction = normalizeApprovalInteractionIntentIdentity({
       ...common,
       kind: action.kind,
@@ -428,6 +441,14 @@ async function createJob(
       subjectRevision: action.subjectRevision,
       subjectVersion: action.subjectVersion,
       targetPolicyVersion: action.targetPolicyVersion,
+    });
+  } else {
+    interaction = normalizeApprovalInteractionIntentIdentity({
+      ...common,
+      kind: action.kind,
+      deliveryId: action.deliveryId,
+      candidateIdempotencyKey: action.candidateIdempotencyKey,
+      entityVersion: action.entityVersion,
     });
   }
   if (action.reason === undefined) {

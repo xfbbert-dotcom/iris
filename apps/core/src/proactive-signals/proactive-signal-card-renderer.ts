@@ -16,7 +16,7 @@ export type ProactiveSignalCardRenderResult = {
 export function renderProactiveSignalCard(
   input: ProactiveSignalCardRenderInput,
 ): ProactiveSignalCardRenderResult {
-  const { candidate } = input.context;
+  const { delivery, candidate } = input.context;
   let componentCount = 0;
   const component = <T extends Record<string, unknown>>(value: T): T => {
     componentCount += 1;
@@ -29,6 +29,31 @@ export function renderProactiveSignalCard(
     ? "Please share the latest status when convenient."
     : "Please share whether this thread still needs follow-up.";
   const evidenceCount = candidate.evidenceMessageIds.length;
+  const feedbackCallbackValue = (action: "helpful" | "irrelevant") => ({
+    kind: "proactive_signal_feedback",
+    action,
+    deliveryId: delivery.id,
+    candidateIdempotencyKey: candidate.idempotencyKey,
+    entityVersion: String(candidate.entityVersion),
+  });
+  const feedbackElements = [
+    component({
+      tag: "button",
+      name: "helpful",
+      text: { tag: "plain_text", content: "\u6709\u5e2e\u52a9" },
+      type: "primary",
+      form_action_type: "submit",
+      behaviors: [{ type: "callback", value: feedbackCallbackValue("helpful") }],
+    }),
+    component({
+      tag: "button",
+      name: "irrelevant",
+      text: { tag: "plain_text", content: "\u4e0d\u76f8\u5173" },
+      type: "default",
+      form_action_type: "submit",
+      behaviors: [{ type: "callback", value: feedbackCallbackValue("irrelevant") }],
+    }),
+  ];
   const card: Record<string, unknown> = {
     schema: "2.0",
     header: {
@@ -49,6 +74,11 @@ export function renderProactiveSignalCard(
         component({
           tag: "markdown",
           content: suggestedAction,
+        }),
+        component({
+          tag: "form",
+          name: "proactiveSignalFeedback",
+          elements: feedbackElements,
         }),
       ],
     },

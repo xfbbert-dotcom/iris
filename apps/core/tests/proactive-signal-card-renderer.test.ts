@@ -20,6 +20,54 @@ describe("ProactiveSignalCardRenderer", () => {
     expect(Buffer.byteLength(result.json, "utf8")).toBeLessThanOrEqual(24 * 1024);
   });
 
+  it("binds compact feedback buttons only to the proactive delivery facts", () => {
+    const result = renderProactiveSignalCard({ context: deliveryContext() });
+    const elements = (result.card.body as { elements: Array<Record<string, unknown>> }).elements;
+    const form = elements.at(-1);
+
+    expect(form).toMatchObject({ tag: "form", name: "proactiveSignalFeedback" });
+    const buttons = (form?.elements as Array<Record<string, unknown>>);
+    expect(buttons).toEqual([
+      {
+        tag: "button",
+        name: "helpful",
+        text: { tag: "plain_text", content: "\u6709\u5e2e\u52a9" },
+        type: "primary",
+        form_action_type: "submit",
+        behaviors: [{
+          type: "callback",
+          value: {
+            kind: "proactive_signal_feedback",
+            action: "helpful",
+            deliveryId: "proactive-delivery:abc",
+            candidateIdempotencyKey: "quiet_open_thread:thread-a:1",
+            entityVersion: "1",
+          },
+        }],
+      },
+      {
+        tag: "button",
+        name: "irrelevant",
+        text: { tag: "plain_text", content: "\u4e0d\u76f8\u5173" },
+        type: "default",
+        form_action_type: "submit",
+        behaviors: [{
+          type: "callback",
+          value: {
+            kind: "proactive_signal_feedback",
+            action: "irrelevant",
+            deliveryId: "proactive-delivery:abc",
+            candidateIdempotencyKey: "quiet_open_thread:thread-a:1",
+            entityVersion: "1",
+          },
+        }],
+      },
+    ]);
+    expect(result.json).not.toMatch(/actor|message-a|private project detail/iu);
+    expect(result.componentCount).toBeLessThanOrEqual(12);
+    expect(Buffer.byteLength(result.json, "utf8")).toBeLessThanOrEqual(24 * 1024);
+  });
+
   it("renders high priority overdue actions distinctly", () => {
     const result = renderProactiveSignalCard({
       context: deliveryContext({

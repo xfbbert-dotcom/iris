@@ -48,6 +48,36 @@ describe("parseFeishuCardAction", () => {
     });
   });
 
+  it("parses a proactive feedback action with an empty or absent form value", () => {
+    const withEmptyForm = parseFeishuCardAction(cardAction({
+      event: {
+        action: {
+          name: "helpful",
+          value: feedbackActionValue(),
+          form_value: { reason: undefined },
+        },
+      },
+    }));
+    const withoutForm = parseFeishuCardAction(cardAction({
+      event: {
+        action: {
+          name: "helpful",
+          value: feedbackActionValue(),
+          form_value: undefined,
+        },
+      },
+    }));
+
+    expect(withEmptyForm).toMatchObject({
+      kind: "proactive_signal_feedback",
+      deliveryId: "delivery-1",
+      candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+      entityVersion: 2,
+      action: "helpful",
+    });
+    expect(withoutForm).toMatchObject({ kind: "proactive_signal_feedback", action: "helpful" });
+  });
+
   it("requires the exact callback event and bounded identifiers", () => {
     expect(parseFeishuCardAction(cardAction({ header: { event_type: "im.message.receive_v1" } }))).toBeUndefined();
     expect(parseFeishuCardAction(cardAction({ header: { event_id: " " } }))).toBeUndefined();
@@ -94,6 +124,8 @@ describe("parseFeishuCardAction", () => {
     ["a missing rejection reason", cardAction({ event: { action: { form_value: { reason: "" } } } })],
     ["an approval reason", cardAction({ event: { action: { name: "approve", value: proposalActionValue({ action: "approve" }), form_value: { reason: "not allowed" } } } })],
     ["a non-canonical proposal version", cardAction({ event: { action: { name: "approve", value: proposalActionValue({ action: "approve", proposalVersion: "04" }), form_value: { reason: "" } } } })],
+    ["a feedback callback with an unexpected binding", cardAction({ event: { action: { name: "helpful", value: feedbackActionValue({ presentationId: "not-allowed" }), form_value: {} } } })],
+    ["a feedback callback with a noncanonical version", cardAction({ event: { action: { name: "helpful", value: feedbackActionValue({ entityVersion: "02" }), form_value: {} } } })],
   ])("rejects %s", (_label, body) => {
     expect(parseFeishuCardAction(body)).toBeUndefined();
   });
@@ -160,6 +192,21 @@ function proposalActionValue(overrides: Record<string, unknown> = {}): Record<st
     subjectRevision: "2",
     subjectVersion: "7",
     targetPolicyVersion: "3",
+    ...overrides,
+  };
+}
+
+function feedbackActionValue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    presentationId: undefined,
+    draftId: undefined,
+    revisionNumber: undefined,
+    draftVersion: undefined,
+    kind: "proactive_signal_feedback",
+    action: "helpful",
+    deliveryId: "delivery-1",
+    candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+    entityVersion: "2",
     ...overrides,
   };
 }

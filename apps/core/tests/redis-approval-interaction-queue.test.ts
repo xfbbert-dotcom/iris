@@ -722,6 +722,28 @@ describe("Redis approval interaction queue", () => {
     expect(JSON.stringify(job)).not.toMatch(/draft body|knowledge content|evidence text/iu);
   });
 
+  it("round-trips a content-free proactive feedback job", () => {
+    const job = normalizeApprovalInteractionJob({
+      kind: "proactive_signal_feedback",
+      idempotencyKey: "feishu-card:cli_feedback:event-feedback",
+      eventId: "event-feedback",
+      appId: "cli_feedback",
+      actorOpenId: "ou_member",
+      chatId: "oc_group",
+      messageId: "om_reminder",
+      presentationId: "delivery-1",
+      deliveryId: "delivery-1",
+      candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+      entityVersion: 2,
+      action: "irrelevant",
+      receivedAt: new Date("2026-07-27T00:00:00.000Z"),
+      attempts: 0,
+    });
+
+    expect(parseApprovalInteractionJob(serializeApprovalInteractionJob(job))).toEqual(job);
+    expect(JSON.stringify(job)).not.toMatch(/reason|intentId|evidence text/iu);
+  });
+
   it("serializes a sensitive action and its replayable DLQ record with only an opaque intent id", async () => {
     const sampleReason = "Private sample reason that must remain in PostgreSQL.";
     const durableIntent = { reason: sampleReason };

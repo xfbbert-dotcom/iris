@@ -427,6 +427,91 @@ describe("FeishuCardActionGateway", () => {
     });
   });
 
+  it("acknowledges signed proactive feedback and leaves duplicate detection to the queue", async () => {
+    const now = new Date("2026-07-27T00:00:00.000Z");
+    const encryptKey = "feedback-card-encrypt-key";
+    const queue = { enqueue: vi.fn(async () => "duplicate" as const) };
+    const body = cardAction();
+    const event = body.event as Record<string, unknown>;
+    const action = event.action as Record<string, unknown>;
+    action.name = "helpful";
+    action.form_value = {};
+    action.value = feedbackActionValue();
+    const rawBody = JSON.stringify(body);
+    const timestamp = String(Math.floor(now.getTime() / 1_000));
+    const nonce = "feedback-nonce";
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      verifyRequest: createFeishuRequestVerifier({
+        verificationToken: "verification-token",
+        encryptKey,
+      }, {
+        now: () => now,
+        requireSignature: true,
+      }),
+      now: () => now,
+    });
+
+    await expect(gateway.handleCallback({
+      headers: {
+        "x-lark-request-timestamp": timestamp,
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": createHash("sha256")
+          .update(timestamp + nonce + encryptKey + rawBody)
+          .digest("hex"),
+      },
+      body,
+      rawBody,
+    })).resolves.toEqual({
+      statusCode: 200,
+      body: { toast: { type: "info", content: "\u5df2\u6536\u5230\uff0c\u6b63\u5728\u6838\u9a8c" } },
+    });
+    expect(queue.enqueue).toHaveBeenCalledWith({
+      kind: "proactive_signal_feedback",
+      idempotencyKey: "feishu-card:cli_approval:event-1",
+      eventId: "event-1",
+      appId: "cli_approval",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_approval",
+      messageId: "om_approval",
+      presentationId: "delivery-1",
+      deliveryId: "delivery-1",
+      candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+      entityVersion: 2,
+      action: "helpful",
+      receivedAt: now,
+      attempts: 0,
+    });
+  });
+
+  it("rejects malformed feedback bindings with a value-free recognized diagnostic", async () => {
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const onDiagnostic = vi.fn();
+    const gateway = createFeishuCardActionGateway({ queue, verifyRequest: () => true, onDiagnostic });
+    const body = cardAction();
+    const event = body.event as Record<string, unknown>;
+    const action = event.action as Record<string, unknown>;
+    action.name = "helpful";
+    action.form_value = {};
+    action.value = feedbackActionValue({ candidateIdempotencyKey: "sensitive-candidate", unexpected: true });
+
+    await expect(gateway.handleCallback({ headers: {}, body })).resolves.toEqual({
+      statusCode: 400,
+      body: { ok: false },
+    });
+    expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      stage: "action_rejected",
+      actionShape: expect.objectContaining({
+        callbackKindRecognized: true,
+        callbackActionRecognized: true,
+        callbackIdentifiersValid: true,
+        callbackVersionsCanonical: true,
+      }),
+    }));
+    expect(JSON.stringify(onDiagnostic.mock.calls)).not.toContain("sensitive-candidate");
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
   it("persists a normalized sensitive intent before enqueueing only its opaque id", async () => {
     const now = new Date("2026-07-19T00:00:00.000Z");
     const sampleReason = "Keep  internal spacing exactly.";
@@ -657,6 +742,17 @@ function cardAction(): Record<string, unknown> {
       host: "im_message",
       context: { open_message_id: "om_approval", open_chat_id: "oc_approval" },
     },
+  };
+}
+
+function feedbackActionValue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: "proactive_signal_feedback",
+    action: "helpful",
+    deliveryId: "delivery-1",
+    candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+    entityVersion: "2",
+    ...overrides,
   };
 }
 

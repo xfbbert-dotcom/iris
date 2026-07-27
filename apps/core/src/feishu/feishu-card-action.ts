@@ -2,8 +2,10 @@ import {
   ACTION_PROPOSAL_CARD_ACTIONS,
   KNOWLEDGE_CARD_ACTIONS,
   KNOWLEDGE_CARD_REASON_MAX_CHARS,
+  PROACTIVE_SIGNAL_FEEDBACK_ACTIONS,
   type ActionProposalCardAction,
   type KnowledgeCardAction,
+  type ProactiveSignalFeedbackAction,
 } from "../knowledge-cards/knowledge-card.js";
 import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/knowledge-draft.js";
 
@@ -45,10 +47,22 @@ type ParsedActionProposalPayload = {
   rejectionConfirmed?: true;
 };
 
-type ParsedActionPayload = ParsedKnowledgeActionPayload | ParsedActionProposalPayload;
+type ParsedProactiveSignalFeedbackPayload = {
+  kind: "proactive_signal_feedback";
+  deliveryId: string;
+  candidateIdempotencyKey: string;
+  entityVersion: number;
+  action: ProactiveSignalFeedbackAction;
+};
+
+type ParsedActionPayload =
+  | ParsedKnowledgeActionPayload
+  | ParsedActionProposalPayload
+  | ParsedProactiveSignalFeedbackPayload;
 type ParsedCallbackValue =
   | Omit<ParsedKnowledgeActionPayload, "reason" | "rejectionConfirmed">
-  | Omit<ParsedActionProposalPayload, "reason" | "rejectionConfirmed">;
+  | Omit<ParsedActionProposalPayload, "reason" | "rejectionConfirmed">
+  | ParsedProactiveSignalFeedbackPayload;
 
 export type ParsedFeishuCardAction = ParsedFeishuCardActionCommon & ParsedActionPayload;
 
@@ -130,10 +144,15 @@ function parseAction(value: unknown): ParsedActionPayload | undefined {
   }
 
   const callbackValue = parseCallbackValue(value.value);
-  const formValue = parseFormValue(value.form_value);
-  if (callbackValue === undefined || formValue === undefined || value.name !== callbackValue.action) {
+  if (callbackValue === undefined || value.name !== callbackValue.action) {
     return undefined;
   }
+  if (callbackValue.kind === "proactive_signal_feedback") {
+    return isEmptyFormValue(value.form_value) ? callbackValue : undefined;
+  }
+
+  const formValue = parseFormValue(value.form_value);
+  if (formValue === undefined) return undefined;
 
   if (callbackValue.action === "confirm" || callbackValue.action === "approve") {
     return formValue.reason === "" ? callbackValue : undefined;
@@ -153,6 +172,9 @@ function parseCallbackValue(value: unknown): ParsedCallbackValue | undefined {
   }
   if (value.kind === "action_proposal_approval") {
     return parseActionProposalCallbackValue(value);
+  }
+  if (value.kind === "proactive_signal_feedback") {
+    return parseProactiveSignalFeedbackCallbackValue(value);
   }
   return undefined;
 }
@@ -229,12 +251,40 @@ function parseActionProposalCallbackValue(value: Record<string, unknown>): Parse
   };
 }
 
+function parseProactiveSignalFeedbackCallbackValue(
+  value: Record<string, unknown>,
+): ParsedProactiveSignalFeedbackPayload | undefined {
+  if (
+    !hasOnlyKeys(value, ["kind", "action", "deliveryId", "candidateIdempotencyKey", "entityVersion"]) ||
+    !PROACTIVE_SIGNAL_FEEDBACK_ACTIONS.includes(value.action as ProactiveSignalFeedbackAction)
+  ) {
+    return undefined;
+  }
+  const deliveryId = parseReference(value.deliveryId);
+  const candidateIdempotencyKey = parseReference(value.candidateIdempotencyKey);
+  const entityVersion = parsePositiveIntegerString(value.entityVersion);
+  if (deliveryId === undefined || candidateIdempotencyKey === undefined || entityVersion === undefined) {
+    return undefined;
+  }
+  return {
+    kind: "proactive_signal_feedback",
+    action: value.action as ProactiveSignalFeedbackAction,
+    deliveryId,
+    candidateIdempotencyKey,
+    entityVersion,
+  };
+}
+
 function parseFormValue(value: unknown): { reason: string } | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, ["reason"]) || typeof value.reason !== "string") {
     return undefined;
   }
   const reason = value.reason.trim();
   return [...reason].length <= KNOWLEDGE_CARD_REASON_MAX_CHARS ? { reason } : undefined;
+}
+
+function isEmptyFormValue(value: unknown): boolean {
+  return value === undefined || (isRecord(value) && Object.keys(value).length === 0);
 }
 
 function parseReference(value: unknown): string | undefined {

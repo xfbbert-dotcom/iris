@@ -2,9 +2,11 @@ import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/kno
 
 export const KNOWLEDGE_CARD_ACTIONS = ["confirm", "request_revision", "reject"] as const;
 export const ACTION_PROPOSAL_CARD_ACTIONS = ["approve", "request_revision", "reject"] as const;
+export const PROACTIVE_SIGNAL_FEEDBACK_ACTIONS = ["helpful", "irrelevant"] as const;
 export const APPROVAL_INTERACTION_KINDS = [
   "knowledge_draft_confirmation",
   "action_proposal_approval",
+  "proactive_signal_feedback",
 ] as const;
 export const KNOWLEDGE_CARD_PRESENTATION_STATES = [
   "pending_send",
@@ -20,10 +22,11 @@ export const KNOWLEDGE_CARD_MAX_COMPONENTS = 100;
 
 export type KnowledgeCardAction = (typeof KNOWLEDGE_CARD_ACTIONS)[number];
 export type ActionProposalCardAction = (typeof ACTION_PROPOSAL_CARD_ACTIONS)[number];
+export type ProactiveSignalFeedbackAction = (typeof PROACTIVE_SIGNAL_FEEDBACK_ACTIONS)[number];
 export type ApprovalInteractionKind = (typeof APPROVAL_INTERACTION_KINDS)[number];
 export type KnowledgeCardPresentationState = (typeof KNOWLEDGE_CARD_PRESENTATION_STATES)[number];
 
-type ApprovalInteractionJobCommon = {
+export type ApprovalInteractionJobCommon = {
   idempotencyKey: string;
   eventId: string;
   appId: string;
@@ -55,13 +58,23 @@ export type ActionProposalApprovalInteractionJob = ApprovalInteractionJobCommon 
   action: ActionProposalCardAction;
 };
 
+export type ProactiveSignalFeedbackInteractionJob = ApprovalInteractionJobCommon & {
+  kind: "proactive_signal_feedback";
+  deliveryId: string;
+  candidateIdempotencyKey: string;
+  entityVersion: number;
+  action: ProactiveSignalFeedbackAction;
+};
+
 export type ApprovalInteractionJob =
   | KnowledgeDraftConfirmationInteractionJob
-  | ActionProposalApprovalInteractionJob;
+  | ActionProposalApprovalInteractionJob
+  | ProactiveSignalFeedbackInteractionJob;
 
 export type ApprovalInteractionIntentIdentity =
   | Omit<KnowledgeDraftConfirmationInteractionJob, "intentId" | "receivedAt" | "attempts">
-  | Omit<ActionProposalApprovalInteractionJob, "intentId" | "receivedAt" | "attempts">;
+  | Omit<ActionProposalApprovalInteractionJob, "intentId" | "receivedAt" | "attempts">
+  | Omit<ProactiveSignalFeedbackInteractionJob, "intentId" | "receivedAt" | "attempts">;
 
 export class KnowledgeCardValidationError extends Error {
   constructor(message: string) {
@@ -83,24 +96,28 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
     "messageId",
     "presentationId",
     "action",
-    "intentId",
     "receivedAt",
     "attempts",
   ];
+  const intentCapableCommonFields = [...commonFields, "intentId"];
   assertKnownFields(input, kind === "knowledge_draft_confirmation"
-    ? [...commonFields, "draftId", "revisionNumber", "draftVersion"]
-    : [
-        ...commonFields,
+    ? [...intentCapableCommonFields, "draftId", "revisionNumber", "draftVersion"]
+    : kind === "action_proposal_approval"
+      ? [
+        ...intentCapableCommonFields,
         "proposalId",
         "requirementId",
         "proposalVersion",
         "subjectRevision",
         "subjectVersion",
         "targetPolicyVersion",
-      ]);
+      ]
+      : [...commonFields, "deliveryId", "candidateIdempotencyKey", "entityVersion"]);
 
   const action = requireAction(input.action, kind);
-  const intentId = normalizeIntentId(input.intentId, action);
+  const intentId = kind === "proactive_signal_feedback"
+    ? undefined
+    : normalizeIntentId(input.intentId, action);
   const common = {
     kind,
     idempotencyKey: requireReference("idempotencyKey", input.idempotencyKey),
@@ -124,6 +141,16 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
       revisionNumber: requirePositiveInteger("revisionNumber", input.revisionNumber),
       draftVersion: requirePositiveInteger("draftVersion", input.draftVersion),
       action: action as KnowledgeCardAction,
+    };
+  }
+  if (kind === "proactive_signal_feedback") {
+    return {
+      ...common,
+      kind,
+      deliveryId: requireReference("deliveryId", input.deliveryId),
+      candidateIdempotencyKey: requireReference("candidateIdempotencyKey", input.candidateIdempotencyKey),
+      entityVersion: requirePositiveInteger("entityVersion", input.entityVersion),
+      action: action as ProactiveSignalFeedbackAction,
     };
   }
   return {
@@ -178,6 +205,16 @@ export function toApprovalInteractionIntentIdentity(
       action: job.action,
     };
   }
+  if (job.kind === "proactive_signal_feedback") {
+    return {
+      ...common,
+      kind: job.kind,
+      deliveryId: job.deliveryId,
+      candidateIdempotencyKey: job.candidateIdempotencyKey,
+      entityVersion: job.entityVersion,
+      action: job.action,
+    };
+  }
   return {
     ...common,
     kind: job.kind,
@@ -207,19 +244,21 @@ function requireKind(value: unknown): ApprovalInteractionKind {
 function requireAction(
   value: unknown,
   kind: ApprovalInteractionKind,
-): KnowledgeCardAction | ActionProposalCardAction {
+): KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction {
   const actions = kind === "knowledge_draft_confirmation"
     ? KNOWLEDGE_CARD_ACTIONS
-    : ACTION_PROPOSAL_CARD_ACTIONS;
+    : kind === "action_proposal_approval"
+      ? ACTION_PROPOSAL_CARD_ACTIONS
+      : PROACTIVE_SIGNAL_FEEDBACK_ACTIONS;
   if (!(actions as readonly unknown[]).includes(value)) {
     throw validationError("action is invalid");
   }
-  return value as KnowledgeCardAction | ActionProposalCardAction;
+  return value as KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction;
 }
 
 function normalizeIntentId(
   value: unknown,
-  action: KnowledgeCardAction | ActionProposalCardAction,
+  action: KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction,
 ): string | undefined {
   if (action === "confirm" || action === "approve") {
     if (value !== undefined) throw validationError("intentId is not allowed for this action");
