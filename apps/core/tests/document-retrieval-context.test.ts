@@ -41,11 +41,16 @@ describe("DocumentRetrievalContextBuilder", () => {
       ]),
     };
     const canReadDocument = vi.fn(async (documentId: string) => documentId === "source-allowed");
+    const onPermissionDecision = vi.fn(async (_decision: {
+      documentId: string;
+      outcome: "allowed" | "denied" | "error";
+    }) => undefined);
     const builder = createDocumentRetrievalContextBuilder({
       embeddingProfileId: "static-dev-6d",
       embedder,
       fragments,
       canReadDocument,
+      onPermissionDecision,
     });
 
     const result = await builder.buildContext({
@@ -62,6 +67,10 @@ describe("DocumentRetrievalContextBuilder", () => {
     });
     expect(canReadDocument).toHaveBeenCalledWith("source-allowed");
     expect(canReadDocument).toHaveBeenCalledWith("source-denied");
+    expect(onPermissionDecision.mock.calls.map(([decision]) => decision)).toEqual([
+      { documentId: "source-allowed", outcome: "allowed" },
+      { documentId: "source-denied", outcome: "denied" },
+    ]);
     expect(result.allowedFragments).toEqual([
       expect.objectContaining({ id: "fragment-allowed", documentSourceId: "source-allowed" }),
     ]);

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import type { GenerateAnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
+import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
@@ -505,15 +506,20 @@ describe("createAnswerDraftRuntime", () => {
       }),
     };
     const auditLog = new InMemoryAuditLog();
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
     const runtime = createAnswerDraftRuntime({
       env: {
         ...enabledEnv(),
         IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
       },
+      agentExecutionObserver: { observe },
       dependencies: {
         createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
         createDocumentFragmentRepository: vi.fn(() => fragments),
         createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createLiveChatContextProvider: vi.fn(() => ({
+          loadRecentMessages: vi.fn(async () => []),
+        })),
         createModelProvider: vi.fn(() => model),
         auditLog,
         createEmbeddingProfileRepository: vi.fn(() => ({
@@ -525,7 +531,10 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      executionId: "turn-source-policy-1",
       question: "What can Iris use?",
+      chatId: "chat-a",
+      askerId: "ou_alice",
       liveChatMessages: [],
     });
 
@@ -577,6 +586,51 @@ describe("createAnswerDraftRuntime", () => {
         recordedAt: expect.any(Date),
       },
     ]);
+    expect(
+      observe.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.subjectType === "permission_decision"),
+    ).toEqual([
+      expect.objectContaining({
+        groupId: "chat-a",
+        actorOpenId: "ou_alice",
+        subjectId: "source-allowed",
+        eventType: "permission_allowed",
+        outcome: "success",
+        metadata: { turnId: "turn-source-policy-1" },
+      }),
+      expect.objectContaining({
+        subjectId: "source-disabled",
+        eventType: "permission_denied",
+        outcome: "denied",
+      }),
+      expect.objectContaining({
+        subjectId: "source-denied",
+        eventType: "permission_denied",
+        outcome: "denied",
+      }),
+      expect.objectContaining({
+        subjectId: "source-stale",
+        eventType: "permission_denied",
+        outcome: "denied",
+      }),
+      expect.objectContaining({
+        subjectId: "source-missing",
+        eventType: "permission_denied",
+        outcome: "denied",
+      }),
+      expect.objectContaining({
+        subjectId: "source-error",
+        eventType: "permission_error",
+        outcome: "error",
+      }),
+    ]);
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({
+      subjectType: "provider_request",
+      subjectId: "turn-source-policy-1",
+      provider: "openai-compatible",
+      modelId: "model-a",
+    }));
   });
 
   it("fails closed for Feishu document fragments when live permission checks are unavailable", async () => {

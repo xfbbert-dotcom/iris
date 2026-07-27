@@ -7,6 +7,7 @@ import type { EmbeddingProvider } from "../documents/document-semantic-indexer.j
 import type { AuditLog } from "../audit/audit-log.js";
 import {
   filterFragmentsByLivePermission,
+  type PermissionGuardDecision,
   type RetrievedDocumentFragment as PermissionGuardFragment,
 } from "../permissions/permission-guard.js";
 import {
@@ -60,6 +61,7 @@ export function createDocumentRetrievalContextBuilder({
   conversationStateGroupId,
   conversationStateContextProvider,
   canReadDocument,
+  onPermissionDecision,
   auditLog,
 }: {
   embeddingProfileId: string;
@@ -72,6 +74,7 @@ export function createDocumentRetrievalContextBuilder({
   conversationStateGroupId?: string;
   conversationStateContextProvider?: ConversationStateContextProvider;
   canReadDocument: (documentId: string) => Promise<boolean>;
+  onPermissionDecision?: (decision: PermissionGuardDecision) => Promise<void>;
   auditLog?: AuditLog;
 }): DocumentRetrievalContextBuilder {
   return {
@@ -123,6 +126,7 @@ export function createDocumentRetrievalContextBuilder({
       const permissionGuardResult = await filterFragmentsByLivePermission({
         fragments: meaningfulFragments.map(toPermissionGuardFragment),
         canReadDocument,
+        onPermissionDecision,
         auditLog,
       });
       const allowedFragmentKeys = new Set(

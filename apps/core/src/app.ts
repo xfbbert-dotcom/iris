@@ -362,6 +362,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
             dependencies: { auditLog },
             runtimeController,
+            ...(agentExecutionLedgerRuntime === undefined
+              ? {}
+              : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
           })
         : undefined;
     answerDraftOrchestrator ??= answerDraftRuntime?.answerDraftOrchestrator;

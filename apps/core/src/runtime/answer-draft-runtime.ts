@@ -1,4 +1,11 @@
-import { createAnswerDraftOrchestrator, type AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
+import { createHash } from "node:crypto";
+
+import {
+  createAnswerDraftOrchestrator,
+  resolveAnswerDraftExecutionId,
+  type AnswerDraftOrchestrator,
+} from "../agent/answer-draft-orchestrator.js";
+import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import type { AuditLog } from "../audit/audit-log.js";
 import {
   readAnswerDraftRuntimeConfig,
@@ -43,6 +50,7 @@ import {
   type FeishuDocumentPermissionChecker,
   type FeishuDocumentPermissionCheckerDependencies,
 } from "../permissions/feishu-document-permission-checker.js";
+import type { PermissionGuardDecision } from "../permissions/permission-guard.js";
 import {
   createFeishuTenantAccessTokenProvider,
   type FeishuTenantAccessTokenProvider,
@@ -139,10 +147,12 @@ export function createAnswerDraftRuntime({
   env = process.env,
   dependencies = {},
   runtimeController,
+  agentExecutionObserver,
 }: {
   env?: EnvLike;
   dependencies?: AnswerDraftRuntimeDependencies;
   runtimeController?: RuntimeRetrievalGate;
+  agentExecutionObserver?: AgentExecutionObserver;
 } = {}): AnswerDraftRuntime | undefined {
   const runtimeConfig = readAnswerDraftRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
@@ -225,61 +235,83 @@ export function createAnswerDraftRuntime({
   let runtimeEmbeddingPromise: Promise<RuntimeEmbedding> | undefined;
   const answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> = {
     async generateDraft(input) {
-      runtimeEmbeddingPromise ??= resolveRuntimeEmbedding({
-        embeddingConfig,
-        profiles,
-        createEmbeddingProvider: createEmbedding,
-      }).catch((error: unknown) => {
-        runtimeEmbeddingPromise = undefined;
-        throw error;
-      });
-      const runtimeEmbedding = await runtimeEmbeddingPromise;
+      const executionId = resolveAnswerDraftExecutionId(input.executionId);
       const currentGroupId = normalizeCurrentGroupId(input.chatId);
       const documentGroupId = runtimeConfig.permissionMode === "source-policy"
         ? currentGroupId
         : undefined;
-      const contextBuilder = createDocumentRetrievalContextBuilder({
-        embeddingProfileId: runtimeEmbedding.profile.id,
-        embedder: runtimeEmbedding.embedder,
-        fragments,
-        sourceTypes: selectAnswerSourceTypes({
-          permissionMode: runtimeConfig.permissionMode,
-          runtimeController,
-          currentGroupId: documentGroupId,
-        }),
-        ...(documentGroupId === undefined ? {} : { groupId: documentGroupId }),
-        ...(currentGroupId === undefined ? {} : { memoryGroupId: currentGroupId }),
-        ...(groupMemoryRepository === undefined
-          ? {}
-          : {
-              groupMemoryContextProvider: createRuntimeGatedGroupMemoryContextProvider({
-                delegate: createGroupMemoryContextProvider({
-                  repository: groupMemoryRepository,
-                }),
-                runtimeController,
-              }),
-            }),
-        ...(currentGroupId === undefined || conversationStateContextProvider === undefined
-          ? {}
-          : {
-              conversationStateGroupId: currentGroupId,
-              conversationStateContextProvider,
-            }),
-        canReadDocument: createCanReadDocument({
-          permissionMode: runtimeConfig.permissionMode,
-          sourceRegistry,
-          runtimeController,
-          livePermissionChecker,
-          currentGroupId: documentGroupId,
-        }),
-        auditLog: dependencies.auditLog,
+      const onPermissionDecision = createPermissionDecisionObservationHandler({
+        observer: agentExecutionObserver,
+        executionId,
+        groupId: currentGroupId,
+        actorOpenId: normalizeOptionalRuntimeReference(input.askerId),
       });
+      const contextBuilder = {
+        async buildContext(
+          contextInput: Parameters<
+            ReturnType<typeof createDocumentRetrievalContextBuilder>["buildContext"]
+          >[0],
+        ) {
+          runtimeEmbeddingPromise ??= resolveRuntimeEmbedding({
+            embeddingConfig,
+            profiles,
+            createEmbeddingProvider: createEmbedding,
+          }).catch((error: unknown) => {
+            runtimeEmbeddingPromise = undefined;
+            throw error;
+          });
+          const runtimeEmbedding = await runtimeEmbeddingPromise;
+          return createDocumentRetrievalContextBuilder({
+            embeddingProfileId: runtimeEmbedding.profile.id,
+            embedder: runtimeEmbedding.embedder,
+            fragments,
+            sourceTypes: selectAnswerSourceTypes({
+              permissionMode: runtimeConfig.permissionMode,
+              runtimeController,
+              currentGroupId: documentGroupId,
+            }),
+            ...(documentGroupId === undefined ? {} : { groupId: documentGroupId }),
+            ...(currentGroupId === undefined ? {} : { memoryGroupId: currentGroupId }),
+            ...(groupMemoryRepository === undefined
+              ? {}
+              : {
+                  groupMemoryContextProvider: createRuntimeGatedGroupMemoryContextProvider({
+                    delegate: createGroupMemoryContextProvider({
+                      repository: groupMemoryRepository,
+                    }),
+                    runtimeController,
+                  }),
+                }),
+            ...(currentGroupId === undefined || conversationStateContextProvider === undefined
+              ? {}
+              : {
+                  conversationStateGroupId: currentGroupId,
+                  conversationStateContextProvider,
+                }),
+            canReadDocument: createCanReadDocument({
+              permissionMode: runtimeConfig.permissionMode,
+              sourceRegistry,
+              runtimeController,
+              livePermissionChecker,
+              currentGroupId: documentGroupId,
+            }),
+            ...(onPermissionDecision === undefined ? {} : { onPermissionDecision }),
+            auditLog: dependencies.auditLog,
+          }).buildContext(contextInput);
+        },
+      };
 
       return createAnswerDraftOrchestrator({
         contextBuilder,
         model,
         liveChatContextProvider,
-      }).generateDraft(input);
+        agentExecutionObserver,
+        provider: modelConfig.provider,
+        modelId: modelConfig.model,
+      }).generateDraft({
+        ...input,
+        executionId,
+      });
     },
   };
 
@@ -290,6 +322,94 @@ export function createAnswerDraftRuntime({
       return pool.end();
     },
   };
+}
+
+function createPermissionDecisionObservationHandler({
+  observer,
+  executionId,
+  groupId,
+  actorOpenId,
+}: {
+  observer: AgentExecutionObserver | undefined;
+  executionId: string;
+  groupId: string | undefined;
+  actorOpenId: string | undefined;
+}): ((decision: PermissionGuardDecision) => Promise<void>) | undefined {
+  if (observer === undefined) {
+    return undefined;
+  }
+
+  return async (decision) => {
+    const event = permissionDecisionEvent(decision.outcome);
+    await observer.observe({
+      ...(groupId === undefined ? {} : { groupId }),
+      ...(actorOpenId === undefined ? {} : { actorOpenId }),
+      subjectType: "permission_decision",
+      subjectId: decision.documentId,
+      eventType: event.eventType,
+      phase: "context_assembly",
+      outcome: event.outcome,
+      decisionReason: event.decisionReason,
+      operationKey: createPermissionDecisionOperationKey(
+        executionId,
+        decision.documentId,
+        decision.outcome,
+      ),
+      metadata: { turnId: executionId },
+    });
+  };
+}
+
+function permissionDecisionEvent(outcome: PermissionGuardDecision["outcome"]): {
+  eventType: "permission_allowed" | "permission_denied" | "permission_error";
+  outcome: "success" | "denied" | "error";
+  decisionReason: string;
+} {
+  if (outcome === "allowed") {
+    return {
+      eventType: "permission_allowed",
+      outcome: "success",
+      decisionReason: "live_permission_allowed",
+    };
+  }
+  if (outcome === "denied") {
+    return {
+      eventType: "permission_denied",
+      outcome: "denied",
+      decisionReason: "live_permission_denied",
+    };
+  }
+  return {
+    eventType: "permission_error",
+    outcome: "error",
+    decisionReason: "live_permission_error",
+  };
+}
+
+function createPermissionDecisionOperationKey(
+  executionId: string,
+  documentId: string,
+  outcome: PermissionGuardDecision["outcome"],
+): string {
+  return [
+    "turn",
+    sha256(executionId),
+    "permission",
+    sha256(documentId),
+    outcome,
+  ].join(":");
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeOptionalRuntimeReference(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized.length === 0 || [...normalized].length > 512) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function isPostgresGroupMemoryDataSource(

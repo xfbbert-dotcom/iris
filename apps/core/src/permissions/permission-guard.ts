@@ -11,6 +11,12 @@ export type PermissionGuardInput = {
   fragments: RetrievedDocumentFragment[];
   canReadDocument: (documentId: string) => Promise<boolean>;
   auditLog?: AuditLog;
+  onPermissionDecision?: (decision: PermissionGuardDecision) => Promise<void>;
+};
+
+export type PermissionGuardDecision = {
+  documentId: string;
+  outcome: "allowed" | "denied" | "error";
 };
 
 export type PermissionGuardResult = {
@@ -27,6 +33,10 @@ export async function filterFragmentsByLivePermission(
   const permissionsByDocumentId = await resolvePermissionsByDocumentId(
     [...fragmentIdsByDocumentId.keys()],
     input.canReadDocument,
+  );
+  await reportPermissionDecisions(
+    permissionsByDocumentId,
+    input.onPermissionDecision,
   );
   const auditedDocumentIds = new Set<string>();
 
@@ -59,6 +69,36 @@ type PermissionResolution =
   | { allowed: true }
   | { allowed: false; error?: unknown };
 type DeniedPermissionResolution = Extract<PermissionResolution, { allowed: false }>;
+
+async function reportPermissionDecisions(
+  permissionsByDocumentId: Map<string, PermissionResolution>,
+  onPermissionDecision: PermissionGuardInput["onPermissionDecision"],
+): Promise<void> {
+  if (onPermissionDecision === undefined) {
+    return;
+  }
+
+  await Promise.all(
+    [...permissionsByDocumentId].map(async ([documentId, permission]) => {
+      const outcome = permission.allowed
+        ? "allowed"
+        : hasPermissionError(permission)
+          ? "error"
+          : "denied";
+      try {
+        await onPermissionDecision({ documentId, outcome });
+      } catch {
+        // Decision observability is best-effort; permission filtering stays authoritative.
+      }
+    }),
+  );
+}
+
+function hasPermissionError(
+  permission: PermissionResolution,
+): permission is { allowed: false; error: unknown } {
+  return !permission.allowed && Object.prototype.hasOwnProperty.call(permission, "error");
+}
 
 async function resolvePermissionsByDocumentId(
   documentIds: string[],

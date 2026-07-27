@@ -208,8 +208,10 @@ export function createFeishuMentionAnswerResponder({
         let answerText: string;
         try {
           const answer = await answerDraftOrchestrator.generateDraft({
+            executionId: input.messageId,
             question,
             chatId: input.chatId,
+            ...(normalizedSenderId === undefined ? {} : { askerId: normalizedSenderId }),
             liveChatMessages: [
               {
                 speaker: normalizeOptionalText(input.senderId) ?? "unknown",

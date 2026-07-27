@@ -14,11 +14,12 @@ describe("agent execution ledger app composition", () => {
   it("creates one runtime, protects its API, exposes status, and closes it once", async () => {
     const runtime = fakeRuntime();
     const createAgentExecutionLedgerRuntime = vi.fn(() => runtime);
+    const createAnswerDraftRuntime = vi.fn(() => undefined);
     const app = buildApp({
       internalApiToken: "operator-secret",
       now: () => new Date("2026-07-27T14:00:00.000Z"),
       createAgentExecutionLedgerRuntime,
-      createAnswerDraftRuntime: () => undefined,
+      createAnswerDraftRuntime,
       createMemoryExtractionRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -59,6 +60,9 @@ describe("agent execution ledger app composition", () => {
       writeFailureCount: 0,
     });
     expect(createAgentExecutionLedgerRuntime).toHaveBeenCalledOnce();
+    expect(createAnswerDraftRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      agentExecutionObserver: runtime.observer,
+    }));
 
     await app.close();
     await app.close();

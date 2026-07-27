@@ -1,3 +1,6 @@
+import { createHash, randomUUID } from "node:crypto";
+
+import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import type { RetrievedDocumentFragment } from "../documents/document-fragment-repository.js";
 import type {
   DocumentRetrievalContextBuilder,
@@ -24,6 +27,7 @@ export interface ModelProvider {
 }
 
 export type AnswerDraftInput = {
+  executionId?: string;
   question: string;
   chatId?: string;
   askerId?: string;
@@ -57,16 +61,26 @@ const MAX_REQUEST_LIVE_CHAT_MESSAGES = 50;
 const MAX_LIVE_CHAT_SPEAKER_CHARS = 256;
 const MAX_LIVE_CHAT_TEXT_CHARS = 2000;
 const MAX_LIVE_CHAT_LIMIT = 20;
+const MAX_EXECUTION_ID_CHARS = 512;
+const MAX_EXECUTION_OPERATION_KEY_CHARS = 512;
 const TRUNCATION_MARKER = " ... [truncated]";
 
 export function createAnswerDraftOrchestrator({
   contextBuilder,
   model,
   liveChatContextProvider,
+  agentExecutionObserver,
+  provider,
+  modelId,
+  createExecutionId = randomUUID,
 }: {
   contextBuilder: Pick<DocumentRetrievalContextBuilder, "buildContext">;
   model: ModelProvider;
   liveChatContextProvider?: LiveChatContextProvider;
+  agentExecutionObserver?: AgentExecutionObserver;
+  provider?: string;
+  modelId?: string;
+  createExecutionId?: () => string;
 }): AnswerDraftOrchestrator {
   return {
     async generateDraft(input) {
@@ -85,38 +99,169 @@ export function createAnswerDraftOrchestrator({
 
       assertSafeMagnitudeLimit(input.fragmentLimit, "fragmentLimit");
       const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
-      const storedLiveChatMessages =
-        input.chatId === undefined
-          ? []
-          : await liveChatContextProvider?.loadRecentMessages({
-              chatId: input.chatId,
-              limit: liveChatLimit,
-            }) ?? [];
-      const liveChatMessages = selectLiveChatWindow(
-        dedupeLiveChatMessages([...storedLiveChatMessages, ...input.liveChatMessages]),
-        liveChatLimit,
-      );
-
-      const context = await contextBuilder.buildContext({
-        queryText: buildRetrievalQueryText(question, liveChatMessages),
-        liveChatMessages,
-        fragmentLimit: input.fragmentLimit,
-        liveChatLimit,
-        ...(input.askerId === undefined ? {} : { askerId: input.askerId }),
+      const executionId = resolveAnswerDraftExecutionId(input.executionId, createExecutionId);
+      const commonObservation = {
+        ...toOptionalObservationReference("groupId", input.chatId),
+        ...toOptionalObservationReference("actorOpenId", input.askerId),
+        subjectId: executionId,
+      };
+      await safelyObserve(agentExecutionObserver, {
+        ...commonObservation,
+        subjectType: "turn",
+        eventType: "turn_started",
+        phase: "context_assembly",
+        operationKey: createTurnOperationKey(executionId, "started"),
+        metadata: {},
       });
 
-      const modelResult = await model.generateAnswerDraft({
-        question,
-        promptContext: context.promptContext,
-      });
-      const answerText = truncateAnswerDraftText(modelResult.answerText.trim());
-      if (answerText.length === 0) {
-        throw new Error("model answer draft must not be blank");
+      try {
+        const storedLiveChatMessages =
+          input.chatId === undefined
+            ? []
+            : await liveChatContextProvider?.loadRecentMessages({
+                chatId: input.chatId,
+                limit: liveChatLimit,
+              }) ?? [];
+        const liveChatMessages = selectLiveChatWindow(
+          dedupeLiveChatMessages([...storedLiveChatMessages, ...input.liveChatMessages]),
+          liveChatLimit,
+        );
+
+        const context = await contextBuilder.buildContext({
+          queryText: buildRetrievalQueryText(question, liveChatMessages),
+          liveChatMessages,
+          fragmentLimit: input.fragmentLimit,
+          liveChatLimit,
+          ...(input.askerId === undefined ? {} : { askerId: input.askerId }),
+        });
+
+        const providerObservation = {
+          ...commonObservation,
+          subjectType: "provider_request" as const,
+          ...(provider === undefined ? {} : { provider }),
+          ...(modelId === undefined ? {} : { modelId }),
+        };
+        await safelyObserve(agentExecutionObserver, {
+          ...providerObservation,
+          eventType: "provider_request_started",
+          phase: "sampling",
+          operationKey: createTurnOperationKey(executionId, "provider:started"),
+          metadata: {},
+        });
+
+        let answerText: string;
+        try {
+          const modelResult = await model.generateAnswerDraft({
+            question,
+            promptContext: context.promptContext,
+          });
+          answerText = truncateAnswerDraftText(modelResult.answerText.trim());
+          if (answerText.length === 0) {
+            throw new Error("model answer draft must not be blank");
+          }
+          await safelyObserve(agentExecutionObserver, {
+            ...providerObservation,
+            eventType: "provider_request_completed",
+            phase: "sampling",
+            outcome: "success",
+            operationKey: createTurnOperationKey(executionId, "provider:completed"),
+            metadata: {},
+          });
+        } catch (error) {
+          await safelyObserve(agentExecutionObserver, {
+            ...providerObservation,
+            eventType: "provider_request_failed",
+            phase: "sampling",
+            outcome: "error",
+            decisionReason: "model_provider_failed",
+            operationKey: createTurnOperationKey(executionId, "provider:failed"),
+            metadata: {},
+          });
+          throw error;
+        }
+
+        const result = toAnswerDraftResult(answerText, context);
+        await safelyObserve(agentExecutionObserver, {
+          ...commonObservation,
+          subjectType: "turn",
+          eventType: "turn_completed",
+          phase: "completed",
+          outcome: "success",
+          operationKey: createTurnOperationKey(executionId, "completed"),
+          metadata: {
+            retrievedFragmentCount: result.retrievedFragmentCount,
+            allowedFragmentCount: result.allowedFragments.length,
+            deniedDocumentCount: result.deniedDocumentIds.length,
+            groupMemoryCount: result.usedGroupMemories.length,
+            discussionThreadCount: result.usedDiscussionThreads?.length ?? 0,
+            actionItemCount: result.usedActionItems?.length ?? 0,
+          },
+        });
+        return result;
+      } catch (error) {
+        await safelyObserve(agentExecutionObserver, {
+          ...commonObservation,
+          subjectType: "turn",
+          eventType: "turn_failed",
+          phase: "completed",
+          outcome: "error",
+          decisionReason: "answer_draft_failed",
+          operationKey: createTurnOperationKey(executionId, "failed"),
+          metadata: {},
+        });
+        throw error;
       }
-
-      return toAnswerDraftResult(answerText, context);
     },
   };
+}
+
+async function safelyObserve(
+  observer: AgentExecutionObserver | undefined,
+  input: Parameters<AgentExecutionObserver["observe"]>[0],
+): Promise<void> {
+  try {
+    await observer?.observe(input);
+  } catch {
+    // Execution observability is best-effort and must not replace the answer result.
+  }
+}
+
+export function resolveAnswerDraftExecutionId(
+  value: string | undefined,
+  createExecutionId: () => string = randomUUID,
+): string {
+  const candidate = value ?? createExecutionId();
+  const normalized = candidate.trim();
+  if (normalized.length === 0 || [...normalized].length > MAX_EXECUTION_ID_CHARS) {
+    throw new Error(`executionId must include at most ${MAX_EXECUTION_ID_CHARS} characters`);
+  }
+  return normalized;
+}
+
+function toOptionalObservationReference<
+  TName extends "groupId" | "actorOpenId",
+>(
+  name: TName,
+  value: string | undefined,
+): Partial<Record<TName, string>> {
+  const normalized = value?.trim();
+  if (
+    normalized === undefined ||
+    normalized.length === 0 ||
+    [...normalized].length > MAX_EXECUTION_ID_CHARS
+  ) {
+    return {};
+  }
+  return { [name]: normalized } as Partial<Record<TName, string>>;
+}
+
+function createTurnOperationKey(executionId: string, suffix: string): string {
+  const readable = `turn:${executionId}:${suffix}`;
+  if ([...readable].length <= MAX_EXECUTION_OPERATION_KEY_CHARS) {
+    return readable;
+  }
+  const executionHash = createHash("sha256").update(executionId).digest("hex");
+  return `turn:${executionHash}:${suffix}`;
 }
 
 function sanitizeLiveChatLimit(value: number | undefined): number | undefined {

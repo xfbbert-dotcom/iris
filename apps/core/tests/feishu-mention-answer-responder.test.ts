@@ -51,8 +51,10 @@ describe("FeishuMentionAnswerResponder", () => {
     ).resolves.toEqual({ status: "replied", replyMessageId: "reply-1" });
 
     expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      executionId: "om_message_1",
       question: "帮我总结一下",
       chatId: "oc_group_1",
+      askerId: "ou_alice",
       liveChatMessages: [{ speaker: "ou_alice", text: "帮我总结一下" }],
     });
     expect(replier.replyText).toHaveBeenCalledWith({
@@ -122,6 +124,8 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(request?.question.length).toBeLessThanOrEqual(4000);
     expect(request?.question).toContain("[truncated]");
     expect(request?.question).not.toContain("trailing detail");
+    expect(request?.executionId).toBe("om_message_1");
+    expect(request?.askerId).toBe("ou_alice");
     expect(request?.liveChatMessages).toEqual([
       { speaker: "ou_alice", text: request?.question },
     ]);
@@ -158,8 +162,10 @@ describe("FeishuMentionAnswerResponder", () => {
     });
 
     expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      executionId: "om_message_1",
       question: "summarize this",
       chatId: "oc_group_1",
+      askerId: "ou_alice",
       liveChatMessages: [{ speaker: "ou_alice", text: "summarize this" }],
     });
   });
@@ -341,8 +347,10 @@ describe("FeishuMentionAnswerResponder", () => {
 
     expect(registerUserSubmittedDocument).not.toHaveBeenCalled();
     expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      executionId: "om_doc_question",
       question: "what does this document say? https://docs.feishu.cn/docx/user_doc_token_1",
       chatId: "oc_group_1",
+      askerId: "ou_alice",
       liveChatMessages: [
         {
           speaker: "ou_alice",
