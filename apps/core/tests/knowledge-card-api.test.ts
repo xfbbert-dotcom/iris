@@ -478,6 +478,60 @@ describe("knowledge card API", () => {
     ]) expect((await app.inject({ method: "GET", url, headers: authorization })).statusCode).toBe(400);
     await app.close();
   });
+
+  it("lists proactive feedback dead letters with only safe feedback facts", async () => {
+    const runtime = runtimeFixture();
+    vi.mocked(runtime.deadLetters.list).mockResolvedValue([{
+      id: "dlq-feedback",
+      replayable: true,
+      errorCode: "internal_error",
+      failedAt: new Date("2026-07-27T08:01:00.000Z"),
+      job: {
+        kind: "proactive_signal_feedback",
+        idempotencyKey: "feishu-card:app:feedback-event",
+        eventId: "feedback-event",
+        appId: "app-id",
+        actorOpenId: "ou_feedback_actor_secret",
+        chatId: "oc_pilot",
+        messageId: "om_feedback_message_secret",
+        presentationId: "delivery-1",
+        deliveryId: "delivery-1",
+        candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+        entityVersion: 2,
+        action: "irrelevant",
+        receivedAt: new Date("2026-07-27T08:00:00.000Z"),
+        attempts: 1,
+      },
+    }]);
+    const app = createApp(runtime);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/approval-interactions/dead-letters?limit=1",
+      headers: authorization,
+    });
+
+    expect(response.json()).toEqual({
+      ok: true,
+      deadLetters: [{
+        id: "dlq-feedback",
+        replayable: true,
+        errorCode: "internal_error",
+        failedAt: "2026-07-27T08:01:00.000Z",
+        kind: "proactive_signal_feedback",
+        presentationId: "delivery-1",
+        deliveryId: "delivery-1",
+        candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+        entityVersion: 2,
+        action: "irrelevant",
+        attempts: 1,
+      }],
+    });
+    expect(response.body).not.toMatch(
+      /ou_feedback_actor_secret|om_feedback_message_secret|feedback-event|feishu-card|evidence|reason/iu,
+    );
+    await app.close();
+  });
 });
 
 function createApp(

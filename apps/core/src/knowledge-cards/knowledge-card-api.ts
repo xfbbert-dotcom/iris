@@ -316,6 +316,16 @@ function toDeadLetterResponse(deadLetter: ApprovalInteractionDeadLetter) {
       draftVersion: deadLetter.job.draftVersion,
     };
   }
+  if (deadLetter.job.kind === "proactive_signal_feedback") {
+    return {
+      ...common,
+      kind: deadLetter.job.kind,
+      deliveryId: deadLetter.job.deliveryId,
+      candidateIdempotencyKey: deadLetter.job.candidateIdempotencyKey,
+      entityVersion: deadLetter.job.entityVersion,
+      action: deadLetter.job.action,
+    };
+  }
   return {
     ...common,
     kind: deadLetter.job.kind,

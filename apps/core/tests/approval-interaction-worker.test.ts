@@ -541,6 +541,39 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.queue.acknowledge).not.toHaveBeenCalled();
   });
 
+  it("fails closed for proactive feedback without accessing sensitive or knowledge processing", async () => {
+    const processActionApproval = vi.fn(async () => ({
+      status: "applied" as const,
+      code: "action_approval_applied" as const,
+    }));
+    const feedback = feedbackJob();
+    const harness = createHarness({
+      job: feedback,
+      actionApprovalWorker: { processActionApproval },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      idempotencyKey: feedback.idempotencyKey,
+      code: "internal_error",
+    }]);
+    expect(harness.queue.handleFailure).toHaveBeenCalledWith({
+      job: feedback,
+      workerId: "approval-worker-1",
+      errorCode: "internal_error",
+      at,
+    });
+    expect(harness.queue.acknowledge).not.toHaveBeenCalled();
+    expect(harness.intentStore.resolveIntent).not.toHaveBeenCalled();
+    expect(harness.intentStore.deleteIntent).not.toHaveBeenCalled();
+    expect(harness.repository.getPresentation).not.toHaveBeenCalled();
+    expect(harness.repository.getPresentationContext).not.toHaveBeenCalled();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+    expect(harness.membershipChecker.isCurrentMember).not.toHaveBeenCalled();
+    expect(harness.cardClient.updateCard).not.toHaveBeenCalled();
+    expect(processActionApproval).not.toHaveBeenCalled();
+  });
+
   it("acknowledges a required action review with the generic review message", async () => {
     const harness = createHarness({
       job: actionJob(),
@@ -708,6 +741,28 @@ function actionJob(
     subjectVersion: 7,
     targetPolicyVersion: 3,
     action: "approve",
+    receivedAt: new Date(at.getTime() - 1_000),
+    attempts: 0,
+    ...overrides,
+  };
+}
+
+function feedbackJob(
+  overrides: Partial<Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }>> = {},
+): Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }> {
+  return {
+    kind: "proactive_signal_feedback",
+    idempotencyKey: "card-action:feedback-event-1",
+    eventId: "feedback-event-1",
+    appId: "cli_app",
+    actorOpenId: "ou_feedback_actor",
+    chatId: "oc_group",
+    messageId: "om_feedback_card",
+    presentationId: "delivery-1",
+    deliveryId: "delivery-1",
+    candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+    entityVersion: 2,
+    action: "helpful",
     receivedAt: new Date(at.getTime() - 1_000),
     attempts: 0,
     ...overrides,

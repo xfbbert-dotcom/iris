@@ -145,6 +145,10 @@ type ProcessJobInput = {
 };
 
 async function processJob(rawInput: ProcessJobInput): Promise<ApprovalInteractionWorkerResult> {
+  const { job: rawJob } = rawInput;
+  if (rawJob.kind === "proactive_signal_feedback") {
+    return deferProactiveSignalFeedback({ ...rawInput, job: rawJob });
+  }
   const resolution = await resolveSensitiveIntent(rawInput);
   if (resolution.status === "retryable") {
     return handleTransientFailure(rawInput, "repository_unavailable");
@@ -159,14 +163,15 @@ async function processJob(rawInput: ProcessJobInput): Promise<ApprovalInteractio
       code: "immutable_intent_conflict",
     };
   }
-  const input: ProcessJobInput = {
+  const input = {
     ...rawInput,
+    job: rawJob,
     ...(resolution.intent === undefined ? {} : { resolvedIntent: resolution.intent }),
   };
   const { job } = input;
   let presentation: KnowledgeDraftPresentation | undefined;
 
-  if (job.kind !== "knowledge_draft_confirmation") {
+  if (job.kind === "action_proposal_approval") {
     return processActionApprovalJob({ ...input, job });
   }
 
@@ -433,6 +438,22 @@ async function handleTransientFailure(
     status: failure.action === "dead_lettered" ? "dead_lettered" : "retrying",
     idempotencyKey: input.job.idempotencyKey,
     code,
+  };
+}
+
+async function deferProactiveSignalFeedback(
+  input: ProcessJobInput & { job: Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }> },
+): Promise<ApprovalInteractionWorkerResult> {
+  const failure = await input.queue.handleFailure({
+    job: input.job,
+    workerId: input.workerId,
+    errorCode: "internal_error",
+    at: requireDate(input.now()),
+  });
+  return {
+    status: failure.action === "dead_lettered" ? "dead_lettered" : "retrying",
+    idempotencyKey: input.job.idempotencyKey,
+    code: "internal_error",
   };
 }
 
