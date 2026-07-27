@@ -306,14 +306,22 @@ describe("Core server startup", () => {
     expect(createActionReviewRuntime).toHaveBeenCalledOnce();
   });
 
-  it("passes the runtime-owned proactive repository to knowledge-card composition", async () => {
+  it("closes knowledge cards before their runtime-owned proactive repository", async () => {
+    const order: string[] = [];
     const runtimeController = new RuntimeController(createDefaultRuntimeConfig());
     const proactiveSignalRepository = {} as ProactiveSignalRepository;
     const proactiveSignalRuntime: ProactiveSignalRuntime = {
       repository: proactiveSignalRepository,
-      close: vi.fn(async () => undefined),
+      close: vi.fn(async () => {
+        order.push("close-proactive-signals");
+      }),
     };
-    const createKnowledgeCardRuntime = vi.fn(() => undefined);
+    const knowledgeCardRuntime = fakeKnowledgeCardRuntime({
+      close: vi.fn(async () => {
+        order.push("close-knowledge-cards");
+      }),
+    });
+    const createKnowledgeCardRuntime = vi.fn(() => knowledgeCardRuntime);
     const app = buildApp({
       runtimeController,
       createProactiveSignalRuntime: () => proactiveSignalRuntime,
@@ -337,6 +345,8 @@ describe("Core server startup", () => {
     });
 
     await app.close();
+    expect(order).toEqual(["close-knowledge-cards", "close-proactive-signals"]);
+    expect(knowledgeCardRuntime.close).toHaveBeenCalledOnce();
     expect(proactiveSignalRuntime.close).toHaveBeenCalledOnce();
   });
 

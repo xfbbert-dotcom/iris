@@ -625,6 +625,50 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.intentStore.resolveIntent).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["delayed", "retrying"],
+    ["dead_lettered", "dead_lettered"],
+  ] as const)(
+    "routes a failed proactive feedback acknowledgement to %s without entering other workflows",
+    async (action, status) => {
+      const feedback = feedbackJob();
+      const processActionApproval = vi.fn();
+      const harness = createHarness({
+        job: feedback,
+        proactiveSignalFeedbackWorker: {
+          processFeedback: vi.fn(async () => ({
+            status: "applied" as const,
+            code: "feedback_applied" as const,
+          })),
+        },
+        actionApprovalWorker: { processActionApproval },
+        acknowledge: async () => {
+          throw new Error("redis unavailable");
+        },
+        handleFailure: async () => ({ action }),
+      });
+
+      await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+        status,
+        idempotencyKey: feedback.idempotencyKey,
+        code: "redis_unavailable",
+      }]);
+      expect(harness.queue.handleFailure).toHaveBeenCalledWith({
+        job: feedback,
+        workerId: "approval-worker-1",
+        errorCode: "redis_unavailable",
+        at,
+      });
+      expect(harness.repository.getPresentation).not.toHaveBeenCalled();
+      expect(harness.repository.getPresentationContext).not.toHaveBeenCalled();
+      expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+      expect(harness.intentStore.resolveIntent).not.toHaveBeenCalled();
+      expect(harness.intentStore.deleteIntent).not.toHaveBeenCalled();
+      expect(processActionApproval).not.toHaveBeenCalled();
+      expect(harness.cardClient.updateCard).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not delegate non-feedback interactions to the proactive worker", async () => {
     const processFeedback = vi.fn();
     const harness = createHarness({
