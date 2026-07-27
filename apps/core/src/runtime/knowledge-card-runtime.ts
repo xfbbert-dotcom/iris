@@ -5,6 +5,7 @@ import {
   readFeishuAuthConfig,
   readFeishuOpenApiConfig,
   readKnowledgeCardRuntimeConfig,
+  readProactiveFeedbackConfig,
   type EnvLike,
 } from "../config/env.js";
 import type { DatabaseConfig } from "../database/database-config.js";
@@ -61,6 +62,12 @@ import type {
 } from "../knowledge-cards/knowledge-card-repository.js";
 import { createPostgresKnowledgeCardRepository } from "../knowledge-cards/postgres-knowledge-card-repository.js";
 import {
+  createProactiveSignalFeedbackWorker,
+} from "../proactive-signals/proactive-signal-feedback-worker.js";
+import type {
+  ProactiveSignalRepository,
+} from "../proactive-signals/proactive-signal-repository.js";
+import {
   createRedisApprovalInteractionQueue,
   type RedisApprovalInteractionQueueClient,
 } from "../knowledge-cards/redis-approval-interaction-queue.js";
@@ -78,7 +85,10 @@ type KnowledgeCardRedisClient = RedisApprovalInteractionQueueClient & {
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
 };
-type KnowledgeCardRuntimeGate = Pick<RuntimeController, "canGenerateKnowledgeDrafts">;
+type KnowledgeCardRuntimeGate = Pick<
+  RuntimeController,
+  "canGenerateKnowledgeDrafts" | "canProactivelySpeak"
+>;
 
 export type KnowledgeCardRuntimeRepository = KnowledgeCardRepository &
   Pick<KnowledgeDraftRepository, "getDraft">;
@@ -148,10 +158,12 @@ export type KnowledgeCardRuntimeDependencies = {
 export function createKnowledgeCardRuntime({
   env = process.env,
   runtimeController,
+  proactiveSignalRepository,
   dependencies = {},
 }: {
   env?: EnvLike;
   runtimeController?: KnowledgeCardRuntimeGate;
+  proactiveSignalRepository?: ProactiveSignalRepository;
   dependencies?: KnowledgeCardRuntimeDependencies;
 } = {}): KnowledgeCardRuntime | undefined {
   const config = readKnowledgeCardRuntimeConfig(env);
@@ -162,6 +174,7 @@ export function createKnowledgeCardRuntime({
 
   const feishuConfig = readFeishuOpenApiConfig(env);
   const feishuAuthConfig = readFeishuAuthConfig(env);
+  const proactiveFeedbackConfig = readProactiveFeedbackConfig(env);
   const createPool = dependencies.createPostgresPool ?? createPostgresPool;
   const createRedis = dependencies.createRedisClient ??
     ((url: string) => createClient({ url }) as unknown as KnowledgeCardRedisClient);
@@ -221,6 +234,15 @@ export function createKnowledgeCardRuntime({
       baseUrl: feishuConfig.baseUrl,
       tokenProvider,
     });
+    const proactiveSignalFeedbackWorker = proactiveSignalRepository === undefined
+      ? undefined
+      : createProactiveSignalFeedbackWorker({
+          repository: proactiveSignalRepository,
+          membershipChecker,
+          canProactivelySpeak: (groupId) => runtimeController.canProactivelySpeak(groupId),
+          botOpenId: config.botOpenId,
+          suppressionDays: proactiveFeedbackConfig.suppressionDays,
+        });
     const enabledGroups = new Set(config.enabledGroupIds);
     const canUseKnowledgeCards = (groupId: string): boolean => {
       const normalized = groupId.trim();
@@ -261,6 +283,7 @@ export function createKnowledgeCardRuntime({
       leaseMs: EXTERNAL_LEASE_MS,
       intentStore,
       actionApprovalWorker,
+      proactiveSignalFeedbackWorker,
     });
     dispatcherLoop = createDispatcherPollingLoop({
       worker: dispatcher,

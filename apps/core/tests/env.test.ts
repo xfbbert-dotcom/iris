@@ -14,10 +14,29 @@ import {
   readModelProviderConfig,
   readMemoryExtractionRuntimeConfig,
   readKnowledgeCardRuntimeConfig,
+  readProactiveFeedbackConfig,
   readProactiveSignalDeliveryRuntimeConfig,
   readReindexWorkerRuntimeConfig,
   readServerPort,
 } from "../src/config/env.js";
+
+describe("readProactiveFeedbackConfig", () => {
+  it("uses the 30-day default and accepts a bounded override", () => {
+    expect(readProactiveFeedbackConfig({})).toEqual({ suppressionDays: 30 });
+    expect(readProactiveFeedbackConfig({
+      IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS: "45",
+    })).toEqual({ suppressionDays: 45 });
+  });
+
+  it.each(["0", "366", "1.5", "thirty"])(
+    "rejects invalid suppression days %s",
+    (value) => {
+      expect(() => readProactiveFeedbackConfig({
+        IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS: value,
+      })).toThrow("IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS");
+    },
+  );
+});
 
 describe("readAgentExecutionLedgerRuntimeConfig", () => {
   it("is disabled unless explicitly enabled", () => {

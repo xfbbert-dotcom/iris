@@ -541,29 +541,47 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.queue.acknowledge).not.toHaveBeenCalled();
   });
 
-  it("fails closed for proactive feedback without accessing sensitive or knowledge processing", async () => {
+  it.each([
+    [
+      { status: "applied" as const, code: "feedback_applied" as const },
+      { status: "applied", code: "feedback_applied" },
+    ],
+    [
+      { status: "already_applied" as const, code: "duplicate_feedback" as const },
+      { status: "already_applied", code: "duplicate_feedback" },
+    ],
+    [
+      { status: "denied" as const, code: "runtime_disabled" as const },
+      { status: "denied", code: "runtime_disabled" },
+    ],
+    [
+      { status: "denied" as const, code: "stale_delivery" as const },
+      { status: "denied", code: "stale_delivery" },
+    ],
+  ] as const)("acknowledges governed proactive feedback result %#", async (feedbackResult, expected) => {
     const processActionApproval = vi.fn(async () => ({
       status: "applied" as const,
       code: "action_approval_applied" as const,
     }));
+    const processFeedback = vi.fn(async () => feedbackResult);
     const feedback = feedbackJob();
     const harness = createHarness({
       job: feedback,
       actionApprovalWorker: { processActionApproval },
+      proactiveSignalFeedbackWorker: { processFeedback },
     });
 
     await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
-      status: "retrying",
+      status: expected.status,
       idempotencyKey: feedback.idempotencyKey,
-      code: "internal_error",
+      code: expected.code,
     }]);
-    expect(harness.queue.handleFailure).toHaveBeenCalledWith({
+    expect(processFeedback).toHaveBeenCalledWith(feedback);
+    expect(harness.queue.acknowledge).toHaveBeenCalledWith({
       job: feedback,
       workerId: "approval-worker-1",
-      errorCode: "internal_error",
-      at,
     });
-    expect(harness.queue.acknowledge).not.toHaveBeenCalled();
+    expect(harness.queue.handleFailure).not.toHaveBeenCalled();
     expect(harness.intentStore.resolveIntent).not.toHaveBeenCalled();
     expect(harness.intentStore.deleteIntent).not.toHaveBeenCalled();
     expect(harness.repository.getPresentation).not.toHaveBeenCalled();
@@ -572,6 +590,50 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.membershipChecker.isCurrentMember).not.toHaveBeenCalled();
     expect(harness.cardClient.updateCard).not.toHaveBeenCalled();
     expect(processActionApproval).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["delayed", "retrying"],
+    ["dead_lettered", "dead_lettered"],
+  ] as const)("keeps %s retry ownership for retryable proactive feedback", async (action, status) => {
+    const feedback = feedbackJob();
+    const harness = createHarness({
+      job: feedback,
+      proactiveSignalFeedbackWorker: {
+        processFeedback: vi.fn(async () => ({
+          status: "retryable" as const,
+          code: "repository_unavailable" as const,
+        })),
+      },
+      handleFailure: async () => ({ action }),
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status,
+      idempotencyKey: feedback.idempotencyKey,
+      code: "repository_unavailable",
+    }]);
+    expect(harness.queue.handleFailure).toHaveBeenCalledWith({
+      job: feedback,
+      workerId: "approval-worker-1",
+      errorCode: "repository_unavailable",
+      at,
+    });
+    expect(harness.queue.acknowledge).not.toHaveBeenCalled();
+    expect(harness.repository.getPresentation).not.toHaveBeenCalled();
+    expect(harness.repository.getPresentationContext).not.toHaveBeenCalled();
+    expect(harness.intentStore.resolveIntent).not.toHaveBeenCalled();
+  });
+
+  it("does not delegate non-feedback interactions to the proactive worker", async () => {
+    const processFeedback = vi.fn();
+    const harness = createHarness({
+      proactiveSignalFeedbackWorker: { processFeedback },
+    });
+
+    await harness.worker.processBatch({ limit: 1 });
+
+    expect(processFeedback).not.toHaveBeenCalled();
   });
 
   it("acknowledges a required action review with the generic review message", async () => {
@@ -671,6 +733,11 @@ type HarnessOverrides = {
   actionApprovalWorker?: {
     processActionApproval: (job: Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>) => Promise<any>;
   };
+  proactiveSignalFeedbackWorker?: {
+    processFeedback: (
+      job: Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }>,
+    ) => Promise<any>;
+  };
   resolveIntent?: (...args: any[]) => Promise<any>;
   deleteIntent?: (...args: any[]) => Promise<void>;
 };
@@ -717,6 +784,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
       leaseMs: 30_000,
       now: () => new Date(at),
       actionApprovalWorker: overrides.actionApprovalWorker,
+      proactiveSignalFeedbackWorker: overrides.proactiveSignalFeedbackWorker,
       intentStore,
     }),
   };

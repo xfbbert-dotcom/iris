@@ -5,6 +5,9 @@ import type {
   ActionApprovalWorkerResult,
 } from "../action-approvals/action-approval-worker.js";
 import { KnowledgeDraftEvidenceError } from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
+import type {
+  ProactiveSignalFeedbackWorkerResult,
+} from "../proactive-signals/proactive-signal-feedback-worker.js";
 
 import type { ApprovalInteractionQueue } from "./approval-interaction-queue.js";
 import {
@@ -50,6 +53,9 @@ export type ApprovalInteractionWorkerCode =
   | "stale_presentation"
   | "invalid_membership_evidence"
   | "evidence_invalidated"
+  | "feedback_applied"
+  | "duplicate_feedback"
+  | "stale_delivery"
   | "membership_unavailable"
   | "repository_unavailable"
   | "redis_unavailable"
@@ -77,6 +83,11 @@ export type ApprovalInteractionWorkerDependencies = {
     ):
       Promise<ActionApprovalWorkerResult>;
   };
+  proactiveSignalFeedbackWorker?: {
+    processFeedback(
+      job: Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }>,
+    ): Promise<ProactiveSignalFeedbackWorkerResult>;
+  };
 };
 
 export function createApprovalInteractionWorker({
@@ -91,6 +102,7 @@ export function createApprovalInteractionWorker({
   now = () => new Date(),
   intentStore,
   actionApprovalWorker,
+  proactiveSignalFeedbackWorker,
 }: ApprovalInteractionWorkerDependencies) {
   const safeBotOpenId = requireIdentifier("botOpenId", botOpenId);
   const safeWorkerId = requireIdentifier("workerId", workerId);
@@ -119,6 +131,7 @@ export function createApprovalInteractionWorker({
           now,
           intentStore,
           actionApprovalWorker,
+          proactiveSignalFeedbackWorker,
         }));
       }
       return results;
@@ -142,12 +155,14 @@ type ProcessJobInput = {
   intentStore?: ApprovalInteractionWorkerDependencies["intentStore"];
   resolvedIntent?: ApprovalInteractionIntent;
   actionApprovalWorker?: ApprovalInteractionWorkerDependencies["actionApprovalWorker"];
+  proactiveSignalFeedbackWorker?:
+    ApprovalInteractionWorkerDependencies["proactiveSignalFeedbackWorker"];
 };
 
 async function processJob(rawInput: ProcessJobInput): Promise<ApprovalInteractionWorkerResult> {
   const { job: rawJob } = rawInput;
   if (rawJob.kind === "proactive_signal_feedback") {
-    return deferProactiveSignalFeedback({ ...rawInput, job: rawJob });
+    return processProactiveSignalFeedback({ ...rawInput, job: rawJob });
   }
   const resolution = await resolveSensitiveIntent(rawInput);
   if (resolution.status === "retryable") {
@@ -441,19 +456,52 @@ async function handleTransientFailure(
   };
 }
 
-async function deferProactiveSignalFeedback(
+async function processProactiveSignalFeedback(
   input: ProcessJobInput & { job: Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }> },
+): Promise<ApprovalInteractionWorkerResult> {
+  if (input.proactiveSignalFeedbackWorker === undefined) {
+    return handleProactiveSignalFeedbackFailure(input, "internal_error");
+  }
+  let result: ProactiveSignalFeedbackWorkerResult;
+  try {
+    result = await input.proactiveSignalFeedbackWorker.processFeedback(input.job);
+  } catch {
+    return handleProactiveSignalFeedbackFailure(input, "internal_error");
+  }
+  if (result.status === "retryable") {
+    return handleProactiveSignalFeedbackFailure(input, result.code as Extract<
+      ProactiveSignalFeedbackWorkerResult["code"],
+      "membership_unavailable" | "repository_unavailable" | "internal_error"
+    >);
+  }
+  try {
+    await input.queue.acknowledge({ job: input.job, workerId: input.workerId });
+  } catch {
+    return handleProactiveSignalFeedbackFailure(input, "redis_unavailable");
+  }
+  return {
+    status: result.status,
+    idempotencyKey: input.job.idempotencyKey,
+    code: result.code,
+  };
+}
+
+async function handleProactiveSignalFeedbackFailure(
+  input: ProcessJobInput & { job: Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }> },
+  code: Extract<ApprovalInteractionWorkerCode,
+    "membership_unavailable" | "repository_unavailable" | "redis_unavailable" | "internal_error"
+  >,
 ): Promise<ApprovalInteractionWorkerResult> {
   const failure = await input.queue.handleFailure({
     job: input.job,
     workerId: input.workerId,
-    errorCode: "internal_error",
+    errorCode: code,
     at: requireDate(input.now()),
   });
   return {
     status: failure.action === "dead_lettered" ? "dead_lettered" : "retrying",
     idempotencyKey: input.job.idempotencyKey,
-    code: "internal_error",
+    code,
   };
 }
 
@@ -529,6 +577,9 @@ function renderStatusCard(code: ApprovalInteractionWorkerCode): string {
     stale_presentation: "This draft changed. Use the latest knowledge card.",
     invalid_membership_evidence: "Membership verification expired. Try again.",
     evidence_invalidated: "This draft can no longer be reviewed because its evidence changed.",
+    feedback_applied: "Feedback recorded.",
+    duplicate_feedback: "Feedback was already recorded.",
+    stale_delivery: "This reminder is no longer current.",
     evidence_or_policy_invalid: "This publication can no longer be reviewed because its evidence or policy changed.",
     review_required: "请先打开完整正文审阅页并完成审阅",
     membership_unavailable: "Membership could not be verified. Try again later.",

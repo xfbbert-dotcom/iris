@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeController } from "../src/admin/runtime-controller.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
+import type { ApprovalInteractionJob } from "../src/knowledge-cards/knowledge-card.js";
+import type { ProactiveSignalRepository } from "../src/proactive-signals/proactive-signal-repository.js";
 import {
   createKnowledgeCardRuntime,
   type KnowledgeCardRuntimeDependencies,
@@ -45,6 +47,65 @@ describe("KnowledgeCardRuntime", () => {
     )).resolves.toEqual({ status: "applied", code: "action_approval_applied" });
     expect(actionWorker.processActionApproval).toHaveBeenCalledOnce();
     expect(() => runtime.bindActionApprovalWorker(actionWorker)).toThrow(/already bound/iu);
+
+    await runtime.close();
+  });
+
+  it("constructs proactive feedback processing with the shared membership checker and live gate", async () => {
+    const dependencies = runtimeDependencies();
+    const controller = enabledController();
+    const canProactivelySpeak = vi.spyOn(controller, "canProactivelySpeak");
+    const proactiveSignalRepository = {
+      recordFeedback: vi.fn(async () => ({ status: "applied" as const })),
+    } as unknown as ProactiveSignalRepository;
+    const runtime = createKnowledgeCardRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS: "45",
+      },
+      runtimeController: controller,
+      proactiveSignalRepository,
+      dependencies,
+    })!;
+    const membershipChecker =
+      dependencies.createFeishuGroupMembershipChecker.mock.results[0]?.value;
+    membershipChecker?.isCurrentMember.mockResolvedValue(true);
+    const interactionDependencies = dependencies.createInteractionWorker.mock.calls[0]?.[0];
+    const feedbackWorker = interactionDependencies?.proactiveSignalFeedbackWorker;
+    const feedbackJob: Extract<
+      ApprovalInteractionJob,
+      { kind: "proactive_signal_feedback" }
+    > = {
+      kind: "proactive_signal_feedback",
+      idempotencyKey: "card-action:feedback-event-1",
+      eventId: "feedback-event-1",
+      appId: "app-id",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_pilot",
+      messageId: "om_card",
+      presentationId: "delivery-1",
+      deliveryId: "delivery-1",
+      candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+      entityVersion: 2,
+      action: "irrelevant",
+      receivedAt: new Date("2026-07-27T00:00:00.000Z"),
+      attempts: 0,
+    };
+
+    await expect(feedbackWorker?.processFeedback(feedbackJob)).resolves.toMatchObject({
+      status: "applied",
+      code: "feedback_applied",
+    });
+    expect(membershipChecker?.isCurrentMember).toHaveBeenCalledWith({
+      chatId: "oc_pilot",
+      openId: "ou_reviewer",
+    });
+    expect(canProactivelySpeak).toHaveBeenCalledTimes(2);
+    expect(proactiveSignalRepository.recordFeedback).toHaveBeenCalledWith(expect.objectContaining({
+      groupId: "oc_pilot",
+      feedback: "irrelevant",
+      suppressUntil: expect.any(Date),
+    }));
 
     await runtime.close();
   });

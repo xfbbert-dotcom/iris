@@ -88,6 +88,10 @@ export type KnowledgeCardRuntimeConfig =
       botOpenId: string;
     };
 
+export type ProactiveFeedbackConfig = {
+  suppressionDays: number;
+};
+
 export type ActionApprovalRuntimeConfig =
   | { enabled: false }
   | {
@@ -458,6 +462,19 @@ export function readKnowledgeCardRuntimeConfig(
       100,
     ),
     botOpenId,
+  };
+}
+
+export function readProactiveFeedbackConfig(
+  env: EnvLike = process.env,
+): ProactiveFeedbackConfig {
+  return {
+    suppressionDays: readBoundedPositiveIntegerEnv(
+      "IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS",
+      env.IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS,
+      30,
+      365,
+    ),
   };
 }
 

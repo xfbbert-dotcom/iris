@@ -17,6 +17,10 @@ import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js"
 import type { ActionApprovalRuntime } from "../src/runtime/action-approval-runtime.js";
 import type { ActionReviewRuntime } from "../src/runtime/action-review-runtime.js";
 import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
+import type {
+  ProactiveSignalRepository,
+  ProactiveSignalRuntime,
+} from "../src/proactive-signals/proactive-signal-repository.js";
 import type { ProactiveSignalDeliveryRuntime } from "../src/runtime/proactive-signal-delivery-runtime.js";
 import type { ProactiveSignalPlannerRuntime } from "../src/runtime/proactive-signal-planner-runtime.js";
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
@@ -222,6 +226,7 @@ describe("Core server startup", () => {
     const runtimeControlRuntime = fakeRuntimeControlRuntime({
       onClose: () => order.push("close-runtime-control"),
     });
+    const proactiveSignalRepository = {} as ProactiveSignalRepository;
     const knowledgeCardRuntime = fakeKnowledgeCardRuntime({
       start: vi.fn(async () => {
         order.push("start-knowledge-cards");
@@ -250,7 +255,10 @@ describe("Core server startup", () => {
       }),
     });
     const createKnowledgeCardRuntime = vi.fn((input) => {
-      expect(input).toEqual({ runtimeController: runtimeControlRuntime.runtimeControl.controller });
+      expect(input).toEqual({
+        runtimeController: runtimeControlRuntime.runtimeControl.controller,
+        proactiveSignalRepository,
+      });
       return knowledgeCardRuntime;
     });
     const createActionApprovalRuntime = vi.fn((input) => {
@@ -272,6 +280,7 @@ describe("Core server startup", () => {
         createReindexWorkerRuntime: () => undefined,
         createMemoryExtractionRuntime: () => undefined,
         createKnowledgeDraftRuntime: () => undefined,
+        proactiveSignalRepository,
         createKnowledgeCardRuntime,
         createActionApprovalRuntime,
         createActionReviewRuntime,
@@ -295,6 +304,40 @@ describe("Core server startup", () => {
     expect(createKnowledgeCardRuntime).toHaveBeenCalledOnce();
     expect(createActionApprovalRuntime).toHaveBeenCalledOnce();
     expect(createActionReviewRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("passes the runtime-owned proactive repository to knowledge-card composition", async () => {
+    const runtimeController = new RuntimeController(createDefaultRuntimeConfig());
+    const proactiveSignalRepository = {} as ProactiveSignalRepository;
+    const proactiveSignalRuntime: ProactiveSignalRuntime = {
+      repository: proactiveSignalRepository,
+      close: vi.fn(async () => undefined),
+    };
+    const createKnowledgeCardRuntime = vi.fn(() => undefined);
+    const app = buildApp({
+      runtimeController,
+      createProactiveSignalRuntime: () => proactiveSignalRuntime,
+      createKnowledgeCardRuntime,
+      createAnswerDraftRuntime: () => undefined,
+      createAgentExecutionLedgerRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => undefined,
+      createKnowledgeDraftRuntime: () => undefined,
+      createActionApprovalRuntime: () => undefined,
+      createActionReviewRuntime: () => undefined,
+      createProactiveSignalPlannerRuntime: () => undefined,
+      createProactiveSignalDeliveryRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    expect(createKnowledgeCardRuntime).toHaveBeenCalledWith({
+      runtimeController,
+      proactiveSignalRepository,
+    });
+
+    await app.close();
+    expect(proactiveSignalRuntime.close).toHaveBeenCalledOnce();
   });
 
   it("starts proactive signal delivery after approvals and before event workers", async () => {

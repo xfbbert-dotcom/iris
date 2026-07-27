@@ -390,7 +390,11 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     )({ runtimeController });
     knowledgeCardRuntime = (
       dependencies.createKnowledgeCardRuntime ?? createDefaultKnowledgeCardRuntime
-    )({ runtimeController });
+    )({
+      runtimeController,
+      proactiveSignalRepository:
+        dependencies.proactiveSignalRepository ?? proactiveSignalRuntime?.repository,
+    });
     actionApprovalRuntime = (
       dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
     )({
