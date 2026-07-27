@@ -4,7 +4,7 @@
 
 **Goal:** Let current Feishu group members rate proactive Iris reminders as helpful or irrelevant, suppress repeated irrelevant reminders, and show bounded aggregate effectiveness in the Admin Console.
 
-**Architecture:** Extend the existing proactive delivery card and authenticated card-action queue with a third typed interaction. A focused worker performs runtime, delivery-binding, and live membership checks before an atomic Postgres feedback write; irrelevant feedback updates a bounded suppression projection used during future candidate persistence. The existing group-scoped proactive Admin Console reads aggregate metrics only.
+**Architecture:** Extend the existing proactive delivery card and authenticated card-action queue with a third typed interaction. A focused worker performs runtime, delivery-binding, and live membership checks before an atomic Postgres feedback write; irrelevant feedback updates a bounded suppression projection checked during candidate persistence, approval, claim, and final pre-send authorization. Proactive delivery requires the feedback-card runtime for every delivery group. The existing group-scoped proactive Admin Console reads aggregate metrics only.
 
 **Tech Stack:** TypeScript, Fastify, PostgreSQL, Redis, Feishu card schema 2.0, Vitest, browser-native HTML/CSS/JavaScript.
 
@@ -18,6 +18,8 @@
 - `IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS` defaults to `30` and accepts integers from `1` through `365`.
 - One actor contributes at most one result per delivery; the first valid result wins.
 - An irrelevant result suppresses the same `(groupId, kind, entityId)` only until the bounded expiry.
+- A suppression committed after queue claim must atomically cancel the delivery before external send.
+- Proactive delivery must fail closed unless knowledge-card feedback is enabled for every delivery group.
 - Admin responses are group-scoped, bounded, and contain aggregates only.
 
 ---
@@ -616,4 +618,3 @@ gh pr checks --repo xfbbert-dotcom/iris --watch
 ```
 
 Expected: Core and AI Worker checks pass.
-

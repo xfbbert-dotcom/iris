@@ -97,6 +97,13 @@ scanner reports `suppressedCount` separately from `recordedCount` and
 missing work. A later entity version remains suppressed until the bounded period
 expires; after expiry it can be considered normally.
 
+Suppression is also checked during approval, queue claim, and one final atomic
+database authorization immediately before external send. If feedback creates a
+suppression after a delivery was claimed, that authorization changes the delivery
+to `cancelled`, clears its lease, and prevents the Feishu request. One final
+synchronous runtime gate follows authorization and immediately precedes the
+external client call.
+
 ## 5. Data Model
 
 Migration `0040_proactive_signal_feedback.sql` adds:
@@ -155,6 +162,11 @@ A focused proactive feedback worker:
 The existing approval interaction worker delegates only this new job kind to the
 focused worker and retains queue acknowledgement/retry ownership.
 
+Proactive delivery cannot be configured for a group unless knowledge-card feedback
+is enabled for that group. Runtime assembly also fails closed if a delivery runtime
+exists without the feedback runtime, and startup cleanup closes the unused delivery
+resources.
+
 ### 6.3 Repository
 
 The proactive repository gains:
@@ -189,6 +201,9 @@ No actor IDs, message bodies, evidence text, or candidate content are exposed.
 - Membership or repository outages are retried; they never count as feedback.
 - Runtime disable is checked both before external membership I/O and before the
   database mutation.
+- Active suppression is rechecked atomically after claim and immediately before
+  the Feishu send.
+- Proactive delivery cannot start without the corresponding feedback-card runtime.
 - A failed Admin Console summary does not enable speech or mutate feedback.
 - Migration absence makes the feedback capability unavailable; it does not
   weaken proactive delivery gates.
@@ -206,11 +221,11 @@ No actor IDs, message bodies, evidence text, or candidate content are exposed.
 4. One actor contributes at most one feedback result per delivery.
 5. Irrelevant feedback suppresses the same group/kind/entity for the configured
    period; helpful feedback does not.
-6. Suppressed candidates are counted separately and are not persisted or sent.
+6. Suppressed candidates are counted separately and are not persisted or sent,
+   including when suppression arrives after queue claim.
 7. Admin APIs and UI expose bounded aggregate results without actor identity or
    message content.
 8. Focused tests, the full Core test suite, typecheck, build, migration checks,
    and deployment contract checks pass.
 9. Production remains fail closed after deployment until a separate controlled
    Feishu card-feedback acceptance pass is completed.
-

@@ -10,6 +10,10 @@ The internal rollout runbook lives at:
 
 `docs/operations/internal-rollout-runbook.md`
 
+Reusable engineering failures and prevention rules live at:
+
+`docs/operations/engineering-failure-ledger.md`
+
 The Phase 5B-1 knowledge-card confirmation acceptance contract lives at:
 
 `docs/runbooks/iris-knowledge-card-confirmation-acceptance.md`
