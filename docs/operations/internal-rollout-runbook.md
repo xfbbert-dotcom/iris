@@ -1018,6 +1018,43 @@ requires ordinary discussion, evidence promotion, one explicit commitment, an @I
 completion, reopening, no unsolicited reply, no cross-group state, and zero queue, DLQ, and
 projection-repair counts before rollback or expansion decisions.
 
+## Proactive Feedback-Card Gray Gate
+
+Migration `0040_proactive_signal_feedback.sql` adds the feedback event ledger and active
+suppression projection. Apply it through the normal reviewed migration job before any feedback
+card can be accepted. The feedback retention setting is independent of all proactive runtime
+gates:
+
+```text
+IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS=30
+```
+
+It accepts only whole-day values from `1` through `365`. This setting does not enable planning,
+delivery, proactive speech, Iris globally, or Caddy.
+
+Production remains disabled pending one real Feishu feedback-card gray pass. Until the controller
+approves that pass, keep global and desired-global runtime disabled, `proactiveSpeech=false`, all
+proactive planner and delivery environment gates disabled, and Caddy stopped. Do not treat a
+successful local build, a migration, or an Admin Console aggregate as rollout approval.
+
+For the controller-approved one-group pass:
+
+1. Confirm privately that Core, Postgres, Redis, and AI Worker are healthy; event, document,
+   reindex, memory, interaction, and proactive queues and DLQs must be clean before enabling the
+   minimum approved path.
+2. Use one explicitly allowlisted group and the minimum runtime capability needed to deliver a
+   single bounded proactive card. Do not expose `/internal/*` or the AI Worker through Caddy.
+3. Have a current member submit one feedback-card action. Confirm the callback is accepted only
+   for the exact sent delivery and its current group membership.
+4. Inspect the group-scoped feedback summary only: total feedback, helpful count, irrelevant
+   count, helpful rate, active suppression count, and last feedback time. It must not render actor
+   identifiers, message bodies, evidence text, prompts, or answers.
+5. For an `irrelevant` result, confirm one active suppression only for the matching group, signal
+   kind, and entity until the configured expiry. A `helpful` result must not create a suppression.
+6. Return the runtime to the disabled state and recheck service health plus all pending/DLQ counts.
+   Stop immediately and keep the loop disabled if binding, membership, queue, privacy, or runtime
+   gate evidence is not clean; do not replay queues or make extra model requests during triage.
+
 ## Verification Before Internal Use
 
 Run the local verification suite before changing rollout configuration:
