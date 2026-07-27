@@ -97,3 +97,13 @@
 - Ordered Epsilon replay did not pass: the first replay request hit `upstream_status=429` with `classification=provider_rate_limited`.
 - The replay stopped immediately; no further model retries were made. Epsilon request 01 was marked `skipped/provider_rate_limited_429`; later Epsilon requests remain pending for a future controlled replay.
 - Final state remained fail-closed: `globalEnabled=false`, `desiredGlobalEnabled=false`, `proactiveSpeech=false`, Caddy inactive, memory extraction disabled/running=false, and memory DLQ empty.
+
+## Semantic Thread/Action Heartbeat - 2026-07-27 17:04 CST
+
+- Read-only safety preflight passed before the only provider probe: `globalEnabled=false`, `desiredGlobalEnabled=false`, `proactiveSpeech=false`, Caddy inactive, Core/Postgres/Redis/AI Worker healthy, memory extraction disabled/running=false, all event/document/reindex/memory pending and DLQ counts zero, and the semantic DLQ empty.
+- The deployed candidate remained `c2bd13ca0f959d83eb8a877948748183a150d736`; running Core and AI Worker image tags matched that SHA. PR #13 head `ab9915814e7961db23e2b44e98ce7857504c0eee` still had successful `Core` and `AI Worker` checks.
+- The one permitted minimal V2 provider probe succeeded with HTTP `200`.
+- A fresh isolated Eta group and six append-only marker messages were then created with no pre-existing thread or action state. The six extraction requests were replayed strictly one at a time in original message order, waiting for all extraction queues to drain before each next request.
+- All six provider requests completed successfully, but each returned zero memory, thread, action, resolution, and dependency candidates (`v3:p0:a0:r0:d0:c0`). The read-only lifecycle inspector therefore failed with zero qualifying threads; the Eta group also contained zero actions. This is recorded as a semantic empty-result acceptance failure, not a quota, timeout, transport, or invalid-response failure.
+- No further provider request was made after the failed lifecycle inspection. Append-only messages and run history were retained.
+- Final fail-closed state was restored and rechecked: `globalEnabled=false`, `desiredGlobalEnabled=false`, `proactiveSpeech=false`, Caddy stopped, memory extraction disabled/running=false with blank thread/action allowlists, Core/Postgres/Redis/AI Worker healthy, all event/document/reindex/memory pending, processing, delayed, DLQ, and projection-repair counts zero, and Core/AI Worker still on the deployed candidate SHA.
