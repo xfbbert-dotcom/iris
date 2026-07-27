@@ -93,6 +93,47 @@ describe("createPostgresConversationStateRepository", () => {
     );
   });
 
+  it("atomically creates an action linked to a candidate thread", async () => {
+    const baseThreadOperation = createThreadOperation();
+    const threadOperation: CreateConversationStateOperation = {
+      ...baseThreadOperation,
+      thread: { ...baseThreadOperation.thread, status: "candidate" },
+    };
+    const baseActionOperation = createActionOperation();
+    const actionOperation: CreateConversationStateOperation = {
+      ...baseActionOperation,
+      action: { ...baseActionOperation.action, threadId: "thread-1" },
+    };
+    const client = scriptedClient([
+      step(/begin/u),
+      step(/from conversation_state_operation_claims/u, []),
+      step(/from discussion_threads[\s\S]+for update/u, []),
+      step(/from action_items[\s\S]+for update/u, []),
+      step(/from conversation_messages[\s\S]+chat_id = \$2/u, [{ id: "message-1" }]),
+      step(/insert into discussion_threads/u),
+      step(/insert into discussion_thread_evidence/u),
+      step(/insert into discussion_thread_events/u),
+      step(/insert into discussion_thread_event_evidence/u),
+      step(/insert into conversation_state_operation_claims/u),
+      step(/insert into action_items/u),
+      step(/insert into action_item_events/u),
+      step(/insert into action_item_event_evidence/u),
+      step(/insert into conversation_state_projection_repairs/u),
+      step(/insert into conversation_state_operation_claims/u),
+      step(/commit/u),
+    ]);
+    const repository = createPostgresConversationStateRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.applyOperations({
+      groupId: "chat-a",
+      operations: [threadOperation, actionOperation],
+    })).resolves.toEqual({
+      status: "applied",
+      threadIds: ["thread-1"],
+      actionItemIds: ["action-1"],
+    });
+  });
+
   it("rejects cross-group evidence and rolls back before writing state", async () => {
     const client = scriptedClient([
       step(/begin/u),
@@ -942,7 +983,7 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
     },
   );
 
-  it("rejects candidate-linked action writes before they can reach answer or extraction context", async () => {
+  it("persists candidate-linked actions for extraction while hiding them from answer retrieval", async () => {
     const repository = createPostgresConversationStateRepository({ dataSource: pool! });
     const candidate = integrationThreadOperation({
       id: `hidden-candidate-${suffix}`, status: "candidate", eventType: "created", operationKey: `hidden-candidate-${suffix}`,
@@ -951,9 +992,27 @@ runIfDatabase("PostgresConversationStateRepository with Postgres", () => {
       id: `hidden-action-${suffix}`, operationKey: `hidden-action-${suffix}`, threadId: candidate.thread!.id,
     });
     await expect(repository.applyOperations({ groupId, operations: [candidate, action] }))
-      .rejects.toThrow("action item thread is not retrieval-visible");
-    await expect(pool!.query("SELECT id FROM action_items WHERE id = $1", [action.action!.id]))
-      .resolves.toMatchObject({ rows: [] });
+      .resolves.toMatchObject({
+        status: "applied",
+        threadIds: [candidate.thread!.id],
+        actionItemIds: [action.action!.id],
+      });
+
+    const relevantActions = await repository.listRelevantActions({ groupId, limit: 100 });
+    expect(relevantActions.map((relevantAction) => relevantAction.id))
+      .not.toContain(action.action!.id);
+
+    const extractionContext = await repository.loadExtractionContext({
+      groupId,
+      threadLimit: 100,
+      actionLimit: 100,
+    });
+    expect(extractionContext.threads).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: candidate.thread!.id, status: "candidate" }),
+    ]));
+    expect(extractionContext.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: action.action!.id, threadId: candidate.thread!.id }),
+    ]));
   });
 
   it("serializes concurrent identical operations across independent pool clients", async () => {

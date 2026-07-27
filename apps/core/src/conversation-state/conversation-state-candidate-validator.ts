@@ -246,7 +246,7 @@ function validateActionOperation(input: {
   if (operation.confidence < input.applyConfidence) return reject("low_confidence");
 
   if (operation.operation === "create") {
-    if (!isValidThreadDependency(operation.threadId, input.threadsById)) return reject("invalid_dependency");
+    if (!isValidActionCreateThreadDependency(operation.threadId, input.threadsById)) return reject("invalid_dependency");
     if (isSuggestion(operation, evidence)) return reject("non_commitment_action");
     const owner = validateOwner(operation.owner, evidence, input.evidenceById);
     if (!owner.ok) return owner;
@@ -546,6 +546,15 @@ function isValidThreadDependency(
   if (threadId === undefined || threadId === null) return true;
   const thread = threadsById.get(threadId);
   return thread !== undefined && (thread.status === "open" || thread.status === "resolved");
+}
+
+function isValidActionCreateThreadDependency(
+  threadId: string | null | undefined,
+  threadsById: Map<string, ExtractionExistingThread>,
+): boolean {
+  if (threadId === undefined || threadId === null) return true;
+  const thread = threadsById.get(threadId);
+  return thread !== undefined && thread.status !== "merged";
 }
 
 function reject(code: string): { ok: false; code: string } {

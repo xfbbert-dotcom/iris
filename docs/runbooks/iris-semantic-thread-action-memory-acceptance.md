@@ -519,6 +519,33 @@ stopped, opens only the private pilot processing window, enqueues one marker req
 for drain after each request, and returns runtime to fail-closed. It must not be used for arbitrary
 production messages.
 
+Prefer a fresh isolated internal group over reseeding when six clean marker messages can be created
+without modifying append-only history. The fresh helper refuses any marker message that already has
+an extraction request and refuses a group that already contains thread or action state:
+
+```bash
+IRIS_PILOT_ENV_FILE=.env.pilot \
+IRIS_SEMANTIC_FRESH_ACCEPTANCE_CONFIRM=RUN_FRESH_SEMANTIC_ACCEPTANCE_ONE_BY_ONE \
+IRIS_SEMANTIC_FRESH_ACCEPTANCE_GROUP_ID=<fresh-internal-group-id> \
+IRIS_SEMANTIC_FRESH_ACCEPTANCE_MARKER=<literal-gray-marker> \
+IRIS_SEMANTIC_FRESH_ACCEPTANCE_KNOWN_GROUP_IDS=<exhaustive-comma-separated-group-inventory> \
+./deploy/pilot/semantic-fresh-acceptance-one-by-one.sh
+```
+
+The helper validates persisted evidence before registration, opens no public ingress, registers and
+enqueues exactly one request at a time, and returns global/group runtime to fail-closed. The known
+group list must be an exhaustive, current inventory; the helper refuses to open the private window
+when Postgres contains a group outside that list or when any non-target group would become enabled.
+The outer Compose command is bounded to 1,800 seconds by default and each internal HTTP/DB/Redis
+operation is bounded to 10 seconds. Operators may set
+`IRIS_SEMANTIC_FRESH_ACCEPTANCE_COMMAND_TIMEOUT_SECONDS` (60-3,600) and
+`IRIS_SEMANTIC_FRESH_ACCEPTANCE_REQUEST_TIMEOUT_MS` (1,000-30,000) without removing those bounds.
+A run with
+`invalid_model_response_retry` is not terminal while its request remains pending or processing and
+the queue still contains bounded retry work. The helper continues waiting through that retry. It
+stops on a skipped request, DLQ entry, stalled request, timeout, or unknown status. It never deletes
+or updates prior extraction history.
+
 Replay semantic DLQ entries one at a time in original `enqueuedAt` order. After each replay, wait for
 memory extraction `pendingJobCount`, `processingJobCount`, and `delayedJobCount` to return to zero
 before replaying the next item. If any replay produces a new DLQ, invalid response, rate limit,
