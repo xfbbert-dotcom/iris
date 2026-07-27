@@ -20,6 +20,13 @@ describe("ProactiveSignalFeedbackWorker", () => {
       chatId: "oc_group",
       openId: "ou_actor",
     });
+    expect(harness.repository.validateFeedbackBinding).toHaveBeenCalledWith({
+      deliveryId: "delivery-1",
+      candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+      groupId: "oc_group",
+      messageId: "om_card",
+      entityVersion: 2,
+    });
     expect(harness.repository.recordFeedback).toHaveBeenCalledWith({
       idempotencyKey: "card-action:feedback-event-1",
       deliveryId: "delivery-1",
@@ -83,7 +90,7 @@ describe("ProactiveSignalFeedbackWorker", () => {
     ["non-member", { isCurrentMember: async () => false }, "not_current_member"],
     [
       "stale binding",
-      { recordFeedback: async () => ({ status: "stale_binding" as const }) },
+      { validateFeedbackBinding: async () => ({ status: "stale_binding" as const }) },
       "stale_delivery",
     ],
   ] as const)("returns a stable denial for %s", async (_label, overrides, code) => {
@@ -104,7 +111,7 @@ describe("ProactiveSignalFeedbackWorker", () => {
     ],
     [
       "repository exception",
-      { recordFeedback: async () => { throw new Error("repository unavailable"); } },
+      { validateFeedbackBinding: async () => { throw new Error("repository unavailable"); } },
       "repository_unavailable",
     ],
   ] as const)("classifies a %s as retryable", async (_label, overrides, code) => {
@@ -123,6 +130,10 @@ describe("ProactiveSignalFeedbackWorker", () => {
         order.push("gate");
         return true;
       },
+      validateFeedbackBinding: async () => {
+        order.push("binding");
+        return { status: "valid" as const };
+      },
       isCurrentMember: async () => {
         order.push("membership");
         return true;
@@ -135,7 +146,23 @@ describe("ProactiveSignalFeedbackWorker", () => {
 
     await harness.worker.processFeedback(feedbackJob());
 
-    expect(order).toEqual(["gate", "membership", "gate", "mutation"]);
+    expect(order).toEqual(["gate", "binding", "membership", "gate", "mutation"]);
+  });
+
+  it("does not call Feishu membership for a stale delivery binding", async () => {
+    const harness = createHarness({
+      validateFeedbackBinding: async () => ({ status: "stale_binding" }),
+      isCurrentMember: async () => {
+        throw new Error("membership must not be called");
+      },
+    });
+
+    await expect(harness.worker.processFeedback(feedbackJob())).resolves.toEqual({
+      status: "denied",
+      code: "stale_delivery",
+    });
+    expect(harness.membershipChecker.isCurrentMember).not.toHaveBeenCalled();
+    expect(harness.repository.recordFeedback).not.toHaveBeenCalled();
   });
 
   it("does not mutate when the runtime is disabled after membership", async () => {
@@ -185,11 +212,15 @@ type HarnessOverrides = {
   suppressionDays?: number;
   canProactivelySpeak?: (groupId: string) => boolean;
   isCurrentMember?: () => Promise<boolean>;
+  validateFeedbackBinding?: ProactiveSignalRepository["validateFeedbackBinding"];
   recordFeedback?: ProactiveSignalRepository["recordFeedback"];
 };
 
 function createHarness(overrides: HarnessOverrides = {}) {
   const repository = {
+    validateFeedbackBinding: vi.fn(
+      overrides.validateFeedbackBinding ?? (async () => ({ status: "valid" as const })),
+    ),
     recordFeedback: vi.fn(overrides.recordFeedback ?? (async () => ({ status: "applied" as const }))),
   };
   const membershipChecker = {

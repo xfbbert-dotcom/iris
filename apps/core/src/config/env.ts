@@ -541,6 +541,16 @@ export function readProactiveSignalDeliveryRuntimeConfig(
     "IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS",
     env.IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS,
   );
+  const feedbackRuntime = readKnowledgeCardRuntimeConfig(env);
+  if (!feedbackRuntime.enabled) {
+    throw new Error("proactive signal delivery requires knowledge cards to be enabled");
+  }
+  const feedbackGroups = new Set(feedbackRuntime.enabledGroupIds);
+  if (enabledGroupIds.some((groupId) => !feedbackGroups.has(groupId))) {
+    throw new Error(
+      "IRIS_KNOWLEDGE_CARD_GROUP_IDS must include every proactive delivery group",
+    );
+  }
   const { databaseUrl } = readDatabaseConfig(env);
   readFeishuOpenApiConfig(env);
   return {

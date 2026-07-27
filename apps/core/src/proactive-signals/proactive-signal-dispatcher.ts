@@ -25,6 +25,7 @@ export type ProactiveSignalDispatcherCode =
   | "send_succeeded"
   | "runtime_disabled"
   | "stale_delivery"
+  | "feedback_suppressed"
   | "max_attempts_exhausted"
   | FeishuInteractiveCardClientErrorClassification;
 
@@ -124,12 +125,27 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<ProactiveSignal
   if (!readRuntimeGate(input, context.delivery.groupId)) {
     return failPreparation(contextualInput, "runtime_disabled");
   }
-  await input.repository.beginProactiveSignalDeliveryAttempt({
+  await observeDeliveryAttempt(contextualInput, "tool_call_started");
+  const authorization = await input.repository.beginProactiveSignalDeliveryAttempt({
     deliveryId: context.delivery.id,
     workerId: input.claim.workerId,
     at: requireDate(input.now()),
   });
-  await observeDeliveryAttempt(contextualInput, "tool_call_started");
+  if (authorization.status === "suppressed") {
+    await observeDeliveryAttempt(
+      contextualInput,
+      "tool_call_cancelled",
+      "feedback_suppressed",
+    );
+    return {
+      status: "permanent_failure",
+      deliveryId: context.delivery.id,
+      code: "feedback_suppressed",
+    };
+  }
+  if (authorization.status === "stale") {
+    return failPreparation(contextualInput, "stale_delivery");
+  }
   if (!readRuntimeGate(input, context.delivery.groupId)) {
     return failExternalAttempt(contextualInput, "permanent", "runtime_disabled");
   }

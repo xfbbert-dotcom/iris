@@ -24,6 +24,9 @@ describe("proactive signal persistence", () => {
     expect(normalized).toContain("create table proactive_signal_suppressions");
     expect(normalized).toContain("unique (delivery_id, actor_fingerprint)");
     expect(normalized).toContain("check (feedback in ('helpful', 'irrelevant'))");
+    expect(normalized).toContain(
+      "source_feedback_event_id text not null references proactive_signal_feedback_events(idempotency_key)",
+    );
     expect(normalized).toContain("proactive_signal_feedback_events_append_only");
     expect(normalized).toContain("proactive_signal_feedback_events_truncate_guard");
   });
@@ -90,7 +93,53 @@ describe("proactive signal persistence", () => {
     expect(sql).toContain("insert into proactive_signal_feedback_events");
     expect(sql).toContain("on conflict do nothing");
     expect(sql).toContain("insert into proactive_signal_suppressions");
+    expect(sql).toContain("source_feedback_event_id");
+    expect(sql).toContain("excluded.suppress_until > proactive_signal_suppressions.suppress_until");
     expect(sql).not.toContain("message body");
+  });
+
+  it("validates the exact sent feedback binding without mutating feedback", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({
+        rows: [{ binding_valid: true }],
+      })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.validateFeedbackBinding({
+      deliveryId: "delivery-1",
+      candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+      groupId: "oc_pilot",
+      messageId: "om_card",
+      entityVersion: 2,
+    })).resolves.toEqual({ status: "valid" });
+
+    const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("from proactive_signal_delivery_outbox delivery");
+    expect(sql).toContain("delivery.status = 'sent'");
+    expect(sql).not.toContain("insert into proactive_signal_feedback_events");
+    expect(dataSource.connect).not.toHaveBeenCalled();
+  });
+
+  it("returns stale binding before feedback mutation when the sent delivery does not match", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.validateFeedbackBinding({
+      deliveryId: "delivery-1",
+      candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+      groupId: "oc_pilot",
+      messageId: "om_wrong",
+      entityVersion: 2,
+    })).resolves.toEqual({ status: "stale_binding" });
   });
 
   it("treats duplicate feedback as already applied only after the sent binding matches", async () => {
@@ -449,6 +498,8 @@ describe("proactive signal persistence", () => {
     const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
     expect(sql).toContain("insert into proactive_signal_delivery_outbox");
     expect(sql).toContain("on conflict (candidate_idempotency_key, delivery_channel) do nothing");
+    expect(sql).toContain("from proactive_signal_suppressions");
+    expect(sql).toContain("suppression.suppress_until > $4");
     expect(sql).toContain("insert into proactive_signal_delivery_events");
     expect(sql).not.toContain("operator-a");
   });
@@ -514,6 +565,8 @@ describe("proactive signal persistence", () => {
     const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
     expect(sql).toContain("for update skip locked");
     expect(sql).toContain("candidate.status = 'pending'");
+    expect(sql).toContain("from proactive_signal_suppressions");
+    expect(sql).toContain("suppression.suppress_until > $2");
     expect(sql).toContain("lease_worker_id = $1");
   });
 
@@ -557,6 +610,35 @@ describe("proactive signal persistence", () => {
     const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
     expect(sql).not.toContain("conversation_messages.text");
     expect(sql).not.toContain("message_body");
+  });
+
+  it.each([
+    "authorized",
+    "suppressed",
+    "stale",
+  ] as const)("atomically returns %s from the final delivery authorization", async (status) => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({
+        rows: [{ authorization_status: status }],
+      })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.beginProactiveSignalDeliveryAttempt({
+      deliveryId: "delivery-a",
+      workerId: "worker-a",
+      at: new Date("2026-07-23T10:00:00.000Z"),
+    })).resolves.toEqual({ status });
+
+    const sql = String(dataSource.query.mock.calls[0]?.[0]).toLowerCase();
+    expect(sql).toContain("from proactive_signal_suppressions");
+    expect(sql).toContain("suppression.suppress_until > $3");
+    expect(sql).toContain("status = 'cancelled'");
+    expect(sql).toContain("failure_classification = 'feedback_suppressed'");
+    expect(sql).toContain("'cancelled', 'cancelled'");
   });
 
   it("completes a processing delivery with Feishu message id and append-only sent event", async () => {

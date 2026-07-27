@@ -18,6 +18,15 @@ export type ProactiveSignalFeedbackResult =
   | { status: "already_applied" }
   | { status: "stale_binding" };
 
+export type ProactiveSignalFeedbackBindingResult =
+  | { status: "valid" }
+  | { status: "stale_binding" };
+
+export type ProactiveSignalDeliveryAuthorizationResult =
+  | { status: "authorized" }
+  | { status: "suppressed" }
+  | { status: "stale" };
+
 export type ProactiveSignalFeedbackSummary = {
   groupId: string;
   totalCount: number;
@@ -84,6 +93,13 @@ export type ProactiveSignalRepository = {
     suppressUntil: Date;
     at: Date;
   }): Promise<ProactiveSignalFeedbackResult>;
+  validateFeedbackBinding(input: {
+    deliveryId: string;
+    candidateIdempotencyKey: string;
+    groupId: string;
+    messageId?: string;
+    entityVersion: number;
+  }): Promise<ProactiveSignalFeedbackBindingResult>;
   getFeedbackSummary(input: {
     groupId: string;
     at: Date;
@@ -118,7 +134,7 @@ export type ProactiveSignalRepository = {
     deliveryId: string;
     workerId: string;
     at: Date;
-  }): Promise<void>;
+  }): Promise<ProactiveSignalDeliveryAuthorizationResult>;
   failProactiveSignalDeliveryPreparation(input: {
     deliveryId: string;
     workerId: string;
@@ -174,6 +190,9 @@ export function createPostgresProactiveSignalRepository({
     },
     recordFeedback(input) {
       return recordFeedback(dataSource, input);
+    },
+    validateFeedbackBinding(input) {
+      return validateFeedbackBinding(dataSource, input);
     },
     getFeedbackSummary(input) {
       return getFeedbackSummary(dataSource, input);
@@ -347,19 +366,23 @@ async function recordFeedback(
       await client.query(
         `
         INSERT INTO proactive_signal_suppressions (
-          group_id, kind, entity_id, suppress_until, created_at, updated_at
+          group_id, kind, entity_id, suppress_until, source_feedback_event_id,
+          created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $5)
+        VALUES ($1, $2, $3, $4, $5, $6, $6)
         ON CONFLICT (group_id, kind, entity_id)
         DO UPDATE SET
-          suppress_until = GREATEST(proactive_signal_suppressions.suppress_until, EXCLUDED.suppress_until),
+          suppress_until = EXCLUDED.suppress_until,
+          source_feedback_event_id = EXCLUDED.source_feedback_event_id,
           updated_at = EXCLUDED.updated_at
+        WHERE EXCLUDED.suppress_until > proactive_signal_suppressions.suppress_until
         `,
         [
           groupId,
           requireSignalKind(bound?.kind),
           requireBoundedString("entityId", bound?.entity_id),
           suppressUntil,
+          idempotencyKey,
           at,
         ],
       );
@@ -376,6 +399,46 @@ async function recordFeedback(
   } finally {
     client.release();
   }
+}
+
+async function validateFeedbackBinding(
+  queryable: Queryable,
+  input: {
+    deliveryId: string;
+    candidateIdempotencyKey: string;
+    groupId: string;
+    messageId?: string;
+    entityVersion: number;
+  },
+): Promise<ProactiveSignalFeedbackBindingResult> {
+  const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
+  const candidateIdempotencyKey = requireBoundedString(
+    "candidateIdempotencyKey",
+    input.candidateIdempotencyKey,
+  );
+  const groupId = requireBoundedString("groupId", input.groupId);
+  const messageId = input.messageId === undefined
+    ? undefined
+    : requireBoundedString("messageId", input.messageId);
+  const entityVersion = requireVersion(input.entityVersion);
+  const result = await queryable.query<{ binding_valid: unknown }>(
+    `
+    SELECT TRUE AS binding_valid
+    FROM proactive_signal_delivery_outbox delivery
+    JOIN proactive_signal_candidates candidate
+      ON candidate.idempotency_key = delivery.candidate_idempotency_key
+     AND candidate.group_id = delivery.group_id
+    WHERE delivery.id = $1
+      AND delivery.candidate_idempotency_key = $2
+      AND delivery.group_id = $3
+      AND ($4::text IS NULL OR delivery.sent_message_id = $4)
+      AND candidate.entity_version = $5
+      AND delivery.status = 'sent'
+    LIMIT 1
+    `,
+    [deliveryId, candidateIdempotencyKey, groupId, messageId, entityVersion],
+  );
+  return result.rows.length === 0 ? { status: "stale_binding" } : { status: "valid" };
 }
 
 async function getFeedbackSummary(
@@ -443,6 +506,14 @@ async function claimProactiveSignalDelivery(
         ON candidate.idempotency_key = candidate_delivery.candidate_idempotency_key
        AND candidate.group_id = candidate_delivery.group_id
       WHERE candidate.status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM proactive_signal_suppressions suppression
+          WHERE suppression.group_id = candidate.group_id
+            AND suppression.kind = candidate.kind
+            AND suppression.entity_id = candidate.entity_id
+            AND suppression.suppress_until > $2
+        )
         AND (
           candidate_delivery.status = 'pending'
           OR (candidate_delivery.status = 'failed' AND candidate_delivery.next_attempt_at <= $2)
@@ -513,26 +584,87 @@ async function getProactiveSignalDeliveryContext(
 async function beginProactiveSignalDeliveryAttempt(
   queryable: Queryable,
   input: { deliveryId: string; workerId: string; at: Date },
-): Promise<void> {
+): Promise<ProactiveSignalDeliveryAuthorizationResult> {
   const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
   const workerId = requireBoundedString("workerId", input.workerId);
   const at = requireDate(input.at, "at");
-  await queryable.query(
+  const result = await queryable.query<{ authorization_status: unknown }>(
     `
-    INSERT INTO proactive_signal_delivery_events (
-      id, delivery_id, candidate_idempotency_key, group_id, event_type,
-      delivery_status, created_at
+    WITH bound AS MATERIALIZED (
+      SELECT delivery.id, delivery.candidate_idempotency_key, delivery.group_id,
+        EXISTS (
+          SELECT 1
+          FROM proactive_signal_suppressions suppression
+          WHERE suppression.group_id = candidate.group_id
+            AND suppression.kind = candidate.kind
+            AND suppression.entity_id = candidate.entity_id
+            AND suppression.suppress_until > $3
+        ) AS suppressed
+      FROM proactive_signal_delivery_outbox delivery
+      JOIN proactive_signal_candidates candidate
+        ON candidate.idempotency_key = delivery.candidate_idempotency_key
+       AND candidate.group_id = delivery.group_id
+      WHERE delivery.id = $1
+        AND delivery.status = 'processing'
+        AND delivery.lease_worker_id = $2
+        AND candidate.status = 'pending'
+    ),
+    cancelled AS (
+      UPDATE proactive_signal_delivery_outbox delivery
+      SET status = 'cancelled',
+          lease_worker_id = NULL,
+          lease_until = NULL,
+          failure_classification = 'feedback_suppressed',
+          updated_at = $3
+      FROM bound
+      WHERE delivery.id = bound.id
+        AND bound.suppressed
+      RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id
+    ),
+    processing_event AS (
+      INSERT INTO proactive_signal_delivery_events (
+        id, delivery_id, candidate_idempotency_key, group_id, event_type,
+        delivery_status, created_at
+      )
+      SELECT $4, bound.id, bound.candidate_idempotency_key, bound.group_id,
+        'processing', 'processing', $3
+      FROM bound
+      WHERE NOT bound.suppressed
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id
+    ),
+    cancelled_event AS (
+      INSERT INTO proactive_signal_delivery_events (
+        id, delivery_id, candidate_idempotency_key, group_id, event_type,
+        delivery_status, created_at
+      )
+      SELECT $5, cancelled.id, cancelled.candidate_idempotency_key, cancelled.group_id,
+        'cancelled', 'cancelled', $3
+      FROM cancelled
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id
     )
-    SELECT $2, delivery.id, delivery.candidate_idempotency_key, delivery.group_id,
-      'processing', 'processing', $3
-    FROM proactive_signal_delivery_outbox delivery
-    WHERE delivery.id = $1
-      AND delivery.status = 'processing'
-      AND delivery.lease_worker_id = $4
-    ON CONFLICT (id) DO NOTHING
+    SELECT CASE
+      WHEN EXISTS (SELECT 1 FROM cancelled) THEN 'suppressed'
+      WHEN EXISTS (SELECT 1 FROM bound WHERE NOT bound.suppressed) THEN 'authorized'
+      ELSE 'stale'
+    END AS authorization_status,
+    (SELECT COUNT(*) FROM processing_event) AS processing_event_count,
+    (SELECT COUNT(*) FROM cancelled_event) AS cancelled_event_count
     `,
-    [deliveryId, deliveryEventId(deliveryId, "processing", workerId, at), at, workerId],
+    [
+      deliveryId,
+      workerId,
+      at,
+      deliveryEventId(deliveryId, "processing", workerId, at),
+      deliveryEventId(deliveryId, "cancelled", workerId, at),
+    ],
   );
+  const status = result.rows[0]?.authorization_status;
+  if (status === "authorized" || status === "suppressed" || status === "stale") {
+    return { status };
+  }
+  throw new Error("proactive signal delivery authorization is invalid");
 }
 
 async function failProactiveSignalDeliveryPreparation(
@@ -697,6 +829,14 @@ async function approveCandidateForDelivery(
       WHERE candidate.idempotency_key = $1
         AND candidate.group_id = $2
         AND candidate.status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM proactive_signal_suppressions suppression
+          WHERE suppression.group_id = candidate.group_id
+            AND suppression.kind = candidate.kind
+            AND suppression.entity_id = candidate.entity_id
+            AND suppression.suppress_until > $4
+        )
       ON CONFLICT (candidate_idempotency_key, delivery_channel) DO NOTHING
       RETURNING id
       `,
@@ -729,9 +869,17 @@ async function approveCandidateForDelivery(
         AND delivery.group_id = $2
         AND delivery.delivery_channel = 'feishu_group_card'
         AND candidate.status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM proactive_signal_suppressions suppression
+          WHERE suppression.group_id = candidate.group_id
+            AND suppression.kind = candidate.kind
+            AND suppression.entity_id = candidate.entity_id
+            AND suppression.suppress_until > $3
+        )
       LIMIT 1
       `,
-      [idempotencyKey, groupId],
+      [idempotencyKey, groupId, now],
     );
     await client.query("commit");
     if (existing.rows.length === 0) return { status: "not_found" };

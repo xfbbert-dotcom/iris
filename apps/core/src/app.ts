@@ -422,6 +422,11 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ? {}
         : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
     });
+    if (proactiveSignalDeliveryRuntime !== undefined && knowledgeCardRuntime === undefined) {
+      throw new Error(
+        "proactive signal delivery requires the knowledge-card feedback runtime",
+      );
+    }
     knowledgeCardStartup = knowledgeCardRuntime?.start();
     actionApprovalStartup = actionApprovalRuntime === undefined
       ? undefined

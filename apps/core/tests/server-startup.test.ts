@@ -375,6 +375,14 @@ describe("Core server startup", () => {
         order.push("close-proactive-signals");
       }),
     });
+    const knowledgeCardRuntime = fakeKnowledgeCardRuntime({
+      start: vi.fn(async () => {
+        order.push("start-knowledge-cards");
+      }),
+      close: vi.fn(async () => {
+        order.push("close-knowledge-cards");
+      }),
+    });
     const eventWorkerRuntime = fakeEventWorkerRuntime({
       start: vi.fn(() => order.push("start-event")),
       close: vi.fn(async () => {
@@ -393,7 +401,7 @@ describe("Core server startup", () => {
         createReindexWorkerRuntime: () => undefined,
         createMemoryExtractionRuntime: () => undefined,
         createKnowledgeDraftRuntime: () => undefined,
-        createKnowledgeCardRuntime: () => undefined,
+        createKnowledgeCardRuntime: () => knowledgeCardRuntime,
         createActionApprovalRuntime: () => actionApprovalRuntime,
         createActionReviewRuntime: () => undefined,
         createProactiveSignalDeliveryRuntime,
@@ -402,18 +410,62 @@ describe("Core server startup", () => {
       },
     });
 
-    expect(order).toEqual(["start-action-approvals", "start-proactive-signals", "start-event"]);
+    expect(order).toEqual([
+      "start-knowledge-cards",
+      "start-action-approvals",
+      "start-proactive-signals",
+      "start-event",
+    ]);
     await app.close();
     expect(order).toEqual([
+      "start-knowledge-cards",
       "start-action-approvals",
       "start-proactive-signals",
       "start-event",
       "close-event",
       "close-proactive-signals",
       "close-action-approvals",
+      "close-knowledge-cards",
       "close-runtime-control",
     ]);
     expect(createProactiveSignalDeliveryRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed before starting proactive delivery when its feedback runtime is unavailable", async () => {
+    const proactiveRuntime = fakeProactiveSignalDeliveryRuntime();
+    let cleanup: Promise<void> | undefined;
+    let app: FastifyInstance | undefined;
+    let startupError: unknown;
+    try {
+      app = buildApp({
+        createAnswerDraftRuntime: () => undefined,
+        createAgentExecutionLedgerRuntime: () => undefined,
+        createReindexWorkerRuntime: () => undefined,
+        createMemoryExtractionRuntime: () => undefined,
+        createKnowledgeDraftRuntime: () => undefined,
+        createKnowledgeCardRuntime: () => undefined,
+        createActionApprovalRuntime: () => undefined,
+        createActionReviewRuntime: () => undefined,
+        createProactiveSignalPlannerRuntime: () => undefined,
+        createProactiveSignalDeliveryRuntime: () => proactiveRuntime,
+        createEventWorkerRuntime: () => undefined,
+        createDocumentSyncRuntime: () => undefined,
+        onRuntimeStartupCleanup: (pendingCleanup) => {
+          cleanup = pendingCleanup;
+        },
+      });
+    } catch (error) {
+      startupError = error;
+    } finally {
+      await app?.close();
+    }
+
+    await cleanup;
+    expect(startupError).toEqual(
+      new Error("proactive signal delivery requires the knowledge-card feedback runtime"),
+    );
+    expect(proactiveRuntime.start).not.toHaveBeenCalled();
+    expect(proactiveRuntime.close).toHaveBeenCalledOnce();
   });
 
   it("starts proactive signal planner before delivery and event workers", async () => {
@@ -441,6 +493,14 @@ describe("Core server startup", () => {
         order.push("close-proactive-delivery");
       }),
     });
+    const knowledgeCardRuntime = fakeKnowledgeCardRuntime({
+      start: vi.fn(async () => {
+        order.push("start-knowledge-cards");
+      }),
+      close: vi.fn(async () => {
+        order.push("close-knowledge-cards");
+      }),
+    });
     const eventWorkerRuntime = fakeEventWorkerRuntime({
       start: vi.fn(() => order.push("start-event")),
       close: vi.fn(async () => {
@@ -461,7 +521,7 @@ describe("Core server startup", () => {
         createReindexWorkerRuntime: () => undefined,
         createMemoryExtractionRuntime: () => undefined,
         createKnowledgeDraftRuntime: () => undefined,
-        createKnowledgeCardRuntime: () => undefined,
+        createKnowledgeCardRuntime: () => knowledgeCardRuntime,
         createActionApprovalRuntime: () => undefined,
         createActionReviewRuntime: () => undefined,
         conversationStateInspectionStore,
@@ -473,18 +533,21 @@ describe("Core server startup", () => {
     });
 
     expect(order).toEqual([
+      "start-knowledge-cards",
       "start-proactive-planner",
       "start-proactive-delivery",
       "start-event",
     ]);
     await app.close();
     expect(order).toEqual([
+      "start-knowledge-cards",
       "start-proactive-planner",
       "start-proactive-delivery",
       "start-event",
       "close-event",
       "close-proactive-delivery",
       "close-proactive-planner",
+      "close-knowledge-cards",
       "close-runtime-control",
     ]);
     expect(createProactiveSignalPlannerRuntime).toHaveBeenCalledOnce();

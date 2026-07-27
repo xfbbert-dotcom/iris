@@ -172,6 +172,8 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
 
   it("lists bounded events without sensitive content fields", async () => {
     await repository.recordEvent(eventInput("tool-1", {
+      subjectType: "tool_call",
+      subjectId: `tool-${suffix}`,
       eventType: "tool_call_started",
       operationKey: `ledger:${suffix}:tool-start`,
       toolCallId: `tool-${suffix}`,
@@ -179,6 +181,8 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       metadata: { permission: "allowed" },
     }));
     await repository.recordEvent(eventInput("tool-2", {
+      subjectType: "tool_call",
+      subjectId: `tool-${suffix}`,
       eventType: "tool_call_completed",
       operationKey: `ledger:${suffix}:tool-complete`,
       toolCallId: `tool-${suffix}`,
@@ -205,7 +209,12 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     const groupId = `oc_feedback_${suffix}`;
     const candidate = proactiveCandidate({ groupId, entityId: `thread-feedback-${suffix}`, entityVersion: 2 });
     const deliveryId = await createSentProactiveDelivery({ repository: proactiveRepository, pool, candidate });
-    const input = proactiveFeedback({ groupId, deliveryId, candidateIdempotencyKey: candidate.idempotencyKey });
+    const input = proactiveFeedback({
+      groupId,
+      deliveryId,
+      candidateIdempotencyKey: candidate.idempotencyKey,
+      entityVersion: candidate.entityVersion,
+    });
 
     await expect(proactiveRepository.recordFeedback(input)).resolves.toEqual({ status: "applied" });
     await expect(proactiveRepository.recordFeedback(input)).resolves.toEqual({ status: "already_applied" });
@@ -246,6 +255,10 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       candidateIdempotencyKey: unsentCandidate.idempotencyKey,
       actorFingerprint: "b".repeat(64),
     }))).resolves.toEqual({ status: "stale_binding" });
+    await pool.query(
+      "UPDATE proactive_signal_delivery_outbox SET status = 'cancelled' WHERE id = $1",
+      [unsentDeliveryId],
+    );
   });
 
   it("projects irrelevant feedback into one active suppression and expires it at insertion time", async () => {
@@ -257,28 +270,87 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       pool,
       candidate: firstCandidate,
     });
-    const firstFeedback = proactiveFeedback({
-      groupId,
-      deliveryId: firstDeliveryId,
-      candidateIdempotencyKey: firstCandidate.idempotencyKey,
-      suppressUntil: new Date("2026-08-26T00:00:00.000Z"),
-    });
-    await expect(proactiveRepository.recordFeedback(firstFeedback)).resolves.toEqual({ status: "applied" });
-
     const secondCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 2 });
     const secondDeliveryId = await createSentProactiveDelivery({
       repository: proactiveRepository,
       pool,
       candidate: secondCandidate,
     });
+    const queuedBeforeSuppression = proactiveCandidate({ groupId, entityId, entityVersion: 3 });
+    await createQueuedProactiveDelivery({
+      repository: proactiveRepository,
+      candidate: queuedBeforeSuppression,
+    });
+    const pendingBeforeSuppression = proactiveCandidate({ groupId, entityId, entityVersion: 4 });
+    await proactiveRepository.recordCandidates({ signals: [pendingBeforeSuppression], now: at });
+
+    const firstFeedback = proactiveFeedback({
+      idempotencyKey: `feishu-card:${suffix}:suppression-first`,
+      groupId,
+      deliveryId: firstDeliveryId,
+      candidateIdempotencyKey: firstCandidate.idempotencyKey,
+      entityVersion: firstCandidate.entityVersion,
+      suppressUntil: new Date("2026-08-26T00:00:00.000Z"),
+    });
+    const bindings = await pool.query(
+      `SELECT delivery.id, delivery.candidate_idempotency_key, delivery.group_id,
+        delivery.status, delivery.sent_message_id, candidate.entity_version
+       FROM proactive_signal_delivery_outbox delivery
+       JOIN proactive_signal_candidates candidate
+         ON candidate.idempotency_key = delivery.candidate_idempotency_key
+        AND candidate.group_id = delivery.group_id
+       WHERE delivery.id = ANY($1::text[])
+       ORDER BY candidate.entity_version`,
+      [[firstDeliveryId, secondDeliveryId]],
+    );
+    expect(bindings.rows).toEqual([
+      {
+        id: firstDeliveryId,
+        candidate_idempotency_key: firstCandidate.idempotencyKey,
+        group_id: groupId,
+        status: "sent",
+        sent_message_id: "om_card",
+        entity_version: "1",
+      },
+      {
+        id: secondDeliveryId,
+        candidate_idempotency_key: secondCandidate.idempotencyKey,
+        group_id: groupId,
+        status: "sent",
+        sent_message_id: "om_card",
+        entity_version: "2",
+      },
+    ]);
+    await expect(proactiveRepository.validateFeedbackBinding({
+      deliveryId: firstFeedback.deliveryId,
+      candidateIdempotencyKey: firstFeedback.candidateIdempotencyKey,
+      groupId: firstFeedback.groupId,
+      messageId: firstFeedback.messageId,
+      entityVersion: firstFeedback.entityVersion,
+    })).resolves.toEqual({ status: "valid" });
+    await expect(proactiveRepository.recordFeedback(firstFeedback)).resolves.toEqual({ status: "applied" });
+
     await expect(proactiveRepository.recordFeedback(proactiveFeedback({
       idempotencyKey: `feishu-card:${suffix}:second`,
       groupId,
       deliveryId: secondDeliveryId,
       candidateIdempotencyKey: secondCandidate.idempotencyKey,
+      entityVersion: secondCandidate.entityVersion,
       actorFingerprint: "c".repeat(64),
       suppressUntil: new Date("2026-08-27T00:00:00.000Z"),
     }))).resolves.toEqual({ status: "applied" });
+
+    await expect(proactiveRepository.claimProactiveSignalDelivery({
+      workerId: `worker-${suffix}`,
+      at: new Date("2026-07-27T01:00:00.000Z"),
+      leaseUntil: new Date("2026-07-27T01:01:00.000Z"),
+    })).resolves.toBeUndefined();
+    await expect(proactiveRepository.approveCandidateForDelivery({
+      idempotencyKey: pendingBeforeSuppression.idempotencyKey,
+      groupId,
+      operatorHint: "integration-test",
+      now: new Date("2026-07-27T01:00:00.000Z"),
+    })).resolves.toEqual({ status: "not_found" });
 
     const helpfulCandidate = proactiveCandidate({
       groupId,
@@ -295,17 +367,26 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       groupId,
       deliveryId: helpfulDeliveryId,
       candidateIdempotencyKey: helpfulCandidate.idempotencyKey,
+      entityVersion: helpfulCandidate.entityVersion,
       actorFingerprint: "d".repeat(64),
       feedback: "helpful",
     }))).resolves.toEqual({ status: "applied" });
 
     const suppressions = await pool.query(
-      "SELECT entity_id, suppress_until FROM proactive_signal_suppressions WHERE group_id = $1 ORDER BY entity_id",
+      `SELECT suppression.entity_id, suppression.suppress_until,
+        suppression.source_feedback_event_id, feedback.feedback
+       FROM proactive_signal_suppressions suppression
+       JOIN proactive_signal_feedback_events feedback
+         ON feedback.idempotency_key = suppression.source_feedback_event_id
+       WHERE suppression.group_id = $1
+       ORDER BY suppression.entity_id`,
       [groupId],
     );
     expect(suppressions.rows).toEqual([{
       entity_id: entityId,
       suppress_until: new Date("2026-08-27T00:00:00.000Z"),
+      source_feedback_event_id: `feishu-card:${suffix}:second`,
+      feedback: "irrelevant",
     }]);
 
     const summary = await proactiveRepository.getFeedbackSummary({
@@ -323,7 +404,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     });
     expect(JSON.stringify(summary)).not.toContain("actorFingerprint");
 
-    const suppressedCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 3 });
+    const suppressedCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 5 });
     await expect(proactiveRepository.recordCandidates({
       signals: [suppressedCandidate],
       now: new Date("2026-07-27T01:00:00.000Z"),
@@ -338,7 +419,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       "UPDATE proactive_signal_suppressions SET suppress_until = $2 WHERE group_id = $1",
       [groupId, new Date("2026-07-27T00:30:00.000Z")],
     );
-    const expiredCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 4 });
+    const expiredCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 6 });
     await expect(proactiveRepository.recordCandidates({
       signals: [expiredCandidate],
       now: new Date("2026-07-27T01:00:00.000Z"),
@@ -348,6 +429,74 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       suppressedCount: 0,
       recordedKeys: [expiredCandidate.idempotencyKey],
     });
+  });
+
+  it("cancels a claimed delivery when irrelevant feedback commits before final authorization", async () => {
+    const groupId = `oc_claimed_suppression_${suffix}`;
+    const entityId = `thread-claimed-suppression-${suffix}`;
+    const sentCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 1 });
+    const sentDeliveryId = await createSentProactiveDelivery({
+      repository: proactiveRepository,
+      pool,
+      candidate: sentCandidate,
+    });
+    const claimedCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 2 });
+    const claimedDeliveryId = await createQueuedProactiveDelivery({
+      repository: proactiveRepository,
+      candidate: claimedCandidate,
+    });
+    const workerId = `worker-claimed-${suffix}`;
+    const claimAt = new Date(at.getTime() + 60_000);
+
+    const claimed = await pool.query(
+      `UPDATE proactive_signal_delivery_outbox
+       SET status = 'processing',
+           lease_worker_id = $2,
+           lease_until = $3,
+           attempt_count = attempt_count + 1,
+           updated_at = $4
+       WHERE id = $1
+         AND status = 'pending'
+       RETURNING id`,
+      [claimedDeliveryId, workerId, new Date(claimAt.getTime() + 60_000), claimAt],
+    );
+    expect(claimed.rows).toEqual([{ id: claimedDeliveryId }]);
+
+    const feedbackAt = new Date(at.getTime() + 120_000);
+    await expect(proactiveRepository.recordFeedback(proactiveFeedback({
+      idempotencyKey: `feishu-card:${suffix}:claimed-suppression`,
+      groupId,
+      deliveryId: sentDeliveryId,
+      candidateIdempotencyKey: sentCandidate.idempotencyKey,
+      entityVersion: sentCandidate.entityVersion,
+      suppressUntil: new Date(feedbackAt.getTime() + 30 * 24 * 60 * 60 * 1000),
+      at: feedbackAt,
+    }))).resolves.toEqual({ status: "applied" });
+
+    const authorizationAt = new Date(at.getTime() + 180_000);
+    await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
+      deliveryId: claimedDeliveryId,
+      workerId,
+      at: authorizationAt,
+    })).resolves.toEqual({ status: "suppressed" });
+
+    const delivery = await pool.query(
+      `SELECT status, lease_worker_id, lease_until, failure_classification
+       FROM proactive_signal_delivery_outbox
+       WHERE id = $1`,
+      [claimedDeliveryId],
+    );
+    expect(delivery.rows).toEqual([{
+      status: "cancelled",
+      lease_worker_id: null,
+      lease_until: null,
+      failure_classification: "feedback_suppressed",
+    }]);
+    await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
+      deliveryId: claimedDeliveryId,
+      workerId,
+      at: new Date(authorizationAt.getTime() + 60_000),
+    })).resolves.toEqual({ status: "stale" });
   });
 });
 
@@ -380,7 +529,7 @@ function proactiveFeedback(
     candidateIdempotencyKey: "quiet_open_thread:thread-missing:1",
     groupId: `oc_${suffix}`,
     messageId: "om_card",
-    entityVersion: 2,
+    entityVersion: 1,
     actorFingerprint: "a".repeat(64),
     feedback: "irrelevant",
     suppressUntil: new Date("2026-08-26T00:00:00.000Z"),

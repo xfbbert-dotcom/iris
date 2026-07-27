@@ -13,6 +13,7 @@ export type ProactiveSignalScannerBatchSnapshot =
       skippedCount: number;
       recordedCount: number;
       existingCount: number;
+      suppressedCount: number;
       failed: false;
     }
   | {
@@ -23,6 +24,7 @@ export type ProactiveSignalScannerBatchSnapshot =
       skippedCount: 0;
       recordedCount: 0;
       existingCount: 0;
+      suppressedCount: 0;
       failed: true;
       errorCode: "scanner_failed";
     };
@@ -85,6 +87,7 @@ export function createProactiveSignalScannerLoop({
         skippedCount: results.filter((result) => result.status === "skipped").length,
         recordedCount: results.reduce((count, result) => count + result.recordedCount, 0),
         existingCount: results.reduce((count, result) => count + result.existingCount, 0),
+        suppressedCount: results.reduce((count, result) => count + result.suppressedCount, 0),
         failed: false,
       };
     } catch (error) {
@@ -96,6 +99,7 @@ export function createProactiveSignalScannerLoop({
         skippedCount: 0,
         recordedCount: 0,
         existingCount: 0,
+        suppressedCount: 0,
         failed: true,
         errorCode: "scanner_failed",
       };

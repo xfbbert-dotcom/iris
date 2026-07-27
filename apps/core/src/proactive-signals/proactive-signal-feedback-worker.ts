@@ -35,7 +35,7 @@ export function createProactiveSignalFeedbackWorker({
   suppressionDays,
   now = () => new Date(),
 }: {
-  repository: Pick<ProactiveSignalRepository, "recordFeedback">;
+  repository: Pick<ProactiveSignalRepository, "recordFeedback" | "validateFeedbackBinding">;
   membershipChecker: FeishuGroupMembershipChecker;
   canProactivelySpeak(groupId: string): boolean;
   botOpenId: string;
@@ -60,6 +60,19 @@ export function createProactiveSignalFeedbackWorker({
       if (initiallyEnabled === undefined) return retryable("internal_error");
       if (!initiallyEnabled) return denied("runtime_disabled");
       if (job.actorOpenId === safeBotOpenId) return denied("bot_actor");
+
+      try {
+        const binding = await repository.validateFeedbackBinding({
+          deliveryId: job.deliveryId,
+          candidateIdempotencyKey: job.candidateIdempotencyKey,
+          groupId: job.chatId,
+          ...(job.messageId === undefined ? {} : { messageId: job.messageId }),
+          entityVersion: job.entityVersion,
+        });
+        if (binding.status === "stale_binding") return denied("stale_delivery");
+      } catch {
+        return retryable("repository_unavailable");
+      }
 
       try {
         if (!await membershipChecker.isCurrentMember({

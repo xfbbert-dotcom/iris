@@ -1411,7 +1411,13 @@ async function refreshProactiveCandidates() {
   const generation = ++proactiveCandidateRefreshGeneration;
   const candidateRefresh = requestJson(proactiveCandidateListPath(groupId));
   const summaryRefresh = refreshProactiveFeedbackSummary(groupId, generation);
-  const candidateBody = await candidateRefresh;
+  let candidateBody;
+  try {
+    candidateBody = await candidateRefresh;
+  } catch (error) {
+    if (!isCurrentProactiveCandidateRefresh(groupId, generation)) return;
+    throw error;
+  }
   if (!isCurrentProactiveCandidateRefresh(groupId, generation)) return;
   renderProactiveCandidates(candidateBody.candidates || []);
   await summaryRefresh;

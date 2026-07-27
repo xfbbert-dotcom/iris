@@ -14,6 +14,7 @@ export type ProactiveSignalScanResult =
       signalCount: number;
       recordedCount: number;
       existingCount: number;
+      suppressedCount: number;
       recordedKeys: string[];
     }
   | {
@@ -22,6 +23,7 @@ export type ProactiveSignalScanResult =
       reason: "runtime_disabled";
       recordedCount: 0;
       existingCount: 0;
+      suppressedCount: 0;
     };
 
 export type ProactiveSignalScanner = {
@@ -65,6 +67,7 @@ export function createProactiveSignalScanner({
           reason: "runtime_disabled",
           recordedCount: 0,
           existingCount: 0,
+          suppressedCount: 0,
         };
       }
 

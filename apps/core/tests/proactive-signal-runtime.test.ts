@@ -85,9 +85,15 @@ function enabledEnv() {
   return {
     IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED: "true",
     IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS: "oc_pilot,oc_review",
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot,oc_review",
     DATABASE_URL: "postgres://iris:secret@postgres:5432/iris",
+    REDIS_URL: "redis://redis:6379",
     FEISHU_APP_ID: "app-id",
     FEISHU_APP_SECRET: "app-secret",
+    FEISHU_VERIFICATION_TOKEN: "verification-token",
+    FEISHU_ENCRYPT_KEY: "encrypt-key",
+    IRIS_FEISHU_BOT_OPEN_ID: "ou_irisbot",
   };
 }
 
@@ -104,7 +110,7 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     approveCandidateForDelivery: vi.fn(),
     claimProactiveSignalDelivery: vi.fn(),
     getProactiveSignalDeliveryContext: vi.fn(),
-    beginProactiveSignalDeliveryAttempt: vi.fn(),
+    beginProactiveSignalDeliveryAttempt: vi.fn(async () => ({ status: "authorized" as const })),
     failProactiveSignalDeliveryPreparation: vi.fn(),
     completeProactiveSignalDelivery: vi.fn(),
     failProactiveSignalDelivery: vi.fn(),

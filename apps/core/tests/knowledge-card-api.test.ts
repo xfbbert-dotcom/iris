@@ -420,6 +420,7 @@ describe("knowledge card API", () => {
     expect(runtime.deadLetters.list).toHaveBeenCalledWith({ limit: 5 });
     expect(list.json()).toEqual({
       ok: true,
+      proactiveFeedbackDeadLetterCount: 0,
       deadLetters: [
         {
           id: "dlq-1",
@@ -479,7 +480,7 @@ describe("knowledge card API", () => {
     await app.close();
   });
 
-  it("lists proactive feedback dead letters with only safe feedback facts", async () => {
+  it("redacts proactive feedback dead letters into an aggregate count", async () => {
     const runtime = runtimeFixture();
     vi.mocked(runtime.deadLetters.list).mockResolvedValue([{
       id: "dlq-feedback",
@@ -513,22 +514,11 @@ describe("knowledge card API", () => {
 
     expect(response.json()).toEqual({
       ok: true,
-      deadLetters: [{
-        id: "dlq-feedback",
-        replayable: true,
-        errorCode: "internal_error",
-        failedAt: "2026-07-27T08:01:00.000Z",
-        kind: "proactive_signal_feedback",
-        presentationId: "delivery-1",
-        deliveryId: "delivery-1",
-        candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
-        entityVersion: 2,
-        action: "irrelevant",
-        attempts: 1,
-      }],
+      deadLetters: [],
+      proactiveFeedbackDeadLetterCount: 1,
     });
     expect(response.body).not.toMatch(
-      /ou_feedback_actor_secret|om_feedback_message_secret|feedback-event|feishu-card|evidence|reason/iu,
+      /ou_feedback_actor_secret|om_feedback_message_secret|feedback-event|feishu-card|delivery-1|quiet_open_thread|irrelevant|evidence|reason/iu,
     );
     await app.close();
   });

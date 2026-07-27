@@ -172,7 +172,16 @@ export function registerKnowledgeCardApi(
     if (limit === undefined) return invalid(reply);
     try {
       const deadLetters = await runtime.deadLetters.list({ limit });
-      return { ok: true, deadLetters: deadLetters.map(toDeadLetterResponse) };
+      const proactiveFeedbackDeadLetterCount = deadLetters.filter(
+        isProactiveFeedbackDeadLetter,
+      ).length;
+      return {
+        ok: true,
+        deadLetters: deadLetters
+          .filter((deadLetter) => !isProactiveFeedbackDeadLetter(deadLetter))
+          .map(toDeadLetterResponse),
+        proactiveFeedbackDeadLetterCount,
+      };
     } catch {
       return deadLetterFailure(reply);
     }
@@ -317,14 +326,7 @@ function toDeadLetterResponse(deadLetter: ApprovalInteractionDeadLetter) {
     };
   }
   if (deadLetter.job.kind === "proactive_signal_feedback") {
-    return {
-      ...common,
-      kind: deadLetter.job.kind,
-      deliveryId: deadLetter.job.deliveryId,
-      candidateIdempotencyKey: deadLetter.job.candidateIdempotencyKey,
-      entityVersion: deadLetter.job.entityVersion,
-      action: deadLetter.job.action,
-    };
+    return { kind: deadLetter.job.kind };
   }
   return {
     ...common,
@@ -336,6 +338,10 @@ function toDeadLetterResponse(deadLetter: ApprovalInteractionDeadLetter) {
     subjectVersion: deadLetter.job.subjectVersion,
     targetPolicyVersion: deadLetter.job.targetPolicyVersion,
   };
+}
+
+function isProactiveFeedbackDeadLetter(deadLetter: ApprovalInteractionDeadLetter): boolean {
+  return deadLetter.replayable && deadLetter.job.kind === "proactive_signal_feedback";
 }
 
 function readRuntimeGate(runtime: KnowledgeCardRuntime, groupId: string): boolean {

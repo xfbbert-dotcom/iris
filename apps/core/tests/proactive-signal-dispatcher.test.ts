@@ -25,6 +25,7 @@ describe("ProactiveSignalDispatcher", () => {
       },
       begin: async () => {
         order.push("begin");
+        return { status: "authorized" };
       },
       send: async (input) => {
         order.push("send");
@@ -103,7 +104,7 @@ describe("ProactiveSignalDispatcher", () => {
     }));
   });
 
-  it("fails closed if the runtime gate changes after the external attempt begins", async () => {
+  it("fails closed if the runtime gate changes after final database authorization", async () => {
     let reads = 0;
     const harness = createHarness({
       canDeliver: () => ++reads === 1,
@@ -115,7 +116,32 @@ describe("ProactiveSignalDispatcher", () => {
       code: "runtime_disabled",
     }]);
     expect(harness.repository.beginProactiveSignalDeliveryAttempt).toHaveBeenCalledOnce();
+    expect(harness.repository.failProactiveSignalDeliveryPreparation).not.toHaveBeenCalled();
+    expect(harness.repository.failProactiveSignalDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      deliveryId: "delivery-a",
+      classification: "permanent",
+      errorCode: "runtime_disabled",
+    }));
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+  });
+
+  it("cancels a claimed delivery when feedback suppression wins before external send", async () => {
+    const harness = createHarness({
+      begin: async () => ({ status: "suppressed" as const }),
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      deliveryId: "delivery-a",
+      code: "feedback_suppressed",
+    }]);
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+    expect(harness.repository.failProactiveSignalDeliveryPreparation).not.toHaveBeenCalled();
+    expect(harness.observe).toHaveBeenLastCalledWith(expect.objectContaining({
+      eventType: "tool_call_cancelled",
+      outcome: "skipped",
+      decisionReason: "feedback_suppressed",
+    }));
   });
 
   it.each([
@@ -180,7 +206,9 @@ type HarnessOverrides = {
   claim?: ProactiveSignalDeliveryClaim;
   getContext?: () => Promise<ProactiveSignalDeliveryContext | undefined>;
   canDeliver?: (groupId: string) => boolean;
-  begin?: () => Promise<void>;
+  begin?: () => Promise<
+    { status: "authorized" } | { status: "suppressed" } | { status: "stale" }
+  >;
   send?: (input: { chatId: string; cardJson: string; uuid: string }) => Promise<{ messageId: string }>;
   complete?: () => Promise<void>;
   observe?: AgentExecutionObserver["observe"];
@@ -191,7 +219,9 @@ function createHarness(overrides: HarnessOverrides = {}) {
     claimProactiveSignalDelivery: vi.fn(async () =>
       Object.hasOwn(overrides, "claim") ? overrides.claim : deliveryClaim()),
     getProactiveSignalDeliveryContext: vi.fn(overrides.getContext ?? (async () => deliveryContext())),
-    beginProactiveSignalDeliveryAttempt: vi.fn(overrides.begin ?? (async () => undefined)),
+    beginProactiveSignalDeliveryAttempt: vi.fn(
+      overrides.begin ?? (async () => ({ status: "authorized" as const })),
+    ),
     failProactiveSignalDeliveryPreparation: vi.fn(async () => undefined),
     completeProactiveSignalDelivery: vi.fn(overrides.complete ?? (async () => undefined)),
     failProactiveSignalDelivery: vi.fn(async () => undefined),

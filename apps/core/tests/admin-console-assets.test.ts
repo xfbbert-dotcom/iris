@@ -142,6 +142,40 @@ describe("admin console assets", () => {
     expect(metricValues(console.element("proactive-feedback-summary"))).toContain("8");
   });
 
+  it("ignores a stale candidate request failure after the current group succeeds", async () => {
+    const firstCandidates = deferred<ResponseStub>();
+    const firstSummary = deferred<ResponseStub>();
+    const secondCandidates = deferred<ResponseStub>();
+    const secondSummary = deferred<ResponseStub>();
+    const responses = [firstCandidates, firstSummary, secondCandidates, secondSummary];
+    const fetch = vi.fn(() => {
+      const response = responses.shift();
+      if (response === undefined) throw new Error("unexpected_request");
+      return response.promise;
+    });
+    const console = runAdminConsole(fetch);
+    console.element("proactive-candidate-group").value = "group-a";
+
+    const firstRefresh = console.trigger("proactive-candidate-refresh", "click");
+    console.element("proactive-candidate-group").value = "group-b";
+    const secondRefresh = console.trigger("proactive-candidate-refresh", "click");
+
+    secondCandidates.resolve(jsonResponse({ ok: true, candidates: [candidate("candidate-b")] }));
+    secondSummary.resolve(jsonResponse(feedbackSummary("group-b", 8)));
+    await secondRefresh;
+    firstSummary.resolve(jsonResponse(feedbackSummary("group-a", 1)));
+    firstCandidates.reject(new Error("stale_candidate_failure"));
+    await firstRefresh;
+
+    const rows = console.element("proactive-candidate-rows");
+    expect(rows.children).toHaveLength(1);
+    expect(rows.children[0]!.children[0]!.children[1]!.textContent).toBe("candidate-b");
+    expect(console.element("connection-state").textContent).not.toBe("Request failed");
+    expect(console.element("event-log").children.some((item) =>
+      item.textContent.includes("stale_candidate_failure"),
+    )).toBe(false);
+  });
+
   it("clears unavailable feedback after a successful dismissal without reporting the dismissal as failed", async () => {
     let refreshCount = 0;
     const fetch = vi.fn((path: string) => {
@@ -384,6 +418,10 @@ function jsonResponse(body: unknown): ResponseStub {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => { resolve = next; });
-  return { promise, resolve };
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
+    resolve = next;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }

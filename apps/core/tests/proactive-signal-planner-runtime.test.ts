@@ -4,7 +4,11 @@ import { RuntimeController } from "../src/admin/runtime-controller.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { ConversationStateInspectionStore } from "../src/conversation-state/conversation-state-api.js";
 import type { ProactiveSignalRepository } from "../src/proactive-signals/proactive-signal-repository.js";
-import { createProactiveSignalScanner } from "../src/proactive-signals/proactive-signal-scanner.js";
+import {
+  createProactiveSignalScanner,
+  type ProactiveSignalScanner,
+} from "../src/proactive-signals/proactive-signal-scanner.js";
+import { createProactiveSignalScannerLoop } from "../src/proactive-signals/proactive-signal-scanner-loop.js";
 import {
   createProactiveSignalPlannerRuntime,
   type ProactiveSignalPlannerRuntimeDependencies,
@@ -84,9 +88,51 @@ describe("ProactiveSignalPlannerRuntime", () => {
       reason: "runtime_disabled",
       recordedCount: 0,
       existingCount: 0,
+      suppressedCount: 0,
     });
     expect(dependencies.store.listThreads).not.toHaveBeenCalled();
     await runtime.close();
+  });
+
+  it("reports suppressed candidates in scanner batch snapshots", async () => {
+    let scheduled: (() => void) | undefined;
+    const scheduleTimeout = ((handler: () => void) => {
+      scheduled = handler;
+      return 1 as unknown as ReturnType<typeof globalThis.setTimeout>;
+    }) as unknown as typeof globalThis.setTimeout;
+    const cancelTimeout = (() => undefined) as typeof globalThis.clearTimeout;
+    const scanner = {
+      scanOnce: vi.fn().mockResolvedValue({
+        groupId: "oc_pilot",
+        status: "recorded",
+        signalCount: 2,
+        recordedCount: 0,
+        existingCount: 0,
+        suppressedCount: 2,
+        recordedKeys: [],
+      }),
+    } as ProactiveSignalScanner;
+    const loop = createProactiveSignalScannerLoop({
+      scanner,
+      groupIds: ["oc_pilot"],
+      intervalMs: 60_000,
+      batchLimit: 1,
+      now: () => new Date("2026-07-27T08:00:00.000Z"),
+      setTimeout: scheduleTimeout,
+      clearTimeout: cancelTimeout,
+    });
+
+    loop.start();
+    expect(scheduled).toBeDefined();
+    scheduled!();
+    await loop.stop();
+
+    expect(loop.getSnapshot().latestBatch).toMatchObject({
+      status: "succeeded",
+      recordedCount: 0,
+      existingCount: 0,
+      suppressedCount: 2,
+    });
   });
 });
 

@@ -408,6 +408,23 @@ test("CI runs the private-first post-restore smoke mode after restore", () => {
   assert.ok(postRestoreSmoke > restore);
 });
 
+test("CI runs the proactive pre-send suppression race against real Postgres", () => {
+  const workflow = readFileSync(ciWorkflowPath, "utf8");
+  const postgresIntegrations = workflow.slice(
+    workflow.indexOf("- name: Test Postgres integrations"),
+    workflow.indexOf("- name: Validate Docker Compose"),
+  );
+
+  assert.match(
+    postgresIntegrations,
+    /IRIS_TEST_DATABASE_URL: postgres:\/\/iris:iris@localhost:5432\/iris/u,
+  );
+  assert.match(
+    postgresIntegrations,
+    /npm --workspace apps\/core test -- agent-execution-ledger\.test\.ts/u,
+  );
+});
+
 test("CI keeps the pilot queues empty before the backup drill", () => {
   const workflow = readFileSync(ciWorkflowPath, "utf8");
   const startStack = workflow.indexOf("- name: Start pilot stack");

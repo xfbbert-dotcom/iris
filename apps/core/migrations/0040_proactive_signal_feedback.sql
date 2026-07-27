@@ -17,6 +17,8 @@ CREATE TABLE proactive_signal_suppressions (
   kind TEXT NOT NULL CHECK (kind IN ('quiet_open_thread', 'overdue_action')),
   entity_id TEXT NOT NULL CHECK (char_length(entity_id) BETWEEN 1 AND 512),
   suppress_until TIMESTAMPTZ NOT NULL,
+  source_feedback_event_id TEXT NOT NULL
+    REFERENCES proactive_signal_feedback_events(idempotency_key) ON DELETE RESTRICT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (group_id, kind, entity_id)

@@ -56,6 +56,7 @@ describe("KnowledgeCardRuntime", () => {
     const controller = enabledController();
     const canProactivelySpeak = vi.spyOn(controller, "canProactivelySpeak");
     const proactiveSignalRepository = {
+      validateFeedbackBinding: vi.fn(async () => ({ status: "valid" as const })),
       recordFeedback: vi.fn(async () => ({ status: "applied" as const })),
     } as unknown as ProactiveSignalRepository;
     const runtime = createKnowledgeCardRuntime({
@@ -95,6 +96,13 @@ describe("KnowledgeCardRuntime", () => {
     await expect(feedbackWorker?.processFeedback(feedbackJob)).resolves.toMatchObject({
       status: "applied",
       code: "feedback_applied",
+    });
+    expect(proactiveSignalRepository.validateFeedbackBinding).toHaveBeenCalledWith({
+      deliveryId: "delivery-1",
+      candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
+      groupId: "oc_pilot",
+      messageId: "om_card",
+      entityVersion: 2,
     });
     expect(membershipChecker?.isCurrentMember).toHaveBeenCalledWith({
       chatId: "oc_pilot",

@@ -121,9 +121,15 @@ describe("readProactiveSignalDeliveryRuntimeConfig", () => {
   const enabledEnv = {
     IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED: "true",
     IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS: " oc_pilot ,oc_review ",
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot,oc_review",
     DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
+    REDIS_URL: "redis://redis:6379",
+    FEISHU_VERIFICATION_TOKEN: "verification-token",
+    FEISHU_ENCRYPT_KEY: "encrypt-key",
     FEISHU_APP_ID: " app-id ",
     FEISHU_APP_SECRET: " app-secret ",
+    IRIS_FEISHU_BOT_OPEN_ID: "ou_irisbot",
   };
 
   it("is disabled unless explicitly enabled", () => {
@@ -161,6 +167,17 @@ describe("readProactiveSignalDeliveryRuntimeConfig", () => {
         [name]: " ",
       })).toThrow(message);
     }
+  });
+
+  it("requires an actionable feedback runtime for every delivery group", () => {
+    expect(() => readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_ENABLED: "false",
+    })).toThrow("proactive signal delivery requires knowledge cards");
+    expect(() => readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS must include every proactive delivery group");
   });
 
   it("rejects duplicate groups and unsafe batch settings", () => {
