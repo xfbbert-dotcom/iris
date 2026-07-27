@@ -104,6 +104,14 @@
 - The deployed candidate remained `c2bd13ca0f959d83eb8a877948748183a150d736`; running Core and AI Worker image tags matched that SHA. PR #13 head `ab9915814e7961db23e2b44e98ce7857504c0eee` still had successful `Core` and `AI Worker` checks.
 - The one permitted minimal V2 provider probe succeeded with HTTP `200`.
 - A fresh isolated Eta group and six append-only marker messages were then created with no pre-existing thread or action state. The six extraction requests were replayed strictly one at a time in original message order, waiting for all extraction queues to drain before each next request.
-- All six provider requests completed successfully, but each returned zero memory, thread, action, resolution, and dependency candidates (`v3:p0:a0:r0:d0:c0`). The read-only lifecycle inspector therefore failed with zero qualifying threads; the Eta group also contained zero actions. This is recorded as a semantic empty-result acceptance failure, not a quota, timeout, transport, or invalid-response failure.
+- All six provider requests completed successfully, but each returned zero memory, thread, action, resolution, and dependency candidates (`v3:p0:a0:r0:d0:c0`). The read-only lifecycle inspector therefore failed with zero qualifying threads; the Eta group also contained zero actions. This was initially recorded as a semantic empty-result acceptance failure; the byte-level evidence below later invalidated that classification.
 - No further provider request was made after the failed lifecycle inspection. Append-only messages and run history were retained.
 - Final fail-closed state was restored and rechecked: `globalEnabled=false`, `desiredGlobalEnabled=false`, `proactiveSpeech=false`, Caddy stopped, memory extraction disabled/running=false with blank thread/action allowlists, Core/Postgres/Redis/AI Worker healthy, all event/document/reindex/memory pending, processing, delayed, DLQ, and projection-repair counts zero, and Core/AI Worker still on the deployed candidate SHA.
+
+## Eta Empty-Result Root Cause - 2026-07-27
+
+- A byte-level Postgres readback showed that all six Eta `conversation_messages.text` values had already lost their Chinese text before extraction. Long runs of literal ASCII `?` (`0x3f`) occupied the missing spans; this was stored data, not terminal rendering.
+- The prior `v3:p0:a0:r0:d0:c0` responses therefore do not establish a Gemini semantic failure. The provider received corrupted evidence and correctly produced no grounded operations.
+- Zeta rows in the same database retained valid UTF-8 Chinese and had produced non-empty semantic operations, further isolating the fault to the Eta fixture insertion path.
+- The seed and reseed helpers now read the persisted text before any registration, reset, deletion, or enqueue side effect and fail closed on Unicode replacement characters or long high-density runs of ASCII question marks.
+- Eta history remains append-only and is not reused. The next gray run must use a fresh isolated marker, UTF-8/base64-safe transport, and byte-for-byte Postgres readback before the single provider replay window.

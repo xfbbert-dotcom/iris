@@ -42,6 +42,7 @@ import {
   createMemoryExtractionJob,
 } from "/app/apps/core/dist/memory-extraction/memory-extraction-queue.js";
 import { createRedisMemoryExtractionQueue } from "/app/apps/core/dist/memory-extraction/redis-memory-extraction-queue.js";
+import { assertSemanticEvidenceIntegrity } from "/app/apps/core/dist/memory-extraction/semantic-evidence-integrity.js";
 
 const internalToken = requireEnv("IRIS_INTERNAL_API_TOKEN");
 const groupId = requireEnv("IRIS_SEMANTIC_RESEED_PILOT_GROUP_ID");
@@ -125,6 +126,7 @@ async function resetMarkerRequests() {
           cm.id AS message_id,
           cm.provider_message_id,
           cm.chat_id AS group_id,
+          cm.text AS message_text,
           r.id AS request_id,
           r.run_id
         FROM conversation_messages cm
@@ -138,13 +140,20 @@ async function resetMarkerRequests() {
         `,
         [groupId, escapedMarker, limit],
       );
-      const messages = messagesResult.rows.map((row) => ({
-        message_id: requireString(row.message_id, "message_id"),
-        provider_message_id: requireString(row.provider_message_id, "provider_message_id"),
-        group_id: requireString(row.group_id, "group_id"),
-        request_id: requireString(row.request_id, "request_id"),
-        run_id: typeof row.run_id === "string" && row.run_id.trim() !== "" ? row.run_id : undefined,
-      }));
+      const messages = messagesResult.rows.map((row) => {
+        assertSemanticEvidenceIntegrity({
+          text: row.message_text,
+          marker,
+          messageId: row.message_id,
+        });
+        return {
+          message_id: requireString(row.message_id, "message_id"),
+          provider_message_id: requireString(row.provider_message_id, "provider_message_id"),
+          group_id: requireString(row.group_id, "group_id"),
+          request_id: requireString(row.request_id, "request_id"),
+          run_id: typeof row.run_id === "string" && row.run_id.trim() !== "" ? row.run_id : undefined,
+        };
+      });
       const requestIds = messages.map((row) => row.request_id);
       const runIds = [...new Set(messages.map((row) => row.run_id).filter(Boolean))];
       if (requestIds.length === 0) {

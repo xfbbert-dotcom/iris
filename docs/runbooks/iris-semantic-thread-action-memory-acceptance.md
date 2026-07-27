@@ -568,6 +568,14 @@ no-reply observation changes, acceptance fails and the wrapper runs fail-closed 
 Use a unique marker such as `IRIS-GRAY-<date>-ALPHA`. Humans send these messages in the approved
 group; the operator does not send them through an API.
 
+Before registering or replaying any marker message, read its persisted `conversation_messages.text`
+value back from Postgres. Refuse the run if any message contains Unicode replacement characters or
+long high-density runs of ASCII question marks, because that is evidence of a lossy terminal/SSH
+encoding path rather than valid conversation evidence. Synthetic internal fixtures must cross Windows/SSH
+boundaries as UTF-8 files or base64-encoded bytes and must be compared byte-for-byte after insert.
+Never interpret a schema-valid empty model response from corrupted evidence as a semantic-model
+acceptance result.
+
 1. Ordinary discussion without mentioning Iris: introduce the marker, a decision still under
    discussion, and one relevant fact.
 2. Evidence promotion without mentioning Iris: continue the same topic. Poll until the same

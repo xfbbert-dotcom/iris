@@ -301,7 +301,17 @@ test("semantic seed helper backfills real pilot messages without opening public 
   assert.match(script, /-e IRIS_SEMANTIC_SEED_MARKER/u);
   assert.match(script, /-e IRIS_SEMANTIC_SEED_LIMIT/u);
   assert.match(script, /FROM conversation_messages/u);
+  assert.match(script, /SELECT id, provider_message_id, chat_id, text/u);
   assert.match(script, /ORDER BY sent_at ASC, created_at ASC, id ASC/u);
+  assert.match(script, /semantic-evidence-integrity\.js/u);
+  assert.match(
+    script,
+    /for \(const row of messages\.rows\) \{\s+assertSemanticEvidenceIntegrity\(\{\s+text: row\.text,\s+marker,\s+messageId: row\.id,\s+\}\);\s+\}\s+let createdCount/u,
+  );
+  assert.ok(
+    script.indexOf("text: row.text") <
+      script.indexOf("repository.registerRequest"),
+  );
   assert.match(script, /createPostgresMemoryExtractionRepository/u);
   assert.match(script, /createRedisMemoryExtractionQueue/u);
   assert.match(script, /registerRequest/u);
@@ -321,7 +331,17 @@ test("semantic reseed helper resets approved marker messages one at a time", () 
   assert.match(script, /IRIS_SEMANTIC_RESEED_PILOT_GROUP_ID/u);
   assert.match(script, /IRIS_SEMANTIC_RESEED_MARKER/u);
   assert.match(script, /LIKE '%' \|\| \$2 \|\| '%' ESCAPE '\\\\'/u);
+  assert.match(script, /cm\.text AS message_text/u);
   assert.match(script, /ORDER BY cm\.sent_at ASC, cm\.created_at ASC, cm\.id ASC/u);
+  assert.match(script, /semantic-evidence-integrity\.js/u);
+  assert.match(
+    script,
+    /assertSemanticEvidenceIntegrity\(\{\s+text: row\.message_text,\s+marker,\s+messageId: row\.message_id,\s+\}\)/u,
+  );
+  assert.ok(
+    script.indexOf("text: row.message_text") <
+      script.indexOf("UPDATE group_memory_extraction_requests"),
+  );
   assert.match(script, /FOR UPDATE/u);
   assert.match(script, /DELETE FROM group_memory_extraction_conflict_evidence/u);
   assert.match(script, /DELETE FROM group_memory_extraction_conflict_candidates/u);
