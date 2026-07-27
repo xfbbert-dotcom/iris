@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeController } from "../src/admin/runtime-controller.js";
 import type { ActionProposalRepository } from "../src/action-approvals/action-proposal-repository.js";
+import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import {
   createActionApprovalRuntime,
@@ -29,10 +30,12 @@ describe("ActionApprovalRuntime", () => {
     const order: string[] = [];
     const dependencies = runtimeDependencies({ order });
     const knowledgeCards = knowledgeCardRuntime();
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
     const runtime = createActionApprovalRuntime({
       env: enabledEnv(),
       runtimeController: enabledController(),
       knowledgeCardRuntime: knowledgeCards,
+      agentExecutionObserver: { observe },
       dependencies,
     })!;
 
@@ -49,6 +52,13 @@ describe("ActionApprovalRuntime", () => {
     }));
     expect(dependencies.createActionWorker).toHaveBeenCalledWith(expect.objectContaining({
       requireReviewAttestation: false,
+      agentExecutionObserver: { observe },
+    }));
+    expect(dependencies.createPlanner).toHaveBeenCalledWith(expect.objectContaining({
+      agentExecutionObserver: { observe },
+    }));
+    expect(dependencies.createPublicationExecutor).toHaveBeenCalledWith(expect.objectContaining({
+      agentExecutionObserver: { observe },
     }));
     expect(knowledgeCards.bindActionApprovalWorker).toHaveBeenCalledWith(dependencies.actionWorker);
     const dispatcherGate = dependencies.createDispatcher.mock.calls[0]?.[0].canDeliverApprovalCards;

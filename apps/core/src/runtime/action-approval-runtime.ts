@@ -1,4 +1,5 @@
 import type { RuntimeController } from "../admin/runtime-controller.js";
+import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import { createActionApprovalDispatcher } from "../action-approvals/action-approval-dispatcher.js";
 import {
   createActionApprovalDispatcherLoop,
@@ -88,11 +89,13 @@ export function createActionApprovalRuntime({
   runtimeController,
   knowledgeCardRuntime,
   dependencies = {},
+  agentExecutionObserver,
 }: {
   env?: EnvLike;
   runtimeController?: ActionApprovalRuntimeGate;
   knowledgeCardRuntime?: KnowledgeCardRuntime;
   dependencies?: ActionApprovalRuntimeDependencies;
+  agentExecutionObserver?: AgentExecutionObserver;
 } = {}): ActionApprovalRuntime | undefined {
   const config = readActionApprovalRuntimeConfig(env);
   if (!config.enabled) return undefined;
@@ -148,6 +151,7 @@ export function createActionApprovalRuntime({
     const planner = createPlanner({
       repository,
       getAllowedGroupIds: () => config.enabledGroupIds.filter((groupId) => canUseGroup(groupId)),
+      ...(agentExecutionObserver === undefined ? {} : { agentExecutionObserver }),
     });
     const dispatcher = createDispatcher({
       repository,
@@ -168,6 +172,7 @@ export function createActionApprovalRuntime({
       canUseActionApprovalsForSourceGroup: canUseGroup,
       requireReviewAttestation,
       botOpenId: knowledgeCardRuntime.approvalInteractions.botOpenId,
+      ...(agentExecutionObserver === undefined ? {} : { agentExecutionObserver }),
     });
     const publisher = createPublisher({
       baseUrl: feishuConfig.baseUrl,
@@ -185,6 +190,7 @@ export function createActionApprovalRuntime({
         };
       },
       workerId: "knowledge-publication-executor",
+      ...(agentExecutionObserver === undefined ? {} : { agentExecutionObserver }),
     });
     plannerLoop = createPlannerPollingLoop({
       planner,

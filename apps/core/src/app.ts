@@ -393,7 +393,13 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     )({ runtimeController });
     actionApprovalRuntime = (
       dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
-    )({ runtimeController, knowledgeCardRuntime });
+    )({
+      runtimeController,
+      knowledgeCardRuntime,
+      ...(agentExecutionLedgerRuntime === undefined
+        ? {}
+        : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
+    });
     actionReviewRuntime = (
       dependencies.createActionReviewRuntime ?? createDefaultActionReviewRuntime
     )({ actionApprovalRuntime });
@@ -406,7 +412,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     });
     proactiveSignalDeliveryRuntime = (
       dependencies.createProactiveSignalDeliveryRuntime ?? createDefaultProactiveSignalDeliveryRuntime
-    )({ runtimeController });
+    )({
+      runtimeController,
+      ...(agentExecutionLedgerRuntime === undefined
+        ? {}
+        : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
+    });
     knowledgeCardStartup = knowledgeCardRuntime?.start();
     actionApprovalStartup = actionApprovalRuntime === undefined
       ? undefined

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeController } from "../src/admin/runtime-controller.js";
+import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { FeishuInteractiveCardClient } from "../src/feishu/feishu-interactive-card-client.js";
 import type { ProactiveSignalRepository } from "../src/proactive-signals/proactive-signal-repository.js";
@@ -19,9 +20,11 @@ describe("ProactiveSignalDeliveryRuntime", () => {
     const runtimeController = new RuntimeController(createDefaultRuntimeConfig());
     runtimeController.disableGroup("oc_review");
     const dependencies = runtimeDependencies({ order });
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
     const runtime = createProactiveSignalDeliveryRuntime({
       env: enabledEnv(),
       runtimeController,
+      agentExecutionObserver: { observe },
       dependencies,
     })!;
 
@@ -37,6 +40,9 @@ describe("ProactiveSignalDeliveryRuntime", () => {
       baseUrl: "https://open.feishu.cn",
       tokenProvider: dependencies.tokenProvider,
     });
+    expect(dependencies.createDispatcher).toHaveBeenCalledWith(expect.objectContaining({
+      agentExecutionObserver: { observe },
+    }));
     const deliveryGate = dependencies.createDispatcher.mock.calls[0]?.[0].canDeliverProactiveSignals;
     expect(deliveryGate?.("oc_pilot")).toBe(false);
     expect(runtime.canUseProactiveSignalDelivery("oc_pilot")).toBe(false);

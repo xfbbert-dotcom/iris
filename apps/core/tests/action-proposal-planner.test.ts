@@ -4,6 +4,7 @@ import {
   createActionProposalPlanner,
   type ActionProposalDraftCandidate,
 } from "../src/action-approvals/action-proposal-planner.js";
+import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import type {
   ActionProposalRepository,
   PublicationTargetPolicy,
@@ -23,9 +24,11 @@ describe("ActionProposalPlanner", () => {
       .mockResolvedValueOnce({ outcome: "applied", proposal: proposal("draft-a") })
       .mockResolvedValueOnce({ outcome: "already_applied", proposal: proposal("draft-b") })
       .mockResolvedValueOnce({ outcome: "applied", proposal: proposal("draft-later") });
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
     const planner = createActionProposalPlanner({
       repository,
       getAllowedGroupIds: () => ["oc_pilot"],
+      agentExecutionObserver: { observe },
     });
 
     await expect(planner.planBatch({ limit: 3, at })).resolves.toEqual({
@@ -48,6 +51,55 @@ describe("ActionProposalPlanner", () => {
       { draftId: "draft-b", operationKey: "publish-knowledge:draft-b:1:3" },
       { draftId: "draft-later", operationKey: "publish-knowledge:draft-later:1:3" },
     ]);
+    expect(observe.mock.calls.map(([event]) => event)).toEqual([
+      expect.objectContaining({
+        groupId: "oc_pilot",
+        subjectType: "action_proposal",
+        subjectId: "proposal-draft-a",
+        eventType: "action_proposed",
+        phase: "approval_wait",
+        outcome: "success",
+        metadata: {
+          proposalVersion: 1,
+          draftRevision: 1,
+          draftVersion: 2,
+          targetPolicyVersion: 3,
+          riskLevel: "medium",
+        },
+      }),
+      expect.objectContaining({
+        groupId: "oc_pilot",
+        subjectType: "action_proposal",
+        subjectId: "proposal-draft-later",
+        eventType: "action_proposed",
+      }),
+    ]);
+    expect(JSON.stringify(observe.mock.calls)).not.toMatch(/draft body|secret|title/iu);
+  });
+
+  it("keeps planning successful when proposal observation fails", async () => {
+    const repository = repositoryHarness({
+      candidates: [candidate("draft-a")],
+      policies: [policy()],
+    });
+    repository.createProposal.mockResolvedValue({
+      outcome: "applied",
+      proposal: proposal("draft-a"),
+    });
+    const planner = createActionProposalPlanner({
+      repository,
+      getAllowedGroupIds: () => ["oc_pilot"],
+      agentExecutionObserver: {
+        observe: vi.fn(async () => {
+          throw new Error("ledger unavailable");
+        }),
+      },
+    });
+
+    await expect(planner.planBatch({ limit: 1, at })).resolves.toMatchObject({
+      plannedCount: 1,
+      failedCount: 0,
+    });
   });
 
   it("fails closed for every ambiguous or stale planning input without leaking details", async () => {

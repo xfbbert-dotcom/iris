@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import type {
   ActionProposalDraftCandidate,
   ActionProposalRepository,
@@ -32,6 +33,7 @@ type PlannerRepository = Pick<
 export function createActionProposalPlanner(input: {
   repository: PlannerRepository;
   getAllowedGroupIds: () => string[];
+  agentExecutionObserver?: AgentExecutionObserver;
 }): ActionProposalPlanner {
   return {
     async planBatch(request) {
@@ -84,8 +86,32 @@ export function createActionProposalPlanner(input: {
             operationKey,
             at,
           });
-          if (mutation.outcome === "applied") result.plannedCount += 1;
-          else result.alreadyPlannedCount += 1;
+          if (mutation.outcome === "applied") {
+            result.plannedCount += 1;
+            await safelyObserve(input.agentExecutionObserver, {
+              ...(candidate.sourceGroupId === undefined
+                ? {}
+                : { groupId: candidate.sourceGroupId }),
+              subjectType: "action_proposal",
+              subjectId: mutation.proposal.id,
+              eventType: "action_proposed",
+              phase: "approval_wait",
+              outcome: "success",
+              operationKey: `action-proposal:${createHash("sha256")
+                .update(operationKey)
+                .digest("hex")}:proposed`,
+              metadata: {
+                proposalVersion: mutation.proposal.version,
+                draftRevision: candidate.currentRevision,
+                draftVersion: candidate.version,
+                targetPolicyVersion: policy.version,
+                riskLevel: candidate.riskLevel,
+              },
+              at,
+            });
+          } else {
+            result.alreadyPlannedCount += 1;
+          }
         } catch (error) {
           if (isIneligible(error)) result.ineligibleCount += 1;
           else result.failedCount += 1;
@@ -94,6 +120,17 @@ export function createActionProposalPlanner(input: {
       return result;
     },
   };
+}
+
+async function safelyObserve(
+  observer: AgentExecutionObserver | undefined,
+  event: Parameters<AgentExecutionObserver["observe"]>[0],
+): Promise<void> {
+  try {
+    await observer?.observe(event);
+  } catch {
+    // Proposal facts remain authoritative when execution observation is unavailable.
+  }
 }
 
 function matchPolicy(

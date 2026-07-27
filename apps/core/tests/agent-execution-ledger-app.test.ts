@@ -15,6 +15,8 @@ describe("agent execution ledger app composition", () => {
     const runtime = fakeRuntime();
     const createAgentExecutionLedgerRuntime = vi.fn(() => runtime);
     const createAnswerDraftRuntime = vi.fn(() => undefined);
+    const createActionApprovalRuntime = vi.fn(() => undefined);
+    const createProactiveSignalDeliveryRuntime = vi.fn(() => undefined);
     const app = buildApp({
       internalApiToken: "operator-secret",
       now: () => new Date("2026-07-27T14:00:00.000Z"),
@@ -28,10 +30,10 @@ describe("agent execution ledger app composition", () => {
       createProactiveSignalRuntime: () => undefined,
       createKnowledgeDraftRuntime: () => undefined,
       createKnowledgeCardRuntime: () => undefined,
-      createActionApprovalRuntime: () => undefined,
+      createActionApprovalRuntime,
       createActionReviewRuntime: () => undefined,
       createProactiveSignalPlannerRuntime: () => undefined,
-      createProactiveSignalDeliveryRuntime: () => undefined,
+      createProactiveSignalDeliveryRuntime,
     });
 
     const unauthorized = await app.inject({
@@ -61,6 +63,12 @@ describe("agent execution ledger app composition", () => {
     });
     expect(createAgentExecutionLedgerRuntime).toHaveBeenCalledOnce();
     expect(createAnswerDraftRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      agentExecutionObserver: runtime.observer,
+    }));
+    expect(createActionApprovalRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      agentExecutionObserver: runtime.observer,
+    }));
+    expect(createProactiveSignalDeliveryRuntime).toHaveBeenCalledWith(expect.objectContaining({
       agentExecutionObserver: runtime.observer,
     }));
 

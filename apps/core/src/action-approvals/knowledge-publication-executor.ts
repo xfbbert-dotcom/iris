@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import type {
   ActionProposalRepository,
   ClaimApprovedPublicationExecutionResult,
@@ -53,6 +54,7 @@ export type KnowledgePublicationExecutorDependencies = {
   };
   workerId: string;
   now?: () => Date;
+  agentExecutionObserver?: AgentExecutionObserver;
 };
 
 export function createKnowledgePublicationExecutor({
@@ -61,6 +63,7 @@ export function createKnowledgePublicationExecutor({
   runtimeSnapshot,
   workerId,
   now = () => new Date(),
+  agentExecutionObserver,
 }: KnowledgePublicationExecutorDependencies) {
   const safeWorkerId = requireIdentifier("workerId", workerId);
   return {
@@ -100,6 +103,7 @@ export function createKnowledgePublicationExecutor({
           claim,
           proposalId: proposal.id,
           now,
+          agentExecutionObserver,
         }));
       }
       return results;
@@ -113,7 +117,12 @@ async function publishClaim(input: {
   claim: ClaimApprovedPublicationExecutionResult;
   proposalId: string;
   now: () => Date;
+  agentExecutionObserver: AgentExecutionObserver | undefined;
 }): Promise<KnowledgePublicationExecutorResult> {
+  await observePublicationExecution(
+    input,
+    "action_execution_started",
+  );
   let published: KnowledgePublicationPublisherResult;
   try {
     published = await input.publisher.publish({
@@ -124,6 +133,11 @@ async function publishClaim(input: {
     });
   } catch {
     await markExecutionFailed(input, "failed", "publisher_failed");
+    await observePublicationExecution(
+      input,
+      "action_execution_failed",
+      "publisher_failed",
+    );
     return { status: "failed", proposalId: input.proposalId, code: "publisher_failed" };
   }
   try {
@@ -144,9 +158,77 @@ async function publishClaim(input: {
     });
   } catch {
     await markExecutionFailed(input, "reconciliation_required", "completion_failed");
+    await observePublicationExecution(
+      input,
+      "action_execution_reconciliation_required",
+      "completion_failed",
+    );
     return { status: "failed", proposalId: input.proposalId, code: "completion_failed" };
   }
+  await observePublicationExecution(
+    input,
+    "action_execution_completed",
+    "publication_succeeded",
+  );
   return { status: "published", proposalId: input.proposalId, code: "publication_succeeded" };
+}
+
+async function observePublicationExecution(
+  input: {
+    claim: ClaimApprovedPublicationExecutionResult;
+    now: () => Date;
+    agentExecutionObserver: AgentExecutionObserver | undefined;
+  },
+  eventType:
+    | "action_execution_started"
+    | "action_execution_completed"
+    | "action_execution_failed"
+    | "action_execution_reconciliation_required",
+  decisionReason?: "publication_succeeded" | "publisher_failed" | "completion_failed",
+): Promise<void> {
+  if (input.agentExecutionObserver === undefined) {
+    return;
+  }
+
+  const execution = input.claim.execution;
+  try {
+    await input.agentExecutionObserver.observe({
+      ...(input.claim.draft.sourceGroupId === undefined
+        ? {}
+        : { groupId: input.claim.draft.sourceGroupId }),
+      subjectType: "action_execution",
+      subjectId: execution.id,
+      eventType,
+      phase: eventType === "action_execution_completed" ? "completed" : "external_call",
+      toolCallId: execution.id,
+      toolName: "iris.knowledge.publishDraft",
+      ...(eventType === "action_execution_started"
+        ? {}
+        : {
+            outcome: eventType === "action_execution_completed"
+              ? "success" as const
+              : eventType === "action_execution_reconciliation_required"
+                ? "unknown" as const
+                : "error" as const,
+          }),
+      ...(decisionReason === undefined ? {} : { decisionReason }),
+      operationKey: `publication-execution:${createHash("sha256")
+        .update(`${execution.id}:${eventType}`)
+        .digest("hex")}`,
+      metadata: {
+        proposalId: input.claim.proposal.id,
+        proposalVersion: input.claim.proposal.version,
+        executionVersion: execution.version,
+        draftVersion: input.claim.draft.version,
+        draftRevision: input.claim.draft.revisionNumber,
+        targetPolicyVersion: input.claim.policy.version,
+        attemptNumber: execution.attemptNumber,
+      },
+      at: requireDate(input.now()),
+    });
+  } catch {
+    // Publication facts remain authoritative when execution observation is unavailable.
+  }
 }
 
 async function markExecutionFailed(

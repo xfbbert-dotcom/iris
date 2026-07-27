@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createActionApprovalWorker,
 } from "../src/action-approvals/action-approval-worker.js";
+import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import type {
   ActionApprovalDeliveryContext,
 } from "../src/action-approvals/action-proposal-repository.js";
@@ -55,6 +56,21 @@ describe("ActionApprovalWorker", () => {
       operationKey: "action-approval:cli_app:event-1",
       at: job().receivedAt,
     });
+    expect(harness.observe).toHaveBeenCalledWith(expect.objectContaining({
+      groupId: "oc_source",
+      actorOpenId: "ou_owner",
+      subjectType: "action_proposal",
+      subjectId: "proposal-1",
+      eventType: "action_approved",
+      phase: "approval_wait",
+      outcome: "success",
+      decisionReason: "publication_approved",
+      metadata: expect.objectContaining({
+        presentationId: "proposal-presentation-1",
+        proposalVersion: 4,
+        action: "approve",
+      }),
+    }));
   });
 
   it("maps a missing required review to a stable denial without mutation", async () => {
@@ -88,6 +104,13 @@ describe("ActionApprovalWorker", () => {
       ...(typedOverrides.actorOpenId === undefined ? {} : { actorOpenId: typedOverrides.actorOpenId }),
     }))).resolves.toEqual({ status: "denied", code });
     expect(harness.repository.applyApprovalAction).not.toHaveBeenCalled();
+    expect(harness.observe).toHaveBeenCalledWith(expect.objectContaining({
+      subjectType: "permission_decision",
+      subjectId: "proposal-1",
+      eventType: "permission_denied",
+      outcome: "denied",
+      decisionReason: code,
+    }));
   });
 
   it("skips group membership only for a company-level proposal", async () => {
@@ -137,6 +160,16 @@ describe("ActionApprovalWorker", () => {
       action,
       ...extra,
     }));
+    expect(harness.observe).toHaveBeenCalledWith(expect.objectContaining({
+      subjectType: "action_proposal",
+      subjectId: "proposal-1",
+      eventType: "action_rejected",
+      outcome: "denied",
+      decisionReason: action === "request_revision"
+        ? "revision_requested"
+        : "publication_rejected",
+    }));
+    expect(JSON.stringify(harness.observe.mock.calls)).not.toContain(extra.reason);
   });
 
   it("does not retry a committed action when card updates fail", async () => {
@@ -149,10 +182,11 @@ describe("ActionApprovalWorker", () => {
   });
 
   it("returns an idempotent replay without exposing callback or proposal content", async () => {
-    const result = await createHarness({ apply: async () => mutation("already_applied") })
-      .worker.processActionApproval(job());
+    const harness = createHarness({ apply: async () => mutation("already_applied") });
+    const result = await harness.worker.processActionApproval(job());
     expect(result).toEqual({ status: "already_applied", code: "duplicate_callback" });
     expect(JSON.stringify(result)).not.toMatch(/ou_owner|draft body|secret evidence|event-1/iu);
+    expect(harness.observe).not.toHaveBeenCalled();
   });
 
   it("re-authorizes an exact sequential replay after its presentation closes", async () => {
@@ -257,6 +291,7 @@ type Overrides = {
     ActionApprovalDeliveryContext["presentation"][]
   >;
   update?: () => Promise<void>;
+  observe?: AgentExecutionObserver["observe"];
 };
 
 function createHarness(overrides: Overrides = {}) {
@@ -271,10 +306,14 @@ function createHarness(overrides: Overrides = {}) {
     isCurrentMember: vi.fn(overrides.membership ?? (async () => true)),
   };
   const cardClient = { updateCard: vi.fn(overrides.update ?? (async () => undefined)) };
+  const observe = vi.fn<AgentExecutionObserver["observe"]>(
+    overrides.observe ?? (async () => undefined),
+  );
   return {
     repository,
     membershipChecker,
     cardClient,
+    observe,
     worker: createActionApprovalWorker({
       repository,
       membershipChecker,
@@ -284,6 +323,7 @@ function createHarness(overrides: Overrides = {}) {
       canUseActionApprovalsForSourceGroup: overrides.groupEnabled ?? (() => true),
       botOpenId: "ou_bot",
       now: () => new Date(at),
+      agentExecutionObserver: { observe },
     }),
   };
 }

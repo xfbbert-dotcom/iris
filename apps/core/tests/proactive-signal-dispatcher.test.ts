@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import { FeishuInteractiveCardClientError } from "../src/feishu/feishu-interactive-card-client.js";
 import { createProactiveSignalDispatcher } from "../src/proactive-signals/proactive-signal-dispatcher.js";
 import type {
@@ -52,6 +53,30 @@ describe("ProactiveSignalDispatcher", () => {
       messageId: "om_proactive",
       at: now,
     });
+    expect(harness.observe.mock.calls.map(([event]) => event)).toEqual([
+      expect.objectContaining({
+        groupId: "group-a",
+        subjectType: "tool_call",
+        subjectId: "delivery-a",
+        eventType: "tool_call_started",
+        phase: "external_call",
+        toolCallId: "delivery-a",
+        toolName: "iris.feishu.deliverProactiveSignal",
+        metadata: {
+          signalType: "quiet_open_thread",
+          attemptNumber: 1,
+        },
+      }),
+      expect.objectContaining({
+        subjectId: "delivery-a",
+        eventType: "tool_call_completed",
+        outcome: "success",
+        decisionReason: "send_succeeded",
+      }),
+    ]);
+    expect(JSON.stringify(harness.observe.mock.calls)).not.toMatch(
+      /Iris follow-up|message-a|om_proactive/iu,
+    );
   });
 
   it("fails preparation without sending when context is stale or runtime is disabled", async () => {
@@ -71,6 +96,11 @@ describe("ProactiveSignalDispatcher", () => {
       errorCode: "runtime_disabled",
       at: now,
     });
+    expect(harness.observe).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: "tool_call_cancelled",
+      outcome: "skipped",
+      decisionReason: "runtime_disabled",
+    }));
   });
 
   it("fails closed if the runtime gate changes after the external attempt begins", async () => {
@@ -111,6 +141,25 @@ describe("ProactiveSignalDispatcher", () => {
         : status === "permanent_failure" ? "permanent" : "outcome_unknown",
       errorCode: code,
     }));
+    expect(harness.observe).toHaveBeenLastCalledWith(expect.objectContaining({
+      eventType: "tool_call_failed",
+      outcome: status === "outcome_unknown" ? "unknown" : "error",
+      decisionReason: code,
+    }));
+  });
+
+  it("keeps delivery successful when execution observation fails", async () => {
+    const harness = createHarness({
+      observe: async () => {
+        throw new Error("ledger unavailable");
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "sent",
+      deliveryId: "delivery-a",
+      code: "send_succeeded",
+    }]);
   });
 
   it("stops when no delivery is ready and bounds the batch limit", async () => {
@@ -134,6 +183,7 @@ type HarnessOverrides = {
   begin?: () => Promise<void>;
   send?: (input: { chatId: string; cardJson: string; uuid: string }) => Promise<{ messageId: string }>;
   complete?: () => Promise<void>;
+  observe?: AgentExecutionObserver["observe"];
 };
 
 function createHarness(overrides: HarnessOverrides = {}) {
@@ -149,9 +199,13 @@ function createHarness(overrides: HarnessOverrides = {}) {
   const cardClient = {
     sendCard: vi.fn(overrides.send ?? (async () => ({ messageId: "om_proactive" }))),
   };
+  const observe = vi.fn<AgentExecutionObserver["observe"]>(
+    overrides.observe ?? (async () => undefined),
+  );
   return {
     repository,
     cardClient,
+    observe,
     dispatcher: createProactiveSignalDispatcher({
       repository,
       cardClient,
@@ -160,6 +214,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
       leaseMs: 30_000,
       retryDelayMs: 60_000,
       now: () => new Date(now),
+      agentExecutionObserver: { observe },
     }),
   };
 }

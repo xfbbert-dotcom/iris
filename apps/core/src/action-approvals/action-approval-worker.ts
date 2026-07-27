@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+
+import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import type { FeishuGroupMembershipChecker } from "../feishu/feishu-group-membership-checker.js";
 import type { FeishuInteractiveCardClient } from "../feishu/feishu-interactive-card-client.js";
 import { KnowledgeDraftEvidenceError } from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
@@ -47,6 +50,7 @@ export function createActionApprovalWorker({
   requireReviewAttestation,
   botOpenId,
   now = () => new Date(),
+  agentExecutionObserver,
 }: {
   repository: Pick<ActionProposalRepository,
     | "getApprovalDeliveryContext"
@@ -62,6 +66,7 @@ export function createActionApprovalWorker({
   requireReviewAttestation: boolean;
   botOpenId: string;
   now?: () => Date;
+  agentExecutionObserver?: AgentExecutionObserver;
 }) {
   const safeBotOpenId = requireIdentifier("botOpenId", botOpenId);
   return {
@@ -69,25 +74,65 @@ export function createActionApprovalWorker({
       job: ActionProposalApprovalInteractionJob,
       intent?: ApprovalInteractionIntent,
     ): Promise<ActionApprovalWorkerResult> {
-      if (!readGate(isActionApprovalRuntimeEnabled)) return denied("runtime_disabled");
-      if (job.actorOpenId === safeBotOpenId) return denied("bot_actor");
+      let observationGroupId: string | undefined;
+      const process = async (): Promise<ActionApprovalWorkerResult> => {
+        if (!readGate(isActionApprovalRuntimeEnabled)) return denied("runtime_disabled");
+        if (job.actorOpenId === safeBotOpenId) return denied("bot_actor");
 
-      let replay;
-      try {
-        replay = await repository.inspectApprovalActionReplay(
-          toMutationInput(job, intent, requireReviewAttestation),
-        );
-      } catch (error) {
-        return classifyStableOrRetryable(error);
-      }
-      if (replay !== undefined) {
-        if (!readGroupGate(canUseActionApprovalsForSourceGroup, replay.sourceGroupId)) {
+        let replay;
+        try {
+          replay = await repository.inspectApprovalActionReplay(
+            toMutationInput(job, intent, requireReviewAttestation),
+          );
+        } catch (error) {
+          return classifyStableOrRetryable(error);
+        }
+        if (replay !== undefined) {
+          observationGroupId = replay.sourceGroupId;
+          if (!readGroupGate(canUseActionApprovalsForSourceGroup, replay.sourceGroupId)) {
+            return denied("runtime_disabled");
+          }
+          if (replay.sourceGroupId !== undefined) {
+            try {
+              if (!await membershipChecker.isCurrentMember({
+                chatId: replay.sourceGroupId,
+                openId: job.actorOpenId,
+              })) return denied("not_current_member");
+            } catch {
+              return retryable("membership_unavailable");
+            }
+          }
+          if (
+            !readGate(isActionApprovalRuntimeEnabled) ||
+            !readGroupGate(canUseActionApprovalsForSourceGroup, replay.sourceGroupId)
+          ) return denied("runtime_disabled");
+          await updateProposalCards(repository, cardClient, replay.result);
+          return { status: "already_applied", code: "duplicate_callback" };
+        }
+
+        let context: ActionApprovalDeliveryContext | undefined;
+        try {
+          context = await repository.getApprovalDeliveryContext(job.presentationId);
+        } catch {
+          return retryable("repository_unavailable");
+        }
+        if (!isExactContext(job, context)) return denied("stale_presentation");
+
+        try {
+          const preflight = await repository.preflightApprovalAction(
+            toPreflightInput(job, requireReviewAttestation),
+          );
+          observationGroupId = preflight.sourceGroupId;
+        } catch (error) {
+          return classifyStableOrRetryable(error);
+        }
+        if (!readGroupGate(canUseActionApprovalsForSourceGroup, observationGroupId)) {
           return denied("runtime_disabled");
         }
-        if (replay.sourceGroupId !== undefined) {
+        if (observationGroupId !== undefined) {
           try {
             if (!await membershipChecker.isCurrentMember({
-              chatId: replay.sourceGroupId,
+              chatId: observationGroupId,
               openId: job.actorOpenId,
             })) return denied("not_current_member");
           } catch {
@@ -96,61 +141,95 @@ export function createActionApprovalWorker({
         }
         if (
           !readGate(isActionApprovalRuntimeEnabled) ||
-          !readGroupGate(canUseActionApprovalsForSourceGroup, replay.sourceGroupId)
+          !readGroupGate(canUseActionApprovalsForSourceGroup, observationGroupId)
         ) return denied("runtime_disabled");
-        await updateProposalCards(repository, cardClient, replay.result);
-        return { status: "already_applied", code: "duplicate_callback" };
-      }
 
-      let context: ActionApprovalDeliveryContext | undefined;
-      try {
-        context = await repository.getApprovalDeliveryContext(job.presentationId);
-      } catch {
-        return retryable("repository_unavailable");
-      }
-      if (!isExactContext(job, context)) return denied("stale_presentation");
-
-      let sourceGroupId: string | undefined;
-      try {
-        const preflight = await repository.preflightApprovalAction(
-          toPreflightInput(job, requireReviewAttestation),
-        );
-        sourceGroupId = preflight.sourceGroupId;
-      } catch (error) {
-        return classifyStableOrRetryable(error);
-      }
-      if (!readGroupGate(canUseActionApprovalsForSourceGroup, sourceGroupId)) {
-        return denied("runtime_disabled");
-      }
-      if (sourceGroupId !== undefined) {
+        let mutation: ApplyActionProposalActionResult;
         try {
-          if (!await membershipChecker.isCurrentMember({
-            chatId: sourceGroupId,
-            openId: job.actorOpenId,
-          })) return denied("not_current_member");
-        } catch {
-          return retryable("membership_unavailable");
+          mutation = await repository.applyApprovalAction(
+            toMutationInput(job, intent, requireReviewAttestation),
+          );
+        } catch (error) {
+          return classifyStableOrRetryable(error);
         }
-      }
-      if (
-        !readGate(isActionApprovalRuntimeEnabled) ||
-        !readGroupGate(canUseActionApprovalsForSourceGroup, sourceGroupId)
-      ) return denied("runtime_disabled");
+        await updateProposalCards(repository, cardClient, mutation);
+        return mutation.outcome === "already_applied"
+          ? { status: "already_applied", code: "duplicate_callback" }
+          : { status: "applied", code: "action_approval_applied" };
+      };
 
-      let mutation: ApplyActionProposalActionResult;
-      try {
-        mutation = await repository.applyApprovalAction(
-          toMutationInput(job, intent, requireReviewAttestation),
-        );
-      } catch (error) {
-        return classifyStableOrRetryable(error);
-      }
-      await updateProposalCards(repository, cardClient, mutation);
-      return mutation.outcome === "already_applied"
-        ? { status: "already_applied", code: "duplicate_callback" }
-        : { status: "applied", code: "action_approval_applied" };
+      const result = await process();
+      await observeActionApprovalResult({
+        observer: agentExecutionObserver,
+        job,
+        result,
+        sourceGroupId: observationGroupId,
+      });
+      return result;
     },
   };
+}
+
+async function observeActionApprovalResult(input: {
+  observer: AgentExecutionObserver | undefined;
+  job: ActionProposalApprovalInteractionJob;
+  result: ActionApprovalWorkerResult;
+  sourceGroupId: string | undefined;
+}): Promise<void> {
+  if (input.observer === undefined || input.result.status === "already_applied") {
+    return;
+  }
+
+  const operationDigest = createHash("sha256")
+    .update(`${input.job.appId}:${input.job.eventId}`)
+    .digest("hex");
+  const common = {
+    ...(input.sourceGroupId === undefined ? {} : { groupId: input.sourceGroupId }),
+    actorOpenId: input.job.actorOpenId,
+    subjectId: input.job.proposalId,
+    operationKey: `action-approval:${operationDigest}:${input.result.code}`,
+    metadata: {
+      presentationId: input.job.presentationId,
+      proposalVersion: input.job.proposalVersion,
+      subjectRevision: input.job.subjectRevision,
+      subjectVersion: input.job.subjectVersion,
+      targetPolicyVersion: input.job.targetPolicyVersion,
+      action: input.job.action,
+    },
+    at: input.job.receivedAt,
+  } as const;
+
+  try {
+    if (input.result.status === "applied") {
+      const approved = input.job.action === "approve";
+      await input.observer.observe({
+        ...common,
+        subjectType: "action_proposal",
+        eventType: approved ? "action_approved" : "action_rejected",
+        phase: "approval_wait",
+        outcome: approved ? "success" : "denied",
+        decisionReason: approved
+          ? "publication_approved"
+          : input.job.action === "request_revision"
+            ? "revision_requested"
+            : "publication_rejected",
+      });
+      return;
+    }
+
+    await input.observer.observe({
+      ...common,
+      subjectType: "permission_decision",
+      eventType: input.result.status === "denied"
+        ? "permission_denied"
+        : "permission_error",
+      phase: "permission_prompt",
+      outcome: input.result.status === "denied" ? "denied" : "error",
+      decisionReason: input.result.code,
+    });
+  } catch {
+    // Approval facts remain authoritative when execution observation is unavailable.
+  }
 }
 
 function isExactContext(

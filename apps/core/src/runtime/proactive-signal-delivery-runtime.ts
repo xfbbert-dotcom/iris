@@ -1,4 +1,5 @@
 import type { RuntimeController } from "../admin/runtime-controller.js";
+import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
 import {
   readFeishuOpenApiConfig,
   readProactiveSignalDeliveryRuntimeConfig,
@@ -57,10 +58,12 @@ export function createProactiveSignalDeliveryRuntime({
   env = process.env,
   runtimeController,
   dependencies = {},
+  agentExecutionObserver,
 }: {
   env?: EnvLike;
   runtimeController?: ProactiveSignalRuntimeGate;
   dependencies?: ProactiveSignalDeliveryRuntimeDependencies;
+  agentExecutionObserver?: AgentExecutionObserver;
 } = {}): ProactiveSignalDeliveryRuntime | undefined {
   const config = readProactiveSignalDeliveryRuntimeConfig(env);
   if (!config.enabled) return undefined;
@@ -113,6 +116,7 @@ export function createProactiveSignalDeliveryRuntime({
       workerId: DISPATCHER_WORKER_ID,
       leaseMs: EXTERNAL_LEASE_MS,
       retryDelayMs: SEND_RETRY_DELAY_MS,
+      ...(agentExecutionObserver === undefined ? {} : { agentExecutionObserver }),
     });
     dispatcherLoop = createDispatcherPollingLoop({
       worker: dispatcher,
