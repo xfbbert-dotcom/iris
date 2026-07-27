@@ -8,6 +8,7 @@ import {
   createPostgresProactiveSignalRepository,
   type ProactiveSignalFeedback,
   type ProactiveSignalDataSource,
+  type ProactiveSignalRecordResult,
 } from "../src/proactive-signals/proactive-signal-repository.js";
 import type { ProactiveSignalCandidate } from "../src/proactive-signals/proactive-signal-planner.js";
 
@@ -133,13 +134,55 @@ describe("proactive signal persistence", () => {
       dataSource: { connect, query: vi.fn() } as unknown as ProactiveSignalDataSource,
     });
 
-    await expect(repository.recordFeedback(feedback({ feedback: "helpful" }))).resolves.toEqual({ status: "applied" });
+    await expect(repository.recordFeedback(feedback({
+      feedback: "helpful",
+      suppressUntil: new Date("2026-07-27T00:00:00.000Z"),
+    }))).resolves.toEqual({ status: "applied" });
     const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
     expect(sql).not.toContain("insert into proactive_signal_suppressions");
     await expect(repository.recordFeedback(feedback({ actorFingerprint: "A".repeat(64) }))).rejects.toThrow(
       "actorFingerprint is invalid",
     );
     expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires irrelevant suppressions to be within the next 365 days", async () => {
+    const at = new Date("2026-07-27T00:00:00.000Z");
+    const connect = vi.fn(async () => {
+      throw new Error("feedback validation must fail before connecting");
+    });
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: { connect, query: vi.fn() } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.recordFeedback(feedback({ at, suppressUntil: at }))).rejects.toThrow(
+      "suppressUntil is invalid",
+    );
+    await expect(repository.recordFeedback(feedback({
+      at,
+      suppressUntil: new Date(at.getTime() + 365 * 24 * 60 * 60 * 1000 + 1),
+    }))).rejects.toThrow("suppressUntil is invalid");
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("accepts an irrelevant suppression exactly 365 days after feedback", async () => {
+    const at = new Date("2026-07-27T00:00:00.000Z");
+    const client = createClient([
+      { rows: [{ kind: "quiet_open_thread", entity_id: "thread-a" }] },
+      { rows: [{ idempotency_key: "feishu-card:cli:event-1" }] },
+      { rows: [] },
+    ]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.recordFeedback(feedback({
+      at,
+      suppressUntil: new Date(at.getTime() + 365 * 24 * 60 * 60 * 1000),
+    }))).resolves.toEqual({ status: "applied" });
   });
 
   it("summarizes feedback by group without selecting actor fingerprints", async () => {
@@ -269,6 +312,33 @@ describe("proactive signal persistence", () => {
       recordedKeys: [],
     });
     expect(client.query.mock.calls).toHaveLength(3);
+  });
+
+  it("anchors candidate CTE values to the target Postgres column types", async () => {
+    const client = createClient([
+      { rows: [{ idempotency_key: "quiet_open_thread:thread-a:1", outcome: "recorded" }] },
+      { rows: [] },
+      { rows: [] },
+    ]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await repository.recordCandidates({
+      signals: [signal()],
+      now: new Date("2026-07-27T00:00:00.000Z"),
+    });
+
+    const insertCall = client.query.mock.calls.find(([statement]) =>
+      String(statement).toLowerCase().includes("insert into proactive_signal_candidates")
+    );
+    expect(String(insertCall?.[0])).toContain("$7::bigint");
+    expect(String(insertCall?.[0])).toContain("$11::timestamptz");
+    expect(String(insertCall?.[0])).toContain("$12::timestamptz");
+    expect(String(insertCall?.[0])).toContain("$13::timestamptz");
   });
 
   it("excludes candidates with active database suppressions and reports them separately", async () => {
@@ -598,3 +668,12 @@ function expectPlaceholdersToBeUnique(statement: string, values: unknown[]) {
   expect(new Set(placeholders).size).toBe(placeholders.length);
   expect(Math.max(...placeholders)).toBe(values.length);
 }
+
+// @ts-expect-error ProactiveSignalRecordResult requires complete accounting.
+const recordResultMissingSuppressedCount: ProactiveSignalRecordResult = {
+  recordedCount: 0,
+  existingCount: 0,
+  recordedKeys: [],
+};
+
+void recordResultMissingSuppressedCount;

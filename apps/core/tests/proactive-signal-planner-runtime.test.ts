@@ -108,6 +108,7 @@ function runtimeDependencies({ order = [] }: { order?: string[] } = {}) {
     recordCandidates: vi.fn<ProactiveSignalRepository["recordCandidates"]>().mockResolvedValue({
       recordedCount: 1,
       existingCount: 0,
+      suppressedCount: 0,
       recordedKeys: ["quiet_open_thread:thread-quiet:2"],
     }),
   } as unknown as ProactiveSignalRepository;

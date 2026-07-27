@@ -102,6 +102,7 @@ describe("proactive signal API", () => {
       recordCandidates: vi.fn<ProactiveSignalRepository["recordCandidates"]>().mockResolvedValue({
         recordedCount: 1,
         existingCount: 0,
+        suppressedCount: 0,
         recordedKeys: ["quiet_open_thread:thread-quiet:2"],
       }),
       listPendingCandidates: vi.fn<ProactiveSignalRepository["listPendingCandidates"]>().mockResolvedValue([]),
@@ -151,6 +152,7 @@ describe("proactive signal API", () => {
       generatedAt: "2026-07-23T10:00:00.000Z",
       recordedCount: 1,
       existingCount: 0,
+      suppressedCount: 0,
       recordedKeys: ["quiet_open_thread:thread-quiet:2"],
       signals: [expect.objectContaining({ entityId: "thread-quiet" })],
     });

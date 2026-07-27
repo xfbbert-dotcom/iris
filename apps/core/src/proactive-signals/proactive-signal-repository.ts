@@ -7,7 +7,7 @@ import { createPostgresPool } from "../database/postgres.js";
 export type ProactiveSignalRecordResult = {
   recordedCount: number;
   existingCount: number;
-  suppressedCount?: number;
+  suppressedCount: number;
   recordedKeys: string[];
 };
 
@@ -161,6 +161,7 @@ export type ProactiveSignalDataSource = Queryable & {
 
 const MAX_BATCH_SIZE = 50;
 const MAX_IDENTIFIER_CHARS = 512;
+const MAX_IRRELEVANT_SUPPRESSION_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 
 export function createPostgresProactiveSignalRepository({
   dataSource,
@@ -275,8 +276,8 @@ async function recordFeedback(
   const entityVersion = requireVersion(input.entityVersion);
   const actorFingerprint = requireActorFingerprint(input.actorFingerprint);
   const feedback = requireFeedback(input.feedback);
-  const suppressUntil = requireDate(input.suppressUntil, "suppressUntil");
   const at = requireDate(input.at, "at");
+  const suppressUntil = requireSuppressUntil(input.suppressUntil, feedback, at);
 
   const client = await dataSource.connect();
   try {
@@ -811,7 +812,7 @@ function insertCandidates(client: Queryable, signals: ProactiveSignalCandidate[]
       now,
       now,
     );
-    return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, $${offset + 11}, $${offset + 12}, $${offset + 13})`;
+    return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}::bigint, $${offset + 8}, $${offset + 9}, $${offset + 10}, $${offset + 11}::timestamptz, $${offset + 12}::timestamptz, $${offset + 13}::timestamptz)`;
   });
 
   values.push(now);
@@ -1038,6 +1039,18 @@ function requireActorFingerprint(value: unknown): string {
 function requireFeedback(value: unknown): ProactiveSignalFeedback {
   if (value === "helpful" || value === "irrelevant") return value;
   throw new Error("feedback is invalid");
+}
+
+function requireSuppressUntil(value: Date, feedback: ProactiveSignalFeedback, at: Date): Date {
+  const suppressUntil = requireDate(value, "suppressUntil");
+  if (
+    feedback === "irrelevant"
+    && (suppressUntil.getTime() <= at.getTime()
+      || suppressUntil.getTime() > at.getTime() + MAX_IRRELEVANT_SUPPRESSION_WINDOW_MS)
+  ) {
+    throw new Error("suppressUntil is invalid");
+  }
+  return suppressUntil;
 }
 
 function requireDate(value: Date, label: string): Date {
