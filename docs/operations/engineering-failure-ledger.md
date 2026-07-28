@@ -187,6 +187,22 @@ delivery mistakes while implementing it.
 - **Exit condition:** Revoked content is absent from the prompt and cannot be reconstructed from a
   different source.
 
+### Separate retrieval authorization from answer generation failures
+
+- **Failure:** A real user-submitted document synced and indexed correctly, but a later internal
+  answer-draft request returned only the generic `answer_draft_failed` response.
+- **Root cause:** The public error envelope intentionally hides whether context retrieval,
+  permission checking, or the model provider failed, so the response alone cannot identify the
+  failed boundary.
+- **Prevention rule:** Validate the durable source, evidence, snapshot, fragment, and deployed live
+  permission checker independently before classifying the failure. Do not retry the model merely
+  to discover which earlier boundary passed.
+- **Guard:** Content-free boundary diagnostics, a single live permission-check invocation, empty
+  queue/DLQ checks, and an explicit residual entry for the unanswered provider/runtime failure.
+- **Exit condition:** The document gate is accepted only for the boundaries proven by evidence;
+  answer/citation remains open until a later bounded request succeeds and is independently
+  observed.
+
 ### Isolate semantic replay evidence
 
 - **Failure:** Reusing partially processed markers or replaying several semantic events together

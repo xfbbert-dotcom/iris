@@ -18,8 +18,9 @@ The gate passes only when all of the following are true:
 4. Exactly one `user_submitted_document` source exists for the canonical URL, keeps
    `canUseForKnowledgeDrafts=false`, and contains exactly one submitting-user evidence item plus
    one same-message group evidence item.
-5. Document sync reaches `synced`, permission state reaches `allowed`, and an indexed snapshot is
-   available.
+5. Document sync reaches `synced`, the live permission guard returns `allowed`, and an indexed
+   snapshot is available. The cached permission state may remain `unknown`; it is not authorization
+   to answer without the live guard.
 6. A later real `@Iris` question returns the unique marker from that document and cites the same
    source.
 7. A control group cannot retrieve the marker.
@@ -103,7 +104,7 @@ The operator then verifies internally, without printing document body content:
 - one source row, one user-submission evidence item, and one group-message evidence item with the
   same canonical URL, group ID, and message ID;
 - `canUseForKnowledgeDrafts=false`;
-- permission state `allowed`;
+- the live permission guard returns `allowed`; cached permission state is recorded separately;
 - sync state `synced`;
 - latest snapshot and indexed fragment counts are non-zero;
 - document-sync and reindex queues and DLQs are zero.
@@ -151,3 +152,28 @@ Record only bounded metadata in the private deployment log and PR:
 - timer and cleanup result.
 
 Do not record access tokens, document body content, user open IDs, prompts, or raw model responses.
+
+## 2026-07-28 Real Pilot Result
+
+Candidate `b7f95e77d60d151995d5738771788aaf6b8806df` passed the real Feishu
+submission and authorization portion of this gate in pilot group
+`oc_637a9aca45f01943477f4e17f1fc5b9a`.
+
+- Source ID: `ee4d4973-cd9f-4ca4-9570-66215b103da5`.
+- Submission message ID: `om_x100b69b8626ad8acb4b6e0442c5b4eb`.
+- Receipt reply message ID: `om_x100b69b8621a58acb309580bf635b28`.
+- Final type is `user_submitted_document`; draft publication remains disabled.
+- Exactly one `user_submission` and one same-message `group_message` evidence row exist.
+- Sync is `synced`; one successful snapshot and one indexed fragment contain the bounded marker.
+- A direct invocation of the deployed live Feishu permission checker returned `allowed`.
+- Event, document-sync, and reindex pending/DLQ counts returned to zero.
+
+One internal answer-draft attempt returned `500 answer_draft_failed`. It was not retried. Because
+the source, snapshot, fragment, and live permission checks all passed independently, this is
+tracked as an answer-generation/provider residual rather than a document-ingestion failure. The
+answer/citation and disabled-control-group criteria therefore remain open.
+
+Cleanup completed successfully: global and desired-global runtime are disabled, all 14 known
+groups are disabled, proactive speech and memory extraction are disabled, Caddy and the automatic
+timer are stopped, Core/Postgres/Redis/AI Worker are healthy, and the durable acceptance evidence
+remains intact.
