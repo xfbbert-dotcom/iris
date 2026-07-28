@@ -373,6 +373,26 @@ test("semantic reseed helper resets approved marker messages one at a time", () 
 
 test("fresh semantic acceptance waits through bounded model retries without deleting history", () => {
   const script = readFileSync(semanticFreshAcceptancePath, "utf8");
+  const actionCommitmentStep = sliceBetween(
+    script,
+    'stepName: "action_commitment"',
+    'stepName: "mention_question"',
+  );
+  const mentionQuestionStep = sliceBetween(
+    script,
+    'stepName: "mention_question"',
+    'stepName: "completion_and_resolution"',
+  );
+  const completionAndResolutionStep = sliceBetween(
+    script,
+    'stepName: "completion_and_resolution"',
+    'stepName: "thread_reopening"',
+  );
+  const threadReopeningStep = sliceBetween(
+    script,
+    'stepName: "thread_reopening"',
+    "  const expected = expectedByStep[step - 1];",
+  );
   assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_CONFIRM/u);
   assert.match(script, /RUN_FRESH_SEMANTIC_ACCEPTANCE_ONE_BY_ONE/u);
   assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_GROUP_ID/u);
@@ -400,20 +420,20 @@ test("fresh semantic acceptance waits through bounded model retries without dele
   assert.match(script, /stepName: "mention_question"/u);
   assert.match(script, /stepName: "completion_and_resolution"/u);
   assert.match(
-    script,
-    /stepName: "action_commitment".*threadVersion: 3.*type: "evidence_attached", version: 3, triggerIndex: 2/su,
+    actionCommitmentStep,
+    /threadVersion: 3.*type: "evidence_attached", version: 3, triggerIndex: 2/su,
   );
   assert.match(
-    script,
-    /stepName: "mention_question".*threadVersion: 3.*type: "evidence_attached", version: 3, triggerIndex: 2/su,
+    mentionQuestionStep,
+    /threadVersion: 3.*type: "evidence_attached", version: 3, triggerIndex: 2/su,
   );
   assert.match(
-    script,
-    /stepName: "completion_and_resolution".*threadVersion: 4.*type: "resolved", version: 4, triggerIndex: 4/su,
+    completionAndResolutionStep,
+    /threadVersion: 4.*type: "evidence_attached", version: 3, triggerIndex: 2.*type: "resolved", version: 4, triggerIndex: 4/su,
   );
   assert.match(
-    script,
-    /stepName: "thread_reopening".*threadVersion: 5.*type: "reopened", version: 5, triggerIndex: 5/su,
+    threadReopeningStep,
+    /threadVersion: 5.*type: "evidence_attached", version: 3, triggerIndex: 2.*type: "resolved", version: 4, triggerIndex: 4.*type: "reopened", version: 5, triggerIndex: 5/su,
   );
   assert.match(script, /commitmentOwnerOpenId/u);
   assert.match(script, /action\.owner_ref !== commitmentOwnerOpenId/u);
@@ -515,10 +535,15 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   assert.match(script, /\/internal\/conversation-state\/actions\/\$\{encodeURIComponent\(action\.id\)\}\/events/u);
   assert.match(script, /created/u);
   assert.match(script, /promoted/u);
+  assert.match(script, /evidence_attached/u);
   assert.match(script, /resolved/u);
   assert.match(script, /reopened/u);
   assert.match(script, /completed/u);
-  assert.match(script, /hasDuplicateLifecycleVersions/u);
+  assert.match(script, /hasExactEventLifecycle/u);
+  assert.match(script, /eventType: "evidence_attached", toVersion: 3/u);
+  assert.match(script, /thread\.version !== 5/u);
+  assert.match(script, /action\.version !== 2/u);
+  assert.doesNotMatch(script, /hasDuplicateLifecycleVersions/u);
   assert.match(script, /projectionRepairs/u);
   assert.match(script, /controlGroupId/u);
   assert.doesNotMatch(script, /\/internal\/runtime-control\/global/u);
@@ -526,6 +551,14 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   assert.doesNotMatch(script, /stop caddy/u);
   assert.doesNotMatch(script, /\/v1\/memory\/extract/u);
 });
+
+function sliceBetween(value, startToken, endToken) {
+  const start = value.indexOf(startToken);
+  assert.notEqual(start, -1, `missing start token: ${startToken}`);
+  const end = value.indexOf(endToken, start + startToken.length);
+  assert.notEqual(end, -1, `missing end token: ${endToken}`);
+  return value.slice(start, end);
+}
 
 test("pilot rollback documents decrypted stdin restore and Caddy-last reactivation", () => {
   const readme = readFileSync(pilotReadmePath, "utf8");
