@@ -36,15 +36,46 @@ The pilot gate is green only when all of the following are true:
 Once this gate passes, deploy the pilot. Do not start another general hardening audit unless the gate
 fails, the pilot exposes a P0/P1 issue, or the same user friction repeats.
 
-### Runtime-Control Limitation During The Pilot
+### Controlled Daily Pilot Profile
 
-The current runtime-control state is in memory. The pilot Compose configuration sets
-`IRIS_RUNTIME_GLOBAL_ENABLED=false`, so a Core restart fails closed and requires an operator to
-enable Iris explicitly after checking health. Per-group and capability mutations still return to
-their defaults after restart. For the 3-5 person pilot, treat stopping the Core service (and, if
-necessary, disabling the Feishu callback or bot) as the authoritative emergency stop. Durable
-Postgres-backed runtime control is a P1 item before expanding to the full 20-30 person rollout, but
-it does not delay the supervised single-group pilot.
+After every product-level loop in
+`docs/runbooks/iris-internal-mvp-gray-checklist.md` has passed once, start daily use with exactly one
+Feishu group and 3-5 cooperative users. This is the minimum useful product profile:
+
+- enable group-context ingestion, mention replies, group-document reading, and authorized
+  knowledge-base retrieval;
+- enable memory/thread/action extraction only for the same pilot group by setting
+  `IRIS_MEMORY_EXTRACTION_ENABLED=true`,
+  `IRIS_THREAD_EXTRACTION_GROUP_IDS=<pilot-group-id>`, and
+  `IRIS_ACTION_EXTRACTION_GROUP_IDS=<pilot-group-id>`;
+- keep `proactiveSpeech=false`, proactive planner/delivery environment gates off, and all proactive
+  allowlists empty until a controller explicitly opens a separate observed delivery window;
+- keep `generateKnowledgeDrafts=false`, `writeKnowledgeBase=false`, and `callExternalTools=false`
+  during ordinary daily chat. Open the governed knowledge publication path only for an intentional
+  review/approval session;
+- keep every known non-pilot group durably disabled.
+
+Prepare this profile with Caddy stopped and live/durable global runtime disabled. Recreate Core only
+after the exact allowlists are written, then require memory extraction to report enabled/running,
+readiness to report `ready`, and every queue/DLQ count to be zero. Enable only the pilot group,
+durably enable global runtime, verify the fresh response, and start Caddy last.
+
+An unplanned Core restart intentionally returns live global runtime to disabled. Re-run readiness
+and queue checks before manual reactivation; never auto-resume from durable desired state. Expand
+from the pilot group only after observed work contains no unresolved P0/P1 issue.
+
+### Durable Runtime Control During The Pilot
+
+Runtime-control intent is persisted in Postgres as one versioned company snapshot containing the
+desired global state, disabled groups, and capability switches. Core still starts fail-closed:
+`IRIS_RUNTIME_GLOBAL_ENABLED=false` keeps live `globalEnabled=false` after every unplanned restart,
+even when durable `desiredGlobalEnabled=true`. An operator must re-check readiness and worker health
+before explicitly restoring live activation.
+
+For the 3-5 person pilot, emergency global disable takes effect in memory before persistence and
+reports whether the disabled state was durably recorded. If persistence is unavailable, stop Core
+and, if necessary, Caddy or the Feishu callback/bot. Never treat persisted desired state as
+permission to auto-resume.
 
 ## Security Boundary
 
@@ -352,21 +383,22 @@ inviting pilot users:
 ```
 
 The script uses `set -Eeuo pipefail`, refuses concurrent runs with `flock`, and briefly stops Caddy
-and Core after graceful ingress drain. Before the stop it captures the in-memory global runtime
-state through the authenticated container-local API and records whether Caddy is running. It
+and Core after graceful ingress drain. Before the stop it captures the live and durable global
+runtime state through the authenticated container-local API and records whether Caddy is running. It
 captures PostgreSQL and Redis while both are quiescent, starts Core alone in its configured
 fail-closed state, then encrypts the paired snapshot as one bundle. It writes to a unique owner-only
 temporary file and publishes it only after snapshot and encryption succeed. Only after atomic
-publication does a successful planned backup restore a previously enabled global state and restart
-Caddy when Caddy was running before maintenance. Files older than seven 24-hour periods are removed.
+publication does a successful planned backup restore a previously enabled live global state after
+verifying the durable desired state, and restart Caddy when Caddy was running before maintenance.
+Files older than seven 24-hour periods are removed.
 
 If any maintenance step fails, cleanup keeps Caddy stopped and restarts only a verified disabled
 Core; it never re-enables Iris from the `EXIT` trap. Cleanup first attempts an explicit runtime API
 disable, retries Caddy shutdown, uses a forced container stop if needed, and independently verifies
 both final states. Treat `FAIL-CLOSED RECOVERY INCOMPLETE` as a page-level incident and immediately
 verify the runtime and Caddy from the VPS. Host restarts, crashes, and container recreation also
-remain fail-closed and still require an explicit operator enable. This planned-backup behavior does
-not make runtime-control state durable, and group or capability overrides are not restored.
+remain fail-closed and still require an explicit operator activation; validated disabled-group and
+capability intent is restored from Postgres without expanding authority.
 
 Copy the encrypted file off the VPS, decrypt it on the operator-controlled machine, inspect the
 bundle, and validate both payloads. A bundle whose Postgres archive and Redis RDB have not both been
@@ -998,11 +1030,10 @@ Recovery rule:
 - If a component is listed with `status: "stopped"`, treat it as an enabled worker that is not
   running. It appears in `degradedComponents` until the worker is started or intentionally disabled.
 
-## Semantic Thread And Action Gray Gate
+## Semantic Thread And Action Daily Pilot
 
-Semantic thread/action extraction is code implemented but remains disabled by default and has not
-passed real Feishu gray acceptance. The pilot environment must retain these defaults outside the
-single approved gray group:
+Semantic thread/action extraction remains disabled by default, and its controlled real-Feishu gray
+gate has passed. Outside a reviewed single-group daily pilot, retain these defaults:
 
 ```text
 IRIS_THREAD_EXTRACTION_GROUP_IDS=
@@ -1011,12 +1042,16 @@ IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR=0.65
 IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE=0.85
 ```
 
-Do not expose the AI Worker or any `/internal/*` operator route through Caddy. Do not enable
-proactive speech, reminders, or follow-up. After controller review, follow
-`docs/runbooks/iris-semantic-thread-action-memory-acceptance.md` for the one-group gray gate. It
-requires ordinary discussion, evidence promotion, one explicit commitment, an @Iris question,
-completion, reopening, no unsolicited reply, no cross-group state, and zero queue, DLQ, and
-projection-repair counts before rollback or expansion decisions.
+For the daily pilot, set both extraction group lists to the exact approved pilot group and set
+`IRIS_MEMORY_EXTRACTION_ENABLED=true` while global runtime and Caddy remain off. Recreate Core,
+verify the extraction worker is enabled/running with zero queue, DLQ, and projection-repair counts,
+then follow the Controlled Daily Pilot Profile above. Do not expose the AI Worker or any
+`/internal/*` operator route through Caddy. Proactive speech, reminders, and follow-up remain a
+separate gate.
+
+Use `docs/runbooks/iris-semantic-thread-action-memory-acceptance.md` for regression after a semantic
+incident or a change to extraction behavior. Do not repeat the full gray gate merely because the
+daily pilot starts.
 
 ## Proactive Feedback-Card Gray Gate
 

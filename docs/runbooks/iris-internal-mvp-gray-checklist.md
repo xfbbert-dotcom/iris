@@ -78,25 +78,30 @@ Record non-blocking hardening as backlog instead of extending the gate.
     - Public `/health` remains available; public `/internal/*` remains `404`.
     - Queues drain or remain safely retryable after re-enable.
 
-## Current Status - 2026-07-28
+## Current Status - 2026-07-29
 
 - Loops 1 and 2 have now passed a real Feishu semantic gray run. The ordered six-message replay
   produced one current-group thread through create, promote, resolve, and reopen transitions plus
   one action through create and complete, with stable owner/evidence/version facts, no duplicate
   entities, no control-group data, and empty queues and DLQs after the run.
-- Loop 3 has real evidence for group-visible and authorized-wiki discovery, sync, retrieval, and
-  citation. The Admin Console and explicit in-chat user-document submission paths are implemented
-  and covered by automated tests, but the employee-facing in-chat submission path still needs one
-  real Feishu pass with a previously unregistered document.
+- Loop 3 has real evidence for group-visible, authorized-wiki, and employee-submitted document
+  discovery, sync, retrieval, citation, and answer use. A previously unregistered Feishu document
+  was submitted through an explicit in-chat command, retained the correct source/evidence policy,
+  synced and indexed once, passed the live permission guard, and answered a later ordinary
+  document question through the answer path.
 - Loops 4, 5, 6, 7, and 10 have real Feishu pilot evidence for permission revocation, knowledge
   draft confirmation, approval-before-action, first knowledge-base publication, and runtime
   fail-closed behavior.
 - Loops 8 and 9 have passed one bounded real Feishu proactive delivery and feedback run. One
   `helpful` result recorded without suppression; one independent `irrelevant` result created one
   exact group/kind/entity suppression, and a repeat scan produced no replacement candidate.
-- Production remains intentionally fail-closed after every acceptance window. Iris is not yet a
-  complete daily rollout: the next missing P1 product gate is the real employee-submitted document
-  loop, followed by an explicit product decision to begin a controlled daily pilot.
+- All ten required P1 loops have now passed once in a controlled real-Feishu pilot. The product gate
+  is green for a 3-5 person, single-group daily pilot; it is not an automatic authorization to
+  enable production or expand to all 20-30 employees.
+- Production remains intentionally fail-closed after the final acceptance window. The next action
+  is an explicit product decision to start that controlled daily pilot, followed by observation of
+  real work. P2/P3 hardening and broad cross-group sharing remain backlog unless pilot evidence
+  promotes them to a P0/P1 issue.
 
 ## Not Required For The First 20-30 Person MVP
 

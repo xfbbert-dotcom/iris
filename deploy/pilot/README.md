@@ -7,8 +7,10 @@ internal bearer token inside Core; do not print it, the database URL, or any app
 
 The `ai-worker` service is reachable only on the internal `backend` network and publishes no host
 port. Core and AI Worker images use the same `IRIS_IMAGE_TAG`. Keep
-`IRIS_MEMORY_EXTRACTION_ENABLED=false` until every internal gate in
-`docs/runbooks/iris-automatic-memory-extraction-acceptance.md` passes. The AI Worker bearer token
+`IRIS_MEMORY_EXTRACTION_ENABLED=false` is the maintenance and preflight default. The controlled
+real-Feishu memory/thread/action gate has passed, so a reviewed daily pilot may set it to `true`
+only with `IRIS_THREAD_EXTRACTION_GROUP_IDS` and `IRIS_ACTION_EXTRACTION_GROUP_IDS` equal to the
+single approved pilot group. Keep both lists empty outside that pilot. The AI Worker bearer token
 must match Core's token, while its extraction-model credentials come from the separate
 `IRIS_MEMORY_EXTRACTION_MODEL_*` deployment variables; do not replace Core's existing answer-model
 configuration.
