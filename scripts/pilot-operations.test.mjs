@@ -399,6 +399,22 @@ test("fresh semantic acceptance waits through bounded model retries without dele
   assert.match(script, /Expected exactly one action bound to the semantic acceptance thread/u);
   assert.match(script, /stepName: "mention_question"/u);
   assert.match(script, /stepName: "completion_and_resolution"/u);
+  assert.match(
+    script,
+    /stepName: "action_commitment".*threadVersion: 3.*type: "evidence_attached", version: 3, triggerIndex: 2/su,
+  );
+  assert.match(
+    script,
+    /stepName: "mention_question".*threadVersion: 3.*type: "evidence_attached", version: 3, triggerIndex: 2/su,
+  );
+  assert.match(
+    script,
+    /stepName: "completion_and_resolution".*threadVersion: 4.*type: "resolved", version: 4, triggerIndex: 4/su,
+  );
+  assert.match(
+    script,
+    /stepName: "thread_reopening".*threadVersion: 5.*type: "reopened", version: 5, triggerIndex: 5/su,
+  );
   assert.match(script, /commitmentOwnerOpenId/u);
   assert.match(script, /action\.owner_ref !== commitmentOwnerOpenId/u);
   assert.match(script, /completionOwnerOpenId !== commitmentOwnerOpenId/u);

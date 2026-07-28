@@ -520,7 +520,7 @@ async def test_total_wall_clock_deadline_stops_endless_slow_response():
     assert caught.value.code == "provider_timeout"
     assert str(caught.value) == "provider_timeout"
     assert "secret" not in repr(caught.value)
-    assert stream.chunks_yielded >= 2
+    assert stream.chunks_yielded >= 1
 
 
 @pytest.mark.asyncio

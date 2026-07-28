@@ -539,6 +539,9 @@ run to have enabled `memory`, `thread`, and `action`, then proves the cumulative
 thread creation, promotion, action creation, action completion, thread resolution, and thread
 reopening. Entity counts, links, owners, versions, lifecycle events, and event evidence must all
 match; a completed extraction that produced zero semantic candidates therefore fails immediately.
+Creating an action from an explicit commitment also attaches that commitment evidence to the
+existing discussion thread. The thread therefore advances from promoted version 2 to version 3
+with an `evidence_attached` event before later resolution (version 4) and reopening (version 5).
 The fourth, mention-question step is the deliberate exception: it must leave the semantic lifecycle
 unchanged. The fifth message must both complete the action and resolve the thread, and the persisted
 Feishu action owner must exactly match the sender of both the commitment and completion messages.
@@ -620,7 +623,9 @@ acceptance result.
 2. Evidence promotion without mentioning Iris: continue the same topic. Poll until the same
    evidence-bound thread is `open`, not `candidate`.
 3. Explicit commitment: one participant personally commits to one concrete action. Poll until
-   exactly one matching `open` action has the correct Feishu owner and evidence message ID.
+   exactly one matching `open` action has the correct Feishu owner and evidence message ID. The
+   same evidence must be attached to the existing thread as version 3; this is not a duplicate
+   thread or a failed extraction.
 4. Mention question: mention Iris and ask for the current decision and commitment. Require one
    accurate answer grounded only in this group's open thread/action state.
 5. Completion: the owner explicitly completes the action and resolves the discussion. Poll until the

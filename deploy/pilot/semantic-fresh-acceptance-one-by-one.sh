@@ -645,10 +645,11 @@ async function assertSemanticLifecycleAfterStep(step, evidenceMessages) {
     {
       stepName: "action_commitment",
       threadStatus: "open",
-      threadVersion: 2,
+      threadVersion: 3,
       threadEvents: [
         { type: "created", version: 1, triggerIndex: 0 },
         { type: "promoted", version: 2, triggerIndex: 1 },
+        { type: "evidence_attached", version: 3, triggerIndex: 2 },
       ],
       action: {
         status: "open",
@@ -659,10 +660,11 @@ async function assertSemanticLifecycleAfterStep(step, evidenceMessages) {
     {
       stepName: "mention_question",
       threadStatus: "open",
-      threadVersion: 2,
+      threadVersion: 3,
       threadEvents: [
         { type: "created", version: 1, triggerIndex: 0 },
         { type: "promoted", version: 2, triggerIndex: 1 },
+        { type: "evidence_attached", version: 3, triggerIndex: 2 },
       ],
       action: {
         status: "open",
@@ -673,11 +675,12 @@ async function assertSemanticLifecycleAfterStep(step, evidenceMessages) {
     {
       stepName: "completion_and_resolution",
       threadStatus: "resolved",
-      threadVersion: 3,
+      threadVersion: 4,
       threadEvents: [
         { type: "created", version: 1, triggerIndex: 0 },
         { type: "promoted", version: 2, triggerIndex: 1 },
-        { type: "resolved", version: 3, triggerIndex: 4 },
+        { type: "evidence_attached", version: 3, triggerIndex: 2 },
+        { type: "resolved", version: 4, triggerIndex: 4 },
       ],
       action: {
         status: "completed",
@@ -691,12 +694,13 @@ async function assertSemanticLifecycleAfterStep(step, evidenceMessages) {
     {
       stepName: "thread_reopening",
       threadStatus: "open",
-      threadVersion: 4,
+      threadVersion: 5,
       threadEvents: [
         { type: "created", version: 1, triggerIndex: 0 },
         { type: "promoted", version: 2, triggerIndex: 1 },
-        { type: "resolved", version: 3, triggerIndex: 4 },
-        { type: "reopened", version: 4, triggerIndex: 5 },
+        { type: "evidence_attached", version: 3, triggerIndex: 2 },
+        { type: "resolved", version: 4, triggerIndex: 4 },
+        { type: "reopened", version: 5, triggerIndex: 5 },
       ],
       action: {
         status: "completed",
