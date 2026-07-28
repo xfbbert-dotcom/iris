@@ -10,8 +10,21 @@ export type DatabaseHealth = {
   ok: boolean;
 };
 
-export function createPostgresPool(config: DatabaseConfig): pg.Pool {
-  return new pg.Pool({ connectionString: config.databaseUrl });
+export type PostgresPoolConfig = DatabaseConfig & {
+  connectionTimeoutMillis?: number;
+  queryTimeoutMillis?: number;
+  statementTimeoutMillis?: number;
+  lockTimeoutMillis?: number;
+};
+
+export function createPostgresPool(config: PostgresPoolConfig): pg.Pool {
+  return new pg.Pool({
+    connectionString: config.databaseUrl,
+    connectionTimeoutMillis: config.connectionTimeoutMillis,
+    query_timeout: config.queryTimeoutMillis,
+    statement_timeout: config.statementTimeoutMillis,
+    lock_timeout: config.lockTimeoutMillis,
+  });
 }
 
 export async function closePostgresPool(pool: pg.Pool): Promise<void> {

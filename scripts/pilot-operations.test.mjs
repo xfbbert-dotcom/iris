@@ -378,8 +378,11 @@ test("fresh semantic acceptance waits through bounded model retries without dele
   assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_GROUP_ID/u);
   assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_MARKER/u);
   assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_KNOWN_GROUP_IDS/u);
+  assert.match(script, /expected_count != 6/u);
   assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_COMMAND_TIMEOUT_SECONDS/u);
   assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_REQUEST_TIMEOUT_MS/u);
+  assert.match(script, /cleanup_timeout_seconds/u);
+  assert.match(script, /known_group_count/u);
   assert.match(script, /semantic-evidence-integrity\.js/u);
   assert.match(script, /assertSemanticEvidenceIntegrity/u);
   assert.match(script, /ORDER BY sent_at ASC, created_at ASC, id ASC/u);
@@ -389,12 +392,31 @@ test("fresh semantic acceptance waits through bounded model retries without dele
   assert.match(script, /await waitForRequestTerminal\(result\.request\.id\)/u);
   assert.match(script, /request\.status === "completed"/u);
   assert.match(script, /request\.status === "completed" && queueDrained/u);
+  assert.match(script, /run\.enabled_operation_families/u);
+  assert.match(script, /assertEnabledOperationFamilies/u);
+  assert.match(script, /await assertSemanticLifecycleAfterStep\(results\.length/u);
+  assert.match(script, /Expected exactly one semantic acceptance thread/u);
+  assert.match(script, /Expected exactly one action bound to the semantic acceptance thread/u);
+  assert.match(script, /stepName: "mention_question"/u);
+  assert.match(script, /stepName: "completion_and_resolution"/u);
+  assert.match(script, /commitmentOwnerOpenId/u);
+  assert.match(script, /action\.owner_ref !== commitmentOwnerOpenId/u);
+  assert.match(script, /completionOwnerOpenId !== commitmentOwnerOpenId/u);
+  assert.match(script, /created.*promoted.*resolved.*reopened/su);
+  assert.match(script, /created.*completed/su);
   assert.match(script, /request\.status === "skipped"/u);
   assert.match(script, /invalid_model_response_retry/u);
   assert.match(script, /delayedJobCount/u);
+  assert.match(script, /requireQueueCount/u);
+  assert.match(script, /requireDeadLetters/u);
+  assert.doesNotMatch(script, /deadLetters\.deadLetters \?\? \[\]/u);
+  assert.doesNotMatch(script, /(?:pending|processing|delayed)JobCount \?\? 0/u);
   assert.match(script, /\/internal\/memory-extraction\/dead-letters\?limit=20/u);
   assert.match(script, /\/internal\/runtime-control\/global/u);
-  assert.match(script, /\/internal\/runtime-control\/groups\/\$\{groupId\}/u);
+  assert.match(
+    script,
+    /\/internal\/runtime-control\/groups\/\$\{encodeURIComponent\(groupId\)\}/u,
+  );
   assert.match(script, /globalEnabled !== false/u);
   assert.match(script, /desiredGlobalEnabled !== false/u);
   assert.match(script, /proactiveSpeech !== false/u);
@@ -403,17 +425,60 @@ test("fresh semantic acceptance waits through bounded model retries without dele
   assert.match(script, /finally \{/u);
   assert.doesNotMatch(script, /if \(privateWindowOpened\)/u);
   assert.match(script, /await safeMutation\(\(\) => setGlobal\(false\)\)/u);
-  assert.match(script, /await safeMutation\(\(\) => setGroup\(groupId, false\)\)/u);
+  assert.match(script, /await disableKnownGroups/u);
   assert.doesNotMatch(script, /safeMutation\(\(\) => assertFinalFailClosed/u);
   assert.match(script, /AbortSignal\.timeout/u);
   assert.match(script, /timeout --kill-after=/u);
+  assert.match(script, /core sh -c/u);
+  assert.match(script, /exec timeout --signal=TERM --kill-after=15s/u);
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_RUN_TOKEN/u);
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_PID_FILE/u);
+  assert.match(script, /terminate_acceptance_process/u);
+  assert.match(script, /readdir\("\/proc"/u);
+  assert.match(script, /\/proc\/\$\{pid\}\/environ/u);
+  assert.match(script, /waitForMatchingProcesses/u);
+  assert.match(script, /waitForStableAbsence/u);
+  assert.match(script, /process\.kill\(pid, "SIGTERM"\)/u);
+  assert.match(script, /process\.kill\(pid, "SIGKILL"\)/u);
   assert.match(script, /trap .*EXIT/u);
   assert.match(script, /force_fail_closed/u);
   assert.match(script, /parsed\.durable !== true/u);
-  assert.match(script, /stop caddy/u);
+  assert.match(script, /stop_caddy_bounded/u);
+  assert.doesNotMatch(script, /^\s*"\$\{compose\[@\]\}" stop caddy/gmu);
+  assert.match(script, /connectionTimeoutMillis: requestTimeoutMs/u);
+  assert.match(script, /queryTimeoutMillis: requestTimeoutMs/u);
+  assert.match(script, /statementTimeoutMillis: requestTimeoutMs/u);
+  assert.match(script, /lockTimeoutMillis: requestTimeoutMs/u);
+  assert.match(script, /enqueueWithRedisDeadline/u);
+  assert.match(script, /redisTimedOut = true/u);
+  assert.match(script, /redis\.destroy\(\)/u);
+  assert.doesNotMatch(script, /redis\.withAbortSignal/u);
+  assert.match(script, /cleanupFailures/u);
+  assert.match(script, /assertExactDisabledGroupSet\(status\.disabledGroupIds, knownGroupIds\)/u);
+  assert.match(script, /for \(const knownGroupId of knownGroupIds\)/u);
+  assert.doesNotMatch(script, /Promise\.allSettled\(\s*knownGroupIds\.map/u);
   assert.doesNotMatch(script, /DELETE FROM/u);
   assert.doesNotMatch(script, /UPDATE group_memory_extraction_requests/u);
   assert.doesNotMatch(script, /up .*caddy/u);
+  const cleanupBody = script.slice(
+    script.indexOf("force_fail_closed() {"),
+    script.indexOf("trap force_fail_closed EXIT"),
+  );
+  assert.ok(
+    cleanupBody.indexOf("terminate_acceptance_process") <
+      cleanupBody.indexOf("stop_caddy_bounded"),
+    "cleanup must terminate the container-side acceptance process before proving fail-closed",
+  );
+  assert.ok(
+    script.indexOf("await assertSemanticLifecycleAfterStep(results.length") <
+      script.indexOf("console.log(JSON.stringify(acceptanceSummary))"),
+    "the full semantic lifecycle must be proven before reporting success",
+  );
+  assert.ok(
+    script.indexOf("await assertFinalFailClosed()") <
+      script.indexOf("console.log(JSON.stringify(acceptanceSummary))"),
+    "the final fail-closed state must be proven before reporting success",
+  );
 });
 
 test("semantic acceptance inspector validates lifecycle without mutating runtime or public ingress", () => {

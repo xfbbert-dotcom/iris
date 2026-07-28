@@ -532,12 +532,24 @@ IRIS_SEMANTIC_FRESH_ACCEPTANCE_KNOWN_GROUP_IDS=<exhaustive-comma-separated-group
 ./deploy/pilot/semantic-fresh-acceptance-one-by-one.sh
 ```
 
-The helper validates persisted evidence before registration, opens no public ingress, registers and
-enqueues exactly one request at a time, and returns global/group runtime to fail-closed. The known
-group list must be an exhaustive, current inventory; the helper refuses to open the private window
-when Postgres contains a group outside that list or when any non-target group would become enabled.
-The outer Compose command is bounded to 1,800 seconds by default and each internal HTTP/DB/Redis
-operation is bounded to 10 seconds. Operators may set
+The helper requires exactly six ordered marker messages and validates persisted evidence before
+registration. It opens no public ingress, registers and enqueues exactly one request at a time, and
+returns global/group runtime to fail-closed. After every completed request it requires the persisted
+run to have enabled `memory`, `thread`, and `action`, then proves the cumulative lifecycle:
+thread creation, promotion, action creation, action completion, thread resolution, and thread
+reopening. Entity counts, links, owners, versions, lifecycle events, and event evidence must all
+match; a completed extraction that produced zero semantic candidates therefore fails immediately.
+The fourth, mention-question step is the deliberate exception: it must leave the semantic lifecycle
+unchanged. The fifth message must both complete the action and resolve the thread, and the persisted
+Feishu action owner must exactly match the sender of both the commitment and completion messages.
+The known group list must be an exhaustive, current inventory; the helper refuses to open the
+private window when Postgres contains a group outside that list or when any non-target group would
+become enabled. Cleanup attempts every known group independently and proves the exact disabled set.
+The acceptance process publishes a unique run token before Node starts, is bounded by a timeout
+inside the Core container, and cleanup terminates every `/proc` process carrying that token before
+proving the runtime closed. The outer Compose command has a later attach timeout, both Caddy stops
+are bounded, and each internal HTTP/Postgres/Redis operation has a real transport or server-side
+timeout of 10 seconds. Operators may set
 `IRIS_SEMANTIC_FRESH_ACCEPTANCE_COMMAND_TIMEOUT_SECONDS` (60-3,600) and
 `IRIS_SEMANTIC_FRESH_ACCEPTANCE_REQUEST_TIMEOUT_MS` (1,000-30,000) without removing those bounds.
 A run with

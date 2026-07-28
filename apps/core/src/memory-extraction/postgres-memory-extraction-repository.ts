@@ -2629,7 +2629,7 @@ async function selectCurrentConversationState(
         WHERE dependency.id = action_items.thread_id
           AND dependency.group_id = action_items.group_id
           AND (
-            dependency.status IN ('candidate', 'merged')
+            dependency.status = 'merged'
             OR dependency.retrieval_state <> 'visible'
           )
       )
