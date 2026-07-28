@@ -51,6 +51,24 @@ delivery mistakes while implementing it.
 
 ## Feishu Boundaries
 
+### Require a postcondition for browser and OpenAPI writes
+
+- **Failure:** Browser automation reported successful clicks on Feishu's visual `New` card, but no
+  document, menu, navigation, or new tab appeared. The application-level document-create request
+  was separately rejected with Feishu code `99991672`, and no document was created.
+- **Root cause:** The visual card is a non-native interactive container whose automation result
+  does not prove that Feishu accepted the action. The Iris application also does not currently
+  hold a document-create scope, so the service API is not an equivalent fallback.
+- **Prevention rule:** Treat every external write as incomplete until its domain postcondition is
+  observed. Do not retry an unchanged permission denial. For an employee-submission acceptance,
+  prefer a human-created, explicitly shared fixture instead of widening application permissions
+  only to manufacture test data.
+- **Guard:** Check for the new canonical document URL or API object before recording success,
+  record only the bounded provider error code, and keep Iris fail-closed while awaiting the
+  fixture.
+- **Exit condition:** A genuinely new document exists, was not previously registered, and is
+  explicitly shared with Iris before the bounded submission window opens.
+
 ### Acknowledge callbacks before doing expensive work
 
 - **Failure:** Any filtering, model work, or slow dependency on the callback path risks crossing

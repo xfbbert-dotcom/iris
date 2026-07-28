@@ -44,6 +44,12 @@ Grant the Iris app read access to that document. Record the canonical docx URL a
 private deployment log. Do not place credentials, personal data, or production secrets in the
 fixture.
 
+If the operator cannot create the fixture through the signed-in Feishu UI and the Iris application
+does not have a document-create scope, stop after the first confirmed permission denial. Ask the
+human tester to create and share this single bounded fixture. Do not widen application permissions
+solely to manufacture acceptance data, and do not treat an automation click result as success
+without observing a new canonical document URL.
+
 ## Fail-Closed Preflight
 
 Before opening public ingress, verify read-only:
