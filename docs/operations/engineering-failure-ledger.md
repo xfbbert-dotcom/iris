@@ -89,6 +89,23 @@ delivery mistakes while implementing it.
 - **Exit condition:** Only the current card can change the current proposal, and repeated actions
   do not duplicate the effect.
 
+### Diagnose card interaction errors from server evidence
+
+- **Failure:** A real proactive-feedback click showed Feishu client code `200080` and created no
+  feedback event.
+- **Root cause:** The operator clicked after the bounded gray window had expired. The fail-closed
+  timer had already stopped Caddy and disabled Iris, so the callback could not reach Core. The
+  client code alone did not distinguish that transport closure from a stale card or application
+  rejection.
+- **Prevention rule:** Before changing callback code or reissuing a card, correlate the click with
+  the gray-window deadline, Caddy state, callback diagnostics, queue state, and durable event
+  count. Reopen a new bounded window only after proving the previous window closed cleanly.
+- **Guard:** Every real card acceptance records its open and automatic-close deadlines, keeps the
+  planner disabled, and verifies the public boundary plus empty queues before asking for the
+  human click.
+- **Exit condition:** The exact callback is durably recorded, its queue and DLQ drain to zero, and
+  the same bounded cleanup restores global, group, capability, environment, and ingress state.
+
 ### Recheck mutable safety state immediately before an external side effect
 
 - **Failure:** An active suppression could be created after a proactive delivery was claimed but

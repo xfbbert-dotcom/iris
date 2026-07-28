@@ -76,3 +76,30 @@ release gates:
   fail closed or no-op as specified;
 - recheck global and desired-global runtime disabled, `proactiveSpeech=false`, Caddy stopped,
   service health, and empty pending/DLQ counts before any public ingress or enablement.
+
+## Real Feishu Gray Evidence
+
+On 2026-07-28, candidate `ac01da182132d639961964448b366fb0230081bb` completed the
+first real helpful-feedback path in the authorized pilot group:
+
+- Core and AI Worker ran images tagged with the same candidate SHA; the constitutional approved
+  marker remained `570e90cc7c4924b44c44a332f3eb4f8b20110999`.
+- The first human click occurred after the 30-minute fail-closed timer had stopped Caddy. Feishu
+  displayed `200080`, no callback reached Core, and no feedback event was written. Reopening a
+  bounded window and retrying the same original card succeeded, proving the card binding and
+  callback payload were valid.
+- The accepted event was bound to delivery
+  `proactive-delivery:8319e1fb2969cf5b9572002af8881c548eb27ecbb6f17641094578e00b5e9bf9`,
+  candidate `quiet_open_thread:19a6750a-de47-40a9-9476-ed99e7152173:7`, pilot group, sent
+  message, and entity version `7`.
+- The group summary became `total=1`, `helpful=1`, `irrelevant=0`, helpful rate `1`, with zero
+  active suppressions. Approval-interaction pending, delayed, processing, and DLQ counts were all
+  zero.
+- Cleanup then restored `globalEnabled=false`, `desiredGlobalEnabled=false`,
+  `proactiveSpeech=false`, all 14 known groups disabled, proactive environment flags disabled,
+  and Caddy stopped. Core, Postgres, Redis, and AI Worker remained healthy; event, document, and
+  reindex pending/DLQ counts remained zero.
+
+The real irrelevant-feedback suppression path and the negative actor/stale-binding cases remain
+external acceptance gates; unit, integration, and PostgreSQL race coverage for those paths is
+already present.
