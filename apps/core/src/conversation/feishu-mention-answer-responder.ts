@@ -70,7 +70,8 @@ const USER_SUBMITTED_DOCUMENT_SENDER_REQUIRED =
 const userSubmittedDocumentIntentPatterns = [
   /\b(?:add|submit|register|index)\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
   /\bread\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
-  /(?:\u63d0\u4ea4|\u6536\u5f55|\u8bfb\u53d6|\u540c\u6b65|\u5b66\u4e60|\u8bb0\u4f4f)(?:\u8fd9\u4e2a|\u8fd9\u4efd)?\u6587\u6863/u,
+  /(?:\u8bf7(?:\u4f60)?|\u5e2e\u6211|\u5e2e\u5fd9|\u9ebb\u70e6(?:\u4f60)?)\s*(?:\u63d0\u4ea4|\u6536\u5f55|\u8bfb\u53d6|\u540c\u6b65|\u5b66\u4e60|\u8bb0\u4f4f)(?:\u8fd9\u4e2a|\u8fd9\u4efd)?\u6587\u6863/u,
+  /(?:^|\s)(?:\u63d0\u4ea4|\u6536\u5f55|\u8bfb\u53d6|\u540c\u6b65|\u5b66\u4e60|\u8bb0\u4f4f)(?:\u8fd9\u4e2a|\u8fd9\u4efd)\u6587\u6863(?:\s|$|[\uff0c\u3002\uff01\uff1f,.!?])/u,
 ] as const;
 
 export function createFeishuMentionAnswerResponder({

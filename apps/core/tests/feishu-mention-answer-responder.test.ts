@@ -283,6 +283,50 @@ describe("FeishuMentionAnswerResponder", () => {
     });
   });
 
+  it("keeps questions about user-submitted documents on the answer path", async () => {
+    const question =
+      "\u521a\u624d\u6536\u5f55\u7684\u7528\u6237\u63d0\u4ea4\u6587\u6863\uff0c\u9a8c\u6536\u7f16\u53f7\u662f\u4ec0\u4e48\uff1f\u53ea\u56de\u590d\u7f16\u53f7\u3002";
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "IRIS_USER_DOC_20260728_616559",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const registerUserSubmittedDocument = vi.fn();
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-answer" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+      documentLinkExtractor: createFeishuDocumentLinkExtractor(),
+      userSubmittedDocumentRegistrar: { registerUserSubmittedDocument },
+    });
+
+    await expect(
+      responder.maybeRespond({
+        messageId: "om_user_doc_question",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: `@_user_1 ${question}`,
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      }),
+    ).resolves.toEqual({ status: "replied", replyMessageId: "reply-answer" });
+
+    expect(registerUserSubmittedDocument).not.toHaveBeenCalled();
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      executionId: "om_user_doc_question",
+      question,
+      chatId: "oc_group_1",
+      askerId: "ou_alice",
+      liveChatMessages: [{ speaker: "ou_alice", text: question }],
+    });
+  });
+
   it("does not register or answer explicit document submission commands when document reading is disabled", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const registerUserSubmittedDocument = vi.fn();
