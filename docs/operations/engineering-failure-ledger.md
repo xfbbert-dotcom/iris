@@ -36,6 +36,25 @@ delivery mistakes while implementing it.
 - **Exit condition:** A single probe succeeds; application acceptance then runs separately and does
   not infer correctness from provider availability alone.
 
+### Bound transient answer-model retries without multiplying the deadline
+
+- **Failure:** Authorized retrieval, live Feishu permission checks, and prompt assembly all
+  succeeded, but `gemini-3.5-flash` returned HTTP 503 high demand and the internal answer endpoint
+  failed before producing the exact requested marker.
+- **Root cause:** The selected answer model was temporarily capacity-constrained, while the
+  OpenAI-compatible adapter had neither a transient retry nor a model-compatible exact-output
+  prompt for the available Gemini 3.6 model.
+- **Prevention rule:** Select the answer model through configuration, omit deprecated sampling
+  controls, and retry at most once only for HTTP 408/500/502/503/504 or a fetch transport failure.
+  Never retry quota or permanent client errors. Treat the configured timeout as one total budget
+  across the initial request, backoff, and retry.
+- **Guard:** Deterministic tests cover every retryable status, 429 and 401 non-retry behavior,
+  malformed error bodies, final transport-error identity, remaining timer duration, timer cleanup
+  before backoff, and exact-value prompt policy.
+- **Exit condition:** Local and CI verification pass, the internal authorized-document request
+  returns exactly the requested marker through `gemini-3.6-flash`, one bounded Feishu pilot answer
+  passes, and production is restored to a verified fail-closed state after evidence is recorded.
+
 ### Make timeout tests deterministic
 
 - **Failure:** A streaming timeout test intermittently observed zero or one chunks on Windows even
