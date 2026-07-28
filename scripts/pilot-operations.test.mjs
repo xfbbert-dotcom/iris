@@ -419,27 +419,62 @@ test("fresh semantic acceptance waits through bounded model retries without dele
   assert.match(script, /Expected exactly one action bound to the semantic acceptance thread/u);
   assert.match(script, /stepName: "mention_question"/u);
   assert.match(script, /stepName: "completion_and_resolution"/u);
-  assert.match(
-    actionCommitmentStep,
-    /threadVersion: 3.*type: "evidence_attached", version: 3, triggerIndex: 2/su,
-  );
-  assert.match(
-    mentionQuestionStep,
-    /threadVersion: 3.*type: "evidence_attached", version: 3, triggerIndex: 2/su,
-  );
-  assert.match(
-    completionAndResolutionStep,
-    /threadVersion: 4.*type: "evidence_attached", version: 3, triggerIndex: 2.*type: "resolved", version: 4, triggerIndex: 4/su,
-  );
-  assert.match(
-    threadReopeningStep,
-    /threadVersion: 5.*type: "evidence_attached", version: 3, triggerIndex: 2.*type: "resolved", version: 4, triggerIndex: 4.*type: "reopened", version: 5, triggerIndex: 5/su,
-  );
+  assertStepLifecycle(actionCommitmentStep, {
+    threadVersion: 3,
+    threadEvents: [
+      ["created", 1, 0],
+      ["promoted", 2, 1],
+      ["evidence_attached", 3, 2],
+    ],
+    actionStatus: "open",
+    actionVersion: 1,
+    actionEvents: [["created", 1, 2]],
+  });
+  assertStepLifecycle(mentionQuestionStep, {
+    threadVersion: 3,
+    threadEvents: [
+      ["created", 1, 0],
+      ["promoted", 2, 1],
+      ["evidence_attached", 3, 2],
+    ],
+    actionStatus: "open",
+    actionVersion: 1,
+    actionEvents: [["created", 1, 2]],
+  });
+  assertStepLifecycle(completionAndResolutionStep, {
+    threadVersion: 4,
+    threadEvents: [
+      ["created", 1, 0],
+      ["promoted", 2, 1],
+      ["evidence_attached", 3, 2],
+      ["resolved", 4, 4],
+    ],
+    actionStatus: "completed",
+    actionVersion: 2,
+    actionEvents: [
+      ["created", 1, 2],
+      ["completed", 2, 4],
+    ],
+  });
+  assertStepLifecycle(threadReopeningStep, {
+    threadVersion: 5,
+    threadEvents: [
+      ["created", 1, 0],
+      ["promoted", 2, 1],
+      ["evidence_attached", 3, 2],
+      ["resolved", 4, 4],
+      ["reopened", 5, 5],
+    ],
+    actionStatus: "completed",
+    actionVersion: 2,
+    actionEvents: [
+      ["created", 1, 2],
+      ["completed", 2, 4],
+    ],
+  });
   assert.match(script, /commitmentOwnerOpenId/u);
   assert.match(script, /action\.owner_ref !== commitmentOwnerOpenId/u);
   assert.match(script, /completionOwnerOpenId !== commitmentOwnerOpenId/u);
-  assert.match(script, /created.*promoted.*resolved.*reopened/su);
-  assert.match(script, /created.*completed/su);
   assert.match(script, /request\.status === "skipped"/u);
   assert.match(script, /invalid_model_response_retry/u);
   assert.match(script, /delayedJobCount/u);
@@ -519,6 +554,27 @@ test("fresh semantic acceptance waits through bounded model retries without dele
 
 test("semantic acceptance inspector validates lifecycle without mutating runtime or public ingress", () => {
   const script = readFileSync(semanticAcceptanceInspectPath, "utf8");
+  const threadLifecycle = sliceBetween(
+    script,
+    "const expectedThreadLifecycle = [",
+    "const expectedActionLifecycle = [",
+  );
+  const actionLifecycle = sliceBetween(
+    script,
+    "const expectedActionLifecycle = [",
+    "await assertFailClosedRuntime();",
+  );
+  assert.deepEqual(readInspectorLifecycle(threadLifecycle), [
+    ["created", 1],
+    ["promoted", 2],
+    ["evidence_attached", 3],
+    ["resolved", 4],
+    ["reopened", 5],
+  ]);
+  assert.deepEqual(readInspectorLifecycle(actionLifecycle), [
+    ["created", 1],
+    ["completed", 2],
+  ]);
   assert.match(script, /IRIS_SEMANTIC_ACCEPTANCE_PILOT_GROUP_ID/u);
   assert.match(script, /IRIS_SEMANTIC_ACCEPTANCE_CONTROL_GROUP_ID/u);
   assert.match(script, /exec -T\s+\\?\s+-e PILOT_GROUP_ID/u);
@@ -540,7 +596,7 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   assert.match(script, /reopened/u);
   assert.match(script, /completed/u);
   assert.match(script, /hasExactEventLifecycle/u);
-  assert.match(script, /eventType: "evidence_attached", toVersion: 3/u);
+  assert.match(script, /events\.length !== expectedLifecycle\.length/u);
   assert.match(script, /thread\.version !== 5/u);
   assert.match(script, /action\.version !== 2/u);
   assert.doesNotMatch(script, /hasDuplicateLifecycleVersions/u);
@@ -558,6 +614,39 @@ function sliceBetween(value, startToken, endToken) {
   const end = value.indexOf(endToken, start + startToken.length);
   assert.notEqual(end, -1, `missing end token: ${endToken}`);
   return value.slice(start, end);
+}
+
+function assertStepLifecycle(
+  stepBlock,
+  {
+    threadVersion,
+    threadEvents,
+    actionStatus,
+    actionVersion,
+    actionEvents,
+  },
+) {
+  const actionIndex = stepBlock.indexOf("action:");
+  assert.notEqual(actionIndex, -1, "step block is missing an action contract");
+  const threadBlock = stepBlock.slice(0, actionIndex);
+  const actionBlock = stepBlock.slice(actionIndex);
+  assert.match(threadBlock, new RegExp(`threadVersion: ${threadVersion},`, "u"));
+  assert.deepEqual(readStepEvents(threadBlock), threadEvents);
+  assert.match(actionBlock, new RegExp(`status: "${actionStatus}",`, "u"));
+  assert.match(actionBlock, new RegExp(`version: ${actionVersion},`, "u"));
+  assert.deepEqual(readStepEvents(actionBlock), actionEvents);
+}
+
+function readStepEvents(value) {
+  return [...value.matchAll(
+    /\{ type: "([^"]+)", version: ([0-9]+), triggerIndex: ([0-9]+) \}/gu,
+  )].map((match) => [match[1], Number(match[2]), Number(match[3])]);
+}
+
+function readInspectorLifecycle(value) {
+  return [...value.matchAll(
+    /\{ eventType: "([^"]+)", toVersion: ([0-9]+) \}/gu,
+  )].map((match) => [match[1], Number(match[2])]);
 }
 
 test("pilot rollback documents decrypted stdin restore and Caddy-last reactivation", () => {
