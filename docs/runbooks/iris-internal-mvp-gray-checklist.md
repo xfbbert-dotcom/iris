@@ -78,21 +78,25 @@ Record non-blocking hardening as backlog instead of extending the gate.
     - Public `/health` remains available; public `/internal/*` remains `404`.
     - Queues drain or remain safely retryable after re-enable.
 
-## Current Status - 2026-07-24
+## Current Status - 2026-07-28
 
-- Loops 3, 4, 5, 6, 7, and 10 have real Feishu pilot evidence for their core safety or product
-  path: group/wiki document answering, permission revocation, knowledge draft confirmation,
-  approval-before-action, first knowledge-base publication, and runtime fail-closed behavior.
-- Loops 1 and 2 are code-complete for current-group message ingestion, semantic memory, threads,
-  and actions, but their real Feishu gray gate is still pending. The current blocker is external
-  Gemini availability: the latest minimal V2 JSON Schema probe returned `503 provider_unavailable`.
-  Until that probe succeeds, semantic DLQ replay must not run.
-- Loops 8 and 9 are code-complete and locally verified for governed proactive candidates and
-  delivery gating, but real Feishu proactive card delivery remains default-off and must wait until
-  the semantic thread/action loop has passed in the pilot group.
-- This status means the product is not "only a chatbot", but it also is not yet a complete daily
-  Iris rollout. The next release gate is provider recovery followed by ordered semantic DLQ replay
-  and one controlled real Feishu semantic gray pass.
+- Loops 1 and 2 have now passed a real Feishu semantic gray run. The ordered six-message replay
+  produced one current-group thread through create, promote, resolve, and reopen transitions plus
+  one action through create and complete, with stable owner/evidence/version facts, no duplicate
+  entities, no control-group data, and empty queues and DLQs after the run.
+- Loop 3 has real evidence for group-visible and authorized-wiki discovery, sync, retrieval, and
+  citation. The Admin Console and explicit in-chat user-document submission paths are implemented
+  and covered by automated tests, but the employee-facing in-chat submission path still needs one
+  real Feishu pass with a previously unregistered document.
+- Loops 4, 5, 6, 7, and 10 have real Feishu pilot evidence for permission revocation, knowledge
+  draft confirmation, approval-before-action, first knowledge-base publication, and runtime
+  fail-closed behavior.
+- Loops 8 and 9 have passed one bounded real Feishu proactive delivery and feedback run. One
+  `helpful` result recorded without suppression; one independent `irrelevant` result created one
+  exact group/kind/entity suppression, and a repeat scan produced no replacement candidate.
+- Production remains intentionally fail-closed after every acceptance window. Iris is not yet a
+  complete daily rollout: the next missing P1 product gate is the real employee-submitted document
+  loop, followed by an explicit product decision to begin a controlled daily pilot.
 
 ## Not Required For The First 20-30 Person MVP
 
