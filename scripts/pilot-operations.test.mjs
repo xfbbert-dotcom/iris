@@ -12,6 +12,7 @@ const semanticAcceptanceInspectPath = "deploy/pilot/semantic-acceptance-inspect.
 const semanticSeedFromMessagesPath = "deploy/pilot/semantic-seed-from-messages.sh";
 const semanticReseedFromMessagesPath = "deploy/pilot/semantic-reseed-from-messages-one-by-one.sh";
 const semanticFreshAcceptancePath = "deploy/pilot/semantic-fresh-acceptance-one-by-one.sh";
+const proactiveFeedbackAutoclosePath = "deploy/pilot/proactive-feedback-autoclose.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
 const ciWorkflowPath = ".github/workflows/ci.yml";
@@ -25,6 +26,7 @@ test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined 
     semanticAcceptanceInspectPath,
     semanticSeedFromMessagesPath,
     semanticReseedFromMessagesPath,
+    proactiveFeedbackAutoclosePath,
     postgresInitPath,
   ]) {
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });
@@ -41,12 +43,34 @@ test("pilot shell scripts use LF endings for direct Linux execution", () => {
     semanticAcceptanceInspectPath,
     semanticSeedFromMessagesPath,
     semanticReseedFromMessagesPath,
+    proactiveFeedbackAutoclosePath,
     postgresInitPath,
   ]) {
     const script = readFileSync(scriptPath, "utf8");
     assert.equal(script.includes("\r"), false, `${scriptPath} contains a CR byte`);
     assert.ok(script.startsWith("#!/usr/bin/env bash\n"), `${scriptPath} has an invalid shebang`);
   }
+});
+
+test("proactive feedback gray-window cleanup is bounded and proves fail-closed state", () => {
+  assert.equal(existsSync(proactiveFeedbackAutoclosePath), true);
+  const script = readFileSync(proactiveFeedbackAutoclosePath, "utf8");
+
+  assert.match(script, /IRIS_PROACTIVE_FEEDBACK_AUTOCLOSE_CONFIRM/u);
+  assert.match(script, /EUID/u);
+  assert.match(script, /stop_caddy_bounded/u);
+  assert.match(script, /\/internal\/runtime-control\/global/u);
+  assert.match(script, /\/internal\/runtime-control\/groups\/\$\{encodeURIComponent\(groupId\)\}/u);
+  assert.match(script, /proactiveSpeech: false/u);
+  assert.match(script, /IRIS_KNOWLEDGE_CARD_ENABLED/u);
+  assert.match(script, /IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED/u);
+  assert.match(script, /IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED/u);
+  assert.match(script, /up --detach --wait --wait-timeout/u);
+  assert.match(script, /globalEnabled !== false/u);
+  assert.match(script, /desiredGlobalEnabled !== false/u);
+  assert.match(script, /assertExactDisabledGroupSet/u);
+  assert.match(script, /systemctl is-active --quiet caddy/u);
+  assert.doesNotMatch(script, /\/scan|approve-delivery|feedback-summary/u);
 });
 
 test("Postgres initialization separates admin, migrator, and app roles", () => {
