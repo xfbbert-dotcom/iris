@@ -98,7 +98,7 @@ if (controlGroupId.length > 0) {
 }
 
 const stateStatus = await getJson("http://127.0.0.1:3000/internal/conversation-state/status");
-assertZeroCounts(stateStatus.projectionRepairs, "projectionRepairs");
+assertNoOutstandingProjectionRepairs(stateStatus.projectionRepairs);
 
 console.log(JSON.stringify({
   ok: true,
@@ -187,9 +187,16 @@ function hasEvidence(evidenceMessageIds) {
   return Array.isArray(evidenceMessageIds) && evidenceMessageIds.length > 0;
 }
 
-function assertZeroCounts(counts, label) {
-  for (const [key, value] of Object.entries(counts ?? {})) {
-    if (value !== 0) throw new Error(`Expected ${label}.${key} to be zero`);
+function assertNoOutstandingProjectionRepairs(counts) {
+  const outstanding = {
+    pending: zeroIfMissing(counts?.pending),
+    processing: zeroIfMissing(counts?.processing),
+    failed: zeroIfMissing(counts?.failed),
+  };
+  for (const [status, value] of Object.entries(outstanding)) {
+    if (value !== 0) {
+      throw new Error(`Expected projectionRepairs.${status} to be zero`);
+    }
   }
 }
 

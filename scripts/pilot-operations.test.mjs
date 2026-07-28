@@ -602,6 +602,14 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   assert.match(script, /action\.version !== 2/u);
   assert.doesNotMatch(script, /hasDuplicateLifecycleVersions/u);
   assert.match(script, /projectionRepairs/u);
+  assert.match(script, /assertNoOutstandingProjectionRepairs/u);
+  assert.match(script, /counts\?\.pending/u);
+  assert.match(script, /counts\?\.processing/u);
+  assert.match(script, /counts\?\.failed/u);
+  assert.doesNotMatch(
+    script,
+    /assertZeroCounts\(stateStatus\.projectionRepairs/u,
+  );
   assert.match(script, /controlGroupId/u);
   assert.doesNotMatch(script, /\/internal\/runtime-control\/global/u);
   assert.doesNotMatch(script, /\/internal\/memory-extraction\/dead-letters\/.*\/replay/u);
