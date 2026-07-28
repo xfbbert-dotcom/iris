@@ -92,3 +92,22 @@
 - Real Feishu feedback callbacks are bound to the exact sent delivery, candidate, group, and entity version, require a current group member, and are gated before membership I/O and immediately before mutation. The card exposes only `helpful` and `irrelevant` actions; it does not carry actor identity, message identifiers, evidence text, or message bodies.
 - Operators can inspect only group-scoped aggregate effectiveness: total feedback, helpful count, irrelevant count, helpful rate, active suppression count, and last feedback time. Feedback tables and aggregate APIs do not expose raw actor identities, message bodies, evidence text, prompts, or answers; persisted actor attribution is a SHA-256 fingerprint, not a Feishu open ID.
 - Production remains disabled for this loop. Do not enable proactive speech, planning, or delivery based on local tests or aggregate UI alone. One real Feishu feedback-card gray pass in an explicitly approved small group is still required before controller review can consider any rollout change.
+
+## Status Amendment - 2026-07-28 Real Proactive Feedback Gray
+
+- The bounded pilot completed two independently bound real Feishu feedback cards: one `helpful`
+  result without suppression and one `irrelevant` result with exactly one 30-day suppression for
+  the same group, signal kind, and thread.
+- A repeated repository scan after the irrelevant result returned zero new candidates and one
+  suppressed candidate. Both deliveries remained single-attempt sent facts, and all interaction
+  queue and DLQ counts returned to zero.
+- A Feishu `200080` observed on the first click was traced to the 30-minute fail-closed window
+  having already stopped Caddy. Reopening a bounded window and reusing the same card succeeded;
+  no card schema or callback parser change was needed.
+- Cleanup restored global and desired-global runtime disabled, all 14 known groups disabled,
+  proactive speech and proactive environment flags disabled, Caddy stopped, and healthy
+  Core/Postgres/Redis/AI Worker services with empty event/document/reindex queues and DLQs.
+- Phase 4B now has a working real positive feedback loop, but production remains default-off.
+  Negative actor, membership-loss, stale-binding, disabled-runtime, and duplicate-callback
+  external cases plus operating-threshold calibration remain explicit rollout gates, not reasons
+  to block work on the next missing whitepaper capability.
