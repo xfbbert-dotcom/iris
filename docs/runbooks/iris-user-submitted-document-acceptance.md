@@ -177,3 +177,28 @@ Cleanup completed successfully: global and desired-global runtime are disabled, 
 groups are disabled, proactive speech and memory extraction are disabled, Caddy and the automatic
 timer are stopped, Core/Postgres/Redis/AI Worker are healthy, and the durable acceptance evidence
 remains intact.
+
+## 2026-07-29 Answer-Path Closure
+
+Candidate `b478f6b97b366bfc9ff35ee1215273d810b9770a` closed the remaining real
+answer-path defect on PR #17.
+
+- GitHub `Core` and `AI Worker` checks passed for the exact candidate SHA.
+- Core and AI Worker were rebuilt and deployed with matching candidate tags; the answer model
+  remained `gemini-3.6-flash`.
+- The regression question intentionally contained the phrase `用户提交文档` and the unique Wiki
+  node `KLZWwTFaAiYMZKkvokVcjIhNnib`.
+- Real inbound message ID: `om_x100b69ba740c78a0b268318cef69321`.
+- Real reply message ID: `om_x100b69ba758eaca0b18d5ca20542ed7`.
+- The message followed the answer path rather than the document-submission path and returned
+  exactly `IRIS_USER_DOC_20260728_616559`.
+- The bounded automatic-close timer was active before ingress opened and was cancelled only after
+  fail-closed cleanup completed.
+- Final state was rechecked: global and desired-global runtime disabled, all 14 known groups
+  disabled, proactive speech and memory extraction disabled, Caddy stopped, no automatic-close
+  timer remaining, Core/Postgres/Redis/AI Worker healthy, matching deployed image SHAs, and all
+  event, document-sync, reindex, memory-extraction, and approval-interaction pending, processing,
+  delayed, and DLQ counts zero.
+
+Backup for this deployment:
+`/opt/iris/repository/backups/iris-20260728T170813Z.bundle.tar.age`.

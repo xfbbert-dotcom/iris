@@ -177,6 +177,32 @@ delivery mistakes while implementing it.
   exactly one user-submission and one same-message group evidence row, healthy sync/index state,
   and no pending or dead-letter work.
 
+### Distinguish document commands from questions about documents
+
+- **Failure:** A real question containing the noun phrase `用户提交文档` was treated as a new
+  document-submission command and replied by asking for a link.
+- **Root cause:** The Chinese intent pattern matched any occurrence of `提交文档`, without requiring
+  an imperative cue or an explicit demonstrative such as `这个文档`.
+- **Prevention rule:** Command routing must require command-shaped language. Ordinary questions
+  that merely describe a user-submitted document stay on the answer path.
+- **Guard:** A regression uses the exact failed sentence, while the existing explicit Chinese and
+  English submission-command cases continue to bypass the answer model.
+- **Exit condition:** The focused responder suite, full Core suite, typecheck, build, exact-SHA CI,
+  and one real Feishu question all pass; the real answer is the target document marker.
+
+### Verify automatic-close timers as runnable safety controls
+
+- **Failure:** Invoking the automatic-close script directly depended on its executable bit, so a
+  timer could be scheduled without a runnable command.
+- **Root cause:** The deployment treated a checked-in shell script as an executable program rather
+  than explicitly selecting its interpreter.
+- **Prevention rule:** Schedule the script through `/bin/bash`, verify the timer is active before
+  opening ingress, and independently restore fail-closed state immediately after the test.
+- **Guard:** The bounded window records the transient unit, checks its active state, and verifies
+  global, group, capability, Caddy, and queue state after manual cleanup.
+- **Exit condition:** The timer command is runnable, cleanup succeeds before expiry, no timer
+  remains, and every fail-closed invariant is rechecked.
+
 ### Serialize leases and suppression at the final delivery boundary
 
 - **Failure:** A worker with an expired lease could still authorize a reminder, while a concurrent
