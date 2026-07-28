@@ -322,6 +322,7 @@ test(
     const accepted = runBackup({
       runtimeEnabled: false,
       caddyRunning: false,
+      commandTimeoutSeconds: "5",
       httpTimeoutMs: "000100",
     });
     try {
