@@ -472,43 +472,79 @@ describe("validateConversationStateCandidates", () => {
     },
   );
 
-  it.each(["create", "correct", "reopen"] as const)(
+  it("accepts an explicit action commitment linked to a candidate thread", () => {
+    const run = claimedRun() as any;
+    run.existingThreads = [{ ...existingThread(), status: "candidate" }];
+
+    const result = validateConversationStateCandidates({
+      run,
+      response: responseWithActionCreate({ threadId: "thread-1" }),
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+
+    expect(result.actionOperations).toEqual([
+      expect.objectContaining({
+        operation: "create",
+        threadId: "thread-1",
+        ownerRefType: "feishu_user",
+        ownerRef: "sender-1",
+      }),
+    ]);
+    expect(result.diagnostics.rejectionCodes).toEqual([]);
+  });
+
+  it.each([
+    ["unknown", []],
+    ["merged", [{ ...existingThread(), status: "merged" as const }]],
+  ])("rejects an action create linked to an %s thread", (_name, existingThreads) => {
+    const run = claimedRun() as any;
+    run.existingThreads = existingThreads;
+
+    const result = validateConversationStateCandidates({
+      run,
+      response: responseWithActionCreate({ threadId: "thread-1" }),
+      candidateFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+
+    expect(result.actionOperations).toEqual([]);
+    expect(result.diagnostics.rejectionCodes).toEqual(["invalid_dependency"]);
+  });
+
+  it.each(["correct", "reopen"] as const)(
     "rejects %s action state that depends on a candidate thread",
     (operation) => {
       const run = claimedRun() as any;
       run.existingThreads = [{ ...existingThread(), status: "candidate" }];
-      if (operation !== "create") {
-        run.existingActions = [{
-          ...existingAction(),
-          threadId: "thread-1",
-          ...(operation === "reopen"
-            ? { status: "completed", completedAt: new Date("2026-07-14T00:02:00.000Z") }
-            : {}),
-        }];
-      }
-      const actionOperation = operation === "create"
-        ? responseWithActionCreate({ threadId: "thread-1" }).actionOperations[0]!
-        : operation === "correct"
-          ? {
-              operation: "correct",
-              operationKey: "action:correct:candidate",
-              confidence: 0.9,
-              evidenceMessageIds: ["message-1"],
-              evidenceSpan: "Launch planning",
-              actionId: "action-1",
-              expectedVersion: 1,
-              correctedFields: ["description"],
-              description: "Ship corrected launch notes.",
-            }
-          : {
-              operation: "reopen",
-              operationKey: "action:reopen:candidate",
-              confidence: 0.9,
-              evidenceMessageIds: ["message-1"],
-              evidenceSpan: "Launch planning",
-              actionId: "action-1",
-              expectedVersion: 1,
-            };
+      run.existingActions = [{
+        ...existingAction(),
+        threadId: "thread-1",
+        ...(operation === "reopen"
+          ? { status: "completed", completedAt: new Date("2026-07-14T00:02:00.000Z") }
+          : {}),
+      }];
+      const actionOperation = operation === "correct"
+        ? {
+            operation: "correct",
+            operationKey: "action:correct:candidate",
+            confidence: 0.9,
+            evidenceMessageIds: ["message-1"],
+            evidenceSpan: "Launch planning",
+            actionId: "action-1",
+            expectedVersion: 1,
+            correctedFields: ["description"],
+            description: "Ship corrected launch notes.",
+          }
+        : {
+            operation: "reopen",
+            operationKey: "action:reopen:candidate",
+            confidence: 0.9,
+            evidenceMessageIds: ["message-1"],
+            evidenceSpan: "Launch planning",
+            actionId: "action-1",
+            expectedVersion: 1,
+          };
 
       const result = validateConversationStateCandidates({
         run,

@@ -519,6 +519,48 @@ stopped, opens only the private pilot processing window, enqueues one marker req
 for drain after each request, and returns runtime to fail-closed. It must not be used for arbitrary
 production messages.
 
+Prefer a fresh isolated internal group over reseeding when six clean marker messages can be created
+without modifying append-only history. The fresh helper refuses any marker message that already has
+an extraction request and refuses a group that already contains thread or action state:
+
+```bash
+IRIS_PILOT_ENV_FILE=.env.pilot \
+IRIS_SEMANTIC_FRESH_ACCEPTANCE_CONFIRM=RUN_FRESH_SEMANTIC_ACCEPTANCE_ONE_BY_ONE \
+IRIS_SEMANTIC_FRESH_ACCEPTANCE_GROUP_ID=<fresh-internal-group-id> \
+IRIS_SEMANTIC_FRESH_ACCEPTANCE_MARKER=<literal-gray-marker> \
+IRIS_SEMANTIC_FRESH_ACCEPTANCE_KNOWN_GROUP_IDS=<exhaustive-comma-separated-group-inventory> \
+./deploy/pilot/semantic-fresh-acceptance-one-by-one.sh
+```
+
+The helper requires exactly six ordered marker messages and validates persisted evidence before
+registration. It opens no public ingress, registers and enqueues exactly one request at a time, and
+returns global/group runtime to fail-closed. After every completed request it requires the persisted
+run to have enabled `memory`, `thread`, and `action`, then proves the cumulative lifecycle:
+thread creation, promotion, action creation, action completion, thread resolution, and thread
+reopening. Entity counts, links, owners, versions, lifecycle events, and event evidence must all
+match; a completed extraction that produced zero semantic candidates therefore fails immediately.
+Creating an action from an explicit commitment also attaches that commitment evidence to the
+existing discussion thread. The thread therefore advances from promoted version 2 to version 3
+with an `evidence_attached` event before later resolution (version 4) and reopening (version 5).
+The fourth, mention-question step is the deliberate exception: it must leave the semantic lifecycle
+unchanged. The fifth message must both complete the action and resolve the thread, and the persisted
+Feishu action owner must exactly match the sender of both the commitment and completion messages.
+The known group list must be an exhaustive, current inventory; the helper refuses to open the
+private window when Postgres contains a group outside that list or when any non-target group would
+become enabled. Cleanup attempts every known group independently and proves the exact disabled set.
+The acceptance process publishes a unique run token before Node starts, is bounded by a timeout
+inside the Core container, and cleanup terminates every `/proc` process carrying that token before
+proving the runtime closed. The outer Compose command has a later attach timeout, both Caddy stops
+are bounded, and each internal HTTP/Postgres/Redis operation has a real transport or server-side
+timeout of 10 seconds. Operators may set
+`IRIS_SEMANTIC_FRESH_ACCEPTANCE_COMMAND_TIMEOUT_SECONDS` (60-3,600) and
+`IRIS_SEMANTIC_FRESH_ACCEPTANCE_REQUEST_TIMEOUT_MS` (1,000-30,000) without removing those bounds.
+A run with
+`invalid_model_response_retry` is not terminal while its request remains pending or processing and
+the queue still contains bounded retry work. The helper continues waiting through that retry. It
+stops on a skipped request, DLQ entry, stalled request, timeout, or unknown status. It never deletes
+or updates prior extraction history.
+
 Replay semantic DLQ entries one at a time in original `enqueuedAt` order. After each replay, wait for
 memory extraction `pendingJobCount`, `processingJobCount`, and `delayedJobCount` to return to zero
 before replaying the next item. If any replay produces a new DLQ, invalid response, rate limit,
@@ -568,12 +610,22 @@ no-reply observation changes, acceptance fails and the wrapper runs fail-closed 
 Use a unique marker such as `IRIS-GRAY-<date>-ALPHA`. Humans send these messages in the approved
 group; the operator does not send them through an API.
 
+Before registering or replaying any marker message, read its persisted `conversation_messages.text`
+value back from Postgres. Refuse the run if any message contains Unicode replacement characters or
+long high-density runs of ASCII question marks, because that is evidence of a lossy terminal/SSH
+encoding path rather than valid conversation evidence. Synthetic internal fixtures must cross Windows/SSH
+boundaries as UTF-8 files or base64-encoded bytes and must be compared byte-for-byte after insert.
+Never interpret a schema-valid empty model response from corrupted evidence as a semantic-model
+acceptance result.
+
 1. Ordinary discussion without mentioning Iris: introduce the marker, a decision still under
    discussion, and one relevant fact.
 2. Evidence promotion without mentioning Iris: continue the same topic. Poll until the same
    evidence-bound thread is `open`, not `candidate`.
 3. Explicit commitment: one participant personally commits to one concrete action. Poll until
-   exactly one matching `open` action has the correct Feishu owner and evidence message ID.
+   exactly one matching `open` action has the correct Feishu owner and evidence message ID. The
+   same evidence must be attached to the existing thread as version 3; this is not a duplicate
+   thread or a failed extraction.
 4. Mention question: mention Iris and ask for the current decision and commitment. Require one
    accurate answer grounded only in this group's open thread/action state.
 5. Completion: the owner explicitly completes the action and resolves the discussion. Poll until the

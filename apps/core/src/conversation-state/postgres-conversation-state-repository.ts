@@ -603,11 +603,13 @@ function prevalidateOperations(
     const dependency = action.threadId === undefined
       ? undefined
       : threads.get(action.threadId) ?? createdThreads.get(action.threadId);
-    const requiresVisibleDependency = operation.kind === "create"
-      || operation.actionEvent?.eventType === "corrected"
+    const requiresVisibleDependency = operation.actionEvent?.eventType === "corrected"
       || operation.actionEvent?.eventType === "reopened";
     if (action.threadId !== undefined && dependency === undefined) {
       throw new Error("action item thread not found");
+    }
+    if (operation.kind === "create" && dependency?.status === "merged") {
+      throw new Error("action item thread is not retrieval-visible");
     }
     if (requiresVisibleDependency && dependency !== undefined &&
       dependency.status !== "open" && dependency.status !== "resolved") {

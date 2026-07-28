@@ -1137,7 +1137,8 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
   const groupA = `extraction-group-a-${suffix}`;
   const groupB = `extraction-group-b-${suffix}`;
   const memoryOnlyGroup = `extraction-memory-only-${suffix}`;
-  const groupIds = [groupA, groupB, memoryOnlyGroup];
+  const candidateActionGroup = `extraction-candidate-action-${suffix}`;
+  const groupIds = [groupA, groupB, memoryOnlyGroup, candidateActionGroup];
   const contextIds = Array.from(
     { length: 12 },
     (_, index) => `feishu:extraction-context-${index.toString().padStart(2, "0")}-${suffix}`,
@@ -1811,6 +1812,67 @@ runIfDatabase("PostgresMemoryExtractionRepository with Postgres", () => {
       status: "ready",
       run: {
         evidenceMessages: [expect.objectContaining({ senderOpenId: "ou_typed" })],
+      },
+    });
+  });
+
+  it("loads a candidate-thread action into the next production extraction run", async () => {
+    const repository = createRepository(pool);
+    const messageId = `feishu:candidate-action-${suffix}`;
+    const threadId = `candidate-action-thread-${suffix}`;
+    const actionId = `candidate-action-${suffix}`;
+    const timestamp = new Date("2026-07-14T04:13:00.000Z");
+    await insertExtractionMessage(pool!, {
+      id: messageId,
+      groupId: candidateActionGroup,
+      text: "I will own the candidate-thread follow-up",
+      createdAt: timestamp,
+    });
+    await pool!.query(
+      `
+      INSERT INTO discussion_threads (
+        id, group_id, title, summary, status, confidence, version,
+        first_evidence_at, last_activity_at, created_at, updated_at
+      ) VALUES ($1, $2, 'Candidate action thread', 'Candidate action thread',
+        'candidate', 0.8, 1, $3, $3, $3, $3)
+      `,
+      [threadId, candidateActionGroup, timestamp],
+    );
+    await pool!.query(
+      `
+      INSERT INTO action_items (
+        id, group_id, thread_id, description, owner_ref_type, owner_ref, status,
+        confidence, version, created_at, updated_at
+      ) VALUES ($1, $2, $3, 'Follow up on the candidate thread',
+        'feishu_user', 'alice', 'open', 0.9, 1, $4, $4)
+      `,
+      [actionId, candidateActionGroup, threadId, timestamp],
+    );
+    const registered = await repository.registerRequest({
+      groupId: candidateActionGroup,
+      conversationMessageId: messageId,
+      providerMessageId: `provider-${messageId}`,
+    });
+
+    const claimed = await repository.claimRun({
+      requestIds: [registered.request.id],
+      maxEvidenceMessages: 1,
+      contextMessageLimit: 0,
+      activeMemoryLimit: 0,
+      enabledOperationFamilies: ["memory", "thread", "action"],
+    });
+
+    expect(claimed?.existingThreads).toEqual([
+      expect.objectContaining({ id: threadId, status: "candidate" }),
+    ]);
+    expect(claimed?.existingActions).toEqual([
+      expect.objectContaining({ id: actionId, threadId }),
+    ]);
+    await expect(repository.loadRunInput(claimed!.id)).resolves.toMatchObject({
+      status: "ready",
+      run: {
+        existingThreads: [expect.objectContaining({ id: threadId, status: "candidate" })],
+        existingActions: [expect.objectContaining({ id: actionId, threadId })],
       },
     });
   });

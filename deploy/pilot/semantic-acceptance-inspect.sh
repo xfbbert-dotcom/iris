@@ -26,6 +26,17 @@ const headers = {
   "content-type": "application/json",
   "x-iris-operator": "iris-semantic-acceptance-inspect",
 };
+const expectedThreadLifecycle = [
+  { eventType: "created", toVersion: 1 },
+  { eventType: "promoted", toVersion: 2 },
+  { eventType: "evidence_attached", toVersion: 3 },
+  { eventType: "resolved", toVersion: 4 },
+  { eventType: "reopened", toVersion: 5 },
+];
+const expectedActionLifecycle = [
+  { eventType: "created", toVersion: 1 },
+  { eventType: "completed", toVersion: 2 },
+];
 
 await assertFailClosedRuntime();
 await assertQueuesAndDlqClear();
@@ -42,7 +53,7 @@ for (const thread of pilotThreads.threads ?? []) {
   const events = await getJson(
     `http://127.0.0.1:3000/internal/conversation-state/threads/${encodeURIComponent(thread.id)}/events?limit=100`,
   );
-  if (hasEventLifecycle(events.events, ["created", "promoted", "resolved", "reopened"])) {
+  if (hasExactEventLifecycle(events.events, expectedThreadLifecycle)) {
     candidateThreads.push({ thread, events: events.events });
   }
 }
@@ -52,11 +63,11 @@ if (candidateThreads.length !== 1) {
 }
 
 const { thread, events: threadEvents } = candidateThreads[0];
-if (thread.groupId !== pilotGroupId || thread.status !== "open" || thread.version < 4) {
+if (thread.groupId !== pilotGroupId || thread.status !== "open" || thread.version !== 5) {
   throw new Error("Semantic acceptance thread did not finish reopened and open");
 }
-if (hasDuplicateLifecycleVersions(threadEvents, ["created", "promoted", "resolved", "reopened"])) {
-  throw new Error("Semantic acceptance thread has duplicate event versions");
+if (!hasExactEventLifecycle(threadEvents, expectedThreadLifecycle)) {
+  throw new Error("Semantic acceptance thread lifecycle is not canonical");
 }
 if (!hasEvidence(thread.evidenceMessageIds) || !threadEvents.every((event) => hasEvidence(event.evidenceMessageIds))) {
   throw new Error("Semantic acceptance thread is missing evidence bindings");
@@ -72,17 +83,14 @@ const actionEventsResponse = await getJson(
   `http://127.0.0.1:3000/internal/conversation-state/actions/${encodeURIComponent(action.id)}/events?limit=100`,
 );
 const actionEvents = actionEventsResponse.events ?? [];
-if (!hasEventLifecycle(actionEvents, ["created", "completed"])) {
+if (!hasExactEventLifecycle(actionEvents, expectedActionLifecycle)) {
   throw new Error("Semantic acceptance action did not complete its lifecycle");
 }
-if (action.status !== "completed" || action.version < 2) {
+if (action.status !== "completed" || action.version !== 2) {
   throw new Error("Semantic acceptance action did not finish completed");
 }
 if (!hasEvidence(action.evidenceMessageIds) || !actionEvents.every((event) => hasEvidence(event.evidenceMessageIds))) {
   throw new Error("Semantic acceptance action is missing evidence bindings");
-}
-if (hasDuplicateLifecycleVersions(actionEvents, ["created", "completed"])) {
-  throw new Error("Semantic acceptance action has duplicate event versions");
 }
 
 if (controlGroupId.length > 0) {
@@ -90,7 +98,7 @@ if (controlGroupId.length > 0) {
 }
 
 const stateStatus = await getJson("http://127.0.0.1:3000/internal/conversation-state/status");
-assertZeroCounts(stateStatus.projectionRepairs, "projectionRepairs");
+assertNoOutstandingProjectionRepairs(stateStatus.projectionRepairs);
 
 console.log(JSON.stringify({
   ok: true,
@@ -162,23 +170,42 @@ async function assertEmptyControlGroup(groupId) {
   }
 }
 
-function hasEventLifecycle(events, expectedTypes) {
-  const types = new Set((events ?? []).map((event) => event.eventType));
-  return expectedTypes.every((type) => types.has(type));
-}
-
-function hasDuplicateLifecycleVersions(events, lifecycleTypes) {
-  const lifecycle = (events ?? []).filter((event) => lifecycleTypes.includes(event.eventType));
-  return new Set(lifecycle.map((event) => event.toVersion)).size !== lifecycle.length;
+function hasExactEventLifecycle(events, expectedLifecycle) {
+  if (!Array.isArray(events) || events.length !== expectedLifecycle.length) {
+    return false;
+  }
+  const ordered = [...events].sort((left, right) =>
+    left.toVersion - right.toVersion || String(left.id ?? "").localeCompare(String(right.id ?? "")),
+  );
+  return ordered.every((event, index) =>
+    event.eventType === expectedLifecycle[index].eventType &&
+    event.toVersion === expectedLifecycle[index].toVersion,
+  );
 }
 
 function hasEvidence(evidenceMessageIds) {
   return Array.isArray(evidenceMessageIds) && evidenceMessageIds.length > 0;
 }
 
-function assertZeroCounts(counts, label) {
-  for (const [key, value] of Object.entries(counts ?? {})) {
-    if (value !== 0) throw new Error(`Expected ${label}.${key} to be zero`);
+function assertNoOutstandingProjectionRepairs(counts) {
+  const expectedStatuses = ["pending", "processing", "completed", "failed"];
+  if (
+    counts === null ||
+    typeof counts !== "object" ||
+    Array.isArray(counts) ||
+    Object.keys(counts).length !== expectedStatuses.length ||
+    expectedStatuses.some((status) => !Object.hasOwn(counts, status))
+  ) {
+    throw new Error("Invalid projection repairs status counts");
+  }
+  for (const status of expectedStatuses) {
+    const value = counts[status];
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error("Invalid projection repairs status counts");
+    }
+    if (status !== "completed" && value !== 0) {
+      throw new Error(`Expected projectionRepairs.${status} to be zero`);
+    }
   }
 }
 

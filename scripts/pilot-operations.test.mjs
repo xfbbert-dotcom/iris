@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const backupPath = "deploy/pilot/backup.sh";
 const restorePath = "deploy/pilot/restore-from-stdin.sh";
@@ -10,6 +11,7 @@ const semanticOrderedReplayPath = "deploy/pilot/semantic-dlq-replay-one-by-one.s
 const semanticAcceptanceInspectPath = "deploy/pilot/semantic-acceptance-inspect.sh";
 const semanticSeedFromMessagesPath = "deploy/pilot/semantic-seed-from-messages.sh";
 const semanticReseedFromMessagesPath = "deploy/pilot/semantic-reseed-from-messages-one-by-one.sh";
+const semanticFreshAcceptancePath = "deploy/pilot/semantic-fresh-acceptance-one-by-one.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
 const ciWorkflowPath = ".github/workflows/ci.yml";
@@ -301,7 +303,17 @@ test("semantic seed helper backfills real pilot messages without opening public 
   assert.match(script, /-e IRIS_SEMANTIC_SEED_MARKER/u);
   assert.match(script, /-e IRIS_SEMANTIC_SEED_LIMIT/u);
   assert.match(script, /FROM conversation_messages/u);
+  assert.match(script, /SELECT id, provider_message_id, chat_id, text/u);
   assert.match(script, /ORDER BY sent_at ASC, created_at ASC, id ASC/u);
+  assert.match(script, /semantic-evidence-integrity\.js/u);
+  assert.match(
+    script,
+    /for \(const row of messages\.rows\) \{\s+assertSemanticEvidenceIntegrity\(\{\s+text: row\.text,\s+marker,\s+messageId: row\.id,\s+\}\);\s+\}\s+let createdCount/u,
+  );
+  assert.ok(
+    script.indexOf("text: row.text") <
+      script.indexOf("repository.registerRequest"),
+  );
   assert.match(script, /createPostgresMemoryExtractionRepository/u);
   assert.match(script, /createRedisMemoryExtractionQueue/u);
   assert.match(script, /registerRequest/u);
@@ -321,7 +333,17 @@ test("semantic reseed helper resets approved marker messages one at a time", () 
   assert.match(script, /IRIS_SEMANTIC_RESEED_PILOT_GROUP_ID/u);
   assert.match(script, /IRIS_SEMANTIC_RESEED_MARKER/u);
   assert.match(script, /LIKE '%' \|\| \$2 \|\| '%' ESCAPE '\\\\'/u);
+  assert.match(script, /cm\.text AS message_text/u);
   assert.match(script, /ORDER BY cm\.sent_at ASC, cm\.created_at ASC, cm\.id ASC/u);
+  assert.match(script, /semantic-evidence-integrity\.js/u);
+  assert.match(
+    script,
+    /assertSemanticEvidenceIntegrity\(\{\s+text: row\.message_text,\s+marker,\s+messageId: row\.message_id,\s+\}\)/u,
+  );
+  assert.ok(
+    script.indexOf("text: row.message_text") <
+      script.indexOf("UPDATE group_memory_extraction_requests"),
+  );
   assert.match(script, /FOR UPDATE/u);
   assert.match(script, /DELETE FROM group_memory_extraction_conflict_evidence/u);
   assert.match(script, /DELETE FROM group_memory_extraction_conflict_candidates/u);
@@ -350,8 +372,210 @@ test("semantic reseed helper resets approved marker messages one at a time", () 
   assert.doesNotMatch(script, /up .*caddy/u);
 });
 
+test("fresh semantic acceptance waits through bounded model retries without deleting history", () => {
+  const script = readFileSync(semanticFreshAcceptancePath, "utf8");
+  const actionCommitmentStep = sliceBetween(
+    script,
+    'stepName: "action_commitment"',
+    'stepName: "mention_question"',
+  );
+  const mentionQuestionStep = sliceBetween(
+    script,
+    'stepName: "mention_question"',
+    'stepName: "completion_and_resolution"',
+  );
+  const completionAndResolutionStep = sliceBetween(
+    script,
+    'stepName: "completion_and_resolution"',
+    'stepName: "thread_reopening"',
+  );
+  const threadReopeningStep = sliceBetween(
+    script,
+    'stepName: "thread_reopening"',
+    "  const expected = expectedByStep[step - 1];",
+  );
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_CONFIRM/u);
+  assert.match(script, /RUN_FRESH_SEMANTIC_ACCEPTANCE_ONE_BY_ONE/u);
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_GROUP_ID/u);
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_MARKER/u);
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_KNOWN_GROUP_IDS/u);
+  assert.match(script, /expected_count != 6/u);
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_COMMAND_TIMEOUT_SECONDS/u);
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_REQUEST_TIMEOUT_MS/u);
+  assert.match(script, /cleanup_timeout_seconds/u);
+  assert.match(script, /known_group_count/u);
+  assert.match(script, /semantic-evidence-integrity\.js/u);
+  assert.match(script, /assertSemanticEvidenceIntegrity/u);
+  assert.match(script, /ORDER BY sent_at ASC, created_at ASC, id ASC/u);
+  assert.match(script, /registerRequest/u);
+  assert.match(script, /result\.created !== true/u);
+  assert.match(script, /for \(const row of messages\)/u);
+  assert.match(script, /await waitForRequestTerminal\(result\.request\.id\)/u);
+  assert.match(script, /request\.status === "completed"/u);
+  assert.match(script, /request\.status === "completed" && queueDrained/u);
+  assert.match(script, /run\.enabled_operation_families/u);
+  assert.match(script, /assertEnabledOperationFamilies/u);
+  assert.match(script, /await assertSemanticLifecycleAfterStep\(results\.length/u);
+  assert.match(script, /Expected exactly one semantic acceptance thread/u);
+  assert.match(script, /Expected exactly one action bound to the semantic acceptance thread/u);
+  assert.match(script, /stepName: "mention_question"/u);
+  assert.match(script, /stepName: "completion_and_resolution"/u);
+  assertStepLifecycle(actionCommitmentStep, {
+    threadVersion: 3,
+    threadEvents: [
+      ["created", 1, 0],
+      ["promoted", 2, 1],
+      ["evidence_attached", 3, 2],
+    ],
+    actionStatus: "open",
+    actionVersion: 1,
+    actionEvents: [["created", 1, 2]],
+  });
+  assertStepLifecycle(mentionQuestionStep, {
+    threadVersion: 3,
+    threadEvents: [
+      ["created", 1, 0],
+      ["promoted", 2, 1],
+      ["evidence_attached", 3, 2],
+    ],
+    actionStatus: "open",
+    actionVersion: 1,
+    actionEvents: [["created", 1, 2]],
+  });
+  assertStepLifecycle(completionAndResolutionStep, {
+    threadVersion: 4,
+    threadEvents: [
+      ["created", 1, 0],
+      ["promoted", 2, 1],
+      ["evidence_attached", 3, 2],
+      ["resolved", 4, 4],
+    ],
+    actionStatus: "completed",
+    actionVersion: 2,
+    actionEvents: [
+      ["created", 1, 2],
+      ["completed", 2, 4],
+    ],
+  });
+  assertStepLifecycle(threadReopeningStep, {
+    threadVersion: 5,
+    threadEvents: [
+      ["created", 1, 0],
+      ["promoted", 2, 1],
+      ["evidence_attached", 3, 2],
+      ["resolved", 4, 4],
+      ["reopened", 5, 5],
+    ],
+    actionStatus: "completed",
+    actionVersion: 2,
+    actionEvents: [
+      ["created", 1, 2],
+      ["completed", 2, 4],
+    ],
+  });
+  assert.match(script, /commitmentOwnerOpenId/u);
+  assert.match(script, /action\.owner_ref !== commitmentOwnerOpenId/u);
+  assert.match(script, /completionOwnerOpenId !== commitmentOwnerOpenId/u);
+  assert.match(script, /request\.status === "skipped"/u);
+  assert.match(script, /invalid_model_response_retry/u);
+  assert.match(script, /delayedJobCount/u);
+  assert.match(script, /requireQueueCount/u);
+  assert.match(script, /requireDeadLetters/u);
+  assert.doesNotMatch(script, /deadLetters\.deadLetters \?\? \[\]/u);
+  assert.doesNotMatch(script, /(?:pending|processing|delayed)JobCount \?\? 0/u);
+  assert.match(script, /\/internal\/memory-extraction\/dead-letters\?limit=20/u);
+  assert.match(script, /\/internal\/runtime-control\/global/u);
+  assert.match(
+    script,
+    /\/internal\/runtime-control\/groups\/\$\{encodeURIComponent\(groupId\)\}/u,
+  );
+  assert.match(script, /globalEnabled !== false/u);
+  assert.match(script, /desiredGlobalEnabled !== false/u);
+  assert.match(script, /proactiveSpeech !== false/u);
+  assert.match(script, /assertExactDisabledGroupSet/u);
+  assert.match(script, /assertKnownGroupInventory/u);
+  assert.match(script, /finally \{/u);
+  assert.doesNotMatch(script, /if \(privateWindowOpened\)/u);
+  assert.match(script, /await safeMutation\(\(\) => setGlobal\(false\)\)/u);
+  assert.match(script, /await disableKnownGroups/u);
+  assert.doesNotMatch(script, /safeMutation\(\(\) => assertFinalFailClosed/u);
+  assert.match(script, /AbortSignal\.timeout/u);
+  assert.match(script, /timeout --kill-after=/u);
+  assert.match(script, /core sh -c/u);
+  assert.match(script, /exec timeout --signal=TERM --kill-after=15s/u);
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_RUN_TOKEN/u);
+  assert.match(script, /IRIS_SEMANTIC_FRESH_ACCEPTANCE_PID_FILE/u);
+  assert.match(script, /terminate_acceptance_process/u);
+  assert.match(script, /readdir\("\/proc"/u);
+  assert.match(script, /\/proc\/\$\{pid\}\/environ/u);
+  assert.match(script, /waitForMatchingProcesses/u);
+  assert.match(script, /waitForStableAbsence/u);
+  assert.match(script, /process\.kill\(pid, "SIGTERM"\)/u);
+  assert.match(script, /process\.kill\(pid, "SIGKILL"\)/u);
+  assert.match(script, /trap .*EXIT/u);
+  assert.match(script, /force_fail_closed/u);
+  assert.match(script, /parsed\.durable !== true/u);
+  assert.match(script, /stop_caddy_bounded/u);
+  assert.doesNotMatch(script, /^\s*"\$\{compose\[@\]\}" stop caddy/gmu);
+  assert.match(script, /connectionTimeoutMillis: requestTimeoutMs/u);
+  assert.match(script, /queryTimeoutMillis: requestTimeoutMs/u);
+  assert.match(script, /statementTimeoutMillis: requestTimeoutMs/u);
+  assert.match(script, /lockTimeoutMillis: requestTimeoutMs/u);
+  assert.match(script, /enqueueWithRedisDeadline/u);
+  assert.match(script, /redisTimedOut = true/u);
+  assert.match(script, /redis\.destroy\(\)/u);
+  assert.doesNotMatch(script, /redis\.withAbortSignal/u);
+  assert.match(script, /cleanupFailures/u);
+  assert.match(script, /assertExactDisabledGroupSet\(status\.disabledGroupIds, knownGroupIds\)/u);
+  assert.match(script, /for \(const knownGroupId of knownGroupIds\)/u);
+  assert.doesNotMatch(script, /Promise\.allSettled\(\s*knownGroupIds\.map/u);
+  assert.doesNotMatch(script, /DELETE FROM/u);
+  assert.doesNotMatch(script, /UPDATE group_memory_extraction_requests/u);
+  assert.doesNotMatch(script, /up .*caddy/u);
+  const cleanupBody = script.slice(
+    script.indexOf("force_fail_closed() {"),
+    script.indexOf("trap force_fail_closed EXIT"),
+  );
+  assert.ok(
+    cleanupBody.indexOf("terminate_acceptance_process") <
+      cleanupBody.indexOf("stop_caddy_bounded"),
+    "cleanup must terminate the container-side acceptance process before proving fail-closed",
+  );
+  assert.ok(
+    script.indexOf("await assertSemanticLifecycleAfterStep(results.length") <
+      script.indexOf("console.log(JSON.stringify(acceptanceSummary))"),
+    "the full semantic lifecycle must be proven before reporting success",
+  );
+  assert.ok(
+    script.indexOf("await assertFinalFailClosed()") <
+      script.indexOf("console.log(JSON.stringify(acceptanceSummary))"),
+    "the final fail-closed state must be proven before reporting success",
+  );
+});
+
 test("semantic acceptance inspector validates lifecycle without mutating runtime or public ingress", () => {
   const script = readFileSync(semanticAcceptanceInspectPath, "utf8");
+  const threadLifecycle = sliceBetween(
+    script,
+    "const expectedThreadLifecycle = [",
+    "const expectedActionLifecycle = [",
+  );
+  const actionLifecycle = sliceBetween(
+    script,
+    "const expectedActionLifecycle = [",
+    "await assertFailClosedRuntime();",
+  );
+  assert.deepEqual(readInspectorLifecycle(threadLifecycle), [
+    ["created", 1],
+    ["promoted", 2],
+    ["evidence_attached", 3],
+    ["resolved", 4],
+    ["reopened", 5],
+  ]);
+  assert.deepEqual(readInspectorLifecycle(actionLifecycle), [
+    ["created", 1],
+    ["completed", 2],
+  ]);
   assert.match(script, /IRIS_SEMANTIC_ACCEPTANCE_PILOT_GROUP_ID/u);
   assert.match(script, /IRIS_SEMANTIC_ACCEPTANCE_CONTROL_GROUP_ID/u);
   assert.match(script, /exec -T\s+\\?\s+-e PILOT_GROUP_ID/u);
@@ -368,17 +592,233 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   assert.match(script, /\/internal\/conversation-state\/actions\/\$\{encodeURIComponent\(action\.id\)\}\/events/u);
   assert.match(script, /created/u);
   assert.match(script, /promoted/u);
+  assert.match(script, /evidence_attached/u);
   assert.match(script, /resolved/u);
   assert.match(script, /reopened/u);
   assert.match(script, /completed/u);
-  assert.match(script, /hasDuplicateLifecycleVersions/u);
+  assert.match(script, /hasExactEventLifecycle/u);
+  assert.match(script, /events\.length !== expectedLifecycle\.length/u);
+  assert.match(script, /thread\.version !== 5/u);
+  assert.match(script, /action\.version !== 2/u);
+  assert.doesNotMatch(script, /hasDuplicateLifecycleVersions/u);
   assert.match(script, /projectionRepairs/u);
+  assert.match(script, /assertNoOutstandingProjectionRepairs/u);
+  assert.match(script, /expectedStatuses = \["pending", "processing", "completed", "failed"\]/u);
+  assert.match(script, /Object\.hasOwn\(counts, status\)/u);
+  assert.doesNotMatch(
+    script,
+    /assertZeroCounts\(stateStatus\.projectionRepairs/u,
+  );
   assert.match(script, /controlGroupId/u);
   assert.doesNotMatch(script, /\/internal\/runtime-control\/global/u);
   assert.doesNotMatch(script, /\/internal\/memory-extraction\/dead-letters\/.*\/replay/u);
   assert.doesNotMatch(script, /stop caddy/u);
   assert.doesNotMatch(script, /\/v1\/memory\/extract/u);
 });
+
+test("semantic inspector repair gate allows only valid completed history", () => {
+  const script = readFileSync(semanticAcceptanceInspectPath, "utf8");
+  assert.doesNotThrow(() => runProjectionRepairGate(script, {
+    pending: 0,
+    processing: 0,
+    completed: 22,
+    failed: 0,
+  }));
+  for (const status of ["pending", "processing", "failed"]) {
+    assert.throws(
+      () => runProjectionRepairGate(script, {
+        pending: 0,
+        processing: 0,
+        completed: 22,
+        failed: 0,
+        [status]: 1,
+      }),
+      new RegExp(`projectionRepairs\\.${status}`, "u"),
+    );
+  }
+  for (const invalidCounts of [
+    undefined,
+    {},
+    { pending: 0, processing: 0, completed: 22 },
+    { pending: null, processing: 0, completed: 22, failed: 0 },
+    { pending: 0, processing: 0, completed: -1, failed: 0 },
+    { pending: 0, processing: 0, completed: 22.5, failed: 0 },
+    { pending: 0, processing: 0, completed: 22, failed: 0, cancelled: 1 },
+  ]) {
+    assert.throws(
+      () => runProjectionRepairGate(script, invalidCounts),
+      /projection repairs status counts/u,
+    );
+  }
+});
+
+test("semantic lifecycle source parsing includes multiline and extended events", () => {
+  assert.deepEqual(readStepEvents(`
+    events: [
+      { type: "created", version: 1, triggerIndex: 0 },
+      {
+        type: "promoted",
+        version: 2,
+        triggerIndex: 1,
+        note: "must not be ignored",
+      },
+    ],
+  `), [
+    ["created", 1, 0],
+    ["promoted", 2, 1],
+  ]);
+  assert.deepEqual(readInspectorLifecycle(`
+    const expectedLifecycle = [
+      { eventType: "created", toVersion: 1 },
+      {
+        eventType: "promoted",
+        toVersion: 2,
+        note: "must not be ignored",
+      },
+    ];
+  `), [
+    ["created", 1],
+    ["promoted", 2],
+  ]);
+});
+
+test("semantic lifecycle source parsing pins the top-level action version", () => {
+  assert.throws(
+    () => assertStepLifecycle(`
+      threadVersion: 3,
+      threadEvents: [
+        { type: "created", version: 1, triggerIndex: 0 },
+      ],
+      action: {
+        status: "completed",
+        version: 99,
+        events: [
+          { type: "created", version: 1, triggerIndex: 0 },
+          { type: "completed", version: 2, triggerIndex: 1 },
+        ],
+      },
+    `, {
+      threadVersion: 3,
+      threadEvents: [["created", 1, 0]],
+      actionStatus: "completed",
+      actionVersion: 2,
+      actionEvents: [
+        ["created", 1, 0],
+        ["completed", 2, 1],
+      ],
+    }),
+    /version: 2/u,
+  );
+});
+
+function sliceBetween(value, startToken, endToken) {
+  const start = value.indexOf(startToken);
+  assert.notEqual(start, -1, `missing start token: ${startToken}`);
+  const end = value.indexOf(endToken, start + startToken.length);
+  assert.notEqual(end, -1, `missing end token: ${endToken}`);
+  return value.slice(start, end);
+}
+
+function assertStepLifecycle(
+  stepBlock,
+  {
+    threadVersion,
+    threadEvents,
+    actionStatus,
+    actionVersion,
+    actionEvents,
+  },
+) {
+  const actionIndex = stepBlock.indexOf("action:");
+  assert.notEqual(actionIndex, -1, "step block is missing an action contract");
+  const threadBlock = stepBlock.slice(0, actionIndex);
+  const actionBlock = stepBlock.slice(actionIndex);
+  const actionEventsIndex = actionBlock.indexOf("events:");
+  assert.notEqual(actionEventsIndex, -1, "action contract is missing events");
+  const actionHeader = actionBlock.slice(0, actionEventsIndex);
+  assert.match(threadBlock, new RegExp(`threadVersion: ${threadVersion},`, "u"));
+  assert.deepEqual(readStepEvents(threadBlock, "threadEvents:"), threadEvents);
+  assert.match(actionHeader, new RegExp(`status: "${actionStatus}",`, "u"));
+  assert.match(actionHeader, new RegExp(`version: ${actionVersion},`, "u"));
+  assert.deepEqual(readStepEvents(actionBlock), actionEvents);
+}
+
+function readStepEvents(value, startToken = "events:") {
+  return Array.from(readSourceArray(value, startToken), (event) => {
+    assert.equal(typeof event?.type, "string");
+    assert.equal(Number.isSafeInteger(event?.version), true);
+    assert.equal(Number.isSafeInteger(event?.triggerIndex), true);
+    return [event.type, event.version, event.triggerIndex];
+  });
+}
+
+function readInspectorLifecycle(value) {
+  return Array.from(readSourceArray(value), (event) => {
+    assert.equal(typeof event?.eventType, "string");
+    assert.equal(Number.isSafeInteger(event?.toVersion), true);
+    return [event.eventType, event.toVersion];
+  });
+}
+
+function runProjectionRepairGate(script, input) {
+  const repairGate = sliceBetween(
+    script,
+    "function assertNoOutstandingProjectionRepairs",
+    "\n\nfunction zeroIfMissing",
+  );
+  const zeroIfMissing = sliceBetween(
+    script,
+    "function zeroIfMissing",
+    "\n\nasync function getJson",
+  );
+  runInNewContext(
+    `${repairGate}\n${zeroIfMissing}\nassertNoOutstandingProjectionRepairs(input);`,
+    { input },
+    { timeout: 100 },
+  );
+}
+
+function readSourceArray(value, startToken) {
+  const searchStart = startToken === undefined ? 0 : value.indexOf(startToken);
+  assert.notEqual(searchStart, -1, `missing array token: ${startToken}`);
+  const arrayStart = value.indexOf("[", searchStart);
+  assert.notEqual(arrayStart, -1, "missing source array");
+  let depth = 0;
+  let quote;
+  let escaped = false;
+  for (let index = arrayStart; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote !== undefined) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "[") {
+      depth += 1;
+      continue;
+    }
+    if (character !== "]") continue;
+    depth -= 1;
+    if (depth !== 0) continue;
+    const parsed = runInNewContext(
+      `(${value.slice(arrayStart, index + 1)})`,
+      Object.create(null),
+      { timeout: 100 },
+    );
+    assert.equal(Array.isArray(parsed), true);
+    return parsed;
+  }
+  assert.fail("unterminated source array");
+}
 
 test("pilot rollback documents decrypted stdin restore and Caddy-last reactivation", () => {
   const readme = readFileSync(pilotReadmePath, "utf8");

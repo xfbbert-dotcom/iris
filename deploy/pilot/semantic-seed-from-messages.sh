@@ -41,6 +41,7 @@ import {
   createMemoryExtractionJob,
 } from "/app/apps/core/dist/memory-extraction/memory-extraction-queue.js";
 import { createRedisMemoryExtractionQueue } from "/app/apps/core/dist/memory-extraction/redis-memory-extraction-queue.js";
+import { assertSemanticEvidenceIntegrity } from "/app/apps/core/dist/memory-extraction/semantic-evidence-integrity.js";
 
 const groupId = requireEnv("IRIS_SEMANTIC_SEED_PILOT_GROUP_ID");
 const marker = requireEnv("IRIS_SEMANTIC_SEED_MARKER");
@@ -60,7 +61,7 @@ try {
   const queue = createRedisMemoryExtractionQueue({ client: redis });
   const messages = await pool.query(
     `
-    SELECT id, provider_message_id, chat_id
+    SELECT id, provider_message_id, chat_id, text
     FROM conversation_messages
     WHERE chat_id = $1
       AND text IS NOT NULL
@@ -70,6 +71,14 @@ try {
     `,
     [groupId, escapedMarker, limit],
   );
+
+  for (const row of messages.rows) {
+    assertSemanticEvidenceIntegrity({
+      text: row.text,
+      marker,
+      messageId: row.id,
+    });
+  }
 
   let createdCount = 0;
   let existingCount = 0;
