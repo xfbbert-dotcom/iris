@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const backupPath = "deploy/pilot/backup.sh";
 const restorePath = "deploy/pilot/restore-from-stdin.sh";
@@ -608,6 +609,65 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   assert.doesNotMatch(script, /\/v1\/memory\/extract/u);
 });
 
+test("semantic lifecycle source parsing includes multiline and extended events", () => {
+  assert.deepEqual(readStepEvents(`
+    events: [
+      { type: "created", version: 1, triggerIndex: 0 },
+      {
+        type: "promoted",
+        version: 2,
+        triggerIndex: 1,
+        note: "must not be ignored",
+      },
+    ],
+  `), [
+    ["created", 1, 0],
+    ["promoted", 2, 1],
+  ]);
+  assert.deepEqual(readInspectorLifecycle(`
+    const expectedLifecycle = [
+      { eventType: "created", toVersion: 1 },
+      {
+        eventType: "promoted",
+        toVersion: 2,
+        note: "must not be ignored",
+      },
+    ];
+  `), [
+    ["created", 1],
+    ["promoted", 2],
+  ]);
+});
+
+test("semantic lifecycle source parsing pins the top-level action version", () => {
+  assert.throws(
+    () => assertStepLifecycle(`
+      threadVersion: 3,
+      threadEvents: [
+        { type: "created", version: 1, triggerIndex: 0 },
+      ],
+      action: {
+        status: "completed",
+        version: 99,
+        events: [
+          { type: "created", version: 1, triggerIndex: 0 },
+          { type: "completed", version: 2, triggerIndex: 1 },
+        ],
+      },
+    `, {
+      threadVersion: 3,
+      threadEvents: [["created", 1, 0]],
+      actionStatus: "completed",
+      actionVersion: 2,
+      actionEvents: [
+        ["created", 1, 0],
+        ["completed", 2, 1],
+      ],
+    }),
+    /version: 2/u,
+  );
+});
+
 function sliceBetween(value, startToken, endToken) {
   const start = value.indexOf(startToken);
   assert.notEqual(start, -1, `missing start token: ${startToken}`);
@@ -630,23 +690,73 @@ function assertStepLifecycle(
   assert.notEqual(actionIndex, -1, "step block is missing an action contract");
   const threadBlock = stepBlock.slice(0, actionIndex);
   const actionBlock = stepBlock.slice(actionIndex);
+  const actionEventsIndex = actionBlock.indexOf("events:");
+  assert.notEqual(actionEventsIndex, -1, "action contract is missing events");
+  const actionHeader = actionBlock.slice(0, actionEventsIndex);
   assert.match(threadBlock, new RegExp(`threadVersion: ${threadVersion},`, "u"));
-  assert.deepEqual(readStepEvents(threadBlock), threadEvents);
-  assert.match(actionBlock, new RegExp(`status: "${actionStatus}",`, "u"));
-  assert.match(actionBlock, new RegExp(`version: ${actionVersion},`, "u"));
+  assert.deepEqual(readStepEvents(threadBlock, "threadEvents:"), threadEvents);
+  assert.match(actionHeader, new RegExp(`status: "${actionStatus}",`, "u"));
+  assert.match(actionHeader, new RegExp(`version: ${actionVersion},`, "u"));
   assert.deepEqual(readStepEvents(actionBlock), actionEvents);
 }
 
-function readStepEvents(value) {
-  return [...value.matchAll(
-    /\{ type: "([^"]+)", version: ([0-9]+), triggerIndex: ([0-9]+) \}/gu,
-  )].map((match) => [match[1], Number(match[2]), Number(match[3])]);
+function readStepEvents(value, startToken = "events:") {
+  return Array.from(readSourceArray(value, startToken), (event) => {
+    assert.equal(typeof event?.type, "string");
+    assert.equal(Number.isSafeInteger(event?.version), true);
+    assert.equal(Number.isSafeInteger(event?.triggerIndex), true);
+    return [event.type, event.version, event.triggerIndex];
+  });
 }
 
 function readInspectorLifecycle(value) {
-  return [...value.matchAll(
-    /\{ eventType: "([^"]+)", toVersion: ([0-9]+) \}/gu,
-  )].map((match) => [match[1], Number(match[2])]);
+  return Array.from(readSourceArray(value), (event) => {
+    assert.equal(typeof event?.eventType, "string");
+    assert.equal(Number.isSafeInteger(event?.toVersion), true);
+    return [event.eventType, event.toVersion];
+  });
+}
+
+function readSourceArray(value, startToken) {
+  const searchStart = startToken === undefined ? 0 : value.indexOf(startToken);
+  assert.notEqual(searchStart, -1, `missing array token: ${startToken}`);
+  const arrayStart = value.indexOf("[", searchStart);
+  assert.notEqual(arrayStart, -1, "missing source array");
+  let depth = 0;
+  let quote;
+  let escaped = false;
+  for (let index = arrayStart; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote !== undefined) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "[") {
+      depth += 1;
+      continue;
+    }
+    if (character !== "]") continue;
+    depth -= 1;
+    if (depth !== 0) continue;
+    const parsed = runInNewContext(
+      `(${value.slice(arrayStart, index + 1)})`,
+      Object.create(null),
+      { timeout: 100 },
+    );
+    assert.equal(Array.isArray(parsed), true);
+    return parsed;
+  }
+  assert.fail("unterminated source array");
 }
 
 test("pilot rollback documents decrypted stdin restore and Caddy-last reactivation", () => {
