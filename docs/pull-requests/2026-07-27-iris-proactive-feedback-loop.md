@@ -62,20 +62,25 @@ The independent review found no critical issue and two important issues. Both ar
 - proactive delivery configuration and runtime assembly now require the matching feedback-card
   runtime before any delivery worker starts.
 
-## External Acceptance Pending
+## External Acceptance Status
 
-The branch does not deploy itself or change production runtime state. The following remain external
-release gates:
+The branch does not deploy itself or change production runtime state. The following positive-path
+external gates passed on the bounded pilot:
 
-- deploy the reviewed candidate with Core and AI Worker images pinned to the approved commit;
+- deploy the reviewed candidate with Core and AI Worker images pinned to the same candidate commit;
 - apply migration `0040_proactive_signal_feedback.sql`;
-- complete one real Feishu feedback-card gray pass in an explicitly approved small group;
+- complete real `helpful` and `irrelevant` Feishu feedback-card paths in the explicitly approved
+  pilot group;
 - prove `helpful` records an aggregate event without suppression;
-- prove `irrelevant` suppresses only the same group, signal kind, and entity until expiry;
+- prove `irrelevant` suppresses only the same group, signal kind, and entity until expiry, and a
+  repeated scan records no new candidate for that entity.
+
+The following negative-path external gates remain:
+
 - prove a stale delivery, bot actor, removed member, disabled runtime, and duplicate callback all
   fail closed or no-op as specified;
 - recheck global and desired-global runtime disabled, `proactiveSpeech=false`, Caddy stopped,
-  service health, and empty pending/DLQ counts before any public ingress or enablement.
+  service health, and empty pending/DLQ counts around every future public ingress or enablement.
 
 ## Real Feishu Gray Evidence
 
@@ -95,11 +100,20 @@ first real helpful-feedback path in the authorized pilot group:
 - The group summary became `total=1`, `helpful=1`, `irrelevant=0`, helpful rate `1`, with zero
   active suppressions. Approval-interaction pending, delayed, processing, and DLQ counts were all
   zero.
+- A second independently bound card recorded `irrelevant` for delivery
+  `proactive-delivery:cc6b8f1ea0216bf74ba8fd2a808138d083a47c594fc0149c40b41b4cd02fee97`,
+  candidate `quiet_open_thread:8bd4b143-9588-40c4-84d8-bedeaa950958:5`, sent message, and entity
+  version `5`. It created one suppression only for the pilot group's `quiet_open_thread` signal
+  and that exact thread, expiring after the configured 30 days.
+- A repeated real repository scan returned `recordedCount=0`, `existingCount=1`, and
+  `suppressedCount=1`. The final aggregate became `total=2`, `helpful=1`, `irrelevant=1`, with one
+  active suppression. Both deliveries remained single-attempt `sent` records, and no additional
+  delivery was created by the suppression verification.
 - Cleanup then restored `globalEnabled=false`, `desiredGlobalEnabled=false`,
   `proactiveSpeech=false`, all 14 known groups disabled, proactive environment flags disabled,
   and Caddy stopped. Core, Postgres, Redis, and AI Worker remained healthy; event, document, and
   reindex pending/DLQ counts remained zero.
 
-The real irrelevant-feedback suppression path and the negative actor/stale-binding cases remain
-external acceptance gates; unit, integration, and PostgreSQL race coverage for those paths is
-already present.
+The positive real feedback loop is complete. Negative actor, membership-loss, stale-binding,
+disabled-runtime, and duplicate-callback cases remain external acceptance gates; unit,
+integration, and PostgreSQL race coverage for those paths is already present.
