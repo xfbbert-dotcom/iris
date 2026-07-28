@@ -188,13 +188,22 @@ function hasEvidence(evidenceMessageIds) {
 }
 
 function assertNoOutstandingProjectionRepairs(counts) {
-  const outstanding = {
-    pending: zeroIfMissing(counts?.pending),
-    processing: zeroIfMissing(counts?.processing),
-    failed: zeroIfMissing(counts?.failed),
-  };
-  for (const [status, value] of Object.entries(outstanding)) {
-    if (value !== 0) {
+  const expectedStatuses = ["pending", "processing", "completed", "failed"];
+  if (
+    counts === null ||
+    typeof counts !== "object" ||
+    Array.isArray(counts) ||
+    Object.keys(counts).length !== expectedStatuses.length ||
+    expectedStatuses.some((status) => !Object.hasOwn(counts, status))
+  ) {
+    throw new Error("Invalid projection repairs status counts");
+  }
+  for (const status of expectedStatuses) {
+    const value = counts[status];
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error("Invalid projection repairs status counts");
+    }
+    if (status !== "completed" && value !== 0) {
       throw new Error(`Expected projectionRepairs.${status} to be zero`);
     }
   }

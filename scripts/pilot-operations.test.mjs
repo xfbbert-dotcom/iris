@@ -603,9 +603,8 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   assert.doesNotMatch(script, /hasDuplicateLifecycleVersions/u);
   assert.match(script, /projectionRepairs/u);
   assert.match(script, /assertNoOutstandingProjectionRepairs/u);
-  assert.match(script, /counts\?\.pending/u);
-  assert.match(script, /counts\?\.processing/u);
-  assert.match(script, /counts\?\.failed/u);
+  assert.match(script, /expectedStatuses = \["pending", "processing", "completed", "failed"\]/u);
+  assert.match(script, /Object\.hasOwn\(counts, status\)/u);
   assert.doesNotMatch(
     script,
     /assertZeroCounts\(stateStatus\.projectionRepairs/u,
@@ -615,6 +614,42 @@ test("semantic acceptance inspector validates lifecycle without mutating runtime
   assert.doesNotMatch(script, /\/internal\/memory-extraction\/dead-letters\/.*\/replay/u);
   assert.doesNotMatch(script, /stop caddy/u);
   assert.doesNotMatch(script, /\/v1\/memory\/extract/u);
+});
+
+test("semantic inspector repair gate allows only valid completed history", () => {
+  const script = readFileSync(semanticAcceptanceInspectPath, "utf8");
+  assert.doesNotThrow(() => runProjectionRepairGate(script, {
+    pending: 0,
+    processing: 0,
+    completed: 22,
+    failed: 0,
+  }));
+  for (const status of ["pending", "processing", "failed"]) {
+    assert.throws(
+      () => runProjectionRepairGate(script, {
+        pending: 0,
+        processing: 0,
+        completed: 22,
+        failed: 0,
+        [status]: 1,
+      }),
+      new RegExp(`projectionRepairs\\.${status}`, "u"),
+    );
+  }
+  for (const invalidCounts of [
+    undefined,
+    {},
+    { pending: 0, processing: 0, completed: 22 },
+    { pending: null, processing: 0, completed: 22, failed: 0 },
+    { pending: 0, processing: 0, completed: -1, failed: 0 },
+    { pending: 0, processing: 0, completed: 22.5, failed: 0 },
+    { pending: 0, processing: 0, completed: 22, failed: 0, cancelled: 1 },
+  ]) {
+    assert.throws(
+      () => runProjectionRepairGate(script, invalidCounts),
+      /projection repairs status counts/u,
+    );
+  }
 });
 
 test("semantic lifecycle source parsing includes multiline and extended events", () => {
@@ -723,6 +758,24 @@ function readInspectorLifecycle(value) {
     assert.equal(Number.isSafeInteger(event?.toVersion), true);
     return [event.eventType, event.toVersion];
   });
+}
+
+function runProjectionRepairGate(script, input) {
+  const repairGate = sliceBetween(
+    script,
+    "function assertNoOutstandingProjectionRepairs",
+    "\n\nfunction zeroIfMissing",
+  );
+  const zeroIfMissing = sliceBetween(
+    script,
+    "function zeroIfMissing",
+    "\n\nasync function getJson",
+  );
+  runInNewContext(
+    `${repairGate}\n${zeroIfMissing}\nassertNoOutstandingProjectionRepairs(input);`,
+    { input },
+    { timeout: 100 },
+  );
 }
 
 function readSourceArray(value, startToken) {
