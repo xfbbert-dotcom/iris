@@ -360,7 +360,10 @@ describe("proactive signal persistence", () => {
       suppressedCount: 0,
       recordedKeys: [],
     });
-    expect(client.query.mock.calls).toHaveLength(3);
+    expect(client.query.mock.calls).toHaveLength(4);
+    expect(String(client.query.mock.calls[1]?.[0]).toLowerCase()).toContain(
+      "pg_advisory_xact_lock",
+    );
   });
 
   it("anchors candidate CTE values to the target Postgres column types", async () => {
@@ -636,6 +639,8 @@ describe("proactive signal persistence", () => {
     const sql = String(dataSource.query.mock.calls[0]?.[0]).toLowerCase();
     expect(sql).toContain("from proactive_signal_suppressions");
     expect(sql).toContain("suppression.suppress_until > $3");
+    expect(sql).toContain("delivery.lease_until > $3");
+    expect(sql).toContain("for update of delivery");
     expect(sql).toContain("status = 'cancelled'");
     expect(sql).toContain("failure_classification = 'feedback_suppressed'");
     expect(sql).toContain("'cancelled', 'cancelled'");
@@ -737,6 +742,9 @@ function createClient(results: Array<{ rows: Array<Record<string, unknown>> }>) 
   return {
     query: vi.fn(async (statement: string, _values?: unknown[]) => {
       if (statement === "begin" || statement === "commit" || statement === "rollback") {
+        return { rows: [] };
+      }
+      if (statement.toLowerCase().includes("pg_advisory_xact_lock")) {
         return { rows: [] };
       }
       return results[index++] ?? { rows: [] };

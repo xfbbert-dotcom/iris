@@ -301,6 +301,9 @@ async function recordFeedback(
   const client = await dataSource.connect();
   try {
     await client.query("begin");
+    if (feedback === "irrelevant") {
+      await lockProactiveSignalGroups(client, [groupId]);
+    }
     const binding = await client.query<{ kind: unknown; entity_id: unknown }>(
       `
       SELECT candidate.kind, candidate.entity_id
@@ -607,7 +610,10 @@ async function beginProactiveSignalDeliveryAttempt(
       WHERE delivery.id = $1
         AND delivery.status = 'processing'
         AND delivery.lease_worker_id = $2
+        AND delivery.lease_until IS NOT NULL
+        AND delivery.lease_until > $3
         AND candidate.status = 'pending'
+      FOR UPDATE OF delivery
     ),
     cancelled AS (
       UPDATE proactive_signal_delivery_outbox delivery
@@ -619,6 +625,10 @@ async function beginProactiveSignalDeliveryAttempt(
       FROM bound
       WHERE delivery.id = bound.id
         AND bound.suppressed
+        AND delivery.status = 'processing'
+        AND delivery.lease_worker_id = $2
+        AND delivery.lease_until IS NOT NULL
+        AND delivery.lease_until > $3
       RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id
     ),
     processing_event AS (
@@ -912,6 +922,7 @@ async function recordCandidates(
   const client = await dataSource.connect();
   try {
     await client.query("begin");
+    await lockProactiveSignalGroups(client, signals.map((signal) => signal.groupId));
     const inserted = await insertCandidates(client, signals, now);
     const recordedKeys = inserted.rows
       .filter((row) => requireCandidateRecordOutcome(row.outcome) === "recorded")
@@ -938,6 +949,21 @@ async function recordCandidates(
     throw error;
   } finally {
     client.release();
+  }
+}
+
+async function lockProactiveSignalGroups(
+  queryable: Queryable,
+  groupIds: string[],
+): Promise<void> {
+  const normalizedGroupIds = [...new Set(
+    groupIds.map((groupId) => requireBoundedString("groupId", groupId)),
+  )].sort((left, right) => left.localeCompare(right));
+  for (const groupId of normalizedGroupIds) {
+    await queryable.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [`iris:proactive-signal-group:${groupId}`],
+    );
   }
 }
 

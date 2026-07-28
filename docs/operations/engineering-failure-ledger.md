@@ -105,6 +105,21 @@ delivery mistakes while implementing it.
 - **Exit condition:** Feedback committed before final authorization changes the delivery to
   `cancelled`, clears its lease, and makes every later authorization stale.
 
+### Serialize leases and suppression at the final delivery boundary
+
+- **Failure:** A worker with an expired lease could still authorize a reminder, while a concurrent
+  irrelevant-feedback transaction and candidate insert could both commit without observing the
+  other's suppression state.
+- **Root cause:** Final authorization checked worker ownership but not lease expiry under a row
+  lock, and suppression writes shared no transaction lock with candidate registration.
+- **Prevention rule:** Revalidate ownership and unexpired lease while locking the claimed delivery.
+  Serialize suppression and candidate insertion with sorted, group-scoped transaction advisory
+  locks.
+- **Guard:** Real PostgreSQL tests force lease expiry and interleave the two transactions; SQL
+  contract tests require the lease predicate and delivery row lock.
+- **Exit condition:** Expired workers receive `stale`, suppression committed first prevents a
+  pending candidate, and all focused tests pass against PostgreSQL.
+
 ## Data And Memory
 
 ### Recheck permissions at answer time

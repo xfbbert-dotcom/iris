@@ -462,7 +462,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     );
     expect(claimed.rows).toEqual([{ id: claimedDeliveryId }]);
 
-    const feedbackAt = new Date(at.getTime() + 120_000);
+    const feedbackAt = new Date(at.getTime() + 90_000);
     await expect(proactiveRepository.recordFeedback(proactiveFeedback({
       idempotencyKey: `feishu-card:${suffix}:claimed-suppression`,
       groupId,
@@ -473,7 +473,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       at: feedbackAt,
     }))).resolves.toEqual({ status: "applied" });
 
-    const authorizationAt = new Date(at.getTime() + 180_000);
+    const authorizationAt = new Date(at.getTime() + 100_000);
     await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
       deliveryId: claimedDeliveryId,
       workerId,
@@ -498,6 +498,110 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       at: new Date(authorizationAt.getTime() + 60_000),
     })).resolves.toEqual({ status: "stale" });
   });
+
+  it("rejects final delivery authorization after the worker lease expires", async () => {
+    const groupId = `oc_expired_lease_${suffix}`;
+    const candidate = proactiveCandidate({
+      groupId,
+      entityId: `thread-expired-lease-${suffix}`,
+      entityVersion: 1,
+    });
+    const deliveryId = await createQueuedProactiveDelivery({
+      repository: proactiveRepository,
+      candidate,
+    });
+    const workerId = `worker-expired-${suffix}`;
+    const leaseUntil = new Date(at.getTime() + 60_000);
+    await pool.query(
+      `UPDATE proactive_signal_delivery_outbox
+       SET status = 'processing',
+           lease_worker_id = $2,
+           lease_until = $3,
+           attempt_count = attempt_count + 1,
+           updated_at = $3
+       WHERE id = $1`,
+      [deliveryId, workerId, leaseUntil],
+    );
+
+    await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
+      deliveryId,
+      workerId,
+      at: new Date(leaseUntil.getTime() + 1),
+    })).resolves.toEqual({ status: "stale" });
+
+    const processingEvents = await pool.query(
+      `SELECT COUNT(*)::integer AS count
+       FROM proactive_signal_delivery_events
+       WHERE delivery_id = $1
+         AND event_type = 'processing'`,
+      [deliveryId],
+    );
+    expect(processingEvents.rows).toEqual([{ count: 0 }]);
+  });
+
+  it("serializes feedback suppression ahead of a concurrent candidate insertion", async () => {
+    const groupId = `oc_feedback_race_${suffix}`;
+    const entityId = `thread-feedback-race-${suffix}`;
+    const sentCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 1 });
+    const deliveryId = await createSentProactiveDelivery({
+      repository: proactiveRepository,
+      pool,
+      candidate: sentCandidate,
+    });
+    const concurrentCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 2 });
+    const blocker = await pool.connect();
+    await blocker.query("BEGIN");
+    await blocker.query(
+      `SELECT id
+       FROM proactive_signal_delivery_outbox
+       WHERE id = $1
+       FOR UPDATE`,
+      [deliveryId],
+    );
+
+    let feedbackPromise: Promise<{ status: "applied" | "already_applied" | "stale_binding" }>;
+    let candidatePromise: ReturnType<ProactiveSignalRepository["recordCandidates"]>;
+    let candidateWaitedForGroupLock: boolean;
+    try {
+      feedbackPromise = proactiveRepository.recordFeedback(proactiveFeedback({
+        idempotencyKey: `feishu-card:${suffix}:feedback-race`,
+        groupId,
+        deliveryId,
+        candidateIdempotencyKey: sentCandidate.idempotencyKey,
+        entityVersion: sentCandidate.entityVersion,
+        suppressUntil: new Date(at.getTime() + 30 * 24 * 60 * 60 * 1000),
+      }));
+      await waitForBlockedDatabaseQuery(pool, "%for key share of delivery%");
+
+      let candidateSettled = false;
+      candidatePromise = proactiveRepository.recordCandidates({
+        signals: [concurrentCandidate],
+        now: at,
+      }).finally(() => {
+        candidateSettled = true;
+      });
+      candidateWaitedForGroupLock = await waitForAdvisoryLockOrSettlement(
+        pool,
+        () => candidateSettled,
+      );
+    } finally {
+      await blocker.query("COMMIT");
+      blocker.release();
+    }
+    const [feedbackResult, candidateResult] = await Promise.all([
+      feedbackPromise!,
+      candidatePromise!,
+    ]);
+
+    expect(candidateWaitedForGroupLock!).toBe(true);
+    expect(feedbackResult).toEqual({ status: "applied" });
+    expect(candidateResult).toEqual({
+      recordedCount: 0,
+      existingCount: 0,
+      suppressedCount: 1,
+      recordedKeys: [],
+    });
+  }, 15_000);
 });
 
 function proactiveCandidate(overrides: Partial<ProactiveSignalCandidate> = {}): ProactiveSignalCandidate {
@@ -571,6 +675,52 @@ async function createSentProactiveDelivery({
     [deliveryId, "om_card"],
   );
   return deliveryId;
+}
+
+async function waitForBlockedDatabaseQuery(
+  pool: pg.Pool,
+  queryPattern: string,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const result = await pool.query(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND pid <> pg_backend_pid()
+           AND wait_event_type = 'Lock'
+           AND query ILIKE $1
+       ) AS waiting`,
+      [queryPattern],
+    );
+    if (result.rows[0]?.waiting === true) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for blocked query ${queryPattern}`);
+}
+
+async function waitForAdvisoryLockOrSettlement(
+  pool: pg.Pool,
+  isSettled: () => boolean,
+): Promise<boolean> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (isSettled()) return false;
+    const result = await pool.query(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND pid <> pg_backend_pid()
+           AND wait_event_type = 'Lock'
+           AND query ILIKE '%pg_advisory_xact_lock%'
+       ) AS waiting`,
+    );
+    if (result.rows[0]?.waiting === true) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("timed out waiting for proactive group advisory lock");
 }
 
 function eventInput(
