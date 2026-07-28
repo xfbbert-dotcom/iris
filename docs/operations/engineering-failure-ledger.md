@@ -140,6 +140,24 @@ delivery mistakes while implementing it.
 - **Exit condition:** Feedback committed before final authorization changes the delivery to
   `cancelled`, clears its lease, and makes every later authorization stale.
 
+### Preserve explicit intent across same-event document discovery
+
+- **Failure:** A real `@Iris` document-submission command synced and indexed successfully, but the
+  final source type was `group_visible_document` instead of `user_submitted_document`.
+- **Root cause:** Mention handling registered the explicit user submission first. Generic link
+  discovery then observed the same URI in the same Feishu message and applied the normal
+  group-over-user source priority, treating a mechanical duplicate as independent evidence.
+- **Prevention rule:** Attach group/message provenance to in-chat submissions. Keep user-submitted
+  type and defaults only when every group observation is paired with an explicit submission from
+  the exact same URI, group, and message. Any independent group observation resumes normal source
+  precedence.
+- **Guard:** Order-independent in-memory and real PostgreSQL tests, retry idempotency tests, a full
+  Feishu event-chain regression, and pilot postconditions for source type, both evidence rows, and
+  `canUseForKnowledgeDrafts=false`.
+- **Exit condition:** One bounded real submission produces one canonical user-submitted source,
+  exactly one user-submission and one same-message group evidence row, healthy sync/index state,
+  and no pending or dead-letter work.
+
 ### Serialize leases and suppression at the final delivery boundary
 
 - **Failure:** A worker with an expired lease could still authorize a reminder, while a concurrent

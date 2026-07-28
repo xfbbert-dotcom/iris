@@ -62,6 +62,8 @@ export interface RegisterUserSubmittedDocumentInput {
   sourceUri: string;
   title?: string;
   submittedByUserId: string;
+  submissionGroupId?: string;
+  submissionMessageId?: string;
   observedAt: Date;
 }
 
@@ -209,6 +211,15 @@ export function createDocumentSourceRegistry(
         DOCUMENT_SOURCE_URI_MAX_CHARS,
       );
       const submittedByUserId = requireNonBlank("submittedByUserId", input.submittedByUserId);
+      const submissionGroupId = normalizeOptional(
+        "submissionGroupId",
+        input.submissionGroupId,
+      );
+      const submissionMessageId = normalizeOptional(
+        "submissionMessageId",
+        input.submissionMessageId,
+      );
+      requirePairedSubmissionProvenance(submissionGroupId, submissionMessageId);
       const source = registerSource(
         sourcesById,
         sourcesByUri,
@@ -227,8 +238,8 @@ export function createDocumentSourceRegistry(
           evidence: {
             kind: "user_submission",
             sourceUri,
-            groupId: undefined,
-            messageId: undefined,
+            groupId: submissionGroupId,
+            messageId: submissionMessageId,
             userId: submittedByUserId,
             spaceId: undefined,
             observedAt: normalizeDocumentSourceDate("observedAt", input.observedAt),
@@ -395,6 +406,46 @@ export function higherPriorityDocumentSourceType(
   return higherPrioritySourceType(first, second);
 }
 
+export function mergeDocumentSourceType(
+  existingSourceType: DocumentSourceType,
+  nextSourceType: DocumentSourceType,
+  existingEvidence: readonly DocumentSourceEvidence[],
+  nextEvidence: DocumentSourceEvidence,
+): DocumentSourceType {
+  const priorityResult = higherPrioritySourceType(existingSourceType, nextSourceType);
+  if (priorityResult === "authorized_wiki_document") {
+    return priorityResult;
+  }
+  if (
+    !isSameMessageExplicitDocumentSubmission(
+      existingSourceType,
+      nextSourceType,
+      existingEvidence,
+      nextEvidence,
+    )
+  ) {
+    return priorityResult;
+  }
+
+  return "user_submitted_document";
+}
+
+export function isSameMessageExplicitDocumentSubmission(
+  existingSourceType: DocumentSourceType,
+  nextSourceType: DocumentSourceType,
+  existingEvidence: readonly DocumentSourceEvidence[],
+  nextEvidence: DocumentSourceEvidence,
+): boolean {
+  return (
+    hasSourceTypePair(
+      existingSourceType,
+      nextSourceType,
+      "user_submitted_document",
+      "group_visible_document",
+    ) && hasOnlyExplicitSubmissionGroupEvidence(existingEvidence, nextEvidence)
+  );
+}
+
 export function documentSourceEvidenceKey(evidence: DocumentSourceEvidence): string {
   return evidenceKey(evidence);
 }
@@ -435,7 +486,12 @@ function registerSource(
   }
 
   const hasExistingEvidence = evidenceExists(existing.evidence, next.evidence);
-  const mergedSourceType = higherPrioritySourceType(existing.sourceType, next.sourceType);
+  const mergedSourceType = mergeDocumentSourceType(
+    existing.sourceType,
+    next.sourceType,
+    existing.evidence,
+    next.evidence,
+  );
   const mergedTitle = existing.title ?? next.title;
   const mergedOriginGroupId = existing.originGroupId ?? next.originGroupId;
   const mergedOriginMessageId = existing.originMessageId ?? next.originMessageId;
@@ -447,6 +503,7 @@ function registerSource(
     existing,
     next,
     knowledgeDraftsPolicyOverriddenById.has(existing.id),
+    mergedSourceType,
   );
   const shouldRefreshUpdatedAt =
     !hasExistingEvidence ||
@@ -533,6 +590,7 @@ function shouldUseKnowledgeDrafts(
   existing: DocumentSource,
   next: NextDocumentSource,
   knowledgeDraftsPolicyOverridden: boolean,
+  mergedSourceType: DocumentSourceType,
 ): boolean {
   if (existing.permissionState === "denied") {
     return false;
@@ -542,11 +600,70 @@ function shouldUseKnowledgeDrafts(
     return existing.canUseForKnowledgeDrafts;
   }
 
+  if (
+    mergedSourceType === "user_submitted_document" &&
+    isSameMessageExplicitDocumentSubmission(
+      existing.sourceType,
+      next.sourceType,
+      existing.evidence,
+      next.evidence,
+    )
+  ) {
+    return false;
+  }
+
   if (existing.canUseForKnowledgeDrafts) {
     return true;
   }
 
   return existing.sourceType === "user_submitted_document" && next.canUseForKnowledgeDrafts;
+}
+
+function hasOnlyExplicitSubmissionGroupEvidence(
+  existingEvidence: readonly DocumentSourceEvidence[],
+  nextEvidence: DocumentSourceEvidence,
+): boolean {
+  const combinedEvidence = [...existingEvidence, nextEvidence];
+  const groupEvidence = combinedEvidence.filter(
+    (evidence) => evidence.kind === "group_message",
+  );
+  const userSubmissionEvidence = combinedEvidence.filter(
+    (evidence) => evidence.kind === "user_submission",
+  );
+
+  return (
+    groupEvidence.length > 0 &&
+    groupEvidence.every((groupObservation) =>
+      userSubmissionEvidence.some((submission) =>
+        isSameSubmissionMessage(groupObservation, submission),
+      ),
+    )
+  );
+}
+
+function isSameSubmissionMessage(
+  groupObservation: DocumentSourceEvidence,
+  submission: DocumentSourceEvidence,
+): boolean {
+  return (
+    groupObservation.sourceUri === submission.sourceUri &&
+    groupObservation.groupId !== undefined &&
+    groupObservation.groupId === submission.groupId &&
+    groupObservation.messageId !== undefined &&
+    groupObservation.messageId === submission.messageId
+  );
+}
+
+function hasSourceTypePair(
+  first: DocumentSourceType,
+  second: DocumentSourceType,
+  expectedFirst: DocumentSourceType,
+  expectedSecond: DocumentSourceType,
+): boolean {
+  return (
+    (first === expectedFirst && second === expectedSecond) ||
+    (first === expectedSecond && second === expectedFirst)
+  );
 }
 
 function evidenceExists(
@@ -629,6 +746,17 @@ function normalizeOptional(
   maxLength?: number,
 ): string | undefined {
   return normalizeDocumentSourceOptionalString(fieldName, value, maxLength);
+}
+
+function requirePairedSubmissionProvenance(
+  submissionGroupId: string | undefined,
+  submissionMessageId: string | undefined,
+): void {
+  if ((submissionGroupId === undefined) !== (submissionMessageId === undefined)) {
+    throw new DocumentSourceValidationError(
+      "submissionGroupId and submissionMessageId must be provided together",
+    );
+  }
 }
 
 function cloneSource(source: DocumentSource): DocumentSource {

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createFeishuMessageEventProcessor as createFeishuMessageEventProcessorWithReplayGuard } from "../src/conversation/feishu-message-event-processor.js";
+import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-mention-answer-responder.js";
 import type { ConversationMessageReplayGuard } from "../src/conversation/conversation-message-replay-guard.js";
+import { createDocumentSourceRegistry } from "../src/documents/document-source-registry.js";
+import { createFeishuDocumentLinkExtractor } from "../src/documents/feishu-document-link-extractor.js";
+import { createGroupVisibleDocumentRegistrar } from "../src/documents/group-visible-document-registrar.js";
 import type { RawEvent } from "../src/events/raw-event-queue.js";
 import { createMemoryExtractionPlanner } from "../src/memory-extraction/memory-extraction-planner.js";
 
@@ -114,6 +118,79 @@ describe("FeishuMessageEventProcessor", () => {
     expect(memoryExtractionPlanner.registerMessage).toHaveBeenCalledWith(persistedMessage, {
       senderOpenId: "open-1",
     });
+  });
+
+  it("keeps an explicit submission canonical after the full event runs generic discovery", async () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-28T11:30:00.000Z"),
+    });
+    const asyncRegistry = {
+      registerGroupVisibleDocument: async (
+        input: Parameters<typeof registry.registerGroupVisibleDocument>[0],
+      ) => registry.registerGroupVisibleDocument(input),
+      registerUserSubmittedDocument: async (
+        input: Parameters<typeof registry.registerUserSubmittedDocument>[0],
+      ) => registry.registerUserSubmittedDocument(input),
+    };
+    const documentLinkExtractor = createFeishuDocumentLinkExtractor();
+    const mentionAnswerResponder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator: { generateDraft: vi.fn() },
+      replier: { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) },
+      documentLinkExtractor,
+      userSubmittedDocumentRegistrar: asyncRegistry,
+    });
+    const processor = createFeishuMessageEventProcessor({
+      messages: {
+        upsertMessage: vi.fn(async (input) => ({
+          id: `feishu:${input.providerMessageId}`,
+          createdAt: new Date("2026-07-28T11:30:01.000Z"),
+          ...input,
+        })),
+      },
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar: createGroupVisibleDocumentRegistrar({
+        registry: asyncRegistry,
+      }),
+      mentionAnswerResponder,
+    });
+    const sourceUri = "https://docs.feishu.cn/docx/user_doc_token_1";
+
+    const event = rawEventFixture({
+      rawBody: {
+        header: {
+          event_id: "event-user-submission",
+          event_type: "im.message.receive_v1",
+        },
+        event: {
+          sender: { sender_id: { open_id: "ou_alice" } },
+          message: {
+            message_id: "message-user-submission",
+            chat_id: "chat-user-submission",
+            message_type: "text",
+            content: JSON.stringify({
+              text: `@_user_1 请收录这个文档 ${sourceUri}?from=chat`,
+            }),
+            mentions: [
+              { key: "@_user_1", id: { open_id: "ou_iris" }, name: "Iris" },
+            ],
+            create_time: "1785238140000",
+          },
+        },
+      },
+    });
+
+    await processor.process(event);
+    await processor.process(event);
+
+    const source = registry.findSourceByUri(sourceUri);
+    expect(source?.sourceType).toBe("user_submitted_document");
+    expect(source?.canUseForKnowledgeDrafts).toBe(false);
+    expect(source?.evidence.map((evidence) => evidence.kind)).toEqual([
+      "user_submission",
+      "group_message",
+    ]);
   });
 
   it("rechecks deletion before each effect and stops after persistence when the tombstone appears", async () => {

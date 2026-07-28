@@ -12,6 +12,7 @@
 
 - Preserve global source precedence: authorized wiki, group visible, user submitted.
 - A same-message match requires identical canonical URI, nonblank group ID, and nonblank message ID.
+- A same-message mechanical duplicate keeps the user-submitted knowledge-draft default `false`.
 - Keep evidence append-only and idempotent.
 - Do not change retrieval scope, permission guards, runtime enablement, or database schema.
 - Keep production fail-closed until the bounded pilot acceptance is complete.
@@ -32,8 +33,8 @@
 
 Register a user submission with `submissionGroupId: "group-1"` and
 `submissionMessageId: "message-1"`, then register group discovery with the same
-URI/group/message. Assert one source, type `user_submitted_document`, and two
-distinct evidence rows.
+URI/group/message. Assert one source, type `user_submitted_document`,
+`canUseForKnowledgeDrafts: false`, and two distinct evidence rows.
 
 - [ ] **Step 2: Run the focused test and observe RED**
 
@@ -84,7 +85,9 @@ present. Store both on `user_submission` evidence, while leaving source-level
 Return authorized wiki whenever either type is authorized. For a user/group
 merge, combine existing and incoming evidence and retain user-submitted only
 when every group-message row has a matching user-submission row for the same
-URI/group/message. Otherwise delegate to the unchanged global priority helper.
+URI/group/message. In that narrow case keep the user-submitted knowledge-draft
+default unless an administrator overrode it. Otherwise delegate to the
+unchanged global priority helper.
 
 - [ ] **Step 3: Use the function in the in-memory registry**
 
@@ -182,6 +185,7 @@ Use a fresh document/marker, enable only the pilot group behind an automatic
 close timer, submit one explicit command, and verify:
 
 - source type is `user_submitted_document`;
+- `canUseForKnowledgeDrafts` is `false`;
 - one matching `user_submission` and one matching `group_message` evidence row;
 - sync and indexing are healthy;
 - exact marker retrieval succeeds;

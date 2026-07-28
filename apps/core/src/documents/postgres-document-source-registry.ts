@@ -5,7 +5,8 @@ import pg from "pg";
 import {
   DOCUMENT_SOURCE_URI_MAX_CHARS,
   DocumentSourceValidationError,
-  higherPriorityDocumentSourceType,
+  isSameMessageExplicitDocumentSubmission,
+  mergeDocumentSourceType,
   normalizeDocumentSourceDate,
   normalizeDocumentSourceOptionalString,
   normalizeDocumentSourceRequiredString,
@@ -174,6 +175,15 @@ export function createPostgresDocumentSourceRegistry(
         "submittedByUserId",
         input.submittedByUserId,
       );
+      const submissionGroupId = normalizeOptional(
+        "submissionGroupId",
+        input.submissionGroupId,
+      );
+      const submissionMessageId = normalizeOptional(
+        "submissionMessageId",
+        input.submissionMessageId,
+      );
+      requirePairedSubmissionProvenance(submissionGroupId, submissionMessageId);
 
       return registerSource(pool, resolvedDependencies, {
         sourceType: "user_submitted_document",
@@ -188,8 +198,8 @@ export function createPostgresDocumentSourceRegistry(
         evidence: {
           kind: "user_submission",
           sourceUri,
-          groupId: undefined,
-          messageId: undefined,
+          groupId: submissionGroupId,
+          messageId: submissionMessageId,
           userId: submittedByUserId,
           spaceId: undefined,
           observedAt: normalizeDocumentSourceDate("observedAt", input.observedAt),
@@ -418,10 +428,23 @@ on conflict (source_uri) do nothing
     );
 
     const existing = await getSourceByUriForUpdate(client, next.sourceUri);
-    const mergedSourceType = higherPriorityDocumentSourceType(
+    const existingEvidence =
+      (await fetchEvidenceBySourceId(client, [existing.id])).get(existing.id) ?? [];
+    const mergedSourceType = mergeDocumentSourceType(
       existing.source_type,
       next.sourceType,
+      existingEvidence,
+      next.evidence,
     );
+    const sameMessageExplicitSubmission = isSameMessageExplicitDocumentSubmission(
+      existing.source_type,
+      next.sourceType,
+      existingEvidence,
+      next.evidence,
+    );
+    const incomingKnowledgeDraftCapability = sameMessageExplicitSubmission
+      ? false
+      : next.canUseForKnowledgeDrafts;
 
     await client.query(
       `
@@ -436,6 +459,9 @@ set
   can_use_for_knowledge_drafts = case
     when permission_state = 'denied' then false
     when knowledge_drafts_policy_overridden then can_use_for_knowledge_drafts
+    when source_type = 'group_visible_document'
+      and $1 = 'user_submitted_document'
+    then $7
     when can_use_for_knowledge_drafts then true
     when source_type = 'user_submitted_document' then $7
     else false
@@ -466,6 +492,9 @@ set
         case
           when permission_state = 'denied' then false
           when knowledge_drafts_policy_overridden then can_use_for_knowledge_drafts
+          when source_type = 'group_visible_document'
+            and $1 = 'user_submitted_document'
+          then $7
           when can_use_for_knowledge_drafts then true
           when source_type = 'user_submitted_document' then $7
           else false
@@ -493,7 +522,7 @@ where id = $9
         next.originMessageId ?? null,
         next.submittedByUserId ?? null,
         next.authorizedSpaceId ?? null,
-        next.canUseForKnowledgeDrafts,
+        incomingKnowledgeDraftCapability,
         now,
         existing.id,
         next.evidence.kind,
@@ -735,4 +764,15 @@ function normalizeOptional(
   maxLength?: number,
 ): string | undefined {
   return normalizeDocumentSourceOptionalString(fieldName, value, maxLength);
+}
+
+function requirePairedSubmissionProvenance(
+  submissionGroupId: string | undefined,
+  submissionMessageId: string | undefined,
+): void {
+  if ((submissionGroupId === undefined) !== (submissionMessageId === undefined)) {
+    throw new DocumentSourceValidationError(
+      "submissionGroupId and submissionMessageId must be provided together",
+    );
+  }
 }

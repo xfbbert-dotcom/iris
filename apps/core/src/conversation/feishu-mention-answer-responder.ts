@@ -177,6 +177,8 @@ export function createFeishuMentionAnswerResponder({
           await userSubmittedDocumentRegistrar.registerUserSubmittedDocument({
             sourceUri: userSubmittedDocumentCommand.sourceUri,
             submittedByUserId: normalizedSenderId,
+            submissionGroupId: input.chatId,
+            submissionMessageId: input.messageId,
             observedAt: input.observedAt ?? new Date(),
           });
           const result = toRepliedResult(

@@ -195,6 +195,7 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
       "begin",
       "insert source",
       "select source for update",
+      "select evidence",
       "update source",
       "insert evidence",
       "select source",
@@ -313,6 +314,96 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
       null,
       "space-1",
     ]);
+  });
+
+  it("keeps a user submission canonical when generic discovery is from the same message", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "user_submitted_document",
+        origin_group_id: null,
+        origin_message_id: null,
+        submitted_by_user_id: "user-1",
+        can_use_for_knowledge_drafts: false,
+      }),
+      evidenceRows: [
+        makeEvidenceRow({
+          kind: "user_submission",
+          group_id: "group-1",
+          message_id: "message-1",
+          user_id: "user-1",
+        }),
+      ],
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedByUserId: "user-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+    expect(update?.values?.[0]).toBe("user_submitted_document");
+    expect(update?.values?.[6]).toBe(false);
+  });
+
+  it("keeps the Postgres same-message result canonical when discovery runs first", async () => {
+    const fake = createFakePool({
+      sourceRow: makeSourceRow({
+        source_type: "group_visible_document",
+        can_use_for_knowledge_drafts: true,
+      }),
+      evidenceRows: [
+        makeEvidenceRow({
+          kind: "group_message",
+          group_id: "group-1",
+          message_id: "message-1",
+          user_id: "user-1",
+        }),
+      ],
+    });
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    await registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/doc",
+      submittedByUserId: "user-1",
+      submissionGroupId: "group-1",
+      submissionMessageId: "message-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+
+    const update = fake.queries.find((query) => {
+      const normalized = normalizeSql(query.sql);
+      return (
+        normalized.startsWith("update document_sources") &&
+        !normalized.includes("returning *")
+      );
+    });
+    expect(update?.values?.[0]).toBe("user_submitted_document");
+    expect(update?.values?.[6]).toBe(false);
+  });
+
+  it("requires Postgres user-submission group and message provenance together", () => {
+    const fake = createFakePool();
+    const registry = createPostgresDocumentSourceRegistry(fake.pool);
+
+    expect(() =>
+      registry.registerUserSubmittedDocument({
+        sourceUri: "https://example.com/doc",
+        submittedByUserId: "user-1",
+        submissionGroupId: "group-1",
+        observedAt: new Date("2026-07-28T11:29:00.000Z"),
+      }),
+    ).toThrow("submissionGroupId and submissionMessageId must be provided together");
+    expect(fake.queries).toEqual([]);
   });
 
   it("does not silently re-enable manually disabled knowledge drafts for knowledge-capable sources", async () => {
@@ -530,6 +621,7 @@ describe("createPostgresDocumentSourceRegistry without a database", () => {
       "begin",
       "insert source",
       "select source for update",
+      "select evidence",
       "update source",
       "insert evidence",
       "rollback",
@@ -786,5 +878,44 @@ runIfDatabase("createPostgresDocumentSourceRegistry", () => {
 
     expect(reregistered.id).toBe(first.id);
     expect(reregistered.canUseForAnswering).toBe(false);
+  });
+
+  it("preserves explicit same-message submissions in both registration orders", async () => {
+    const registry = createPostgresDocumentSourceRegistry(pool, {
+      createId: () => randomUUID(),
+      now: () => new Date("2026-07-28T11:30:00.000Z"),
+    });
+
+    for (const order of ["user-first", "group-first"] as const) {
+      const sourceUri = `${testSourcePrefix}${order}`;
+      const userSubmission = {
+        sourceUri,
+        submittedByUserId: "user-1",
+        submissionGroupId: "group-1",
+        submissionMessageId: `message-${order}`,
+        observedAt: new Date("2026-07-28T11:29:00.000Z"),
+      };
+      const groupDiscovery = {
+        sourceUri,
+        originGroupId: "group-1",
+        originMessageId: `message-${order}`,
+        observedByUserId: "user-1",
+        observedAt: new Date("2026-07-28T11:29:00.000Z"),
+      };
+
+      if (order === "user-first") {
+        await registry.registerUserSubmittedDocument(userSubmission);
+        await registry.registerGroupVisibleDocument(groupDiscovery);
+      } else {
+        await registry.registerGroupVisibleDocument(groupDiscovery);
+        await registry.registerUserSubmittedDocument(userSubmission);
+      }
+      await registry.registerUserSubmittedDocument(userSubmission);
+      const source = await registry.registerGroupVisibleDocument(groupDiscovery);
+
+      expect(source.sourceType).toBe("user_submitted_document");
+      expect(source.canUseForKnowledgeDrafts).toBe(false);
+      expect(source.evidence).toHaveLength(2);
+    }
   });
 });

@@ -15,8 +15,9 @@ The gate passes only when all of the following are true:
 2. The pilot user shares the document with the Iris app before submission.
 3. A real pilot-group message matching `@Iris 请收录这个文档 <URL>` produces the bounded receipt
    confirmation.
-4. Exactly one `user_submitted_document` source exists for the canonical URL and contains the
-   submitting user evidence.
+4. Exactly one `user_submitted_document` source exists for the canonical URL, keeps
+   `canUseForKnowledgeDrafts=false`, and contains exactly one submitting-user evidence item plus
+   one same-message group evidence item.
 5. Document sync reaches `synced`, permission state reaches `allowed`, and an indexed snapshot is
    available.
 6. A later real `@Iris` question returns the unique marker from that document and cites the same
@@ -99,7 +100,9 @@ Expected reply:
 The operator then verifies internally, without printing document body content:
 
 - canonical URL and `sourceType=user_submitted_document`;
-- one source row and one user-submission evidence item for the message;
+- one source row, one user-submission evidence item, and one group-message evidence item with the
+  same canonical URL, group ID, and message ID;
+- `canUseForKnowledgeDrafts=false`;
 - permission state `allowed`;
 - sync state `synced`;
 - latest snapshot and indexed fragment counts are non-zero;

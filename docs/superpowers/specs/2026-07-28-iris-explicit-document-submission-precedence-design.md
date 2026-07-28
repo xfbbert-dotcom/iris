@@ -63,6 +63,10 @@ If any group-message evidence has no matching explicit submission, normal
 precedence applies and the source is `group_visible_document`. An authorized
 wiki source always remains `authorized_wiki_document`.
 
+The same-message mechanical duplicate also does not upgrade
+`canUseForKnowledgeDrafts`: the canonical user-submitted default remains
+`false`. A policy explicitly changed by an administrator remains authoritative.
+
 ## Security And Scope Invariants
 
 - Do not raise the global priority of `user_submitted_document`.
@@ -77,6 +81,7 @@ wiki source always remains `authorized_wiki_document`.
 - The real command shape produces one source with type
   `user_submitted_document`, one user-submission evidence row, and one
   group-message evidence row.
+- Its default `canUseForKnowledgeDrafts` remains `false`.
 - Reversing registration order produces the same result.
 - Replaying either registration does not duplicate evidence.
 - A later ordinary group mention upgrades the source to

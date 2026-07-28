@@ -200,6 +200,8 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(registerUserSubmittedDocument).toHaveBeenCalledWith({
       sourceUri: "https://docs.feishu.cn/docx/user_doc_token_1",
       submittedByUserId: "ou_alice",
+      submissionGroupId: "oc_group_1",
+      submissionMessageId: "om_user_doc_submission",
       observedAt: new Date("2026-07-24T02:30:00.000Z"),
     });
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
@@ -241,6 +243,8 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(registerUserSubmittedDocument).toHaveBeenCalledWith({
       sourceUri: "https://tcnmvzw006k7.feishu.cn/wiki/N2cswiBleiiyOokzJotcnDTunxe",
       submittedByUserId: "ou_alice",
+      submissionGroupId: "oc_group_1",
+      submissionMessageId: "om_user_doc_submission_cn",
       observedAt: new Date("2026-07-24T03:00:00.000Z"),
     });
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
