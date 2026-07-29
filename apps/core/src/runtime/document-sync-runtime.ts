@@ -137,7 +137,7 @@ export type DocumentSyncRuntime = {
     delete(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
     replayBatch(input: { ids: string[] }): Promise<ReplayDocumentSyncDeadLettersResult>;
   };
-  wikiSpaces?: {
+  wikiSpaces: {
     register(input: { rootSourceUri: string; at: Date }): Promise<{
       authorization: WikiSpaceAuthorization;
       created: boolean;
@@ -385,65 +385,105 @@ function createEnabledDocumentSyncRuntime({
   const feishuConfig = readFeishuOpenApiConfig(env);
   const embeddingConfig = readDocumentSyncReindexEmbeddingConfig(env);
   const pool = createPool(readDatabaseConfig(env));
-  const redis = createRedis(runtimeConfig.redisUrl);
-  const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
-  const documentSources = createDocumentSources(pool);
-  const snapshots = createSnapshots({ queryable: pool });
-  const tokenProvider = createTokenProvider({
-    baseUrl: feishuConfig.baseUrl,
-    appId: feishuConfig.appId,
-    appSecret: feishuConfig.appSecret,
-    timeoutMs: feishuConfig.documentFetchTimeoutMs,
-  });
-  const fetcher = createBodyFetcher({
-    baseUrl: feishuConfig.baseUrl,
-    tokenProvider,
-    timeoutMs: feishuConfig.documentFetchTimeoutMs,
-    maxContentChars: feishuConfig.documentMaxContentChars,
-  });
-  const queue = createQueue(createLazyRedisDocumentSyncQueueClient(redisConnection));
-  const manualPlanner = createManualPlanner({
-    registry: documentSources,
-    queue,
-  });
-  const wikiSpaceRepository = createWikiSpaceRepository({
-    dataSource: pool as unknown as WikiSpaceAuthorizationDataSource,
-  });
-  const wikiSpaceLoop = createWikiSpaceRuntimeLoop({
-    config: wikiSpaceRuntimeConfig,
-    feishuConfig,
-    tokenProvider,
-    repository: wikiSpaceRepository,
-    documentSources,
-    manualPlanner,
-    createWikiClient,
-    scanWikiSpace,
-    createWikiWorker,
-    createWikiLoop,
-  });
-  const syncedSnapshotReindexer = createSyncedSnapshotReindexer({
-    embeddingConfig,
-    createReindexQueue,
-    createReindexPlanner,
-    snapshots,
-    redisConnection,
-  });
-  const runner: DocumentSyncRunner = createRunner({
-    registry: documentSources,
-    snapshots,
-    fetcher,
-    ...(syncedSnapshotReindexer === undefined ? {} : { syncedSnapshotReindexer }),
-  });
-  const worker = createWorker({
-    queue,
-    runner,
-  });
-  const loop: DocumentSyncWorkerLoop = createLoop({
-    worker,
-    intervalMs: runtimeConfig.intervalMs,
-    batchLimit: runtimeConfig.batchLimit,
-    onError: () => undefined,
-  });
+  let redis: RedisClient;
+  try {
+    redis = createRedis(runtimeConfig.redisUrl);
+  } catch (error) {
+    cleanupFailedDocumentSyncRuntimeConstruction({ pool });
+    throw error;
+  }
+  let resolveRedisConnection: (client: RedisClient) => void = () => undefined;
+  let rejectRedisConnection: (error: unknown) => void = () => undefined;
+  const redisConnection = observeStartupPromise(new Promise<RedisClient>((resolve, reject) => {
+    resolveRedisConnection = resolve;
+    rejectRedisConnection = reject;
+  }));
+  const constructRuntimeComponent = <T>(construct: () => T): T => {
+    try {
+      return construct();
+    } catch (error) {
+      cleanupFailedDocumentSyncRuntimeConstruction({ redis, pool });
+      throw error;
+    }
+  };
+
+  const documentSources = constructRuntimeComponent(() => createDocumentSources(pool));
+  const snapshots = constructRuntimeComponent(() => createSnapshots({ queryable: pool }));
+  const tokenProvider = constructRuntimeComponent(() =>
+    createTokenProvider({
+      baseUrl: feishuConfig.baseUrl,
+      appId: feishuConfig.appId,
+      appSecret: feishuConfig.appSecret,
+      timeoutMs: feishuConfig.documentFetchTimeoutMs,
+    }),
+  );
+  const fetcher = constructRuntimeComponent(() =>
+    createBodyFetcher({
+      baseUrl: feishuConfig.baseUrl,
+      tokenProvider,
+      timeoutMs: feishuConfig.documentFetchTimeoutMs,
+      maxContentChars: feishuConfig.documentMaxContentChars,
+    }),
+  );
+  const queue = constructRuntimeComponent(() =>
+    createQueue(createLazyRedisDocumentSyncQueueClient(redisConnection)),
+  );
+  const manualPlanner = constructRuntimeComponent(() =>
+    createManualPlanner({
+      registry: documentSources,
+      queue,
+    }),
+  );
+  const wikiSpaceRepository = constructRuntimeComponent(() =>
+    createWikiSpaceRepository({
+      dataSource: pool as unknown as WikiSpaceAuthorizationDataSource,
+    }),
+  );
+  const wikiSpaceLoop = constructRuntimeComponent(() =>
+    createWikiSpaceRuntimeLoop({
+      config: wikiSpaceRuntimeConfig,
+      feishuConfig,
+      tokenProvider,
+      repository: wikiSpaceRepository,
+      documentSources,
+      manualPlanner,
+      createWikiClient,
+      scanWikiSpace,
+      createWikiWorker,
+      createWikiLoop,
+    }),
+  );
+  const syncedSnapshotReindexer = constructRuntimeComponent(() =>
+    createSyncedSnapshotReindexer({
+      embeddingConfig,
+      createReindexQueue,
+      createReindexPlanner,
+      snapshots,
+      redisConnection,
+    }),
+  );
+  const runner: DocumentSyncRunner = constructRuntimeComponent(() =>
+    createRunner({
+      registry: documentSources,
+      snapshots,
+      fetcher,
+      ...(syncedSnapshotReindexer === undefined ? {} : { syncedSnapshotReindexer }),
+    }),
+  );
+  const worker = constructRuntimeComponent(() => createWorker({ queue, runner }));
+  const loop: DocumentSyncWorkerLoop = constructRuntimeComponent(() =>
+    createLoop({
+      worker,
+      intervalMs: runtimeConfig.intervalMs,
+      batchLimit: runtimeConfig.batchLimit,
+      onError: () => undefined,
+    }),
+  );
+  const redisStartup = constructRuntimeComponent(() => redis.connect());
+  void redisStartup.then(
+    () => resolveRedisConnection(redis),
+    (error) => rejectRedisConnection(error),
+  );
 
   return {
     start() {
@@ -613,6 +653,27 @@ function createEnabledDocumentSyncRuntime({
       ]);
     },
   };
+}
+
+function cleanupFailedDocumentSyncRuntimeConstruction({
+  redis,
+  pool,
+}: {
+  redis?: RedisClient;
+  pool: PostgresPool;
+}): void {
+  if (redis !== undefined) {
+    ignoreCleanupFailure(() => redis.quit());
+  }
+  ignoreCleanupFailure(() => pool.end());
+}
+
+function ignoreCleanupFailure(cleanup: () => Promise<unknown>): void {
+  try {
+    void cleanup().catch(() => undefined);
+  } catch {
+    // Preserve the synchronous runtime construction error.
+  }
 }
 
 function createWikiSpaceRuntimeLoop({

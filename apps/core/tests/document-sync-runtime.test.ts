@@ -48,6 +48,55 @@ describe("createDocumentSyncRuntime", () => {
     expect(redisClient.connect).not.toHaveBeenCalled();
   });
 
+  it("releases owned resources without masking a synchronous wiki composition failure", async () => {
+    const constructionError = new Error("wiki repository construction failed");
+    const pool = {
+      query: vi.fn(),
+      end: vi.fn(async () => {
+        throw new Error("pool cleanup failed");
+      }),
+    };
+    const redisClient = {
+      connect: vi.fn(async () => redisClient),
+      quit: vi.fn(async () => {
+        throw new Error("redis cleanup failed");
+      }),
+    };
+    const dependencies = {
+      createPostgresPool: vi.fn(() => pool),
+      createRedisClient: vi.fn(() => redisClient),
+      createDocumentSourceRegistry: vi.fn(() => ({})),
+      createDocumentSnapshotRepository: vi.fn(() => ({})),
+      createFeishuTenantAccessTokenProvider: vi.fn(() => ({})),
+      createFeishuDocumentBodyFetcher: vi.fn(() => ({})),
+      createDocumentSyncQueue: vi.fn(() => ({})),
+      createManualDocumentSyncPlanner: vi.fn(() => ({})),
+      createWikiSpaceAuthorizationRepository: vi.fn(() => {
+        throw constructionError;
+      }),
+    };
+
+    let thrown: unknown;
+    try {
+      createDocumentSyncRuntime({
+        env: {
+          ...enabledEnv(),
+          IRIS_EMBEDDING_PROVIDER: undefined,
+          IRIS_WIKI_SPACE_SYNC_ENABLED: "true",
+        },
+        dependencies: dependencies as never,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(thrown).toBe(constructionError);
+    expect(redisClient.quit).toHaveBeenCalledOnce();
+    expect(pool.end).toHaveBeenCalledOnce();
+    expect(redisClient.connect).not.toHaveBeenCalled();
+  });
+
   it("composes wiki space sync with shared runtime dependencies", async () => {
     const authorization = {
       id: "wiki-authorization-1",
@@ -208,7 +257,9 @@ describe("createDocumentSyncRuntime", () => {
     });
 
     expect(runtime).toMatchObject({ wikiSpaces: expect.any(Object) });
-    if (runtime === undefined || !("wikiSpaces" in runtime)) return;
+    if (runtime === undefined) {
+      throw new Error("document sync runtime was not created");
+    }
     expect(dependencies.createWikiSpaceAuthorizationRepository).toHaveBeenCalledWith({
       dataSource: pool,
     });
@@ -229,14 +280,7 @@ describe("createDocumentSyncRuntime", () => {
       intervalMs: 1_000,
       onError: expect.any(Function),
     });
-    const wikiSpaces = (runtime as unknown as {
-      wikiSpaces: {
-        register(input: { rootSourceUri: string; at: Date }): Promise<unknown>;
-        list(input: { limit: number }): Promise<unknown>;
-        requestScan(input: { id: string; at: Date }): Promise<unknown>;
-        setEnabled(input: { id: string; enabled: boolean; at: Date }): Promise<unknown>;
-      };
-    }).wikiSpaces;
+    const wikiSpaces = runtime.wikiSpaces;
 
     const at = new Date("2026-07-29T02:00:00.000Z");
     await expect(wikiSpaces.register({
