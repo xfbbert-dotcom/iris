@@ -84,6 +84,39 @@ describe("scanFeishuWikiSpace", () => {
     expect(result.skippedNodeCount).toBe(1);
   });
 
+  it("stops pagination and child expansion once maxNodes is reached", async () => {
+    const listCalls: Array<{ parentNodeToken: string; pageToken?: string }> = [];
+    const client: FeishuWikiSpaceClient = {
+      getNode: async () => wikiNode("root", { hasChild: true }),
+      listChildren: async ({ parentNodeToken, pageToken }) => {
+        listCalls.push({
+          parentNodeToken,
+          ...(pageToken === undefined ? {} : { pageToken }),
+        });
+        if (parentNodeToken === "root" && pageToken === undefined) {
+          return {
+            nodes: [wikiNode("child", { hasChild: true })],
+            nextPageToken: "next-root-page",
+          };
+        }
+        if (parentNodeToken === "root") {
+          return { nodes: [wikiNode("overflow")] };
+        }
+        return { nodes: [wikiNode("grandchild")] };
+      },
+    };
+
+    const result = await scanFeishuWikiSpace({
+      client,
+      rootNodeToken: "root",
+      maxNodes: 2,
+    });
+
+    expect(result.documents.map((document) => document.nodeToken)).toEqual(["root", "child"]);
+    expect(result.discoveredNodeCount).toBe(2);
+    expect(listCalls).toEqual([{ parentNodeToken: "root" }]);
+  });
+
   it("does not traverse descendants beyond maxDepth", async () => {
     const nodes = Array.from({ length: 22 }, (_, index) => wikiNode(`node-${index}`, { hasChild: index < 21 }));
     const children = Object.fromEntries(nodes.slice(0, -1).map((item, index) => [item.nodeToken, [nodes[index + 1]]]));

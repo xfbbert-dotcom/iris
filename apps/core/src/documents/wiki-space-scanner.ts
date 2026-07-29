@@ -50,6 +50,7 @@ export async function scanFeishuWikiSpace({
       skippedNodeCount += 1;
       continue;
     }
+    if (discoveredNodeCount >= safeMaxNodes) continue;
 
     let pageToken: string | undefined;
     const pageTokens = new Set<string>();
@@ -73,6 +74,7 @@ export async function scanFeishuWikiSpace({
         discoveredNodeCount += 1;
         queue.push({ node: child, depth: depth + 1 });
       }
+      if (discoveredNodeCount >= safeMaxNodes) break;
       pageToken = page.nextPageToken;
       if (pageToken !== undefined && (pageTokens.has(pageToken) || pageTokens.size >= safeMaxNodes)) {
         throw new Error("Feishu wiki space pagination did not advance");
