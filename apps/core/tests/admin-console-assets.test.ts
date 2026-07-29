@@ -57,6 +57,138 @@ describe("admin console assets", () => {
     expect(script).not.toContain("rawContent");
   });
 
+  it("renders compact wiki space controls adjacent to document sources", () => {
+    const html = renderAdminConsoleHtml();
+    const css = renderAdminConsoleCss();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("Wiki Spaces");
+    expect(html.indexOf('class="document-source-panel"')).toBeLessThan(html.indexOf('class="wiki-space-panel"'));
+    expect(html).toContain("wiki-space-root-source-uri");
+    expect(html).toContain("wiki-space-form");
+    expect(html).toContain("wiki-space-refresh");
+    expect(html).toContain("wiki-space-rows");
+    expect(html).toContain("wiki-space-loading");
+    expect(html).toContain("wiki-space-error");
+    expect(html).toContain("wiki-space-empty");
+    expect(html).toContain('title="Refresh wiki spaces"');
+    expect(css).toContain(".wiki-space-table");
+    expect(css).toContain("table-layout: fixed");
+    expect(script).toContain("/internal/document-sync/wiki-spaces?limit=20");
+    expect(script).toContain('rescanButton.title = "Rescan wiki space"');
+    expect(script).toContain("checkbox.type = \"checkbox\"");
+    expect(script).not.toContain(".innerHTML");
+  });
+
+  it("registers a wiki root and refreshes the authorization list", async () => {
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/document-sync/wiki-spaces") {
+        return Promise.resolve(jsonResponse({ ok: true, authorization: wikiSpace("space-1") }));
+      }
+      if (path === "/internal/document-sync/wiki-spaces?limit=20") {
+        return Promise.resolve(jsonResponse({ ok: true, wikiSpaces: [] }));
+      }
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    const rootSourceUri = "https://tenant.feishu.cn/wiki/root_1?from=space";
+    console.element("wiki-space-root-source-uri").value = rootSourceUri;
+
+    await console.trigger("wiki-space-form", "submit");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/internal/document-sync/wiki-spaces",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ rootSourceUri }) }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(2, "/internal/document-sync/wiki-spaces?limit=20", expect.anything());
+    expect(console.element("wiki-space-root-source-uri").value).toBe("");
+    expect(console.element("event-log").children[0]!.textContent).toContain("Wiki space registered: space-1");
+  });
+
+  it("keeps only the latest wiki space refresh when requests resolve out of order", async () => {
+    const first = deferred<ResponseStub>();
+    const second = deferred<ResponseStub>();
+    const responses = [first, second];
+    const fetch = vi.fn(() => {
+      const response = responses.shift();
+      if (response === undefined) throw new Error("unexpected_request");
+      return response.promise;
+    });
+    const console = runAdminConsole(fetch);
+
+    const firstRefresh = console.trigger("wiki-space-refresh", "click");
+    expect(console.element("wiki-space-loading").textContent).toBe("Loading wiki spaces...");
+    const secondRefresh = console.trigger("wiki-space-refresh", "click");
+    second.resolve(jsonResponse({ ok: true, wikiSpaces: [wikiSpace("space-b", { title: "current" })] }));
+    await secondRefresh;
+    first.resolve(jsonResponse({ ok: true, wikiSpaces: [wikiSpace("space-a", { title: "stale" })] }));
+    await firstRefresh;
+
+    const rows = console.element("wiki-space-rows");
+    expect(rows.children).toHaveLength(1);
+    expect(rows.children[0]!.children[0]!.children[0]!.textContent).toBe("current");
+    expect(console.element("wiki-space-loading").textContent).toBe("");
+  });
+
+  it("renders wiki server strings through DOM text nodes", async () => {
+    const console = runAdminConsole(() => Promise.resolve(jsonResponse({
+      ok: true,
+      wikiSpaces: [wikiSpace("space-b", { title: "<img src=x onerror=alert(1)>" })],
+    })));
+
+    await console.trigger("wiki-space-refresh", "click");
+
+    expect(console.element("wiki-space-rows").children[0]!.children[0]!.children[0]!.textContent).toBe(
+      "<img src=x onerror=alert(1)>",
+    );
+  });
+
+  it("reports a wiki space loading failure without an empty state", async () => {
+    const failedConsole = runAdminConsole(() => Promise.reject(new Error("wiki_space_operation_failed")));
+    await failedConsole.trigger("wiki-space-refresh", "click");
+    expect(failedConsole.element("wiki-space-error").textContent).toBe(
+      "Unable to load wiki spaces: wiki_space_operation_failed",
+    );
+    expect(failedConsole.element("wiki-space-empty").textContent).toBe("");
+  });
+
+  it("rescans a wiki space and persists enabled changes through the Task 5 endpoints", async () => {
+    const authorization = wikiSpace("space/1");
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/document-sync/wiki-spaces?limit=20") {
+        return Promise.resolve(jsonResponse({ ok: true, wikiSpaces: [authorization] }));
+      }
+      if (path === "/internal/document-sync/wiki-spaces/space%2F1/rescan") {
+        return Promise.resolve(jsonResponse({ ok: true, authorization }));
+      }
+      if (path === "/internal/document-sync/wiki-spaces/space%2F1") {
+        return Promise.resolve(jsonResponse({ ok: true, authorization: { ...authorization, enabled: false } }));
+      }
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+
+    await console.trigger("wiki-space-refresh", "click");
+    const rescanButton = console.allElements().find((element) => element.title === "Rescan wiki space");
+    const enabled = console.allElements().find((element) => element.type === "checkbox");
+    expect(rescanButton).toBeDefined();
+    expect(enabled).toBeDefined();
+
+    await rescanButton!.trigger("click");
+    enabled!.checked = false;
+    await enabled!.trigger("change");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/internal/document-sync/wiki-spaces/space%2F1/rescan",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/internal/document-sync/wiki-spaces/space%2F1",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ enabled: false }) }),
+    );
+  });
+
   it("renders a redacted knowledge draft governance queue", () => {
     const html = renderAdminConsoleHtml();
     const script = renderAdminConsoleScript();
@@ -288,8 +420,10 @@ class FakeElement {
   readonly dataset: Record<string, string | undefined> = {};
   className = "";
   disabled = false;
+  checked = false;
   id = "";
   textContent = "";
+  title = "";
   type = "";
   value = "";
 
@@ -401,6 +535,26 @@ function feedbackSummary(groupId: string, helpfulCount: number) {
     helpfulRate: 1,
     activeSuppressionCount: 0,
     lastFeedbackAt: "2026-07-27T00:00:00.000Z",
+  };
+}
+
+function wikiSpace(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    rootSourceUri: "https://tenant.feishu.cn/wiki/root_1?from=space",
+    rootNodeToken: "root_1",
+    title: "Operations Wiki",
+    enabled: true,
+    scanState: "synced",
+    attemptCount: 0,
+    nextScanAt: "2026-07-30T00:00:00.000Z",
+    discoveredNodeCount: 4,
+    registeredDocumentCount: 3,
+    skippedNodeCount: 1,
+    revision: 1,
+    createdAt: "2026-07-29T00:00:00.000Z",
+    updatedAt: "2026-07-29T00:00:00.000Z",
+    ...overrides,
   };
 }
 

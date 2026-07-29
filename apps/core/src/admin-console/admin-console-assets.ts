@@ -152,6 +152,41 @@ export function renderAdminConsoleHtml(): string {
       <div id="document-source-empty" class="empty-state">Connect to load document sources.</div>
     </section>
 
+    <section class="wiki-space-panel" aria-labelledby="wiki-spaces-heading">
+      <div class="panel-heading">
+        <div>
+          <h2 id="wiki-spaces-heading">Wiki Spaces</h2>
+          <p>Register Feishu wiki roots and monitor scheduled scan state.</p>
+        </div>
+        <button id="wiki-space-refresh" type="button" class="secondary icon-button" title="Refresh wiki spaces" aria-label="Refresh wiki spaces">&#8635;</button>
+      </div>
+      <form id="wiki-space-form" class="wiki-space-form">
+        <label>
+          Wiki root URL
+          <input id="wiki-space-root-source-uri" type="url" placeholder="https://tenant.feishu.cn/wiki/...">
+        </label>
+        <button id="wiki-space-submit" type="submit" class="secondary">Register Wiki Space</button>
+      </form>
+      <div id="wiki-space-loading" class="loading-state" aria-live="polite"></div>
+      <div id="wiki-space-error" class="error-state" role="alert"></div>
+      <div class="table-wrap">
+        <table id="wiki-space-table" class="wiki-space-table">
+          <thead>
+            <tr>
+              <th>Wiki space</th>
+              <th>State</th>
+              <th>Documents</th>
+              <th>Next scan</th>
+              <th>Enabled</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="wiki-space-rows"></tbody>
+        </table>
+      </div>
+      <div id="wiki-space-empty" class="empty-state">Connect to load wiki spaces.</div>
+    </section>
+
     <section class="knowledge-draft-panel" aria-labelledby="knowledge-drafts-heading">
       <div class="panel-heading">
         <div>
@@ -455,7 +490,8 @@ h2 {
   .control-grid > article,
   .mvp-gate-panel,
   .document-source-panel,
-.knowledge-draft-panel,
+  .wiki-space-panel,
+  .knowledge-draft-panel,
 .publication-queue-panel,
 .proactive-candidate-panel,
 .audit-summary-panel,
@@ -573,6 +609,11 @@ dd {
   padding: 16px;
 }
 
+.wiki-space-panel {
+  margin-top: 16px;
+  padding: 16px;
+}
+
 .mvp-gate-panel {
   margin-top: 16px;
   padding: 16px;
@@ -627,6 +668,26 @@ dd {
 
 .manual-source-form button {
   min-height: 42px;
+}
+
+.wiki-space-form {
+  display: grid;
+  grid-template-columns: minmax(280px, 2fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-top: 14px;
+}
+
+.wiki-space-form button {
+  min-height: 42px;
+}
+
+.icon-button {
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .table-wrap {
@@ -685,6 +746,73 @@ td.source-title {
   max-width: 300px;
 }
 
+.wiki-space-table {
+  min-width: 760px;
+  table-layout: fixed;
+}
+
+.wiki-space-table th:nth-child(1),
+.wiki-space-table td:nth-child(1) {
+  width: 30%;
+}
+
+.wiki-space-table th:nth-child(2),
+.wiki-space-table td:nth-child(2) {
+  width: 16%;
+}
+
+.wiki-space-table th:nth-child(3),
+.wiki-space-table td:nth-child(3) {
+  width: 16%;
+}
+
+.wiki-space-table th:nth-child(4),
+.wiki-space-table td:nth-child(4) {
+  width: 18%;
+}
+
+.wiki-space-table th:nth-child(5),
+.wiki-space-table td:nth-child(5) {
+  width: 10%;
+}
+
+.wiki-space-table th:nth-child(6),
+.wiki-space-table td:nth-child(6) {
+  width: 10%;
+}
+
+.wiki-space-primary,
+.wiki-space-secondary {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiki-space-secondary {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wiki-space-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.wiki-space-toggle {
+  display: inline-grid;
+  grid-template-columns: 16px auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+.wiki-space-toggle input {
+  min-height: auto;
+  width: 16px;
+}
+
 .source-uri {
   color: var(--muted);
   font-size: 12px;
@@ -712,6 +840,15 @@ td.source-title {
 
 .empty-state {
   margin-top: 10px;
+}
+
+.loading-state,
+.error-state {
+  margin-top: 10px;
+}
+
+.error-state {
+  color: var(--danger);
 }
 
 .compact-status {
@@ -750,7 +887,8 @@ td.source-title {
   .status-grid,
   .control-grid,
   .source-filters,
-  .manual-source-form {
+  .manual-source-form,
+  .wiki-space-form {
     grid-template-columns: 1fr;
   }
 
@@ -786,6 +924,14 @@ const userDocumentSubmitter = document.getElementById("user-document-submitter")
 const userDocumentSubmit = document.getElementById("user-document-submit");
 const documentSourceRows = document.getElementById("document-source-rows");
 const documentSourceEmpty = document.getElementById("document-source-empty");
+const wikiSpaceRefresh = document.getElementById("wiki-space-refresh");
+const wikiSpaceForm = document.getElementById("wiki-space-form");
+const wikiSpaceRootSourceUri = document.getElementById("wiki-space-root-source-uri");
+const wikiSpaceSubmit = document.getElementById("wiki-space-submit");
+const wikiSpaceRows = document.getElementById("wiki-space-rows");
+const wikiSpaceLoading = document.getElementById("wiki-space-loading");
+const wikiSpaceError = document.getElementById("wiki-space-error");
+const wikiSpaceEmpty = document.getElementById("wiki-space-empty");
 const knowledgeDraftRefresh = document.getElementById("knowledge-draft-refresh");
 const knowledgeDraftStatus = document.getElementById("knowledge-draft-status");
 const knowledgeDraftStatusFilter = document.getElementById("knowledge-draft-status-filter");
@@ -826,8 +972,11 @@ const capabilityLabels = {
 
 let cachedStatus = undefined;
 let proactiveCandidateRefreshGeneration = 0;
+let wikiSpaceRefreshGeneration = 0;
 const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
 const userSubmittedDocumentPath = "/internal/document-sync/user-submitted-documents";
+const wikiSpaceListPath = "/internal/document-sync/wiki-spaces?limit=20";
+const wikiSpaceBasePath = "/internal/document-sync/wiki-spaces";
 const knowledgeDraftListBasePath = "/internal/knowledge-drafts?limit=20";
 const knowledgeDraftRequestRevisionPath = "/request-revision";
 const knowledgeDraftRejectPath = "/reject";
@@ -1060,6 +1209,135 @@ async function registerUserSubmittedDocument() {
       submittedByUserId,
       ...(title.length === 0 ? {} : { title }),
     }),
+  });
+}
+
+function wikiSpacePath(id, suffix = "") {
+  return wikiSpaceBasePath + "/" + encodeURIComponent(id) + suffix;
+}
+
+function renderWikiSpaceEnabledToggle(wikiSpace) {
+  const label = document.createElement("label");
+  label.className = "wiki-space-toggle";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = wikiSpace.enabled === true;
+  checkbox.addEventListener("change", async () => {
+    checkbox.disabled = true;
+    try {
+      await requestJson(wikiSpacePath(wikiSpace.id), {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: checkbox.checked }),
+      });
+      addEvent("Wiki space " + (checkbox.checked ? "enabled: " : "disabled: ") + text(wikiSpace.id));
+      await refreshWikiSpaces();
+    } catch (error) {
+      checkbox.checked = !checkbox.checked;
+      addEvent("Wiki space enabled update failed: " + error.message);
+      setConnection("Request failed", "warn");
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+  const labelCopy = document.createElement("span");
+  labelCopy.textContent = "Enabled";
+  label.append(checkbox, labelCopy);
+  return label;
+}
+
+function renderWikiSpaces(wikiSpaces) {
+  const visibleSpaces = Array.isArray(wikiSpaces) ? wikiSpaces : [];
+  wikiSpaceRows.replaceChildren();
+  for (const wikiSpace of visibleSpaces) {
+    const row = document.createElement("tr");
+
+    const spaceCell = document.createElement("td");
+    const title = document.createElement("strong");
+    title.className = "wiki-space-primary";
+    title.textContent = text(wikiSpace.title, wikiSpace.id);
+    const rootSourceUri = document.createElement("div");
+    rootSourceUri.className = "wiki-space-secondary";
+    rootSourceUri.textContent = text(wikiSpace.rootSourceUri, wikiSpace.id);
+    spaceCell.append(title, rootSourceUri);
+
+    const stateCell = document.createElement("td");
+    stateCell.textContent = text(wikiSpace.scanState);
+    if (wikiSpace.lastErrorClassification) {
+      const error = document.createElement("div");
+      error.className = "wiki-space-secondary";
+      error.textContent = text(wikiSpace.lastErrorClassification);
+      stateCell.append(error);
+    }
+
+    const documentsCell = document.createElement("td");
+    documentsCell.textContent =
+      text(wikiSpace.registeredDocumentCount, "0") + " registered / " + text(wikiSpace.discoveredNodeCount, "0") + " found";
+
+    const nextScanCell = document.createElement("td");
+    nextScanCell.textContent = text(wikiSpace.nextScanAt, "not scheduled");
+
+    const enabledCell = document.createElement("td");
+    enabledCell.append(renderWikiSpaceEnabledToggle(wikiSpace));
+
+    const actionsCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "wiki-space-actions";
+    const rescanButton = document.createElement("button");
+    rescanButton.type = "button";
+    rescanButton.className = "secondary icon-button";
+    rescanButton.title = "Rescan wiki space";
+    rescanButton.textContent = "\\u21bb";
+    rescanButton.addEventListener("click", async () => {
+      rescanButton.disabled = true;
+      try {
+        await requestJson(wikiSpacePath(wikiSpace.id, "/rescan"), {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        addEvent("Wiki space rescan requested: " + text(wikiSpace.id));
+        await refreshWikiSpaces();
+      } catch (error) {
+        addEvent("Wiki space rescan failed: " + error.message);
+        setConnection("Request failed", "warn");
+      } finally {
+        rescanButton.disabled = false;
+      }
+    });
+    actions.append(rescanButton);
+    actionsCell.append(actions);
+
+    row.append(spaceCell, stateCell, documentsCell, nextScanCell, enabledCell, actionsCell);
+    wikiSpaceRows.append(row);
+  }
+  wikiSpaceEmpty.textContent = visibleSpaces.length === 0 ? "No wiki spaces registered." : "";
+}
+
+async function refreshWikiSpaces() {
+  const generation = ++wikiSpaceRefreshGeneration;
+  wikiSpaceLoading.textContent = "Loading wiki spaces...";
+  wikiSpaceError.textContent = "";
+  wikiSpaceEmpty.textContent = "";
+  try {
+    const body = await requestJson(wikiSpaceListPath);
+    if (generation !== wikiSpaceRefreshGeneration) return;
+    renderWikiSpaces(body.wikiSpaces);
+  } catch (error) {
+    if (generation !== wikiSpaceRefreshGeneration) return;
+    wikiSpaceRows.replaceChildren();
+    wikiSpaceEmpty.textContent = "";
+    wikiSpaceError.textContent = "Unable to load wiki spaces: " + error.message;
+    throw error;
+  } finally {
+    if (generation === wikiSpaceRefreshGeneration) wikiSpaceLoading.textContent = "";
+  }
+}
+
+async function registerWikiSpace() {
+  const rootSourceUri = wikiSpaceRootSourceUri.value.trim();
+  if (rootSourceUri.length === 0) throw new Error("root_source_uri_required");
+  return requestJson(wikiSpaceBasePath, {
+    method: "POST",
+    body: JSON.stringify({ rootSourceUri }),
   });
 }
 
@@ -1663,6 +1941,7 @@ async function refresh() {
   ]);
   render(status, readiness, runtime);
   await refreshDocumentSources();
+  await refreshWikiSpaces();
   await refreshKnowledgeDrafts();
   await refreshPublicationQueue();
   await refreshAuditSummaries();
@@ -1713,6 +1992,35 @@ documentSourceRefresh.addEventListener("click", async () => {
     addEvent("Document source refresh failed: " + error.message);
   } finally {
     documentSourceRefresh.disabled = false;
+  }
+});
+
+wikiSpaceRefresh.addEventListener("click", async () => {
+  wikiSpaceRefresh.disabled = true;
+  try {
+    await refreshWikiSpaces();
+    addEvent("Wiki spaces refreshed");
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Wiki space refresh failed: " + error.message);
+  } finally {
+    wikiSpaceRefresh.disabled = false;
+  }
+});
+
+wikiSpaceForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  wikiSpaceSubmit.disabled = true;
+  try {
+    const body = await registerWikiSpace();
+    wikiSpaceRootSourceUri.value = "";
+    addEvent("Wiki space registered: " + text(body.authorization?.id, "unknown wiki space"));
+    await refreshWikiSpaces();
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Wiki space registration failed: " + error.message);
+  } finally {
+    wikiSpaceSubmit.disabled = false;
   }
 });
 
