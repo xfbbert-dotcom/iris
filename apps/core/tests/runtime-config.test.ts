@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
+import * as envConfig from "../src/config/env.js";
 import { readMemoryExtractionRuntimeConfig, readProactiveSignalPlannerRuntimeConfig } from "../src/config/env.js";
 
 describe("createDefaultRuntimeConfig", () => {
@@ -101,6 +102,66 @@ describe("proactive signal planner rollout configuration", () => {
     })).toThrow("IRIS_PROACTIVE_SIGNAL_PLANNER_QUIET_THREAD_MINUTES must be a positive integer");
   });
 });
+
+describe("wiki space sync rollout configuration", () => {
+  it("stays disabled by default and reads bounded enabled settings", () => {
+    const readWikiSpaceSyncRuntimeConfig = getWikiSpaceSyncRuntimeConfigReader();
+
+    expect(readWikiSpaceSyncRuntimeConfig({})).toEqual({ enabled: false });
+    expect(readWikiSpaceSyncRuntimeConfig({
+      IRIS_DOCUMENT_SYNC_WORKER_ENABLED: "true",
+      IRIS_WIKI_SPACE_SYNC_ENABLED: "true",
+    })).toEqual({
+      enabled: true,
+      intervalMs: 1_000,
+      refreshIntervalMs: 3_600_000,
+      leaseMs: 60_000,
+      maxDepth: 20,
+      maxAttempts: 3,
+    });
+  });
+
+  it("rejects unsafe scan settings and document-sync-independent enablement", () => {
+    const readWikiSpaceSyncRuntimeConfig = getWikiSpaceSyncRuntimeConfigReader();
+    const enabledEnv = {
+      IRIS_DOCUMENT_SYNC_WORKER_ENABLED: "true",
+      IRIS_WIKI_SPACE_SYNC_ENABLED: "true",
+    };
+
+    expect(() => readWikiSpaceSyncRuntimeConfig({
+      ...enabledEnv,
+      IRIS_WIKI_SPACE_SYNC_INTERVAL_MS: "2147483648",
+    })).toThrow("IRIS_WIKI_SPACE_SYNC_INTERVAL_MS must not exceed 2147483647");
+    expect(() => readWikiSpaceSyncRuntimeConfig({
+      ...enabledEnv,
+      IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS: "0",
+    })).toThrow("IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS must be a positive integer");
+    expect(() => readWikiSpaceSyncRuntimeConfig({
+      ...enabledEnv,
+      IRIS_WIKI_SPACE_SYNC_LEASE_MS: "0",
+    })).toThrow("IRIS_WIKI_SPACE_SYNC_LEASE_MS must be a positive integer");
+    expect(() => readWikiSpaceSyncRuntimeConfig({
+      ...enabledEnv,
+      IRIS_WIKI_SPACE_SYNC_MAX_DEPTH: "21",
+    })).toThrow("IRIS_WIKI_SPACE_SYNC_MAX_DEPTH must not exceed 20");
+    expect(() => readWikiSpaceSyncRuntimeConfig({
+      ...enabledEnv,
+      IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS: "1001",
+    })).toThrow("IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS must not exceed 1000");
+    expect(() => readWikiSpaceSyncRuntimeConfig({
+      IRIS_WIKI_SPACE_SYNC_ENABLED: "true",
+    })).toThrow("wiki space sync requires the document sync worker to be enabled");
+  });
+});
+
+function getWikiSpaceSyncRuntimeConfigReader(): (env: Record<string, string | undefined>) => unknown {
+  const candidate = (envConfig as Record<string, unknown>).readWikiSpaceSyncRuntimeConfig;
+  expect(candidate).toBeTypeOf("function");
+  if (typeof candidate !== "function") {
+    throw new Error("readWikiSpaceSyncRuntimeConfig is unavailable");
+  }
+  return candidate as (env: Record<string, string | undefined>) => unknown;
+}
 
 function enabledExtractionEnv() {
   return {

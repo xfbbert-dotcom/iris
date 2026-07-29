@@ -48,6 +48,258 @@ describe("createDocumentSyncRuntime", () => {
     expect(redisClient.connect).not.toHaveBeenCalled();
   });
 
+  it("composes wiki space sync with shared runtime dependencies", async () => {
+    const authorization = {
+      id: "wiki-authorization-1",
+      rootSourceUri: "https://docs.feishu.cn/wiki/root-node",
+      rootNodeToken: "root-node",
+      enabled: true,
+      scanState: "pending" as const,
+      attemptCount: 0,
+      nextScanAt: new Date("2026-07-29T01:00:00.000Z"),
+      discoveredNodeCount: 0,
+      registeredDocumentCount: 0,
+      skippedNodeCount: 0,
+      revision: 1,
+      createdAt: new Date("2026-07-29T01:00:00.000Z"),
+      updatedAt: new Date("2026-07-29T01:00:00.000Z"),
+    };
+    const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
+    const redisClient = {
+      connect: vi.fn(async () => redisClient),
+      eval: vi.fn(async () => 1),
+      rPush: vi.fn(async () => 1),
+      lPop: vi.fn(async () => null),
+      lLen: vi.fn(async () => 0),
+      lRange: vi.fn(async () => []),
+      lRem: vi.fn(async () => 0),
+      sRem: vi.fn(),
+      quit: vi.fn(async () => undefined),
+    };
+    const registeredSource = {
+      id: "source-1",
+      sourceType: "authorized_wiki_document" as const,
+      sourceUri: "https://docs.feishu.cn/wiki/child-node",
+      title: "Wiki child",
+      originGroupId: undefined,
+      originMessageId: undefined,
+      submittedByUserId: undefined,
+      authorizedSpaceId: "space-1",
+      permissionState: "unknown" as const,
+      syncState: "pending" as const,
+      canUseForAnswering: true,
+      canUseForKnowledgeDrafts: true,
+      createdAt: new Date("2026-07-29T01:00:00.000Z"),
+      updatedAt: new Date("2026-07-29T01:00:00.000Z"),
+      evidence: [],
+    };
+    const documentSources = {
+      registerAuthorizedWikiDocument: vi.fn(async () => registeredSource),
+    };
+    const manualPlanner = {
+      enqueueSource: vi.fn(async ({ documentSourceId }: { documentSourceId: string }) => ({
+        status: "enqueued" as const,
+        documentSourceId,
+      })),
+    };
+    const tokenProvider = { getTenantAccessToken: vi.fn(async () => "tenant-token") };
+    const wikiRepository = {
+      register: vi.fn(async () => ({ authorization, created: true })),
+      list: vi.fn(async () => [authorization]),
+      claimNext: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      requestScan: vi.fn(async () => authorization),
+      setEnabled: vi.fn(async () => authorization),
+      getStatusCounts: vi.fn(async () => ({
+        pending: 1,
+        scanning: 0,
+        synced: 2,
+        retry_wait: 0,
+        dead_letter: 0,
+        disabled: 3,
+      })),
+    };
+    const wikiClient = {
+      getNode: vi.fn(),
+      listChildren: vi.fn(),
+    };
+    const wikiWorker = { processNext: vi.fn() };
+    const closeOrder: string[] = [];
+    const documentLoop = {
+      start: vi.fn(),
+      stop: vi.fn(async () => {
+        closeOrder.push("document-loop");
+      }),
+      isRunning: vi.fn(() => true),
+      getSnapshot: vi.fn(() => ({
+        running: true,
+        intervalMs: 2_500,
+        batchLimit: 4,
+      })),
+    };
+    const wikiLoop = {
+      start: vi.fn(),
+      stop: vi.fn(async () => {
+        closeOrder.push("wiki-loop");
+      }),
+      isRunning: vi.fn(() => true),
+      getSnapshot: vi.fn(() => ({
+        running: true,
+        intervalMs: 1_000,
+      })),
+    };
+    let wikiWorkerInput: {
+      scanner(input: { rootNodeToken: string }): Promise<unknown>;
+      registrar: {
+        register(input: {
+          sourceUri: string;
+          title?: string;
+          authorizedSpaceId: string;
+          observedAt: Date;
+        }): Promise<unknown>;
+      };
+    } | undefined;
+    const scanFeishuWikiSpace = vi.fn(async () => ({
+      spaceId: "space-1",
+      documents: [],
+      discoveredNodeCount: 1,
+      skippedNodeCount: 0,
+    }));
+    const dependencies = {
+      createPostgresPool: vi.fn(() => pool),
+      createRedisClient: vi.fn(() => redisClient),
+      createDocumentSourceRegistry: vi.fn(() => documentSources),
+      createDocumentSnapshotRepository: vi.fn(() => ({})),
+      createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
+      createFeishuDocumentBodyFetcher: vi.fn(() => ({ fetch: vi.fn() })),
+      createDocumentSyncQueue: vi.fn(() => ({
+        enqueue: vi.fn(),
+        dequeueBatch: vi.fn(),
+        getPendingCount: vi.fn(async () => 0),
+        handleProcessedJob: vi.fn(),
+        handleFailedJob: vi.fn(),
+        getDeadLetterCount: vi.fn(async () => 0),
+        listDeadLetters: vi.fn(),
+        replayDeadLetter: vi.fn(),
+        deleteDeadLetter: vi.fn(),
+        replayDeadLetters: vi.fn(),
+      })),
+      createManualDocumentSyncPlanner: vi.fn(() => manualPlanner),
+      createDocumentSyncRunner: vi.fn(() => ({ syncSourceById: vi.fn() })),
+      createDocumentSyncWorker: vi.fn(() => ({ processBatch: vi.fn() })),
+      createWorkerLoop: vi.fn(() => documentLoop),
+      createWikiSpaceAuthorizationRepository: vi.fn(() => wikiRepository),
+      createFeishuWikiSpaceClient: vi.fn(() => wikiClient),
+      scanFeishuWikiSpace,
+      createWikiSpaceSyncWorker: vi.fn((input) => {
+        wikiWorkerInput = input;
+        return wikiWorker;
+      }),
+      createWikiSpaceWorkerLoop: vi.fn(() => wikiLoop),
+    };
+
+    const runtime = createDocumentSyncRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_WIKI_SPACE_SYNC_ENABLED: "true",
+      },
+      dependencies: dependencies as never,
+    });
+
+    expect(runtime).toMatchObject({ wikiSpaces: expect.any(Object) });
+    if (runtime === undefined || !("wikiSpaces" in runtime)) return;
+    expect(dependencies.createWikiSpaceAuthorizationRepository).toHaveBeenCalledWith({
+      dataSource: pool,
+    });
+    expect(dependencies.createFeishuWikiSpaceClient).toHaveBeenCalledWith({
+      baseUrl: "https://open.example.com",
+      tokenProvider,
+    });
+    expect(dependencies.createWikiSpaceSyncWorker).toHaveBeenCalledWith({
+      repository: wikiRepository,
+      scanner: expect.any(Function),
+      registrar: expect.any(Object),
+      leaseMs: 60_000,
+      refreshIntervalMs: 3_600_000,
+      maxAttempts: 3,
+    });
+    expect(dependencies.createWikiSpaceWorkerLoop).toHaveBeenCalledWith({
+      worker: wikiWorker,
+      intervalMs: 1_000,
+      onError: expect.any(Function),
+    });
+    const wikiSpaces = (runtime as unknown as {
+      wikiSpaces: {
+        register(input: { rootSourceUri: string; at: Date }): Promise<unknown>;
+        list(input: { limit: number }): Promise<unknown>;
+        requestScan(input: { id: string; at: Date }): Promise<unknown>;
+        setEnabled(input: { id: string; enabled: boolean; at: Date }): Promise<unknown>;
+      };
+    }).wikiSpaces;
+
+    const at = new Date("2026-07-29T02:00:00.000Z");
+    await expect(wikiSpaces.register({
+      rootSourceUri: "https://docs.feishu.cn/wiki/root-node",
+      at,
+    })).resolves.toEqual({ authorization, created: true });
+    expect(wikiRepository.register).toHaveBeenCalledWith({
+      rootSourceUri: "https://docs.feishu.cn/wiki/root-node",
+      rootNodeToken: "root-node",
+      at,
+    });
+    await expect(wikiSpaces.list({ limit: 10 })).resolves.toEqual([authorization]);
+    await expect(wikiSpaces.requestScan({ id: authorization.id, at })).resolves.toEqual(authorization);
+    await expect(wikiSpaces.setEnabled({ id: authorization.id, enabled: false, at })).resolves.toEqual(authorization);
+
+    await wikiWorkerInput?.scanner({ rootNodeToken: "root-node" });
+    await wikiWorkerInput?.registrar.register({
+      sourceUri: "https://docs.feishu.cn/wiki/child-node",
+      title: "Wiki child",
+      authorizedSpaceId: "space-1",
+      observedAt: at,
+    });
+    expect(documentSources.registerAuthorizedWikiDocument).toHaveBeenCalledWith({
+      sourceUri: "https://docs.feishu.cn/wiki/child-node",
+      title: "Wiki child",
+      authorizedSpaceId: "space-1",
+      observedAt: at,
+    });
+    expect(manualPlanner.enqueueSource).toHaveBeenCalledWith({ documentSourceId: "source-1" });
+    expect(scanFeishuWikiSpace).toHaveBeenCalledWith({
+      client: wikiClient,
+      rootNodeToken: "root-node",
+      maxDepth: 20,
+    });
+
+    runtime.start();
+    expect(documentLoop.start).toHaveBeenCalledOnce();
+    expect(wikiLoop.start).toHaveBeenCalledOnce();
+    await expect(runtime.getStatus()).resolves.toMatchObject({
+      wikiSpaces: {
+        running: true,
+        intervalMs: 1_000,
+        statusCounts: {
+          pending: 1,
+          scanning: 0,
+          synced: 2,
+          retry_wait: 0,
+          dead_letter: 0,
+          disabled: 3,
+        },
+      },
+    });
+
+    pool.end.mockImplementationOnce(async () => {
+      closeOrder.push("pool");
+    });
+    redisClient.quit.mockImplementationOnce(async () => {
+      closeOrder.push("redis");
+    });
+    await runtime.close();
+    expect(closeOrder).toEqual(["wiki-loop", "document-loop", "redis", "pool"]);
+  });
+
   it("composes Feishu document sync worker dependencies when enabled", async () => {
     const latestBatch = {
       status: "succeeded" as const,

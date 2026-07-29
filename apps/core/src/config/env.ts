@@ -58,6 +58,17 @@ export type DocumentSyncWorkerRuntimeConfig =
       batchLimit: number;
     };
 
+export type WikiSpaceSyncRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      intervalMs: number;
+      refreshIntervalMs: number;
+      leaseMs: number;
+      maxDepth: number;
+      maxAttempts: number;
+    };
+
 export type MemoryExtractionRuntimeConfig =
   | { enabled: false }
   | {
@@ -335,6 +346,49 @@ export function readDocumentSyncWorkerRuntimeConfig(
       "IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT",
       env.IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT,
       10,
+    ),
+  };
+}
+
+export function readWikiSpaceSyncRuntimeConfig(
+  env: EnvLike = process.env,
+): WikiSpaceSyncRuntimeConfig {
+  if (readOptionalEnv(env.IRIS_WIKI_SPACE_SYNC_ENABLED) !== "true") {
+    return { enabled: false };
+  }
+
+  if (!readDocumentSyncWorkerRuntimeConfig(env).enabled) {
+    throw new Error("wiki space sync requires the document sync worker to be enabled");
+  }
+
+  return {
+    enabled: true,
+    intervalMs: readTimerDelayEnv(
+      "IRIS_WIKI_SPACE_SYNC_INTERVAL_MS",
+      env.IRIS_WIKI_SPACE_SYNC_INTERVAL_MS,
+      1_000,
+    ),
+    refreshIntervalMs: readTimerDelayEnv(
+      "IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS",
+      env.IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS,
+      3_600_000,
+    ),
+    leaseMs: readTimerDelayEnv(
+      "IRIS_WIKI_SPACE_SYNC_LEASE_MS",
+      env.IRIS_WIKI_SPACE_SYNC_LEASE_MS,
+      60_000,
+    ),
+    maxDepth: readBoundedNonNegativeIntegerEnv(
+      "IRIS_WIKI_SPACE_SYNC_MAX_DEPTH",
+      env.IRIS_WIKI_SPACE_SYNC_MAX_DEPTH,
+      20,
+      20,
+    ),
+    maxAttempts: readBoundedPositiveIntegerEnv(
+      "IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS",
+      env.IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS,
+      3,
+      1_000,
     ),
   };
 }
@@ -787,6 +841,31 @@ function readBoundedPositiveIntegerEnv(
   maximum: number,
 ): number {
   const parsed = readPositiveIntegerEnv(name, value, defaultValue);
+  if (parsed > maximum) {
+    throw new Error(`${name} must not exceed ${maximum}`);
+  }
+
+  return parsed;
+}
+
+function readBoundedNonNegativeIntegerEnv(
+  name: string,
+  value: string | undefined,
+  defaultValue: number,
+  maximum: number,
+): number {
+  const trimmed = readOptionalEnv(value);
+  if (trimmed === undefined) {
+    return defaultValue;
+  }
+  if (!/^\d+$/u.test(trimmed)) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative safe integer`);
+  }
   if (parsed > maximum) {
     throw new Error(`${name} must not exceed ${maximum}`);
   }

@@ -5,15 +5,19 @@ import {
   readEmbeddingProviderConfig,
   readDocumentSyncWorkerRuntimeConfig,
   readFeishuOpenApiConfig,
+  readWikiSpaceSyncRuntimeConfig,
   type DocumentSyncWorkerRuntimeConfig,
   type EmbeddingProviderConfig,
   type EnvLike,
+  type FeishuOpenApiConfig,
+  type WikiSpaceSyncRuntimeConfig,
 } from "../config/env.js";
 import { readDatabaseConfig, type DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
 import {
   createFeishuDocumentBodyFetcher,
   normalizeFeishuDocumentSourceUri,
+  parseFeishuWikiNodeToken,
 } from "../documents/feishu-document-body-fetcher.js";
 import {
   createDocumentSyncRunner,
@@ -55,6 +59,31 @@ import {
   createRedisDocumentSyncQueue,
   type RedisDocumentSyncQueueClient,
 } from "../documents/redis-document-sync-queue.js";
+import {
+  createPostgresWikiSpaceAuthorizationRepository,
+  type WikiSpaceAuthorization,
+  type WikiSpaceAuthorizationDataSource,
+  type WikiSpaceAuthorizationRepository,
+  type WikiSpaceScanState,
+} from "../documents/wiki-space-authorization-repository.js";
+import {
+  createFeishuWikiSpaceClient,
+  type FeishuWikiSpaceClient,
+} from "../documents/feishu-wiki-space-client.js";
+import {
+  scanFeishuWikiSpace,
+  type WikiSpaceScanResult,
+} from "../documents/wiki-space-scanner.js";
+import {
+  createWikiSpaceSyncWorker,
+  type AuthorizedWikiDocumentRegistrar,
+  type WikiSpaceSyncWorkerResult,
+} from "../documents/wiki-space-sync-worker.js";
+import {
+  createWikiSpaceSyncWorkerLoop,
+  type WikiSpaceSyncWorkerBatchSnapshot,
+  type WikiSpaceSyncWorkerLoop,
+} from "../documents/wiki-space-sync-worker-loop.js";
 import { closeRuntimeResources } from "./runtime-close.js";
 import {
   createFeishuTenantAccessTokenProvider,
@@ -108,6 +137,19 @@ export type DocumentSyncRuntime = {
     delete(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
     replayBatch(input: { ids: string[] }): Promise<ReplayDocumentSyncDeadLettersResult>;
   };
+  wikiSpaces?: {
+    register(input: { rootSourceUri: string; at: Date }): Promise<{
+      authorization: WikiSpaceAuthorization;
+      created: boolean;
+    }>;
+    list(input: { limit: number }): Promise<WikiSpaceAuthorization[]>;
+    requestScan(input: { id: string; at: Date }): Promise<WikiSpaceAuthorization | undefined>;
+    setEnabled(input: {
+      id: string;
+      enabled: boolean;
+      at: Date;
+    }): Promise<WikiSpaceAuthorization | undefined>;
+  };
   start(): void;
   close(): Promise<void>;
 };
@@ -153,6 +195,14 @@ export type DocumentSyncRuntimeStatus = {
   pendingJobCount: number;
   deadLetterJobCount: number;
   latestBatch?: DocumentSyncWorkerBatchSnapshot;
+  wikiSpaces?: WikiSpaceSyncRuntimeStatus;
+};
+
+export type WikiSpaceSyncRuntimeStatus = {
+  running: boolean;
+  intervalMs: number;
+  statusCounts: Record<WikiSpaceScanState, number>;
+  latestBatch?: WikiSpaceSyncWorkerBatchSnapshot;
 };
 
 type PostgresPool = Queryable & { end(): Promise<void> };
@@ -200,6 +250,10 @@ type DocumentSyncRuntimeReindexPlanner = Pick<
   ReturnType<typeof createDocumentReindexPlanner>,
   "enqueueSyncedSnapshotReindex"
 >;
+type DocumentSyncRuntimeWikiSpaceRepository = WikiSpaceAuthorizationRepository;
+type DocumentSyncRuntimeWikiSpaceWorker = {
+  processNext(): Promise<WikiSpaceSyncWorkerResult>;
+};
 type RedisClient = RedisDocumentSyncQueueClient &
   RedisDocumentReindexQueueClient & {
   connect(): Promise<unknown>;
@@ -237,6 +291,31 @@ export type DocumentSyncRuntimeDependencies = {
   createDocumentSyncRunner?: typeof createDocumentSyncRunner;
   createDocumentSyncWorker?: typeof createDocumentSyncWorker;
   createWorkerLoop?: typeof createDocumentSyncWorkerLoop;
+  createWikiSpaceAuthorizationRepository?: (dependencies: {
+    dataSource: WikiSpaceAuthorizationDataSource;
+  }) => DocumentSyncRuntimeWikiSpaceRepository;
+  createFeishuWikiSpaceClient?: (dependencies: {
+    baseUrl: string;
+    tokenProvider: FeishuTenantAccessTokenProvider;
+  }) => FeishuWikiSpaceClient;
+  scanFeishuWikiSpace?: (input: {
+    client: FeishuWikiSpaceClient;
+    rootNodeToken: string;
+    maxDepth: number;
+  }) => Promise<WikiSpaceScanResult>;
+  createWikiSpaceSyncWorker?: (dependencies: {
+    repository: Pick<WikiSpaceAuthorizationRepository, "claimNext" | "complete" | "fail">;
+    scanner(input: { rootNodeToken: string }): Promise<WikiSpaceScanResult>;
+    registrar: AuthorizedWikiDocumentRegistrar;
+    leaseMs: number;
+    refreshIntervalMs: number;
+    maxAttempts: number;
+  }) => DocumentSyncRuntimeWikiSpaceWorker;
+  createWikiSpaceWorkerLoop?: (dependencies: {
+    worker: DocumentSyncRuntimeWikiSpaceWorker;
+    intervalMs: number;
+    onError: (classification: string) => void;
+  }) => WikiSpaceSyncWorkerLoop;
 };
 
 export function createDocumentSyncRuntime({
@@ -246,21 +325,29 @@ export function createDocumentSyncRuntime({
   env?: EnvLike;
   dependencies?: DocumentSyncRuntimeDependencies;
 } = {}): DocumentSyncRuntime | undefined {
+  const wikiSpaceRuntimeConfig = readWikiSpaceSyncRuntimeConfig(env);
   const runtimeConfig = readDocumentSyncWorkerRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
     return undefined;
   }
 
-  return createEnabledDocumentSyncRuntime({ env, runtimeConfig, dependencies });
+  return createEnabledDocumentSyncRuntime({
+    env,
+    runtimeConfig,
+    wikiSpaceRuntimeConfig,
+    dependencies,
+  });
 }
 
 function createEnabledDocumentSyncRuntime({
   env,
   runtimeConfig,
+  wikiSpaceRuntimeConfig,
   dependencies,
 }: {
   env: EnvLike;
   runtimeConfig: Extract<DocumentSyncWorkerRuntimeConfig, { enabled: true }>;
+  wikiSpaceRuntimeConfig: WikiSpaceSyncRuntimeConfig;
   dependencies: DocumentSyncRuntimeDependencies;
 }): DocumentSyncRuntime {
   const createPool = dependencies.createPostgresPool ?? createPostgresPool;
@@ -288,6 +375,12 @@ function createEnabledDocumentSyncRuntime({
   const createRunner = dependencies.createDocumentSyncRunner ?? createDocumentSyncRunner;
   const createWorker = dependencies.createDocumentSyncWorker ?? createDocumentSyncWorker;
   const createLoop = dependencies.createWorkerLoop ?? createDocumentSyncWorkerLoop;
+  const createWikiSpaceRepository =
+    dependencies.createWikiSpaceAuthorizationRepository ?? createPostgresWikiSpaceAuthorizationRepository;
+  const createWikiClient = dependencies.createFeishuWikiSpaceClient ?? createFeishuWikiSpaceClient;
+  const scanWikiSpace = dependencies.scanFeishuWikiSpace ?? scanFeishuWikiSpace;
+  const createWikiWorker = dependencies.createWikiSpaceSyncWorker ?? createWikiSpaceSyncWorker;
+  const createWikiLoop = dependencies.createWikiSpaceWorkerLoop ?? createWikiSpaceSyncWorkerLoop;
 
   const feishuConfig = readFeishuOpenApiConfig(env);
   const embeddingConfig = readDocumentSyncReindexEmbeddingConfig(env);
@@ -312,6 +405,21 @@ function createEnabledDocumentSyncRuntime({
   const manualPlanner = createManualPlanner({
     registry: documentSources,
     queue,
+  });
+  const wikiSpaceRepository = createWikiSpaceRepository({
+    dataSource: pool as unknown as WikiSpaceAuthorizationDataSource,
+  });
+  const wikiSpaceLoop = createWikiSpaceRuntimeLoop({
+    config: wikiSpaceRuntimeConfig,
+    feishuConfig,
+    tokenProvider,
+    repository: wikiSpaceRepository,
+    documentSources,
+    manualPlanner,
+    createWikiClient,
+    scanWikiSpace,
+    createWikiWorker,
+    createWikiLoop,
   });
   const syncedSnapshotReindexer = createSyncedSnapshotReindexer({
     embeddingConfig,
@@ -340,11 +448,16 @@ function createEnabledDocumentSyncRuntime({
   return {
     start() {
       loop.start();
+      wikiSpaceLoop?.start();
     },
     async getStatus() {
       const loopSnapshot = loop.getSnapshot();
       const pendingJobCount = await queue.getPendingCount();
       const deadLetterJobCount = await queue.getDeadLetterCount();
+      const wikiSpaceStatus = await getWikiSpaceRuntimeStatus({
+        repository: wikiSpaceRepository,
+        loop: wikiSpaceLoop,
+      });
 
       return {
         enabled: true,
@@ -356,6 +469,7 @@ function createEnabledDocumentSyncRuntime({
         ...(loopSnapshot.latestBatch === undefined
           ? {}
           : { latestBatch: loopSnapshot.latestBatch }),
+        ...(wikiSpaceStatus === undefined ? {} : { wikiSpaces: wikiSpaceStatus }),
       };
     },
     enqueueSource(input) {
@@ -466,8 +580,30 @@ function createEnabledDocumentSyncRuntime({
         return queue.replayDeadLetters(input);
       },
     },
+    wikiSpaces: {
+      register(input) {
+        const root = normalizeWikiRootSource(input.rootSourceUri);
+        return wikiSpaceRepository.register({
+          rootSourceUri: root.sourceUri,
+          rootNodeToken: root.nodeToken,
+          at: input.at,
+        });
+      },
+      list(input) {
+        return wikiSpaceRepository.list(input);
+      },
+      requestScan(input) {
+        return wikiSpaceRepository.requestScan(input);
+      },
+      setEnabled(input) {
+        return wikiSpaceRepository.setEnabled(input);
+      },
+    },
     async close() {
       await closeRuntimeResources([
+        async () => {
+          await wikiSpaceLoop?.stop();
+        },
         () => loop.stop(),
         async () => {
           const client = await redisConnection;
@@ -476,6 +612,141 @@ function createEnabledDocumentSyncRuntime({
         () => pool.end(),
       ]);
     },
+  };
+}
+
+function createWikiSpaceRuntimeLoop({
+  config,
+  feishuConfig,
+  tokenProvider,
+  repository,
+  documentSources,
+  manualPlanner,
+  createWikiClient,
+  scanWikiSpace,
+  createWikiWorker,
+  createWikiLoop,
+}: {
+  config: WikiSpaceSyncRuntimeConfig;
+  feishuConfig: Pick<FeishuOpenApiConfig, "baseUrl">;
+  tokenProvider: FeishuTenantAccessTokenProvider;
+  repository: DocumentSyncRuntimeWikiSpaceRepository;
+  documentSources: DocumentSyncRuntimeDocumentSources;
+  manualPlanner: ManualDocumentSyncPlanner;
+  createWikiClient: (dependencies: {
+    baseUrl: string;
+    tokenProvider: FeishuTenantAccessTokenProvider;
+  }) => FeishuWikiSpaceClient;
+  scanWikiSpace: (input: {
+    client: FeishuWikiSpaceClient;
+    rootNodeToken: string;
+    maxDepth: number;
+  }) => Promise<WikiSpaceScanResult>;
+  createWikiWorker: (dependencies: {
+    repository: Pick<WikiSpaceAuthorizationRepository, "claimNext" | "complete" | "fail">;
+    scanner(input: { rootNodeToken: string }): Promise<WikiSpaceScanResult>;
+    registrar: AuthorizedWikiDocumentRegistrar;
+    leaseMs: number;
+    refreshIntervalMs: number;
+    maxAttempts: number;
+  }) => DocumentSyncRuntimeWikiSpaceWorker;
+  createWikiLoop: (dependencies: {
+    worker: DocumentSyncRuntimeWikiSpaceWorker;
+    intervalMs: number;
+    onError: (classification: string) => void;
+  }) => WikiSpaceSyncWorkerLoop;
+}): WikiSpaceSyncWorkerLoop | undefined {
+  if (!config.enabled) {
+    return undefined;
+  }
+
+  const client = createWikiClient({
+    baseUrl: feishuConfig.baseUrl,
+    tokenProvider,
+  });
+  const worker = createWikiWorker({
+    repository,
+    scanner(input) {
+      return scanWikiSpace({
+        client,
+        rootNodeToken: input.rootNodeToken,
+        maxDepth: config.maxDepth,
+      });
+    },
+    registrar: createWikiDocumentRegistrar({ documentSources, manualPlanner }),
+    leaseMs: config.leaseMs,
+    refreshIntervalMs: config.refreshIntervalMs,
+    maxAttempts: config.maxAttempts,
+  });
+
+  return createWikiLoop({
+    worker,
+    intervalMs: config.intervalMs,
+    onError: () => undefined,
+  });
+}
+
+function createWikiDocumentRegistrar({
+  documentSources,
+  manualPlanner,
+}: {
+  documentSources: DocumentSyncRuntimeDocumentSources;
+  manualPlanner: ManualDocumentSyncPlanner;
+}): AuthorizedWikiDocumentRegistrar {
+  return {
+    async register(input) {
+      const source = await documentSources.registerAuthorizedWikiDocument({
+        sourceUri: normalizeFeishuRegistrationSourceUri(input.sourceUri),
+        ...(input.title === undefined ? {} : { title: input.title }),
+        authorizedSpaceId: input.authorizedSpaceId,
+        observedAt: input.observedAt,
+      });
+      const enqueue = await manualPlanner.enqueueSource({ documentSourceId: source.id });
+      if (enqueue.status === "enqueued") {
+        return { sourceId: source.id, enqueueStatus: "enqueued" };
+      }
+      if (enqueue.status === "skipped" && enqueue.reason === "already_syncing") {
+        return { sourceId: source.id, enqueueStatus: "already_pending" };
+      }
+
+      throw new Error("wiki document registration did not enqueue a document sync job");
+    },
+  };
+}
+
+async function getWikiSpaceRuntimeStatus({
+  repository,
+  loop,
+}: {
+  repository: DocumentSyncRuntimeWikiSpaceRepository;
+  loop: WikiSpaceSyncWorkerLoop | undefined;
+}): Promise<WikiSpaceSyncRuntimeStatus | undefined> {
+  if (loop === undefined) {
+    return undefined;
+  }
+
+  const snapshot = loop.getSnapshot();
+  const statusCounts = await repository.getStatusCounts();
+  return {
+    running: snapshot.running,
+    intervalMs: snapshot.intervalMs,
+    statusCounts,
+    ...(snapshot.latestBatch === undefined ? {} : { latestBatch: snapshot.latestBatch }),
+  };
+}
+
+function normalizeWikiRootSource(rootSourceUri: string): {
+  sourceUri: string;
+  nodeToken: string;
+} {
+  const nodeToken = parseFeishuWikiNodeToken(rootSourceUri);
+  if (nodeToken === undefined) {
+    throw new Error("unsupported Feishu wiki source URI");
+  }
+
+  return {
+    sourceUri: normalizeFeishuRegistrationSourceUri(rootSourceUri),
+    nodeToken,
   };
 }
 
