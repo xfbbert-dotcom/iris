@@ -119,10 +119,9 @@ Invoke-RestMethod -Headers $irisHeaders -Uri "$irisBaseUrl/internal/document-syn
 Invoke-RestMethod -Headers $irisHeaders -Uri "$irisBaseUrl/internal/reindex/dead-letters?limit=20"
 ```
 
-First disable the affected root when the failure could involve access. Fix the underlying cause
-(for example, an invalid root, missing Feishu scope, revoked access, or transient Feishu outage),
-then replay only the reviewed item in the affected queue. For a wiki scan `dead_letter`, use the
-explicit rescan endpoint after repair instead of repeatedly toggling the root.
+First disable the affected root when the failure could involve access. Keep it disabled while
+fixing the underlying cause (for example, an invalid root, missing Feishu scope, revoked access, or
+transient Feishu outage), then replay only the reviewed item in the affected queue.
 
 ```powershell
 $deadLetterId = "replace-with-reviewed-document-sync-dlq-id"
@@ -132,8 +131,38 @@ Invoke-RestMethod -Method Post -Headers $irisHeaders `
 
 Use the analogous `/internal/events/dead-letters/<id>/replay` or
 `/internal/reindex/dead-letters/<id>/replay` endpoint only for the matching queue. Do not replay an
-unchanged permission denial. Recheck `/internal/status`, all three DLQ lists, and the wiki-space
-list after recovery; every pending and dead-letter count must return to zero.
+unchanged permission denial.
+
+For a wiki scan `dead_letter`, a disabled root cannot accept a rescan request. After repair, use
+this bounded sequence instead of repeatedly toggling it. Enable the retained root only for the
+probe:
+
+```powershell
+Invoke-RestMethod -Method Patch -Headers $irisHeaders `
+  -Uri "$irisBaseUrl/internal/document-sync/wiki-spaces/$wikiSpaceId" `
+  -ContentType "application/json" `
+  -Body '{"enabled":true}'
+```
+
+Request exactly one rescan:
+
+```powershell
+Invoke-RestMethod -Method Post -Headers $irisHeaders `
+  -Uri "$irisBaseUrl/internal/document-sync/wiki-spaces/$wikiSpaceId/rescan" `
+  -ContentType "application/json" `
+  -Body "{}"
+```
+
+Observe the resulting authorization and all event/document/reindex queue/DLQ gates. Recheck
+`/internal/status`, all three DLQ lists, and the wiki-space list; every pending and dead-letter
+count must return to zero. Disable the root again immediately after the result settles:
+
+```powershell
+Invoke-RestMethod -Method Patch -Headers $irisHeaders `
+  -Uri "$irisBaseUrl/internal/document-sync/wiki-spaces/$wikiSpaceId" `
+  -ContentType "application/json" `
+  -Body '{"enabled":false}'
+```
 
 ## Permission Revocation Second Check
 
@@ -143,10 +172,39 @@ root ID, document URL, and revocation time without recording its body.
 
 Perform two independent post-revocation checks:
 
-1. Request a rescan and verify it produces a permission-denied classification or a safe
-   `retry_wait`/`dead_letter` outcome without registering new readable content. Inspect the
-   wiki-space list and all three queue/DLQ surfaces after the attempt.
-2. After the queue gate settles, issue one ordinary pilot-group question whose answer depends only
+1. A disabled root cannot accept a rescan request. Enable the retained root only for this bounded
+   probe:
+
+```powershell
+Invoke-RestMethod -Method Patch -Headers $irisHeaders `
+  -Uri "$irisBaseUrl/internal/document-sync/wiki-spaces/$wikiSpaceId" `
+  -ContentType "application/json" `
+  -Body '{"enabled":true}'
+```
+
+   Request exactly one rescan:
+
+```powershell
+Invoke-RestMethod -Method Post -Headers $irisHeaders `
+  -Uri "$irisBaseUrl/internal/document-sync/wiki-spaces/$wikiSpaceId/rescan" `
+  -ContentType "application/json" `
+  -Body "{}"
+```
+
+   Observe the resulting authorization and all event/document/reindex queue/DLQ gates. Verify the
+   scan produces a permission-denied classification or a safe `retry_wait`/`dead_letter` outcome
+   without registering new readable content. Disable the root again immediately after the result
+   settles:
+
+```powershell
+Invoke-RestMethod -Method Patch -Headers $irisHeaders `
+  -Uri "$irisBaseUrl/internal/document-sync/wiki-spaces/$wikiSpaceId" `
+  -ContentType "application/json" `
+  -Body '{"enabled":false}'
+```
+
+2. After the root is disabled and the queue gate settles, issue one ordinary pilot-group question
+   whose answer depends only
    on the revoked document's unique marker. The deployed source-policy live permission guard must
    deny the fragment: the reply must not contain the marker or cite the revoked source. Record the
    content-free permission decision/audit evidence. Do not repeat the answer request to probe a
@@ -158,9 +216,18 @@ the root disabled and enter rollback.
 ## Rollback
 
 Set `IRIS_WIKI_SPACE_SYNC_ENABLED=false` in the operator-controlled `.env.pilot`, restart only
-through the reviewed pilot deployment procedure with Caddy stopped, and verify that
-`$status.components.documentSync.wikiSpaces` is absent after Core is healthy. Do not delete the
-authorization records or Redis/Postgres data as part of this rollback.
+through the reviewed pilot deployment procedure with Caddy stopped. After Core is healthy, fetch a
+fresh authenticated status response; never reuse a pre-restart snapshot:
+
+```powershell
+$statusAfterRollback = Invoke-RestMethod -Headers $irisHeaders `
+  -Uri "$irisBaseUrl/internal/status"
+if ($null -ne $statusAfterRollback.components.documentSync.wikiSpaces) {
+  throw "Wiki space sync is still present after rollback"
+}
+```
+
+Do not delete the authorization records or Redis/Postgres data as part of this rollback.
 
 Keep affected roots disabled, inspect event/document-sync/reindex pending and DLQ counts until they
 are zero, and retain the root IDs, failure classification, queue snapshots, and timestamps for the

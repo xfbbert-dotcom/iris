@@ -19,6 +19,10 @@ const knowledgeCardAcceptanceRunbook = readFileSync(
   "docs/runbooks/iris-knowledge-card-confirmation-acceptance.md",
   "utf8",
 );
+const wikiSpaceSyncRunbook = readFileSync(
+  "docs/runbooks/iris-wiki-space-sync.md",
+  "utf8",
+);
 const documentReindexQueueSource = readFileSync(
   "apps/core/src/reindex/redis-document-reindex-queue.ts",
   "utf8",
@@ -199,6 +203,54 @@ test("keeps wiki space sync default-off with deterministic Compose wiring", () =
     );
     assert.equal(compose.services.core.environment[name], expected, `${name} must survive interpolation`);
   }
+});
+
+test("requires one enabled wiki rescan followed by queue gates and disable", () => {
+  const sections = [
+    wikiSpaceSyncRunbook.slice(
+      wikiSpaceSyncRunbook.indexOf("## Dead-Letter Diagnosis And Recovery"),
+      wikiSpaceSyncRunbook.indexOf("## Permission Revocation Second Check"),
+    ),
+    wikiSpaceSyncRunbook.slice(
+      wikiSpaceSyncRunbook.indexOf("## Permission Revocation Second Check"),
+      wikiSpaceSyncRunbook.indexOf("## Rollback"),
+    ),
+  ];
+
+  for (const section of sections) {
+    assertMarkersInOrder(section, [
+      "Enable the retained root",
+      "-Body '{\"enabled\":true}'",
+      "/rescan",
+      "Observe the resulting authorization and all event/document/reindex queue/DLQ gates",
+      "Disable the root again",
+      "-Body '{\"enabled\":false}'",
+    ]);
+    assert.equal(
+      section.match(/\/rescan"/gu)?.length,
+      1,
+      "each recovery procedure must request exactly one rescan",
+    );
+  }
+});
+
+test("requires rollback to verify wiki sync from a fresh authenticated status", () => {
+  const rollback = wikiSpaceSyncRunbook.slice(
+    wikiSpaceSyncRunbook.indexOf("## Rollback"),
+  );
+
+  assertMarkersInOrder(rollback, [
+    "`IRIS_WIKI_SPACE_SYNC_ENABLED=false`",
+    "After Core is healthy",
+    "$statusAfterRollback = Invoke-RestMethod",
+    "/internal/status",
+    "$statusAfterRollback.components.documentSync.wikiSpaces",
+  ]);
+  assert.doesNotMatch(
+    rollback,
+    /\$status\.components\.documentSync\.wikiSpaces/u,
+    "rollback must not inspect the pre-restart status snapshot",
+  );
 });
 
 test("proxies exactly the two public Feishu callback paths and keeps the fallback closed", () => {
