@@ -68,6 +68,7 @@ import {
 import type { DocumentSnapshot } from "./documents/document-snapshot-repository.js";
 import {
   normalizeFeishuDocumentSourceUri,
+  parseFeishuWikiNodeToken,
 } from "./documents/feishu-document-body-fetcher.js";
 import { buildInternalStatusSnapshot } from "./admin/internal-status-snapshot.js";
 import { buildInternalRolloutReadinessReport } from "./admin/internal-rollout-readiness.js";
@@ -240,6 +241,14 @@ type RegisterUserSubmittedDocumentRequest = {
   sourceUri: string;
   title?: string;
   submittedByUserId: string;
+};
+
+type WikiSpaceRegistrationRequest = {
+  rootSourceUri: string;
+};
+
+type WikiSpaceEnabledRequest = {
+  enabled: boolean;
 };
 
 type DocumentSourceListQuery = {
@@ -496,7 +505,11 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     runtimeController,
   });
   startupGateway = gateway;
-  const app = Fastify({ logger: false, bodyLimit: maxJsonBodyBytes });
+  const app = Fastify({
+    logger: false,
+    bodyLimit: maxJsonBodyBytes,
+    routerOptions: { maxParamLength: maxInternalStringLength + 1 },
+  });
   startupApp = app;
 
   if (
@@ -1202,6 +1215,97 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return { ok: true, ...(await documentSyncRuntime.getStatus()) };
     } catch {
       return reply.code(500).send({ ok: false, error: "document_sync_status_failed" });
+    }
+  });
+
+  app.post("/internal/document-sync/wiki-spaces", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseWikiSpaceRegistrationRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return reply.code(202).send({
+        ok: true,
+        ...(await documentSyncRuntime.wikiSpaces.register({
+          rootSourceUri: parsedRequest.rootSourceUri,
+          at: now(),
+        })),
+      });
+    } catch {
+      return reply.code(500).send({ ok: false, error: "wiki_space_registration_failed" });
+    }
+  });
+
+  app.get("/internal/document-sync/wiki-spaces", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const parsedQuery = parseWikiSpaceListQuery(request.query);
+    if (parsedQuery === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, wikiSpaces: await documentSyncRuntime.wikiSpaces.list(parsedQuery) };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
+    }
+  });
+
+  app.post("/internal/document-sync/wiki-spaces/:id/rescan", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const authorization = await documentSyncRuntime.wikiSpaces.requestScan({ id, at: now() });
+      if (authorization === undefined) {
+        return reply.code(404).send({ ok: false, error: "wiki_space_not_found" });
+      }
+
+      return { ok: true, authorization };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
+    }
+  });
+
+  app.patch("/internal/document-sync/wiki-spaces/:id", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseWikiSpaceEnabledRequest(body);
+    if (id === undefined || parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const authorization = await documentSyncRuntime.wikiSpaces.setEnabled({
+        id,
+        enabled: parsedRequest.enabled,
+        at: now(),
+      });
+      if (authorization === undefined) {
+        return reply.code(404).send({ ok: false, error: "wiki_space_not_found" });
+      }
+
+      return { ok: true, authorization };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
     }
   });
 
@@ -2646,6 +2750,60 @@ function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery |
     ...(usableForAnswering === undefined ? {} : { usableForAnswering }),
     ...(includeLatestSnapshot === undefined ? {} : { includeLatestSnapshot }),
   };
+}
+
+function parseWikiSpaceRegistrationRequest(value: unknown): WikiSpaceRegistrationRequest | undefined {
+  if (!isRecord(value) || Object.keys(value).length !== 1 || !("rootSourceUri" in value)) {
+    return undefined;
+  }
+
+  const rootSourceUri = value.rootSourceUri;
+  if (
+    typeof rootSourceUri !== "string" ||
+    rootSourceUri.length === 0 ||
+    rootSourceUri.length > maxInternalRawSourceUriLength ||
+    rootSourceUri.trim() !== rootSourceUri ||
+    !isExactFeishuWikiRootSourceUri(rootSourceUri)
+  ) {
+    return undefined;
+  }
+
+  return { rootSourceUri };
+}
+
+function parseWikiSpaceListQuery(value: unknown): { limit: number } | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "limit")) {
+    return undefined;
+  }
+
+  const limit = parseDeadLetterLimit(value.limit);
+  return limit === undefined ? undefined : { limit };
+}
+
+function parseWikiSpaceEnabledRequest(value: unknown): WikiSpaceEnabledRequest | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 1 ||
+    !("enabled" in value) ||
+    typeof value.enabled !== "boolean"
+  ) {
+    return undefined;
+  }
+
+  return { enabled: value.enabled };
+}
+
+function isExactFeishuWikiRootSourceUri(sourceUri: string): boolean {
+  const nodeToken = parseFeishuWikiNodeToken(sourceUri);
+  if (nodeToken === undefined) {
+    return false;
+  }
+
+  try {
+    return new URL(sourceUri).pathname === `/wiki/${nodeToken}`;
+  } catch {
+    return false;
+  }
 }
 
 function parseDocumentSourceType(value: unknown): DocumentSourceType | false | undefined {
