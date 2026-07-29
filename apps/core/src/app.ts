@@ -324,7 +324,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   app.get("/internal/audit/status", async () => ({
     ok: true,
     enabled: true,
-    storage: "in_memory",
+    storage: auditLog.storage,
     retention: auditLog.retention,
   }));
 
@@ -334,7 +334,7 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       audit: {
         ok: true,
         enabled: true,
-        storage: "in_memory",
+        storage: auditLog.storage,
         retention: auditLog.retention,
       },
       runtimeControl: {
@@ -2027,7 +2027,15 @@ export async function startServer({
         ? (runtimeControlRuntime =
             await createRuntimeControlRuntimeDependency()).controller
         : new RuntimeController(createDefaultRuntimeConfig()));
-    app = buildApp({ ...appDependencies, runtimeController, internalApiToken });
+    app = buildApp({
+      ...appDependencies,
+      runtimeController,
+      ...(appDependencies.auditLog !== undefined ||
+      runtimeControlRuntime?.auditLog === undefined
+        ? {}
+        : { auditLog: runtimeControlRuntime.auditLog }),
+      internalApiToken,
+    });
     if (runtimeControlRuntime !== undefined) {
       app.addHook("onClose", async () => {
         await runtimeControlRuntime?.close();

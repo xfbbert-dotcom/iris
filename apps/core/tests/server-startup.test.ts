@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { startServer } from "../src/app.js";
 import { RuntimeController } from "../src/admin/runtime-controller.js";
+import { PostgresAuditLog } from "../src/audit/postgres-audit-log.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import { isolateEnvVar } from "./test-env.js";
@@ -90,10 +91,18 @@ describe("Core server startup", () => {
     process.env.PORT = String(port);
     const controller = new RuntimeController(createDefaultRuntimeConfig());
     await controller.disableGlobal();
+    const auditLog = await PostgresAuditLog.create({
+      load: async () => ({ events: [], droppedEventCount: 0 }),
+      record: async () => undefined,
+    });
     const close = vi.fn(async () => undefined);
 
     const app = await startServer({
-      createRuntimeControlRuntime: async () => ({ controller, close }),
+      createRuntimeControlRuntime: async () => ({
+        controller,
+        auditLog,
+        close,
+      }),
       appDependencies: {
         createAnswerDraftRuntime: () => undefined,
         createEventWorkerRuntime: () => undefined,
@@ -109,6 +118,14 @@ describe("Core server startup", () => {
     expect(status.json()).toMatchObject({
       ok: true,
       globalEnabled: false,
+    });
+    const auditStatus = await app.inject({
+      method: "GET",
+      url: "/internal/audit/status",
+    });
+    expect(auditStatus.json()).toMatchObject({
+      ok: true,
+      storage: "postgres",
     });
 
     await app.close();

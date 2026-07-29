@@ -29,6 +29,9 @@ export async function runMigrations(input: RunMigrationsInput): Promise<Migratio
   await client.query("begin");
 
   try {
+    await client.query(
+      "select pg_advisory_xact_lock(hashtext('iris_schema_migrations'))",
+    );
     await client.query(`
 create table if not exists schema_migrations (
   name text primary key,

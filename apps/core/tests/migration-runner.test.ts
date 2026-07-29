@@ -49,6 +49,10 @@ describe("runMigrations", () => {
     });
     expect(queries).toContain("select 1;");
     expect(queries).toContain("select 2;");
+    expect(queries.indexOf("select pg_advisory_xact_lock(hashtext('iris_schema_migrations'))"))
+      .toBeLessThan(
+        queries.findIndex((sql) => sql.includes("create table if not exists schema_migrations")),
+      );
     expect(Array.from(applied)).toEqual(["0001_first.sql", "0002_second.sql"]);
   });
 
@@ -226,5 +230,18 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("scope = 'group'");
     expect(normalized).toContain("scope = 'capability'");
     expect(normalized).toContain("and enabled = false");
+  });
+
+  it("includes migration to persist bounded audit events", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0017_audit_events.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table audit_events");
+    expect(normalized).toContain("payload jsonb not null");
+    expect(normalized).toContain("create table audit_log_metadata");
+    expect(normalized).toContain("dropped_event_count bigint not null default 0");
   });
 });

@@ -58,6 +58,7 @@ export class InMemoryAuditLog implements AuditLog {
   private readonly maxEvents: number;
   private readonly now: () => Date;
   private droppedEvents = 0;
+  readonly storage: "in_memory" | "postgres" = "in_memory";
 
   constructor(options: InMemoryAuditLogOptions = {}) {
     this.maxEvents = options.maxEvents ?? 1000;
@@ -72,17 +73,41 @@ export class InMemoryAuditLog implements AuditLog {
   }
 
   async record(event: AuditEvent): Promise<void> {
+    this.appendRecordedEvent(this.createRecordedEvent(event));
+  }
+
+  protected get maxEventCount(): number {
+    return this.maxEvents;
+  }
+
+  protected createRecordedEvent(event: AuditEvent): RecordedAuditEvent {
     const normalizedEvent = normalizeAuditEvent(event);
-    this.storedEvents.push({
+    return {
       ...normalizedEvent,
       fragmentIds: [...normalizedEvent.fragmentIds],
       recordedAt: new Date(this.now()),
-    });
+    };
+  }
+
+  protected appendRecordedEvent(event: RecordedAuditEvent): void {
+    this.storedEvents.push(cloneRecordedEvent(event));
     const overflow = this.storedEvents.length - this.maxEvents;
     if (overflow > 0) {
       this.storedEvents.splice(0, overflow);
       this.droppedEvents += overflow;
     }
+  }
+
+  protected restoreRecordedEvents(
+    events: RecordedAuditEvent[],
+    droppedEventCount: number,
+  ): void {
+    this.storedEvents.splice(
+      0,
+      this.storedEvents.length,
+      ...events.slice(-this.maxEvents).map(cloneRecordedEvent),
+    );
+    this.droppedEvents = droppedEventCount;
   }
 
   get retention() {

@@ -732,6 +732,10 @@ Invoke-RestMethod `
   -Uri "http://localhost:3000/internal/audit/events?limit=20&type=runtime_control_updated"
 ```
 
+Production audit events and retention counters are bounded and stored in PostgreSQL. Confirm
+`GET /internal/audit/status` reports `storage: "postgres"` after startup; a Core restart must not
+clear the recent event window.
+
 When a runtime-control mutation is sent with `X-Iris-Operator`, the audit event includes
 `operatorHint`.
 

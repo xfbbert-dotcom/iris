@@ -38,6 +38,25 @@ try {
   assert.equal(restored.globalEnabled, false);
   assert.equal(restored.disabledGroupIds.includes(proofGroupId), true);
   assert.equal(restored.capabilities.callExternalTools, true);
+  const audit = await requestJson(
+    "/internal/audit/events?limit=20&type=runtime_control_updated",
+  );
+  assert.equal(audit.events.some((event) => event.runtimeControlScope === "global"), true);
+  assert.equal(
+    audit.events.some(
+      (event) =>
+        event.runtimeControlScope === "group" && event.targetId === proofGroupId,
+    ),
+    true,
+  );
+  assert.equal(
+    audit.events.some(
+      (event) =>
+        event.runtimeControlScope === "capability" &&
+        event.targetId === "callExternalTools",
+    ),
+    true,
+  );
 
   process.stdout.write(
     `${JSON.stringify({
@@ -46,6 +65,7 @@ try {
         globalControlRestored: true,
         groupControlRestored: true,
         capabilityControlRestored: true,
+        auditEventsRestored: true,
       },
     })}\n`,
   );
