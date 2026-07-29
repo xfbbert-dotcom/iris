@@ -251,6 +251,91 @@ describe("Wiki space internal API", () => {
     await app.close();
   });
 
+  it.each([
+    ["POST", 514, "/rescan"],
+    ["POST", 4_096, "/rescan"],
+    ["PATCH", 514, ""],
+    ["PATCH", 4_096, ""],
+  ] as const)(
+    "returns a controlled invalid request for %s wiki space IDs with %i characters",
+    async (method, idLength, suffix) => {
+      const runtime = fakeDocumentSyncRuntime();
+      const app = buildApp({
+        internalApiToken: "operator-secret",
+        createDocumentSyncRuntime: () => runtime,
+      });
+
+      const response = await app.inject({
+        method,
+        url: `/internal/document-sync/wiki-spaces/${"a".repeat(idLength)}${suffix}`,
+        headers: operatorAuthorization,
+        ...(method === "PATCH" ? { payload: { enabled: true } } : {}),
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+      expect(runtime.wikiSpaces.requestScan).not.toHaveBeenCalled();
+      expect(runtime.wikiSpaces.setEnabled).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
+  it("keeps unrelated and method-mismatched request targets on the default 404 boundary", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      internalApiToken: "operator-secret",
+      createDocumentSyncRuntime: () => runtime,
+    });
+    const longId = "a".repeat(4_096);
+
+    const unrelatedPublic = await app.inject({
+      method: "PATCH",
+      url: `/document-sync/wiki-spaces/${longId}`,
+      payload: { enabled: true },
+    });
+    const unrelatedInternal = await app.inject({
+      method: "PATCH",
+      url: `/internal/not-a-route/${longId}`,
+      headers: operatorAuthorization,
+      payload: { enabled: true },
+    });
+    const wrongWikiSpaceMethod = await app.inject({
+      method: "GET",
+      url: `/internal/document-sync/wiki-spaces/${longId}`,
+      headers: operatorAuthorization,
+    });
+
+    expect(unrelatedPublic.statusCode).toBe(404);
+    expect(unrelatedInternal.statusCode).toBe(404);
+    expect(wrongWikiSpaceMethod.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("authenticates overlong wiki space request targets before returning validation errors", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const app = buildApp({
+      internalApiToken: "operator-secret",
+      createDocumentSyncRuntime: () => runtime,
+    });
+    const longId = "a".repeat(4_096);
+
+    const rescan = await app.inject({
+      method: "POST",
+      url: `/internal/document-sync/wiki-spaces/${longId}/rescan`,
+    });
+    const update = await app.inject({
+      method: "PATCH",
+      url: `/internal/document-sync/wiki-spaces/${longId}`,
+      payload: { enabled: true },
+    });
+
+    expect(rescan.statusCode).toBe(401);
+    expect(rescan.json()).toEqual({ ok: false, error: "internal_api_unauthorized" });
+    expect(update.statusCode).toBe(401);
+    expect(update.json()).toEqual({ ok: false, error: "internal_api_unauthorized" });
+    await app.close();
+  });
+
   it("maps registration and operation failures to safe errors", async () => {
     const registrationError = new Error("Feishu credential: secret-value");
     const operationError = new Error("database connection: secret-value");
