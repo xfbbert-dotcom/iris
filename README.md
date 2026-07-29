@@ -21,10 +21,23 @@ The first implementation slice builds:
 
 ## Local Development
 
+Prerequisites:
+
+- Node.js 22
+- Python 3.12 or newer
+- Docker Desktop with the WSL 2 backend
+
 Install TypeScript dependencies:
 
 ```powershell
-npm install
+npm ci
+```
+
+Start the Core App in development mode after loading the variables from `.env.example` into the
+current shell:
+
+```powershell
+npm --workspace apps/core run dev
 ```
 
 Run TypeScript tests:

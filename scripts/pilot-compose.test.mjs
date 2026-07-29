@@ -73,7 +73,12 @@ function loadPilotCompose() {
   );
 
   if (result.status !== 0) {
-    throw new Error(`Unable to render pilot Compose config: ${result.stderr || result.stdout}`);
+    const details =
+      result.error?.message ||
+      result.stderr?.trim() ||
+      result.stdout?.trim() ||
+      `docker compose exited with status ${String(result.status)}`;
+    throw new Error(`Unable to render pilot Compose config: ${details}`);
   }
   return JSON.parse(result.stdout);
 }

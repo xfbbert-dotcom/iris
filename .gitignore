@@ -2,6 +2,7 @@
 node_modules/
 apps/core/dist/
 __pycache__/
+.pytest_cache/
 *.py[cod]
 .env
 .env.*
