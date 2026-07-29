@@ -84,6 +84,14 @@ test("starts the pilot runtime globally disabled", () => {
   assert.match(compose.services.core.environment.IRIS_FEISHU_BOT_OPEN_ID, /^ou_[A-Za-z0-9]+$/u);
 });
 
+test("passes the execution-ledger gate into the Core container while disabled by default", () => {
+  const name = "IRIS_AGENT_EXECUTION_LEDGER_ENABLED";
+
+  assert.equal(readEnvAssignment(pilotCiEnv, name), "false");
+  assert.equal(readEnvAssignment(pilotEnvExample, name), "false");
+  assert.equal(compose.services.core.environment[name], "false");
+});
+
 test("keeps automatic memory extraction private with dedicated model egress", () => {
   const aiWorker = compose.services["ai-worker"];
   const core = compose.services.core;
