@@ -303,6 +303,56 @@ describe("admin console assets", () => {
     expect(console.element("connection-state").textContent).toBe("Request failed");
   });
 
+  it("does not render an older action refresh after a newer mutation starts", async () => {
+    const authorization = wikiSpace("space-1");
+    const olderRefresh = deferred<ResponseStub>();
+    const olderRefreshStarted = deferred<void>();
+    const newerRegistration = deferred<ResponseStub>();
+    let listRequestCount = 0;
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/document-sync/wiki-spaces?limit=20") {
+        listRequestCount += 1;
+        if (listRequestCount === 1) {
+          return Promise.resolve(jsonResponse({ ok: true, wikiSpaces: [authorization] }));
+        }
+        olderRefreshStarted.resolve(undefined);
+        return olderRefresh.promise;
+      }
+      if (path === "/internal/document-sync/wiki-spaces/space-1") {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          authorization: { ...authorization, enabled: false },
+        }));
+      }
+      if (path === "/internal/document-sync/wiki-spaces") return newerRegistration.promise;
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    await console.trigger("wiki-space-refresh", "click");
+    const rows = console.element("wiki-space-rows");
+    const renderedRow = rows.children[0]!;
+    const enabled = renderedRow.children[4]!.children[0]!.children[0]!;
+
+    enabled.checked = false;
+    const olderAction = enabled.trigger("change");
+    await olderRefreshStarted.promise;
+    console.element("wiki-space-root-source-uri").value = "https://tenant.feishu.cn/wiki/root_2";
+    const newerAction = console.trigger("wiki-space-form", "submit");
+    expect(listRequestCount).toBe(2);
+
+    olderRefresh.resolve(jsonResponse({ ok: true, wikiSpaces: [] }));
+    await olderAction;
+
+    expect(listRequestCount).toBe(2);
+    expect(rows.children).toHaveLength(1);
+    expect(rows.children[0]).toBe(renderedRow);
+    expect(rows.children[0]!.children[4]!.children[0]!.children[0]!.checked).toBe(false);
+    expect(console.element("wiki-space-empty").textContent).toBe("");
+
+    newerRegistration.resolve(errorResponse(500, "newer_registration_failed"));
+    await newerAction;
+  });
+
   it("keeps newer action feedback when an older manual refresh fails", async () => {
     const olderRefresh = deferred<ResponseStub>();
     const newerRegistration = deferred<ResponseStub>();

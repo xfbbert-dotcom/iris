@@ -1365,7 +1365,7 @@ async function refreshWikiSpaces(operationGeneration = wikiSpaceOperationGenerat
   clearWikiSpaceError(operationGeneration);
   try {
     const body = await requestJson(wikiSpaceListPath);
-    if (generation !== wikiSpaceRefreshGeneration) return;
+    if (generation !== wikiSpaceRefreshGeneration || !isCurrentWikiSpaceOperation(operationGeneration)) return;
     renderWikiSpaces(body.wikiSpaces);
   } catch (error) {
     if (generation !== wikiSpaceRefreshGeneration) return;
