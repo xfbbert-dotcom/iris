@@ -24,13 +24,19 @@ The pilot gate is green only when all of the following are true:
 
 - `npm run readiness` reports `status: "ready"` or an explicitly accepted non-security warning;
 - database migrations have completed and `GET /internal/status` reports all enabled workers running;
-- GitHub Core and AI Worker checks pass for the deployed commit;
+- GitHub Core checks and the non-runtime Python contract checks pass for the deployed commit;
 - one real Feishu group completes the callback, mention reply, group-document, authorized-wiki,
   live-permission-denial, global-disable, and queue-recovery smoke checks;
 - an operator knows the rollback action: stop Core and disable or remove the Feishu callback/bot.
 
 Once this gate passes, deploy the pilot. Do not start another general hardening audit unless the gate
 fails, the pilot exposes a P0/P1 issue, or the same user friction repeats.
+
+The Pilot runtime is currently the TypeScript Core plus Postgres and Redis. The Python package under
+`workers/ai` contains forward-looking job contracts only: it has no service entry point, queue
+consumer, Core call path, or Pilot container. Do not start an ad hoc Python process for the Pilot.
+Introduce a Python service only with an explicit queue/result protocol, health and shutdown
+contracts, and end-to-end deployment coverage.
 
 ### Durable Runtime Control
 
@@ -885,5 +891,5 @@ npm run verify
 For PR verification, GitHub Actions must show:
 
 - Core: success
-- AI Worker: success
+- Python contract tests: success (no Python process is deployed in the Pilot)
 - PR merge state: clean

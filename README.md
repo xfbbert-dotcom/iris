@@ -17,15 +17,18 @@ The first implementation slice builds:
 - runtime capability controls
 - real-time permission guard
 - context assembly with live chat anchoring
-- Python AI worker job contracts
+- experimental Python AI worker job contracts (not connected to the Pilot runtime)
 
 ## Local Development
 
-Prerequisites:
+Runtime prerequisites:
 
 - Node.js 22
-- Python 3.12 or newer
 - Docker Desktop with the WSL 2 backend
+
+Python 3.12 or newer is optional and currently needed only to run the experimental AI worker
+contract tests. The Pilot Compose stack does not start a Python worker; document parsing,
+embeddings, retrieval, and answer drafting currently run inside the TypeScript Core.
 
 Install TypeScript dependencies:
 

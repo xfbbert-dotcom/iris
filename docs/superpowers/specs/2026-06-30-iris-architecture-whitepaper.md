@@ -18,10 +18,16 @@ Constitutional principle:
 
 ## 2. Architecture Choice
 
-Iris v1 uses a modular monolith plus Python workers:
+Iris targets a modular monolith plus Python workers:
 
 - TypeScript Core App for Feishu integration, API, web admin console, permissions, approval, audit, orchestration, and product behavior.
 - Python AI Workers for document parsing, embeddings, retrieval, memory extraction, summarization, draft generation, and proactive signal scanning.
+
+Implementation status for the supervised Pilot: only the TypeScript modular monolith is deployed.
+It currently owns document parsing, embeddings, retrieval, and draft generation. The Python package
+contains contract prototypes but has no process entry point, queue consumer, Core call path, or
+deployment service. Python workers remain a target architecture and must not be represented as an
+active Pilot dependency until those boundaries and end-to-end operations exist.
 - Postgres as the fact database.
 - pgvector as the first semantic retrieval layer.
 - Redis Queue as the async job layer.
