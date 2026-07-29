@@ -15,7 +15,7 @@ export type FeishuWikiSpaceClient = {
   getNode(nodeToken: string): Promise<FeishuWikiNode>;
   listChildren(input: {
     spaceId: string;
-    parentNodeToken: string;
+    parentNodeToken?: string;
     pageToken?: string;
     pageSize: number;
   }): Promise<{ nodes: FeishuWikiNode[]; nextPageToken?: string }>;
@@ -88,12 +88,12 @@ export function createFeishuWikiSpaceClient({
 
     async listChildren({ spaceId, parentNodeToken, pageToken, pageSize }) {
       const safeSpaceId = requireToken(spaceId, "spaceId");
-      const safeParentNodeToken = requireToken(parentNodeToken, "parentNodeToken");
       const safePageSize = requirePageSize(pageSize);
-      const query = new URLSearchParams({
-        parent_node_token: safeParentNodeToken,
-        page_size: String(safePageSize),
-      });
+      const query = new URLSearchParams();
+      if (parentNodeToken !== undefined) {
+        query.set("parent_node_token", requireToken(parentNodeToken, "parentNodeToken"));
+      }
+      query.set("page_size", String(safePageSize));
       if (pageToken !== undefined) {
         query.set("page_token", requireToken(pageToken, "pageToken"));
       }
@@ -145,9 +145,6 @@ async function requestJson({
       }
       throw new WikiSpaceSyncError("request_failed", true);
     }
-    if (!response.ok) {
-      throw httpError(response.status);
-    }
     let responseBody: unknown;
     try {
       responseBody = await readBoundedJsonResponse({
@@ -160,7 +157,13 @@ async function requestJson({
       if (isAbortError(error)) {
         throw new WikiSpaceSyncError("timeout", true);
       }
+      if (!response.ok) {
+        throw httpError(response.status);
+      }
       throw invalidResponse();
+    }
+    if (!response.ok) {
+      throw httpError(response.status, responseBody);
     }
     if (!isRecord(responseBody) || responseBody.code !== 0) {
       throw invalidResponse();
@@ -204,12 +207,15 @@ function readNode(value: unknown): FeishuWikiNode {
   };
 }
 
-function httpError(status: number): WikiSpaceSyncError {
+function httpError(status: number, responseBody?: unknown): WikiSpaceSyncError {
   if (status === 401) return new WikiSpaceSyncError("unauthorized", false);
   if (status === 403) return new WikiSpaceSyncError("forbidden", false);
   if (status === 404) return new WikiSpaceSyncError("not_found", false);
   if (status === 429) return new WikiSpaceSyncError("rate_limited", true);
   if (status >= 500 && status <= 599) return new WikiSpaceSyncError("upstream_unavailable", true);
+  if (status === 400 && isRecord(responseBody) && responseBody.code === 131006) {
+    return new WikiSpaceSyncError("forbidden", false);
+  }
   return new WikiSpaceSyncError("request_failed", false);
 }
 

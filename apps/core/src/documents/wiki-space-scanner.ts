@@ -33,11 +33,51 @@ export async function scanFeishuWikiSpace({
   const safePageSize = requireBoundedInteger(pageSize, "pageSize", 50);
   const root = await client.getNode(rootNodeToken);
   const spaceId = root.spaceId;
-  const queue: Array<{ node: FeishuWikiNode; depth: number }> = [{ node: root, depth: 0 }];
-  const visited = new Set([root.nodeToken]);
+  const queue: Array<{ node: FeishuWikiNode; depth: number }> = [];
+  const visited = new Set<string>();
   const documents: Array<{ nodeToken: string; title?: string }> = [];
-  let discoveredNodeCount = 1;
+  let discoveredNodeCount = 0;
   let skippedNodeCount = 0;
+
+  let rootPageToken: string | undefined;
+  const rootPageTokens = new Set<string>();
+  do {
+    const page = await client.listChildren({
+      spaceId,
+      ...(rootPageToken === undefined ? {} : { pageToken: rootPageToken }),
+      pageSize: safePageSize,
+    });
+    for (const topLevelNode of page.nodes) {
+      if (topLevelNode.spaceId !== spaceId) {
+        throw terminalScanError("cross_space_node");
+      }
+      if (visited.has(topLevelNode.nodeToken)) {
+        skippedNodeCount += 1;
+        continue;
+      }
+      if (discoveredNodeCount >= safeMaxNodes) {
+        throw terminalScanError("node_limit_exceeded");
+      }
+      visited.add(topLevelNode.nodeToken);
+      discoveredNodeCount += 1;
+      queue.push({ node: topLevelNode, depth: 0 });
+    }
+    rootPageToken = page.nextPageToken;
+    if (rootPageToken !== undefined && discoveredNodeCount >= safeMaxNodes) {
+      throw terminalScanError("node_limit_exceeded");
+    }
+    if (
+      rootPageToken !== undefined &&
+      (rootPageTokens.has(rootPageToken) || rootPageTokens.size >= safeMaxNodes)
+    ) {
+      throw new Error("Feishu wiki space pagination did not advance");
+    }
+    if (rootPageToken !== undefined) rootPageTokens.add(rootPageToken);
+  } while (rootPageToken !== undefined);
+
+  if (discoveredNodeCount === 0) {
+    throw new WikiSpaceSyncError("forbidden", false);
+  }
 
   for (let index = 0; index < queue.length; index += 1) {
     const { node, depth } = queue[index];

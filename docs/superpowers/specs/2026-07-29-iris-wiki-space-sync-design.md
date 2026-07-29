@@ -15,10 +15,11 @@ whitepaper requirement:
 > registered manually.
 
 This design adds durable, asynchronous wiki-space discovery to the existing
-modular monolith. An administrator registers one wiki root URL. Iris resolves
-the root, enumerates supported descendant pages, idempotently registers them as
-authorized wiki documents, and hands them to the existing document sync and
-semantic indexing pipeline.
+modular monolith. An administrator registers any page URL from an authorized
+knowledge space. Iris uses that page only as an anchor to resolve the
+authoritative space ID, enumerates every visible top-level tree in the space,
+idempotently registers all supported pages as authorized wiki documents, and
+hands them to the existing document sync and semantic indexing pipeline.
 
 The feature does not replace the document source registry, document sync
 worker, vector index, or answer-time permission guard. It connects those
@@ -32,7 +33,7 @@ TypeScript Core modular monolith:
 ```text
 Admin Console / Internal API
           |
-          | register root URL (fast, no Feishu network call)
+          | register page anchor URL (fast, no Feishu network call)
           v
 wiki_space_authorizations (Postgres)
           |
@@ -59,10 +60,11 @@ the module extractable later if scale or ownership requires it.
 
 ### 3.1 Included
 
-- register one authorized Feishu wiki root URL;
+- register one page URL from an authorized Feishu knowledge space;
 - persist authorization and scan state in Postgres;
-- asynchronously resolve the root node and its space ID;
-- recursively enumerate descendants with pagination;
+- asynchronously resolve the anchor node and its space ID;
+- enumerate all visible top-level nodes and recursively traverse every tree
+  with pagination;
 - register supported pages through the existing
   `registerAuthorizedWikiDocument` path;
 - enqueue each registered page through the existing document-sync planner;
@@ -95,11 +97,13 @@ Migration `0041_wiki_space_authorizations.sql` creates
 Fields:
 
 - `id`: stable Iris-side identifier.
-- `root_source_uri`: normalized Feishu wiki root URL; unique.
-- `root_node_token`: token parsed from the normalized URL.
+- `root_source_uri`: normalized Feishu wiki anchor URL; unique. The historical
+  column name is retained for migration compatibility; it is not the scan
+  boundary.
+- `root_node_token`: anchor token parsed from the normalized URL.
 - `space_id`: resolved Feishu space ID, nullable before the first successful
   resolution.
-- `title`: most recently observed root title, nullable.
+- `title`: most recently observed anchor title, nullable.
 - `enabled`: explicit administrator policy.
 - `scan_state`: `pending | scanning | synced | retry_wait | dead_letter |
   disabled`.
@@ -174,18 +178,23 @@ The worker uses the existing cached `FeishuTenantAccessTokenProvider`.
 
 For each claimed authorization:
 
-1. Resolve `root_node_token` through the Feishu wiki node API.
-2. Record the authoritative `space_id` and root title.
-3. Add the root node to a breadth-first queue.
-4. For each node, list direct children with Feishu pagination.
-5. Reject any child whose reported `space_id` differs from the root.
-6. Stop with a safe terminal classification if depth or node limits are
+1. Resolve `root_node_token` through the Feishu wiki node API. This token is an
+   authorization anchor, not a traversal root.
+2. Record the authoritative `space_id` and anchor title.
+3. List every top-level node in that space with Feishu pagination and add them
+   to a breadth-first queue.
+4. Fail closed with `forbidden` when the anchor is readable but no top-level
+   nodes are visible. A partial page subtree must never be reported as a
+   successful space scan.
+5. For each node, list direct children with Feishu pagination.
+6. Reject any node whose reported `space_id` differs from the resolved space.
+7. Stop with a safe terminal classification if depth or node limits are
    exceeded.
-7. For each supported wiki page, build a canonical
+8. For each supported wiki page, build a canonical
    `https://<tenant-host>/wiki/<node_token>` source URI.
-8. Call the existing authorized-wiki registration method with the resolved
+9. Call the existing authorized-wiki registration method with the resolved
    space ID and title.
-9. Use the existing manual document-sync planner to enqueue the resulting
+10. Use the existing manual document-sync planner to enqueue the resulting
    source.
 
 Supported v1 pages are wiki nodes whose object type can be fetched by the
@@ -201,7 +210,8 @@ create an infinite traversal or duplicate registrations.
 Internal endpoints:
 
 - `POST /internal/document-sync/wiki-spaces`
-  - body: `{ "rootSourceUri": "https://.../wiki/<token>" }`;
+  - body: `{ "rootSourceUri": "https://.../wiki/<token>" }`; the compatibility
+    field accepts any page URL in the intended knowledge space;
   - validates and normalizes locally;
   - persists `pending`;
   - returns `202` without calling Feishu.
@@ -282,7 +292,10 @@ Tests must cover:
 - transactional claims and expired-lease recovery;
 - success, retry, dead-letter, enable, disable, and manual-rescan transitions;
 - root resolution, pagination, deterministic breadth-first traversal, node
-  deduplication, unsupported node skipping, and same-space enforcement;
+  deduplication, unsupported node skipping, same-space enforcement, and
+  whole-space top-level enumeration independent of the anchor page;
+- terminal failure when the anchor is readable but whole-space enumeration is
+  unavailable;
 - node/depth bounds;
 - idempotent document registration and enqueue on repeated scans;
 - no Feishu call on the registration HTTP request;
@@ -301,12 +314,14 @@ acceptance.
 
 The feature is complete for the internal release when:
 
-1. Registering the pilot root URL returns before any Feishu network request.
-2. One worker scan discovers the root and both current child pages.
-3. Exactly three authorized wiki document sources exist for that space.
+1. Registering a pilot page URL returns before any Feishu network request.
+2. One worker scan discovers every visible top-level tree in the knowledge
+   space, including siblings of the registered anchor.
+3. Every supported page visible to the app is registered as an authorized wiki
+   document source.
 4. Repeating the scan creates no duplicate source or evidence rows.
-5. Adding a fourth child and rescanning discovers it without manual page
-   registration.
+5. Adding a page under any top-level tree and rescanning discovers it without
+   manual page registration.
 6. Disabling the space prevents future scans but does not delete history.
 7. Revoking a page permission prevents its fragments from reaching the answer
    model through the existing real-time permission guard.
@@ -319,4 +334,3 @@ The feature is complete for the internal release when:
 Provider capacity that blocks semantic indexing is recorded as a downstream
 reindex failure; it does not extend this feature indefinitely. Local free-model
 test infrastructure is a separate architecture change.
-

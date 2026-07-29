@@ -7,6 +7,54 @@ import {
 } from "../src/documents/wiki-space-scanner.js";
 
 describe("scanFeishuWikiSpace", () => {
+  it("uses the supplied page only to resolve the space and scans every top-level tree", async () => {
+    const anchor = wikiNode("anchor");
+    const client: FeishuWikiSpaceClient = {
+      getNode: async () => anchor,
+      listChildren: async ({ parentNodeToken }) => {
+        if (parentNodeToken === undefined) {
+          return {
+            nodes: [
+              anchor,
+              wikiNode("sibling-root", { hasChild: true }),
+            ],
+          };
+        }
+        if (parentNodeToken === "sibling-root") {
+          return { nodes: [wikiNode("sibling-child")] };
+        }
+        return { nodes: [] };
+      },
+    };
+
+    await expect(scanFeishuWikiSpace({ client, rootNodeToken: "anchor" })).resolves.toEqual({
+      spaceId: "space-1",
+      rootTitle: "anchor",
+      documents: [
+        { nodeToken: "anchor", title: "anchor" },
+        { nodeToken: "sibling-root", title: "sibling-root" },
+        { nodeToken: "sibling-child", title: "sibling-child" },
+      ],
+      discoveredNodeCount: 3,
+      skippedNodeCount: 0,
+    });
+  });
+
+  it("fails closed when the anchor is readable but no top-level space nodes are visible", async () => {
+    const client: FeishuWikiSpaceClient = {
+      getNode: async () => wikiNode("anchor"),
+      listChildren: async () => ({ nodes: [] }),
+    };
+
+    await expect(scanFeishuWikiSpace({
+      client,
+      rootNodeToken: "anchor",
+    })).rejects.toMatchObject({
+      classification: "forbidden",
+      retriable: false,
+    });
+  });
+
   it("walks a same-space wiki breadth first and emits supported documents in stable order", async () => {
     const client = fakeClient({
       root: wikiNode("root", { hasChild: true }),
@@ -38,8 +86,11 @@ describe("scanFeishuWikiSpace", () => {
     const child = wikiNode("child");
     const client: FeishuWikiSpaceClient = {
       getNode: async () => root,
-      listChildren: async ({ pageToken }) => {
-        if (pageToken === undefined) return { nodes: [], nextPageToken: "next" };
+      listChildren: async ({ parentNodeToken, pageToken }) => {
+        if (parentNodeToken === undefined) {
+          if (pageToken === undefined) return { nodes: [], nextPageToken: "next" };
+          return { nodes: [root] };
+        }
         return { nodes: [child, child] };
       },
     };
@@ -49,6 +100,44 @@ describe("scanFeishuWikiSpace", () => {
       discoveredNodeCount: 2,
       skippedNodeCount: 1,
     });
+  });
+
+  it("continues through successful child pagination", async () => {
+    const root = wikiNode("root", { hasChild: true });
+    const listCalls: Array<{ parentNodeToken?: string; pageToken?: string }> = [];
+    const client: FeishuWikiSpaceClient = {
+      getNode: async () => root,
+      listChildren: async ({ parentNodeToken, pageToken }) => {
+        listCalls.push({
+          ...(parentNodeToken === undefined ? {} : { parentNodeToken }),
+          ...(pageToken === undefined ? {} : { pageToken }),
+        });
+        if (parentNodeToken === undefined) {
+          return { nodes: [root] };
+        }
+        if (pageToken === undefined) {
+          return {
+            nodes: [wikiNode("child-a")],
+            nextPageToken: "next-child-page",
+          };
+        }
+        return { nodes: [wikiNode("child-b")] };
+      },
+    };
+
+    await expect(scanFeishuWikiSpace({ client, rootNodeToken: "root" })).resolves.toMatchObject({
+      documents: [
+        { nodeToken: "root" },
+        { nodeToken: "child-a" },
+        { nodeToken: "child-b" },
+      ],
+      discoveredNodeCount: 3,
+    });
+    expect(listCalls).toEqual([
+      {},
+      { parentNodeToken: "root" },
+      { parentNodeToken: "root", pageToken: "next-child-page" },
+    ]);
   });
 
   it("does not emit unsupported objects but continues through them to supported descendants", async () => {
@@ -94,14 +183,18 @@ describe("scanFeishuWikiSpace", () => {
   });
 
   it("rejects a known next page once maxNodes is reached without fetching it", async () => {
-    const listCalls: Array<{ parentNodeToken: string; pageToken?: string }> = [];
+    const listCalls: Array<{ parentNodeToken?: string; pageToken?: string }> = [];
+    const root = wikiNode("root", { hasChild: true });
     const client: FeishuWikiSpaceClient = {
-      getNode: async () => wikiNode("root", { hasChild: true }),
+      getNode: async () => root,
       listChildren: async ({ parentNodeToken, pageToken }) => {
         listCalls.push({
-          parentNodeToken,
+          ...(parentNodeToken === undefined ? {} : { parentNodeToken }),
           ...(pageToken === undefined ? {} : { pageToken }),
         });
+        if (parentNodeToken === undefined) {
+          return { nodes: [root] };
+        }
         if (parentNodeToken === "root" && pageToken === undefined) {
           return {
             nodes: [wikiNode("child", { hasChild: true })],
@@ -124,7 +217,7 @@ describe("scanFeishuWikiSpace", () => {
       retriable: false,
     });
 
-    expect(listCalls).toEqual([{ parentNodeToken: "root" }]);
+    expect(listCalls).toEqual([{}, { parentNodeToken: "root" }]);
   });
 
   it("rejects a node that reports children at maxDepth", async () => {
@@ -149,7 +242,11 @@ function fakeClient(input: {
 }): FeishuWikiSpaceClient {
   return {
     getNode: async () => input.root,
-    listChildren: async ({ parentNodeToken }) => ({ nodes: input.children[parentNodeToken] ?? [] }),
+    listChildren: async ({ parentNodeToken }) => ({
+      nodes: parentNodeToken === undefined
+        ? [input.root]
+        : (input.children[parentNodeToken] ?? []),
+    }),
   };
 }
 

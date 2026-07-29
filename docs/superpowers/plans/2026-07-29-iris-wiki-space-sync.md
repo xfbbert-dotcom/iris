@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let an Iris administrator register one Feishu wiki root URL and have Core durably, asynchronously, and idempotently discover and synchronize all supported pages in that space.
+**Goal:** Let an Iris administrator register any page URL from a Feishu knowledge space and have Core durably, asynchronously, and idempotently discover and synchronize all supported pages across every top-level tree in that space.
 
 **Architecture:** Add a Postgres-backed wiki-space authorization and scan state machine inside the existing Core modular monolith. A bounded worker uses the existing cached Feishu tenant token, traverses same-space wiki nodes breadth-first, and sends supported pages through the existing authorized-wiki document registration and document-sync queue. The HTTP request never waits on Feishu, and the existing live permission guard remains the final authority before model context injection.
 
@@ -14,7 +14,7 @@
 - `IRIS_WIKI_SPACE_SYNC_ENABLED` defaults to `false`.
 - Public ingress must continue returning `404` for `/internal/*`.
 - Registration performs no Feishu network call and returns HTTP `202`.
-- Traversal stays inside the resolved root space, uses breadth-first order, and is bounded to 500 nodes and depth 20.
+- The submitted page is an anchor used only to resolve the authoritative space ID. Traversal starts from the space's top-level nodes, stays inside that space, uses breadth-first order, and is bounded to 500 nodes and depth 20.
 - Only `docx` and legacy `doc` wiki nodes enter the existing document pipeline.
 - A missing page in one scan is not automatically deleted or disabled.
 - Automated tests must not consume Gemini or any hosted model quota.
@@ -202,7 +202,7 @@ export type FeishuWikiSpaceClient = {
   getNode(nodeToken: string): Promise<FeishuWikiNode>;
   listChildren(input: {
     spaceId: string;
-    parentNodeToken: string;
+    parentNodeToken?: string;
     pageToken?: string;
     pageSize: number;
   }): Promise<{ nodes: FeishuWikiNode[]; nextPageToken?: string }>;
@@ -219,8 +219,9 @@ export type WikiSpaceScanResult = {
 
 - [ ] **Step 1: Write failing client tests**
 
-Assert exact Feishu URLs, bearer token usage, pagination mapping, response-size
-limit, timeout, and safe classifications for `401/403/404/429/5xx`.
+Assert exact Feishu URLs for top-level and child listing, bearer token usage,
+pagination mapping, response-size limit, timeout, and safe classifications for
+`401/403/404/429/5xx` plus Feishu space-permission code `131006`.
 
 - [ ] **Step 2: Verify client tests are RED**
 
@@ -242,15 +243,16 @@ Use a deterministic fake client to prove:
 
 ```ts
 expect(result.documents.map((item) => item.nodeToken)).toEqual([
-  "root",
-  "child-a",
-  "child-b",
-  "grandchild",
+  "anchor",
+  "sibling-root",
+  "sibling-child",
 ]);
 ```
 
-Add tests for multi-page children, duplicate tokens, unsupported types,
-cross-space nodes, `maxNodes=500`, and `maxDepth=20`.
+Add tests proving the submitted anchor does not narrow the scan, plus
+multi-page top-level and child listings, duplicate tokens, unsupported types,
+cross-space nodes, an empty top-level fail-closed result, `maxNodes=500`, and
+`maxDepth=20`.
 
 - [ ] **Step 5: Verify scanner tests are RED**
 
@@ -262,8 +264,9 @@ Expected: FAIL because traversal is absent.
 
 - [ ] **Step 6: Implement breadth-first traversal and verify GREEN**
 
-Use a queue of `{ node, depth }`, a `Set<string>` for visited node tokens, and
-only emit `docx`/`doc` nodes. Do not perform document registration here.
+Resolve the anchor's `space_id`, page through all top-level nodes, then use a
+queue of `{ node, depth }` and a `Set<string>` for visited node tokens. Only
+emit `docx`/`doc` nodes. Do not perform document registration here.
 
 - [ ] **Step 7: Commit**
 
@@ -311,7 +314,7 @@ export type WikiSpaceSyncWorkerResult =
 
 - [ ] **Step 1: Write worker RED tests**
 
-Cover one successful claim, canonical child URLs using the root URL origin,
+Cover one successful claim, canonical page URLs using the anchor URL origin,
 three registrations in traversal order, retry backoff, terminal failure,
 exhausted attempts, and stale revision rejection.
 
@@ -579,7 +582,7 @@ git commit -m "ops: add wiki space sync rollout gate"
 - Modify: `docs/runbooks/deployment-log.md`
 
 **Interfaces:**
-- Consumes the reviewed branch and the pilot root
+- Consumes the reviewed branch and the pilot anchor
   `https://tcnmvzw006k7.feishu.cn/wiki/Pxkiwgn3qirkzGk8Pqbc1RuunMe`.
 - Produces CI evidence and a deployment decision; it does not merge.
 
@@ -599,10 +602,10 @@ leave the current pilot unchanged.
 
 - [ ] **Step 4: Deploy fail-closed and run one real traversal**
 
-Enable only the wiki-space worker, register the root once, and verify exactly
-the root plus its two current children are discovered. Do not repeatedly replay
-Gemini embedding failures; discovery acceptance is independent from provider
-capacity.
+Enable only the wiki-space worker, register the anchor once, and verify every
+supported page across all visible top-level trees is discovered, including
+siblings of the anchor. Do not repeatedly replay Gemini embedding failures;
+discovery acceptance is independent from provider capacity.
 
 - [ ] **Step 5: Verify idempotency and permission guard**
 
@@ -623,4 +626,3 @@ downstream indexing.
 Keep the worker enabled only if every gate passes. Otherwise set
 `IRIS_WIKI_SPACE_SYNC_ENABLED=false`, rebuild Core, and verify the original
 pilot remains healthy.
-

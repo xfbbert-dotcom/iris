@@ -260,6 +260,41 @@ delivery mistakes while implementing it.
 - **Exit condition:** The complete lifecycle is reproduced once with no duplicates or unrelated
   data.
 
+### Do not confuse a Wiki page anchor with the whole knowledge space
+
+- **Failure:** Iris reported that an authorized Feishu knowledge space was available, but only the
+  page whose URL was registered and its two descendants were indexed. Sibling top-level trees,
+  including the material needed for a real question, were invisible.
+- **Root cause:** The registered page token was used both to resolve the authoritative `space_id`
+  and as the traversal boundary. A Feishu knowledge-space overview can show several sibling
+  top-level trees, so one visible page is not necessarily the space root.
+- **Prevention rule:** Treat a submitted Wiki page only as an authorization anchor. Resolve its
+  `space_id`, enumerate every top-level node, then traverse all same-space trees. If the anchor is
+  readable but whole-space enumeration is denied or empty, fail closed instead of reporting a
+  successful partial scan.
+- **Guard:** Client request-shape coverage for parentless top-level listing, scanner regressions
+  with an anchor plus sibling tree, safe classification for Feishu error `131006`, and an empty
+  top-level result regression.
+- **Exit condition:** A real scan registers all supported pages visible in the authorized space,
+  includes siblings of the anchor, remains idempotent on rescan, and returns every document/reindex
+  queue and DLQ to zero.
+
+### Do not treat Feishu-native recommendations as Iris retrieval evidence
+
+- **Failure:** A `相关知识` link rendered below an Iris reply was interpreted as proof that Iris had
+  retrieved the linked Feishu knowledge page.
+- **Root cause:** Feishu's chat client can add its own knowledge recommendation independently of
+  Iris. The decoration is visually adjacent to the bot reply but is not part of Iris's answer,
+  source trace, or citation pipeline.
+- **Prevention rule:** Validate Iris retrieval from durable source, snapshot, fragment, live
+  permission-guard, and bounded unique-marker evidence. Never use Feishu-native recommendations,
+  previews, or search decorations as Iris acceptance evidence.
+- **Guard:** The wiki-space runbook labels client-native UI separately and states that the current
+  release has neither durable per-answer source traces nor Iris-owned citation rendering.
+- **Exit condition:** A bounded unique-marker test can prove the retrieval loop while durable
+  source-level trace and citation acceptance remain explicitly open. Client-native `相关知识` is
+  ignored.
+
 ## Test Architecture
 
 ### Keep test doubles aligned with fail-closed interfaces

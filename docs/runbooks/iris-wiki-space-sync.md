@@ -3,9 +3,15 @@
 ## Scope And Preconditions
 
 Wiki-space discovery is deployment-default-off. Keep
-`IRIS_WIKI_SPACE_SYNC_ENABLED=false` until the operator has a bounded Feishu wiki root, a reviewed
-pilot, and clean raw-event, document-sync, and reindex queues. It requires
+`IRIS_WIKI_SPACE_SYNC_ENABLED=false` until the operator has an authorized, bounded Feishu knowledge
+space, a reviewed pilot, and clean raw-event, document-sync, and reindex queues. It requires
 `IRIS_DOCUMENT_SYNC_WORKER_ENABLED=true`; Core rejects the configuration otherwise.
+
+The registration URL may point to any page in the intended knowledge space. Iris uses the page only
+to resolve the space ID, then enumerates all top-level trees. Before registration, add the Iris
+application as a member of the knowledge space itself; sharing only one page or subtree is
+insufficient. A scan that can read the anchor but cannot enumerate the space fails closed as
+`forbidden`.
 
 Keep the approved first-release scan defaults aligned across Core and pilot configuration:
 `IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS=21600000` (6 hours),
@@ -66,11 +72,11 @@ Wiki authorization state meanings:
 
 ## Register, Inspect, Rescan, And Enablement
 
-Register one approved root URL. Registration is idempotent for its canonical root and returns an
+Register one approved page URL from the space. Registration is idempotent for its canonical anchor and returns an
 authorization in `pending` state; it does not expose document bodies in the response.
 
 ```powershell
-$wikiRootUrl = "https://example.feishu.cn/wiki/wiki_root_token"
+$wikiRootUrl = "https://example.feishu.cn/wiki/any_page_token_in_the_space"
 Invoke-RestMethod -Method Post -Headers $irisHeaders `
   -Uri "$irisBaseUrl/internal/document-sync/wiki-spaces" `
   -ContentType "application/json" `
@@ -170,11 +176,34 @@ Invoke-RestMethod -Method Patch -Headers $irisHeaders `
   -Body '{"enabled":false}'
 ```
 
+## Answer And Citation Evidence
+
+Feishu may render a native `相关知识` recommendation below a chat reply. That recommendation belongs
+to Feishu's own client-side knowledge feature; it is not an Iris citation and does not prove that
+Iris retrieved, authorized, or supplied the recommended page to the model.
+
+The current internal release stores aggregate retrieval counts but does not yet persist the exact
+source IDs supplied for each answer, and it does not render Iris-owned source citations. Therefore,
+do not claim source-level trace or citation acceptance for this release.
+
+For a bounded end-to-end retrieval smoke test, require all of these independent signals:
+
+1. The relevant source has a successful snapshot and at least one indexed document fragment.
+2. The live permission guard allows that exact source for the requesting chat at answer time.
+3. A unique test marker exists only in that authorized document, not in group messages, memories,
+   another indexed source, or the question itself.
+4. One ordinary Iris answer returns the exact marker while aggregate retrieval telemetry reports
+   at least one allowed fragment.
+
+Do not use Feishu-native `相关知识`, search suggestions, page previews, or other client decorations
+as acceptance evidence. Record a passing marker test as bounded retrieval evidence, not as proof of
+a durable source-level trace or citation feature. Common-knowledge answers are not retrieval proof.
+
 ## Permission Revocation Second Check
 
 For a previously synced pilot document, remove the app's effective Feishu access through the real
-space, node, folder, or membership control. Disable the affected wiki root immediately. Record the
-root ID, document URL, and revocation time without recording its body.
+space, node, folder, or membership control. Disable the affected wiki authorization immediately.
+Record the authorization ID, document URL, and revocation time without recording its body.
 
 Perform two independent post-revocation checks:
 

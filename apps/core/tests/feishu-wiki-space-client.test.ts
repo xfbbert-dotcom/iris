@@ -79,6 +79,42 @@ describe("FeishuWikiSpaceClient", () => {
     );
   });
 
+  it("lists top-level space nodes without narrowing the request to the anchor page", async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      code: 0,
+      data: {
+        items: [
+          node({
+            node_token: "sibling-root",
+            obj_token: "doc-sibling-root",
+            title: "Sibling root",
+          }),
+        ],
+        has_more: false,
+      },
+    }));
+    const client = createFeishuWikiSpaceClient({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+
+    await expect(client.listChildren({ spaceId: "space 1", pageSize: 50 })).resolves.toEqual({
+      nodes: [{
+        nodeToken: "sibling-root",
+        objectToken: "doc-sibling-root",
+        objectType: "docx",
+        spaceId: "space-1",
+        title: "Sibling root",
+        hasChild: true,
+      }],
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/wiki/v2/spaces/space%201/nodes?page_size=50",
+      expect.anything(),
+    );
+  });
+
   it.each([
     [401, "unauthorized", false],
     [403, "forbidden", false],
@@ -98,6 +134,42 @@ describe("FeishuWikiSpaceClient", () => {
     expect(error).toMatchObject({ classification, retriable });
     expect(String(error)).not.toContain("tenant-secret");
     expect(String(error)).not.toContain("raw upstream body");
+  });
+
+  it("classifies Feishu's HTTP 400 space-permission response as terminal forbidden", async () => {
+    const client = createFeishuWikiSpaceClient({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-secret") },
+      fetch: vi.fn(async () => jsonResponse({
+        code: 131006,
+        msg: "permission denied: raw tenant-secret",
+      }, { status: 400 })),
+    });
+
+    const error = await client.listChildren({
+      spaceId: "space-1",
+      pageSize: 50,
+    }).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(WikiSpaceSyncError);
+    expect(error).toMatchObject({ classification: "forbidden", retriable: false });
+    expect(String(error)).not.toContain("tenant-secret");
+  });
+
+  it("keeps an upstream HTTP failure retriable when its body is not valid JSON", async () => {
+    const client = createFeishuWikiSpaceClient({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => new Response("<html>gateway failure</html>", {
+        status: 500,
+        headers: { "content-type": "text/html" },
+      })),
+    });
+
+    await expect(client.getNode("root")).rejects.toMatchObject({
+      classification: "upstream_unavailable",
+      retriable: true,
+    });
   });
 
   it("rejects known oversized JSON responses before parsing them", async () => {

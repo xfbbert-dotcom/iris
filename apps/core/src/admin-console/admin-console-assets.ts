@@ -156,13 +156,13 @@ export function renderAdminConsoleHtml(): string {
       <div class="panel-heading">
         <div>
           <h2 id="wiki-spaces-heading">Wiki Spaces</h2>
-          <p>Register Feishu wiki roots and monitor scheduled scan state.</p>
+          <p>Register any page from an authorized Feishu knowledge space and monitor full-space scan state.</p>
         </div>
         <button id="wiki-space-refresh" type="button" class="secondary icon-button" title="Refresh wiki spaces" aria-label="Refresh wiki spaces">&#8635;</button>
       </div>
       <form id="wiki-space-form" class="wiki-space-form">
         <label>
-          Wiki root URL
+          Any page URL in the knowledge space
           <input id="wiki-space-root-source-uri" type="url" placeholder="https://tenant.feishu.cn/wiki/...">
         </label>
         <button id="wiki-space-submit" type="submit" class="secondary">Register Wiki Space</button>

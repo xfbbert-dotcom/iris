@@ -184,15 +184,21 @@ describe("WikiSpaceSyncWorker", () => {
       complete: vi.fn(),
       fail: vi.fn(async () => claimed),
     };
+    const root = wikiNode("root", { hasChild: classification === "depth_limit_exceeded" });
     const client: FeishuWikiSpaceClient = {
-      getNode: async () => wikiNode("root", { hasChild: true }),
-      listChildren: async () => ({
-        nodes: [
-          classification === "cross_space_node"
-            ? wikiNode("foreign", { spaceId: "space-2" })
-            : wikiNode("child"),
-        ],
-      }),
+      getNode: async () => root,
+      listChildren: async ({ parentNodeToken }) => {
+        if (parentNodeToken !== undefined) {
+          return { nodes: [wikiNode("child")] };
+        }
+        if (classification === "cross_space_node") {
+          return { nodes: [wikiNode("foreign", { spaceId: "space-2" })] };
+        }
+        if (classification === "node_limit_exceeded") {
+          return { nodes: [root, wikiNode("overflow")] };
+        }
+        return { nodes: [root] };
+      },
     };
     const worker = createWikiSpaceSyncWorker({
       repository,

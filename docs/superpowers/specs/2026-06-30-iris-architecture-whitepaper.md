@@ -130,6 +130,13 @@ Document source types:
 - Authorized knowledge-base document: belongs to an authorized Feishu wiki or knowledge-base space.
 - User-submitted document: manually given to Iris by a user.
 
+An administrator may identify an authorized Feishu knowledge space by pasting any page URL from
+that space. The page token is only an anchor for resolving the authoritative space ID; it is not a
+content boundary. Iris must enumerate every visible top-level tree in the authorized space and
+recursively discover supported pages. If the anchor is readable but the application lacks
+space-member permission to enumerate the whole space, synchronization fails closed and must not
+report a partial page subtree as a successfully synchronized knowledge base.
+
 Document-source evidence timestamps must be valid before entering either the in-memory v1 registry
 or the Postgres fact layer. Invalid `observedAt` values are rejected before state mutation or
 transaction work so document provenance remains sortable and auditable.
