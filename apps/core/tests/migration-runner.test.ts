@@ -281,6 +281,30 @@ describe("runMigrations", () => {
 });
 
 describe("defaultMigrationsDir", () => {
+  it("orders 0041 after the existing migrations and defines durable wiki-space authorization constraints", async () => {
+    const migrationNames = await readdir(defaultMigrationsDir());
+    const priorMigrationIndex = migrationNames.indexOf("0040_proactive_signal_feedback.sql");
+    const migrationIndex = migrationNames.indexOf("0041_wiki_space_authorizations.sql");
+    expect(migrationIndex).toBeGreaterThan(priorMigrationIndex);
+
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0041_wiki_space_authorizations.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table wiki_space_authorizations");
+    expect(normalized).toContain("unique (root_source_uri)");
+    expect(normalized).toContain("scan_state in ('pending', 'scanning', 'synced', 'retry_wait', 'dead_letter', 'disabled')");
+    expect(normalized).toContain("check (attempt_count >= 0)");
+    expect(normalized).toContain("check (discovered_node_count >= 0)");
+    expect(normalized).toContain("check (registered_document_count >= 0)");
+    expect(normalized).toContain("check (skipped_node_count >= 0)");
+    expect(normalized).toContain("check (revision >= 1)");
+    expect(normalized).toContain("create index wiki_space_authorizations_due_scan_idx");
+    expect(normalized).toContain("create index wiki_space_authorizations_expired_lease_idx");
+  });
+
   it("defines bounded durable conversation-state snapshots and content-free completion diagnostics", async () => {
     const migration = await readFile(
       join(defaultMigrationsDir(), "0025_conversation_state_extraction.sql"),
