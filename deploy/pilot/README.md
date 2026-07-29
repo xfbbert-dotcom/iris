@@ -19,6 +19,19 @@ Core waits only for `ai-worker` to start. An unhealthy extraction worker degrade
 but must not prevent Feishu callback, document-sync, or mention-reply startup. Never expose the
 worker on the edge network and never use live provider quota to manufacture an acceptance 429.
 
+## Wiki Space Sync
+
+`IRIS_WIKI_SPACE_SYNC_ENABLED=false` is the deployment default. The feature remains off unless the
+operator explicitly enables it and restarts Core with the document-sync worker enabled. Keep the
+following values explicit in `.env.pilot`: `IRIS_WIKI_SPACE_SYNC_INTERVAL_MS=1000`,
+`IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS=3600000`, `IRIS_WIKI_SPACE_SYNC_LEASE_MS=60000`,
+`IRIS_WIKI_SPACE_SYNC_MAX_DEPTH=20`, and `IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS=3`.
+
+Use the [wiki space sync runbook](../../docs/runbooks/iris-wiki-space-sync.md) for registration,
+controlled enablement, status interpretation, dead-letter recovery, permission-revocation checks,
+and fail-closed rollback. Do not enable it while document-sync, reindex, or raw-event queues are
+degraded or non-empty.
+
 ## Planned Restart And Reactivation
 
 Run the sequence in this exact order:

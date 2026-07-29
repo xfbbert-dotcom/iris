@@ -180,6 +180,27 @@ test("keeps knowledge cards disabled with an empty pilot allowlist", () => {
   }
 });
 
+test("keeps wiki space sync default-off with deterministic Compose wiring", () => {
+  const expectedValues = {
+    IRIS_WIKI_SPACE_SYNC_ENABLED: "false",
+    IRIS_WIKI_SPACE_SYNC_INTERVAL_MS: "1000",
+    IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS: "3600000",
+    IRIS_WIKI_SPACE_SYNC_LEASE_MS: "60000",
+    IRIS_WIKI_SPACE_SYNC_MAX_DEPTH: "20",
+    IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS: "3",
+  };
+
+  for (const [name, expected] of Object.entries(expectedValues)) {
+    assert.equal(readEnvAssignment(pilotCiEnv, name), expected, `${name} must match in CI env`);
+    assert.equal(
+      readEnvAssignment(pilotEnvExample, name),
+      expected,
+      `${name} must match in pilot example`,
+    );
+    assert.equal(compose.services.core.environment[name], expected, `${name} must survive interpolation`);
+  }
+});
+
 test("proxies exactly the two public Feishu callback paths and keeps the fallback closed", () => {
   const matcher = /^\s*@feishu\s+path\s+([^\r\n]+)$/mu.exec(caddyfile);
   assert.notEqual(matcher, null, "Caddy must define one exact Feishu callback matcher");
