@@ -1,4 +1,8 @@
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { installGracefulShutdown } from "./runtime/graceful-shutdown.js";
@@ -1255,64 +1259,68 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
-  app.post("/internal/document-sync/wiki-spaces/*", async (request, reply) => {
-    const id = parseWikiSpaceWildcardId(
-      (request.params as { "*"?: unknown })["*"],
-      "/rescan",
-    );
-    if (id === false) {
-      return reply.callNotFound();
-    }
-    if (documentSyncRuntime === undefined) {
-      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
-    }
-
-    if (id === undefined) {
-      return reply.code(400).send({ ok: false, error: "invalid_request" });
-    }
-
-    try {
-      const authorization = await documentSyncRuntime.wikiSpaces.requestScan({ id, at: now() });
-      if (authorization === undefined) {
-        return reply.code(404).send({ ok: false, error: "wiki_space_not_found" });
+  app.post(
+    "/internal/document-sync/wiki-spaces/*",
+    { onRequest: createWikiSpaceWildcardRouteGuard("/rescan") },
+    async (request, reply) => {
+      const id = parseWikiSpaceWildcardId(
+        (request.params as { "*"?: unknown })["*"],
+        "/rescan",
+      );
+      if (typeof id !== "string") {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      if (documentSyncRuntime === undefined) {
+        return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
       }
 
-      return { ok: true, authorization };
-    } catch {
-      return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
-    }
-  });
+      try {
+        const authorization = await documentSyncRuntime.wikiSpaces.requestScan({ id, at: now() });
+        if (authorization === undefined) {
+          return reply.code(404).send({ ok: false, error: "wiki_space_not_found" });
+        }
 
-  app.patch("/internal/document-sync/wiki-spaces/*", async (request, reply) => {
-    const id = parseWikiSpaceWildcardId((request.params as { "*"?: unknown })["*"], "");
-    if (id === false) {
-      return reply.callNotFound();
-    }
-    if (documentSyncRuntime === undefined) {
-      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
-    }
+        return { ok: true, authorization };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
+      }
+    },
+  );
 
-    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
-    const parsedRequest = parseWikiSpaceEnabledRequest(body);
-    if (id === undefined || parsedRequest === undefined) {
-      return reply.code(400).send({ ok: false, error: "invalid_request" });
-    }
-
-    try {
-      const authorization = await documentSyncRuntime.wikiSpaces.setEnabled({
-        id,
-        enabled: parsedRequest.enabled,
-        at: now(),
-      });
-      if (authorization === undefined) {
-        return reply.code(404).send({ ok: false, error: "wiki_space_not_found" });
+  app.patch(
+    "/internal/document-sync/wiki-spaces/*",
+    { onRequest: createWikiSpaceWildcardRouteGuard("") },
+    async (request, reply) => {
+      const id = parseWikiSpaceWildcardId((request.params as { "*"?: unknown })["*"], "");
+      if (typeof id !== "string") {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      if (documentSyncRuntime === undefined) {
+        return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
       }
 
-      return { ok: true, authorization };
-    } catch {
-      return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
-    }
-  });
+      const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+      const parsedRequest = parseWikiSpaceEnabledRequest(body);
+      if (parsedRequest === undefined) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+
+      try {
+        const authorization = await documentSyncRuntime.wikiSpaces.setEnabled({
+          id,
+          enabled: parsedRequest.enabled,
+          at: now(),
+        });
+        if (authorization === undefined) {
+          return reply.code(404).send({ ok: false, error: "wiki_space_not_found" });
+        }
+
+        return { ok: true, authorization };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
+      }
+    },
+  );
 
   app.get("/internal/document-sync/sources", async (request, reply) => {
     if (documentSyncRuntime === undefined) {
@@ -2796,6 +2804,21 @@ function parseWikiSpaceEnabledRequest(value: unknown): WikiSpaceEnabledRequest |
   }
 
   return { enabled: value.enabled };
+}
+
+function createWikiSpaceWildcardRouteGuard(suffix: string) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const id = parseWikiSpaceWildcardId(
+      (request.params as { "*"?: unknown })["*"],
+      suffix,
+    );
+    if (id === false) {
+      return reply.callNotFound();
+    }
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+  };
 }
 
 function parseWikiSpaceWildcardId(value: unknown, suffix: string): string | false | undefined {

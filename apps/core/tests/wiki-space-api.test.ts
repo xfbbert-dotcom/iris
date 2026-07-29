@@ -280,6 +280,98 @@ describe("Wiki space internal API", () => {
     },
   );
 
+  it.each([
+    ["POST", "/internal/document-sync/wiki-spaces/wiki-space-1/not-rescan"],
+    ["PATCH", "/internal/document-sync/wiki-spaces/wiki-space-1/extra"],
+  ] as const)(
+    "returns the default 404 for authenticated %s shape mismatches before parsing malformed JSON",
+    async (method, url) => {
+      const runtime = fakeDocumentSyncRuntime();
+      const app = buildApp({
+        internalApiToken: "operator-secret",
+        createDocumentSyncRuntime: () => runtime,
+      });
+
+      const response = await app.inject({
+        method,
+        url,
+        headers: {
+          ...operatorAuthorization,
+          "content-type": "application/json",
+        },
+        payload: "{not-json",
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({
+        statusCode: 404,
+        error: "Not Found",
+      });
+      expect(runtime.wikiSpaces.requestScan).not.toHaveBeenCalled();
+      expect(runtime.wikiSpaces.setEnabled).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
+  it.each([
+    ["POST", 514, "/rescan"],
+    ["POST", 4_096, "/rescan"],
+    ["PATCH", 514, ""],
+    ["PATCH", 4_096, ""],
+  ] as const)(
+    "rejects authenticated %s wiki space IDs with %i characters before parsing malformed JSON",
+    async (method, idLength, suffix) => {
+      const runtime = fakeDocumentSyncRuntime();
+      const app = buildApp({
+        internalApiToken: "operator-secret",
+        createDocumentSyncRuntime: () => runtime,
+      });
+
+      const response = await app.inject({
+        method,
+        url: `/internal/document-sync/wiki-spaces/${"a".repeat(idLength)}${suffix}`,
+        headers: {
+          ...operatorAuthorization,
+          "content-type": "application/json",
+        },
+        payload: "{not-json",
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+      expect(runtime.wikiSpaces.requestScan).not.toHaveBeenCalled();
+      expect(runtime.wikiSpaces.setEnabled).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
+  it.each([
+    ["POST", "/rescan"],
+    ["PATCH", ""],
+  ] as const)(
+    "authenticates exact overlong %s requests before parsing malformed JSON",
+    async (method, suffix) => {
+      const runtime = fakeDocumentSyncRuntime();
+      const app = buildApp({
+        internalApiToken: "operator-secret",
+        createDocumentSyncRuntime: () => runtime,
+      });
+
+      const response = await app.inject({
+        method,
+        url: `/internal/document-sync/wiki-spaces/${"a".repeat(514)}${suffix}`,
+        headers: { "content-type": "application/json" },
+        payload: "{not-json",
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toEqual({ ok: false, error: "internal_api_unauthorized" });
+      expect(runtime.wikiSpaces.requestScan).not.toHaveBeenCalled();
+      expect(runtime.wikiSpaces.setEnabled).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
   it("keeps unrelated and method-mismatched request targets on the default 404 boundary", async () => {
     const runtime = fakeDocumentSyncRuntime();
     const app = buildApp({
