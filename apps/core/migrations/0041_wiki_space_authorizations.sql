@@ -34,7 +34,7 @@ CREATE TABLE wiki_space_authorizations (
 
 CREATE INDEX wiki_space_authorizations_due_scan_idx
   ON wiki_space_authorizations (next_scan_at, created_at)
-  WHERE enabled AND scan_state IN ('pending', 'retry_wait');
+  WHERE enabled AND scan_state IN ('pending', 'retry_wait', 'synced');
 
 CREATE INDEX wiki_space_authorizations_expired_lease_idx
   ON wiki_space_authorizations (lease_expires_at, created_at)

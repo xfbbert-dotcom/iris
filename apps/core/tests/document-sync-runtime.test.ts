@@ -271,9 +271,9 @@ describe("createDocumentSyncRuntime", () => {
       repository: wikiRepository,
       scanner: expect.any(Function),
       registrar: expect.any(Object),
-      leaseMs: 60_000,
-      refreshIntervalMs: 3_600_000,
-      maxAttempts: 3,
+      leaseMs: 600_000,
+      refreshIntervalMs: 21_600_000,
+      maxAttempts: 5,
     });
     expect(dependencies.createWikiSpaceWorkerLoop).toHaveBeenCalledWith({
       worker: wikiWorker,

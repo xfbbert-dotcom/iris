@@ -384,6 +384,39 @@ describe("admin console assets", () => {
     expect(console.element("connection-state").textContent).toBe("Request failed");
   });
 
+  it("blocks a refresh started during an enabled mutation until the committed state is authoritative", async () => {
+    const enabledAuthorization = wikiSpace("space-1", { enabled: true, scanState: "synced" });
+    const disabledAuthorization = wikiSpace("space-1", { enabled: false, scanState: "disabled" });
+    const mutation = deferred<ResponseStub>();
+    let listRequestCount = 0;
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/document-sync/wiki-spaces?limit=20") {
+        listRequestCount += 1;
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          wikiSpaces: [listRequestCount === 1 ? enabledAuthorization : disabledAuthorization],
+        }));
+      }
+      if (path === "/internal/document-sync/wiki-spaces/space-1") return mutation.promise;
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    await console.trigger("wiki-space-refresh", "click");
+    const enabled = console.element("wiki-space-rows").children[0]!
+      .children[4]!.children[0]!.children[0]!;
+
+    enabled.checked = false;
+    const mutationAction = enabled.trigger("change");
+    const refreshAction = console.trigger("wiki-space-refresh", "click");
+    const listRequestsBeforeCommit = listRequestCount;
+    mutation.resolve(jsonResponse({ ok: true, authorization: disabledAuthorization }));
+    await Promise.all([mutationAction, refreshAction]);
+
+    expect(listRequestsBeforeCommit).toBe(1);
+    expect(console.element("wiki-space-rows").children[0]!
+      .children[4]!.children[0]!.children[0]!.checked).toBe(false);
+  });
+
   it("keeps newer rescan feedback when an older registration request fails", async () => {
     const olderRegistration = deferred<ResponseStub>();
     const newerRescan = deferred<ResponseStub>();

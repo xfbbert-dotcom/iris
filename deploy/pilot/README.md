@@ -24,8 +24,8 @@ worker on the edge network and never use live provider quota to manufacture an a
 `IRIS_WIKI_SPACE_SYNC_ENABLED=false` is the deployment default. The feature remains off unless the
 operator explicitly enables it and restarts Core with the document-sync worker enabled. Keep the
 following values explicit in `.env.pilot`: `IRIS_WIKI_SPACE_SYNC_INTERVAL_MS=1000`,
-`IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS=3600000`, `IRIS_WIKI_SPACE_SYNC_LEASE_MS=60000`,
-`IRIS_WIKI_SPACE_SYNC_MAX_DEPTH=20`, and `IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS=3`.
+`IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS=21600000`, `IRIS_WIKI_SPACE_SYNC_LEASE_MS=600000`,
+`IRIS_WIKI_SPACE_SYNC_MAX_DEPTH=20`, and `IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS=5`.
 
 Use the [wiki space sync runbook](../../docs/runbooks/iris-wiki-space-sync.md) for registration,
 controlled enablement, status interpretation, dead-letter recovery, permission-revocation checks,

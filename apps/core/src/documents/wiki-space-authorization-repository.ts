@@ -132,6 +132,24 @@ async function register(
   if (inserted.rows.length > 0) {
     return { authorization: mapRow(inserted.rows[0]), created: true };
   }
+  const rescheduled = await queryable.query(
+    `
+    UPDATE wiki_space_authorizations
+    SET scan_state = 'pending',
+        attempt_count = 0,
+        next_scan_at = $2,
+        lease_expires_at = NULL,
+        updated_at = $2,
+        revision = revision + 1
+    WHERE root_source_uri = $1
+      AND enabled = TRUE
+    RETURNING *
+    `,
+    [rootSourceUri, at],
+  );
+  if (rescheduled.rows.length > 0) {
+    return { authorization: mapRow(rescheduled.rows[0]), created: false };
+  }
   const existing = await queryable.query(
     "SELECT * FROM wiki_space_authorizations WHERE root_source_uri = $1",
     [rootSourceUri],
@@ -170,29 +188,45 @@ async function claimNext(
   const maxAttempts = requireLimit(input.maxAttempts, "maxAttempts", MAX_ATTEMPTS);
   const result = await queryable.query(
     `
-    WITH candidate AS (
+    WITH expired_exhausted AS (
+      UPDATE wiki_space_authorizations AS expired
+      SET scan_state = 'dead_letter',
+          next_scan_at = $1,
+          lease_expires_at = NULL,
+          last_scan_completed_at = $1,
+          last_error_classification = 'lease_expired',
+          updated_at = $1,
+          revision = expired.revision + 1
+      WHERE expired.enabled = TRUE
+        AND expired.scan_state = 'scanning'
+        AND expired.lease_expires_at <= $1
+        AND expired.attempt_count >= $3
+      RETURNING expired.id
+    ),
+    candidate AS (
       SELECT id
       FROM wiki_space_authorizations
       WHERE enabled = TRUE
         AND scan_state NOT IN ('disabled', 'dead_letter')
         AND attempt_count < $3
         AND (
-          (scan_state IN ('pending', 'retry_wait') AND next_scan_at <= $1)
+          (scan_state IN ('pending', 'retry_wait', 'synced') AND next_scan_at <= $1)
           OR (scan_state = 'scanning' AND lease_expires_at <= $1)
         )
+        AND id NOT IN (SELECT id FROM expired_exhausted)
       ORDER BY next_scan_at ASC, created_at ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
-    UPDATE wiki_space_authorizations authorization
+    UPDATE wiki_space_authorizations AS target
     SET scan_state = 'scanning',
-        attempt_count = authorization.attempt_count + 1,
+        attempt_count = target.attempt_count + 1,
         lease_expires_at = $2,
         last_scan_started_at = $1,
         updated_at = $1,
-        revision = authorization.revision + 1
-    WHERE authorization.id = (SELECT id FROM candidate)
-    RETURNING authorization.*
+        revision = target.revision + 1
+    WHERE target.id = (SELECT id FROM candidate)
+    RETURNING target.*
     `,
     [at, leaseExpiresAt, maxAttempts],
   );
@@ -226,6 +260,7 @@ async function complete(
     `
     UPDATE wiki_space_authorizations
     SET scan_state = 'synced',
+        attempt_count = 0,
         next_scan_at = $4,
         lease_expires_at = NULL,
         last_scan_completed_at = $3,
@@ -289,6 +324,7 @@ async function requestScan(
     `
     UPDATE wiki_space_authorizations
     SET scan_state = 'pending',
+        attempt_count = 0,
         next_scan_at = $2,
         lease_expires_at = NULL,
         updated_at = $2,
@@ -314,6 +350,7 @@ async function setEnabled(
     UPDATE wiki_space_authorizations
     SET enabled = $2,
         scan_state = CASE WHEN $2 THEN 'pending' ELSE 'disabled' END,
+        attempt_count = CASE WHEN $2 THEN 0 ELSE attempt_count END,
         next_scan_at = CASE WHEN $2 THEN $3 ELSE next_scan_at END,
         lease_expires_at = NULL,
         updated_at = $3,

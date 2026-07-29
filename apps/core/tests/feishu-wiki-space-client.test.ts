@@ -130,6 +130,37 @@ describe("FeishuWikiSpaceClient", () => {
       retriable: true,
     });
   });
+
+  it("classifies rejected fetch transport requests as retriable request failures", async () => {
+    const client = createFeishuWikiSpaceClient({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => {
+        throw new TypeError("fetch failed: getaddrinfo ENOTFOUND secret.internal");
+      }),
+    });
+
+    await expect(client.getNode("root")).rejects.toMatchObject({
+      classification: "request_failed",
+      retriable: true,
+    });
+  });
+
+  it("keeps invalid JSON responses terminal instead of retrying them as transport failures", async () => {
+    const client = createFeishuWikiSpaceClient({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => new Response("{not-json", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })),
+    });
+
+    await expect(client.getNode("root")).rejects.toMatchObject({
+      classification: "invalid_response",
+      retriable: false,
+    });
+  });
 });
 
 function node(overrides: Record<string, unknown> = {}): Record<string, unknown> {

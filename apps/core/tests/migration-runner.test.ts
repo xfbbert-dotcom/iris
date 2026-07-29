@@ -302,6 +302,9 @@ describe("defaultMigrationsDir", () => {
     expect(normalized).toContain("check (skipped_node_count >= 0)");
     expect(normalized).toContain("check (revision >= 1)");
     expect(normalized).toContain("create index wiki_space_authorizations_due_scan_idx");
+    expect(normalized).toContain(
+      "where enabled and scan_state in ('pending', 'retry_wait', 'synced')",
+    );
     expect(normalized).toContain("create index wiki_space_authorizations_expired_lease_idx");
   });
 

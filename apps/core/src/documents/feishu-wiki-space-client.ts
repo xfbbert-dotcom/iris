@@ -29,7 +29,10 @@ export type WikiSpaceSyncErrorClassification =
   | "upstream_unavailable"
   | "timeout"
   | "invalid_response"
-  | "request_failed";
+  | "request_failed"
+  | "cross_space_node"
+  | "depth_limit_exceeded"
+  | "node_limit_exceeded";
 
 export class WikiSpaceSyncError extends Error {
   constructor(
@@ -129,32 +132,37 @@ async function requestJson({
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { authorization: `Bearer ${tenantAccessToken}` },
-      signal: controller.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: { authorization: `Bearer ${tenantAccessToken}` },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw new WikiSpaceSyncError("timeout", true);
+      }
+      throw new WikiSpaceSyncError("request_failed", true);
+    }
     if (!response.ok) {
       throw httpError(response.status);
     }
-    const responseBody = await readBoundedJsonResponse({
-      response,
-      invalidJsonErrorMessage: "Feishu wiki space response was not valid JSON",
-      maxResponseBytes,
-      responseSizeErrorMessage: "Feishu wiki space response exceeded the configured size limit",
-    });
+    let responseBody: unknown;
+    try {
+      responseBody = await readBoundedJsonResponse({
+        response,
+        invalidJsonErrorMessage: "Feishu wiki space response was not valid JSON",
+        maxResponseBytes,
+        responseSizeErrorMessage: "Feishu wiki space response exceeded the configured size limit",
+      });
+    } catch {
+      throw invalidResponse();
+    }
     if (!isRecord(responseBody) || responseBody.code !== 0) {
       throw invalidResponse();
     }
     return responseBody;
-  } catch (error) {
-    if (error instanceof WikiSpaceSyncError) {
-      throw error;
-    }
-    if (isAbortError(error)) {
-      throw new WikiSpaceSyncError("timeout", true);
-    }
-    throw invalidResponse();
   } finally {
     clearTimeout(timeout);
   }

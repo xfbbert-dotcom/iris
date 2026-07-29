@@ -974,6 +974,9 @@ let cachedStatus = undefined;
 let proactiveCandidateRefreshGeneration = 0;
 let wikiSpaceRefreshGeneration = 0;
 let wikiSpaceOperationGeneration = 0;
+let wikiSpaceMutationCount = 0;
+let wikiSpaceMutationsIdle = Promise.resolve();
+let resolveWikiSpaceMutationsIdle;
 const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
 const userSubmittedDocumentPath = "/internal/document-sync/user-submitted-documents";
 const wikiSpaceListPath = "/internal/document-sync/wiki-spaces?limit=20";
@@ -1237,6 +1240,31 @@ function beginWikiSpaceOperation() {
   return generation;
 }
 
+function beginWikiSpaceMutation() {
+  if (wikiSpaceMutationCount === 0) {
+    wikiSpaceMutationsIdle = new Promise((resolve) => {
+      resolveWikiSpaceMutationsIdle = resolve;
+    });
+  }
+  wikiSpaceMutationCount += 1;
+  let completed = false;
+  return () => {
+    if (completed) return;
+    completed = true;
+    wikiSpaceMutationCount -= 1;
+    if (wikiSpaceMutationCount === 0) {
+      resolveWikiSpaceMutationsIdle();
+      resolveWikiSpaceMutationsIdle = undefined;
+    }
+  };
+}
+
+async function waitForWikiSpaceMutations() {
+  while (wikiSpaceMutationCount > 0) {
+    await wikiSpaceMutationsIdle;
+  }
+}
+
 function setWikiSpaceConnection(message, mode, generation) {
   if (!isCurrentWikiSpaceOperation(generation)) return;
   setConnection(message, mode);
@@ -1260,6 +1288,7 @@ function renderWikiSpaceEnabledToggle(wikiSpace) {
   checkbox.checked = wikiSpace.enabled === true;
   checkbox.addEventListener("change", async () => {
     const operationGeneration = beginWikiSpaceOperation();
+    const completeMutation = beginWikiSpaceMutation();
     checkbox.disabled = true;
     try {
       try {
@@ -1273,6 +1302,8 @@ function renderWikiSpaceEnabledToggle(wikiSpace) {
         addEvent("Wiki space enabled update failed: " + error.message);
         setWikiSpaceConnection("Request failed", "warn", operationGeneration);
         return;
+      } finally {
+        completeMutation();
       }
       addEvent("Wiki space " + (checkbox.checked ? "enabled: " : "disabled: ") + text(wikiSpace.id));
       await refreshWikiSpacesAfterAction("enabled update", operationGeneration);
@@ -1331,6 +1362,7 @@ function renderWikiSpaces(wikiSpaces) {
     rescanButton.textContent = "\\u21bb";
     rescanButton.addEventListener("click", async () => {
       const operationGeneration = beginWikiSpaceOperation();
+      const completeMutation = beginWikiSpaceMutation();
       rescanButton.disabled = true;
       try {
         try {
@@ -1343,6 +1375,8 @@ function renderWikiSpaces(wikiSpaces) {
           addEvent("Wiki space rescan failed: " + error.message);
           setWikiSpaceConnection("Request failed", "warn", operationGeneration);
           return;
+        } finally {
+          completeMutation();
         }
         addEvent("Wiki space rescan requested: " + text(wikiSpace.id));
         await refreshWikiSpacesAfterAction("rescan", operationGeneration);
@@ -1360,6 +1394,9 @@ function renderWikiSpaces(wikiSpaces) {
 }
 
 async function refreshWikiSpaces(operationGeneration = wikiSpaceOperationGeneration) {
+  if (wikiSpaceMutationCount > 0) {
+    await waitForWikiSpaceMutations();
+  }
   const generation = ++wikiSpaceRefreshGeneration;
   wikiSpaceLoading.textContent = "Loading wiki spaces...";
   clearWikiSpaceError(operationGeneration);
@@ -2056,6 +2093,7 @@ wikiSpaceRefresh.addEventListener("click", async () => {
 wikiSpaceForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const operationGeneration = beginWikiSpaceOperation();
+  const completeMutation = beginWikiSpaceMutation();
   wikiSpaceSubmit.disabled = true;
   try {
     let body;
@@ -2066,6 +2104,8 @@ wikiSpaceForm.addEventListener("submit", async (event) => {
       setWikiSpaceConnection("Request failed", "warn", operationGeneration);
       addEvent("Wiki space registration failed: " + error.message);
       return;
+    } finally {
+      completeMutation();
     }
     wikiSpaceRootSourceUri.value = "";
     addEvent("Wiki space registered: " + text(body.authorization?.id, "unknown wiki space"));

@@ -1,12 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   createPostgresWikiSpaceAuthorizationRepository,
+  type WikiSpaceAuthorization,
   type WikiSpaceAuthorizationDataSource,
+  type WikiSpaceAuthorizationRepository,
 } from "../src/documents/wiki-space-authorization-repository.js";
+import {
+  defaultMigrationsDir,
+  runMigrations,
+  type MigrationClient,
+} from "../src/database/migrate.js";
 
 const at = new Date("2026-07-29T08:00:00.000Z");
 const later = new Date("2026-07-29T09:00:00.000Z");
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
+const runIfDatabase = databaseUrl ? describe.sequential : describe.skip;
+const schema = `wiki_space_sync_${randomUUID().replaceAll("-", "")}`;
 
 describe("createPostgresWikiSpaceAuthorizationRepository", () => {
   it("registers a root idempotently without re-enabling an admin-disabled root", async () => {
@@ -55,7 +68,7 @@ describe("createPostgresWikiSpaceAuthorizationRepository", () => {
 
     const sql = String(dataSource.query.mock.calls[0]?.[0]).toLowerCase();
     expect(sql).toContain("for update skip locked");
-    expect(sql).toContain("scan_state in ('pending', 'retry_wait')");
+    expect(sql).toContain("scan_state in ('pending', 'retry_wait', 'synced')");
     expect(sql).toContain("scan_state = 'scanning'");
     expect(sql).toContain("lease_expires_at <= $1");
     expect(sql).toContain("enabled = true");
@@ -130,6 +143,170 @@ describe("createPostgresWikiSpaceAuthorizationRepository", () => {
   });
 });
 
+runIfDatabase("Postgres wiki space authorization state transitions", () => {
+  let adminPool: pg.Pool;
+  let pool: pg.Pool;
+  let repository: WikiSpaceAuthorizationRepository;
+
+  beforeAll(async () => {
+    adminPool = new pg.Pool({ connectionString: databaseUrl });
+    await adminPool.query(`CREATE SCHEMA ${schema}`);
+    const isolatedUrl = new URL(databaseUrl!);
+    isolatedUrl.searchParams.set("options", `-c search_path=${schema},public`);
+    pool = new pg.Pool({ connectionString: isolatedUrl.toString() });
+    await runMigrations({
+      client: pool as unknown as MigrationClient,
+      migrationsDir: defaultMigrationsDir(),
+    });
+    repository = createPostgresWikiSpaceAuthorizationRepository({
+      dataSource: pool as unknown as WikiSpaceAuthorizationDataSource,
+    });
+  });
+
+  afterAll(async () => {
+    await pool?.end();
+    await adminPool?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await adminPool?.end();
+  });
+
+  it("resets attempts after every success so periodic refreshes continue past the attempt cap", async () => {
+    const rootSourceUri = uniqueRoot("repeated-success");
+    const registered = await repository.register({
+      rootSourceUri,
+      rootNodeToken: "repeated-success",
+      at,
+    });
+    let dueAt = at;
+
+    for (let refresh = 0; refresh < 7; refresh += 1) {
+      const claimed = await repository.claimNext({
+        at: dueAt,
+        leaseExpiresAt: plusMs(dueAt, 600_000),
+        maxAttempts: 5,
+      });
+      expect(claimed).toMatchObject({
+        id: registered.authorization.id,
+        attemptCount: 1,
+        scanState: "scanning",
+      });
+      const nextScanAt = plusMs(dueAt, 21_600_000);
+      const completed = await completeClaim(repository, claimed!, dueAt, nextScanAt);
+      expect(completed).toMatchObject({
+        attemptCount: 0,
+        scanState: "synced",
+        nextScanAt,
+      });
+      dueAt = nextScanAt;
+    }
+  });
+
+  it("starts a fresh claim series after manual rescan and disabled-to-enabled recovery", async () => {
+    const manual = await createDeadLetter(repository, "manual-recovery", at);
+    const manualRecoveryAt = plusMs(at, 1_000);
+    const rescanned = await repository.requestScan({
+      id: manual.id,
+      at: manualRecoveryAt,
+    });
+    expect(rescanned).toMatchObject({ attemptCount: 0, scanState: "pending" });
+    await expect(repository.claimNext({
+      at: manualRecoveryAt,
+      leaseExpiresAt: plusMs(manualRecoveryAt, 600_000),
+      maxAttempts: 1,
+    })).resolves.toMatchObject({ id: manual.id, attemptCount: 1 });
+
+    const toggled = await createDeadLetter(repository, "toggle-recovery", plusMs(at, 10_000));
+    const disabledAt = plusMs(at, 11_000);
+    await repository.setEnabled({ id: toggled.id, enabled: false, at: disabledAt });
+    const enabledAt = plusMs(at, 12_000);
+    const enabled = await repository.setEnabled({ id: toggled.id, enabled: true, at: enabledAt });
+    expect(enabled).toMatchObject({ attemptCount: 0, scanState: "pending", nextScanAt: enabledAt });
+    await expect(repository.claimNext({
+      at: enabledAt,
+      leaseExpiresAt: plusMs(enabledAt, 600_000),
+      maxAttempts: 1,
+    })).resolves.toMatchObject({ id: toggled.id, attemptCount: 1 });
+  });
+
+  it("atomically dead-letters an expired final-attempt lease under concurrent claims", async () => {
+    const registered = await repository.register({
+      rootSourceUri: uniqueRoot("final-lease"),
+      rootNodeToken: "final-lease",
+      at,
+    });
+    const claimed = await repository.claimNext({
+      at,
+      leaseExpiresAt: plusMs(at, 1_000),
+      maxAttempts: 1,
+    });
+    expect(claimed).toMatchObject({ id: registered.authorization.id, attemptCount: 1 });
+
+    const recoveryAt = plusMs(at, 2_000);
+    const secondRepository = createPostgresWikiSpaceAuthorizationRepository({
+      dataSource: pool as unknown as WikiSpaceAuthorizationDataSource,
+    });
+    await expect(Promise.all([
+      repository.claimNext({
+        at: recoveryAt,
+        leaseExpiresAt: plusMs(recoveryAt, 600_000),
+        maxAttempts: 1,
+      }),
+      secondRepository.claimNext({
+        at: recoveryAt,
+        leaseExpiresAt: plusMs(recoveryAt, 600_000),
+        maxAttempts: 1,
+      }),
+    ])).resolves.toEqual([undefined, undefined]);
+
+    const exhausted = (await repository.list({ limit: 100 }))
+      .find((authorization) => authorization.id === registered.authorization.id);
+    expect(exhausted).toMatchObject({
+      scanState: "dead_letter",
+      attemptCount: 1,
+      lastErrorClassification: "lease_expired",
+      lastScanCompletedAt: recoveryAt,
+    });
+    expect(exhausted).not.toHaveProperty("leaseExpiresAt");
+  });
+
+  it("re-registers enabled roots as fresh scans while preserving disabled rows exactly", async () => {
+    const enabled = await createDeadLetter(repository, "reregister-enabled", at);
+    const repeatedAt = plusMs(at, 1_000);
+    const repeated = await repository.register({
+      rootSourceUri: enabled.rootSourceUri,
+      rootNodeToken: enabled.rootNodeToken,
+      at: repeatedAt,
+    });
+    expect(repeated).toMatchObject({
+      created: false,
+      authorization: {
+        id: enabled.id,
+        enabled: true,
+        scanState: "pending",
+        attemptCount: 0,
+        nextScanAt: repeatedAt,
+        revision: enabled.revision + 1,
+      },
+    });
+
+    const disabledRegistered = await repository.register({
+      rootSourceUri: uniqueRoot("reregister-disabled"),
+      rootNodeToken: "reregister-disabled",
+      at,
+    });
+    const disabled = await repository.setEnabled({
+      id: disabledRegistered.authorization.id,
+      enabled: false,
+      at: plusMs(at, 2_000),
+    });
+    const disabledRepeated = await repository.register({
+      rootSourceUri: disabled!.rootSourceUri,
+      rootNodeToken: disabled!.rootNodeToken,
+      at: plusMs(at, 3_000),
+    });
+    expect(disabledRepeated).toEqual({ authorization: disabled, created: false });
+  });
+});
+
 function row(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: "authorization-1",
@@ -162,4 +339,54 @@ function createDataSource(results: Array<{ rows: Array<Record<string, unknown>> 
   let index = 0;
   const query = vi.fn(async (_statement: string, _values?: unknown[]) => results[index++] ?? { rows: [] });
   return { query } as unknown as WikiSpaceAuthorizationDataSource & { query: ReturnType<typeof vi.fn> };
+}
+
+async function createDeadLetter(
+  repository: WikiSpaceAuthorizationRepository,
+  token: string,
+  startedAt: Date,
+): Promise<WikiSpaceAuthorization> {
+  const registered = await repository.register({
+    rootSourceUri: uniqueRoot(token),
+    rootNodeToken: token,
+    at: startedAt,
+  });
+  const claimed = await repository.claimNext({
+    at: startedAt,
+    leaseExpiresAt: plusMs(startedAt, 600_000),
+    maxAttempts: 1,
+  });
+  expect(claimed).toMatchObject({ id: registered.authorization.id, attemptCount: 1 });
+  return repository.fail({
+    id: claimed!.id,
+    revision: claimed!.revision,
+    at: plusMs(startedAt, 500),
+    classification: "forbidden",
+  });
+}
+
+function completeClaim(
+  repository: WikiSpaceAuthorizationRepository,
+  claimed: WikiSpaceAuthorization,
+  completedAt: Date,
+  nextScanAt: Date,
+): Promise<WikiSpaceAuthorization> {
+  return repository.complete({
+    id: claimed.id,
+    revision: claimed.revision,
+    at: completedAt,
+    nextScanAt,
+    spaceId: "space-1",
+    discoveredNodeCount: 1,
+    registeredDocumentCount: 1,
+    skippedNodeCount: 0,
+  });
+}
+
+function uniqueRoot(token: string): string {
+  return `https://tenant.feishu.cn/wiki/${token}-${randomUUID()}`;
+}
+
+function plusMs(value: Date, milliseconds: number): Date {
+  return new Date(value.getTime() + milliseconds);
 }

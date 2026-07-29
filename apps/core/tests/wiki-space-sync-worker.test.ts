@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { WikiSpaceSyncError } from "../src/documents/feishu-wiki-space-client.js";
 import { createWikiSpaceSyncWorker } from "../src/documents/wiki-space-sync-worker.js";
 import type { WikiSpaceAuthorization } from "../src/documents/wiki-space-authorization-repository.js";
+import {
+  scanFeishuWikiSpace,
+  type FeishuWikiNode,
+  type FeishuWikiSpaceClient,
+} from "../src/documents/wiki-space-scanner.js";
 
 describe("WikiSpaceSyncWorker", () => {
   it("claims one authorization and registers canonical wiki documents in traversal order", async () => {
@@ -168,6 +173,52 @@ describe("WikiSpaceSyncWorker", () => {
     expect(repository.fail.mock.calls[0]?.[0]).not.toHaveProperty("retryAt");
   });
 
+  it.each([
+    ["cross_space_node", 20, 500],
+    ["depth_limit_exceeded", 0, 500],
+    ["node_limit_exceeded", 20, 1],
+  ] as const)("dead-letters scanner invariant breach %s", async (classification, maxDepth, maxNodes) => {
+    const claimed = authorization();
+    const repository = {
+      claimNext: vi.fn(async () => claimed),
+      complete: vi.fn(),
+      fail: vi.fn(async () => claimed),
+    };
+    const client: FeishuWikiSpaceClient = {
+      getNode: async () => wikiNode("root", { hasChild: true }),
+      listChildren: async () => ({
+        nodes: [
+          classification === "cross_space_node"
+            ? wikiNode("foreign", { spaceId: "space-2" })
+            : wikiNode("child"),
+        ],
+      }),
+    };
+    const worker = createWikiSpaceSyncWorker({
+      repository,
+      scanner: ({ rootNodeToken }) => scanFeishuWikiSpace({
+        client,
+        rootNodeToken,
+        maxDepth,
+        maxNodes,
+      }),
+      registrar: { register: vi.fn() },
+      leaseMs: 600_000,
+      refreshIntervalMs: 21_600_000,
+      maxAttempts: 5,
+    });
+
+    await expect(worker.processNext()).resolves.toEqual({
+      status: "dead_lettered",
+      authorizationId: claimed.id,
+      classification,
+    });
+    expect(repository.fail).toHaveBeenCalledWith(expect.objectContaining({
+      classification,
+    }));
+    expect(repository.complete).not.toHaveBeenCalled();
+  });
+
   it("dead-letters retriable failures once the claimed attempt exhausts the limit", async () => {
     const claimed = authorization({ attemptCount: 3 });
     const repository = {
@@ -245,6 +296,18 @@ function authorization(overrides: Partial<WikiSpaceAuthorization> = {}): WikiSpa
     revision: 2,
     createdAt: at,
     updatedAt: at,
+    ...overrides,
+  };
+}
+
+function wikiNode(nodeToken: string, overrides: Partial<FeishuWikiNode> = {}): FeishuWikiNode {
+  return {
+    nodeToken,
+    objectToken: `doc-${nodeToken}`,
+    objectType: "docx",
+    spaceId: "space-1",
+    title: nodeToken,
+    hasChild: false,
     ...overrides,
   };
 }

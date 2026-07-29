@@ -371,12 +371,12 @@ export function readWikiSpaceSyncRuntimeConfig(
     refreshIntervalMs: readTimerDelayEnv(
       "IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS",
       env.IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS,
-      3_600_000,
+      21_600_000,
     ),
     leaseMs: readTimerDelayEnv(
       "IRIS_WIKI_SPACE_SYNC_LEASE_MS",
       env.IRIS_WIKI_SPACE_SYNC_LEASE_MS,
-      60_000,
+      600_000,
     ),
     maxDepth: readBoundedNonNegativeIntegerEnv(
       "IRIS_WIKI_SPACE_SYNC_MAX_DEPTH",
@@ -387,7 +387,7 @@ export function readWikiSpaceSyncRuntimeConfig(
     maxAttempts: readBoundedPositiveIntegerEnv(
       "IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS",
       env.IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS,
-      3,
+      5,
       1_000,
     ),
   };

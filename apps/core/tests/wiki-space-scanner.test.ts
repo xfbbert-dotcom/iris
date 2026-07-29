@@ -55,10 +55,7 @@ describe("scanFeishuWikiSpace", () => {
     const client = fakeClient({
       root: wikiNode("root", { hasChild: true }),
       children: {
-        root: [
-          wikiNode("bitable", { objectType: "bitable", hasChild: true }),
-          wikiNode("foreign", { spaceId: "space-2" }),
-        ],
+        root: [wikiNode("bitable", { objectType: "bitable", hasChild: true })],
         bitable: [wikiNode("nested-document")],
       },
     });
@@ -66,25 +63,37 @@ describe("scanFeishuWikiSpace", () => {
     const result = await scanFeishuWikiSpace({ client, rootNodeToken: "root" });
 
     expect(result.documents.map((document) => document.nodeToken)).toEqual(["root", "nested-document"]);
-    expect(result.discoveredNodeCount).toBe(4);
-    expect(result.skippedNodeCount).toBe(2);
-  });
-
-  it("stops deterministically at maxNodes without following more descendants", async () => {
-    const children = Array.from({ length: 500 }, (_, index) => wikiNode(`child-${index}`));
-    const client = fakeClient({ root: wikiNode("root", { hasChild: true }), children: { root: children } });
-
-    const result = await scanFeishuWikiSpace({ client, rootNodeToken: "root", maxNodes: 500 });
-
-    expect(result.discoveredNodeCount).toBe(500);
-    expect(result.documents.map((document) => document.nodeToken)).toEqual([
-      "root",
-      ...Array.from({ length: 499 }, (_, index) => `child-${index}`),
-    ]);
+    expect(result.discoveredNodeCount).toBe(3);
     expect(result.skippedNodeCount).toBe(1);
   });
 
-  it("stops pagination and child expansion once maxNodes is reached", async () => {
+  it("rejects a foreign-space child with a terminal safe classification", async () => {
+    const client = fakeClient({
+      root: wikiNode("root", { hasChild: true }),
+      children: { root: [wikiNode("foreign", { spaceId: "space-2" })] },
+    });
+
+    await expect(scanFeishuWikiSpace({ client, rootNodeToken: "root" })).rejects.toMatchObject({
+      classification: "cross_space_node",
+      retriable: false,
+    });
+  });
+
+  it("rejects known node overflow without following more descendants", async () => {
+    const children = Array.from({ length: 500 }, (_, index) => wikiNode(`child-${index}`));
+    const client = fakeClient({ root: wikiNode("root", { hasChild: true }), children: { root: children } });
+
+    await expect(scanFeishuWikiSpace({
+      client,
+      rootNodeToken: "root",
+      maxNodes: 500,
+    })).rejects.toMatchObject({
+      classification: "node_limit_exceeded",
+      retriable: false,
+    });
+  });
+
+  it("rejects a known next page once maxNodes is reached without fetching it", async () => {
     const listCalls: Array<{ parentNodeToken: string; pageToken?: string }> = [];
     const client: FeishuWikiSpaceClient = {
       getNode: async () => wikiNode("root", { hasChild: true }),
@@ -106,29 +115,31 @@ describe("scanFeishuWikiSpace", () => {
       },
     };
 
-    const result = await scanFeishuWikiSpace({
+    await expect(scanFeishuWikiSpace({
       client,
       rootNodeToken: "root",
       maxNodes: 2,
+    })).rejects.toMatchObject({
+      classification: "node_limit_exceeded",
+      retriable: false,
     });
 
-    expect(result.documents.map((document) => document.nodeToken)).toEqual(["root", "child"]);
-    expect(result.discoveredNodeCount).toBe(2);
     expect(listCalls).toEqual([{ parentNodeToken: "root" }]);
   });
 
-  it("does not traverse descendants beyond maxDepth", async () => {
+  it("rejects a node that reports children at maxDepth", async () => {
     const nodes = Array.from({ length: 22 }, (_, index) => wikiNode(`node-${index}`, { hasChild: index < 21 }));
     const children = Object.fromEntries(nodes.slice(0, -1).map((item, index) => [item.nodeToken, [nodes[index + 1]]]));
     const client = fakeClient({ root: nodes[0], children });
 
-    const result = await scanFeishuWikiSpace({ client, rootNodeToken: "node-0", maxDepth: 20 });
-
-    expect(result.discoveredNodeCount).toBe(21);
-    expect(result.documents.map((document) => document.nodeToken)).toEqual(
-      Array.from({ length: 21 }, (_, index) => `node-${index}`),
-    );
-    expect(result.skippedNodeCount).toBe(1);
+    await expect(scanFeishuWikiSpace({
+      client,
+      rootNodeToken: "node-0",
+      maxDepth: 20,
+    })).rejects.toMatchObject({
+      classification: "depth_limit_exceeded",
+      retriable: false,
+    });
   });
 });
 

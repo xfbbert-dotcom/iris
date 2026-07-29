@@ -7,6 +7,12 @@ Wiki-space discovery is deployment-default-off. Keep
 pilot, and clean raw-event, document-sync, and reindex queues. It requires
 `IRIS_DOCUMENT_SYNC_WORKER_ENABLED=true`; Core rejects the configuration otherwise.
 
+Keep the approved first-release scan defaults aligned across Core and pilot configuration:
+`IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS=21600000` (6 hours),
+`IRIS_WIKI_SPACE_SYNC_LEASE_MS=600000` (10 minutes), and
+`IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS=5`. Do not shorten the lease for the 500-node traversal bound
+without a reviewed design amendment.
+
 Before any authenticated request, load the internal API token into the current process from the
 operator's secret store. Do not put a token in a shell command, script, transcript, or shell-history
 example.

@@ -1,4 +1,9 @@
-import type { FeishuWikiNode, FeishuWikiSpaceClient } from "./feishu-wiki-space-client.js";
+import {
+  WikiSpaceSyncError,
+  type FeishuWikiNode,
+  type FeishuWikiSpaceClient,
+  type WikiSpaceSyncErrorClassification,
+} from "./feishu-wiki-space-client.js";
 
 export type { FeishuWikiNode, FeishuWikiSpaceClient } from "./feishu-wiki-space-client.js";
 
@@ -37,8 +42,7 @@ export async function scanFeishuWikiSpace({
   for (let index = 0; index < queue.length; index += 1) {
     const { node, depth } = queue[index];
     if (node.spaceId !== spaceId) {
-      skippedNodeCount += 1;
-      continue;
+      throw terminalScanError("cross_space_node");
     }
     if (isSupportedDocument(node.objectType)) {
       documents.push({ nodeToken: node.nodeToken, ...(node.title === undefined ? {} : { title: node.title }) });
@@ -47,10 +51,11 @@ export async function scanFeishuWikiSpace({
     }
     if (!node.hasChild) continue;
     if (depth >= safeMaxDepth) {
-      skippedNodeCount += 1;
-      continue;
+      throw terminalScanError("depth_limit_exceeded");
     }
-    if (discoveredNodeCount >= safeMaxNodes) continue;
+    if (discoveredNodeCount >= safeMaxNodes) {
+      throw terminalScanError("node_limit_exceeded");
+    }
 
     let pageToken: string | undefined;
     const pageTokens = new Set<string>();
@@ -62,20 +67,24 @@ export async function scanFeishuWikiSpace({
         pageSize: safePageSize,
       });
       for (const child of page.nodes) {
+        if (child.spaceId !== spaceId) {
+          throw terminalScanError("cross_space_node");
+        }
         if (visited.has(child.nodeToken)) {
           skippedNodeCount += 1;
           continue;
         }
         if (discoveredNodeCount >= safeMaxNodes) {
-          skippedNodeCount += 1;
-          continue;
+          throw terminalScanError("node_limit_exceeded");
         }
         visited.add(child.nodeToken);
         discoveredNodeCount += 1;
         queue.push({ node: child, depth: depth + 1 });
       }
-      if (discoveredNodeCount >= safeMaxNodes) break;
       pageToken = page.nextPageToken;
+      if (pageToken !== undefined && discoveredNodeCount >= safeMaxNodes) {
+        throw terminalScanError("node_limit_exceeded");
+      }
       if (pageToken !== undefined && (pageTokens.has(pageToken) || pageTokens.size >= safeMaxNodes)) {
         throw new Error("Feishu wiki space pagination did not advance");
       }
@@ -94,6 +103,13 @@ export async function scanFeishuWikiSpace({
 
 function isSupportedDocument(objectType: string): boolean {
   return objectType === "docx" || objectType === "doc";
+}
+
+function terminalScanError(classification: Extract<
+  WikiSpaceSyncErrorClassification,
+  "cross_space_node" | "depth_limit_exceeded" | "node_limit_exceeded"
+>): WikiSpaceSyncError {
+  return new WikiSpaceSyncError(classification, false);
 }
 
 function requireBoundedInteger(

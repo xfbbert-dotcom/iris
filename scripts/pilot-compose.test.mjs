@@ -188,10 +188,10 @@ test("keeps wiki space sync default-off with deterministic Compose wiring", () =
   const expectedValues = {
     IRIS_WIKI_SPACE_SYNC_ENABLED: "false",
     IRIS_WIKI_SPACE_SYNC_INTERVAL_MS: "1000",
-    IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS: "3600000",
-    IRIS_WIKI_SPACE_SYNC_LEASE_MS: "60000",
+    IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS: "21600000",
+    IRIS_WIKI_SPACE_SYNC_LEASE_MS: "600000",
     IRIS_WIKI_SPACE_SYNC_MAX_DEPTH: "20",
-    IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS: "3",
+    IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS: "5",
   };
 
   for (const [name, expected] of Object.entries(expectedValues)) {
@@ -202,6 +202,25 @@ test("keeps wiki space sync default-off with deterministic Compose wiring", () =
       `${name} must match in pilot example`,
     );
     assert.equal(compose.services.core.environment[name], expected, `${name} must survive interpolation`);
+  }
+});
+
+test("preserves distinct valid wiki space numeric overrides through Compose interpolation", () => {
+  const overrides = {
+    IRIS_WIKI_SPACE_SYNC_INTERVAL_MS: "12345",
+    IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS: "21600001",
+    IRIS_WIKI_SPACE_SYNC_LEASE_MS: "600001",
+    IRIS_WIKI_SPACE_SYNC_MAX_DEPTH: "19",
+    IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS: "7",
+  };
+  const overriddenCompose = loadPilotCompose("deploy/pilot/ci.env", overrides);
+
+  for (const [name, expected] of Object.entries(overrides)) {
+    assert.equal(
+      overriddenCompose.services.core.environment[name],
+      expected,
+      `${name} override must survive interpolation`,
+    );
   }
 });
 
@@ -630,7 +649,7 @@ test("gates real Feishu activation behind public boundary checks and fails close
   );
 });
 
-function loadPilotCompose(envFile = "deploy/pilot/ci.env") {
+function loadPilotCompose(envFile = "deploy/pilot/ci.env", overrides = {}) {
   const result = spawnSync(
     process.platform === "win32" ? "docker.exe" : "docker",
     [
@@ -643,7 +662,7 @@ function loadPilotCompose(envFile = "deploy/pilot/ci.env") {
       "--format",
       "json",
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: { ...process.env, ...overrides } },
   );
 
   if (result.status !== 0) {

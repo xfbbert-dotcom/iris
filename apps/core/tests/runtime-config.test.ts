@@ -114,10 +114,10 @@ describe("wiki space sync rollout configuration", () => {
     })).toEqual({
       enabled: true,
       intervalMs: 1_000,
-      refreshIntervalMs: 3_600_000,
-      leaseMs: 60_000,
+      refreshIntervalMs: 21_600_000,
+      leaseMs: 600_000,
       maxDepth: 20,
-      maxAttempts: 3,
+      maxAttempts: 5,
     });
   });
 
