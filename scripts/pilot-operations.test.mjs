@@ -7,6 +7,16 @@ const backupPath = "deploy/pilot/backup.sh";
 const restorePath = "deploy/pilot/restore-from-stdin.sh";
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 
+test("pilot operation scripts use Unix LF line endings", () => {
+  for (const scriptPath of [backupPath, restorePath, postgresInitPath]) {
+    assert.doesNotMatch(
+      readFileSync(scriptPath, "utf8"),
+      /\r/u,
+      `${scriptPath} must use LF line endings for Linux containers`,
+    );
+  }
+});
+
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
   for (const scriptPath of [backupPath, restorePath, postgresInitPath]) {
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });

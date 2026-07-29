@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import test from "node:test";
+
+import { loadPilotCompose } from "./pilot-compose-lib.mjs";
 
 const compose = loadPilotCompose();
 
@@ -56,29 +57,20 @@ test("gates the edge on authenticated runtime readiness", () => {
   assert.equal(compose.services.caddy.environment.IRIS_INTERNAL_API_TOKEN, undefined);
 });
 
-function loadPilotCompose() {
-  const result = spawnSync(
-    process.platform === "win32" ? "docker.exe" : "docker",
-    [
-      "compose",
-      "--env-file",
-      "deploy/pilot/ci.env",
-      "--file",
-      "deploy/pilot/docker-compose.yml",
-      "config",
-      "--format",
-      "json",
-    ],
-    { encoding: "utf8" },
-  );
+test("ignores conflicting pilot variables from the host environment", () => {
+  const isolatedCompose = loadPilotCompose({
+    baseEnv: {
+      ...process.env,
+      DATABASE_URL: "postgres://host_override:secret@localhost:5432/wrong",
+      REDIS_URL: "redis://localhost:9999",
+      IRIS_PUBLIC_HOSTNAME: "host-override.invalid",
+    },
+  });
 
-  if (result.status !== 0) {
-    const details =
-      result.error?.message ||
-      result.stderr?.trim() ||
-      result.stdout?.trim() ||
-      `docker compose exited with status ${String(result.status)}`;
-    throw new Error(`Unable to render pilot Compose config: ${details}`);
-  }
-  return JSON.parse(result.stdout);
-}
+  assert.equal(
+    isolatedCompose.services.core.environment.DATABASE_URL,
+    "postgres://iris_app:iris_ci_app_password@postgres:5432/iris",
+  );
+  assert.equal(isolatedCompose.services.core.environment.REDIS_URL, "redis://redis:6379");
+  assert.equal(isolatedCompose.services.caddy.environment.IRIS_PUBLIC_HOSTNAME, "http://");
+});
