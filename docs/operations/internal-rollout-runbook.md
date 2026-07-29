@@ -32,14 +32,15 @@ The pilot gate is green only when all of the following are true:
 Once this gate passes, deploy the pilot. Do not start another general hardening audit unless the gate
 fails, the pilot exposes a P0/P1 issue, or the same user friction repeats.
 
-### Runtime-Control Limitation During The Pilot
+### Durable Runtime Control
 
-The current runtime-control state is in memory. A Core restart restores default switches, including
-global enablement. For the 3-5 person pilot, treat stopping the Core service (and, if necessary,
-disabling the Feishu callback or bot) as the authoritative emergency stop; do not rely on an
-in-memory disabled state surviving a restart. Durable Postgres-backed runtime control is a P1 item
-before expanding to the full 20-30 person rollout, but it does not delay the supervised single-group
-pilot.
+Global, per-group, and capability controls are stored in PostgreSQL before a successful mutation
+response is returned. Core restores them before it starts workers or listens for traffic, so a
+restart does not silently re-enable Iris. A persistence failure returns HTTP `503` with
+`runtime_control_persistence_failed` and leaves the last durable in-process state unchanged.
+
+Stopping Core and, when necessary, disabling the Feishu callback or bot remains the authoritative
+emergency action when the database is unavailable or a build is unsafe to run.
 
 ## Security Boundary
 
@@ -390,7 +391,7 @@ temporary Postgres volume or a separate VPS before inviting the full 20-30 perso
 
 ### Emergency Stop And Rollback
 
-The authoritative pilot stop is operational, not the in-memory runtime switch:
+For an unsafe build or unavailable database, the authoritative pilot stop is operational:
 
 ```bash
 docker compose \
@@ -718,6 +719,10 @@ Invoke-RestMethod `
 The same state is also summarized inside `GET /internal/status` as `components.runtimeControl`,
 including the current capability flags, so the consolidated operator snapshot can be used as the
 first health check during rollout.
+
+Successful changes are durable across Core restarts. If a mutation returns `503` with
+`runtime_control_persistence_failed`, treat it as not applied, keep or take the operational stop,
+restore PostgreSQL, and retry before restarting Core.
 
 Inspect recent runtime-control changes:
 

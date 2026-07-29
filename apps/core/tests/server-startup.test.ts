@@ -3,6 +3,8 @@ import { createServer, type Server } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { startServer } from "../src/app.js";
+import { RuntimeController } from "../src/admin/runtime-controller.js";
+import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import { isolateEnvVar } from "./test-env.js";
 
@@ -37,6 +39,7 @@ describe("Core server startup", () => {
 
     await expect(
       startServer({
+        persistRuntimeControl: false,
         appDependencies: {
           createAnswerDraftRuntime,
           createEventWorkerRuntime,
@@ -60,6 +63,7 @@ describe("Core server startup", () => {
     const eventWorkerRuntime = fakeEventWorkerRuntime();
 
     const app = await startServer({
+      persistRuntimeControl: false,
       appDependencies: {
         createAnswerDraftRuntime: () => undefined,
         createEventWorkerRuntime: () => eventWorkerRuntime,
@@ -79,6 +83,38 @@ describe("Core server startup", () => {
     expect(eventWorkerRuntime.close).toHaveBeenCalledOnce();
   });
 
+  it("serves restored runtime controls and closes their database resource", async () => {
+    const reservation = await occupyLoopbackPort();
+    const port = reservation.port;
+    await closeServer(reservation.server);
+    process.env.PORT = String(port);
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    await controller.disableGlobal();
+    const close = vi.fn(async () => undefined);
+
+    const app = await startServer({
+      createRuntimeControlRuntime: async () => ({ controller, close }),
+      appDependencies: {
+        createAnswerDraftRuntime: () => undefined,
+        createEventWorkerRuntime: () => undefined,
+        createDocumentSyncRuntime: () => undefined,
+        createReindexWorkerRuntime: () => undefined,
+      },
+    });
+
+    const status = await app.inject({
+      method: "GET",
+      url: "/internal/runtime-control/status",
+    });
+    expect(status.json()).toMatchObject({
+      ok: true,
+      globalEnabled: false,
+    });
+
+    await app.close();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("closes composed runtime resources when the listener cannot bind", async () => {
     const occupied = await occupyLoopbackPort();
     occupiedServer = occupied.server;
@@ -87,6 +123,7 @@ describe("Core server startup", () => {
 
     await expect(
       startServer({
+        persistRuntimeControl: false,
         appDependencies: {
           createAnswerDraftRuntime: () => undefined,
           createEventWorkerRuntime: () => eventWorkerRuntime,
@@ -113,6 +150,7 @@ describe("Core server startup", () => {
     let startupError: unknown;
     try {
       await startServer({
+        persistRuntimeControl: false,
         appDependencies: {
           createAnswerDraftRuntime: () => undefined,
           createEventWorkerRuntime: () => eventWorkerRuntime,

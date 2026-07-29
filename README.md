@@ -58,6 +58,13 @@ Run the full local verification suite:
 npm run verify
 ```
 
+When the disposable Pilot stack is already running, verify that runtime controls survive a Core
+restart and are restored to their defaults afterward:
+
+```powershell
+npm run pilot:persistence-smoke
+```
+
 Check the internal rollout configuration profile:
 
 ```powershell

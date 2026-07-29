@@ -7,8 +7,38 @@ export type RuntimeControllerSnapshot = {
 };
 export type RuntimeCapabilityName = keyof RuntimeConfig["capabilities"];
 
+export interface RuntimeControlStore {
+  load(defaultSnapshot: RuntimeControllerSnapshot): Promise<RuntimeControllerSnapshot>;
+  setGlobalEnabled(enabled: boolean): Promise<void>;
+  setGroupEnabled(groupId: string, enabled: boolean): Promise<void>;
+  setCapabilities(updates: Partial<Record<RuntimeCapabilityName, boolean>>): Promise<void>;
+}
+
+export type RuntimeControlMutation = {
+  previousEnabled: boolean;
+  snapshot: RuntimeControllerSnapshot;
+};
+export type RuntimeControlCapabilitiesMutation = {
+  previousEnabled: Partial<Record<RuntimeCapabilityName, boolean>>;
+  snapshot: RuntimeControllerSnapshot;
+};
+
 export class RuntimeController {
-  constructor(private readonly config: RuntimeConfig) {}
+  private mutationTail: Promise<unknown> = Promise.resolve();
+
+  constructor(
+    private readonly config: RuntimeConfig,
+    private readonly store?: RuntimeControlStore,
+  ) {}
+
+  async hydrate(): Promise<void> {
+    if (this.store === undefined) {
+      return;
+    }
+
+    const snapshot = await this.store.load(this.getSnapshot());
+    this.applySnapshot(snapshot);
+  }
 
   getSnapshot(): RuntimeControllerSnapshot {
     return {
@@ -18,50 +48,93 @@ export class RuntimeController {
     };
   }
 
-  disableGlobal(): void {
-    this.config.globalEnabled = false;
+  disableGlobal(): Promise<RuntimeControlMutation> {
+    return this.setGlobalEnabled(false);
   }
 
-  enableGlobal(): void {
-    this.config.globalEnabled = true;
+  enableGlobal(): Promise<RuntimeControlMutation> {
+    return this.setGlobalEnabled(true);
   }
 
-  disableGroup(groupId: string): void {
+  disableGroup(groupId: string): Promise<RuntimeControlMutation> {
+    return this.setGroupEnabled(groupId, false);
+  }
+
+  enableGroup(groupId: string): Promise<RuntimeControlMutation> {
+    return this.setGroupEnabled(groupId, true);
+  }
+
+  setCapability(
+    capability: RuntimeCapabilityName,
+    enabled: boolean,
+  ): Promise<RuntimeControlMutation> {
+    return this.setCapabilities({ [capability]: enabled }).then((mutation) => ({
+      previousEnabled: mutation.previousEnabled[capability] ?? enabled,
+      snapshot: mutation.snapshot,
+    }));
+  }
+
+  setCapabilities(
+    updates: Partial<Record<RuntimeCapabilityName, boolean>>,
+  ): Promise<RuntimeControlCapabilitiesMutation> {
+    return this.enqueueMutation(async () => {
+      const previousEnabled: Partial<Record<RuntimeCapabilityName, boolean>> = {};
+      for (const capability of Object.keys(updates) as RuntimeCapabilityName[]) {
+        previousEnabled[capability] = this.config.capabilities[capability];
+      }
+      await this.store?.setCapabilities(updates);
+      Object.assign(this.config.capabilities, updates);
+      return { previousEnabled, snapshot: this.getSnapshot() };
+    });
+  }
+
+  pauseProactiveBehavior(): Promise<RuntimeControlMutation> {
+    return this.setCapability("proactiveSpeech", false);
+  }
+
+  pauseDocumentReading(): Promise<RuntimeControlMutation> {
+    return this.setCapability("readGroupDocuments", false);
+  }
+
+  pauseKnowledgeBaseWriting(): Promise<RuntimeControlMutation> {
+    return this.setCapability("writeKnowledgeBase", false);
+  }
+
+  pauseExternalToolCalls(): Promise<RuntimeControlMutation> {
+    return this.setCapability("callExternalTools", false);
+  }
+
+  private setGlobalEnabled(enabled: boolean): Promise<RuntimeControlMutation> {
+    return this.enqueueMutation(async () => {
+      const previousEnabled = this.config.globalEnabled;
+      await this.store?.setGlobalEnabled(enabled);
+      this.config.globalEnabled = enabled;
+      return { previousEnabled, snapshot: this.getSnapshot() };
+    });
+  }
+
+  private setGroupEnabled(
+    groupId: string,
+    enabled: boolean,
+  ): Promise<RuntimeControlMutation> {
     const normalized = normalizeGroupId(groupId);
     if (normalized === undefined) {
-      return;
+      return Promise.resolve({
+        previousEnabled: false,
+        snapshot: this.getSnapshot(),
+      });
     }
 
-    this.config.disabledGroupIds.add(normalized);
-  }
-
-  enableGroup(groupId: string): void {
-    const normalized = normalizeGroupId(groupId);
-    if (normalized === undefined) {
-      return;
-    }
-
-    this.config.disabledGroupIds.delete(normalized);
-  }
-
-  setCapability(capability: RuntimeCapabilityName, enabled: boolean): void {
-    this.config.capabilities[capability] = enabled;
-  }
-
-  pauseProactiveBehavior(): void {
-    this.config.capabilities.proactiveSpeech = false;
-  }
-
-  pauseDocumentReading(): void {
-    this.config.capabilities.readGroupDocuments = false;
-  }
-
-  pauseKnowledgeBaseWriting(): void {
-    this.config.capabilities.writeKnowledgeBase = false;
-  }
-
-  pauseExternalToolCalls(): void {
-    this.config.capabilities.callExternalTools = false;
+    return this.enqueueMutation(async () => {
+      const previousEnabled = !this.config.disabledGroupIds.has(normalized);
+      await this.store?.setGroupEnabled(normalized, enabled);
+      if (enabled) {
+        this.config.disabledGroupIds.delete(normalized);
+      } else {
+        this.config.disabledGroupIds.add(normalized);
+      }
+      return { previousEnabled, snapshot: this.getSnapshot() };
+    });
   }
 
   canProcessGroupMessage(groupId: string): boolean {
@@ -126,6 +199,18 @@ export class RuntimeController {
 
   canCallExternalTools(): boolean {
     return this.config.globalEnabled && this.config.capabilities.callExternalTools;
+  }
+
+  private applySnapshot(snapshot: RuntimeControllerSnapshot): void {
+    this.config.globalEnabled = snapshot.globalEnabled;
+    this.config.disabledGroupIds = new Set(snapshot.disabledGroupIds);
+    this.config.capabilities = { ...snapshot.capabilities };
+  }
+
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationTail.catch(() => undefined).then(operation);
+    this.mutationTail = result;
+    return result;
   }
 }
 

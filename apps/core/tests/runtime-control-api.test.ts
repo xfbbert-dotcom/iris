@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import {
+  RuntimeController,
+  type RuntimeControlStore,
+} from "../src/admin/runtime-controller.js";
 import { InMemoryAuditLog, type AuditEvent } from "../src/audit/audit-log.js";
+import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
 import { isolateEnvVar } from "./test-env.js";
 
@@ -471,6 +476,38 @@ describe("runtime control API", () => {
       ok: true,
       globalEnabled: false,
     });
+  });
+
+  it("returns a retryable error without changing memory when persistence fails", async () => {
+    const store: RuntimeControlStore = {
+      load: async (defaults) => defaults,
+      setGlobalEnabled: async () => {
+        throw new Error("database unavailable");
+      },
+      setGroupEnabled: async () => undefined,
+      setCapabilities: async () => undefined,
+    };
+    const runtimeController = new RuntimeController(createDefaultRuntimeConfig(), store);
+    const app = buildApp({
+      runtimeController,
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+    expect(runtimeController.getSnapshot().globalEnabled).toBe(true);
   });
 
   it("records an optional operator hint on runtime control audit events", async () => {

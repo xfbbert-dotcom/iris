@@ -43,6 +43,10 @@ import {
   type DocumentSyncRuntime
 } from "./runtime/document-sync-runtime.js";
 import {
+  createRuntimeControlRuntime,
+  type RuntimeControlRuntime,
+} from "./runtime/runtime-control-runtime.js";
+import {
   DOCUMENT_SOURCE_URI_MAX_CHARS,
   type DocumentSourceType,
 } from "./documents/document-source-registry.js";
@@ -81,6 +85,8 @@ export type BuildAppDependencies = {
 
 export type StartServerOptions = {
   appDependencies?: Omit<BuildAppDependencies, "internalApiToken" | "readinessEnv">;
+  persistRuntimeControl?: boolean;
+  createRuntimeControlRuntime?: typeof createRuntimeControlRuntime;
 };
 
 type ParsedJsonBody = {
@@ -369,23 +375,28 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
 
     const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
-    const previousSnapshot = runtimeController.getSnapshot();
-    if (parsedRequest.enabled) {
-      runtimeController.enableGlobal();
-    } else {
-      runtimeController.disableGlobal();
+    let mutation;
+    try {
+      mutation = parsedRequest.enabled
+        ? await runtimeController.enableGlobal()
+        : await runtimeController.disableGlobal();
+    } catch {
+      return reply.code(503).send({
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      });
     }
     await recordRuntimeControlAuditEvent({
       auditLog,
       scope: "global",
       enabled: parsedRequest.enabled,
-      previousEnabled: previousSnapshot.globalEnabled,
+      previousEnabled: mutation.previousEnabled,
       operatorHint,
     });
 
     return {
       ok: true,
-      ...runtimeController.getSnapshot(),
+      ...mutation.snapshot,
     };
   });
 
@@ -398,24 +409,29 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
 
     const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
-    const previousSnapshot = runtimeController.getSnapshot();
-    if (parsedRequest.enabled) {
-      runtimeController.enableGroup(groupId);
-    } else {
-      runtimeController.disableGroup(groupId);
+    let mutation;
+    try {
+      mutation = parsedRequest.enabled
+        ? await runtimeController.enableGroup(groupId)
+        : await runtimeController.disableGroup(groupId);
+    } catch {
+      return reply.code(503).send({
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      });
     }
     await recordRuntimeControlAuditEvent({
       auditLog,
       scope: "group",
       targetId: groupId,
       enabled: parsedRequest.enabled,
-      previousEnabled: !previousSnapshot.disabledGroupIds.includes(groupId),
+      previousEnabled: mutation.previousEnabled,
       operatorHint,
     });
 
     return {
       ok: true,
-      ...runtimeController.getSnapshot(),
+      ...mutation.snapshot,
     };
   });
 
@@ -427,24 +443,31 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
 
     const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
-    const previousSnapshot = runtimeController.getSnapshot();
+    let mutation;
+    try {
+      mutation = await runtimeController.setCapabilities(parsedRequest);
+    } catch {
+      return reply.code(503).send({
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      });
+    }
     for (const [capability, enabled] of Object.entries(parsedRequest) as Array<
       [RuntimeCapabilityName, boolean]
     >) {
-      runtimeController.setCapability(capability, enabled);
       await recordRuntimeControlAuditEvent({
         auditLog,
         scope: "capability",
         targetId: capability,
         enabled,
-        previousEnabled: previousSnapshot.capabilities[capability],
+        previousEnabled: mutation.previousEnabled[capability] ?? enabled,
         operatorHint,
       });
     }
 
     return {
       ok: true,
-      ...runtimeController.getSnapshot(),
+      ...mutation.snapshot,
     };
   });
 
@@ -1983,21 +2006,41 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export async function startServer({
   appDependencies = {},
+  persistRuntimeControl = true,
+  createRuntimeControlRuntime: createRuntimeControlRuntimeDependency =
+    createRuntimeControlRuntime,
 }: StartServerOptions = {}) {
-  const internalApiToken = process.env.IRIS_INTERNAL_API_TOKEN;
+  const internalApiToken = readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
   const feishuAuthConfig = readFeishuAuthConfig();
   const host = resolveServerListenHost(
     internalApiToken,
     feishuAuthConfig.verificationToken,
   );
   const port = readServerPort();
-  const app = buildApp({ ...appDependencies, internalApiToken });
+  let runtimeControlRuntime: RuntimeControlRuntime | undefined;
+  let app: ReturnType<typeof buildApp> | undefined;
 
   try {
+    const runtimeController =
+      appDependencies.runtimeController ??
+      (persistRuntimeControl
+        ? (runtimeControlRuntime =
+            await createRuntimeControlRuntimeDependency()).controller
+        : new RuntimeController(createDefaultRuntimeConfig()));
+    app = buildApp({ ...appDependencies, runtimeController, internalApiToken });
+    if (runtimeControlRuntime !== undefined) {
+      app.addHook("onClose", async () => {
+        await runtimeControlRuntime?.close();
+      });
+    }
     await app.listen({ port, host });
   } catch (startupError) {
     try {
-      await app.close();
+      if (app !== undefined) {
+        await app.close();
+      } else {
+        await runtimeControlRuntime?.close();
+      }
     } catch (cleanupError) {
       throw new AggregateError(
         [startupError, cleanupError],

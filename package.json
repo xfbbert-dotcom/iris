@@ -8,6 +8,7 @@
   "scripts": {
     "build": "npm --workspace apps/core run build",
     "pilot:config": "node scripts/pilot-compose-config.mjs",
+    "pilot:persistence-smoke": "node scripts/pilot-runtime-control-persistence-smoke.mjs",
     "pilot:smoke": "node scripts/pilot-smoke.mjs",
     "test:pilot": "node --test scripts/local-compose.test.mjs scripts/pilot-smoke-lib.test.mjs scripts/pilot-compose.test.mjs scripts/pilot-operations.test.mjs",
     "readiness": "npm --workspace apps/core run readiness --",

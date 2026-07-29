@@ -212,4 +212,19 @@ describe("defaultMigrationsDir", () => {
       "add column knowledge_drafts_policy_overridden boolean not null default false",
     );
   });
+
+  it("includes migration to persist runtime controls", async () => {
+    const migration = await readFile(
+      join(defaultMigrationsDir(), "0016_runtime_controls.sql"),
+      "utf8",
+    );
+    const normalized = migration.replace(/\s+/g, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table runtime_controls");
+    expect(normalized).toContain("primary key (scope, target_id)");
+    expect(normalized).toContain("scope = 'global'");
+    expect(normalized).toContain("scope = 'group'");
+    expect(normalized).toContain("scope = 'capability'");
+    expect(normalized).toContain("and enabled = false");
+  });
 });
