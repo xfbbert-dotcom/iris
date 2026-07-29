@@ -114,3 +114,10 @@ npm --workspace apps/core test -- postgres-document-source-registry.test.ts
 npm --workspace apps/core test -- document-snapshot-repository.test.ts
 npm --workspace apps/core test -- document-fragment-repository.test.ts
 ```
+
+Run real Redis Lua queue integration tests:
+
+```powershell
+$env:REDIS_URL="redis://localhost:6379"
+npm --workspace apps/core test -- redis-queue-integration.test.ts
+```

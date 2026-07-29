@@ -26,6 +26,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,6 +67,13 @@ jobs:
           npm --workspace apps/core test -- postgres-document-source-registry.test.ts
           npm --workspace apps/core test -- document-snapshot-repository.test.ts
           npm --workspace apps/core test -- document-fragment-repository.test.ts
+          npm --workspace apps/core test -- postgres-runtime-control-store.test.ts
+          npm --workspace apps/core test -- postgres-audit-log.test.ts
+
+      - name: Test Redis queue integrations
+        env:
+          REDIS_URL: redis://localhost:6379
+        run: npm --workspace apps/core test -- redis-queue-integration.test.ts
 
       - name: Validate Docker Compose
         run: docker compose config
@@ -92,6 +108,9 @@ jobs:
 
       - name: Smoke pilot boundaries
         run: npm run pilot:smoke
+
+      - name: Smoke persisted operator state
+        run: npm run pilot:persistence-smoke
 
       - name: Drill paired pilot backup and restore
         run: |
