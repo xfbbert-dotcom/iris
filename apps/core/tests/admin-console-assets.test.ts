@@ -209,13 +209,16 @@ describe("admin console assets", () => {
     });
     const console = runAdminConsole(fetch);
     await console.trigger("wiki-space-refresh", "click");
-    const enabled = console.allElements().find((element) => element.type === "checkbox");
-    expect(enabled).toBeDefined();
+    const rows = console.element("wiki-space-rows");
+    const renderedRow = rows.children[0]!;
+    const enabled = renderedRow.children[4]!.children[0]!.children[0]!;
 
-    enabled!.checked = false;
-    await enabled!.trigger("change");
+    enabled.checked = false;
+    await enabled.trigger("change");
 
-    expect(enabled!.checked).toBe(false);
+    expect(rows.children).toHaveLength(1);
+    expect(rows.children[0]).toBe(renderedRow);
+    expect(rows.children[0]!.children[4]!.children[0]!.children[0]!.checked).toBe(false);
     expect(console.element("wiki-space-error").textContent).toBe(
       "Unable to refresh wiki spaces after enabled update: list_after_enabled_update_failed",
     );
@@ -226,6 +229,138 @@ describe("admin console assets", () => {
     expect(console.element("event-log").children.some((item) =>
       item.textContent.includes("Wiki space enabled update failed:")
     )).toBe(false);
+  });
+
+  it("keeps the last successful empty state when a later list refresh fails", async () => {
+    let listRequestCount = 0;
+    const console = runAdminConsole(() => {
+      listRequestCount += 1;
+      return listRequestCount === 1
+        ? Promise.resolve(jsonResponse({ ok: true, wikiSpaces: [] }))
+        : Promise.reject(new Error("later_list_failed"));
+    });
+    await console.trigger("wiki-space-refresh", "click");
+    expect(console.element("wiki-space-empty").textContent).toBe("No wiki spaces registered.");
+
+    await console.trigger("wiki-space-refresh", "click");
+
+    expect(console.element("wiki-space-rows").children).toHaveLength(0);
+    expect(console.element("wiki-space-empty").textContent).toBe("No wiki spaces registered.");
+    expect(console.element("wiki-space-error").textContent).toBe(
+      "Unable to load wiki spaces: later_list_failed",
+    );
+  });
+
+  it.each([
+    ["fails", errorResponse(500, "older_enabled_refresh_failed")],
+    ["succeeds", jsonResponse({ ok: true, wikiSpaces: [wikiSpace("space-1", { enabled: false })] })],
+  ])("keeps newer action feedback when an older enabled refresh %s", async (_outcome, olderRefreshResponse) => {
+    const authorization = wikiSpace("space-1");
+    const olderRefresh = deferred<ResponseStub>();
+    const olderRefreshStarted = deferred<void>();
+    const newerRegistration = deferred<ResponseStub>();
+    let listRequestCount = 0;
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/document-sync/wiki-spaces?limit=20") {
+        listRequestCount += 1;
+        if (listRequestCount === 1) {
+          return Promise.resolve(jsonResponse({ ok: true, wikiSpaces: [authorization] }));
+        }
+        olderRefreshStarted.resolve(undefined);
+        return olderRefresh.promise;
+      }
+      if (path === "/internal/document-sync/wiki-spaces/space-1") {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          authorization: { ...authorization, enabled: false },
+        }));
+      }
+      if (path === "/internal/document-sync/wiki-spaces") return newerRegistration.promise;
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    await console.trigger("wiki-space-refresh", "click");
+    const enabled = console.element("wiki-space-rows").children[0]!
+      .children[4]!.children[0]!.children[0]!;
+
+    enabled.checked = false;
+    const olderAction = enabled.trigger("change");
+    await olderRefreshStarted.promise;
+    console.element("wiki-space-root-source-uri").value = "https://tenant.feishu.cn/wiki/root_2";
+    const newerAction = console.trigger("wiki-space-form", "submit");
+    newerRegistration.resolve(errorResponse(500, "newer_registration_failed"));
+    await newerAction;
+    expect(console.element("wiki-space-error").textContent).toBe(
+      "Unable to register wiki space: newer_registration_failed",
+    );
+
+    olderRefresh.resolve(olderRefreshResponse);
+    await olderAction;
+
+    expect(console.element("wiki-space-error").textContent).toBe(
+      "Unable to register wiki space: newer_registration_failed",
+    );
+    expect(console.element("connection-state").textContent).toBe("Request failed");
+  });
+
+  it("keeps newer action feedback when an older manual refresh fails", async () => {
+    const olderRefresh = deferred<ResponseStub>();
+    const newerRegistration = deferred<ResponseStub>();
+    let listRequestCount = 0;
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/document-sync/wiki-spaces?limit=20") {
+        listRequestCount += 1;
+        return listRequestCount === 1
+          ? Promise.resolve(jsonResponse({ ok: true, wikiSpaces: [wikiSpace("space-1")] }))
+          : olderRefresh.promise;
+      }
+      if (path === "/internal/document-sync/wiki-spaces") return newerRegistration.promise;
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    await console.trigger("wiki-space-refresh", "click");
+
+    const olderAction = console.trigger("wiki-space-refresh", "click");
+    console.element("wiki-space-root-source-uri").value = "https://tenant.feishu.cn/wiki/root_2";
+    const newerAction = console.trigger("wiki-space-form", "submit");
+    newerRegistration.resolve(errorResponse(500, "newer_registration_failed"));
+    await newerAction;
+    olderRefresh.resolve(errorResponse(500, "older_manual_refresh_failed"));
+    await olderAction;
+
+    expect(console.element("wiki-space-error").textContent).toBe(
+      "Unable to register wiki space: newer_registration_failed",
+    );
+    expect(console.element("connection-state").textContent).toBe("Request failed");
+  });
+
+  it("keeps newer rescan feedback when an older registration request fails", async () => {
+    const olderRegistration = deferred<ResponseStub>();
+    const newerRescan = deferred<ResponseStub>();
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/document-sync/wiki-spaces?limit=20") {
+        return Promise.resolve(jsonResponse({ ok: true, wikiSpaces: [wikiSpace("space-1")] }));
+      }
+      if (path === "/internal/document-sync/wiki-spaces") return olderRegistration.promise;
+      if (path === "/internal/document-sync/wiki-spaces/space-1/rescan") return newerRescan.promise;
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    await console.trigger("wiki-space-refresh", "click");
+    console.element("wiki-space-root-source-uri").value = "https://tenant.feishu.cn/wiki/root_2";
+
+    const olderAction = console.trigger("wiki-space-form", "submit");
+    const rescanButton = console.allElements().find((element) => element.title === "Rescan wiki space");
+    const newerAction = rescanButton!.trigger("click");
+    newerRescan.resolve(errorResponse(500, "newer_rescan_failed"));
+    await newerAction;
+    olderRegistration.resolve(errorResponse(500, "older_registration_failed"));
+    await olderAction;
+
+    expect(console.element("wiki-space-error").textContent).toBe(
+      "Unable to rescan wiki space: newer_rescan_failed",
+    );
+    expect(console.element("connection-state").textContent).toBe("Request failed");
   });
 
   it("gives the icon-only rescan control an explicit accessible name and tooltip", async () => {

@@ -973,6 +973,7 @@ const capabilityLabels = {
 let cachedStatus = undefined;
 let proactiveCandidateRefreshGeneration = 0;
 let wikiSpaceRefreshGeneration = 0;
+let wikiSpaceOperationGeneration = 0;
 const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
 const userSubmittedDocumentPath = "/internal/document-sync/user-submitted-documents";
 const wikiSpaceListPath = "/internal/document-sync/wiki-spaces?limit=20";
@@ -1216,21 +1217,38 @@ function wikiSpacePath(id, suffix = "") {
   return wikiSpaceBasePath + "/" + encodeURIComponent(id) + suffix;
 }
 
-function clearWikiSpaceError() {
+function isCurrentWikiSpaceOperation(generation) {
+  return generation === wikiSpaceOperationGeneration;
+}
+
+function clearWikiSpaceError(generation = wikiSpaceOperationGeneration) {
+  if (!isCurrentWikiSpaceOperation(generation)) return;
   wikiSpaceError.textContent = "";
 }
 
-function showWikiSpaceError(prefix, error) {
+function showWikiSpaceError(prefix, error, generation = wikiSpaceOperationGeneration) {
+  if (!isCurrentWikiSpaceOperation(generation)) return;
   wikiSpaceError.textContent = prefix + ": " + error.message;
 }
 
-async function refreshWikiSpacesAfterAction(action) {
+function beginWikiSpaceOperation() {
+  const generation = ++wikiSpaceOperationGeneration;
+  clearWikiSpaceError(generation);
+  return generation;
+}
+
+function setWikiSpaceConnection(message, mode, generation) {
+  if (!isCurrentWikiSpaceOperation(generation)) return;
+  setConnection(message, mode);
+}
+
+async function refreshWikiSpacesAfterAction(action, operationGeneration) {
   try {
-    await refreshWikiSpaces();
+    await refreshWikiSpaces(operationGeneration);
   } catch (error) {
-    showWikiSpaceError("Unable to refresh wiki spaces after " + action, error);
+    showWikiSpaceError("Unable to refresh wiki spaces after " + action, error, operationGeneration);
     addEvent("Wiki space refresh after " + action + " failed: " + error.message);
-    setConnection("Refresh warning", "warn");
+    setWikiSpaceConnection("Refresh warning", "warn", operationGeneration);
   }
 }
 
@@ -1241,8 +1259,8 @@ function renderWikiSpaceEnabledToggle(wikiSpace) {
   checkbox.type = "checkbox";
   checkbox.checked = wikiSpace.enabled === true;
   checkbox.addEventListener("change", async () => {
+    const operationGeneration = beginWikiSpaceOperation();
     checkbox.disabled = true;
-    clearWikiSpaceError();
     try {
       try {
         await requestJson(wikiSpacePath(wikiSpace.id), {
@@ -1251,13 +1269,13 @@ function renderWikiSpaceEnabledToggle(wikiSpace) {
         });
       } catch (error) {
         checkbox.checked = wikiSpace.enabled === true;
-        showWikiSpaceError("Unable to update wiki space enabled state", error);
+        showWikiSpaceError("Unable to update wiki space enabled state", error, operationGeneration);
         addEvent("Wiki space enabled update failed: " + error.message);
-        setConnection("Request failed", "warn");
+        setWikiSpaceConnection("Request failed", "warn", operationGeneration);
         return;
       }
       addEvent("Wiki space " + (checkbox.checked ? "enabled: " : "disabled: ") + text(wikiSpace.id));
-      await refreshWikiSpacesAfterAction("enabled update");
+      await refreshWikiSpacesAfterAction("enabled update", operationGeneration);
     } finally {
       checkbox.disabled = false;
     }
@@ -1312,8 +1330,8 @@ function renderWikiSpaces(wikiSpaces) {
     rescanButton.setAttribute("aria-label", "Rescan wiki space");
     rescanButton.textContent = "\\u21bb";
     rescanButton.addEventListener("click", async () => {
+      const operationGeneration = beginWikiSpaceOperation();
       rescanButton.disabled = true;
-      clearWikiSpaceError();
       try {
         try {
           await requestJson(wikiSpacePath(wikiSpace.id, "/rescan"), {
@@ -1321,13 +1339,13 @@ function renderWikiSpaces(wikiSpaces) {
             body: JSON.stringify({}),
           });
         } catch (error) {
-          showWikiSpaceError("Unable to rescan wiki space", error);
+          showWikiSpaceError("Unable to rescan wiki space", error, operationGeneration);
           addEvent("Wiki space rescan failed: " + error.message);
-          setConnection("Request failed", "warn");
+          setWikiSpaceConnection("Request failed", "warn", operationGeneration);
           return;
         }
         addEvent("Wiki space rescan requested: " + text(wikiSpace.id));
-        await refreshWikiSpacesAfterAction("rescan");
+        await refreshWikiSpacesAfterAction("rescan", operationGeneration);
       } finally {
         rescanButton.disabled = false;
       }
@@ -1341,20 +1359,17 @@ function renderWikiSpaces(wikiSpaces) {
   wikiSpaceEmpty.textContent = visibleSpaces.length === 0 ? "No wiki spaces registered." : "";
 }
 
-async function refreshWikiSpaces() {
+async function refreshWikiSpaces(operationGeneration = wikiSpaceOperationGeneration) {
   const generation = ++wikiSpaceRefreshGeneration;
   wikiSpaceLoading.textContent = "Loading wiki spaces...";
-  clearWikiSpaceError();
-  wikiSpaceEmpty.textContent = "";
+  clearWikiSpaceError(operationGeneration);
   try {
     const body = await requestJson(wikiSpaceListPath);
     if (generation !== wikiSpaceRefreshGeneration) return;
     renderWikiSpaces(body.wikiSpaces);
   } catch (error) {
     if (generation !== wikiSpaceRefreshGeneration) return;
-    wikiSpaceRows.replaceChildren();
-    wikiSpaceEmpty.textContent = "";
-    showWikiSpaceError("Unable to load wiki spaces", error);
+    showWikiSpaceError("Unable to load wiki spaces", error, operationGeneration);
     throw error;
   } finally {
     if (generation === wikiSpaceRefreshGeneration) wikiSpaceLoading.textContent = "";
@@ -2025,12 +2040,13 @@ documentSourceRefresh.addEventListener("click", async () => {
 });
 
 wikiSpaceRefresh.addEventListener("click", async () => {
+  const operationGeneration = beginWikiSpaceOperation();
   wikiSpaceRefresh.disabled = true;
   try {
-    await refreshWikiSpaces();
+    await refreshWikiSpaces(operationGeneration);
     addEvent("Wiki spaces refreshed");
   } catch (error) {
-    setConnection("Request failed", "warn");
+    setWikiSpaceConnection("Request failed", "warn", operationGeneration);
     addEvent("Wiki space refresh failed: " + error.message);
   } finally {
     wikiSpaceRefresh.disabled = false;
@@ -2039,21 +2055,21 @@ wikiSpaceRefresh.addEventListener("click", async () => {
 
 wikiSpaceForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const operationGeneration = beginWikiSpaceOperation();
   wikiSpaceSubmit.disabled = true;
-  clearWikiSpaceError();
   try {
     let body;
     try {
       body = await registerWikiSpace();
     } catch (error) {
-      showWikiSpaceError("Unable to register wiki space", error);
-      setConnection("Request failed", "warn");
+      showWikiSpaceError("Unable to register wiki space", error, operationGeneration);
+      setWikiSpaceConnection("Request failed", "warn", operationGeneration);
       addEvent("Wiki space registration failed: " + error.message);
       return;
     }
     wikiSpaceRootSourceUri.value = "";
     addEvent("Wiki space registered: " + text(body.authorization?.id, "unknown wiki space"));
-    await refreshWikiSpacesAfterAction("registration");
+    await refreshWikiSpacesAfterAction("registration", operationGeneration);
   } finally {
     wikiSpaceSubmit.disabled = false;
   }
