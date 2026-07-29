@@ -131,6 +131,26 @@ describe("FeishuWikiSpaceClient", () => {
     });
   });
 
+  it("classifies aborted response body reads as retryable timeouts", async () => {
+    const client = createFeishuWikiSpaceClient({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch: vi.fn(async () => new Response(new ReadableStream({
+        start(controller) {
+          controller.error(abortError());
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })),
+    });
+
+    await expect(client.getNode("root")).rejects.toMatchObject({
+      classification: "timeout",
+      retriable: true,
+    });
+  });
+
   it("classifies rejected fetch transport requests as retriable request failures", async () => {
     const client = createFeishuWikiSpaceClient({
       baseUrl: "https://open.feishu.cn",

@@ -156,7 +156,10 @@ async function requestJson({
         maxResponseBytes,
         responseSizeErrorMessage: "Feishu wiki space response exceeded the configured size limit",
       });
-    } catch {
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw new WikiSpaceSyncError("timeout", true);
+      }
       throw invalidResponse();
     }
     if (!isRecord(responseBody) || responseBody.code !== 0) {
