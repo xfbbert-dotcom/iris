@@ -56,6 +56,20 @@ delivery mistakes while implementing it.
   private retrieval marker passes with live permission, and the legacy fragment/DLQ evidence remains
   available for rollback.
 
+### Keep one migration in one target execution context
+
+- **Failure:** The local-embedding bootstrap was converted to Ubuntu Bash, but later DLQ, reindex,
+  coverage, and retrieval steps still used undefined PowerShell variables. The memory processing
+  gate also queried a Redis sorted set with `LLEN`.
+- **Root cause:** Review stopped at the first executable block instead of tracing the complete
+  operator workflow and checking each queue key against its repository implementation.
+- **Prevention rule:** Ship one canonical target-native migration entrypoint. Keep bearer-token
+  access inside Core, and derive every direct Redis command from the queue's actual data type.
+- **Guard:** Compose contracts reject mixed PowerShell in the Ubuntu migration section, syntax-check
+  the Bash entrypoint, require exact model/profile gates, and require `ZCARD` for memory processing.
+- **Exit condition:** The same script performs backup, evidence capture, bounded reindex, coverage,
+  private retrieval, and fail-closed cleanup on the VPS with all 13 counters at zero.
+
 ### Bound transient answer-model retries without multiplying the deadline
 
 - **Failure:** Authorized retrieval, live Feishu permission checks, and prompt assembly all

@@ -47,21 +47,35 @@ The model boundary is strict: `embedding-model-init` alone receives model-downlo
 temporary Ollama server, and verifies the full stored model-manifest SHA256 plus every referenced
 config and layer blob. A missing or corrupt blob is repaired only by that seed job and the complete
 cache is then reverified. The private `embedding-model` service has no host or edge port and no
-model egress network. Its recurring health check is deliberately lightweight. The backend-only
+model egress network. Its recurring health check locks the exact model tag and full stored manifest
+SHA256 without repeatedly hashing the 639 MB model layer. The backend-only
 one-shot `embedding-model-verify` service hashes the cache once, requests a known input from
 `/v1/embeddings`, and requires exactly 1024 finite values whose norm is within `0.001` of `1`.
 Both one-shot jobs must complete successfully before Core can start. A model name shown by
 `ollama list`, a short digest, a successful pull without blob verification, or endpoint availability
 without the embedding-shape check is a failed gate.
 
-Run this Bash block directly on the Ubuntu 24.04 VPS from the repository root. The host shell never
-reads the bearer token: authenticated requests run as Node processes inside Core, where the token is
-already present. The block captures and durably disables the current global state, proves Caddy
-stopped, creates the existing encrypted paired Postgres/Redis backup, records its path, validates the
-exact rendered embedding configuration, runs migrations, and force-recreates model verification and
-Core. Set `IRIS_OPERATOR_EVIDENCE_PATH` to an absolute operator-controlled NDJSON file first. Retain
-the previous provider settings in the approved rollback `.env.pilot` copy; do not edit historical
-profile rows or fragments.
+Run the canonical migration entrypoint directly on the Ubuntu 24.04 VPS from the repository
+root. It is the only supported procedure for changing the production embedding profile. The host
+shell never reads the internal bearer token: authenticated calls execute as Node processes inside
+Core, where the token is already present.
+
+Set the five non-secret acceptance inputs first. The old profile must be the exact Gemini profile
+found in the existing reindex DLQ. The marker must exist only in the authorized Life Engine page and
+must not be included in the question or live-chat input.
+
+```bash
+export IRIS_OPERATOR_EVIDENCE_PATH=/opt/iris/repository/evidence/local-embedding-migration.ndjson
+export IRIS_OLD_EMBEDDING_PROFILE_ID=replace-with-exact-old-gemini-profile-id
+export IRIS_LIFE_ENGINE_CHAT_ID=replace-with-approved-pilot-chat-id
+export IRIS_LIFE_ENGINE_SOURCE_ID=4f4f04db-ae67-487b-9060-e03e2535ee7d
+export IRIS_LIFE_ENGINE_MARKER=replace-with-authorized-page-only-marker
+
+bash deploy/pilot/migrate-local-embedding.sh
+```
+
+The rendered configuration must resolve to all of these exact values before the script starts model
+or database work:
 
 ```text
 IRIS_EMBEDDING_PROVIDER=openai-compatible
@@ -72,563 +86,45 @@ IRIS_EMBEDDING_DIMENSIONS=1024
 IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d
 ```
 
-```bash
-#!/usr/bin/env bash
-set -Eeuo pipefail
-umask 077
-
-compose=(docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml)
-profile_id="openai-compatible:qwen3-embedding:0.6b:1024"
-
-compose_cmd() {
-  "${compose[@]}" "$@"
-}
-
-assert_caddy_stopped() {
-  local running_services
-  if ! running_services="$(compose_cmd ps --status running --services)"; then
-    echo "Caddy status could not be queried" >&2
-    return 1
-  fi
-  if grep -Fxq caddy <<<"${running_services}"; then
-    echo "Caddy stopped state could not be proven" >&2
-    return 1
-  fi
-}
-
-assert_core_stopped() {
-  local running_services
-  if ! running_services="$(compose_cmd ps --status running --services)"; then
-    echo "Core status could not be queried" >&2
-    return 1
-  fi
-  if grep -Fxq core <<<"${running_services}"; then
-    echo "Core stopped state could not be proven" >&2
-    return 1
-  fi
-}
-
-read_runtime_state() {
-  compose_cmd exec -T core node --input-type=module --eval '
-    function requireInternalToken() {
-      const token = process.env.IRIS_INTERNAL_API_TOKEN ?? "";
-      if (!/^[\x21-\x2B\x2D-\x7E]+$/.test(token)) {
-        throw new Error("IRIS_INTERNAL_API_TOKEN must be one single visible ASCII token without comma or whitespace");
-      }
-      return token;
-    }
-    const response = await fetch("http://127.0.0.1:3000/internal/runtime-control/status", {
-      headers: { authorization: `Bearer ${requireInternalToken()}` },
-    });
-    if (!response.ok) throw new Error(`Runtime status failed: ${response.status}`);
-    const body = await response.json();
-    if (
-      body.ok !== true ||
-      typeof body.globalEnabled !== "boolean" ||
-      typeof body.desiredGlobalEnabled !== "boolean"
-    ) {
-      throw new Error("Current global runtime state is unavailable or malformed");
-    }
-    process.stdout.write(`${body.globalEnabled}\t${body.desiredGlobalEnabled}\n`);
-  '
-}
-
-disable_runtime() {
-  compose_cmd exec -T core node --input-type=module --eval '
-    function requireInternalToken() {
-      const token = process.env.IRIS_INTERNAL_API_TOKEN ?? "";
-      if (!/^[\x21-\x2B\x2D-\x7E]+$/.test(token)) {
-        throw new Error("IRIS_INTERNAL_API_TOKEN must be one single visible ASCII token without comma or whitespace");
-      }
-      return token;
-    }
-    const response = await fetch("http://127.0.0.1:3000/internal/runtime-control/global", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${requireInternalToken()}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ enabled: false }),
-    });
-    if (!response.ok) throw new Error(`Runtime disable failed: ${response.status}`);
-    const body = await response.json();
-    if (
-      body.ok !== true ||
-      body.globalEnabled !== false ||
-      body.desiredGlobalEnabled !== false ||
-      body.durable !== true
-    ) {
-      throw new Error("Global runtime was not durably disabled");
-    }
-  '
-}
-
-assert_active_profile() {
-  compose_cmd exec -T core node --input-type=module --eval '
-    function requireInternalToken() {
-      const token = process.env.IRIS_INTERNAL_API_TOKEN ?? "";
-      if (!/^[\x21-\x2B\x2D-\x7E]+$/.test(token)) {
-        throw new Error("IRIS_INTERNAL_API_TOKEN must be one single visible ASCII token without comma or whitespace");
-      }
-      return token;
-    }
-    const expectedProfileId = process.argv[1];
-    const response = await fetch("http://127.0.0.1:3000/internal/reindex/status", {
-      headers: { authorization: `Bearer ${requireInternalToken()}` },
-    });
-    if (!response.ok) throw new Error(`Reindex status failed: ${response.status}`);
-    const body = await response.json();
-    if (
-      body.ok !== true ||
-      body.enabled !== true ||
-      body.running !== true ||
-      body.activeEmbeddingProfileId !== expectedProfileId
-    ) {
-      throw new Error(`Active embedding profile is not exactly ${expectedProfileId}`);
-    }
-  ' "$1"
-}
-
-validate_rendered_config() {
-  compose_cmd config --format json |
-    compose_cmd run --rm --no-deps -T --entrypoint node core \
-      --input-type=module --eval '
-        let raw = "";
-        for await (const chunk of process.stdin) raw += chunk;
-        const rendered = JSON.parse(raw);
-        const core = rendered.services.core.environment;
-        const verifier = rendered.services["embedding-model-verify"];
-        const seed = rendered.services["embedding-model-init"];
-        const model = rendered.services["embedding-model"];
-        const expectedManifestSha =
-          "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d";
-        const expectedOllamaImage =
-          "ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a";
-        const expectedCore = {
-          IRIS_EMBEDDING_PROVIDER: "openai-compatible",
-          IRIS_EMBEDDING_BASE_URL: "http://embedding-model:11434/v1",
-          IRIS_EMBEDDING_API_KEY: "ollama",
-          IRIS_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
-          IRIS_EMBEDDING_DIMENSIONS: "1024",
-        };
-        for (const [key, value] of Object.entries(expectedCore)) {
-          if (core[key] !== value) {
-            throw new Error("Rendered Core embedding configuration is not the approved local profile");
-          }
-        }
-        const cacheMount = verifier.volumes.find(
-          (volume) =>
-            volume.type === "volume" &&
-            volume.source === "iris_embedding_models" &&
-            volume.target === "/var/lib/iris-ollama" &&
-            volume.read_only === true,
-        );
-        if (
-          seed.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 !== expectedManifestSha ||
-          verifier.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 !== expectedManifestSha ||
-          verifier.environment.IRIS_EMBEDDING_BASE_URL !== "http://embedding-model:11434/v1" ||
-          verifier.environment.IRIS_EMBEDDING_MODEL !== "qwen3-embedding:0.6b" ||
-          verifier.environment.IRIS_EMBEDDING_DIMENSIONS !== "1024" ||
-          verifier.environment.IRIS_EMBEDDING_MODEL_ROOT !== "/var/lib/iris-ollama/models" ||
-          verifier.environment.IRIS_EMBEDDING_NORM_TOLERANCE !== "0.001" ||
-          seed.image !== expectedOllamaImage ||
-          model.image !== expectedOllamaImage ||
-          !cacheMount
-        ) {
-          throw new Error("Rendered model image, cache mount, or manifest contract is not approved");
-        }
-      '
-}
-
-assert_completed_service() {
-  local service="$1"
-  local ids
-  mapfile -t ids < <(compose_cmd ps --all --quiet "${service}")
-  if (( ${#ids[@]} != 1 )); then
-    echo "${service} does not have exactly one container" >&2
-    return 1
-  fi
-  if [[ "$(docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "${ids[0]}")" != "exited 0" ]]; then
-    echo "${service} did not exit successfully" >&2
-    return 1
-  fi
-}
-
-fail_closed_cleanup() {
-  local original_status=$?
-  local disable_proven=false
-  local caddy_stop_status=0
-  local caddy_stopped_status=0
-  local core_stopped_status=0
-  trap - EXIT
-  set +e
-
-  for attempt in 1 2 3; do
-    if disable_runtime; then
-      disable_proven=true
-      break
-    fi
-    sleep 2
-  done
-  compose_cmd stop caddy
-  caddy_stop_status=$?
-  assert_caddy_stopped
-  caddy_stopped_status=$?
-  if [[ "${disable_proven}" != true ]]; then
-    compose_cmd stop core
-    core_stopped_status=$?
-    if ! assert_core_stopped; then
-      core_stopped_status=1
-    fi
-  fi
-
-  if (( caddy_stop_status != 0 || caddy_stopped_status != 0 || core_stopped_status != 0 )); then
-    echo "FAIL-CLOSED RECOVERY INCOMPLETE: inspect Core and Caddy before proceeding" >&2
-    exit 1
-  fi
-  if [[ "${disable_proven}" != true ]]; then
-    echo "Fail-closed cleanup stopped Core because durable disable was not proven" >&2
-    exit 1
-  fi
-  exit "${original_status}"
-}
-trap fail_closed_cleanup EXIT
-
-operator_evidence_path="${IRIS_OPERATOR_EVIDENCE_PATH:-}"
-if [[ -z "${operator_evidence_path}" || "${operator_evidence_path}" != /* ]]; then
-  echo "IRIS_OPERATOR_EVIDENCE_PATH must be an absolute operator-controlled evidence file" >&2
-  exit 1
-fi
-operator_evidence_directory="$(dirname -- "${operator_evidence_path}")"
-install -d -m 700 -- "${operator_evidence_directory}"
-
-runtime_before_migration="$(read_runtime_state)"
-IFS=$'\t' read -r previous_global_enabled previous_desired_global_enabled \
-  <<<"${runtime_before_migration}"
-if [[ ! "${previous_global_enabled}" =~ ^(true|false)$ ||
-      ! "${previous_desired_global_enabled}" =~ ^(true|false)$ ]]; then
-  echo "Current global runtime state is malformed" >&2
-  exit 1
-fi
-
-disable_runtime
-compose_cmd stop caddy
-assert_caddy_stopped
-
-backup_path="$(/usr/local/sbin/iris-backup | tail -n 1)"
-if [[ ! "${backup_path}" =~ ^/[A-Za-z0-9._/-]+$ || ! -f "${backup_path}" ]]; then
-  echo "Encrypted paired Postgres/Redis backup was not created" >&2
-  exit 1
-fi
-recorded_at="$(date --utc +%Y-%m-%dT%H:%M:%S.%NZ)"
-evidence_record="$(printf \
-  '{"schemaVersion":1,"recordedAt":"%s","event":"local_embedding_migration_backup","backupPath":"%s","previousGlobalEnabled":%s,"previousDesiredGlobalEnabled":%s}' \
-  "${recorded_at}" "${backup_path}" "${previous_global_enabled}" \
-  "${previous_desired_global_enabled}")"
-printf '%s\n' "${evidence_record}" >>"${operator_evidence_path}"
-if [[ "$(tail -n 1 -- "${operator_evidence_path}")" != "${evidence_record}" ]]; then
-  echo "Migration backup path evidence write verification failed" >&2
-  exit 1
-fi
-
-validate_rendered_config
-compose_cmd up --detach --wait --wait-timeout 600 --force-recreate \
-  migrate embedding-model-init embedding-model embedding-model-verify core
-assert_completed_service "embedding-model-init"
-assert_completed_service "embedding-model-verify"
-assert_caddy_stopped
-assert_active_profile "${profile_id}"
-```
-
-Do not continue to DLQ inspection unless that block succeeds. It leaves global runtime durably
-disabled and Caddy stopped, and it requires `/internal/reindex/status` to report the exact active
-profile before any DLQ mutation.
+The script has one bounded, fail-closed path. It captures and durably disables runtime, stops and
+proves Caddy stopped, creates the paired encrypted Postgres/Redis backup, records the backup path,
+validates the rendered image and profile, runs migrations, verifies the complete model cache and a
+known 1024-dimensional unit embedding, and starts Core without public ingress. Its exit trap retries
+durable disable and always stops Caddy; if durable disable cannot be proven, it also stops and proves
+Core stopped.
 
 ### Old-Profile DLQ Evidence
 
-List the reindex DLQ before any deletion. For every old Gemini-profile entry that cannot be replayed,
-record old-profile DLQ evidence in an operator-controlled evidence file before deleting it. The
-record must contain the full DLQ ID, embedding profile ID, snapshot ID, `enqueuedAt`, attempts,
-`failedAt`, a safe failure classification, and capture timestamp. It must never persist document
-bodies, prompts, vectors, secrets, or raw provider error bodies. Set
-`IRIS_OPERATOR_EVIDENCE_PATH` to an absolute operator-controlled NDJSON file before this step.
-Missing fields, an unknown classification, a failed evidence write/readback, or an unexpected delete
-response aborts before deletion.
-
-```powershell
-function Get-SafeReindexFailureClassification {
-  param([string]$ErrorMessage)
-  if ([string]::IsNullOrWhiteSpace($ErrorMessage)) { return $null }
-  if ($ErrorMessage -match '(?i)permission|forbidden|unauthorized|denied') { return "permission" }
-  if ($ErrorMessage -match '(?i)timeout|timed out|deadline') { return "timeout" }
-  if ($ErrorMessage -match '(?i)rate limit|quota|429') { return "quota" }
-  if ($ErrorMessage -match '(?i)model|embedding|provider|ollama') { return "embedding_provider" }
-  if ($ErrorMessage -match '(?i)invalid|malformed|configuration|profile') { return "configuration" }
-  return "other"
-}
-
-$oldGeminiProfileId = "replace-with-exact-old-gemini-profile-id"
-if ([string]::IsNullOrWhiteSpace($oldGeminiProfileId) -or $oldGeminiProfileId -notmatch '(?i)gemini') {
-  throw "Set IRIS old Gemini embedding profile ID exactly before DLQ deletion"
-}
-$operatorEvidencePath = $env:IRIS_OPERATOR_EVIDENCE_PATH
-if ([string]::IsNullOrWhiteSpace($operatorEvidencePath) -or
-    -not [System.IO.Path]::IsPathFullyQualified($operatorEvidencePath)) {
-  throw "IRIS_OPERATOR_EVIDENCE_PATH must be an absolute operator-controlled evidence file"
-}
-$operatorEvidenceDirectory = Split-Path -Parent $operatorEvidencePath
-if ([string]::IsNullOrWhiteSpace($operatorEvidenceDirectory)) {
-  throw "IRIS_OPERATOR_EVIDENCE_PATH must include a parent directory"
-}
-New-Item -ItemType Directory -Force -Path $operatorEvidenceDirectory | Out-Null
-
-$oldProfileDlq = Invoke-RestMethod -Headers $irisHeaders `
-  -Uri "http://localhost:3000/internal/reindex/dead-letters?limit=100"
-if ($oldProfileDlq.ok -ne $true) { throw "Could not list reindex DLQ" }
-$oldGeminiDeadLetters = @($oldProfileDlq.deadLetters | Where-Object { $_.job.embeddingProfileId -ceq $oldGeminiProfileId })
-foreach ($deadLetter in $oldGeminiDeadLetters) {
-  $requiredFields = @(
-    [string]$deadLetter.id,
-    [string]$deadLetter.job.embeddingProfileId,
-    [string]$deadLetter.job.documentSnapshotId,
-    [string]$deadLetter.job.enqueuedAt,
-    [string]$deadLetter.failedAt
-  )
-  if (@($requiredFields | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
-    throw "Old Gemini DLQ entry is missing required evidence fields"
-  }
-  try { [int64]$attempts = [int64]$deadLetter.job.attempts } catch { throw "Old Gemini DLQ attempts is invalid" }
-  if ($attempts -lt 0) { throw "Old Gemini DLQ attempts is invalid" }
-  $failureClassification = Get-SafeReindexFailureClassification $deadLetter.errorMessage
-  if ([string]::IsNullOrWhiteSpace($failureClassification)) {
-    throw "Old Gemini DLQ failure classification is unavailable"
-  }
-
-  $evidenceRecord = [ordered]@{
-    schemaVersion = 1
-    recordedAt = (Get-Date).ToUniversalTime().ToString("o")
-    deadLetterId = [string]$deadLetter.id
-    embeddingProfileId = [string]$deadLetter.job.embeddingProfileId
-    documentSnapshotId = [string]$deadLetter.job.documentSnapshotId
-    enqueuedAt = [string]$deadLetter.job.enqueuedAt
-    attempts = $attempts
-    failedAt = [string]$deadLetter.failedAt
-    failureClassification = $failureClassification
-  }
-  Add-Content -LiteralPath $operatorEvidencePath -Value ($evidenceRecord | ConvertTo-Json -Compress)
-  $writtenEvidence = Get-Content -LiteralPath $operatorEvidencePath -Tail 1 | ConvertFrom-Json
-  if ($writtenEvidence.deadLetterId -cne $deadLetter.id -or
-      $writtenEvidence.embeddingProfileId -cne $oldGeminiProfileId -or
-      [string]::IsNullOrWhiteSpace([string]$writtenEvidence.failureClassification)) {
-    throw "Old Gemini DLQ evidence write verification failed"
-  }
-
-  $deleteResult = Invoke-RestMethod -Method Delete -Headers $irisHeaders `
-    -Uri "http://localhost:3000/internal/reindex/dead-letters/$($deadLetter.id)"
-  if ($deleteResult.ok -ne $true -or $deleteResult.status -cne "deleted") {
-    throw "Old Gemini DLQ delete was not confirmed"
-  }
-}
-```
+Before deleting an old Gemini-profile dead letter, the script records an NDJSON evidence row with
+only the full DLQ ID, profile ID, snapshot ID, enqueue/failure timestamps, attempts, safe failure
+classification, and capture timestamp. It reads the row back byte-for-byte and deletes only that
+exact ID after the write succeeds. Document bodies, prompts, vectors, secrets, and raw provider error
+bodies are never written. Missing fields, unknown identity, unsafe IDs, write/readback failure, or an
+unexpected delete response aborts the migration.
 
 ### Bounded Full Reindex
 
-Plan all latest successful snapshots in batches of at most 100. Wait for every batch to drain
-before requesting the next; this lets fragment coverage, rather than queue idempotency alone,
-determine whether more work remains. The loop is bounded at 1,000 requests and fails closed if it
-does not reach an empty plan.
+The script plans latest successful snapshots in batches of at most 100 and stops after at most 1,000
+planning requests. Every batch must drain before the next request. Each gate checks event,
+document-sync, reindex, and memory pending/processing/delayed/DLQ counts. Memory processing is a
+Redis sorted set and is therefore inspected with `ZCARD`, including when extraction is disabled.
+Every count must be exactly zero, and reindex status must name
+`openai-compatible:qwen3-embedding:0.6b:1024`.
 
-```powershell
-$profileId = "openai-compatible:qwen3-embedding:0.6b:1024"
-function Get-ReindexQueueDlqSnapshot {
-  $status = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/status"
-  $events = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/events/status"
-  $reindex = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/reindex/status"
+### Coverage And Private Retrieval
 
-  [long]$eventProcessing = & docker @compose exec -T redis redis-cli LLEN iris:events:raw:processing
-  if ($LASTEXITCODE -ne 0) { throw "Unable to read raw-event processing list" }
-  [long]$documentProcessing = & docker @compose exec -T redis redis-cli LLEN iris:documents:sync:processing
-  if ($LASTEXITCODE -ne 0) { throw "Unable to read document-sync processing list" }
-  [long]$reindexProcessing = & docker @compose exec -T redis redis-cli LLEN iris:reindex:documents:processing
-  if ($LASTEXITCODE -ne 0) { throw "Unable to read document-reindex processing list" }
-  [long]$memoryReady = & docker @compose exec -T redis redis-cli ZCARD iris:memory:extraction:ready:index
-  if ($LASTEXITCODE -ne 0) { throw "Unable to read memory ready index" }
-  [long]$memoryProcessing = & docker @compose exec -T redis redis-cli LLEN iris:memory:extraction:processing
-  if ($LASTEXITCODE -ne 0) { throw "Unable to read memory processing list" }
-  [long]$memoryDelayed = & docker @compose exec -T redis redis-cli ZCARD iris:memory:extraction:delayed
-  if ($LASTEXITCODE -ne 0) { throw "Unable to read memory delayed index" }
-  [long]$memoryDlq = & docker @compose exec -T redis redis-cli SCARD iris:memory:extraction:dlq:ids
-  if ($LASTEXITCODE -ne 0) { throw "Unable to read memory DLQ IDs" }
+Before any ingress is restored, the script requires every latest successful
+`authorized_wiki_document` snapshot to have fragments in
+`document_fragment_embeddings_1024` under the exact Qwen profile. Historical profile rows and
+fragments are preserved. It then briefly enables runtime only on the private Core interface, asks one
+Life Engine marker question, and requires both the marker and the expected source ID in
+`allowedFragments`. This is the live Feishu permission guard gate; Feishu-native related-knowledge
+UI is not Iris evidence.
 
-  [pscustomobject]@{
-    EventOk = ($events.ok -eq $true -and $events.enabled -eq $true -and $events.running -eq $true)
-    DocumentOk = ($status.components.documentSync.ok -eq $true -and $status.components.documentSync.enabled -eq $true -and $status.components.documentSync.running -eq $true)
-    ReindexOk = ($reindex.ok -eq $true -and $reindex.enabled -eq $true -and $reindex.running -eq $true -and $reindex.activeEmbeddingProfileId -ceq $profileId)
-    QueueCounts = @(
-      [long]$events.pendingEventCount,
-      $eventProcessing,
-      [long]$events.deadLetterEventCount,
-      [long]$status.components.documentSync.pendingJobCount,
-      $documentProcessing,
-      [long]$status.components.documentSync.deadLetterJobCount,
-      [long]$status.components.reindex.pendingJobCount,
-      $reindexProcessing,
-      [long]$status.components.reindex.deadLetterJobCount,
-      $memoryReady,
-      $memoryProcessing,
-      $memoryDelayed,
-      $memoryDlq
-    )
-  }
-}
-
-function Assert-ReindexQueueDlqZero {
-  param($Snapshot)
-  if ($Snapshot.EventOk -ne $true -or $Snapshot.DocumentOk -ne $true -or $Snapshot.ReindexOk -ne $true) {
-    throw "Event, document-sync, or reindex status is not healthy for the selected profile"
-  }
-  if (@($Snapshot.QueueCounts | Where-Object { [long]$_ -ne 0 }).Count -ne 0) {
-    throw "Event/document/reindex/memory queue or DLQ zero gate failed"
-  }
-}
-
-function Wait-ReindexQueueDlqZero {
-  $deadline = (Get-Date).AddMinutes(30)
-  do {
-    $snapshot = Get-ReindexQueueDlqSnapshot
-    try {
-      Assert-ReindexQueueDlqZero $snapshot
-      return $snapshot
-    } catch {
-      $lastGateError = $_
-      Start-Sleep -Seconds 2
-    }
-  } while ((Get-Date) -lt $deadline)
-  throw "Reindex queue/DLQ zero gate did not pass: $lastGateError"
-}
-
-$reindexPlan = [pscustomobject]@{ enqueuedCount = 1 }
-$reindexBatch = 0
-while ($reindexPlan.enqueuedCount -gt 0) {
-  $reindexBatch += 1
-  if ($reindexBatch -gt 1000) { throw "Profile reindex planning did not reach an empty plan" }
-
-  $reindexPlan = Invoke-RestMethod -Method Post -Headers $irisHeaders `
-    -Uri "http://localhost:3000/internal/reindex/document-profile" `
-    -ContentType "application/json" `
-    -Body "{`"embeddingProfileId`":`"$profileId`",`"limit`":100}"
-  if ($reindexPlan.ok -ne $true -or $reindexPlan.enqueuedCount -lt 0) {
-    throw "Profile reindex plan failed"
-  }
-  $reindexQueueSnapshot = Wait-ReindexQueueDlqZero
-  if ($reindexPlan.enqueuedCount -eq 0) { break }
-}
-Assert-ReindexQueueDlqZero (Get-ReindexQueueDlqSnapshot)
-```
-
-Before ingress, record zero queue and DLQ counts for event, document-sync, reindex, and memory, and
-verify every latest successful authorized-wiki snapshot has fragments under the exact Qwen profile.
-The direct Redis memory counts remain required even when memory extraction is disabled. The
-following query is content-free and must return exactly one zero before Life Engine acceptance:
-
-```powershell
-if ($profileId -notmatch '^[A-Za-z0-9:._-]+$') { throw "Selected profile ID is unsafe for coverage query" }
-$coverageSql = @"
-with latest_successful_snapshots as (
-  select distinct on (s.document_source_id) s.id
-  from document_snapshots s
-  join document_sources ds on ds.id = s.document_source_id
-  where s.fetch_status = 'succeeded'
-    and ds.source_type = 'authorized_wiki_document'
-  order by s.document_source_id asc, s.fetched_at desc, s.id asc
-)
-select count(*)
-from latest_successful_snapshots s
-where not exists (
-  select 1
-  from document_fragments f
-  join document_fragment_embeddings_1024 e on e.document_fragment_id = f.id
-  where f.document_snapshot_id = s.id
-    and f.embedding_profile_id = '$profileId'
-    and e.embedding_profile_id = '$profileId'
-);
-"@
-$missingQwenProfileFragmentCount = @($coverageSql | & docker @compose exec -T postgres sh -ec 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At')
-if ($LASTEXITCODE -ne 0 -or $missingQwenProfileFragmentCount.Count -ne 1 -or
-    $missingQwenProfileFragmentCount[0].Trim() -notmatch '^\d+$' -or
-    [long]$missingQwenProfileFragmentCount[0].Trim() -ne 0) {
-  throw "Latest successful authorized-wiki missing Qwen-profile fragment count is not zero"
-}
-```
-
-Run one internal Life Engine retrieval question using a unique marker that exists only in its
-authorized page. The result must return that marker, and the live Feishu permission guard must allow
-the source at answer time. Keep Caddy stopped for this query; Feishu-native related-knowledge UI is
-not Iris evidence.
-
-`/internal/answer-drafts` obeys runtime control, so authorize one private request while Caddy remains
-stopped, then durably disable it again. Replace the placeholders with the approved pilot chat, the
-authorized source ID, and a marker that is absent from the question and live chat input.
-
-```powershell
-$lifeEngineChatId = "oc_approved_pilot_group"
-$lifeEngineSourceId = "authorized-life-engine-source-id"
-$lifeEngineMarker = "IRIS-LIFE-ENGINE-UNIQUE-MARKER"
-$disableProven = $false
-try {
-  $enableForPrivateQuery = Invoke-RestMethod -Method Post -Headers $irisHeaders `
-    -Uri "http://localhost:3000/internal/runtime-control/global" `
-    -ContentType "application/json" -Body '{"enabled":true}'
-  if ($enableForPrivateQuery.globalEnabled -ne $true -or $enableForPrivateQuery.durable -ne $true) {
-    throw "Could not durably authorize the private retrieval query"
-  }
-  $lifeEngineResult = Invoke-RestMethod -Method Post -Headers $irisHeaders `
-    -Uri "http://localhost:3000/internal/answer-drafts" `
-    -ContentType "application/json" `
-    -Body "{`"question`":`"Return the approved Life Engine marker only.`",`"chatId`":`"$lifeEngineChatId`",`"liveChatMessages`":[]}"
-  if ($lifeEngineResult.answerText -notmatch [regex]::Escape($lifeEngineMarker)) {
-    throw "Life Engine marker was not retrieved"
-  }
-  if ($lifeEngineResult.retrievedFragmentCount -lt 1 -or
-      $lifeEngineResult.allowedFragments.documentSourceId -notcontains $lifeEngineSourceId) {
-    throw "Live Feishu permission guard did not allow the expected authorized source"
-  }
-} finally {
-  for ($disableAttempt = 1; $disableAttempt -le 3; $disableAttempt += 1) {
-    try {
-      $disableAfterPrivateQuery = Invoke-RestMethod -Method Post -Headers $irisHeaders `
-        -Uri "http://localhost:3000/internal/runtime-control/global" `
-        -ContentType "application/json" -Body '{"enabled":false}'
-      if ($disableAfterPrivateQuery.globalEnabled -eq $false -and $disableAfterPrivateQuery.durable -eq $true) {
-        $disableProven = $true
-        break
-      }
-    } catch {
-      $disableError = $_
-    }
-    Start-Sleep -Seconds 2
-  }
-  if (-not $disableProven) {
-    & docker @compose stop caddy core
-    $stopExitCode = $LASTEXITCODE
-    $stillRunning = @(& docker @compose ps --status running --services)
-    if ($stopExitCode -ne 0 -or $stillRunning -contains "caddy" -or $stillRunning -contains "core") {
-      throw "Could not prove durable disable and could not stop both Caddy and Core"
-    }
-    throw "Could not prove global runtime false and durable after three attempts: $disableError"
-  }
-}
-```
-
-Use the [wiki-space evidence procedure](../runbooks/iris-wiki-space-sync.md#local-embedding-acceptance)
-for the source, permission, and marker controls.
-
-Start Caddy only after the private model check, selected-profile reindex, zero event, document-sync,
-reindex, and memory queue and DLQ counts, live Feishu permission guard, and Life Engine retrieval
-gates have all passed. Any failed command, nonzero queue/DLQ, permission uncertainty, missing marker,
-or unexpected profile requires rollback: keep Caddy stopped, durably disable global runtime,
-restore the approved previous `.env.pilot` and matching Core image/paired backup when needed, and
-preserve the prior-profile fragments.
+A successful run still leaves global runtime durably disabled and Caddy stopped.
+Start Caddy only after confirming the approved pilot scope and all zero queue and DLQ counts. Any
+uncertainty requires rollback to the approved previous environment, image, and paired backup while
+operators preserve the prior-profile fragments.
 
 ### Controlled Daily Pilot Profile
 

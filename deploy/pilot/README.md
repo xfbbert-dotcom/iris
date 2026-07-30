@@ -32,8 +32,9 @@ with Caddy stopped and global runtime disabled. `embedding-model-init` verifies 
 model-manifest SHA256 and every referenced config/layer blob for `qwen3-embedding:0.6b`, repairing
 only through its egress-enabled seed path. The backend-only one-shot `embedding-model-verify` then
 rehashes the cache and requires a known-input 1024-dimensional finite embedding with norm within
-`0.001` of `1`. Both one-shot checks must pass before Core can start; the long-running model health
-check remains lightweight. Do not treat `ollama list`, a model name, or a partial digest as approval.
+`0.001` of `1`. Both one-shot checks must pass before Core can start. The long-running health check
+locks the exact model tag and full manifest SHA256 without repeatedly hashing the model layer. Do
+not treat `ollama list`, a model name, or a partial digest as approval.
 
 The active profile is exactly `openai-compatible:qwen3-embedding:0.6b:1024`. Record old-profile
 DLQ evidence before deleting any old-profile DLQ entry, then use the bounded repeated

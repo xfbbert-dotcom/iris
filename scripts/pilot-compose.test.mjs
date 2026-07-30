@@ -39,6 +39,10 @@ const documentReindexQueueSource = readFileSync(
 const caddyfile = readFileSync("deploy/pilot/Caddyfile", "utf8");
 const pilotCiEnv = readFileSync("deploy/pilot/ci.env", "utf8");
 const pilotEnvExample = readFileSync(".env.pilot.example", "utf8");
+const localEmbeddingMigrationScript = readFileSync(
+  "deploy/pilot/migrate-local-embedding.sh",
+  "utf8",
+);
 
 test("pins every third-party pilot image to an immutable digest", () => {
   for (const serviceName of ["postgres", "redis", "caddy"]) {
@@ -186,7 +190,16 @@ test("keeps model services private with dedicated model egress", () => {
   );
   const runtimeHealthcheck = embeddingModel.healthcheck.test.join(" ").replace(/\$\$/gu, "$");
   assert.match(runtimeHealthcheck, /OLLAMA_HOST=127\.0\.0\.1:11434 ollama list/u);
-  assert.doesNotMatch(runtimeHealthcheck, /sha256sum/u);
+  assert.match(runtimeHealthcheck, /model_tag=\$\{IRIS_EMBEDDING_MODEL#\*:\}/u);
+  assert.match(
+    runtimeHealthcheck,
+    /manifest="\/root\/\.ollama\/models\/manifests\/registry\.ollama\.ai\/library\/\$\{model_name\}\/\$\{model_tag\}"/u,
+  );
+  assert.match(
+    runtimeHealthcheck,
+    /awk -v expected="\$\{IRIS_EMBEDDING_MODEL\}" 'NR > 1 && \$1 == expected/u,
+  );
+  assert.match(runtimeHealthcheck, /sha256sum -c -/u);
   assert.equal(embeddingModelInit.command.length, 1);
   const initCommand = embeddingModelInit.command[0].replace(/\$\$/gu, "$");
   assert.match(
@@ -441,10 +454,10 @@ test("requires fail-closed local embedding profile migration operations", () => 
   assertMarkersInOrder(internalRolloutRunbook, [
     "## Local Embedding Profile Migration",
     "embedding-model-init",
+    "Old-Profile DLQ Evidence",
+    "Bounded Full Reindex",
     "openai-compatible:qwen3-embedding:0.6b:1024",
-    "old-profile DLQ evidence",
-    "while ($reindexPlan.enqueuedCount -gt 0)",
-    "/internal/reindex/document-profile",
+    "Coverage And Private Retrieval",
     "Life Engine",
     "Start Caddy only after",
   ]);
@@ -478,7 +491,7 @@ test("makes local embedding migration commands evidence-first and fail closed", 
   const bootstrap = migration.slice(0, oldProfileDlqStart);
 
   assert.match(
-    bootstrap,
+    localEmbeddingMigrationScript,
     /assert_completed_service "embedding-model-init"/u,
     "completed seed inspection must include the stopped one-shot service",
   );
@@ -489,81 +502,87 @@ test("makes local embedding migration commands evidence-first and fail closed", 
 
   assert.match(
     migration,
-    /function Get-ReindexQueueDlqSnapshot[\s\S]*?\/internal\/status[\s\S]*?\/internal\/events\/status[\s\S]*?\/internal\/reindex\/status[\s\S]*?LLEN iris:events:raw:processing[\s\S]*?LLEN iris:documents:sync:processing[\s\S]*?LLEN iris:reindex:documents:processing[\s\S]*?ZCARD iris:memory:extraction:ready:index[\s\S]*?LLEN iris:memory:extraction:processing[\s\S]*?ZCARD iris:memory:extraction:delayed[\s\S]*?SCARD iris:memory:extraction:dlq:ids/u,
-    "each reindex gate must inspect event, document, reindex, memory, and processing state",
+    /deploy\/pilot\/migrate-local-embedding\.sh/u,
+    "the runbook must invoke one executable VPS migration entrypoint",
   );
-  assert.match(migration, /function Wait-ReindexQueueDlqZero[\s\S]*?Get-ReindexQueueDlqSnapshot/u);
-  assert.match(
-    migration,
-    /while \(\$reindexPlan\.enqueuedCount -gt 0\) \{[\s\S]*?\/internal\/reindex\/document-profile[\s\S]*?\$reindexQueueSnapshot = Wait-ReindexQueueDlqZero[\s\S]*?if \(\$reindexPlan\.enqueuedCount -eq 0\) \{ break \}/u,
-    "zero planning results must pass a fresh queue/DLQ gate before breaking",
-  );
-  assert.match(
-    migration,
-    /\}\s*Assert-ReindexQueueDlqZero/u,
-    "migration must make a final zero-gate assertion after planning",
-  );
-
-  assert.match(migration, /function Get-SafeReindexFailureClassification/u);
-  assert.match(migration, /Where-Object \{ \$_\.job\.embeddingProfileId -ceq \$oldGeminiProfileId \}/u);
-  assert.match(migration, /Add-Content -LiteralPath \$operatorEvidencePath/u);
-  assert.match(migration, /Get-Content -LiteralPath \$operatorEvidencePath -Tail 1/u);
-  assert.match(
-    migration,
-    /Invoke-RestMethod -Method Delete -Headers \$irisHeaders[\s\S]*?\$deadLetter\.id/u,
-  );
-  assert.doesNotMatch(migration, /reviewedOldProfileDlqId/u);
-
-  const privateQuery = migration.slice(migration.indexOf("$disableProven = $false"));
-  const enableStart = privateQuery.indexOf("try {");
-  const enableRequest = privateQuery.indexOf("$enableForPrivateQuery = Invoke-RestMethod");
-  const finallyStart = privateQuery.indexOf("} finally {");
-  assert.ok(enableStart !== -1 && enableRequest > enableStart && finallyStart > enableRequest);
-  assert.match(
-    migration.slice(finallyStart),
-    /for \(\$disableAttempt = 1; \$disableAttempt -le 3; \$disableAttempt \+= 1\)[\s\S]*?\/internal\/runtime-control\/global[\s\S]*?durable[\s\S]*?& docker @compose stop caddy core[\s\S]*?throw/u,
-    "ambiguous private-runtime cleanup must retry disable, stop ingress and Core, then throw",
-  );
-
-  const coverageStart = migration.indexOf("$coverageSql");
-  const lifeEngineStart = migration.indexOf("$lifeEngineChatId");
-  assert.ok(coverageStart !== -1 && lifeEngineStart > coverageStart);
-  const coverage = migration.slice(coverageStart, lifeEngineStart);
-  assert.match(coverage, /authorized_wiki_document/u);
-  assert.match(coverage, /document_fragment_embeddings_1024/u);
-  assert.match(coverage, /not exists/u);
-  assert.match(coverage, /missing Qwen-profile fragment count is not zero/u);
-
-  assert.match(bootstrap, /```bash\s+#!\/usr\/bin\/env bash/u);
-  assert.doesNotMatch(bootstrap, /```powershell|\bpwsh\b|\bPowerShell\b/u);
-  assert.match(bootstrap, /process\.env\.IRIS_INTERNAL_API_TOKEN/u);
   assert.doesNotMatch(
-    bootstrap,
+    migration,
+    /```powershell|\bInvoke-RestMethod\b|\$irisHeaders|\bdocker @compose\b/u,
+    "the Ubuntu migration path must not fall back to an undefined PowerShell context",
+  );
+  assert.match(localEmbeddingMigrationScript, /^#!\/usr\/bin\/env bash\r?$/mu);
+  assert.match(localEmbeddingMigrationScript, /set -Eeuo pipefail/u);
+  assert.match(localEmbeddingMigrationScript, /process\.env\.IRIS_INTERNAL_API_TOKEN/u);
+  assert.doesNotMatch(
+    localEmbeddingMigrationScript,
     /\$env:IRIS_INTERNAL_API_TOKEN|\$IRIS_INTERNAL_API_TOKEN|\$\{IRIS_INTERNAL_API_TOKEN/u,
     "the VPS host shell must never read or interpolate the internal bearer token",
   );
+
+  assert.match(localEmbeddingMigrationScript, /function safeFailureClassification/u);
+  assert.match(localEmbeddingMigrationScript, /\/internal\/reindex\/dead-letters\?limit=100/u);
+  assert.match(localEmbeddingMigrationScript, /failureClassification/u);
+  assert.match(localEmbeddingMigrationScript, /tail -n 1/u);
   assert.match(
-    bootstrap,
+    localEmbeddingMigrationScript,
+    /core_operation delete-dlq "\$\{dead_letter_id\}"/u,
+  );
+  assert.doesNotMatch(localEmbeddingMigrationScript, /reviewedOldProfileDlqId/u);
+
+  assert.match(
+    localEmbeddingMigrationScript,
+    /\/internal\/status[\s\S]*?\/internal\/events\/status[\s\S]*?\/internal\/reindex\/status[\s\S]*?LLEN iris:events:raw:processing[\s\S]*?LLEN iris:documents:sync:processing[\s\S]*?LLEN iris:reindex:documents:processing[\s\S]*?ZCARD iris:memory:extraction:ready:index[\s\S]*?ZCARD iris:memory:extraction:processing[\s\S]*?ZCARD iris:memory:extraction:delayed[\s\S]*?SCARD iris:memory:extraction:dlq:ids/u,
+    "each reindex gate must inspect event, document, reindex, memory, and processing state",
+  );
+  assert.doesNotMatch(
+    localEmbeddingMigrationScript,
+    /LLEN iris:memory:extraction:processing/u,
+  );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /for reindex_batch in \$\(seq 1 1000\)[\s\S]*?core_operation plan-reindex[\s\S]*?wait_queue_gate[\s\S]*?enqueued_count/u,
+  );
+  assert.match(localEmbeddingMigrationScript, /\/internal\/reindex\/document-profile/u);
+  assert.match(localEmbeddingMigrationScript, /authorized_wiki_document/u);
+  assert.match(localEmbeddingMigrationScript, /document_fragment_embeddings_1024/u);
+  assert.match(localEmbeddingMigrationScript, /not exists/u);
+  assert.match(
+    localEmbeddingMigrationScript,
+    /Latest successful authorized-wiki missing Qwen-profile fragment count is not zero/u,
+  );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /\/internal\/answer-drafts[\s\S]*?allowedFragments/u,
+  );
+  assert.match(localEmbeddingMigrationScript, /IRIS_LIFE_ENGINE_MARKER/u);
+  assert.match(
+    localEmbeddingMigrationScript,
+    /fail_closed_cleanup\(\)[\s\S]*?disable_runtime[\s\S]*?compose_cmd stop caddy[\s\S]*?assert_caddy_stopped[\s\S]*?compose_cmd stop core[\s\S]*?assert_core_stopped/u,
+    "every migration exit must re-disable runtime and prove ingress stopped",
+  );
+
+  assert.doesNotMatch(bootstrap, /```powershell|\bpwsh\b|\bPowerShell\b/u);
+  assert.match(
+    localEmbeddingMigrationScript,
     /function requireInternalToken\(\)[\s\S]*?single visible ASCII token/u,
   );
   assert.match(
-    bootstrap,
+    localEmbeddingMigrationScript,
     /assert_caddy_stopped\(\)[\s\S]*?if ! running_services="\$\(compose_cmd ps --status running --services\)"; then[\s\S]*?return 1/u,
     "a failed service-status query must not prove that Caddy is stopped",
   );
   assert.match(
-    bootstrap,
+    localEmbeddingMigrationScript,
     /compose_cmd config --format json \|[\s\S]*?compose_cmd run --rm --no-deps -T --entrypoint node core/u,
     "rendered configuration must be validated inside Core without exposing its token",
   );
-  assertMarkersInOrder(bootstrap, [
+  assertMarkersInOrder(localEmbeddingMigrationScript, [
     "trap fail_closed_cleanup EXIT",
-    'runtime_before_migration="$(read_runtime_state)"',
+    'runtime_before_migration="$(core_operation runtime-status)"',
     "disable_runtime",
     "compose_cmd stop caddy",
     "assert_caddy_stopped",
-    'backup_path="$(/usr/local/sbin/iris-backup',
-    "local_embedding_migration_backup",
+    'record_backup_evidence "${previous_global_enabled}"',
     "validate_rendered_config",
     "compose_cmd up --detach --wait --wait-timeout 600 --force-recreate",
     'assert_completed_service "embedding-model-init"',
@@ -571,21 +590,16 @@ test("makes local embedding migration commands evidence-first and fail closed", 
     "assert_active_profile",
   ]);
   assert.match(
-    bootstrap,
+    localEmbeddingMigrationScript,
     /IRIS_EMBEDDING_BASE_URL[\s\S]*?http:\/\/embedding-model:11434\/v1[\s\S]*?IRIS_EMBEDDING_MODEL[\s\S]*?qwen3-embedding:0\.6b[\s\S]*?IRIS_EMBEDDING_DIMENSIONS[\s\S]*?1024/u,
   );
   assert.match(
-    bootstrap,
+    localEmbeddingMigrationScript,
     /compose_cmd up[\s\S]*?--force-recreate[\s\S]*?migrate[\s\S]*?embedding-model-verify[\s\S]*?core/u,
-  );
-  assert.match(
-    bootstrap,
-    /fail_closed_cleanup\(\)[\s\S]*?disable_runtime[\s\S]*?compose_cmd stop caddy[\s\S]*?assert_caddy_stopped[\s\S]*?compose_cmd stop core[\s\S]*?assert_core_stopped/u,
-    "every bootstrap exit must re-disable runtime and prove Caddy stopped",
   );
   for (const redisMemoryGate of [
     "ZCARD iris:memory:extraction:ready:index",
-    "LLEN iris:memory:extraction:processing",
+    "ZCARD iris:memory:extraction:processing",
     "ZCARD iris:memory:extraction:delayed",
     "SCARD iris:memory:extraction:dlq:ids",
   ]) {

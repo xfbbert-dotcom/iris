@@ -254,8 +254,14 @@ services:
         - CMD-SHELL
         - >-
           model_name=$${IRIS_EMBEDDING_MODEL%:*} &&
+          model_tag=$${IRIS_EMBEDDING_MODEL#*:} &&
+          manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}" &&
           OLLAMA_HOST=127.0.0.1:11434 ollama list >/dev/null 2>&1 &&
-          OLLAMA_HOST=127.0.0.1:11434 ollama list | grep -F "$${model_name}" >/dev/null
+          OLLAMA_HOST=127.0.0.1:11434 ollama list |
+            awk -v expected="$${IRIS_EMBEDDING_MODEL}" 'NR > 1 && $$1 == expected { found = 1 } END { exit(found ? 0 : 1) }' &&
+          test -f "$$manifest" &&
+          printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" |
+            sha256sum -c - >/dev/null
       interval: 10s
       timeout: 5s
       retries: 12

@@ -57,8 +57,8 @@ scan gate.
 $compose = @("compose", "--env-file", ".env.pilot", "--file", "deploy/pilot/docker-compose.yml")
 [long]$memoryReady = & docker @compose exec -T redis redis-cli ZCARD iris:memory:extraction:ready:index
 if ($LASTEXITCODE -ne 0) { throw "Memory ready index could not be inspected" }
-[long]$memoryProcessing = & docker @compose exec -T redis redis-cli LLEN iris:memory:extraction:processing
-if ($LASTEXITCODE -ne 0) { throw "Memory processing list could not be inspected" }
+[long]$memoryProcessing = & docker @compose exec -T redis redis-cli ZCARD iris:memory:extraction:processing
+if ($LASTEXITCODE -ne 0) { throw "Memory processing index could not be inspected" }
 [long]$memoryDelayed = & docker @compose exec -T redis redis-cli ZCARD iris:memory:extraction:delayed
 if ($LASTEXITCODE -ne 0) { throw "Memory delayed index could not be inspected" }
 [long]$memoryDlq = & docker @compose exec -T redis redis-cli SCARD iris:memory:extraction:dlq:ids
