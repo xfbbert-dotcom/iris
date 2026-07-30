@@ -757,6 +757,7 @@ describe("readEmbeddingProviderConfig", () => {
         IRIS_EMBEDDING_API_KEY: " key-a ",
         IRIS_EMBEDDING_MODEL: " embedding-model ",
         IRIS_EMBEDDING_DIMENSIONS: " 1536 ",
+        IRIS_EMBEDDING_BATCH_SIZE: " 4 ",
         IRIS_EMBEDDING_TIMEOUT_MS: " 2500 ",
       }),
     ).toEqual({
@@ -765,6 +766,7 @@ describe("readEmbeddingProviderConfig", () => {
       apiKey: "key-a",
       model: "embedding-model",
       dimensions: 1536,
+      batchSize: 4,
       timeoutMs: 2500,
     });
   });
@@ -824,6 +826,16 @@ describe("readEmbeddingProviderConfig", () => {
         IRIS_EMBEDDING_TIMEOUT_MS: "0",
       }),
     ).toThrow("IRIS_EMBEDDING_TIMEOUT_MS must be a positive integer");
+
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+        IRIS_EMBEDDING_BATCH_SIZE: "0",
+      }),
+    ).toThrow("IRIS_EMBEDDING_BATCH_SIZE must be a positive integer");
   });
 
   it("rejects unsafe integer dimensions", () => {

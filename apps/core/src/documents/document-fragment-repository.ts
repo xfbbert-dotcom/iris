@@ -24,6 +24,7 @@ export type EmbeddingProfileLookup = {
 
 type EmbeddingTable =
   | "document_fragment_embeddings_6"
+  | "document_fragment_embeddings_768"
   | "document_fragment_embeddings_1024"
   | "document_fragment_embeddings_1536";
 
@@ -473,6 +474,9 @@ function hashText(text: string): string {
 function resolveEmbeddingTable(dimension: number): EmbeddingTable {
   if (dimension === 6) {
     return "document_fragment_embeddings_6";
+  }
+  if (dimension === 768) {
+    return "document_fragment_embeddings_768";
   }
   if (dimension === 1024) {
     return "document_fragment_embeddings_1024";

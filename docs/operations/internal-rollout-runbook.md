@@ -48,9 +48,10 @@ temporary Ollama server, and verifies the full stored model-manifest SHA256 plus
 config and layer blob. A missing or corrupt blob is repaired only by that seed job and the complete
 cache is then reverified. The private `embedding-model` service has no host or edge port and no
 model egress network. Its recurring health check locks the exact model tag and full stored manifest
-SHA256 without repeatedly hashing the 639 MB model layer. The backend-only
-one-shot `embedding-model-verify` service hashes the cache once, requests a known input from
-`/v1/embeddings`, and requires exactly 1024 finite values whose norm is within `0.001` of `1`.
+SHA256 without repeatedly hashing the 239 MB model layer. The backend-only
+one-shot `embedding-model-verify` service hashes the cache once, sends four document-prefixed
+inputs with `dimensions=768` to `/v1/embeddings`, and requires four ordered 768-dimensional finite
+vectors whose norms are within `0.001` of `1`.
 Both one-shot jobs must complete successfully before Core can start. A model name shown by
 `ollama list`, a short digest, a successful pull without blob verification, or endpoint availability
 without the embedding-shape check is a failed gate.
@@ -60,13 +61,14 @@ root. It is the only supported procedure for changing the production embedding p
 shell never reads the internal bearer token: authenticated calls execute as Node processes inside
 Core, where the token is already present.
 
-Set the five non-secret acceptance inputs first. The old profile must be the exact Gemini profile
-found in the existing reindex DLQ. The marker must exist only in the authorized Life Engine page and
-must not be included in the question or live-chat input.
+Set the five non-secret acceptance inputs first. The old profile must be the exact prior profile
+found in the existing reindex DLQ, must differ from the target profile, and must exactly match the
+active profile reported by the pre-migration Core. The marker must exist only in the authorized
+Life Engine page and must not be included in the question or live-chat input.
 
 ```bash
 export IRIS_OPERATOR_EVIDENCE_PATH=/opt/iris/repository/evidence/local-embedding-migration.ndjson
-export IRIS_OLD_EMBEDDING_PROFILE_ID=replace-with-exact-old-gemini-profile-id
+export IRIS_OLD_EMBEDDING_PROFILE_ID=replace-with-exact-prior-profile-id
 export IRIS_LIFE_ENGINE_CHAT_ID=replace-with-approved-pilot-chat-id
 export IRIS_LIFE_ENGINE_SOURCE_ID=4f4f04db-ae67-487b-9060-e03e2535ee7d
 export IRIS_LIFE_ENGINE_MARKER=replace-with-authorized-page-only-marker
@@ -81,21 +83,24 @@ or database work:
 IRIS_EMBEDDING_PROVIDER=openai-compatible
 IRIS_EMBEDDING_BASE_URL=http://embedding-model:11434/v1
 IRIS_EMBEDDING_API_KEY=ollama
-IRIS_EMBEDDING_MODEL=qwen3-embedding:0.6b
-IRIS_EMBEDDING_DIMENSIONS=1024
-IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d
+IRIS_EMBEDDING_MODEL=embeddinggemma:300m-qat-q4_0
+IRIS_EMBEDDING_DIMENSIONS=768
+IRIS_EMBEDDING_BATCH_SIZE=4
+IRIS_EMBEDDING_TIMEOUT_MS=60000
+IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=101341d65c2ccbf23f16650b79d30b9fca94a45ffa09a9984c600157b81a58df
 ```
 
 The script has one bounded, fail-closed path. It captures and durably disables runtime, stops and
 proves Caddy stopped, creates the paired encrypted Postgres/Redis backup, records the backup path,
 validates the rendered image and profile, runs migrations, verifies the complete model cache and a
-known 1024-dimensional unit embedding, and starts Core without public ingress. Its exit trap retries
+production-shaped four-item batch of 768-dimensional unit embeddings, and starts Core without
+public ingress. Its exit trap retries
 durable disable and always stops Caddy; if durable disable cannot be proven, it also stops and proves
 Core stopped.
 
 ### Old-Profile DLQ Evidence
 
-Before deleting an old Gemini-profile dead letter, the script records an NDJSON evidence row with
+Before deleting an old-profile dead letter, the script records an NDJSON evidence row with
 only the full DLQ ID, profile ID, snapshot ID, enqueue/failure timestamps, attempts, safe failure
 classification, and capture timestamp. It reads the row back byte-for-byte and deletes only that
 exact ID after the write succeeds. Document bodies, prompts, vectors, secrets, and raw provider error
@@ -108,16 +113,18 @@ The script plans latest successful snapshots in batches of at most 100 and stops
 planning requests. Every batch must drain before the next request. Each gate checks event,
 document-sync, reindex, and memory pending/processing/delayed/DLQ counts. Memory processing is a
 Redis sorted set and is therefore inspected with `ZCARD`, including when extraction is disabled.
-Every count must be exactly zero, and reindex status must name
-`openai-compatible:qwen3-embedding:0.6b:1024`.
+A new DLQ aborts immediately; pending and processing work may drain for at most 30 minutes. Every
+count must then be exactly zero, and reindex status must name
+`openai-compatible:embeddinggemma:300m-qat-q4_0:768`.
 
 ### Coverage And Private Retrieval
 
 Before any ingress is restored, the script requires every latest successful
 `authorized_wiki_document` snapshot to have fragments in
-`document_fragment_embeddings_1024` under the exact Qwen profile. Historical profile rows and
-fragments are preserved. It then briefly enables runtime only on the private Core interface, asks one
-Life Engine marker question, and requires both the marker and the expected source ID in
+`document_fragment_embeddings_768` under the exact EmbeddingGemma profile. Historical profile rows
+and fragments, including the additive 1024-dimensional Qwen table, are preserved. It then briefly
+enables runtime only on the private Core interface, asks one Life Engine marker question, and
+requires both the marker and the expected source ID in
 `allowedFragments`. This is the live Feishu permission guard gate; Feishu-native related-knowledge
 UI is not Iris evidence.
 

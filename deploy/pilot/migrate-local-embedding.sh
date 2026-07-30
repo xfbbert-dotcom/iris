@@ -3,8 +3,8 @@ set -Eeuo pipefail
 umask 077
 
 compose=(docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml)
-profile_id="openai-compatible:qwen3-embedding:0.6b:1024"
-expected_manifest_sha="ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d"
+profile_id="openai-compatible:embeddinggemma:300m-qat-q4_0:768"
+expected_manifest_sha="101341d65c2ccbf23f16650b79d30b9fca94a45ffa09a9984c600157b81a58df"
 expected_ollama_image="ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a"
 
 operator_evidence_path="${IRIS_OPERATOR_EVIDENCE_PATH:-}"
@@ -145,6 +145,18 @@ core_operation() {
         ) {
           throw new Error(`Active embedding profile is not exactly ${expectedProfileId}`);
         }
+        break;
+      }
+      case "current-profile": {
+        const payload = await request("GET", "/internal/reindex/status");
+        const activeEmbeddingProfileId = payload.activeEmbeddingProfileId;
+        if (
+          typeof activeEmbeddingProfileId !== "string"
+          || !/^[A-Za-z0-9:._-]+$/u.test(activeEmbeddingProfileId)
+        ) {
+          throw new Error("Current active embedding profile is unsafe or unavailable");
+        }
+        process.stdout.write(`${activeEmbeddingProfileId}\n`);
         break;
       }
       case "list-old-dlq": {
@@ -302,8 +314,10 @@ validate_rendered_config() {
           IRIS_EMBEDDING_PROVIDER: "openai-compatible",
           IRIS_EMBEDDING_BASE_URL: "http://embedding-model:11434/v1",
           IRIS_EMBEDDING_API_KEY: "ollama",
-          IRIS_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
-          IRIS_EMBEDDING_DIMENSIONS: "1024",
+          IRIS_EMBEDDING_MODEL: "embeddinggemma:300m-qat-q4_0",
+          IRIS_EMBEDDING_DIMENSIONS: "768",
+          IRIS_EMBEDDING_BATCH_SIZE: "4",
+          IRIS_EMBEDDING_TIMEOUT_MS: "60000",
         };
         for (const [key, value] of Object.entries(expectedCore)) {
           if (core[key] !== value) {
@@ -321,10 +335,11 @@ validate_rendered_config() {
           seed.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 !== expectedManifestSha
           || verifier.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 !== expectedManifestSha
           || verifier.environment.IRIS_EMBEDDING_BASE_URL !== "http://embedding-model:11434/v1"
-          || verifier.environment.IRIS_EMBEDDING_MODEL !== "qwen3-embedding:0.6b"
-          || verifier.environment.IRIS_EMBEDDING_DIMENSIONS !== "1024"
+          || verifier.environment.IRIS_EMBEDDING_MODEL !== "embeddinggemma:300m-qat-q4_0"
+          || verifier.environment.IRIS_EMBEDDING_DIMENSIONS !== "768"
           || verifier.environment.IRIS_EMBEDDING_MODEL_ROOT !== "/var/lib/iris-ollama/models"
           || verifier.environment.IRIS_EMBEDDING_NORM_TOLERANCE !== "0.001"
+          || verifier.environment.IRIS_EMBEDDING_VERIFIER_TIMEOUT_MS !== "60000"
           || seed.image !== expectedOllamaImage
           || model.image !== expectedOllamaImage
           || !cacheMount
@@ -393,8 +408,12 @@ require_inputs() {
     echo "IRIS_OPERATOR_EVIDENCE_PATH must be an absolute operator-controlled file" >&2
     return 1
   fi
-  if [[ ! "${old_profile_id}" =~ ^[A-Za-z0-9:._-]+$ || ! "${old_profile_id}" =~ [Gg][Ee][Mm][Ii][Nn][Ii] ]]; then
-    echo "IRIS_OLD_EMBEDDING_PROFILE_ID must be the exact old Gemini profile ID" >&2
+  if [[ ! "${old_profile_id}" =~ ^[A-Za-z0-9:._-]+$ ]]; then
+    echo "IRIS_OLD_EMBEDDING_PROFILE_ID must be an exact safe prior profile ID" >&2
+    return 1
+  fi
+  if [[ "${old_profile_id}" == "${profile_id}" ]]; then
+    echo "IRIS_OLD_EMBEDDING_PROFILE_ID must differ from the target profile ID" >&2
     return 1
   fi
   for value in "${life_engine_chat_id}" "${life_engine_source_id}" "${life_engine_marker}"; do
@@ -465,7 +484,7 @@ redis_count() {
   printf '%s\n' "${value}"
 }
 
-queue_gate() {
+queue_counts() {
   local api_counts
   local -a counts
   api_counts="$(core_operation queue-status "${profile_id}")"
@@ -484,17 +503,61 @@ queue_gate() {
     return 1
   fi
   for count in "${counts[@]}"; do
-    if [[ ! "${count}" =~ ^[0-9]+$ || "${count}" != 0 ]]; then
-      echo "Event/document/reindex/memory queue or DLQ zero gate failed" >&2
+    if [[ ! "${count}" =~ ^[0-9]+$ ]]; then
+      echo "Queue gate returned a malformed counter" >&2
+      return 1
+    fi
+  done
+  local IFS=$'\t'
+  printf '%s\n' "${counts[*]}"
+}
+
+dead_letter_gate() {
+  local -a counts=("$@")
+  local index
+  for index in 1 3 5 12; do
+    if [[ "${counts[${index}]}" != 0 ]]; then
+      echo "Event/document/reindex/memory DLQ gate failed" >&2
       return 1
     fi
   done
 }
 
+all_zero_gate() {
+  local count
+  for count in "$@"; do
+    if [[ "${count}" != 0 ]]; then
+      return 1
+    fi
+  done
+}
+
+queue_gate() {
+  local counts_output
+  local -a counts
+  counts_output="$(queue_counts)"
+  IFS=$'\t' read -r -a counts <<<"${counts_output}"
+  dead_letter_gate "${counts[@]}"
+  if ! all_zero_gate "${counts[@]}"; then
+    echo "Event/document/reindex/memory queue or DLQ zero gate failed" >&2
+    return 1
+  fi
+}
+
 wait_queue_gate() {
   local deadline=$((SECONDS + 1800))
+  local counts_output
+  local -a counts
   while (( SECONDS < deadline )); do
-    if queue_gate; then
+    if ! counts_output="$(queue_counts)"; then
+      sleep 2
+      continue
+    fi
+    IFS=$'\t' read -r -a counts <<<"${counts_output}"
+    if ! dead_letter_gate "${counts[@]}"; then
+      return 1
+    fi
+    if all_zero_gate "${counts[@]}"; then
       return
     fi
     sleep 2
@@ -528,17 +591,21 @@ assert_fragment_coverage() {
 with latest_successful_snapshots as (
   select distinct on (s.document_source_id) s.id
   from document_snapshots s
-  join document_sources ds on ds.id = s.document_source_id
   where s.fetch_status = 'succeeded'
-    and ds.source_type = 'authorized_wiki_document'
   order by s.document_source_id asc, s.fetched_at desc, s.id asc
 )
 select count(*)
 from latest_successful_snapshots s
-where not exists (
+join document_sources ds on ds.id = s.document_source_id
+where ds.source_type = 'authorized_wiki_document'
+  and ds.can_use_for_answering = true
+  and ds.permission_state in ('unknown', 'readable')
+  and s.body_text is not null
+  and s.body_text !~ '^[[:space:]]*$'
+  and not exists (
   select 1
   from document_fragments f
-  join document_fragment_embeddings_1024 e on e.document_fragment_id = f.id
+  join document_fragment_embeddings_768 e on e.document_fragment_id = f.id
   where f.document_snapshot_id = s.id
     and f.embedding_profile_id = '${profile_id}'
     and e.embedding_profile_id = '${profile_id}'
@@ -550,7 +617,7 @@ where not exists (
         'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At'
   )"
   if [[ ! "${missing_count}" =~ ^[0-9]+$ || "${missing_count}" != 0 ]]; then
-    echo "Latest successful authorized-wiki missing Qwen-profile fragment count is not zero" >&2
+    echo "Latest successful authorized-wiki missing EmbeddingGemma-profile fragment count is not zero" >&2
     return 1
   fi
 }
@@ -567,6 +634,7 @@ run_private_life_engine_acceptance() {
 
 main() {
   local runtime_before_migration
+  local active_profile_before_migration
   local previous_global_enabled
   local previous_desired_global_enabled
 
@@ -576,6 +644,11 @@ main() {
     <<<"${runtime_before_migration}"
   if [[ ! "${previous_global_enabled}" =~ ^(true|false)$ || ! "${previous_desired_global_enabled}" =~ ^(true|false)$ ]]; then
     echo "Current global runtime state is malformed" >&2
+    return 1
+  fi
+  active_profile_before_migration="$(core_operation current-profile)"
+  if [[ "${active_profile_before_migration}" != "${old_profile_id}" ]]; then
+    echo "IRIS_OLD_EMBEDDING_PROFILE_ID does not match the active pre-migration profile" >&2
     return 1
   fi
 

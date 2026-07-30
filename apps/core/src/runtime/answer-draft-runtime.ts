@@ -61,6 +61,7 @@ import {
   type LiveChatContextProvider,
 } from "../memory/live-chat-context-provider.js";
 import { assertSupportedRuntimeEmbeddingDimension } from "../model/embedding-profile-id.js";
+import { createQueryEmbeddingProvider } from "../model/embedding-input-format.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createOpenAICompatibleModelProvider } from "../model/openai-compatible-model-provider.js";
 import type { GroupMemoryRepository } from "../memory/group-memory-repository.js";
@@ -712,7 +713,10 @@ async function resolveRuntimeEmbedding({
       dimensions: embeddingConfig.dimensions,
       displayName: `OpenAI-compatible ${embeddingConfig.model} (${embeddingConfig.dimensions}d)`,
     }),
-    embedder: createEmbeddingProvider(embeddingConfig),
+    embedder: createQueryEmbeddingProvider({
+      model: embeddingConfig.model,
+      delegate: createEmbeddingProvider(embeddingConfig),
+    }),
   };
 }
 

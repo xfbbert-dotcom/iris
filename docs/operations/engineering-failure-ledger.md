@@ -43,12 +43,16 @@ delivery mistakes while implementing it.
   quota, and a rushed profile migration risked deleting the only evidence for old-profile reindex
   failures.
 - **Root cause:** The remote quota metric was shared, while model-specific vector dimensions make
-  Gemini and Qwen fragments incompatible retrieval inputs.
-- **Prevention rule:** Use the private Ollama `qwen3-embedding:0.6b` service only for embeddings,
-  require its full stored model-manifest SHA256 before Core starts, select
-  `openai-compatible:qwen3-embedding:0.6b:1024`, and preserve the prior-profile fragments. Record
-  old-profile DLQ evidence before deleting an unreplayable entry, then re-plan latest successful
-  snapshots in bounded 100-item requests until the profile planner returns zero.
+  profiles incompatible retrieval inputs. The first local candidate, Qwen3 Embedding 0.6B, then
+  required 54-70 seconds for one real 1,200-character Chinese chunk on the 2-core pilot VPS; the
+  64-item index batch exhausted the 30-second client deadline and created repeated DLQs.
+- **Prevention rule:** Use the private Ollama `embeddinggemma:300m-qat-q4_0` service only for
+  embeddings, require its full stored model-manifest SHA256 before Core starts, select
+  `openai-compatible:embeddinggemma:300m-qat-q4_0:768`, and preserve the prior-profile fragments.
+  Apply EmbeddingGemma's asymmetric document/query prefixes, index in batches of four with a
+  60-second request deadline, and record old-profile DLQ evidence before deleting an unreplayable
+  entry. Re-plan latest successful snapshots in bounded 100-item requests until the profile planner
+  returns zero.
 - **Guard:** Compose verifies the full manifest in both seed and runtime paths; the rollout
   procedure requires the active profile, zero queues/DLQs, a live Feishu permission check, and a
   unique Life Engine retrieval marker before ingress.
@@ -312,6 +316,21 @@ delivery mistakes while implementing it.
 - **Exit condition:** A real scan registers all supported pages visible in the authorized space,
   includes siblings of the anchor, remains idempotent on rescan, and returns every document/reindex
   queue and DLQ to zero.
+
+### Select the latest snapshot before applying content eligibility filters
+
+- **Failure:** A whitespace-only latest snapshot could be planned forever, while a latest snapshot
+  containing only ordinary spaces could make the planner fall back to an older non-empty body and
+  reindex stale content.
+- **Root cause:** The missing-profile query filtered body text before `DISTINCT ON`, and PostgreSQL
+  `btrim` did not match the indexer's JavaScript whitespace semantics for tabs and newlines.
+- **Prevention rule:** Select each source's latest successful snapshot first. Apply source
+  authorization and a POSIX-whitespace body gate only to that selected row, and use the same SQL
+  ordering in migration coverage checks.
+- **Guard:** A real PostgreSQL regression creates older non-empty versions followed by latest
+  `"\n\t"` and `"   "` versions; neither source may be planned and neither old body may reappear.
+- **Exit condition:** The repository regression, migration contract test, full verification, and
+  independent review all pass on the same working tree.
 
 ### Do not treat Feishu-native recommendations as Iris retrieval evidence
 

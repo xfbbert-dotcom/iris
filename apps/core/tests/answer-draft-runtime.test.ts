@@ -1368,6 +1368,66 @@ describe("createAnswerDraftRuntime", () => {
     });
   });
 
+  it("uses configured EmbeddingGemma query prompts when dimensions are 768", async () => {
+    const vector = Array.from({ length: 768 }, (_, index) => index / 768);
+    const embeddingProvider = { embedTexts: vi.fn(async () => [vector]) };
+    const embeddingProfiles = {
+      getStaticDevelopmentProfile: vi.fn(),
+      findOrCreateProfile: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+          provider: "openai-compatible",
+          model: "embeddinggemma:300m-qat-q4_0",
+          dimensions: 768,
+          displayName: "OpenAI-compatible embeddinggemma:300m-qat-q4_0 (768d)",
+        }),
+      ),
+      getProfileById: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+          provider: "openai-compatible",
+          model: "embeddinggemma:300m-qat-q4_0",
+          dimensions: 768,
+          displayName: "OpenAI-compatible embeddinggemma:300m-qat-q4_0 (768d)",
+        }),
+      ),
+    };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "embed-key",
+        IRIS_EMBEDDING_MODEL: "embeddinggemma:300m-qat-q4_0",
+        IRIS_EMBEDDING_DIMENSIONS: "768",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => embeddingProfiles),
+        createEmbeddingProvider: vi.fn(() => embeddingProvider),
+      },
+    });
+
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "生命粒子引擎是什么？",
+      liveChatMessages: [],
+    });
+
+    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith([
+      "task: search result | query: 生命粒子引擎是什么？",
+    ]);
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
+      embeddingProfileId: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+      embedding: vector,
+      limit: 24,
+    });
+  });
+
   it("rejects unsupported embedding dimensions when generating a draft", async () => {
     const runtime = createAnswerDraftRuntime({
       env: {

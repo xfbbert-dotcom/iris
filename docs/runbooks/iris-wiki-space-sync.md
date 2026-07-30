@@ -222,14 +222,14 @@ a durable source-level trace or citation feature. Common-knowledge answers are n
 ## Local Embedding Acceptance
 
 Use this section only after the private model procedure has selected
-`openai-compatible:qwen3-embedding:0.6b:1024` and the bounded reindex planning loop in the
+`openai-compatible:embeddinggemma:300m-qat-q4_0:768` and the bounded reindex planning loop in the
 [internal rollout runbook](../operations/internal-rollout-runbook.md#local-embedding-profile-migration)
-has returned zero work. Retain prior-profile fragments and old Gemini-profile DLQ evidence; neither
-is discarded merely because the Qwen profile has become active.
+has returned zero work. Retain prior-profile fragments and old-profile DLQ evidence; neither is
+discarded merely because the EmbeddingGemma profile has become active.
 
 With Caddy stopped, choose a Life Engine page that is authorized for the pilot group and place a
 fresh unique marker only in that page. Confirm the source has a successful latest snapshot and a
-fragment under the Qwen profile. Submit one authenticated internal answer-draft request for the
+fragment under the EmbeddingGemma profile. Submit one authenticated internal answer-draft request for the
 pilot chat with no copied marker in the question or live-chat input. The deployed source-policy
 live Feishu permission guard must allow the source, and the one result must contain the marker.
 Record only the source ID, snapshot ID, profile ID, permission decision, request time, and marker

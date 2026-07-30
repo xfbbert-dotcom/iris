@@ -11,9 +11,13 @@ const verifierPath = fileURLToPath(
   new URL("../../../deploy/pilot/verify-local-embedding.mjs", import.meta.url),
 );
 const temporaryDirectories: string[] = [];
-const model = "qwen3-embedding:0.6b";
-const dimensions = 1024;
-const unitEmbedding = Array.from({ length: dimensions }, () => 1 / 32);
+const model = "embeddinggemma:300m-qat-q4_0";
+const dimensions = 768;
+const unitEmbedding = Array.from({ length: dimensions }, () => 1 / Math.sqrt(dimensions));
+const verifierInputs = Array.from(
+  { length: 4 },
+  (_, index) => `title: none | text: iris-local-embedding-verifier-v2-${index + 1}`,
+);
 
 describe("local embedding verifier", () => {
   afterEach(async () => {
@@ -25,10 +29,7 @@ describe("local embedding verifier", () => {
   it("accepts a complete cache and a valid known-input embedding response", async () => {
     const cache = await createModelCache();
     await withEmbeddingServer(
-      JSON.stringify({
-        data: [{ embedding: unitEmbedding }],
-        model,
-      }),
+      validEmbeddingResponse(),
       async ({ baseUrl, requests }) => {
         const result = await runVerifier(cache, baseUrl);
 
@@ -38,7 +39,8 @@ describe("local embedding verifier", () => {
             method: "POST",
             path: "/v1/embeddings",
             body: {
-              input: "iris-local-embedding-verifier-v1",
+              dimensions,
+              input: verifierInputs,
               model,
             },
           },
@@ -83,23 +85,23 @@ describe("local embedding verifier", () => {
     [
       "malformed",
       JSON.stringify({ data: [], model }),
-      "embedding response must contain data[0].embedding",
+      "embedding response must contain exactly 4 items",
     ],
     [
       "non-finite",
-      `{"data":[{"embedding":[1e309,${Array.from({ length: dimensions - 1 }, () => "0").join(",")}]}],"model":"${model}"}`,
+      validEmbeddingResponse({ index: 0, embedding: [null, ...unitEmbedding.slice(1)] }),
       "embedding values must be finite numbers",
     ],
     [
       "wrong-dimension",
-      JSON.stringify({ data: [{ embedding: unitEmbedding.slice(1) }], model }),
-      "embedding dimension must be exactly 1024",
+      validEmbeddingResponse({ index: 0, embedding: unitEmbedding.slice(1) }),
+      "embedding dimension must be exactly 768",
     ],
     [
       "non-unit",
-      JSON.stringify({
-        data: [{ embedding: Array.from({ length: dimensions }, () => 0.1) }],
-        model,
+      validEmbeddingResponse({
+        index: 3,
+        embedding: Array.from({ length: dimensions }, () => 0.1),
       }),
       "embedding norm must be within 0.001 of 1",
     ],
@@ -150,8 +152,8 @@ async function createModelCache(
     "manifests",
     "registry.ollama.ai",
     "library",
-    "qwen3-embedding",
-    "0.6b",
+    "embeddinggemma",
+    "300m-qat-q4_0",
   );
   await mkdir(dirname(manifestPath), { recursive: true });
   await writeFile(manifestPath, manifest);
@@ -170,6 +172,18 @@ async function createModelCache(
     configDigest,
     layerDigest,
   };
+}
+
+function validEmbeddingResponse(
+  replacement?: { index: number; embedding: unknown[] },
+): string {
+  return JSON.stringify({
+    data: Array.from({ length: 4 }, (_, index) => ({
+      index,
+      embedding: replacement?.index === index ? replacement.embedding : unitEmbedding,
+    })),
+    model,
+  });
 }
 
 function digest(content: Buffer): string {

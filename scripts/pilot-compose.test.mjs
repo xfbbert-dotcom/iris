@@ -149,6 +149,10 @@ test("keeps model services private with dedicated model egress", () => {
     "IRIS_EMBEDDING_NORM_TOLERANCE",
     "IRIS_EMBEDDING_VERIFIER_TIMEOUT_MS",
   ]);
+  assert.equal(
+    embeddingModelVerify.environment.IRIS_EMBEDDING_VERIFIER_TIMEOUT_MS,
+    core.environment.IRIS_EMBEDDING_TIMEOUT_MS,
+  );
   for (const forbiddenEnvironmentName of [
     "FEISHU_APP_ID",
     "FEISHU_APP_SECRET",
@@ -179,14 +183,14 @@ test("keeps model services private with dedicated model egress", () => {
     embeddingModelVerify.environment.IRIS_EMBEDDING_MODEL_ROOT,
     "/var/lib/iris-ollama/models",
   );
-  assert.equal(embeddingModel.deploy.resources.limits.memory, "1610612736");
+  assert.equal(embeddingModel.deploy.resources.limits.memory, "805306368");
   assert.equal(embeddingModel.deploy.resources.limits.cpus, 1.5);
   assert.equal(embeddingModel.environment.OLLAMA_NUM_PARALLEL, "1");
   assert.equal(embeddingModel.environment.OLLAMA_KEEP_ALIVE, "30m");
   assert.equal(embeddingModel.environment.OLLAMA_MAX_LOADED_MODELS, "1");
   assert.equal(
     embeddingModel.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256,
-    "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+    "101341d65c2ccbf23f16650b79d30b9fca94a45ffa09a9984c600157b81a58df",
   );
   const runtimeHealthcheck = embeddingModel.healthcheck.test.join(" ").replace(/\$\$/gu, "$");
   assert.match(runtimeHealthcheck, /OLLAMA_HOST=127\.0\.0\.1:11434 ollama list/u);
@@ -272,24 +276,30 @@ test("keeps model services private with dedicated model egress", () => {
   assert.equal(core.image.split(":").at(-1), aiWorker.image.split(":").at(-1));
 
   assert.equal(core.environment.IRIS_EMBEDDING_BASE_URL, "http://embedding-model:11434/v1");
-  assert.equal(core.environment.IRIS_EMBEDDING_MODEL, "qwen3-embedding:0.6b");
-  assert.equal(core.environment.IRIS_EMBEDDING_DIMENSIONS, "1024");
+  assert.equal(core.environment.IRIS_EMBEDDING_MODEL, "embeddinggemma:300m-qat-q4_0");
+  assert.equal(core.environment.IRIS_EMBEDDING_DIMENSIONS, "768");
+  assert.equal(core.environment.IRIS_EMBEDDING_BATCH_SIZE, "4");
+  assert.equal(core.environment.IRIS_EMBEDDING_TIMEOUT_MS, "60000");
   assert.equal(
     readEnvAssignment(pilotCiEnv, "IRIS_EMBEDDING_MODEL"),
-    "qwen3-embedding:0.6b",
+    "embeddinggemma:300m-qat-q4_0",
   );
   assert.equal(
     readEnvAssignment(pilotCiEnv, "IRIS_EMBEDDING_MODEL_MANIFEST_SHA256"),
-    "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+    "101341d65c2ccbf23f16650b79d30b9fca94a45ffa09a9984c600157b81a58df",
   );
   assert.equal(
     readEnvAssignment(pilotEnvExample, "IRIS_EMBEDDING_MODEL"),
-    "qwen3-embedding:0.6b",
+    "embeddinggemma:300m-qat-q4_0",
   );
   assert.equal(
     readEnvAssignment(pilotEnvExample, "IRIS_EMBEDDING_MODEL_MANIFEST_SHA256"),
-    "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+    "101341d65c2ccbf23f16650b79d30b9fca94a45ffa09a9984c600157b81a58df",
   );
+  assert.equal(readEnvAssignment(pilotCiEnv, "IRIS_EMBEDDING_BATCH_SIZE"), "4");
+  assert.equal(readEnvAssignment(pilotEnvExample, "IRIS_EMBEDDING_BATCH_SIZE"), "4");
+  assert.equal(readEnvAssignment(pilotCiEnv, "IRIS_EMBEDDING_TIMEOUT_MS"), "60000");
+  assert.equal(readEnvAssignment(pilotEnvExample, "IRIS_EMBEDDING_TIMEOUT_MS"), "60000");
   assert.equal(core.environment.IRIS_AI_WORKER_BASE_URL, "http://ai-worker:8000");
   assert.ok(core.environment.IRIS_AI_WORKER_TOKEN);
   assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_ENABLED, "false");
@@ -432,7 +442,7 @@ test("requires fail-closed local embedding profile migration operations", () => 
   assertMarkersInOrder(pilotOperationsReadme, [
     "## Local Embedding Profile Rollout",
     "before Core can start",
-    "openai-compatible:qwen3-embedding:0.6b:1024",
+    "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
     "before deleting any old-profile DLQ entry",
     "/internal/reindex/document-profile",
     "Life Engine",
@@ -456,7 +466,7 @@ test("requires fail-closed local embedding profile migration operations", () => 
     "embedding-model-init",
     "Old-Profile DLQ Evidence",
     "Bounded Full Reindex",
-    "openai-compatible:qwen3-embedding:0.6b:1024",
+    "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
     "Coverage And Private Retrieval",
     "Life Engine",
     "Start Caddy only after",
@@ -497,7 +507,7 @@ test("makes local embedding migration commands evidence-first and fail closed", 
   );
   assert.match(
     migration,
-    /IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d/u,
+    /IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=101341d65c2ccbf23f16650b79d30b9fca94a45ffa09a9984c600157b81a58df/u,
   );
 
   assert.match(
@@ -523,6 +533,26 @@ test("makes local embedding migration commands evidence-first and fail closed", 
   assert.match(localEmbeddingMigrationScript, /\/internal\/reindex\/dead-letters\?limit=100/u);
   assert.match(localEmbeddingMigrationScript, /failureClassification/u);
   assert.match(localEmbeddingMigrationScript, /tail -n 1/u);
+  assert.doesNotMatch(
+    localEmbeddingMigrationScript,
+    /old Gemini profile ID/u,
+    "the migration must accept the exact prior local or hosted embedding profile",
+  );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /if \[\[ "\$\{old_profile_id\}" == "\$\{profile_id\}" \]\]; then[\s\S]*?return 1/u,
+    "the old profile must differ from the target profile",
+  );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /case "current-profile":[\s\S]*?activeEmbeddingProfileId[\s\S]*?process\.stdout\.write/u,
+    "the migration must read the actual active profile before replacing Core",
+  );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /active_profile_before_migration="\$\(core_operation current-profile\)"[\s\S]*?if \[\[ "\$\{active_profile_before_migration\}" != "\$\{old_profile_id\}" \]\]; then[\s\S]*?return 1/u,
+    "the operator-supplied old profile must match the active pre-migration profile",
+  );
   assert.match(
     localEmbeddingMigrationScript,
     /core_operation delete-dlq "\$\{dead_letter_id\}" <\/dev\/null/u,
@@ -553,13 +583,28 @@ test("makes local embedding migration commands evidence-first and fail closed", 
     localEmbeddingMigrationScript,
     /for reindex_batch in \$\(seq 1 1000\)[\s\S]*?core_operation plan-reindex[\s\S]*?wait_queue_gate[\s\S]*?enqueued_count/u,
   );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /wait_queue_gate\(\)[\s\S]*?if ! dead_letter_gate "\$\{counts\[@\]\}"; then[\s\S]*?return 1[\s\S]*?sleep 2/u,
+    "a newly created DLQ must abort immediately instead of waiting for the zero gate timeout",
+  );
   assert.match(localEmbeddingMigrationScript, /\/internal\/reindex\/document-profile/u);
   assert.match(localEmbeddingMigrationScript, /authorized_wiki_document/u);
-  assert.match(localEmbeddingMigrationScript, /document_fragment_embeddings_1024/u);
+  assert.match(
+    localEmbeddingMigrationScript,
+    /with latest_successful_snapshots as \([\s\S]*?where s\.fetch_status = 'succeeded'[\s\S]*?order by s\.document_source_id asc, s\.fetched_at desc, s\.id asc[\s\S]*?\)\s*select count\(\*\)\s*from latest_successful_snapshots s\s*join document_sources ds/u,
+    "coverage must select each source's latest successful snapshot before eligibility filtering",
+  );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /ds\.can_use_for_answering = true[\s\S]*?ds\.permission_state in \('unknown', 'readable'\)[\s\S]*?s\.body_text is not null[\s\S]*?s\.body_text !~ '\^\[\[:space:\]\]\*\$'/u,
+    "coverage must exclude disabled, denied, stale, and empty sources",
+  );
+  assert.match(localEmbeddingMigrationScript, /document_fragment_embeddings_768/u);
   assert.match(localEmbeddingMigrationScript, /not exists/u);
   assert.match(
     localEmbeddingMigrationScript,
-    /Latest successful authorized-wiki missing Qwen-profile fragment count is not zero/u,
+    /Latest successful authorized-wiki missing EmbeddingGemma-profile fragment count is not zero/u,
   );
   assert.match(
     localEmbeddingMigrationScript,
@@ -590,6 +635,8 @@ test("makes local embedding migration commands evidence-first and fail closed", 
   assertMarkersInOrder(localEmbeddingMigrationScript, [
     "trap fail_closed_cleanup EXIT",
     'runtime_before_migration="$(core_operation runtime-status)"',
+    'active_profile_before_migration="$(core_operation current-profile)"',
+    'if [[ "${active_profile_before_migration}" != "${old_profile_id}" ]]',
     "disable_runtime",
     "compose_cmd stop caddy",
     "assert_caddy_stopped",
@@ -602,7 +649,11 @@ test("makes local embedding migration commands evidence-first and fail closed", 
   ]);
   assert.match(
     localEmbeddingMigrationScript,
-    /IRIS_EMBEDDING_BASE_URL[\s\S]*?http:\/\/embedding-model:11434\/v1[\s\S]*?IRIS_EMBEDDING_MODEL[\s\S]*?qwen3-embedding:0\.6b[\s\S]*?IRIS_EMBEDDING_DIMENSIONS[\s\S]*?1024/u,
+    /IRIS_EMBEDDING_BASE_URL[\s\S]*?http:\/\/embedding-model:11434\/v1[\s\S]*?IRIS_EMBEDDING_MODEL[\s\S]*?embeddinggemma:300m-qat-q4_0[\s\S]*?IRIS_EMBEDDING_DIMENSIONS[\s\S]*?768[\s\S]*?IRIS_EMBEDDING_BATCH_SIZE[\s\S]*?4[\s\S]*?IRIS_EMBEDDING_TIMEOUT_MS[\s\S]*?60000/u,
+  );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /verifier\.environment\.IRIS_EMBEDDING_VERIFIER_TIMEOUT_MS !== "60000"/u,
   );
   assert.match(
     localEmbeddingMigrationScript,

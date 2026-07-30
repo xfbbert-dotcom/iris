@@ -17,6 +17,17 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("defines native 768-dimensional fragment storage", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0043_document_fragment_embeddings_768.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table if not exists document_fragment_embeddings_768");
+    expect(normalized).toContain("embedding vector(768) not null");
+  });
+
   it("defines native 1024-dimensional fragment storage", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0042_document_fragment_embeddings_1024.sql"),

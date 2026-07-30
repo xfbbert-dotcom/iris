@@ -5,6 +5,10 @@ import { join } from "node:path";
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/u;
 const sha256Pattern = /^[a-f0-9]{64}$/u;
+const verifierInputs = Array.from(
+  { length: 4 },
+  (_, index) => `title: none | text: iris-local-embedding-verifier-v2-${index + 1}`,
+);
 
 try {
   const configuration = readConfiguration(process.env);
@@ -128,7 +132,8 @@ async function verifyKnownInputEmbedding(configuration) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      input: "iris-local-embedding-verifier-v1",
+      dimensions: configuration.dimensions,
+      input: verifierInputs,
       model: configuration.model,
     }),
     signal: AbortSignal.timeout(configuration.timeoutMs),
@@ -146,22 +151,30 @@ async function verifyKnownInputEmbedding(configuration) {
   if (body?.model !== configuration.model) {
     throw new Error(`embedding response model must be exactly ${configuration.model}`);
   }
-  const embedding = body?.data?.[0]?.embedding;
-  if (!Array.isArray(embedding)) {
-    throw new Error("embedding response must contain data[0].embedding");
+  if (!Array.isArray(body?.data) || body.data.length !== verifierInputs.length) {
+    throw new Error(`embedding response must contain exactly ${verifierInputs.length} items`);
   }
-  if (embedding.length !== configuration.dimensions) {
-    throw new Error(`embedding dimension must be exactly ${configuration.dimensions}`);
-  }
-  if (embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
-    throw new Error("embedding values must be finite numbers");
-  }
+  for (const [index, item] of body.data.entries()) {
+    if (item?.index !== index) {
+      throw new Error("embedding response indices must match request order");
+    }
+    const embedding = item?.embedding;
+    if (!Array.isArray(embedding)) {
+      throw new Error(`embedding response item ${index} must contain an embedding`);
+    }
+    if (embedding.length !== configuration.dimensions) {
+      throw new Error(`embedding dimension must be exactly ${configuration.dimensions}`);
+    }
+    if (embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new Error("embedding values must be finite numbers");
+    }
 
-  const norm = Math.sqrt(embedding.reduce((sum, value) => sum + value * value, 0));
-  if (!Number.isFinite(norm) || Math.abs(norm - 1) > configuration.normTolerance) {
-    throw new Error(
-      `embedding norm must be within ${configuration.normTolerance} of 1; got ${norm}`,
-    );
+    const norm = Math.sqrt(embedding.reduce((sum, value) => sum + value * value, 0));
+    if (!Number.isFinite(norm) || Math.abs(norm - 1) > configuration.normTolerance) {
+      throw new Error(
+        `embedding norm must be within ${configuration.normTolerance} of 1; got ${norm}`,
+      );
+    }
   }
 }
 

@@ -2,15 +2,28 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give Iris a quota-free, private Qwen3 embedding path that can index and query the full
+**Goal:** Give Iris a quota-free, private embedding path that can index and query the full
 authorized Feishu knowledge space on the pilot VPS.
 
 **Architecture:** Preserve the existing OpenAI-compatible provider contract. Add native
-1024-dimensional pgvector storage and an internal Ollama service whose one-shot seed job verifies
-the approved Qwen3 model before Core can start.
+model-dimension pgvector storage and an internal Ollama service whose one-shot seed job verifies
+the approved model before Core can start.
 
 **Tech Stack:** TypeScript, PostgreSQL with pgvector, Docker Compose, Ollama 0.32.0,
-Qwen3-Embedding-0.6B, Node test runner.
+EmbeddingGemma 300M, Node test runner.
+
+## Approved Implementation Correction
+
+The original tasks below record the first Qwen3 candidate and remain as implementation history.
+Production-shaped measurement rejected that candidate: one real 1,200-character Chinese chunk took
+54-70 seconds under the pilot resource limit, so the 64-item batch repeatedly timed out. The
+approved implementation keeps the same architecture but uses
+`embeddinggemma:300m-qat-q4_0`, profile
+`openai-compatible:embeddinggemma:300m-qat-q4_0:768`, migration
+`0043_document_fragment_embeddings_768.sql`, batches of four, and a 60-second provider deadline.
+The Qwen 1024-dimensional table and profile data remain intact for rollback. The final design and
+acceptance contract are authoritative in
+`docs/superpowers/specs/2026-07-30-iris-local-embedding-service-design.md`.
 
 ## Global Constraints
 

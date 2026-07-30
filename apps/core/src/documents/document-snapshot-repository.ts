@@ -185,14 +185,19 @@ where id = $1
       const result = await dependencies.queryable.query<DocumentSnapshotRow>(
         `
 with latest_successful_snapshots as (
-  select distinct on (document_source_id) *
-  from document_snapshots
-  where fetch_status = 'succeeded'
-  order by document_source_id asc, fetched_at desc, id asc
+  select distinct on (s.document_source_id) s.*
+  from document_snapshots s
+  where s.fetch_status = 'succeeded'
+  order by s.document_source_id asc, s.fetched_at desc, s.id asc
 )
-select *
+select s.*
 from latest_successful_snapshots s
-where not exists (
+join document_sources ds on ds.id = s.document_source_id
+where s.body_text is not null
+  and s.body_text !~ '^[[:space:]]*$'
+  and ds.can_use_for_answering = true
+  and ds.permission_state in ('unknown', 'readable')
+  and not exists (
     select 1
     from document_fragments f
     where f.document_snapshot_id = s.id

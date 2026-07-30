@@ -18,6 +18,7 @@ export type EmbeddingProviderConfig = {
   apiKey: string;
   model: string;
   dimensions?: number;
+  batchSize?: number;
   timeoutMs: number;
 };
 
@@ -244,6 +245,10 @@ export function readEmbeddingProviderConfig(
     "IRIS_EMBEDDING_DIMENSIONS",
     env.IRIS_EMBEDDING_DIMENSIONS
   );
+  const batchSize = readOptionalPositiveIntegerEnv(
+    "IRIS_EMBEDDING_BATCH_SIZE",
+    env.IRIS_EMBEDDING_BATCH_SIZE
+  );
 
   return {
     provider,
@@ -251,6 +256,7 @@ export function readEmbeddingProviderConfig(
     apiKey: readRequiredEnv("IRIS_EMBEDDING_API_KEY", env.IRIS_EMBEDDING_API_KEY),
     model: readRequiredEnv("IRIS_EMBEDDING_MODEL", env.IRIS_EMBEDDING_MODEL),
     ...(dimensions === undefined ? {} : { dimensions }),
+    ...(batchSize === undefined ? {} : { batchSize }),
     timeoutMs: readTimerDelayEnv(
       "IRIS_EMBEDDING_TIMEOUT_MS",
       env.IRIS_EMBEDDING_TIMEOUT_MS,

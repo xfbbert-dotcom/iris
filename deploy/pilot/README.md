@@ -29,14 +29,19 @@ an edge or host port.
 
 Run the full procedure in the [internal rollout runbook](../../docs/operations/internal-rollout-runbook.md#local-embedding-profile-migration)
 with Caddy stopped and global runtime disabled. `embedding-model-init` verifies the full stored
-model-manifest SHA256 and every referenced config/layer blob for `qwen3-embedding:0.6b`, repairing
+model-manifest SHA256 and every referenced config/layer blob for
+`embeddinggemma:300m-qat-q4_0`, repairing
 only through its egress-enabled seed path. The backend-only one-shot `embedding-model-verify` then
-rehashes the cache and requires a known-input 1024-dimensional finite embedding with norm within
-`0.001` of `1`. Both one-shot checks must pass before Core can start. The long-running health check
+rehashes the cache and sends the production-shaped four-item, document-prefixed request with
+`dimensions=768`; every returned vector must be finite and have norm within `0.001` of `1`. Both
+one-shot checks must pass before Core can start. The long-running health check
 locks the exact model tag and full manifest SHA256 without repeatedly hashing the model layer. Do
 not treat `ollama list`, a model name, or a partial digest as approval.
 
-The active profile is exactly `openai-compatible:qwen3-embedding:0.6b:1024`. Record old-profile
+The active profile is exactly `openai-compatible:embeddinggemma:300m-qat-q4_0:768`. Document
+inputs use EmbeddingGemma's retrieval-document prefix and answer queries use its retrieval-query
+prefix; all other model profiles remain byte-for-byte unchanged. Indexing uses batches of four and
+a 60-second provider timeout, based on the full ten-page pilot-space benchmark. Record old-profile
 DLQ evidence before deleting any old-profile DLQ entry, then use the bounded repeated
 `/internal/reindex/document-profile` procedure until it reports no more work. Preserve the
 prior-profile fragments for rollback; they are not candidates for the new profile's retrieval.

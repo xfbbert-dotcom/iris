@@ -454,6 +454,67 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
+  it("routes 768-dimensional writes to the 768 embedding table", async () => {
+    const createdAt = new Date("2026-07-30T07:30:00.000Z");
+    const vector = Array.from({ length: 768 }, (_, index) => index / 768);
+    const calls: Array<{ sql: string; values?: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      calls.push({ sql, values });
+      if (normalizeSql(sql).startsWith("delete from document_fragments")) {
+        return { rows: [] };
+      }
+      if (normalizeSql(sql).startsWith("insert into document_fragments")) {
+        return {
+          rows: [
+            {
+              id: "fragment-768",
+              document_source_id: "source-1",
+              document_snapshot_id: "snapshot-1",
+              source_uri: "https://example.com/doc",
+              chunk_index: 0,
+              text: "Alpha",
+              content_hash: "hash-alpha",
+              embedding_profile_id:
+                "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+              created_at: createdAt,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({
+          id: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+          dimensions: 768,
+        })),
+      },
+      createId: () => "fragment-768",
+      now: () => createdAt,
+    });
+
+    await repository.replaceFragmentsForSnapshot({
+      documentSourceId: "source-1",
+      documentSnapshotId: "snapshot-1",
+      sourceUri: "https://example.com/doc",
+      embeddingProfileId: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+      chunks: [{ chunkIndex: 0, text: "Alpha" }],
+      embeddings: [vector],
+    });
+
+    expect(normalizeSql(calls[2]?.sql ?? "")).toContain(
+      "insert into document_fragment_embeddings_768",
+    );
+    expect(calls[2]?.values).toEqual([
+      "fragment-768",
+      "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+      `[${vector.join(",")}]`,
+      createdAt,
+    ]);
+  });
+
   it("routes 1024-dimensional similarity search to the 1024 embedding table", async () => {
     const vector = Array.from({ length: 1024 }, (_, index) => index / 1024);
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
@@ -478,6 +539,36 @@ describe("DocumentFragmentRepository", () => {
     await expect(
       repository.searchSimilarFragments({
         embeddingProfileId: "openai-compatible:qwen3-embedding:0.6b:1024",
+        embedding: vector,
+        limit: 3,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("routes 768-dimensional similarity search to the 768 embedding table", async () => {
+    const vector = Array.from({ length: 768 }, (_, index) => index / 768);
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      expect(normalizeSql(sql)).toContain("join document_fragment_embeddings_768 e");
+      expect(values).toEqual([
+        "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+        `[${vector.join(",")}]`,
+        3,
+      ]);
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({
+          id: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+          dimensions: 768,
+        })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
         embedding: vector,
         limit: 3,
       }),
