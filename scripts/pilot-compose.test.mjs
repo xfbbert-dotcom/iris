@@ -88,8 +88,10 @@ test("starts the pilot runtime globally disabled", () => {
   assert.match(compose.services.core.environment.IRIS_FEISHU_BOT_OPEN_ID, /^ou_[A-Za-z0-9]+$/u);
 });
 
-test("keeps automatic memory extraction private with dedicated model egress", () => {
+test("keeps model services private with dedicated model egress", () => {
   const aiWorker = compose.services["ai-worker"];
+  const embeddingModelInit = compose.services["embedding-model-init"];
+  const embeddingModel = compose.services["embedding-model"];
   const core = compose.services.core;
 
   assert.match(aiWorker.build.context, /[\\/]workers[\\/]ai$/u);
@@ -100,7 +102,7 @@ test("keeps automatic memory extraction private with dedicated model egress", ()
   assert.equal(compose.networks["model-egress"].driver, "bridge");
   assert.notEqual(compose.networks["model-egress"].internal, true);
   for (const [serviceName, service] of Object.entries(compose.services)) {
-    if (serviceName !== "ai-worker") {
+    if (!new Set(["ai-worker", "embedding-model-init"]).has(serviceName)) {
       assert.equal(
         service.networks?.["model-egress"],
         undefined,
@@ -108,6 +110,33 @@ test("keeps automatic memory extraction private with dedicated model egress", ()
       );
     }
   }
+
+  assert.match(embeddingModel.image, /@sha256:[a-f0-9]{64}$/u);
+  assert.equal(embeddingModel.ports, undefined);
+  assert.deepEqual(embeddingModel.networks, { backend: null });
+  assert.deepEqual(embeddingModelInit.networks, { "model-egress": null });
+  assert.deepEqual(embeddingModel.volumes, [
+    {
+      type: "volume",
+      source: "iris_embedding_models",
+      target: "/root/.ollama",
+      volume: {},
+    },
+  ]);
+  assert.deepEqual(embeddingModelInit.volumes, embeddingModel.volumes);
+  assert.equal(embeddingModel.deploy.resources.limits.memory, "1610612736");
+  assert.equal(embeddingModel.deploy.resources.limits.cpus, 1.5);
+  assert.equal(embeddingModel.environment.OLLAMA_NUM_PARALLEL, "1");
+  assert.equal(embeddingModel.environment.OLLAMA_KEEP_ALIVE, "30m");
+  assert.equal(
+    embeddingModel.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256,
+    "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+  );
+  assert.match(embeddingModel.healthcheck.test.join(" "), /sha256sum/u);
+  assert.deepEqual(embeddingModel.logging, {
+    driver: "json-file",
+    options: { "max-file": "5", "max-size": "10m" },
+  });
   assert.equal(aiWorker.user, "10001:10001");
   assert.deepEqual(aiWorker.logging, {
     driver: "json-file",
@@ -139,6 +168,25 @@ test("keeps automatic memory extraction private with dedicated model egress", ()
   assert.equal(core.environment.IRIS_MODEL_NAME, "ci-model");
   assert.equal(core.image.split(":").at(-1), aiWorker.image.split(":").at(-1));
 
+  assert.equal(core.environment.IRIS_EMBEDDING_BASE_URL, "http://embedding-model:11434/v1");
+  assert.equal(core.environment.IRIS_EMBEDDING_MODEL, "qwen3-embedding:0.6b");
+  assert.equal(core.environment.IRIS_EMBEDDING_DIMENSIONS, "1024");
+  assert.equal(
+    readEnvAssignment(pilotCiEnv, "IRIS_EMBEDDING_MODEL"),
+    "qwen3-embedding:0.6b",
+  );
+  assert.equal(
+    readEnvAssignment(pilotCiEnv, "IRIS_EMBEDDING_MODEL_MANIFEST_SHA256"),
+    "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+  );
+  assert.equal(
+    readEnvAssignment(pilotEnvExample, "IRIS_EMBEDDING_MODEL"),
+    "qwen3-embedding:0.6b",
+  );
+  assert.equal(
+    readEnvAssignment(pilotEnvExample, "IRIS_EMBEDDING_MODEL_MANIFEST_SHA256"),
+    "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+  );
   assert.equal(core.environment.IRIS_AI_WORKER_BASE_URL, "http://ai-worker:8000");
   assert.ok(core.environment.IRIS_AI_WORKER_TOKEN);
   assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_ENABLED, "false");
@@ -146,6 +194,7 @@ test("keeps automatic memory extraction private with dedicated model egress", ()
   assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_BATCH_LIMIT, "20");
   assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE, "0.85");
   assert.equal(core.depends_on["ai-worker"].condition, "service_started");
+  assert.equal(core.depends_on["embedding-model"].condition, "service_healthy");
 });
 
 test("keeps semantic thread and action extraction disabled by default", () => {
@@ -613,13 +662,13 @@ test("renders the pilot example with disabled extraction and placeholder secrets
     core.environment.FEISHU_VERIFICATION_TOKEN,
     core.environment.FEISHU_APP_SECRET,
     core.environment.IRIS_MODEL_API_KEY,
-    core.environment.IRIS_EMBEDDING_API_KEY,
     core.environment.IRIS_AI_WORKER_TOKEN,
     aiWorker.environment.IRIS_AI_WORKER_TOKEN,
     aiWorker.environment.IRIS_MODEL_API_KEY,
   ]) {
     assert.match(value, /^replace-with-/u);
   }
+  assert.equal(core.environment.IRIS_EMBEDDING_API_KEY, "ollama");
   assert.doesNotMatch(JSON.stringify(exampleCompose), /ci-(?:model|internal|app|memory)/u);
 });
 

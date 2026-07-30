@@ -184,6 +184,63 @@ services:
       - backend
       - model-egress
 
+  embedding-model-init:
+    image: ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a
+    environment:
+      OLLAMA_HOST: 127.0.0.1:11434
+      IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
+      IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      ollama serve &
+      server_pid=$$!
+      trap 'kill "$$server_pid"; wait "$$server_pid"' EXIT
+      until ollama list >/dev/null 2>&1; do sleep 1; done
+      manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${IRIS_EMBEDDING_MODEL}"
+      if [ ! -f "$$manifest" ]; then ollama pull "$$IRIS_EMBEDDING_MODEL"; fi
+      printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c -
+    volumes:
+      - iris_embedding_models:/root/.ollama
+    restart: "no"
+    logging: *bounded-logging
+    networks:
+      - model-egress
+
+  embedding-model:
+    image: ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_KEEP_ALIVE: 30m
+      IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
+      IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
+    depends_on:
+      embedding-model-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          ollama list >/dev/null 2>&1 &&
+          manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${IRIS_EMBEDDING_MODEL}" &&
+          test -f "$$manifest" &&
+          printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c -
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - iris_embedding_models:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1536m
+    restart: unless-stopped
+    logging: *bounded-logging
+    networks:
+      - backend
+
   core:
     <<: *core-image
     environment: *core-environment
@@ -196,6 +253,8 @@ services:
         condition: service_completed_successfully
       ai-worker:
         condition: service_started
+      embedding-model:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${IRIS_CORE_LOOPBACK_PORT:-3000}:3000"
     healthcheck:
@@ -257,5 +316,6 @@ networks:
 volumes:
   iris_postgres_data:
   iris_redis_data:
+  iris_embedding_models:
   iris_caddy_data:
   iris_caddy_config:
