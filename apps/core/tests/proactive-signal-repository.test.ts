@@ -454,6 +454,9 @@ describe("proactive signal persistence", () => {
     const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
     expect(sql).toContain("candidate.group_id = $1");
     expect(sql).toContain("candidate.status = 'pending'");
+    expect(sql).toContain("not exists");
+    expect(sql).toContain("from proactive_signal_delivery_outbox delivery");
+    expect(sql).toContain("delivery.delivery_channel = 'feishu_group_card'");
     expect(sql).not.toContain("conversation_messages.text");
   });
 

@@ -264,6 +264,13 @@ async function listPendingCandidates(
     FROM proactive_signal_candidates candidate
     WHERE candidate.group_id = $1
       AND candidate.status = 'pending'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM proactive_signal_delivery_outbox delivery
+        WHERE delivery.candidate_idempotency_key = candidate.idempotency_key
+          AND delivery.group_id = candidate.group_id
+          AND delivery.delivery_channel = 'feishu_group_card'
+      )
     ORDER BY candidate.priority DESC, candidate.last_relevant_at ASC, candidate.idempotency_key ASC
     LIMIT $2
     `,
