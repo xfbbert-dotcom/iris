@@ -772,10 +772,11 @@ Implementation status:
 
 - TypeScript Core App now requires a Feishu live permission checker before answer-time `source-policy` retrieval can inject Feishu docx/docs/wiki fragments into prompt context.
 - The checker avoids external calls for unsupported non-Feishu URLs, resolves wiki nodes before document checks, uses bounded request timeouts, and keeps transient Feishu failures distinct from explicit denied/not-found responses.
+- The process-local checker serializes external permission probes with a 650 ms minimum start interval and coalesces simultaneous checks for the same source. This stays below the current 100-calls-per-minute wiki-node boundary and the 5-calls-per-second docx metadata boundary without caching an authorization result.
 - The checker treats only known Feishu permission-denied response codes as ordinary denials. Unknown non-zero Feishu codes are permission guard errors, preserving fail-closed filtering while keeping upstream/auth failures observable.
 - Local source-registry lookup failures propagate through the permission guard as `permission_guard_error` audit events. Missing sources, disabled capabilities, denied sources, and stale sources remain ordinary denials.
 - Permission-filtered retrieval now binds allowed fragments to both fragment ID and document source ID, so duplicate or corrupted fragment IDs cannot leak denied document text into prompt context.
-- The current checker is process-local. If latency, rate limiting, or repeated checks become material, the next architecture step is a dedicated Permission Guard Service.
+- The current checker remains process-local for the 20-30-person internal rollout. If its queue latency or cross-instance rate coordination becomes material, the next architecture step is a dedicated Permission Guard Service.
 
 Evolution signal:
 

@@ -60,6 +60,99 @@ describe("createFeishuDocumentPermissionChecker", () => {
     );
   });
 
+  it("serializes and spaces distinct live permission probes below Feishu wiki limits", async () => {
+    let nowMs = 0;
+    let activeFetches = 0;
+    let maxActiveFetches = 0;
+    const wikiProbeStartedAt: number[] = [];
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      activeFetches += 1;
+      maxActiveFetches = Math.max(maxActiveFetches, activeFetches);
+      if (url.includes("/wiki/v2/spaces/get_node")) {
+        wikiProbeStartedAt.push(nowMs);
+      }
+      await Promise.resolve();
+      activeFetches -= 1;
+      return url.includes("/wiki/v2/spaces/get_node")
+        ? jsonResponse({
+            code: 0,
+            data: { node: { obj_type: "docx", obj_token: "doccnWikiDocument" } },
+          })
+        : jsonResponse({ code: 0, data: { document: { title: "Wiki" } } });
+    });
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+      minProbeIntervalMs: 650,
+      now: () => nowMs,
+      sleep: async (milliseconds) => {
+        nowMs += milliseconds;
+      },
+    });
+
+    await expect(Promise.all([
+      checker.canReadSource(source({
+        id: "source-1",
+        sourceUri: "https://example.feishu.cn/wiki/wikcnOne",
+      })),
+      checker.canReadSource(source({
+        id: "source-2",
+        sourceUri: "https://example.feishu.cn/wiki/wikcnTwo",
+      })),
+      checker.canReadSource(source({
+        id: "source-3",
+        sourceUri: "https://example.feishu.cn/wiki/wikcnThree",
+      })),
+    ])).resolves.toEqual([true, true, true]);
+
+    expect(maxActiveFetches).toBe(1);
+    expect(wikiProbeStartedAt).toEqual([0, 650, 1300]);
+  });
+
+  it("coalesces simultaneous permission probes for the same source", async () => {
+    let releaseFirstFetch: ((response: Response) => void) | undefined;
+    let markFirstFetchStarted: (() => void) | undefined;
+    const firstFetchStarted = new Promise<void>((resolve) => {
+      markFirstFetchStarted = resolve;
+    });
+    const firstFetch = new Promise<Response>((resolve) => {
+      releaseFirstFetch = resolve;
+    });
+    const fetch = vi.fn()
+      .mockImplementationOnce(async () => {
+        markFirstFetchStarted?.();
+        return firstFetch;
+      })
+      .mockResolvedValue(
+        jsonResponse({ code: 0, data: { document: { title: "Duplicate" } } }),
+      );
+    const checker = createFeishuDocumentPermissionChecker({
+      baseUrl: "https://open.feishu.cn",
+      tokenProvider: { getTenantAccessToken: vi.fn(async () => "tenant-token") },
+      fetch,
+    });
+    const sharedSource = source({
+      id: "source-shared",
+      sourceUri: "https://example.feishu.cn/docx/doccnShared",
+    });
+
+    const first = checker.canReadSource(sharedSource);
+    const second = checker.canReadSource(sharedSource);
+    await firstFetchStarted;
+    try {
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFirstFetch?.(
+        jsonResponse({ code: 0, data: { document: { title: "Shared" } } }),
+      );
+    }
+
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("returns false when Feishu denies document metadata access", async () => {
     const checker = createFeishuDocumentPermissionChecker({
       baseUrl: "https://open.feishu.cn",

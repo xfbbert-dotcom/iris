@@ -270,6 +270,23 @@ delivery mistakes while implementing it.
 - **Exit condition:** Revoked content is absent from the prompt and cannot be reconstructed from a
   different source.
 
+### Pace live permission probes instead of bursting Feishu
+
+- **Failure:** Indexed knowledge-base fragments were present, but one answer-time guard launched
+  several unique wiki permission probes together. Feishu returned HTTP 400 with code `99991400`
+  (`request trigger frequency limit`), so every affected fragment was correctly excluded and the
+  answer failed closed.
+- **Root cause:** Per-answer document deduplication still used concurrent external checks, while the
+  wiki-node endpoint allows 100 calls per minute and docx metadata allows 5 calls per second. HTTP
+  400 is also a valid legacy rate-limit envelope.
+- **Prevention rule:** Serialize process-local external permission probes with at least 650 ms
+  between starts, coalesce only simultaneous checks for the same source, and never cache the
+  completed authorization result.
+- **Guard:** Deterministic tests prove one in-flight external request, exact probe spacing, and
+  same-source request coalescing while existing denial, timeout, and error tests remain fail closed.
+- **Exit condition:** A private Life Engine answer records the exact source as allowed, retrieves its
+  marker, produces no new `permission_guard_error`, and leaves all queues and DLQs at zero.
+
 ### Separate retrieval authorization from answer generation failures
 
 - **Failure:** A real user-submitted document synced and indexed correctly, but a later internal
