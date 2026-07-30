@@ -157,11 +157,15 @@ test("keeps model services private with dedicated model egress", () => {
   );
   assert.equal(embeddingModelInit.command.length, 1);
   const initCommand = embeddingModelInit.command[0].replace(/\$\$/gu, "$");
-  assert.match(initCommand, /cleanup\(\)/u);
-  assert.match(initCommand, /kill -0 "\$server_pid" 2>\/dev\/null/u);
-  assert.match(initCommand, /wait "\$server_pid" 2>\/dev\/null \|\| true/u);
+  assert.match(
+    initCommand,
+    /cleanup\(\) \{\s+if kill -0 "\$server_pid" 2>\/dev\/null; then kill "\$server_pid" \|\| true; fi\s+wait "\$server_pid" 2>\/dev\/null \|\| true\s+\}/u,
+  );
   assert.match(initCommand, /for attempt in \$\(seq 1 60\); do/u);
-  assert.match(initCommand, /cat "\$ollama_log" >&2 \|\| true/u);
+  assert.match(
+    initCommand,
+    /if \[ "\$ready" != true \]; then cat "\$ollama_log" >&2 \|\| true; exit 1; fi/u,
+  );
   assert.match(initCommand, /model_name=\$\{IRIS_EMBEDDING_MODEL%:\*\}/u);
   assert.match(initCommand, /model_tag=\$\{IRIS_EMBEDDING_MODEL#\*:\}/u);
   assert.match(
