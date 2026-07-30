@@ -55,7 +55,7 @@ core_operation() {
       return token;
     }
 
-    async function request(method, path, body) {
+    async function request(method, path, body, { requirePayloadOk = true } = {}) {
       const response = await fetch(`http://127.0.0.1:3000${path}`, {
         method,
         headers: {
@@ -70,7 +70,7 @@ core_operation() {
       } catch {
         throw new Error(`${method} ${path} returned invalid JSON`);
       }
-      if (!response.ok || payload?.ok !== true) {
+      if (!response.ok || (requirePayloadOk && payload?.ok !== true)) {
         throw new Error(`${method} ${path} failed with HTTP ${response.status}`);
       }
       return payload;
@@ -202,7 +202,7 @@ core_operation() {
       case "queue-status": {
         const [expectedProfileId] = args;
         const [status, events, reindex] = await Promise.all([
-          request("GET", "/internal/status"),
+          request("GET", "/internal/status", undefined, { requirePayloadOk: false }),
           request("GET", "/internal/events/status"),
           request("GET", "/internal/reindex/status"),
         ]);

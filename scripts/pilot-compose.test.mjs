@@ -534,6 +534,16 @@ test("makes local embedding migration commands evidence-first and fail closed", 
     /\/internal\/status[\s\S]*?\/internal\/events\/status[\s\S]*?\/internal\/reindex\/status[\s\S]*?LLEN iris:events:raw:processing[\s\S]*?LLEN iris:documents:sync:processing[\s\S]*?LLEN iris:reindex:documents:processing[\s\S]*?ZCARD iris:memory:extraction:ready:index[\s\S]*?ZCARD iris:memory:extraction:processing[\s\S]*?ZCARD iris:memory:extraction:delayed[\s\S]*?SCARD iris:memory:extraction:dlq:ids/u,
     "each reindex gate must inspect event, document, reindex, memory, and processing state",
   );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /async function request\(method, path, body, \{ requirePayloadOk = true \} = \{\}\)[\s\S]*?if \(!response\.ok \|\| \(requirePayloadOk && payload\?\.ok !== true\)\)/u,
+    "HTTP success and endpoint-level health must be separable for aggregate status reads",
+  );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /request\("GET", "\/internal\/status", undefined, \{ requirePayloadOk: false \}\)/u,
+    "queue gates must inspect relevant components even when unrelated aggregate components are degraded",
+  );
   assert.doesNotMatch(
     localEmbeddingMigrationScript,
     /LLEN iris:memory:extraction:processing/u,
