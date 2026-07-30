@@ -36,6 +36,164 @@ The pilot gate is green only when all of the following are true:
 Once this gate passes, deploy the pilot. Do not start another general hardening audit unless the gate
 fails, the pilot exposes a P0/P1 issue, or the same user friction repeats.
 
+## Local Embedding Profile Migration
+
+Perform this one-time profile migration privately. Keep Caddy stopped and set global runtime to
+disabled before the first command. The Gemini `embed_content_free_tier_requests` quota is shared
+between the attempted Gemini embedding model names; it is the reason this procedure selects the
+private Ollama embedding path, not a reason to retry remote quota.
+
+The model boundary is strict: `embedding-model-init` alone receives model-download egress, starts a
+temporary Ollama server, and verifies the full stored model-manifest SHA256. The private
+`embedding-model` service has no host or edge port, no model egress network, and repeats the full
+stored model-manifest SHA256 check in its health check. The seed and runtime checks must pass before
+Core can start. A model name from `ollama list`, a short digest, or a successful pull without the
+full manifest check is a failed gate.
+
+Start only the model dependency and inspect its completed seed job before Core:
+
+```powershell
+$compose = @("compose", "--env-file", ".env.pilot", "--file", "deploy/pilot/docker-compose.yml")
+& docker @compose up --wait --wait-timeout 600 embedding-model
+if ($LASTEXITCODE -ne 0) { throw "Private embedding model did not become healthy" }
+$seed = @(& docker @compose ps --format json embedding-model-init | ConvertFrom-Json)
+if ($seed.Count -ne 1 -or $seed[0].ExitCode -ne 0) {
+  throw "embedding-model-init did not exit successfully after full model-manifest verification"
+}
+```
+
+Set the Core deployment values to the private endpoint and exact profile. Retain the previous
+provider settings in the approved rollback `.env.pilot` copy; do not edit historical profile rows
+or fragments.
+
+```text
+IRIS_EMBEDDING_PROVIDER=openai-compatible
+IRIS_EMBEDDING_BASE_URL=http://embedding-model:11434/v1
+IRIS_EMBEDDING_API_KEY=ollama
+IRIS_EMBEDDING_MODEL=qwen3-embedding:0.6b
+IRIS_EMBEDDING_DIMENSIONS=1024
+```
+
+After Core is recreated, require `/internal/reindex/status` to report the active profile exactly as
+`openai-compatible:qwen3-embedding:0.6b:1024`. A different active profile, disabled worker, or
+unhealthy Core ends the operation with Caddy stopped.
+
+### Old-Profile DLQ Evidence
+
+List the reindex DLQ before any deletion. For every old Gemini-profile entry that cannot be replayed,
+record old-profile DLQ evidence in the incident record: its full DLQ ID, embedding profile ID,
+document snapshot ID, `enqueuedAt`, attempt count, failure classification, and capture timestamp.
+Do not record document bodies, prompts, vectors, secrets, or raw provider responses. Confirm that
+the new profile above is selected, then delete only the reviewed ID through the matching reindex
+endpoint. Deletion before evidence capture is a failed migration gate.
+
+```powershell
+$oldProfileDlq = Invoke-RestMethod -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/reindex/dead-letters?limit=100"
+$oldProfileDlq
+$reviewedOldProfileDlqId = "replace-with-recorded-old-profile-dlq-id"
+Invoke-RestMethod -Method Delete -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/reindex/dead-letters/$reviewedOldProfileDlqId"
+```
+
+### Bounded Full Reindex
+
+Plan all latest successful snapshots in batches of at most 100. Wait for every batch to drain
+before requesting the next; this lets fragment coverage, rather than queue idempotency alone,
+determine whether more work remains. The loop is bounded at 1,000 requests and fails closed if it
+does not reach an empty plan.
+
+```powershell
+$profileId = "openai-compatible:qwen3-embedding:0.6b:1024"
+$reindexPlan = [pscustomobject]@{ enqueuedCount = 1 }
+$reindexBatch = 0
+while ($reindexPlan.enqueuedCount -gt 0) {
+  $reindexBatch += 1
+  if ($reindexBatch -gt 1000) { throw "Profile reindex planning did not reach an empty plan" }
+
+  $reindexPlan = Invoke-RestMethod -Method Post -Headers $irisHeaders `
+    -Uri "http://localhost:3000/internal/reindex/document-profile" `
+    -ContentType "application/json" `
+    -Body "{`"embeddingProfileId`":`"$profileId`",`"limit`":100}"
+  if ($reindexPlan.ok -ne $true -or $reindexPlan.enqueuedCount -lt 0) {
+    throw "Profile reindex plan failed"
+  }
+  if ($reindexPlan.enqueuedCount -eq 0) { break }
+
+  $deadline = (Get-Date).AddMinutes(30)
+  do {
+    Start-Sleep -Seconds 2
+    $status = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/status"
+    $reindex = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/reindex/status"
+    $queueCounts = @(
+      [long]$status.components.eventWorker.pendingEventCount,
+      [long]$status.components.eventWorker.deadLetterEventCount,
+      [long]$status.components.documentSync.pendingJobCount,
+      [long]$status.components.documentSync.deadLetterJobCount,
+      [long]$status.components.reindex.pendingJobCount,
+      [long]$status.components.reindex.deadLetterJobCount
+    )
+    if ($status.status -ne "healthy" -or $reindex.activeEmbeddingProfileId -cne $profileId) {
+      throw "Reindex status is not healthy for the selected profile"
+    }
+  } while ((@($queueCounts | Where-Object { $_ -ne 0 })).Count -ne 0 -and (Get-Date) -lt $deadline)
+  if ((@($queueCounts | Where-Object { $_ -ne 0 })).Count -ne 0) {
+    throw "Reindex batch did not drain before its deadline"
+  }
+}
+```
+
+Before ingress, record zero queue and DLQ counts for event, document-sync, and reindex, and verify
+every latest successful wiki snapshot has fragments under the exact Qwen profile. Run one internal
+Life Engine retrieval question using a unique marker that exists only in its authorized page. The
+result must return that marker, and the live Feishu permission guard must allow the source at answer
+time. Keep Caddy stopped for this query; Feishu-native related-knowledge UI is not Iris evidence.
+
+`/internal/answer-drafts` obeys runtime control, so authorize one private request while Caddy remains
+stopped, then durably disable it again. Replace the placeholders with the approved pilot chat, the
+authorized source ID, and a marker that is absent from the question and live chat input.
+
+```powershell
+$lifeEngineChatId = "oc_approved_pilot_group"
+$lifeEngineSourceId = "authorized-life-engine-source-id"
+$lifeEngineMarker = "IRIS-LIFE-ENGINE-UNIQUE-MARKER"
+$enableForPrivateQuery = Invoke-RestMethod -Method Post -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/runtime-control/global" `
+  -ContentType "application/json" -Body '{"enabled":true}'
+try {
+  if ($enableForPrivateQuery.globalEnabled -ne $true -or $enableForPrivateQuery.durable -ne $true) {
+    throw "Could not durably authorize the private retrieval query"
+  }
+  $lifeEngineResult = Invoke-RestMethod -Method Post -Headers $irisHeaders `
+    -Uri "http://localhost:3000/internal/answer-drafts" `
+    -ContentType "application/json" `
+    -Body "{`"question`":`"Return the approved Life Engine marker only.`",`"chatId`":`"$lifeEngineChatId`",`"liveChatMessages`":[]}"
+  if ($lifeEngineResult.answerText -notmatch [regex]::Escape($lifeEngineMarker)) {
+    throw "Life Engine marker was not retrieved"
+  }
+  if ($lifeEngineResult.retrievedFragmentCount -lt 1 -or
+      $lifeEngineResult.allowedFragments.documentSourceId -notcontains $lifeEngineSourceId) {
+    throw "Live Feishu permission guard did not allow the expected authorized source"
+  }
+} finally {
+  $disableAfterPrivateQuery = Invoke-RestMethod -Method Post -Headers $irisHeaders `
+    -Uri "http://localhost:3000/internal/runtime-control/global" `
+    -ContentType "application/json" -Body '{"enabled":false}'
+  if ($disableAfterPrivateQuery.globalEnabled -ne $false -or $disableAfterPrivateQuery.durable -ne $true) {
+    throw "Could not durably return the private retrieval query to fail-closed state"
+  }
+}
+```
+
+Use the [wiki-space evidence procedure](../runbooks/iris-wiki-space-sync.md#local-embedding-acceptance)
+for the source, permission, and marker controls.
+
+Start Caddy only after the private model check, selected-profile reindex, zero queue and DLQ counts,
+live Feishu permission guard, and Life Engine retrieval gates have all passed. Any failed command,
+nonzero queue/DLQ, permission uncertainty, missing marker, or unexpected profile requires rollback:
+keep Caddy stopped, durably disable global runtime, restore the approved previous `.env.pilot` and
+matching Core image/paired backup when needed, and preserve the prior-profile fragments.
+
 ### Controlled Daily Pilot Profile
 
 After every product-level loop in

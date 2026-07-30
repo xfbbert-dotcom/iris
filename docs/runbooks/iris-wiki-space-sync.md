@@ -199,6 +199,31 @@ Do not use Feishu-native `相关知识`, search suggestions, page previews, or o
 as acceptance evidence. Record a passing marker test as bounded retrieval evidence, not as proof of
 a durable source-level trace or citation feature. Common-knowledge answers are not retrieval proof.
 
+## Local Embedding Acceptance
+
+Use this section only after the private model procedure has selected
+`openai-compatible:qwen3-embedding:0.6b:1024` and the bounded reindex planning loop in the
+[internal rollout runbook](../operations/internal-rollout-runbook.md#local-embedding-profile-migration)
+has returned zero work. Retain prior-profile fragments and old Gemini-profile DLQ evidence; neither
+is discarded merely because the Qwen profile has become active.
+
+With Caddy stopped, choose a Life Engine page that is authorized for the pilot group and place a
+fresh unique marker only in that page. Confirm the source has a successful latest snapshot and a
+fragment under the Qwen profile. Submit one authenticated internal answer-draft request for the
+pilot chat with no copied marker in the question or live-chat input. The deployed source-policy
+live Feishu permission guard must allow the source, and the one result must contain the marker.
+Record only the source ID, snapshot ID, profile ID, permission decision, request time, and marker
+match; do not record the document body or prompt. Do not repeat a failed answer request to probe a
+provider.
+
+Feishu-native related-knowledge UI is not Iris evidence. A Feishu `相关知识` decoration, preview, or
+search recommendation cannot replace the internal marker result or the live permission decision.
+Use the private authenticated request and compensating durable global disable in the linked rollout
+runbook; it keeps Caddy stopped while the source-policy guard evaluates the live Feishu permission.
+Before ingress, recheck event, document-sync, and reindex status plus their DLQ lists; all pending
+and dead-letter counts must be zero. Any missing fragment, denied/uncertain permission, marker
+miss, or nonzero queue/DLQ keeps Caddy stopped and enters the local-embedding rollback procedure.
+
 ## Permission Revocation Second Check
 
 For a previously synced pilot document, remove the app's effective Feishu access through the real

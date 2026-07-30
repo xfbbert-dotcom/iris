@@ -19,6 +19,29 @@ Core waits only for `ai-worker` to start. An unhealthy extraction worker degrade
 but must not prevent Feishu callback, document-sync, or mention-reply startup. Never expose the
 worker on the edge network and never use live provider quota to manufacture an acceptance 429.
 
+## Local Embedding Profile Rollout
+
+The Gemini free tier exhausted the shared `embed_content_free_tier_requests` quota at 100 requests;
+changing Gemini embedding model names did not create a separate quota. The pilot therefore uses
+only the private Ollama embedding service for vectors. It does not replace the existing answer or
+AI Worker extraction model provider, and neither `embedding-model` nor `embedding-model-init` has
+an edge or host port.
+
+Run the full procedure in the [internal rollout runbook](../../docs/operations/internal-rollout-runbook.md#local-embedding-profile-migration)
+with Caddy stopped and global runtime disabled. `embedding-model-init` verifies the full stored
+model-manifest SHA256 for `qwen3-embedding:0.6b`; `embedding-model` repeats that check in its
+health check. Both checks must pass before Core can start. Do not treat `ollama list`, a model name,
+or a partial digest as approval.
+
+The active profile is exactly `openai-compatible:qwen3-embedding:0.6b:1024`. Record old-profile
+DLQ evidence before deleting any old-profile DLQ entry, then use the bounded repeated
+`/internal/reindex/document-profile` procedure until it reports no more work. Preserve the
+prior-profile fragments for rollback; they are not candidates for the new profile's retrieval.
+
+Keep Caddy stopped until the runbook has recorded zero queue and DLQ counts, a passing live Feishu
+permission guard, and the internal Life Engine retrieval gate. Feishu-native related-knowledge UI
+is not Iris evidence.
+
 ## Wiki Space Sync
 
 `IRIS_WIKI_SPACE_SYNC_ENABLED=false` is the deployment default. The feature remains off unless the

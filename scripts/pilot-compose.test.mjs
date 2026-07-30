@@ -23,6 +23,15 @@ const wikiSpaceSyncRunbook = readFileSync(
   "docs/runbooks/iris-wiki-space-sync.md",
   "utf8",
 );
+const pilotOperationsReadme = readFileSync("deploy/pilot/README.md", "utf8");
+const internalRolloutRunbook = readFileSync(
+  "docs/operations/internal-rollout-runbook.md",
+  "utf8",
+);
+const engineeringFailureLedger = readFileSync(
+  "docs/operations/engineering-failure-ledger.md",
+  "utf8",
+);
 const documentReindexQueueSource = readFileSync(
   "apps/core/src/reindex/redis-document-reindex-queue.ts",
   "utf8",
@@ -359,6 +368,60 @@ test("requires rollback to verify wiki sync from a fresh authenticated status", 
     rollback,
     /\$status\.components\.documentSync\.wikiSpaces/u,
     "rollback must not inspect the pre-restart status snapshot",
+  );
+});
+
+test("requires fail-closed local embedding profile migration operations", () => {
+  assertMarkersInOrder(pilotOperationsReadme, [
+    "## Local Embedding Profile Rollout",
+    "before Core can start",
+    "openai-compatible:qwen3-embedding:0.6b:1024",
+    "before deleting any old-profile DLQ entry",
+    "/internal/reindex/document-profile",
+    "Life Engine",
+    "Start Caddy only after",
+  ]);
+
+  for (const marker of [
+    "Life Engine retrieval gate",
+  ]) {
+    assert.match(pilotOperationsReadme, new RegExp(escapeRegExp(marker), "u"));
+  }
+  assert.match(pilotOperationsReadme, /full stored\s+model-manifest SHA256/u);
+  assert.match(pilotOperationsReadme, /old-profile\s+DLQ evidence\s+before deleting/u);
+  assert.match(pilotOperationsReadme, /preserve the\s+prior-profile fragments/iu);
+  assert.match(pilotOperationsReadme, /zero queue and DLQ counts/u);
+  assert.match(pilotOperationsReadme, /live Feishu\s+permission guard/u);
+  assert.match(pilotOperationsReadme, /Feishu-native related-knowledge UI\s+is not Iris evidence/u);
+
+  assertMarkersInOrder(internalRolloutRunbook, [
+    "## Local Embedding Profile Migration",
+    "embedding-model-init",
+    "openai-compatible:qwen3-embedding:0.6b:1024",
+    "old-profile DLQ evidence",
+    "while ($reindexPlan.enqueuedCount -gt 0)",
+    "/internal/reindex/document-profile",
+    "Life Engine",
+    "Start Caddy only after",
+  ]);
+
+  assert.match(internalRolloutRunbook, /full stored\s+model-manifest SHA256/u);
+  assert.match(internalRolloutRunbook, /before\s+Core can start/u);
+  assert.match(internalRolloutRunbook, /preserve the\s+prior-profile fragments/iu);
+  assert.match(internalRolloutRunbook, /zero queue and DLQ counts/u);
+  assert.match(internalRolloutRunbook, /live Feishu permission guard/u);
+
+  assert.match(
+    wikiSpaceSyncRunbook,
+    /Feishu-native related-knowledge UI\s+is not Iris evidence/u,
+  );
+  assert.match(
+    engineeringFailureLedger,
+    /Gemini.*embed_content_free_tier_requests/u,
+  );
+  assert.match(
+    engineeringFailureLedger,
+    /old-profile\s+DLQ evidence/u,
   );
 });
 

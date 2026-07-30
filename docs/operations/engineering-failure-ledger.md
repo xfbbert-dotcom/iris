@@ -36,6 +36,26 @@ delivery mistakes while implementing it.
 - **Exit condition:** A single probe succeeds; application acceptance then runs separately and does
   not infer correctness from provider availability alone.
 
+### Migrate embedding profiles without deleting the recovery trail
+
+- **Failure:** A complete wiki scan exhausted Gemini's shared `embed_content_free_tier_requests`
+  quota at 100 embedding requests. Changing Gemini embedding model names did not create a separate
+  quota, and a rushed profile migration risked deleting the only evidence for old-profile reindex
+  failures.
+- **Root cause:** The remote quota metric was shared, while model-specific vector dimensions make
+  Gemini and Qwen fragments incompatible retrieval inputs.
+- **Prevention rule:** Use the private Ollama `qwen3-embedding:0.6b` service only for embeddings,
+  require its full stored model-manifest SHA256 before Core starts, select
+  `openai-compatible:qwen3-embedding:0.6b:1024`, and preserve the prior-profile fragments. Record
+  old-profile DLQ evidence before deleting an unreplayable entry, then re-plan latest successful
+  snapshots in bounded 100-item requests until the profile planner returns zero.
+- **Guard:** Compose verifies the full manifest in both seed and runtime paths; the rollout
+  procedure requires the active profile, zero queues/DLQs, a live Feishu permission check, and a
+  unique Life Engine retrieval marker before ingress.
+- **Exit condition:** Every latest successful snapshot has the selected profile's fragments, the
+  private retrieval marker passes with live permission, and the legacy fragment/DLQ evidence remains
+  available for rollback.
+
 ### Bound transient answer-model retries without multiplying the deadline
 
 - **Failure:** Authorized retrieval, live Feishu permission checks, and prompt assembly all
