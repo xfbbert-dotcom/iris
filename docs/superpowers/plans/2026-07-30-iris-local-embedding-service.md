@@ -151,6 +151,7 @@ git commit -m "feat: add private local embedding service"
 ### Task 3: Document Operations And Verify The Candidate
 
 **Files:**
+- Modify: `scripts/pilot-compose.test.mjs`
 - Modify: `deploy/pilot/README.md`
 - Modify: `docs/operations/internal-rollout-runbook.md`
 - Modify: `docs/operations/engineering-failure-ledger.md`
@@ -164,10 +165,11 @@ git commit -m "feat: add private local embedding service"
 
 Extend existing documentation checks in `scripts/pilot-compose.test.mjs` to require:
 
-- model ID verification before Core startup;
+- full model-manifest SHA256 verification before Core startup;
 - old-profile DLQ evidence recording before deletion;
-- new-profile full reindex planning;
-- zero queue/DLQ and internal retrieval gates before ingress.
+- exact new profile `openai-compatible:qwen3-embedding:0.6b:1024` and full reindex planning through
+  `/internal/reindex/document-profile`;
+- zero queue/DLQ, live Feishu permission, and internal Life Engine retrieval gates before ingress.
 
 - [ ] **Step 2: Run the documentation contract tests and verify RED**
 
@@ -181,9 +183,10 @@ Expected: the new required markers are absent.
 
 - [ ] **Step 3: Update runbooks and the failure ledger**
 
-Document the quota root cause, local model boundaries, exact profile migration, acceptance queries,
-and fail-closed rollback. State explicitly that Feishu-native related-knowledge UI is not Iris
-evidence.
+Document the quota root cause, local model boundaries, exact profile migration, old-DLQ evidence
+capture, bounded full-reindex loop, acceptance queries, and fail-closed rollback. Preserve prior
+profile fragments for rollback. State explicitly that Feishu-native related-knowledge UI is not
+Iris evidence.
 
 - [ ] **Step 4: Run all verification**
 
@@ -196,13 +199,13 @@ npm run verify
 Expected: exit code 0 with Core, Python worker, pilot operations, Compose, and readiness checks all
 passing.
 
-- [ ] **Step 5: Commit and publish**
+- [ ] **Step 5: Commit**
 
 ```powershell
-git add deploy/pilot/README.md docs/operations/internal-rollout-runbook.md docs/operations/engineering-failure-ledger.md docs/runbooks/iris-wiki-space-sync.md docs/superpowers/specs/2026-07-30-iris-local-embedding-service-design.md docs/superpowers/plans/2026-07-30-iris-local-embedding-service.md
+git add scripts/pilot-compose.test.mjs deploy/pilot/README.md docs/operations/internal-rollout-runbook.md docs/operations/engineering-failure-ledger.md docs/runbooks/iris-wiki-space-sync.md
 git commit -m "docs: define local embedding rollout"
-git push -u origin codex/iris-local-embedding
 ```
 
-Open a draft pull request based on `codex/iris-wiki-space-sync`, require Core and AI Worker checks,
-and deploy only the exact checked SHA.
+The controller publishes only after the task reviews and final whole-branch review pass. The draft
+pull request is based on `codex/iris-wiki-space-sync`; deployment uses only an exact SHA whose Core
+and AI Worker checks pass.
