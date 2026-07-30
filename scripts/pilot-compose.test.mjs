@@ -525,7 +525,8 @@ test("makes local embedding migration commands evidence-first and fail closed", 
   assert.match(localEmbeddingMigrationScript, /tail -n 1/u);
   assert.match(
     localEmbeddingMigrationScript,
-    /core_operation delete-dlq "\$\{dead_letter_id\}"/u,
+    /core_operation delete-dlq "\$\{dead_letter_id\}" <\/dev\/null/u,
+    "deleting one DLQ entry must not consume the remaining evidence loop input",
   );
   assert.doesNotMatch(localEmbeddingMigrationScript, /reviewedOldProfileDlqId/u);
 

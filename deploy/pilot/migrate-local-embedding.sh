@@ -449,7 +449,7 @@ record_and_delete_old_dlq() {
       echo "Old-profile DLQ evidence write verification failed" >&2
       return 1
     fi
-    core_operation delete-dlq "${dead_letter_id}"
+    core_operation delete-dlq "${dead_letter_id}" </dev/null
   done <<<"${dlq_output}"
 }
 
