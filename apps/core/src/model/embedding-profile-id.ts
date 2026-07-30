@@ -9,7 +9,7 @@ export function createEmbeddingProfileId(input: RuntimeEmbeddingProfileInput): s
 }
 
 export function assertSupportedRuntimeEmbeddingDimension(dimension: number): void {
-  if (dimension !== 6 && dimension !== 1536) {
+  if (dimension !== 6 && dimension !== 1024 && dimension !== 1536) {
     throw new Error(`Unsupported embedding dimension: ${dimension}`);
   }
 }

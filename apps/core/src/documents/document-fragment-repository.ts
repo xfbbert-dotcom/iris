@@ -22,7 +22,10 @@ export type EmbeddingProfileLookup = {
   getProfileById(id: string): Promise<{ id: string; dimensions: number }>;
 };
 
-type EmbeddingTable = "document_fragment_embeddings_6" | "document_fragment_embeddings_1536";
+type EmbeddingTable =
+  | "document_fragment_embeddings_6"
+  | "document_fragment_embeddings_1024"
+  | "document_fragment_embeddings_1536";
 
 export type DocumentFragment = {
   id: string;
@@ -470,6 +473,9 @@ function hashText(text: string): string {
 function resolveEmbeddingTable(dimension: number): EmbeddingTable {
   if (dimension === 6) {
     return "document_fragment_embeddings_6";
+  }
+  if (dimension === 1024) {
+    return "document_fragment_embeddings_1024";
   }
   if (dimension === 1536) {
     return "document_fragment_embeddings_1536";

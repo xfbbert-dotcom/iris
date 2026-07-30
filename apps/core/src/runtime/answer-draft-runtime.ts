@@ -60,6 +60,7 @@ import {
   createLiveChatContextProvider,
   type LiveChatContextProvider,
 } from "../memory/live-chat-context-provider.js";
+import { assertSupportedRuntimeEmbeddingDimension } from "../model/embedding-profile-id.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createOpenAICompatibleModelProvider } from "../model/openai-compatible-model-provider.js";
 import type { GroupMemoryRepository } from "../memory/group-memory-repository.js";
@@ -713,12 +714,6 @@ async function resolveRuntimeEmbedding({
     }),
     embedder: createEmbeddingProvider(embeddingConfig),
   };
-}
-
-function assertSupportedRuntimeEmbeddingDimension(dimension: number): void {
-  if (dimension !== 6 && dimension !== 1536) {
-    throw new Error(`Unsupported embedding dimension: ${dimension}`);
-  }
 }
 
 function createStaticQueryEmbeddingProvider() {

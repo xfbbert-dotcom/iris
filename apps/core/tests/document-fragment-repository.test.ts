@@ -172,6 +172,66 @@ describe("DocumentFragmentRepository", () => {
     ]);
   });
 
+  it("routes 1024-dimensional writes to the 1024 embedding table", async () => {
+    const createdAt = new Date("2026-07-02T01:00:00.000Z");
+    const vector = Array.from({ length: 1024 }, (_, index) => index / 1024);
+    const calls: Array<{ sql: string; values?: unknown[] }> = [];
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      calls.push({ sql, values });
+      if (normalizeSql(sql).startsWith("delete from document_fragments")) {
+        return { rows: [] };
+      }
+      if (normalizeSql(sql).startsWith("insert into document_fragments")) {
+        return {
+          rows: [
+            {
+              id: "fragment-1024",
+              document_source_id: "source-1",
+              document_snapshot_id: "snapshot-1",
+              source_uri: "https://example.com/doc",
+              chunk_index: 0,
+              text: "Alpha",
+              content_hash: "hash-alpha",
+              embedding_profile_id: "openai-compatible:qwen3-embedding:0.6b:1024",
+              created_at: createdAt,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({
+          id: "openai-compatible:qwen3-embedding:0.6b:1024",
+          dimensions: 1024,
+        })),
+      },
+      createId: () => "fragment-1024",
+      now: () => createdAt,
+    });
+
+    await repository.replaceFragmentsForSnapshot({
+      documentSourceId: "source-1",
+      documentSnapshotId: "snapshot-1",
+      sourceUri: "https://example.com/doc",
+      embeddingProfileId: "openai-compatible:qwen3-embedding:0.6b:1024",
+      chunks: [{ chunkIndex: 0, text: "Alpha" }],
+      embeddings: [vector],
+    });
+
+    expect(normalizeSql(calls[2]?.sql ?? "")).toContain(
+      "insert into document_fragment_embeddings_1024",
+    );
+    expect(calls[2]?.values).toEqual([
+      "fragment-1024",
+      "openai-compatible:qwen3-embedding:0.6b:1024",
+      `[${vector.join(",")}]`,
+      createdAt,
+    ]);
+  });
+
   it("rejects invalid replacement vectors before deleting existing fragments", async () => {
     const query = vi.fn(async () => ({ rows: [] }));
     const repository = createDocumentFragmentRepository({

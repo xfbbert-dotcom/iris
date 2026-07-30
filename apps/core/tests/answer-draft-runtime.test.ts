@@ -1305,6 +1305,69 @@ describe("createAnswerDraftRuntime", () => {
     });
   });
 
+  it("uses configured Qwen embedding provider when dimensions are 1024", async () => {
+    const vector = Array.from({ length: 1024 }, (_, index) => index / 1024);
+    const embeddingProvider = { embedTexts: vi.fn(async () => [vector]) };
+    const embeddingProfiles = {
+      getStaticDevelopmentProfile: vi.fn(),
+      findOrCreateProfile: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:qwen3-embedding:0.6b:1024",
+          provider: "openai-compatible",
+          model: "qwen3-embedding:0.6b",
+          dimensions: 1024,
+          displayName: "OpenAI-compatible qwen3-embedding:0.6b (1024d)",
+        }),
+      ),
+      getProfileById: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:qwen3-embedding:0.6b:1024",
+          provider: "openai-compatible",
+          model: "qwen3-embedding:0.6b",
+          dimensions: 1024,
+          displayName: "OpenAI-compatible qwen3-embedding:0.6b (1024d)",
+        }),
+      ),
+    };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "embed-key",
+        IRIS_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+        IRIS_EMBEDDING_DIMENSIONS: "1024",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => embeddingProfiles),
+        createEmbeddingProvider: vi.fn(() => embeddingProvider),
+      },
+    });
+
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "Use local Qwen embedder?",
+      liveChatMessages: [],
+    });
+
+    expect(embeddingProfiles.findOrCreateProfile).toHaveBeenCalledWith({
+      provider: "openai-compatible",
+      model: "qwen3-embedding:0.6b",
+      dimensions: 1024,
+      displayName: "OpenAI-compatible qwen3-embedding:0.6b (1024d)",
+    });
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
+      embeddingProfileId: "openai-compatible:qwen3-embedding:0.6b:1024",
+      embedding: vector,
+      limit: 24,
+    });
+  });
+
   it("rejects unsupported embedding dimensions when generating a draft", async () => {
     const runtime = createAnswerDraftRuntime({
       env: {
