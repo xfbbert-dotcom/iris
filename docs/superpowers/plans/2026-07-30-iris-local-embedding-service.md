@@ -1,0 +1,195 @@
+# Iris Local Embedding Service Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Give Iris a quota-free, private Qwen3 embedding path that can index and query the full
+authorized Feishu knowledge space on the pilot VPS.
+
+**Architecture:** Preserve the existing OpenAI-compatible provider contract. Add native
+1024-dimensional pgvector storage and an internal Ollama service whose one-shot seed job verifies
+the approved Qwen3 model before Core can start.
+
+**Tech Stack:** TypeScript, PostgreSQL with pgvector, Docker Compose, Ollama 0.32.0,
+Qwen3-Embedding-0.6B, Node test runner.
+
+## Global Constraints
+
+- Do not change the answer-generation or memory-extraction provider.
+- Do not expose Ollama on a host, edge, or public port.
+- Pin the Ollama image digest and verify model ID `ac6da0dfba84`.
+- Store 1024-dimensional vectors natively; do not pad them to 1536 dimensions.
+- Keep Iris global runtime disabled and Caddy stopped until all internal acceptance gates pass.
+- Preserve existing Gemini profile data for rollback.
+
+---
+
+### Task 1: Add Native 1024-Dimensional Fragment Storage
+
+**Files:**
+- Create: `apps/core/migrations/0042_document_fragment_embeddings_1024.sql`
+- Modify: `apps/core/src/model/embedding-profile-id.ts`
+- Modify: `apps/core/src/documents/document-fragment-repository.ts`
+- Modify: `apps/core/src/runtime/answer-draft-runtime.ts`
+- Modify: `apps/core/tests/document-fragment-repository.test.ts`
+- Modify: `apps/core/tests/answer-draft-runtime.test.ts`
+- Create: `apps/core/tests/embedding-profile-id.test.ts`
+- Modify: `apps/core/tests/migration-runner.test.ts`
+
+**Interfaces:**
+- Consumes: `EmbeddingProfile.dimensions` and existing `resolveEmbeddingTable()` routing.
+- Produces: support for profile
+  `openai-compatible:qwen3-embedding:0.6b:1024` and table
+  `document_fragment_embeddings_1024`.
+
+- [ ] **Step 1: Write failing 1024-dimension tests**
+
+Add repository assertions that replacement inserts into
+`document_fragment_embeddings_1024`, and add direct and answer-runtime guard assertions that 1024
+is accepted. Extend the migration contract test to require the new table and `vector(1024)`.
+
+- [ ] **Step 2: Run focused tests and verify RED**
+
+Run:
+
+```powershell
+npm exec --workspace apps/core -- vitest run tests/document-fragment-repository.test.ts tests/answer-draft-runtime.test.ts tests/embedding-profile-id.test.ts tests/migration-runner.test.ts
+```
+
+Expected: failures show that dimension 1024 is unsupported and no 1024 table exists.
+
+- [ ] **Step 3: Add the migration and minimal routing**
+
+Create the table and profile index using the same metadata columns and foreign keys as the 1536
+table. Extend `EmbeddingTable`, `resolveEmbeddingTable()`, and
+`assertSupportedRuntimeEmbeddingDimension()` with 1024. Remove the duplicate answer-runtime guard
+and import the shared guard so every answer, reindex, sync, and readiness path enforces one
+dimension contract.
+
+- [ ] **Step 4: Run focused tests and verify GREEN**
+
+Run the same focused command and require all selected tests to pass.
+
+- [ ] **Step 5: Commit**
+
+```powershell
+git add apps/core/migrations/0042_document_fragment_embeddings_1024.sql apps/core/src/model/embedding-profile-id.ts apps/core/src/documents/document-fragment-repository.ts apps/core/src/runtime/answer-draft-runtime.ts apps/core/tests/document-fragment-repository.test.ts apps/core/tests/answer-draft-runtime.test.ts apps/core/tests/embedding-profile-id.test.ts apps/core/tests/migration-runner.test.ts
+git commit -m "feat: support 1024-dimensional embeddings"
+```
+
+### Task 2: Add the Private Ollama Pilot Service
+
+**Files:**
+- Modify: `deploy/pilot/docker-compose.yml`
+- Modify: `deploy/pilot/ci.env`
+- Modify: `.env.pilot.example`
+- Modify: `scripts/pilot-compose.test.mjs`
+
+**Interfaces:**
+- Consumes: Core's existing `IRIS_EMBEDDING_*` OpenAI-compatible configuration.
+- Produces: `embedding-model-init`, `embedding-model`, and volume
+  `iris_embedding_models`.
+
+- [ ] **Step 1: Write failing Compose contract tests**
+
+Assert:
+
+```js
+assert.match(compose.services["embedding-model"].image, /@sha256:[a-f0-9]{64}$/u);
+assert.equal(compose.services["embedding-model"].ports, undefined);
+assert.deepEqual(compose.services["embedding-model"].networks, { backend: null });
+assert.deepEqual(compose.services["embedding-model-init"].networks, { "model-egress": null });
+assert.equal(
+  compose.services.core.depends_on["embedding-model"].condition,
+  "service_healthy",
+);
+assert.equal(compose.services.core.environment.IRIS_EMBEDDING_DIMENSIONS, "1024");
+```
+
+Also require the approved model tag and ID in `ci.env` and `.env.pilot.example`.
+
+- [ ] **Step 2: Run the pilot Compose tests and verify RED**
+
+Run:
+
+```powershell
+node --test --test-concurrency=1 scripts/pilot-compose.test.mjs
+```
+
+Expected: failures report missing embedding services and 1024 configuration.
+
+- [ ] **Step 3: Add seed and runtime services**
+
+Use the pinned Ollama image. The seed service starts a temporary server, reuses a cached model or
+pulls it, verifies the ID, and exits. The runtime service mounts the same volume, joins only
+`backend`, exposes no port, allows one parallel request, and keeps the model for 30 minutes.
+Make Core depend on its healthy state.
+
+- [ ] **Step 4: Run the pilot Compose tests and verify GREEN**
+
+Run the same focused command and require all tests to pass.
+
+- [ ] **Step 5: Commit**
+
+```powershell
+git add deploy/pilot/docker-compose.yml deploy/pilot/ci.env .env.pilot.example scripts/pilot-compose.test.mjs
+git commit -m "feat: add private local embedding service"
+```
+
+### Task 3: Document Operations And Verify The Candidate
+
+**Files:**
+- Modify: `deploy/pilot/README.md`
+- Modify: `docs/operations/internal-rollout-runbook.md`
+- Modify: `docs/operations/engineering-failure-ledger.md`
+- Modify: `docs/runbooks/iris-wiki-space-sync.md`
+
+**Interfaces:**
+- Consumes: model seed/runtime services and 1024 profile from Tasks 1 and 2.
+- Produces: exact deployment, profile migration, recovery, and rollback procedures.
+
+- [ ] **Step 1: Add operational contract coverage**
+
+Extend existing documentation checks in `scripts/pilot-compose.test.mjs` to require:
+
+- model ID verification before Core startup;
+- old-profile DLQ evidence recording before deletion;
+- new-profile full reindex planning;
+- zero queue/DLQ and internal retrieval gates before ingress.
+
+- [ ] **Step 2: Run the documentation contract tests and verify RED**
+
+Run:
+
+```powershell
+node --test --test-concurrency=1 scripts/pilot-compose.test.mjs
+```
+
+Expected: the new required markers are absent.
+
+- [ ] **Step 3: Update runbooks and the failure ledger**
+
+Document the quota root cause, local model boundaries, exact profile migration, acceptance queries,
+and fail-closed rollback. State explicitly that Feishu-native related-knowledge UI is not Iris
+evidence.
+
+- [ ] **Step 4: Run all verification**
+
+Run:
+
+```powershell
+npm run verify
+```
+
+Expected: exit code 0 with Core, Python worker, pilot operations, Compose, and readiness checks all
+passing.
+
+- [ ] **Step 5: Commit and publish**
+
+```powershell
+git add deploy/pilot/README.md docs/operations/internal-rollout-runbook.md docs/operations/engineering-failure-ledger.md docs/runbooks/iris-wiki-space-sync.md docs/superpowers/specs/2026-07-30-iris-local-embedding-service-design.md docs/superpowers/plans/2026-07-30-iris-local-embedding-service.md
+git commit -m "docs: define local embedding rollout"
+git push -u origin codex/iris-local-embedding
+```
+
+Open a draft pull request based on `codex/iris-wiki-space-sync`, require Core and AI Worker checks,
+and deploy only the exact checked SHA.
