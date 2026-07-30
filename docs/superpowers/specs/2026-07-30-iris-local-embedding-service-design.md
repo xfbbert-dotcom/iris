@@ -27,7 +27,8 @@ Run Ollama inside the pilot Docker Compose stack and serve
 - Ollama image: `ollama/ollama:0.32.0`, pinned to immutable image digest
   `sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a`.
 - Model tag: `qwen3-embedding:0.6b`.
-- Expected Ollama model ID: `ac6da0dfba84`.
+- Expected Ollama model-manifest SHA256:
+  `ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d`.
 - Model size: approximately 639 MB.
 - Embedding dimensions: 1024.
 - Exposure: Docker `backend` network only, with no host or edge port.
@@ -44,8 +45,8 @@ the selected model.
 
 `embedding-model-init` is a one-shot Compose service with the model volume and outbound-only
 `model-egress` network. It starts a temporary local Ollama server, uses the cached model when it is
-already present, otherwise pulls the approved model, and verifies the expected model ID. A model
-ID mismatch fails the job.
+already present, otherwise pulls the approved model, and verifies the full SHA256 of Ollama's
+stored model manifest. A manifest mismatch fails the job.
 
 The seed job never receives Iris, Feishu, database, or model-provider credentials.
 
@@ -53,7 +54,8 @@ The seed job never receives Iris, Feishu, database, or model-provider credential
 
 `embedding-model` starts only after the seed job succeeds. It mounts the same model volume and
 joins only the internal `backend` network. It has no public port and no internet-egress network.
-Its health check requires the approved model to be visible.
+Its health check requires the approved model to be visible and its full stored manifest SHA256 to
+match.
 
 Core depends on `embedding-model` being healthy. A missing, corrupt, or unapproved model therefore
 prevents Core startup instead of silently producing an incomplete index.
@@ -109,12 +111,12 @@ profile.
 ## Acceptance Gates
 
 1. Focused tests prove 1024-dimensional insert, replacement, and similarity search routing.
-2. Compose tests prove immutable image pinning, model ID verification, network isolation, no host
-   port, bounded resources, and Core's healthy dependency.
+2. Compose tests prove immutable image pinning, full model-manifest SHA256 verification, network
+   isolation, no host port, bounded resources, and Core's healthy dependency.
 3. Full `npm run verify` passes.
 4. Exact-SHA Core and AI Worker GitHub checks pass.
 5. On the VPS, repository, Core image, and AI Worker image report the same approved SHA.
-6. Ollama reports the approved model ID and returns a 1024-dimensional unit vector.
+6. Ollama reports the approved model-manifest SHA256 and returns a 1024-dimensional unit vector.
 7. The authorized wiki space reaches `synced`; event, document, reindex, and memory queues and DLQs
    all reach zero.
 8. Every latest successful wiki snapshot has fragments for the Qwen3 profile.

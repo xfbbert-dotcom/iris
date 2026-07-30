@@ -16,7 +16,8 @@ Qwen3-Embedding-0.6B, Node test runner.
 
 - Do not change the answer-generation or memory-extraction provider.
 - Do not expose Ollama on a host, edge, or public port.
-- Pin the Ollama image digest and verify model ID `ac6da0dfba84`.
+- Pin the Ollama image digest and verify the full model-manifest SHA256
+  `ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d`.
 - Store 1024-dimensional vectors natively; do not pad them to 1536 dimensions.
 - Keep Iris global runtime disabled and Caddy stopped until all internal acceptance gates pass.
 - Preserve existing Gemini profile data for rollback.
@@ -103,9 +104,16 @@ assert.equal(
   "service_healthy",
 );
 assert.equal(compose.services.core.environment.IRIS_EMBEDDING_DIMENSIONS, "1024");
+assert.equal(
+  compose.services["embedding-model"].environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256,
+  "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+);
 ```
 
-Also require the approved model tag and ID in `ci.env` and `.env.pilot.example`.
+Also require the approved model tag and full manifest SHA256 in `ci.env` and
+`.env.pilot.example`. Update the existing model-egress exclusivity assertion so only
+`ai-worker` and the one-shot `embedding-model-init` may join that network; the long-running
+`embedding-model` must still be rejected from it.
 
 - [ ] **Step 2: Run the pilot Compose tests and verify RED**
 
@@ -119,10 +127,15 @@ Expected: failures report missing embedding services and 1024 configuration.
 
 - [ ] **Step 3: Add seed and runtime services**
 
-Use the pinned Ollama image. The seed service starts a temporary server, reuses a cached model or
-pulls it, verifies the ID, and exits. The runtime service mounts the same volume, joins only
-`backend`, exposes no port, allows one parallel request, and keeps the model for 30 minutes.
-Make Core depend on its healthy state.
+Use image
+`ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a`
+and model `qwen3-embedding:0.6b`. The seed service starts a temporary server, reuses a cached model
+or pulls it, verifies the full stored manifest SHA256 with `sha256sum`, and exits. The runtime
+service mounts the same volume, joins only `backend`, exposes no port, has a 1536 MiB memory limit
+and 1.5 CPU limit, allows one parallel request, and keeps the model for 30 minutes. Its health
+check must verify both server availability and the full stored manifest SHA256. Configure Core
+with base URL `http://embedding-model:11434/v1`, the approved model tag, and 1024 dimensions, and
+make Core depend on the runtime service's healthy state.
 
 - [ ] **Step 4: Run the pilot Compose tests and verify GREEN**
 
