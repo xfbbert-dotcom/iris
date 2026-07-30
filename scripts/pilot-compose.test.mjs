@@ -615,6 +615,11 @@ test("makes local embedding migration commands evidence-first and fail closed", 
     localEmbeddingMigrationScript,
     /\/internal\/answer-drafts[\s\S]*?allowedFragments/u,
   );
+  assert.match(
+    localEmbeddingMigrationScript,
+    /request\("POST", "\/internal\/answer-drafts", \{[\s\S]*?\}, \{ requirePayloadOk: false \}\)/u,
+    "answer acceptance must use the answer-draft success contract, which has no top-level ok field",
+  );
   assert.match(localEmbeddingMigrationScript, /IRIS_LIFE_ENGINE_MARKER/u);
   assert.match(
     localEmbeddingMigrationScript,

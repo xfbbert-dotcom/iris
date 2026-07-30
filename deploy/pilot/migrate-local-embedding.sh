@@ -260,7 +260,7 @@ core_operation() {
           question: "Return the approved Life Engine marker only.",
           chatId,
           liveChatMessages: [],
-        });
+        }, { requirePayloadOk: false });
         if (typeof payload.answerText !== "string" || !payload.answerText.includes(marker)) {
           throw new Error("Life Engine marker was not retrieved");
         }
