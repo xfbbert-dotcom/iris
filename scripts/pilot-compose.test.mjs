@@ -425,6 +425,70 @@ test("requires fail-closed local embedding profile migration operations", () => 
   );
 });
 
+test("makes local embedding migration commands evidence-first and fail closed", () => {
+  const migration = internalRolloutRunbook.slice(
+    internalRolloutRunbook.indexOf("## Local Embedding Profile Migration"),
+    internalRolloutRunbook.indexOf("### Controlled Daily Pilot Profile"),
+  );
+
+  assert.match(
+    migration,
+    /docker @compose ps --all --format json embedding-model-init/u,
+    "completed seed inspection must include stopped Compose services",
+  );
+  assert.match(
+    migration,
+    /IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d/u,
+  );
+
+  assert.match(
+    migration,
+    /function Get-ReindexQueueDlqSnapshot[\s\S]*?\/internal\/status[\s\S]*?\/internal\/events\/status[\s\S]*?\/internal\/reindex\/status[\s\S]*?LLEN iris:events:raw:processing[\s\S]*?LLEN iris:documents:sync:processing[\s\S]*?LLEN iris:reindex:documents:processing/u,
+    "each reindex gate must inspect event, document, reindex, and processing state",
+  );
+  assert.match(migration, /function Wait-ReindexQueueDlqZero[\s\S]*?Get-ReindexQueueDlqSnapshot/u);
+  assert.match(
+    migration,
+    /while \(\$reindexPlan\.enqueuedCount -gt 0\) \{[\s\S]*?\/internal\/reindex\/document-profile[\s\S]*?\$reindexQueueSnapshot = Wait-ReindexQueueDlqZero[\s\S]*?if \(\$reindexPlan\.enqueuedCount -eq 0\) \{ break \}/u,
+    "zero planning results must pass a fresh queue/DLQ gate before breaking",
+  );
+  assert.match(
+    migration,
+    /\}\s*Assert-ReindexQueueDlqZero/u,
+    "migration must make a final zero-gate assertion after planning",
+  );
+
+  assert.match(migration, /function Get-SafeReindexFailureClassification/u);
+  assert.match(migration, /Where-Object \{ \$_\.job\.embeddingProfileId -ceq \$oldGeminiProfileId \}/u);
+  assert.match(migration, /Add-Content -LiteralPath \$operatorEvidencePath/u);
+  assert.match(migration, /Get-Content -LiteralPath \$operatorEvidencePath -Tail 1/u);
+  assert.match(
+    migration,
+    /Invoke-RestMethod -Method Delete -Headers \$irisHeaders[\s\S]*?\$deadLetter\.id/u,
+  );
+  assert.doesNotMatch(migration, /reviewedOldProfileDlqId/u);
+
+  const privateQuery = migration.slice(migration.indexOf("$disableProven = $false"));
+  const enableStart = privateQuery.indexOf("try {");
+  const enableRequest = privateQuery.indexOf("$enableForPrivateQuery = Invoke-RestMethod");
+  const finallyStart = privateQuery.indexOf("} finally {");
+  assert.ok(enableStart !== -1 && enableRequest > enableStart && finallyStart > enableRequest);
+  assert.match(
+    migration.slice(finallyStart),
+    /for \(\$disableAttempt = 1; \$disableAttempt -le 3; \$disableAttempt \+= 1\)[\s\S]*?\/internal\/runtime-control\/global[\s\S]*?durable[\s\S]*?& docker @compose stop caddy core[\s\S]*?throw/u,
+    "ambiguous private-runtime cleanup must retry disable, stop ingress and Core, then throw",
+  );
+
+  const coverageStart = migration.indexOf("$coverageSql");
+  const lifeEngineStart = migration.indexOf("$lifeEngineChatId");
+  assert.ok(coverageStart !== -1 && lifeEngineStart > coverageStart);
+  const coverage = migration.slice(coverageStart, lifeEngineStart);
+  assert.match(coverage, /authorized_wiki_document/u);
+  assert.match(coverage, /document_fragment_embeddings_1024/u);
+  assert.match(coverage, /not exists/u);
+  assert.match(coverage, /missing Qwen-profile fragment count is not zero/u);
+});
+
 test("proxies exactly the two public Feishu callback paths and keeps the fallback closed", () => {
   const matcher = /^\s*@feishu\s+path\s+([^\r\n]+)$/mu.exec(caddyfile);
   assert.notEqual(matcher, null, "Caddy must define one exact Feishu callback matcher");

@@ -56,7 +56,7 @@ Start only the model dependency and inspect its completed seed job before Core:
 $compose = @("compose", "--env-file", ".env.pilot", "--file", "deploy/pilot/docker-compose.yml")
 & docker @compose up --wait --wait-timeout 600 embedding-model
 if ($LASTEXITCODE -ne 0) { throw "Private embedding model did not become healthy" }
-$seed = @(& docker @compose ps --format json embedding-model-init | ConvertFrom-Json)
+$seed = @(& docker @compose ps --all --format json embedding-model-init | ConvertFrom-Json)
 if ($seed.Count -ne 1 -or $seed[0].ExitCode -ne 0) {
   throw "embedding-model-init did not exit successfully after full model-manifest verification"
 }
@@ -72,6 +72,7 @@ IRIS_EMBEDDING_BASE_URL=http://embedding-model:11434/v1
 IRIS_EMBEDDING_API_KEY=ollama
 IRIS_EMBEDDING_MODEL=qwen3-embedding:0.6b
 IRIS_EMBEDDING_DIMENSIONS=1024
+IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d
 ```
 
 After Core is recreated, require `/internal/reindex/status` to report the active profile exactly as
@@ -81,19 +82,88 @@ unhealthy Core ends the operation with Caddy stopped.
 ### Old-Profile DLQ Evidence
 
 List the reindex DLQ before any deletion. For every old Gemini-profile entry that cannot be replayed,
-record old-profile DLQ evidence in the incident record: its full DLQ ID, embedding profile ID,
-document snapshot ID, `enqueuedAt`, attempt count, failure classification, and capture timestamp.
-Do not record document bodies, prompts, vectors, secrets, or raw provider responses. Confirm that
-the new profile above is selected, then delete only the reviewed ID through the matching reindex
-endpoint. Deletion before evidence capture is a failed migration gate.
+record old-profile DLQ evidence in an operator-controlled evidence file before deleting it. The
+record must contain the full DLQ ID, embedding profile ID, snapshot ID, `enqueuedAt`, attempts,
+`failedAt`, a safe failure classification, and capture timestamp. It must never persist document
+bodies, prompts, vectors, secrets, or raw provider error bodies. Set
+`IRIS_OPERATOR_EVIDENCE_PATH` to an absolute operator-controlled NDJSON file before this step.
+Missing fields, an unknown classification, a failed evidence write/readback, or an unexpected delete
+response aborts before deletion.
 
 ```powershell
+function Get-SafeReindexFailureClassification {
+  param([string]$ErrorMessage)
+  if ([string]::IsNullOrWhiteSpace($ErrorMessage)) { return $null }
+  if ($ErrorMessage -match '(?i)permission|forbidden|unauthorized|denied') { return "permission" }
+  if ($ErrorMessage -match '(?i)timeout|timed out|deadline') { return "timeout" }
+  if ($ErrorMessage -match '(?i)rate limit|quota|429') { return "quota" }
+  if ($ErrorMessage -match '(?i)model|embedding|provider|ollama') { return "embedding_provider" }
+  if ($ErrorMessage -match '(?i)invalid|malformed|configuration|profile') { return "configuration" }
+  return "other"
+}
+
+$oldGeminiProfileId = "replace-with-exact-old-gemini-profile-id"
+if ([string]::IsNullOrWhiteSpace($oldGeminiProfileId) -or $oldGeminiProfileId -notmatch '(?i)gemini') {
+  throw "Set IRIS old Gemini embedding profile ID exactly before DLQ deletion"
+}
+$operatorEvidencePath = $env:IRIS_OPERATOR_EVIDENCE_PATH
+if ([string]::IsNullOrWhiteSpace($operatorEvidencePath) -or
+    -not [System.IO.Path]::IsPathFullyQualified($operatorEvidencePath)) {
+  throw "IRIS_OPERATOR_EVIDENCE_PATH must be an absolute operator-controlled evidence file"
+}
+$operatorEvidenceDirectory = Split-Path -Parent $operatorEvidencePath
+if ([string]::IsNullOrWhiteSpace($operatorEvidenceDirectory)) {
+  throw "IRIS_OPERATOR_EVIDENCE_PATH must include a parent directory"
+}
+New-Item -ItemType Directory -Force -Path $operatorEvidenceDirectory | Out-Null
+
 $oldProfileDlq = Invoke-RestMethod -Headers $irisHeaders `
   -Uri "http://localhost:3000/internal/reindex/dead-letters?limit=100"
-$oldProfileDlq
-$reviewedOldProfileDlqId = "replace-with-recorded-old-profile-dlq-id"
-Invoke-RestMethod -Method Delete -Headers $irisHeaders `
-  -Uri "http://localhost:3000/internal/reindex/dead-letters/$reviewedOldProfileDlqId"
+if ($oldProfileDlq.ok -ne $true) { throw "Could not list reindex DLQ" }
+$oldGeminiDeadLetters = @($oldProfileDlq.deadLetters | Where-Object { $_.job.embeddingProfileId -ceq $oldGeminiProfileId })
+foreach ($deadLetter in $oldGeminiDeadLetters) {
+  $requiredFields = @(
+    [string]$deadLetter.id,
+    [string]$deadLetter.job.embeddingProfileId,
+    [string]$deadLetter.job.documentSnapshotId,
+    [string]$deadLetter.job.enqueuedAt,
+    [string]$deadLetter.failedAt
+  )
+  if (@($requiredFields | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
+    throw "Old Gemini DLQ entry is missing required evidence fields"
+  }
+  try { [int64]$attempts = [int64]$deadLetter.job.attempts } catch { throw "Old Gemini DLQ attempts is invalid" }
+  if ($attempts -lt 0) { throw "Old Gemini DLQ attempts is invalid" }
+  $failureClassification = Get-SafeReindexFailureClassification $deadLetter.errorMessage
+  if ([string]::IsNullOrWhiteSpace($failureClassification)) {
+    throw "Old Gemini DLQ failure classification is unavailable"
+  }
+
+  $evidenceRecord = [ordered]@{
+    schemaVersion = 1
+    recordedAt = (Get-Date).ToUniversalTime().ToString("o")
+    deadLetterId = [string]$deadLetter.id
+    embeddingProfileId = [string]$deadLetter.job.embeddingProfileId
+    documentSnapshotId = [string]$deadLetter.job.documentSnapshotId
+    enqueuedAt = [string]$deadLetter.job.enqueuedAt
+    attempts = $attempts
+    failedAt = [string]$deadLetter.failedAt
+    failureClassification = $failureClassification
+  }
+  Add-Content -LiteralPath $operatorEvidencePath -Value ($evidenceRecord | ConvertTo-Json -Compress)
+  $writtenEvidence = Get-Content -LiteralPath $operatorEvidencePath -Tail 1 | ConvertFrom-Json
+  if ($writtenEvidence.deadLetterId -cne $deadLetter.id -or
+      $writtenEvidence.embeddingProfileId -cne $oldGeminiProfileId -or
+      [string]::IsNullOrWhiteSpace([string]$writtenEvidence.failureClassification)) {
+    throw "Old Gemini DLQ evidence write verification failed"
+  }
+
+  $deleteResult = Invoke-RestMethod -Method Delete -Headers $irisHeaders `
+    -Uri "http://localhost:3000/internal/reindex/dead-letters/$($deadLetter.id)"
+  if ($deleteResult.ok -ne $true -or $deleteResult.status -cne "deleted") {
+    throw "Old Gemini DLQ delete was not confirmed"
+  }
+}
 ```
 
 ### Bounded Full Reindex
@@ -105,6 +175,61 @@ does not reach an empty plan.
 
 ```powershell
 $profileId = "openai-compatible:qwen3-embedding:0.6b:1024"
+function Get-ReindexQueueDlqSnapshot {
+  $status = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/status"
+  $events = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/events/status"
+  $reindex = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/reindex/status"
+
+  [long]$eventProcessing = & docker @compose exec -T redis redis-cli LLEN iris:events:raw:processing
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read raw-event processing list" }
+  [long]$documentProcessing = & docker @compose exec -T redis redis-cli LLEN iris:documents:sync:processing
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read document-sync processing list" }
+  [long]$reindexProcessing = & docker @compose exec -T redis redis-cli LLEN iris:reindex:documents:processing
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read document-reindex processing list" }
+
+  [pscustomobject]@{
+    EventOk = ($events.ok -eq $true -and $events.enabled -eq $true -and $events.running -eq $true)
+    DocumentOk = ($status.components.documentSync.ok -eq $true -and $status.components.documentSync.enabled -eq $true -and $status.components.documentSync.running -eq $true)
+    ReindexOk = ($reindex.ok -eq $true -and $reindex.enabled -eq $true -and $reindex.running -eq $true -and $reindex.activeEmbeddingProfileId -ceq $profileId)
+    QueueCounts = @(
+      [long]$events.pendingEventCount,
+      $eventProcessing,
+      [long]$events.deadLetterEventCount,
+      [long]$status.components.documentSync.pendingJobCount,
+      $documentProcessing,
+      [long]$status.components.documentSync.deadLetterJobCount,
+      [long]$status.components.reindex.pendingJobCount,
+      $reindexProcessing,
+      [long]$status.components.reindex.deadLetterJobCount
+    )
+  }
+}
+
+function Assert-ReindexQueueDlqZero {
+  param($Snapshot)
+  if ($Snapshot.EventOk -ne $true -or $Snapshot.DocumentOk -ne $true -or $Snapshot.ReindexOk -ne $true) {
+    throw "Event, document-sync, or reindex status is not healthy for the selected profile"
+  }
+  if (@($Snapshot.QueueCounts | Where-Object { [long]$_ -ne 0 }).Count -ne 0) {
+    throw "Event/document/reindex queue or DLQ zero gate failed"
+  }
+}
+
+function Wait-ReindexQueueDlqZero {
+  $deadline = (Get-Date).AddMinutes(30)
+  do {
+    $snapshot = Get-ReindexQueueDlqSnapshot
+    try {
+      Assert-ReindexQueueDlqZero $snapshot
+      return $snapshot
+    } catch {
+      $lastGateError = $_
+      Start-Sleep -Seconds 2
+    }
+  } while ((Get-Date) -lt $deadline)
+  throw "Reindex queue/DLQ zero gate did not pass: $lastGateError"
+}
+
 $reindexPlan = [pscustomobject]@{ enqueuedCount = 1 }
 $reindexBatch = 0
 while ($reindexPlan.enqueuedCount -gt 0) {
@@ -118,36 +243,50 @@ while ($reindexPlan.enqueuedCount -gt 0) {
   if ($reindexPlan.ok -ne $true -or $reindexPlan.enqueuedCount -lt 0) {
     throw "Profile reindex plan failed"
   }
+  $reindexQueueSnapshot = Wait-ReindexQueueDlqZero
   if ($reindexPlan.enqueuedCount -eq 0) { break }
-
-  $deadline = (Get-Date).AddMinutes(30)
-  do {
-    Start-Sleep -Seconds 2
-    $status = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/status"
-    $reindex = Invoke-RestMethod -Headers $irisHeaders -Uri "http://localhost:3000/internal/reindex/status"
-    $queueCounts = @(
-      [long]$status.components.eventWorker.pendingEventCount,
-      [long]$status.components.eventWorker.deadLetterEventCount,
-      [long]$status.components.documentSync.pendingJobCount,
-      [long]$status.components.documentSync.deadLetterJobCount,
-      [long]$status.components.reindex.pendingJobCount,
-      [long]$status.components.reindex.deadLetterJobCount
-    )
-    if ($status.status -ne "healthy" -or $reindex.activeEmbeddingProfileId -cne $profileId) {
-      throw "Reindex status is not healthy for the selected profile"
-    }
-  } while ((@($queueCounts | Where-Object { $_ -ne 0 })).Count -ne 0 -and (Get-Date) -lt $deadline)
-  if ((@($queueCounts | Where-Object { $_ -ne 0 })).Count -ne 0) {
-    throw "Reindex batch did not drain before its deadline"
-  }
 }
+Assert-ReindexQueueDlqZero (Get-ReindexQueueDlqSnapshot)
 ```
 
 Before ingress, record zero queue and DLQ counts for event, document-sync, and reindex, and verify
-every latest successful wiki snapshot has fragments under the exact Qwen profile. Run one internal
-Life Engine retrieval question using a unique marker that exists only in its authorized page. The
-result must return that marker, and the live Feishu permission guard must allow the source at answer
-time. Keep Caddy stopped for this query; Feishu-native related-knowledge UI is not Iris evidence.
+every latest successful authorized-wiki snapshot has fragments under the exact Qwen profile. The
+following query is content-free and must return exactly one zero before Life Engine acceptance:
+
+```powershell
+if ($profileId -notmatch '^[A-Za-z0-9:._-]+$') { throw "Selected profile ID is unsafe for coverage query" }
+$coverageSql = @"
+with latest_successful_snapshots as (
+  select distinct on (s.document_source_id) s.id
+  from document_snapshots s
+  join document_sources ds on ds.id = s.document_source_id
+  where s.fetch_status = 'succeeded'
+    and ds.source_type = 'authorized_wiki_document'
+  order by s.document_source_id asc, s.fetched_at desc, s.id asc
+)
+select count(*)
+from latest_successful_snapshots s
+where not exists (
+  select 1
+  from document_fragments f
+  join document_fragment_embeddings_1024 e on e.document_fragment_id = f.id
+  where f.document_snapshot_id = s.id
+    and f.embedding_profile_id = '$profileId'
+    and e.embedding_profile_id = '$profileId'
+);
+"@
+$missingQwenProfileFragmentCount = @($coverageSql | & docker @compose exec -T postgres sh -ec 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At')
+if ($LASTEXITCODE -ne 0 -or $missingQwenProfileFragmentCount.Count -ne 1 -or
+    $missingQwenProfileFragmentCount[0].Trim() -notmatch '^\d+$' -or
+    [long]$missingQwenProfileFragmentCount[0].Trim() -ne 0) {
+  throw "Latest successful authorized-wiki missing Qwen-profile fragment count is not zero"
+}
+```
+
+Run one internal Life Engine retrieval question using a unique marker that exists only in its
+authorized page. The result must return that marker, and the live Feishu permission guard must allow
+the source at answer time. Keep Caddy stopped for this query; Feishu-native related-knowledge UI is
+not Iris evidence.
 
 `/internal/answer-drafts` obeys runtime control, so authorize one private request while Caddy remains
 stopped, then durably disable it again. Replace the placeholders with the approved pilot chat, the
@@ -157,10 +296,11 @@ authorized source ID, and a marker that is absent from the question and live cha
 $lifeEngineChatId = "oc_approved_pilot_group"
 $lifeEngineSourceId = "authorized-life-engine-source-id"
 $lifeEngineMarker = "IRIS-LIFE-ENGINE-UNIQUE-MARKER"
-$enableForPrivateQuery = Invoke-RestMethod -Method Post -Headers $irisHeaders `
-  -Uri "http://localhost:3000/internal/runtime-control/global" `
-  -ContentType "application/json" -Body '{"enabled":true}'
+$disableProven = $false
 try {
+  $enableForPrivateQuery = Invoke-RestMethod -Method Post -Headers $irisHeaders `
+    -Uri "http://localhost:3000/internal/runtime-control/global" `
+    -ContentType "application/json" -Body '{"enabled":true}'
   if ($enableForPrivateQuery.globalEnabled -ne $true -or $enableForPrivateQuery.durable -ne $true) {
     throw "Could not durably authorize the private retrieval query"
   }
@@ -176,11 +316,28 @@ try {
     throw "Live Feishu permission guard did not allow the expected authorized source"
   }
 } finally {
-  $disableAfterPrivateQuery = Invoke-RestMethod -Method Post -Headers $irisHeaders `
-    -Uri "http://localhost:3000/internal/runtime-control/global" `
-    -ContentType "application/json" -Body '{"enabled":false}'
-  if ($disableAfterPrivateQuery.globalEnabled -ne $false -or $disableAfterPrivateQuery.durable -ne $true) {
-    throw "Could not durably return the private retrieval query to fail-closed state"
+  for ($disableAttempt = 1; $disableAttempt -le 3; $disableAttempt += 1) {
+    try {
+      $disableAfterPrivateQuery = Invoke-RestMethod -Method Post -Headers $irisHeaders `
+        -Uri "http://localhost:3000/internal/runtime-control/global" `
+        -ContentType "application/json" -Body '{"enabled":false}'
+      if ($disableAfterPrivateQuery.globalEnabled -eq $false -and $disableAfterPrivateQuery.durable -eq $true) {
+        $disableProven = $true
+        break
+      }
+    } catch {
+      $disableError = $_
+    }
+    Start-Sleep -Seconds 2
+  }
+  if (-not $disableProven) {
+    & docker @compose stop caddy core
+    $stopExitCode = $LASTEXITCODE
+    $stillRunning = @(& docker @compose ps --status running --services)
+    if ($stopExitCode -ne 0 -or $stillRunning -contains "caddy" -or $stillRunning -contains "core") {
+      throw "Could not prove durable disable and could not stop both Caddy and Core"
+    }
+    throw "Could not prove global runtime false and durable after three attempts: $disableError"
   }
 }
 ```
