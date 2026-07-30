@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 const compose = loadPilotCompose();
+const pilotComposeConfig = renderPilotComposeConfig();
 const acceptanceRunbook = readFileSync(
   "docs/runbooks/iris-automatic-memory-extraction-acceptance.md",
   "utf8",
@@ -112,6 +113,13 @@ test("keeps model services private with dedicated model egress", () => {
   }
 
   assert.match(embeddingModel.image, /@sha256:[a-f0-9]{64}$/u);
+  assert.equal(embeddingModelInit.image, embeddingModel.image);
+  assert.equal(embeddingModelInit.ports, undefined);
+  assert.deepEqual(Object.keys(embeddingModelInit.environment).sort(), [
+    "IRIS_EMBEDDING_MODEL",
+    "IRIS_EMBEDDING_MODEL_MANIFEST_SHA256",
+    "OLLAMA_HOST",
+  ]);
   assert.equal(embeddingModel.ports, undefined);
   assert.deepEqual(embeddingModel.networks, { backend: null });
   assert.deepEqual(embeddingModelInit.networks, { "model-egress": null });
@@ -128,11 +136,37 @@ test("keeps model services private with dedicated model egress", () => {
   assert.equal(embeddingModel.deploy.resources.limits.cpus, 1.5);
   assert.equal(embeddingModel.environment.OLLAMA_NUM_PARALLEL, "1");
   assert.equal(embeddingModel.environment.OLLAMA_KEEP_ALIVE, "30m");
+  assert.equal(embeddingModel.environment.OLLAMA_MAX_LOADED_MODELS, "1");
   assert.equal(
     embeddingModel.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256,
     "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
   );
-  assert.match(embeddingModel.healthcheck.test.join(" "), /sha256sum/u);
+  const runtimeHealthcheck = embeddingModel.healthcheck.test.join(" ");
+  assert.match(runtimeHealthcheck, /OLLAMA_HOST=127\.0\.0\.1:11434 ollama list/u);
+  assert.match(runtimeHealthcheck, /sha256sum/u);
+  assert.ok(
+    pilotComposeConfig.includes("model_name=$${IRIS_EMBEDDING_MODEL%:*}"),
+    "manifest construction must extract the model name",
+  );
+  assert.ok(
+    pilotComposeConfig.includes("model_tag=$${IRIS_EMBEDDING_MODEL#*:}"),
+    "manifest construction must extract the model tag",
+  );
+  assert.equal(
+    pilotComposeConfig.split(
+      "manifest=\"/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}\"",
+    ).length - 1,
+    2,
+    "seed and runtime checks must use the name/tag manifest path",
+  );
+  assert.ok(
+    pilotComposeConfig.includes("for attempt in $$(seq 1 60); do"),
+    "initializer readiness must be bounded to 60 attempts",
+  );
+  assert.ok(
+    pilotComposeConfig.includes("cat \"$$ollama_log\" >&2 || true"),
+    "initializer must emit its server log on readiness failure",
+  );
   assert.deepEqual(embeddingModel.logging, {
     driver: "json-file",
     options: { "max-file": "5", "max-size": "10m" },
@@ -718,6 +752,27 @@ function loadPilotCompose(envFile = "deploy/pilot/ci.env", overrides = {}) {
     throw new Error(`Unable to render pilot Compose config: ${result.stderr || result.stdout}`);
   }
   return JSON.parse(result.stdout);
+}
+
+function renderPilotComposeConfig(envFile = "deploy/pilot/ci.env") {
+  const result = spawnSync(
+    process.platform === "win32" ? "docker.exe" : "docker",
+    [
+      "compose",
+      "--env-file",
+      envFile,
+      "--file",
+      "deploy/pilot/docker-compose.yml",
+      "config",
+      "--no-interpolate",
+    ],
+    { encoding: "utf8" },
+  );
+
+  if (result.status !== 0) {
+    throw new Error(`Unable to render pilot Compose config: ${result.stderr || result.stdout}`);
+  }
+  return result.stdout;
 }
 
 function readEnvAssignment(contents, name) {

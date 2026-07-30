@@ -192,11 +192,23 @@ services:
       IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
     entrypoint: ["/bin/sh", "-ec"]
     command: |
-      ollama serve &
+      ollama_log=/tmp/ollama-server.log
+      ollama serve >"$$ollama_log" 2>&1 &
       server_pid=$$!
-      trap 'kill "$$server_pid"; wait "$$server_pid"' EXIT
-      until ollama list >/dev/null 2>&1; do sleep 1; done
-      manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${IRIS_EMBEDDING_MODEL}"
+      cleanup() {
+        if kill -0 "$$server_pid" 2>/dev/null; then kill "$$server_pid" || true; fi
+        wait "$$server_pid" 2>/dev/null || true
+      }
+      trap cleanup EXIT
+      ready=false
+      for attempt in $$(seq 1 60); do
+        if ollama list >/dev/null 2>&1; then ready=true; break; fi
+        sleep 1
+      done
+      if [ "$$ready" != true ]; then cat "$$ollama_log" >&2 || true; exit 1; fi
+      model_name=$${IRIS_EMBEDDING_MODEL%:*}
+      model_tag=$${IRIS_EMBEDDING_MODEL#*:}
+      manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}"
       if [ ! -f "$$manifest" ]; then ollama pull "$$IRIS_EMBEDDING_MODEL"; fi
       printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c -
     volumes:
@@ -212,6 +224,7 @@ services:
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_NUM_PARALLEL: "1"
       OLLAMA_KEEP_ALIVE: 30m
+      OLLAMA_MAX_LOADED_MODELS: "1"
       IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
       IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
     depends_on:
@@ -221,8 +234,10 @@ services:
       test:
         - CMD-SHELL
         - >-
-          ollama list >/dev/null 2>&1 &&
-          manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${IRIS_EMBEDDING_MODEL}" &&
+          model_name=$${IRIS_EMBEDDING_MODEL%:*} &&
+          model_tag=$${IRIS_EMBEDDING_MODEL#*:} &&
+          OLLAMA_HOST=127.0.0.1:11434 ollama list >/dev/null 2>&1 &&
+          manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}" &&
           test -f "$$manifest" &&
           printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c -
       interval: 10s
