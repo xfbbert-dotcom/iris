@@ -589,7 +589,7 @@ assert_fragment_coverage() {
   local coverage_sql
   coverage_sql="
 with latest_successful_snapshots as (
-  select distinct on (s.document_source_id) s.id
+  select distinct on (s.document_source_id) s.id, s.document_source_id, s.body_text
   from document_snapshots s
   where s.fetch_status = 'succeeded'
   order by s.document_source_id asc, s.fetched_at desc, s.id asc

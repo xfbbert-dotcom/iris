@@ -597,6 +597,11 @@ test("makes local embedding migration commands evidence-first and fail closed", 
   );
   assert.match(
     localEmbeddingMigrationScript,
+    /select distinct on \(s\.document_source_id\) s\.id,\s*s\.document_source_id,\s*s\.body_text/u,
+    "coverage must project every snapshot column used by the outer authorization and body gates",
+  );
+  assert.match(
+    localEmbeddingMigrationScript,
     /ds\.can_use_for_answering = true[\s\S]*?ds\.permission_state in \('unknown', 'readable'\)[\s\S]*?s\.body_text is not null[\s\S]*?s\.body_text !~ '\^\[\[:space:\]\]\*\$'/u,
     "coverage must exclude disabled, denied, stale, and empty sources",
   );

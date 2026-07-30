@@ -350,6 +350,21 @@ delivery mistakes while implementing it.
 
 ## Test Architecture
 
+### Verify every cross-CTE column dependency in migration SQL
+
+- **Failure:** The local-embedding rollout rebuilt every vector successfully, then its coverage
+  query failed because the CTE projected only `id` while the outer authorization and body gates
+  referenced `document_source_id` and `body_text`.
+- **Root cause:** Static deployment tests checked ordering, filters, and table names but did not
+  assert that every column consumed outside the CTE was part of its projection.
+- **Prevention rule:** For operator SQL embedded in scripts, test both the semantic ordering and
+  the exact projection required by each outer join or predicate.
+- **Guard:** The pilot deployment contract requires
+  `select distinct on (s.document_source_id) s.id, s.document_source_id, s.body_text` before the
+  outer source authorization and body gates.
+- **Exit condition:** The focused deployment contract, full verification, exact-SHA CI, corrected
+  production coverage query, and remaining private retrieval gates all pass.
+
 ### Keep test doubles aligned with fail-closed interfaces
 
 - **Failure:** A runtime assembly test returned `repository_unavailable` after the feedback worker
