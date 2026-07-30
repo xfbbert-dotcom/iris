@@ -167,10 +167,14 @@ test("keeps model services private with dedicated model egress", () => {
     {
       type: "volume",
       source: "iris_embedding_models",
-      target: "/root/.ollama",
+      target: "/var/lib/iris-ollama",
       read_only: true,
     },
   ]);
+  assert.equal(
+    embeddingModelVerify.environment.IRIS_EMBEDDING_MODEL_ROOT,
+    "/var/lib/iris-ollama/models",
+  );
   assert.equal(embeddingModel.deploy.resources.limits.memory, "1610612736");
   assert.equal(embeddingModel.deploy.resources.limits.cpus, 1.5);
   assert.equal(embeddingModel.environment.OLLAMA_NUM_PARALLEL, "1");
@@ -470,11 +474,13 @@ test("makes local embedding migration commands evidence-first and fail closed", 
     internalRolloutRunbook.indexOf("## Local Embedding Profile Migration"),
     internalRolloutRunbook.indexOf("### Controlled Daily Pilot Profile"),
   );
+  const oldProfileDlqStart = migration.indexOf("### Old-Profile DLQ Evidence");
+  const bootstrap = migration.slice(0, oldProfileDlqStart);
 
   assert.match(
-    migration,
-    /docker @compose ps --all --format json embedding-model-init/u,
-    "completed seed inspection must include stopped Compose services",
+    bootstrap,
+    /assert_completed_service "embedding-model-init"/u,
+    "completed seed inspection must include the stopped one-shot service",
   );
   assert.match(
     migration,
@@ -528,37 +534,53 @@ test("makes local embedding migration commands evidence-first and fail closed", 
   assert.match(coverage, /not exists/u);
   assert.match(coverage, /missing Qwen-profile fragment count is not zero/u);
 
-  const headersDefinition = migration.indexOf("$irisHeaders =");
-  const firstAuthenticatedRequest = migration.indexOf("-Headers $irisHeaders");
-  const oldProfileDlqStart = migration.indexOf("### Old-Profile DLQ Evidence");
-  const activeProfileAssertion = migration.indexOf(
-    '$reindexStatus.activeEmbeddingProfileId -cne $profileId',
-  );
-  assert.ok(headersDefinition !== -1 && firstAuthenticatedRequest > headersDefinition);
-  assert.ok(activeProfileAssertion !== -1 && activeProfileAssertion < oldProfileDlqStart);
-  assert.match(
-    migration,
-    /IRIS_INTERNAL_API_TOKEN[\s\S]*?single visible ASCII token[\s\S]*?\$irisHeaders = @\{ authorization = "Bearer \$env:IRIS_INTERNAL_API_TOKEN" \}/u,
+  assert.match(bootstrap, /```bash\s+#!\/usr\/bin\/env bash/u);
+  assert.doesNotMatch(bootstrap, /```powershell|\bpwsh\b|\bPowerShell\b/u);
+  assert.match(bootstrap, /process\.env\.IRIS_INTERNAL_API_TOKEN/u);
+  assert.doesNotMatch(
+    bootstrap,
+    /\$env:IRIS_INTERNAL_API_TOKEN|\$IRIS_INTERNAL_API_TOKEN|\$\{IRIS_INTERNAL_API_TOKEN/u,
+    "the VPS host shell must never read or interpolate the internal bearer token",
   );
   assert.match(
-    migration,
-    /\$runtimeBeforeMigration = Invoke-RestMethod[\s\S]*?\/internal\/runtime-control\/status[\s\S]*?\$disableBeforeMigration = Invoke-RestMethod[\s\S]*?"enabled":false[\s\S]*?durable/u,
+    bootstrap,
+    /function requireInternalToken\(\)[\s\S]*?single visible ASCII token/u,
   );
   assert.match(
-    migration,
-    /docker @compose stop caddy[\s\S]*?Assert-CaddyStopped[\s\S]*?\$backupPath =[\s\S]*?iris-backup[\s\S]*?Add-Content -LiteralPath \$operatorEvidencePath/u,
+    bootstrap,
+    /assert_caddy_stopped\(\)[\s\S]*?if ! running_services="\$\(compose_cmd ps --status running --services\)"; then[\s\S]*?return 1/u,
+    "a failed service-status query must not prove that Caddy is stopped",
   );
   assert.match(
-    migration,
+    bootstrap,
+    /compose_cmd config --format json \|[\s\S]*?compose_cmd run --rm --no-deps -T --entrypoint node core/u,
+    "rendered configuration must be validated inside Core without exposing its token",
+  );
+  assertMarkersInOrder(bootstrap, [
+    "trap fail_closed_cleanup EXIT",
+    'runtime_before_migration="$(read_runtime_state)"',
+    "disable_runtime",
+    "compose_cmd stop caddy",
+    "assert_caddy_stopped",
+    'backup_path="$(/usr/local/sbin/iris-backup',
+    "local_embedding_migration_backup",
+    "validate_rendered_config",
+    "compose_cmd up --detach --wait --wait-timeout 600 --force-recreate",
+    'assert_completed_service "embedding-model-init"',
+    'assert_completed_service "embedding-model-verify"',
+    "assert_active_profile",
+  ]);
+  assert.match(
+    bootstrap,
     /IRIS_EMBEDDING_BASE_URL[\s\S]*?http:\/\/embedding-model:11434\/v1[\s\S]*?IRIS_EMBEDDING_MODEL[\s\S]*?qwen3-embedding:0\.6b[\s\S]*?IRIS_EMBEDDING_DIMENSIONS[\s\S]*?1024/u,
   );
   assert.match(
-    migration,
-    /docker @compose up[\s\S]*?--force-recreate[\s\S]*?migrate[\s\S]*?embedding-model-verify[\s\S]*?core/u,
+    bootstrap,
+    /compose_cmd up[\s\S]*?--force-recreate[\s\S]*?migrate[\s\S]*?embedding-model-verify[\s\S]*?core/u,
   );
   assert.match(
-    migration,
-    /\} finally \{[\s\S]*?enabled":false[\s\S]*?docker @compose stop caddy[\s\S]*?Assert-CaddyStopped/u,
+    bootstrap,
+    /fail_closed_cleanup\(\)[\s\S]*?disable_runtime[\s\S]*?compose_cmd stop caddy[\s\S]*?assert_caddy_stopped[\s\S]*?compose_cmd stop core[\s\S]*?assert_core_stopped/u,
     "every bootstrap exit must re-disable runtime and prove Caddy stopped",
   );
   for (const redisMemoryGate of [
@@ -994,7 +1016,7 @@ async function waitForHttp(origin) {
 function assertMarkersInOrder(contents, markers) {
   let previousIndex = -1;
   for (const marker of markers) {
-    const markerIndex = contents.indexOf(marker);
+    const markerIndex = contents.indexOf(marker, previousIndex + 1);
     assert.ok(markerIndex > previousIndex, `${marker} must appear in order`);
     previousIndex = markerIndex;
   }

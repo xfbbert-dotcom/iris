@@ -54,12 +54,13 @@ Both one-shot jobs must complete successfully before Core can start. A model nam
 `ollama list`, a short digest, a successful pull without blob verification, or endpoint availability
 without the embedding-shape check is a failed gate.
 
-Run this bootstrap as one PowerShell block from the repository root. It validates the bearer token
-without printing it, captures and durably disables the current global state, proves Caddy stopped,
-creates the existing encrypted paired Postgres/Redis backup, records its path, validates the exact
-rendered embedding configuration, runs migrations, and force-recreates model verification and Core.
-Set `IRIS_OPERATOR_EVIDENCE_PATH` to an absolute operator-controlled NDJSON file first. Retain the
-previous provider settings in the approved rollback `.env.pilot` copy; do not edit historical
+Run this Bash block directly on the Ubuntu 24.04 VPS from the repository root. The host shell never
+reads the bearer token: authenticated requests run as Node processes inside Core, where the token is
+already present. The block captures and durably disables the current global state, proves Caddy
+stopped, creates the existing encrypted paired Postgres/Redis backup, records its path, validates the
+exact rendered embedding configuration, runs migrations, and force-recreates model verification and
+Core. Set `IRIS_OPERATOR_EVIDENCE_PATH` to an absolute operator-controlled NDJSON file first. Retain
+the previous provider settings in the approved rollback `.env.pilot` copy; do not edit historical
 profile rows or fragments.
 
 ```text
@@ -71,159 +72,272 @@ IRIS_EMBEDDING_DIMENSIONS=1024
 IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d
 ```
 
-```powershell
-$compose = @("compose", "--env-file", ".env.pilot", "--file", "deploy/pilot/docker-compose.yml")
-$profileId = "openai-compatible:qwen3-embedding:0.6b:1024"
-$irisHeaders = $null
+```bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
 
-function Assert-CaddyStopped {
-  $runningServices = @(& docker @compose ps --status running --services)
-  if ($LASTEXITCODE -ne 0 -or $runningServices -contains "caddy") {
-    throw "Caddy stopped state could not be proven"
-  }
+compose=(docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml)
+profile_id="openai-compatible:qwen3-embedding:0.6b:1024"
+
+compose_cmd() {
+  "${compose[@]}" "$@"
 }
 
-$operatorEvidencePath = $env:IRIS_OPERATOR_EVIDENCE_PATH
-$bootstrapComplete = $false
-try {
-  if ([string]::IsNullOrWhiteSpace($operatorEvidencePath) -or
-      -not [System.IO.Path]::IsPathFullyQualified($operatorEvidencePath)) {
-    throw "IRIS_OPERATOR_EVIDENCE_PATH must be an absolute operator-controlled evidence file"
-  }
-  $operatorEvidenceDirectory = Split-Path -Parent $operatorEvidencePath
-  if ([string]::IsNullOrWhiteSpace($operatorEvidenceDirectory)) {
-    throw "IRIS_OPERATOR_EVIDENCE_PATH must include a parent directory"
-  }
-  New-Item -ItemType Directory -Force -Path $operatorEvidenceDirectory | Out-Null
-
-  if ([string]::IsNullOrWhiteSpace($env:IRIS_INTERNAL_API_TOKEN) -or
-      $env:IRIS_INTERNAL_API_TOKEN -notmatch '^[\x21-\x2B\x2D-\x7E]+$') {
-    throw "IRIS_INTERNAL_API_TOKEN must be one single visible ASCII token without comma or whitespace"
-  }
-  $irisHeaders = @{ authorization = "Bearer $env:IRIS_INTERNAL_API_TOKEN" }
-
-  $runtimeBeforeMigration = Invoke-RestMethod -Headers $irisHeaders `
-    -Uri "http://localhost:3000/internal/runtime-control/status"
-  if ($runtimeBeforeMigration.ok -ne $true -or
-      $runtimeBeforeMigration.globalEnabled -isnot [bool] -or
-      $runtimeBeforeMigration.desiredGlobalEnabled -isnot [bool]) {
-    throw "Current global runtime state is unavailable or malformed"
-  }
-
-  $disableBeforeMigration = Invoke-RestMethod -Method Post -Headers $irisHeaders `
-    -Uri "http://localhost:3000/internal/runtime-control/global" `
-    -ContentType "application/json" -Body '{"enabled":false}'
-  if ($disableBeforeMigration.ok -ne $true -or
-      $disableBeforeMigration.globalEnabled -ne $false -or
-      $disableBeforeMigration.desiredGlobalEnabled -ne $false -or
-      $disableBeforeMigration.durable -ne $true) {
-    throw "Global runtime was not durably disabled"
-  }
-
-  & docker @compose stop caddy
-  if ($LASTEXITCODE -ne 0) { throw "Could not stop Caddy" }
-  Assert-CaddyStopped
-
-  $backupPath = [string](@(& /usr/local/sbin/iris-backup | Select-Object -Last 1))
-  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($backupPath) -or
-      -not [System.IO.Path]::IsPathFullyQualified($backupPath) -or
-      -not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
-    throw "Encrypted paired Postgres/Redis backup was not created"
-  }
-  Add-Content -LiteralPath $operatorEvidencePath -Value (([ordered]@{
-    schemaVersion = 1
-    recordedAt = (Get-Date).ToUniversalTime().ToString("o")
-    event = "local_embedding_migration_backup"
-    backupPath = $backupPath
-    previousGlobalEnabled = [bool]$runtimeBeforeMigration.globalEnabled
-    previousDesiredGlobalEnabled = [bool]$runtimeBeforeMigration.desiredGlobalEnabled
-  }) | ConvertTo-Json -Compress)
-  $backupEvidence = Get-Content -LiteralPath $operatorEvidencePath -Tail 1 | ConvertFrom-Json
-  if ($backupEvidence.event -cne "local_embedding_migration_backup" -or
-      $backupEvidence.backupPath -cne $backupPath) {
-    throw "Migration backup path evidence write verification failed"
-  }
-
-  $renderedComposeJson = @(& docker @compose config --format json) -join "`n"
-  if ($LASTEXITCODE -ne 0) { throw "Pilot Compose configuration could not be rendered" }
-  $renderedCompose = $renderedComposeJson | ConvertFrom-Json
-  $coreEmbedding = $renderedCompose.services.core.environment
-  $expectedEmbedding = [ordered]@{
-    IRIS_EMBEDDING_PROVIDER = "openai-compatible"
-    IRIS_EMBEDDING_BASE_URL = "http://embedding-model:11434/v1"
-    IRIS_EMBEDDING_API_KEY = "ollama"
-    IRIS_EMBEDDING_MODEL = "qwen3-embedding:0.6b"
-    IRIS_EMBEDDING_DIMENSIONS = "1024"
-  }
-  foreach ($entry in $expectedEmbedding.GetEnumerator()) {
-    if ([string]$coreEmbedding.($entry.Key) -cne $entry.Value) {
-      throw "Rendered Core embedding configuration is not the approved local profile"
-    }
-  }
-  $expectedManifestSha = "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d"
-  $expectedOllamaImage = "ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a"
-  $verifierEmbedding = $renderedCompose.services."embedding-model-verify".environment
-  if ($renderedCompose.services."embedding-model-init".environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 -cne $expectedManifestSha -or
-      $verifierEmbedding.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 -cne $expectedManifestSha -or
-      $verifierEmbedding.IRIS_EMBEDDING_BASE_URL -cne "http://embedding-model:11434/v1" -or
-      $verifierEmbedding.IRIS_EMBEDDING_MODEL -cne "qwen3-embedding:0.6b" -or
-      $verifierEmbedding.IRIS_EMBEDDING_DIMENSIONS -cne "1024" -or
-      $verifierEmbedding.IRIS_EMBEDDING_NORM_TOLERANCE -cne "0.001" -or
-      $renderedCompose.services."embedding-model-init".image -cne $expectedOllamaImage -or
-      $renderedCompose.services."embedding-model".image -cne $expectedOllamaImage) {
-    throw "Rendered model image or manifest contract is not approved"
-  }
-
-  & docker @compose up --detach --wait --wait-timeout 600 --force-recreate `
-    migrate embedding-model-init embedding-model embedding-model-verify core
-  if ($LASTEXITCODE -ne 0) {
-    throw "Migration, model verification, or Core recreation failed"
-  }
-  $seed = @(& docker @compose ps --all --format json embedding-model-init | ConvertFrom-Json)
-  if ($seed.Count -ne 1 -or $seed[0].ExitCode -ne 0) {
-    throw "embedding-model-init did not exit successfully after full cache verification"
-  }
-  $verifier = @(& docker @compose ps --all --format json embedding-model-verify | ConvertFrom-Json)
-  if ($verifier.Count -ne 1 -or $verifier[0].ExitCode -ne 0) {
-    throw "embedding-model-verify did not prove cache integrity and a valid unit embedding"
-  }
-  Assert-CaddyStopped
-
-  $reindexStatus = Invoke-RestMethod -Headers $irisHeaders `
-    -Uri "http://localhost:3000/internal/reindex/status"
-  if ($reindexStatus.ok -ne $true -or $reindexStatus.enabled -ne $true -or
-      $reindexStatus.running -ne $true -or
-      $reindexStatus.activeEmbeddingProfileId -cne $profileId) {
-    throw "Active embedding profile is not exactly $profileId"
-  }
-  $bootstrapComplete = $true
-} finally {
-  $cleanupDisableProven = $false
-  if ($null -ne $irisHeaders) {
-    try {
-      $disableAfterBootstrap = Invoke-RestMethod -Method Post -Headers $irisHeaders `
-        -Uri "http://localhost:3000/internal/runtime-control/global" `
-        -ContentType "application/json" -Body '{"enabled":false}'
-      $cleanupDisableProven = (
-        $disableAfterBootstrap.globalEnabled -eq $false -and
-        $disableAfterBootstrap.desiredGlobalEnabled -eq $false -and
-        $disableAfterBootstrap.durable -eq $true
-      )
-    } catch {
-      $cleanupDisableError = $_
-    }
-  }
-  & docker @compose stop caddy
-  $cleanupCaddyExitCode = $LASTEXITCODE
-  Assert-CaddyStopped
-  if (-not $cleanupDisableProven) {
-    & docker @compose stop core
-    if ($LASTEXITCODE -ne 0) { throw "Fail-closed cleanup could not stop Core" }
-    throw "Fail-closed cleanup stopped Core because durable disable was not proven: $cleanupDisableError"
-  }
-  if ($cleanupCaddyExitCode -ne 0) { throw "Fail-closed cleanup could not stop Caddy cleanly" }
+assert_caddy_stopped() {
+  local running_services
+  if ! running_services="$(compose_cmd ps --status running --services)"; then
+    echo "Caddy status could not be queried" >&2
+    return 1
+  fi
+  if grep -Fxq caddy <<<"${running_services}"; then
+    echo "Caddy stopped state could not be proven" >&2
+    return 1
+  fi
 }
-if (-not $bootstrapComplete) { throw "Local embedding migration bootstrap did not complete" }
+
+assert_core_stopped() {
+  local running_services
+  if ! running_services="$(compose_cmd ps --status running --services)"; then
+    echo "Core status could not be queried" >&2
+    return 1
+  fi
+  if grep -Fxq core <<<"${running_services}"; then
+    echo "Core stopped state could not be proven" >&2
+    return 1
+  fi
+}
+
+read_runtime_state() {
+  compose_cmd exec -T core node --input-type=module --eval '
+    function requireInternalToken() {
+      const token = process.env.IRIS_INTERNAL_API_TOKEN ?? "";
+      if (!/^[\x21-\x2B\x2D-\x7E]+$/.test(token)) {
+        throw new Error("IRIS_INTERNAL_API_TOKEN must be one single visible ASCII token without comma or whitespace");
+      }
+      return token;
+    }
+    const response = await fetch("http://127.0.0.1:3000/internal/runtime-control/status", {
+      headers: { authorization: `Bearer ${requireInternalToken()}` },
+    });
+    if (!response.ok) throw new Error(`Runtime status failed: ${response.status}`);
+    const body = await response.json();
+    if (
+      body.ok !== true ||
+      typeof body.globalEnabled !== "boolean" ||
+      typeof body.desiredGlobalEnabled !== "boolean"
+    ) {
+      throw new Error("Current global runtime state is unavailable or malformed");
+    }
+    process.stdout.write(`${body.globalEnabled}\t${body.desiredGlobalEnabled}\n`);
+  '
+}
+
+disable_runtime() {
+  compose_cmd exec -T core node --input-type=module --eval '
+    function requireInternalToken() {
+      const token = process.env.IRIS_INTERNAL_API_TOKEN ?? "";
+      if (!/^[\x21-\x2B\x2D-\x7E]+$/.test(token)) {
+        throw new Error("IRIS_INTERNAL_API_TOKEN must be one single visible ASCII token without comma or whitespace");
+      }
+      return token;
+    }
+    const response = await fetch("http://127.0.0.1:3000/internal/runtime-control/global", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${requireInternalToken()}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ enabled: false }),
+    });
+    if (!response.ok) throw new Error(`Runtime disable failed: ${response.status}`);
+    const body = await response.json();
+    if (
+      body.ok !== true ||
+      body.globalEnabled !== false ||
+      body.desiredGlobalEnabled !== false ||
+      body.durable !== true
+    ) {
+      throw new Error("Global runtime was not durably disabled");
+    }
+  '
+}
+
+assert_active_profile() {
+  compose_cmd exec -T core node --input-type=module --eval '
+    function requireInternalToken() {
+      const token = process.env.IRIS_INTERNAL_API_TOKEN ?? "";
+      if (!/^[\x21-\x2B\x2D-\x7E]+$/.test(token)) {
+        throw new Error("IRIS_INTERNAL_API_TOKEN must be one single visible ASCII token without comma or whitespace");
+      }
+      return token;
+    }
+    const expectedProfileId = process.argv[1];
+    const response = await fetch("http://127.0.0.1:3000/internal/reindex/status", {
+      headers: { authorization: `Bearer ${requireInternalToken()}` },
+    });
+    if (!response.ok) throw new Error(`Reindex status failed: ${response.status}`);
+    const body = await response.json();
+    if (
+      body.ok !== true ||
+      body.enabled !== true ||
+      body.running !== true ||
+      body.activeEmbeddingProfileId !== expectedProfileId
+    ) {
+      throw new Error(`Active embedding profile is not exactly ${expectedProfileId}`);
+    }
+  ' "$1"
+}
+
+validate_rendered_config() {
+  compose_cmd config --format json |
+    compose_cmd run --rm --no-deps -T --entrypoint node core \
+      --input-type=module --eval '
+        let raw = "";
+        for await (const chunk of process.stdin) raw += chunk;
+        const rendered = JSON.parse(raw);
+        const core = rendered.services.core.environment;
+        const verifier = rendered.services["embedding-model-verify"];
+        const seed = rendered.services["embedding-model-init"];
+        const model = rendered.services["embedding-model"];
+        const expectedManifestSha =
+          "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d";
+        const expectedOllamaImage =
+          "ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a";
+        const expectedCore = {
+          IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+          IRIS_EMBEDDING_BASE_URL: "http://embedding-model:11434/v1",
+          IRIS_EMBEDDING_API_KEY: "ollama",
+          IRIS_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+          IRIS_EMBEDDING_DIMENSIONS: "1024",
+        };
+        for (const [key, value] of Object.entries(expectedCore)) {
+          if (core[key] !== value) {
+            throw new Error("Rendered Core embedding configuration is not the approved local profile");
+          }
+        }
+        const cacheMount = verifier.volumes.find(
+          (volume) =>
+            volume.type === "volume" &&
+            volume.source === "iris_embedding_models" &&
+            volume.target === "/var/lib/iris-ollama" &&
+            volume.read_only === true,
+        );
+        if (
+          seed.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 !== expectedManifestSha ||
+          verifier.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 !== expectedManifestSha ||
+          verifier.environment.IRIS_EMBEDDING_BASE_URL !== "http://embedding-model:11434/v1" ||
+          verifier.environment.IRIS_EMBEDDING_MODEL !== "qwen3-embedding:0.6b" ||
+          verifier.environment.IRIS_EMBEDDING_DIMENSIONS !== "1024" ||
+          verifier.environment.IRIS_EMBEDDING_MODEL_ROOT !== "/var/lib/iris-ollama/models" ||
+          verifier.environment.IRIS_EMBEDDING_NORM_TOLERANCE !== "0.001" ||
+          seed.image !== expectedOllamaImage ||
+          model.image !== expectedOllamaImage ||
+          !cacheMount
+        ) {
+          throw new Error("Rendered model image, cache mount, or manifest contract is not approved");
+        }
+      '
+}
+
+assert_completed_service() {
+  local service="$1"
+  local ids
+  mapfile -t ids < <(compose_cmd ps --all --quiet "${service}")
+  if (( ${#ids[@]} != 1 )); then
+    echo "${service} does not have exactly one container" >&2
+    return 1
+  fi
+  if [[ "$(docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "${ids[0]}")" != "exited 0" ]]; then
+    echo "${service} did not exit successfully" >&2
+    return 1
+  fi
+}
+
+fail_closed_cleanup() {
+  local original_status=$?
+  local disable_proven=false
+  local caddy_stop_status=0
+  local caddy_stopped_status=0
+  local core_stopped_status=0
+  trap - EXIT
+  set +e
+
+  for attempt in 1 2 3; do
+    if disable_runtime; then
+      disable_proven=true
+      break
+    fi
+    sleep 2
+  done
+  compose_cmd stop caddy
+  caddy_stop_status=$?
+  assert_caddy_stopped
+  caddy_stopped_status=$?
+  if [[ "${disable_proven}" != true ]]; then
+    compose_cmd stop core
+    core_stopped_status=$?
+    if ! assert_core_stopped; then
+      core_stopped_status=1
+    fi
+  fi
+
+  if (( caddy_stop_status != 0 || caddy_stopped_status != 0 || core_stopped_status != 0 )); then
+    echo "FAIL-CLOSED RECOVERY INCOMPLETE: inspect Core and Caddy before proceeding" >&2
+    exit 1
+  fi
+  if [[ "${disable_proven}" != true ]]; then
+    echo "Fail-closed cleanup stopped Core because durable disable was not proven" >&2
+    exit 1
+  fi
+  exit "${original_status}"
+}
+trap fail_closed_cleanup EXIT
+
+operator_evidence_path="${IRIS_OPERATOR_EVIDENCE_PATH:-}"
+if [[ -z "${operator_evidence_path}" || "${operator_evidence_path}" != /* ]]; then
+  echo "IRIS_OPERATOR_EVIDENCE_PATH must be an absolute operator-controlled evidence file" >&2
+  exit 1
+fi
+operator_evidence_directory="$(dirname -- "${operator_evidence_path}")"
+install -d -m 700 -- "${operator_evidence_directory}"
+
+runtime_before_migration="$(read_runtime_state)"
+IFS=$'\t' read -r previous_global_enabled previous_desired_global_enabled \
+  <<<"${runtime_before_migration}"
+if [[ ! "${previous_global_enabled}" =~ ^(true|false)$ ||
+      ! "${previous_desired_global_enabled}" =~ ^(true|false)$ ]]; then
+  echo "Current global runtime state is malformed" >&2
+  exit 1
+fi
+
+disable_runtime
+compose_cmd stop caddy
+assert_caddy_stopped
+
+backup_path="$(/usr/local/sbin/iris-backup | tail -n 1)"
+if [[ ! "${backup_path}" =~ ^/[A-Za-z0-9._/-]+$ || ! -f "${backup_path}" ]]; then
+  echo "Encrypted paired Postgres/Redis backup was not created" >&2
+  exit 1
+fi
+recorded_at="$(date --utc +%Y-%m-%dT%H:%M:%S.%NZ)"
+evidence_record="$(printf \
+  '{"schemaVersion":1,"recordedAt":"%s","event":"local_embedding_migration_backup","backupPath":"%s","previousGlobalEnabled":%s,"previousDesiredGlobalEnabled":%s}' \
+  "${recorded_at}" "${backup_path}" "${previous_global_enabled}" \
+  "${previous_desired_global_enabled}")"
+printf '%s\n' "${evidence_record}" >>"${operator_evidence_path}"
+if [[ "$(tail -n 1 -- "${operator_evidence_path}")" != "${evidence_record}" ]]; then
+  echo "Migration backup path evidence write verification failed" >&2
+  exit 1
+fi
+
+validate_rendered_config
+compose_cmd up --detach --wait --wait-timeout 600 --force-recreate \
+  migrate embedding-model-init embedding-model embedding-model-verify core
+assert_completed_service "embedding-model-init"
+assert_completed_service "embedding-model-verify"
+assert_caddy_stopped
+assert_active_profile "${profile_id}"
 ```
 
 Do not continue to DLQ inspection unless that block succeeds. It leaves global runtime durably
