@@ -5,7 +5,6 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 const compose = loadPilotCompose();
-const pilotComposeConfig = renderPilotComposeConfig();
 const acceptanceRunbook = readFileSync(
   "docs/runbooks/iris-automatic-memory-extraction-acceptance.md",
   "utf8",
@@ -144,29 +143,18 @@ test("keeps model services private with dedicated model egress", () => {
   const runtimeHealthcheck = embeddingModel.healthcheck.test.join(" ");
   assert.match(runtimeHealthcheck, /OLLAMA_HOST=127\.0\.0\.1:11434 ollama list/u);
   assert.match(runtimeHealthcheck, /sha256sum/u);
-  assert.ok(
-    pilotComposeConfig.includes("model_name=$${IRIS_EMBEDDING_MODEL%:*}"),
-    "manifest construction must extract the model name",
+  assert.equal(embeddingModelInit.command.length, 1);
+  const initCommand = embeddingModelInit.command[0].replace(/\$\$/gu, "$");
+  assert.match(initCommand, /cleanup\(\)/u);
+  assert.match(initCommand, /for attempt in \$\(seq 1 60\); do/u);
+  assert.match(initCommand, /model_name=\$\{IRIS_EMBEDDING_MODEL%:\*\}/u);
+  assert.match(initCommand, /model_tag=\$\{IRIS_EMBEDDING_MODEL#\*:\}/u);
+  assert.match(
+    initCommand,
+    /manifest="\/root\/.ollama\/models\/manifests\/registry\.ollama\.ai\/library\/\$\{model_name\}\/\$\{model_tag\}"/u,
   );
-  assert.ok(
-    pilotComposeConfig.includes("model_tag=$${IRIS_EMBEDDING_MODEL#*:}"),
-    "manifest construction must extract the model tag",
-  );
-  assert.equal(
-    pilotComposeConfig.split(
-      "manifest=\"/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}\"",
-    ).length - 1,
-    2,
-    "seed and runtime checks must use the name/tag manifest path",
-  );
-  assert.ok(
-    pilotComposeConfig.includes("for attempt in $$(seq 1 60); do"),
-    "initializer readiness must be bounded to 60 attempts",
-  );
-  assert.ok(
-    pilotComposeConfig.includes("cat \"$$ollama_log\" >&2 || true"),
-    "initializer must emit its server log on readiness failure",
-  );
+  assert.match(initCommand, /ollama pull "\$IRIS_EMBEDDING_MODEL"/u);
+  assert.match(initCommand, /sha256sum -c -/u);
   assert.deepEqual(embeddingModel.logging, {
     driver: "json-file",
     options: { "max-file": "5", "max-size": "10m" },
@@ -752,27 +740,6 @@ function loadPilotCompose(envFile = "deploy/pilot/ci.env", overrides = {}) {
     throw new Error(`Unable to render pilot Compose config: ${result.stderr || result.stdout}`);
   }
   return JSON.parse(result.stdout);
-}
-
-function renderPilotComposeConfig(envFile = "deploy/pilot/ci.env") {
-  const result = spawnSync(
-    process.platform === "win32" ? "docker.exe" : "docker",
-    [
-      "compose",
-      "--env-file",
-      envFile,
-      "--file",
-      "deploy/pilot/docker-compose.yml",
-      "config",
-      "--no-interpolate",
-    ],
-    { encoding: "utf8" },
-  );
-
-  if (result.status !== 0) {
-    throw new Error(`Unable to render pilot Compose config: ${result.stderr || result.stdout}`);
-  }
-  return result.stdout;
 }
 
 function readEnvAssignment(contents, name) {

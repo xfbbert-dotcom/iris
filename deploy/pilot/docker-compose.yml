@@ -191,26 +191,27 @@ services:
       IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
       IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
     entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      ollama_log=/tmp/ollama-server.log
-      ollama serve >"$$ollama_log" 2>&1 &
-      server_pid=$$!
-      cleanup() {
-        if kill -0 "$$server_pid" 2>/dev/null; then kill "$$server_pid" || true; fi
-        wait "$$server_pid" 2>/dev/null || true
-      }
-      trap cleanup EXIT
-      ready=false
-      for attempt in $$(seq 1 60); do
-        if ollama list >/dev/null 2>&1; then ready=true; break; fi
-        sleep 1
-      done
-      if [ "$$ready" != true ]; then cat "$$ollama_log" >&2 || true; exit 1; fi
-      model_name=$${IRIS_EMBEDDING_MODEL%:*}
-      model_tag=$${IRIS_EMBEDDING_MODEL#*:}
-      manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}"
-      if [ ! -f "$$manifest" ]; then ollama pull "$$IRIS_EMBEDDING_MODEL"; fi
-      printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c -
+    command:
+      - |
+        ollama_log=/tmp/ollama-server.log
+        ollama serve >"$$ollama_log" 2>&1 &
+        server_pid=$$!
+        cleanup() {
+          if kill -0 "$$server_pid" 2>/dev/null; then kill "$$server_pid" || true; fi
+          wait "$$server_pid" 2>/dev/null || true
+        }
+        trap cleanup EXIT
+        ready=false
+        for attempt in $$(seq 1 60); do
+          if ollama list >/dev/null 2>&1; then ready=true; break; fi
+          sleep 1
+        done
+        if [ "$$ready" != true ]; then cat "$$ollama_log" >&2 || true; exit 1; fi
+        model_name=$${IRIS_EMBEDDING_MODEL%:*}
+        model_tag=$${IRIS_EMBEDDING_MODEL#*:}
+        manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}"
+        if [ ! -f "$$manifest" ]; then ollama pull "$$IRIS_EMBEDDING_MODEL"; fi
+        printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c -
     volumes:
       - iris_embedding_models:/root/.ollama
     restart: "no"
