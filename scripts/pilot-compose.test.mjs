@@ -93,6 +93,8 @@ test("keeps model services private with dedicated model egress", () => {
   const embeddingModelInit = compose.services["embedding-model-init"];
   const embeddingModel = compose.services["embedding-model"];
   const core = compose.services.core;
+  const expectedOllamaImage =
+    "ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a";
 
   assert.match(aiWorker.build.context, /[\\/]workers[\\/]ai$/u);
   assert.equal(aiWorker.ports, undefined);
@@ -111,8 +113,8 @@ test("keeps model services private with dedicated model egress", () => {
     }
   }
 
-  assert.match(embeddingModel.image, /@sha256:[a-f0-9]{64}$/u);
-  assert.equal(embeddingModelInit.image, embeddingModel.image);
+  assert.equal(embeddingModelInit.image, expectedOllamaImage);
+  assert.equal(embeddingModel.image, expectedOllamaImage);
   assert.equal(embeddingModelInit.ports, undefined);
   assert.deepEqual(Object.keys(embeddingModelInit.environment).sort(), [
     "IRIS_EMBEDDING_MODEL",
@@ -140,13 +142,26 @@ test("keeps model services private with dedicated model egress", () => {
     embeddingModel.environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256,
     "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
   );
-  const runtimeHealthcheck = embeddingModel.healthcheck.test.join(" ");
+  const runtimeHealthcheck = embeddingModel.healthcheck.test.join(" ").replace(/\$\$/gu, "$");
   assert.match(runtimeHealthcheck, /OLLAMA_HOST=127\.0\.0\.1:11434 ollama list/u);
+  assert.match(runtimeHealthcheck, /model_name=\$\{IRIS_EMBEDDING_MODEL%:\*\}/u);
+  assert.match(runtimeHealthcheck, /model_tag=\$\{IRIS_EMBEDDING_MODEL#\*:\}/u);
+  assert.match(
+    runtimeHealthcheck,
+    /manifest="\/root\/.ollama\/models\/manifests\/registry\.ollama\.ai\/library\/\$\{model_name\}\/\$\{model_tag\}"/u,
+  );
   assert.match(runtimeHealthcheck, /sha256sum/u);
+  assert.ok(
+    runtimeHealthcheck.indexOf("manifest=") < runtimeHealthcheck.indexOf("sha256sum -c -"),
+    "runtime health check must validate the derived manifest before its SHA256",
+  );
   assert.equal(embeddingModelInit.command.length, 1);
   const initCommand = embeddingModelInit.command[0].replace(/\$\$/gu, "$");
   assert.match(initCommand, /cleanup\(\)/u);
+  assert.match(initCommand, /kill -0 "\$server_pid" 2>\/dev\/null/u);
+  assert.match(initCommand, /wait "\$server_pid" 2>\/dev\/null \|\| true/u);
   assert.match(initCommand, /for attempt in \$\(seq 1 60\); do/u);
+  assert.match(initCommand, /cat "\$ollama_log" >&2 \|\| true/u);
   assert.match(initCommand, /model_name=\$\{IRIS_EMBEDDING_MODEL%:\*\}/u);
   assert.match(initCommand, /model_tag=\$\{IRIS_EMBEDDING_MODEL#\*:\}/u);
   assert.match(
