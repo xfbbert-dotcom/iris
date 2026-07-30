@@ -454,6 +454,36 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
+  it("routes 1024-dimensional similarity search to the 1024 embedding table", async () => {
+    const vector = Array.from({ length: 1024 }, (_, index) => index / 1024);
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      expect(normalizeSql(sql)).toContain("join document_fragment_embeddings_1024 e");
+      expect(values).toEqual([
+        "openai-compatible:qwen3-embedding:0.6b:1024",
+        `[${vector.join(",")}]`,
+        3,
+      ]);
+      return { rows: [] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({
+          id: "openai-compatible:qwen3-embedding:0.6b:1024",
+          dimensions: 1024,
+        })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "openai-compatible:qwen3-embedding:0.6b:1024",
+        embedding: vector,
+        limit: 3,
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("limits vector search to the latest successful snapshot for each document source", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       const normalized = normalizeSql(sql);

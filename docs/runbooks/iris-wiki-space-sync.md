@@ -4,7 +4,7 @@
 
 Wiki-space discovery is deployment-default-off. Keep
 `IRIS_WIKI_SPACE_SYNC_ENABLED=false` until the operator has an authorized, bounded Feishu knowledge
-space, a reviewed pilot, and clean raw-event, document-sync, and reindex queues. It requires
+space, a reviewed pilot, and clean raw-event, document-sync, reindex, and memory queues. It requires
 `IRIS_DOCUMENT_SYNC_WORKER_ENABLED=true`; Core rejects the configuration otherwise.
 
 The registration URL may point to any page in the intended knowledge space. Iris uses the page only
@@ -48,17 +48,37 @@ $status.components.documentSync.wikiSpaces
 
 Require `ok=true`, `enabled=true`, and `running=true` for event, document-sync, and reindex workers.
 Require every `pendingJobCount` and `deadLetterJobCount` to be `0` before enabling a space or
-declaring the operation complete. The wiki scan loop is present only when enabled; its
-`running=true`, configured `intervalMs`, and `statusCounts` provide the additional scan gate.
+declaring the operation complete. Memory extraction can be disabled and therefore needs the direct
+content-free Redis counts below. Every result must be exactly `0`. The wiki scan loop is present only
+when enabled; its `running=true`, configured `intervalMs`, and `statusCounts` provide the additional
+scan gate.
 
-The three shared queue families are:
+```powershell
+$compose = @("compose", "--env-file", ".env.pilot", "--file", "deploy/pilot/docker-compose.yml")
+[long]$memoryReady = & docker @compose exec -T redis redis-cli ZCARD iris:memory:extraction:ready:index
+if ($LASTEXITCODE -ne 0) { throw "Memory ready index could not be inspected" }
+[long]$memoryProcessing = & docker @compose exec -T redis redis-cli LLEN iris:memory:extraction:processing
+if ($LASTEXITCODE -ne 0) { throw "Memory processing list could not be inspected" }
+[long]$memoryDelayed = & docker @compose exec -T redis redis-cli ZCARD iris:memory:extraction:delayed
+if ($LASTEXITCODE -ne 0) { throw "Memory delayed index could not be inspected" }
+[long]$memoryDlq = & docker @compose exec -T redis redis-cli SCARD iris:memory:extraction:dlq:ids
+if ($LASTEXITCODE -ne 0) { throw "Memory DLQ IDs could not be inspected" }
+if (@($memoryReady, $memoryProcessing, $memoryDelayed, $memoryDlq |
+    Where-Object { [long]$_ -ne 0 }).Count -ne 0) {
+  throw "Memory queue/DLQ zero gate failed"
+}
+```
+
+The four shared queue families are:
 
 - `eventWorker`: Feishu raw events; a backlog can delay registration-related callbacks.
 - `documentSync`: discovered wiki documents awaiting fetch and snapshot persistence.
 - `reindex`: synced snapshots awaiting embedding/index work.
+- `memory`: extraction ready, processing, delayed, and DLQ state, inspected directly even when its
+  worker is disabled.
 
 Do not treat a zero wiki `statusCounts.pending` count as proof that the document-sync or reindex
-queues are empty. All three queue families must be clean.
+queues are empty. All four queue families must be clean.
 
 Wiki authorization state meanings:
 
@@ -220,9 +240,10 @@ Feishu-native related-knowledge UI is not Iris evidence. A Feishu `相关知识`
 search recommendation cannot replace the internal marker result or the live permission decision.
 Use the private authenticated request and compensating durable global disable in the linked rollout
 runbook; it keeps Caddy stopped while the source-policy guard evaluates the live Feishu permission.
-Before ingress, recheck event, document-sync, and reindex status plus their DLQ lists; all pending
-and dead-letter counts must be zero. Any missing fragment, denied/uncertain permission, marker
-miss, or nonzero queue/DLQ keeps Caddy stopped and enters the local-embedding rollback procedure.
+Before ingress, recheck event, document-sync, and reindex status plus their DLQ lists, then rerun
+the four direct memory Redis counts from the status gate; all pending, processing, delayed, and
+dead-letter counts must be zero. Any missing fragment, denied/uncertain permission, marker miss, or
+nonzero queue/DLQ keeps Caddy stopped and enters the local-embedding rollback procedure.
 
 ## Permission Revocation Second Check
 

@@ -21,6 +21,7 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/apps/core/package.json apps/core/package.json
 COPY --from=build --chown=node:node /app/apps/core/dist apps/core/dist
 COPY --chown=node:node apps/core/migrations apps/core/migrations
+COPY --chown=node:node deploy/pilot/verify-local-embedding.mjs /opt/iris/verify-local-embedding.mjs
 
 USER node
 STOPSIGNAL SIGTERM

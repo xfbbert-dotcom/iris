@@ -44,27 +44,23 @@ between the attempted Gemini embedding model names; it is the reason this proced
 private Ollama embedding path, not a reason to retry remote quota.
 
 The model boundary is strict: `embedding-model-init` alone receives model-download egress, starts a
-temporary Ollama server, and verifies the full stored model-manifest SHA256. The private
-`embedding-model` service has no host or edge port, no model egress network, and repeats the full
-stored model-manifest SHA256 check in its health check. The seed and runtime checks must pass before
-Core can start. A model name from `ollama list`, a short digest, or a successful pull without the
-full manifest check is a failed gate.
+temporary Ollama server, and verifies the full stored model-manifest SHA256 plus every referenced
+config and layer blob. A missing or corrupt blob is repaired only by that seed job and the complete
+cache is then reverified. The private `embedding-model` service has no host or edge port and no
+model egress network. Its recurring health check is deliberately lightweight. The backend-only
+one-shot `embedding-model-verify` service hashes the cache once, requests a known input from
+`/v1/embeddings`, and requires exactly 1024 finite values whose norm is within `0.001` of `1`.
+Both one-shot jobs must complete successfully before Core can start. A model name shown by
+`ollama list`, a short digest, a successful pull without blob verification, or endpoint availability
+without the embedding-shape check is a failed gate.
 
-Start only the model dependency and inspect its completed seed job before Core:
-
-```powershell
-$compose = @("compose", "--env-file", ".env.pilot", "--file", "deploy/pilot/docker-compose.yml")
-& docker @compose up --wait --wait-timeout 600 embedding-model
-if ($LASTEXITCODE -ne 0) { throw "Private embedding model did not become healthy" }
-$seed = @(& docker @compose ps --all --format json embedding-model-init | ConvertFrom-Json)
-if ($seed.Count -ne 1 -or $seed[0].ExitCode -ne 0) {
-  throw "embedding-model-init did not exit successfully after full model-manifest verification"
-}
-```
-
-Set the Core deployment values to the private endpoint and exact profile. Retain the previous
-provider settings in the approved rollback `.env.pilot` copy; do not edit historical profile rows
-or fragments.
+Run this bootstrap as one PowerShell block from the repository root. It validates the bearer token
+without printing it, captures and durably disables the current global state, proves Caddy stopped,
+creates the existing encrypted paired Postgres/Redis backup, records its path, validates the exact
+rendered embedding configuration, runs migrations, and force-recreates model verification and Core.
+Set `IRIS_OPERATOR_EVIDENCE_PATH` to an absolute operator-controlled NDJSON file first. Retain the
+previous provider settings in the approved rollback `.env.pilot` copy; do not edit historical
+profile rows or fragments.
 
 ```text
 IRIS_EMBEDDING_PROVIDER=openai-compatible
@@ -75,9 +71,164 @@ IRIS_EMBEDDING_DIMENSIONS=1024
 IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d
 ```
 
-After Core is recreated, require `/internal/reindex/status` to report the active profile exactly as
-`openai-compatible:qwen3-embedding:0.6b:1024`. A different active profile, disabled worker, or
-unhealthy Core ends the operation with Caddy stopped.
+```powershell
+$compose = @("compose", "--env-file", ".env.pilot", "--file", "deploy/pilot/docker-compose.yml")
+$profileId = "openai-compatible:qwen3-embedding:0.6b:1024"
+$irisHeaders = $null
+
+function Assert-CaddyStopped {
+  $runningServices = @(& docker @compose ps --status running --services)
+  if ($LASTEXITCODE -ne 0 -or $runningServices -contains "caddy") {
+    throw "Caddy stopped state could not be proven"
+  }
+}
+
+$operatorEvidencePath = $env:IRIS_OPERATOR_EVIDENCE_PATH
+$bootstrapComplete = $false
+try {
+  if ([string]::IsNullOrWhiteSpace($operatorEvidencePath) -or
+      -not [System.IO.Path]::IsPathFullyQualified($operatorEvidencePath)) {
+    throw "IRIS_OPERATOR_EVIDENCE_PATH must be an absolute operator-controlled evidence file"
+  }
+  $operatorEvidenceDirectory = Split-Path -Parent $operatorEvidencePath
+  if ([string]::IsNullOrWhiteSpace($operatorEvidenceDirectory)) {
+    throw "IRIS_OPERATOR_EVIDENCE_PATH must include a parent directory"
+  }
+  New-Item -ItemType Directory -Force -Path $operatorEvidenceDirectory | Out-Null
+
+  if ([string]::IsNullOrWhiteSpace($env:IRIS_INTERNAL_API_TOKEN) -or
+      $env:IRIS_INTERNAL_API_TOKEN -notmatch '^[\x21-\x2B\x2D-\x7E]+$') {
+    throw "IRIS_INTERNAL_API_TOKEN must be one single visible ASCII token without comma or whitespace"
+  }
+  $irisHeaders = @{ authorization = "Bearer $env:IRIS_INTERNAL_API_TOKEN" }
+
+  $runtimeBeforeMigration = Invoke-RestMethod -Headers $irisHeaders `
+    -Uri "http://localhost:3000/internal/runtime-control/status"
+  if ($runtimeBeforeMigration.ok -ne $true -or
+      $runtimeBeforeMigration.globalEnabled -isnot [bool] -or
+      $runtimeBeforeMigration.desiredGlobalEnabled -isnot [bool]) {
+    throw "Current global runtime state is unavailable or malformed"
+  }
+
+  $disableBeforeMigration = Invoke-RestMethod -Method Post -Headers $irisHeaders `
+    -Uri "http://localhost:3000/internal/runtime-control/global" `
+    -ContentType "application/json" -Body '{"enabled":false}'
+  if ($disableBeforeMigration.ok -ne $true -or
+      $disableBeforeMigration.globalEnabled -ne $false -or
+      $disableBeforeMigration.desiredGlobalEnabled -ne $false -or
+      $disableBeforeMigration.durable -ne $true) {
+    throw "Global runtime was not durably disabled"
+  }
+
+  & docker @compose stop caddy
+  if ($LASTEXITCODE -ne 0) { throw "Could not stop Caddy" }
+  Assert-CaddyStopped
+
+  $backupPath = [string](@(& /usr/local/sbin/iris-backup | Select-Object -Last 1))
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($backupPath) -or
+      -not [System.IO.Path]::IsPathFullyQualified($backupPath) -or
+      -not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
+    throw "Encrypted paired Postgres/Redis backup was not created"
+  }
+  Add-Content -LiteralPath $operatorEvidencePath -Value (([ordered]@{
+    schemaVersion = 1
+    recordedAt = (Get-Date).ToUniversalTime().ToString("o")
+    event = "local_embedding_migration_backup"
+    backupPath = $backupPath
+    previousGlobalEnabled = [bool]$runtimeBeforeMigration.globalEnabled
+    previousDesiredGlobalEnabled = [bool]$runtimeBeforeMigration.desiredGlobalEnabled
+  }) | ConvertTo-Json -Compress)
+  $backupEvidence = Get-Content -LiteralPath $operatorEvidencePath -Tail 1 | ConvertFrom-Json
+  if ($backupEvidence.event -cne "local_embedding_migration_backup" -or
+      $backupEvidence.backupPath -cne $backupPath) {
+    throw "Migration backup path evidence write verification failed"
+  }
+
+  $renderedComposeJson = @(& docker @compose config --format json) -join "`n"
+  if ($LASTEXITCODE -ne 0) { throw "Pilot Compose configuration could not be rendered" }
+  $renderedCompose = $renderedComposeJson | ConvertFrom-Json
+  $coreEmbedding = $renderedCompose.services.core.environment
+  $expectedEmbedding = [ordered]@{
+    IRIS_EMBEDDING_PROVIDER = "openai-compatible"
+    IRIS_EMBEDDING_BASE_URL = "http://embedding-model:11434/v1"
+    IRIS_EMBEDDING_API_KEY = "ollama"
+    IRIS_EMBEDDING_MODEL = "qwen3-embedding:0.6b"
+    IRIS_EMBEDDING_DIMENSIONS = "1024"
+  }
+  foreach ($entry in $expectedEmbedding.GetEnumerator()) {
+    if ([string]$coreEmbedding.($entry.Key) -cne $entry.Value) {
+      throw "Rendered Core embedding configuration is not the approved local profile"
+    }
+  }
+  $expectedManifestSha = "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d"
+  $expectedOllamaImage = "ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a"
+  $verifierEmbedding = $renderedCompose.services."embedding-model-verify".environment
+  if ($renderedCompose.services."embedding-model-init".environment.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 -cne $expectedManifestSha -or
+      $verifierEmbedding.IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 -cne $expectedManifestSha -or
+      $verifierEmbedding.IRIS_EMBEDDING_BASE_URL -cne "http://embedding-model:11434/v1" -or
+      $verifierEmbedding.IRIS_EMBEDDING_MODEL -cne "qwen3-embedding:0.6b" -or
+      $verifierEmbedding.IRIS_EMBEDDING_DIMENSIONS -cne "1024" -or
+      $verifierEmbedding.IRIS_EMBEDDING_NORM_TOLERANCE -cne "0.001" -or
+      $renderedCompose.services."embedding-model-init".image -cne $expectedOllamaImage -or
+      $renderedCompose.services."embedding-model".image -cne $expectedOllamaImage) {
+    throw "Rendered model image or manifest contract is not approved"
+  }
+
+  & docker @compose up --detach --wait --wait-timeout 600 --force-recreate `
+    migrate embedding-model-init embedding-model embedding-model-verify core
+  if ($LASTEXITCODE -ne 0) {
+    throw "Migration, model verification, or Core recreation failed"
+  }
+  $seed = @(& docker @compose ps --all --format json embedding-model-init | ConvertFrom-Json)
+  if ($seed.Count -ne 1 -or $seed[0].ExitCode -ne 0) {
+    throw "embedding-model-init did not exit successfully after full cache verification"
+  }
+  $verifier = @(& docker @compose ps --all --format json embedding-model-verify | ConvertFrom-Json)
+  if ($verifier.Count -ne 1 -or $verifier[0].ExitCode -ne 0) {
+    throw "embedding-model-verify did not prove cache integrity and a valid unit embedding"
+  }
+  Assert-CaddyStopped
+
+  $reindexStatus = Invoke-RestMethod -Headers $irisHeaders `
+    -Uri "http://localhost:3000/internal/reindex/status"
+  if ($reindexStatus.ok -ne $true -or $reindexStatus.enabled -ne $true -or
+      $reindexStatus.running -ne $true -or
+      $reindexStatus.activeEmbeddingProfileId -cne $profileId) {
+    throw "Active embedding profile is not exactly $profileId"
+  }
+  $bootstrapComplete = $true
+} finally {
+  $cleanupDisableProven = $false
+  if ($null -ne $irisHeaders) {
+    try {
+      $disableAfterBootstrap = Invoke-RestMethod -Method Post -Headers $irisHeaders `
+        -Uri "http://localhost:3000/internal/runtime-control/global" `
+        -ContentType "application/json" -Body '{"enabled":false}'
+      $cleanupDisableProven = (
+        $disableAfterBootstrap.globalEnabled -eq $false -and
+        $disableAfterBootstrap.desiredGlobalEnabled -eq $false -and
+        $disableAfterBootstrap.durable -eq $true
+      )
+    } catch {
+      $cleanupDisableError = $_
+    }
+  }
+  & docker @compose stop caddy
+  $cleanupCaddyExitCode = $LASTEXITCODE
+  Assert-CaddyStopped
+  if (-not $cleanupDisableProven) {
+    & docker @compose stop core
+    if ($LASTEXITCODE -ne 0) { throw "Fail-closed cleanup could not stop Core" }
+    throw "Fail-closed cleanup stopped Core because durable disable was not proven: $cleanupDisableError"
+  }
+  if ($cleanupCaddyExitCode -ne 0) { throw "Fail-closed cleanup could not stop Caddy cleanly" }
+}
+if (-not $bootstrapComplete) { throw "Local embedding migration bootstrap did not complete" }
+```
+
+Do not continue to DLQ inspection unless that block succeeds. It leaves global runtime durably
+disabled and Caddy stopped, and it requires `/internal/reindex/status` to report the exact active
+profile before any DLQ mutation.
 
 ### Old-Profile DLQ Evidence
 
@@ -186,6 +337,14 @@ function Get-ReindexQueueDlqSnapshot {
   if ($LASTEXITCODE -ne 0) { throw "Unable to read document-sync processing list" }
   [long]$reindexProcessing = & docker @compose exec -T redis redis-cli LLEN iris:reindex:documents:processing
   if ($LASTEXITCODE -ne 0) { throw "Unable to read document-reindex processing list" }
+  [long]$memoryReady = & docker @compose exec -T redis redis-cli ZCARD iris:memory:extraction:ready:index
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read memory ready index" }
+  [long]$memoryProcessing = & docker @compose exec -T redis redis-cli LLEN iris:memory:extraction:processing
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read memory processing list" }
+  [long]$memoryDelayed = & docker @compose exec -T redis redis-cli ZCARD iris:memory:extraction:delayed
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read memory delayed index" }
+  [long]$memoryDlq = & docker @compose exec -T redis redis-cli SCARD iris:memory:extraction:dlq:ids
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read memory DLQ IDs" }
 
   [pscustomobject]@{
     EventOk = ($events.ok -eq $true -and $events.enabled -eq $true -and $events.running -eq $true)
@@ -200,7 +359,11 @@ function Get-ReindexQueueDlqSnapshot {
       [long]$status.components.documentSync.deadLetterJobCount,
       [long]$status.components.reindex.pendingJobCount,
       $reindexProcessing,
-      [long]$status.components.reindex.deadLetterJobCount
+      [long]$status.components.reindex.deadLetterJobCount,
+      $memoryReady,
+      $memoryProcessing,
+      $memoryDelayed,
+      $memoryDlq
     )
   }
 }
@@ -211,7 +374,7 @@ function Assert-ReindexQueueDlqZero {
     throw "Event, document-sync, or reindex status is not healthy for the selected profile"
   }
   if (@($Snapshot.QueueCounts | Where-Object { [long]$_ -ne 0 }).Count -ne 0) {
-    throw "Event/document/reindex queue or DLQ zero gate failed"
+    throw "Event/document/reindex/memory queue or DLQ zero gate failed"
   }
 }
 
@@ -249,8 +412,9 @@ while ($reindexPlan.enqueuedCount -gt 0) {
 Assert-ReindexQueueDlqZero (Get-ReindexQueueDlqSnapshot)
 ```
 
-Before ingress, record zero queue and DLQ counts for event, document-sync, and reindex, and verify
-every latest successful authorized-wiki snapshot has fragments under the exact Qwen profile. The
+Before ingress, record zero queue and DLQ counts for event, document-sync, reindex, and memory, and
+verify every latest successful authorized-wiki snapshot has fragments under the exact Qwen profile.
+The direct Redis memory counts remain required even when memory extraction is disabled. The
 following query is content-free and must return exactly one zero before Life Engine acceptance:
 
 ```powershell
@@ -345,11 +509,12 @@ try {
 Use the [wiki-space evidence procedure](../runbooks/iris-wiki-space-sync.md#local-embedding-acceptance)
 for the source, permission, and marker controls.
 
-Start Caddy only after the private model check, selected-profile reindex, zero queue and DLQ counts,
-live Feishu permission guard, and Life Engine retrieval gates have all passed. Any failed command,
-nonzero queue/DLQ, permission uncertainty, missing marker, or unexpected profile requires rollback:
-keep Caddy stopped, durably disable global runtime, restore the approved previous `.env.pilot` and
-matching Core image/paired backup when needed, and preserve the prior-profile fragments.
+Start Caddy only after the private model check, selected-profile reindex, zero event, document-sync,
+reindex, and memory queue and DLQ counts, live Feishu permission guard, and Life Engine retrieval
+gates have all passed. Any failed command, nonzero queue/DLQ, permission uncertainty, missing marker,
+or unexpected profile requires rollback: keep Caddy stopped, durably disable global runtime,
+restore the approved previous `.env.pilot` and matching Core image/paired backup when needed, and
+preserve the prior-profile fragments.
 
 ### Controlled Daily Pilot Profile
 

@@ -101,6 +101,7 @@ test("keeps model services private with dedicated model egress", () => {
   const aiWorker = compose.services["ai-worker"];
   const embeddingModelInit = compose.services["embedding-model-init"];
   const embeddingModel = compose.services["embedding-model"];
+  const embeddingModelVerify = compose.services["embedding-model-verify"];
   const core = compose.services.core;
   const expectedOllamaImage =
     "ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a";
@@ -133,6 +134,26 @@ test("keeps model services private with dedicated model egress", () => {
   assert.equal(embeddingModel.ports, undefined);
   assert.deepEqual(embeddingModel.networks, { backend: null });
   assert.deepEqual(embeddingModelInit.networks, { "model-egress": null });
+  assert.equal(embeddingModelVerify.ports, undefined);
+  assert.deepEqual(embeddingModelVerify.networks, { backend: null });
+  assert.deepEqual(Object.keys(embeddingModelVerify.environment).sort(), [
+    "IRIS_EMBEDDING_BASE_URL",
+    "IRIS_EMBEDDING_DIMENSIONS",
+    "IRIS_EMBEDDING_MODEL",
+    "IRIS_EMBEDDING_MODEL_MANIFEST_SHA256",
+    "IRIS_EMBEDDING_MODEL_ROOT",
+    "IRIS_EMBEDDING_NORM_TOLERANCE",
+    "IRIS_EMBEDDING_VERIFIER_TIMEOUT_MS",
+  ]);
+  for (const forbiddenEnvironmentName of [
+    "FEISHU_APP_ID",
+    "FEISHU_APP_SECRET",
+    "IRIS_INTERNAL_API_TOKEN",
+    "IRIS_MODEL_API_KEY",
+    "IRIS_MEMORY_EXTRACTION_MODEL_API_KEY",
+  ]) {
+    assert.equal(embeddingModelVerify.environment[forbiddenEnvironmentName], undefined);
+  }
   assert.deepEqual(embeddingModel.volumes, [
     {
       type: "volume",
@@ -142,6 +163,14 @@ test("keeps model services private with dedicated model egress", () => {
     },
   ]);
   assert.deepEqual(embeddingModelInit.volumes, embeddingModel.volumes);
+  assert.deepEqual(embeddingModelVerify.volumes, [
+    {
+      type: "volume",
+      source: "iris_embedding_models",
+      target: "/root/.ollama",
+      read_only: true,
+    },
+  ]);
   assert.equal(embeddingModel.deploy.resources.limits.memory, "1610612736");
   assert.equal(embeddingModel.deploy.resources.limits.cpus, 1.5);
   assert.equal(embeddingModel.environment.OLLAMA_NUM_PARALLEL, "1");
@@ -153,17 +182,7 @@ test("keeps model services private with dedicated model egress", () => {
   );
   const runtimeHealthcheck = embeddingModel.healthcheck.test.join(" ").replace(/\$\$/gu, "$");
   assert.match(runtimeHealthcheck, /OLLAMA_HOST=127\.0\.0\.1:11434 ollama list/u);
-  assert.match(runtimeHealthcheck, /model_name=\$\{IRIS_EMBEDDING_MODEL%:\*\}/u);
-  assert.match(runtimeHealthcheck, /model_tag=\$\{IRIS_EMBEDDING_MODEL#\*:\}/u);
-  assert.match(
-    runtimeHealthcheck,
-    /manifest="\/root\/.ollama\/models\/manifests\/registry\.ollama\.ai\/library\/\$\{model_name\}\/\$\{model_tag\}"/u,
-  );
-  assert.match(runtimeHealthcheck, /sha256sum/u);
-  assert.ok(
-    runtimeHealthcheck.indexOf("manifest=") < runtimeHealthcheck.indexOf("sha256sum -c -"),
-    "runtime health check must validate the derived manifest before its SHA256",
-  );
+  assert.doesNotMatch(runtimeHealthcheck, /sha256sum/u);
   assert.equal(embeddingModelInit.command.length, 1);
   const initCommand = embeddingModelInit.command[0].replace(/\$\$/gu, "$");
   assert.match(
@@ -183,6 +202,23 @@ test("keeps model services private with dedicated model egress", () => {
   );
   assert.match(initCommand, /ollama pull "\$IRIS_EMBEDDING_MODEL"/u);
   assert.match(initCommand, /sha256sum -c -/u);
+  assert.match(initCommand, /"digest"\[\[:space:\]\]\*:\[\[:space:\]\]\*"sha256:/u);
+  assert.match(initCommand, /digest_path=\$\(printf '%s' "\$digest" \| sed 's\/:\/-\/'\)/u);
+  assert.match(initCommand, /blob="\/root\/\.ollama\/models\/blobs\/\$\{digest_path\}"/u);
+  assert.match(
+    initCommand,
+    /if verify_model_cache; then[\s\S]*?else[\s\S]*?ollama pull "\$IRIS_EMBEDDING_MODEL"[\s\S]*?verify_model_cache/u,
+    "the egress-enabled seed must repair any incomplete cache and reverify it",
+  );
+  assert.deepEqual(embeddingModelVerify.command, [
+    "node",
+    "/opt/iris/verify-local-embedding.mjs",
+  ]);
+  assert.equal(
+    embeddingModelVerify.depends_on["embedding-model"].condition,
+    "service_healthy",
+  );
+  assert.equal(embeddingModelVerify.restart, "no");
   assert.deepEqual(embeddingModel.logging, {
     driver: "json-file",
     options: { "max-file": "5", "max-size": "10m" },
@@ -245,6 +281,10 @@ test("keeps model services private with dedicated model egress", () => {
   assert.equal(core.environment.IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE, "0.85");
   assert.equal(core.depends_on["ai-worker"].condition, "service_started");
   assert.equal(core.depends_on["embedding-model"].condition, "service_healthy");
+  assert.equal(
+    core.depends_on["embedding-model-verify"].condition,
+    "service_completed_successfully",
+  );
 });
 
 test("keeps semantic thread and action extraction disabled by default", () => {
@@ -443,8 +483,8 @@ test("makes local embedding migration commands evidence-first and fail closed", 
 
   assert.match(
     migration,
-    /function Get-ReindexQueueDlqSnapshot[\s\S]*?\/internal\/status[\s\S]*?\/internal\/events\/status[\s\S]*?\/internal\/reindex\/status[\s\S]*?LLEN iris:events:raw:processing[\s\S]*?LLEN iris:documents:sync:processing[\s\S]*?LLEN iris:reindex:documents:processing/u,
-    "each reindex gate must inspect event, document, reindex, and processing state",
+    /function Get-ReindexQueueDlqSnapshot[\s\S]*?\/internal\/status[\s\S]*?\/internal\/events\/status[\s\S]*?\/internal\/reindex\/status[\s\S]*?LLEN iris:events:raw:processing[\s\S]*?LLEN iris:documents:sync:processing[\s\S]*?LLEN iris:reindex:documents:processing[\s\S]*?ZCARD iris:memory:extraction:ready:index[\s\S]*?LLEN iris:memory:extraction:processing[\s\S]*?ZCARD iris:memory:extraction:delayed[\s\S]*?SCARD iris:memory:extraction:dlq:ids/u,
+    "each reindex gate must inspect event, document, reindex, memory, and processing state",
   );
   assert.match(migration, /function Wait-ReindexQueueDlqZero[\s\S]*?Get-ReindexQueueDlqSnapshot/u);
   assert.match(
@@ -487,6 +527,48 @@ test("makes local embedding migration commands evidence-first and fail closed", 
   assert.match(coverage, /document_fragment_embeddings_1024/u);
   assert.match(coverage, /not exists/u);
   assert.match(coverage, /missing Qwen-profile fragment count is not zero/u);
+
+  const headersDefinition = migration.indexOf("$irisHeaders =");
+  const firstAuthenticatedRequest = migration.indexOf("-Headers $irisHeaders");
+  const oldProfileDlqStart = migration.indexOf("### Old-Profile DLQ Evidence");
+  const activeProfileAssertion = migration.indexOf(
+    '$reindexStatus.activeEmbeddingProfileId -cne $profileId',
+  );
+  assert.ok(headersDefinition !== -1 && firstAuthenticatedRequest > headersDefinition);
+  assert.ok(activeProfileAssertion !== -1 && activeProfileAssertion < oldProfileDlqStart);
+  assert.match(
+    migration,
+    /IRIS_INTERNAL_API_TOKEN[\s\S]*?single visible ASCII token[\s\S]*?\$irisHeaders = @\{ authorization = "Bearer \$env:IRIS_INTERNAL_API_TOKEN" \}/u,
+  );
+  assert.match(
+    migration,
+    /\$runtimeBeforeMigration = Invoke-RestMethod[\s\S]*?\/internal\/runtime-control\/status[\s\S]*?\$disableBeforeMigration = Invoke-RestMethod[\s\S]*?"enabled":false[\s\S]*?durable/u,
+  );
+  assert.match(
+    migration,
+    /docker @compose stop caddy[\s\S]*?Assert-CaddyStopped[\s\S]*?\$backupPath =[\s\S]*?iris-backup[\s\S]*?Add-Content -LiteralPath \$operatorEvidencePath/u,
+  );
+  assert.match(
+    migration,
+    /IRIS_EMBEDDING_BASE_URL[\s\S]*?http:\/\/embedding-model:11434\/v1[\s\S]*?IRIS_EMBEDDING_MODEL[\s\S]*?qwen3-embedding:0\.6b[\s\S]*?IRIS_EMBEDDING_DIMENSIONS[\s\S]*?1024/u,
+  );
+  assert.match(
+    migration,
+    /docker @compose up[\s\S]*?--force-recreate[\s\S]*?migrate[\s\S]*?embedding-model-verify[\s\S]*?core/u,
+  );
+  assert.match(
+    migration,
+    /\} finally \{[\s\S]*?enabled":false[\s\S]*?docker @compose stop caddy[\s\S]*?Assert-CaddyStopped/u,
+    "every bootstrap exit must re-disable runtime and prove Caddy stopped",
+  );
+  for (const redisMemoryGate of [
+    "ZCARD iris:memory:extraction:ready:index",
+    "LLEN iris:memory:extraction:processing",
+    "ZCARD iris:memory:extraction:delayed",
+    "SCARD iris:memory:extraction:dlq:ids",
+  ]) {
+    assert.match(wikiSpaceSyncRunbook, new RegExp(escapeRegExp(redisMemoryGate), "u"));
+  }
 });
 
 test("proxies exactly the two public Feishu callback paths and keeps the fallback closed", () => {

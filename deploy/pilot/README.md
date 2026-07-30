@@ -29,18 +29,21 @@ an edge or host port.
 
 Run the full procedure in the [internal rollout runbook](../../docs/operations/internal-rollout-runbook.md#local-embedding-profile-migration)
 with Caddy stopped and global runtime disabled. `embedding-model-init` verifies the full stored
-model-manifest SHA256 for `qwen3-embedding:0.6b`; `embedding-model` repeats that check in its
-health check. Both checks must pass before Core can start. Do not treat `ollama list`, a model name,
-or a partial digest as approval.
+model-manifest SHA256 and every referenced config/layer blob for `qwen3-embedding:0.6b`, repairing
+only through its egress-enabled seed path. The backend-only one-shot `embedding-model-verify` then
+rehashes the cache and requires a known-input 1024-dimensional finite embedding with norm within
+`0.001` of `1`. Both one-shot checks must pass before Core can start; the long-running model health
+check remains lightweight. Do not treat `ollama list`, a model name, or a partial digest as approval.
 
 The active profile is exactly `openai-compatible:qwen3-embedding:0.6b:1024`. Record old-profile
 DLQ evidence before deleting any old-profile DLQ entry, then use the bounded repeated
 `/internal/reindex/document-profile` procedure until it reports no more work. Preserve the
 prior-profile fragments for rollback; they are not candidates for the new profile's retrieval.
 
-Keep Caddy stopped until the runbook has recorded zero queue and DLQ counts, a passing live Feishu
-permission guard, and the internal Life Engine retrieval gate. Feishu-native related-knowledge UI
-is not Iris evidence.
+Keep Caddy stopped until the runbook has recorded zero queue and DLQ counts across event,
+document-sync, reindex, and memory, plus a passing live Feishu permission guard.
+The Life Engine retrieval gate must also pass.
+Feishu-native related-knowledge UI is not Iris evidence.
 
 ## Wiki Space Sync
 

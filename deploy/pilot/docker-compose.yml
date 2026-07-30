@@ -210,8 +210,26 @@ services:
         model_name=$${IRIS_EMBEDDING_MODEL%:*}
         model_tag=$${IRIS_EMBEDDING_MODEL#*:}
         manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}"
-        if [ ! -f "$$manifest" ]; then ollama pull "$$IRIS_EMBEDDING_MODEL"; fi
-        printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c -
+        verify_model_cache() {
+          test -f "$$manifest" || return 1
+          printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c - || return 1
+          digests=$$(grep -o '"digest"[[:space:]]*:[[:space:]]*"sha256:[a-f0-9]\{64\}"' "$$manifest" |
+            sed -n 's/.*"\(sha256:[a-f0-9]\{64\}\)"/\1/p') || return 1
+          digest_count=$$(printf '%s\n' "$$digests" | awk 'NF { count += 1 } END { print count + 0 }')
+          test "$$digest_count" -ge 2 || return 1
+          for digest in $$digests; do
+            digest_path=$$(printf '%s' "$$digest" | sed 's/:/-/')
+            blob="/root/.ollama/models/blobs/$${digest_path}"
+            test -f "$$blob" || return 1
+            printf '%s  %s\n' "$${digest#sha256:}" "$$blob" | sha256sum -c - || return 1
+          done
+        }
+        if verify_model_cache; then
+          :
+        else
+          ollama pull "$$IRIS_EMBEDDING_MODEL"
+          verify_model_cache
+        fi
     volumes:
       - iris_embedding_models:/root/.ollama
     restart: "no"
@@ -236,11 +254,8 @@ services:
         - CMD-SHELL
         - >-
           model_name=$${IRIS_EMBEDDING_MODEL%:*} &&
-          model_tag=$${IRIS_EMBEDDING_MODEL#*:} &&
           OLLAMA_HOST=127.0.0.1:11434 ollama list >/dev/null 2>&1 &&
-          manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}" &&
-          test -f "$$manifest" &&
-          printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c -
+          OLLAMA_HOST=127.0.0.1:11434 ollama list | grep -F "$${model_name}" >/dev/null
       interval: 10s
       timeout: 5s
       retries: 12
@@ -253,6 +268,30 @@ services:
           cpus: "1.5"
           memory: 1536m
     restart: unless-stopped
+    logging: *bounded-logging
+    networks:
+      - backend
+
+  embedding-model-verify:
+    <<: *core-image
+    command: ["node", "/opt/iris/verify-local-embedding.mjs"]
+    environment:
+      IRIS_EMBEDDING_BASE_URL: http://embedding-model:11434/v1
+      IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
+      IRIS_EMBEDDING_DIMENSIONS: "1024"
+      IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
+      IRIS_EMBEDDING_MODEL_ROOT: /root/.ollama/models
+      IRIS_EMBEDDING_NORM_TOLERANCE: "0.001"
+      IRIS_EMBEDDING_VERIFIER_TIMEOUT_MS: "30000"
+    depends_on:
+      embedding-model:
+        condition: service_healthy
+    volumes:
+      - type: volume
+        source: iris_embedding_models
+        target: /root/.ollama
+        read_only: true
+    restart: "no"
     logging: *bounded-logging
     networks:
       - backend
@@ -271,6 +310,8 @@ services:
         condition: service_started
       embedding-model:
         condition: service_healthy
+      embedding-model-verify:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:${IRIS_CORE_LOOPBACK_PORT:-3000}:3000"
     healthcheck:
