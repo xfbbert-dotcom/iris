@@ -1847,6 +1847,38 @@ async function completePublicationExecution(
       ],
     );
 
+    if (draft.source_group_id !== null) {
+      const publicationResultOutbox = await client.query<{ id: string }>(
+        `INSERT INTO knowledge_draft_presentation_outbox (
+          id, presentation_id, idempotency_key, delivery_sequence,
+          state, attempts, created_at, updated_at
+        )
+        SELECT $1, confirmation.presentation_id, $2, 2,
+               'pending', 0, $5, $5
+        FROM knowledge_draft_group_confirmations confirmation
+        JOIN knowledge_draft_presentations presentation
+          ON presentation.id = confirmation.presentation_id
+         AND presentation.draft_id = confirmation.draft_id
+         AND presentation.revision_number = confirmation.revision_number
+        WHERE confirmation.draft_id = $3
+          AND confirmation.revision_number = $4
+          AND presentation.state = 'closed'
+          AND presentation.message_id IS NOT NULL
+        ON CONFLICT (idempotency_key) DO NOTHING
+        RETURNING id`,
+        [
+          randomUUID(),
+          `knowledge-publication-result:${operationFingerprint({ publicationId })}`,
+          proposal.subject_id,
+          normalized.expectedSubjectRevision,
+          normalized.at,
+        ],
+      );
+      if (publicationResultOutbox.rows[0] === undefined) {
+        throw new ActionProposalPersistenceConflictError();
+      }
+    }
+
     const publication = await requireKnowledgePublication(client, publicationId);
     return {
       outcome: "applied",

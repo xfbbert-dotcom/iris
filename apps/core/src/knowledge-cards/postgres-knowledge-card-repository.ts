@@ -573,11 +573,19 @@ async function claimPresentationSend(
        JOIN knowledge_draft_presentations presentation ON presentation.id = outbox.presentation_id
        WHERE presentation.state IN ('pending_send', 'closed')
          AND outbox.attempts < ${MAX_PRESENTATION_EXTERNAL_ATTEMPTS}
+         AND NOT EXISTS (
+           SELECT 1
+           FROM knowledge_draft_presentation_outbox predecessor
+           WHERE predecessor.presentation_id = outbox.presentation_id
+             AND predecessor.delivery_sequence < outbox.delivery_sequence
+             AND predecessor.state IN ('pending', 'processing', 'external_attempting')
+         )
          AND (
            (outbox.state = 'pending' AND (outbox.retry_at IS NULL OR outbox.retry_at <= $1))
            OR (outbox.state = 'processing' AND outbox.lease_until <= $1)
          )
-       ORDER BY outbox.retry_at ASC NULLS FIRST, outbox.created_at ASC, outbox.id ASC
+       ORDER BY outbox.delivery_sequence ASC,
+                outbox.retry_at ASC NULLS FIRST, outbox.created_at ASC, outbox.id ASC
        FOR UPDATE OF outbox SKIP LOCKED
        LIMIT 1`,
       [at],
@@ -1118,8 +1126,9 @@ async function lockOwnedOutbox(
   const result = await client.query<OutboxRow>(
     `SELECT id, presentation_id, idempotency_key, state, attempts, worker_id, lease_until
      FROM knowledge_draft_presentation_outbox
-     WHERE presentation_id = $1 FOR UPDATE`,
-    [presentationId],
+     WHERE presentation_id = $1 AND state = $2 AND worker_id = $3
+     FOR UPDATE`,
+    [presentationId, expectedState, workerId],
   );
   const row = result.rows[0];
   if (

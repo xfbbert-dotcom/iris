@@ -17,6 +17,23 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("allows ordered durable updates for the same knowledge card presentation", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0044_knowledge_publication_group_result.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain(
+      "drop constraint if exists knowledge_draft_presentation_outbox_presentation_id_key",
+    );
+    expect(normalized).toContain(
+      "create index knowledge_draft_presentation_outbox_presentation_order_idx",
+    );
+    expect(normalized).toContain("delivery_sequence integer not null default 1");
+    expect(normalized).toContain("unique (presentation_id, delivery_sequence)");
+  });
+
   it("defines native 768-dimensional fragment storage", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0043_document_fragment_embeddings_768.sql"),

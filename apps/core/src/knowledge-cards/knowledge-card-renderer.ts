@@ -187,7 +187,15 @@ export function renderKnowledgeCardCommittedResult(
   let template: "green" | "orange" | "red";
   let outcome: string[];
 
-  if (input.result.action === "confirm") {
+  if (input.result.action === "confirm" && input.draft.status === "published") {
+    marker = "published";
+    title = "Knowledge draft published";
+    template = "green";
+    outcome = [
+      "Result: published",
+      "Knowledge base sync: completed",
+    ];
+  } else if (input.result.action === "confirm") {
     marker = "confirmed";
     title = "Knowledge draft confirmed";
     template = "green";

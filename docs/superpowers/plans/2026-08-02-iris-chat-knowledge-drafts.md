@@ -251,6 +251,11 @@ Set the action/card/review environment gates to the original pilot group only, p
 
 In the original pilot group, send a clearly labeled test discussion followed by `@Iris 把刚才讨论整理成知识草稿`. Confirm exactly one draft card appears. Complete group confirmation, full-draft OAuth review, current owner approval, and exactly one publication beneath the authorized Wiki target. Verify the group receives the bounded publication result.
 
+The first live attempt reached one successful Wiki publication but exposed a missing final group
+projection: the original card stayed at `confirmed`. Acceptance therefore remains open. The fix
+must enqueue an ordered, durable `published` update and prove that replaying this projection does
+not create another Wiki node.
+
 - [ ] **Step 5: Verify and record exit evidence**
 
 Confirm exact image SHA parity, public `/health=200`, public `/internal/*=404`, no non-pilot effects, one publication fact, no duplicate node, and every queue/DLQ/outcome-unknown/terminal-failure count at zero. Update the PR and deployment log with content-free identifiers and retain the pilot only if every gate passes; otherwise restore the backed-up environment and previous images.

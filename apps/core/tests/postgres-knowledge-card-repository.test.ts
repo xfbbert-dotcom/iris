@@ -1516,6 +1516,87 @@ runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {
     )).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });
 
+  it("delivers durable updates for one closed card in sequence order", async () => {
+    const { draft, presentation, messageId } = await createActivePresentation("ordered-updates");
+    const repository = cardRepository();
+    await repository.applyInteraction(interactionInput(
+      "ordered-updates",
+      draft.id,
+      presentation.id,
+      { action: "confirm" },
+    ));
+    await pool.query(
+      `INSERT INTO knowledge_draft_presentation_outbox (
+        id, presentation_id, idempotency_key, delivery_sequence,
+        state, attempts, created_at, updated_at
+      ) VALUES ($1, $2, $3, 2, 'pending', 0, $4, $4)`,
+      [
+        id("ordered-updates-publication-outbox"),
+        presentation.id,
+        id("ordered-updates-publication-key"),
+        plusSeconds(11),
+      ],
+    );
+
+    await expect(repository.claimPresentationSend({
+      workerId: "worker-ordered-update-1",
+      leaseUntil: plusSeconds(40),
+      at: plusSeconds(12),
+    })).resolves.toMatchObject({ presentation: { id: presentation.id } });
+    await expect(pool.query(
+      `SELECT delivery_sequence, state
+       FROM knowledge_draft_presentation_outbox
+       WHERE presentation_id = $1
+       ORDER BY delivery_sequence`,
+      [presentation.id],
+    )).resolves.toMatchObject({
+      rows: [
+        { delivery_sequence: 1, state: "processing" },
+        { delivery_sequence: 2, state: "pending" },
+      ],
+    });
+    await repository.beginExternalAttempt({
+      presentationId: presentation.id,
+      workerId: "worker-ordered-update-1",
+      at: plusSeconds(13),
+    });
+    await repository.completePresentationSend({
+      presentationId: presentation.id,
+      workerId: "worker-ordered-update-1",
+      messageId,
+      at: plusSeconds(14),
+    });
+
+    await expect(repository.claimPresentationSend({
+      workerId: "worker-ordered-update-2",
+      leaseUntil: plusSeconds(50),
+      at: plusSeconds(15),
+    })).resolves.toMatchObject({ presentation: { id: presentation.id } });
+    await repository.beginExternalAttempt({
+      presentationId: presentation.id,
+      workerId: "worker-ordered-update-2",
+      at: plusSeconds(16),
+    });
+    await repository.completePresentationSend({
+      presentationId: presentation.id,
+      workerId: "worker-ordered-update-2",
+      messageId,
+      at: plusSeconds(17),
+    });
+    await expect(pool.query(
+      `SELECT delivery_sequence, state
+       FROM knowledge_draft_presentation_outbox
+       WHERE presentation_id = $1
+       ORDER BY delivery_sequence`,
+      [presentation.id],
+    )).resolves.toMatchObject({
+      rows: [
+        { delivery_sequence: 1, state: "sent" },
+        { delivery_sequence: 2, state: "sent" },
+      ],
+    });
+  });
+
   it("requests revision with a bounded reason and closes the presentation", async () => {
     const { draft, presentation } = await createActivePresentation("request-revision");
     const repository = cardRepository();

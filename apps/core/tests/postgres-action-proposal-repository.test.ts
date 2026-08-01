@@ -443,6 +443,117 @@ runIfDatabase("PostgresActionProposalRepository with Postgres", () => {
         expect.objectContaining({ eventType: "execution_succeeded", toVersion: claim.proposal.version + 1 }),
       ]),
     );
+    await expect(pool.query(
+      `SELECT delivery_sequence, state, idempotency_key
+       FROM knowledge_draft_presentation_outbox
+       WHERE presentation_id = $1
+       ORDER BY delivery_sequence ASC`,
+      [`presentation-${label}-${suffix}`],
+    )).resolves.toMatchObject({
+      rows: [
+        { delivery_sequence: 1, state: "sent" },
+        {
+          delivery_sequence: 2,
+          state: "pending",
+          idempotency_key: expect.stringMatching(/^knowledge-publication-result:/u),
+        },
+      ],
+    });
+    const publicationResultClaim = await createPostgresKnowledgeCardRepository({
+      dataSource: pool as unknown as PostgresKnowledgeDraftDataSource,
+    }).claimPresentationSend({
+      workerId: `publication-result-worker-${suffix}`,
+      leaseUntil: plusSeconds(30),
+      at,
+    });
+    expect(publicationResultClaim).toMatchObject({
+      presentation: {
+        id: `presentation-${label}-${suffix}`,
+        state: "closed",
+      },
+      attempts: 1,
+    });
+  });
+
+  it("publishes a company-scoped draft without requiring a group-card result", async () => {
+    const label = "company-publication-execution";
+    const ownerOpenId = `ou_${label}_${suffix}`;
+    const policy = (await actionRepository().upsertTargetPolicy(policyInput(label, {
+      enabled: true,
+      expectedVersion: 0,
+      allowedGroupIds: [],
+      allowedRiskLevels: ["low"],
+    }))).policy;
+    const draft = await createCompanyDraft(label, "low", ownerOpenId);
+    const repository = actionRepository();
+    const proposal = (await repository.createProposal({
+      proposalId: `${label}-${suffix}`,
+      draftId: draft.id,
+      expectedRevision: 1,
+      expectedDraftVersion: draft.version,
+      targetPolicyId: policy.id,
+      expectedTargetPolicyVersion: policy.version,
+      operationKey: `proposal:${label}:${suffix}`,
+      at,
+    })).proposal;
+    const requirement = (await repository.getProposal(proposal.id))?.requirements.find(
+      (item) => item.kind === "designated_owner",
+    );
+    expect(requirement).toBeDefined();
+    const presentationId = await createActiveActionPresentation({
+      proposalId: proposal.id,
+      proposalVersion: proposal.version,
+      requirementId: requirement!.id,
+      recipientOpenId: ownerOpenId,
+      label,
+    });
+    const approval = await repository.applyApprovalAction({
+      proposalId: proposal.id,
+      requirementId: requirement!.id,
+      expectedProposalVersion: proposal.version,
+      expectedSubjectRevision: proposal.subjectRevision,
+      expectedSubjectVersion: proposal.subjectVersion,
+      expectedTargetPolicyVersion: proposal.targetPolicyVersion,
+      sourcePresentationId: presentationId,
+      callbackEventId: `callback-action-${label}-${suffix}`,
+      actorOpenId: ownerOpenId,
+      action: "approve",
+      requireReviewAttestation: false,
+      operationKey: `action-approval:${label}:${suffix}`,
+      at: plusSeconds(1),
+    });
+    const claim = await repository.claimApprovedPublicationExecution({
+      proposalId: proposal.id,
+      expectedProposalVersion: approval.proposal.version,
+      runtimeGate: {
+        globalEnabled: true,
+        writeKnowledgeBase: true,
+        disabledGroupIds: [],
+      },
+      workerId: `worker-${label}`,
+      operationKey: `publication-claim:${label}:${suffix}`,
+      at: plusSeconds(2),
+    });
+
+    await expect(repository.completePublicationExecution({
+      proposalId: proposal.id,
+      executionId: claim.execution.id,
+      expectedProposalVersion: claim.proposal.version,
+      expectedExecutionVersion: claim.execution.version,
+      expectedDraftVersion: claim.draft.version,
+      expectedSubjectRevision: claim.draft.revisionNumber,
+      remoteNodeToken: `node-${label}-${suffix}`,
+      remoteDocumentToken: `doc-${label}-${suffix}`,
+      remoteDocumentType: "docx",
+      contentHash: "d".repeat(64),
+      permissionCheckSummary: "feishu_write_access_verified",
+      operationKey: `publication-complete:${label}:${suffix}`,
+      at: plusSeconds(3),
+    })).resolves.toMatchObject({
+      outcome: "applied",
+      proposal: { status: "succeeded" },
+      draftStatus: "published",
+    });
   });
 
   it("keeps a medium-risk proposal pending for the exact owner", async () => {

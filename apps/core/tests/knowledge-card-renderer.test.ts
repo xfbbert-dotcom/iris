@@ -234,6 +234,31 @@ describe("renderKnowledgeDraftCard", () => {
 });
 
 describe("renderKnowledgeCardCommittedResult", () => {
+  it("renders a bounded published result after the confirmed draft reaches the knowledge base", () => {
+    const rendered = renderKnowledgeCardCommittedResult({
+      presentation: presentation({
+        state: "closed",
+        messageId: "om_card",
+        closedAt: new Date("2026-07-19T03:04:05.000Z"),
+        version: 3,
+      }),
+      draft: { ...draft(), status: "published", version: 12 },
+      result: {
+        action: "confirm",
+        actorOpenId: "ou_committed_actor",
+        confirmedAt: new Date("2026-07-19T03:04:05.000Z"),
+        nextGate: "pending_review",
+      },
+    });
+
+    expect(rendered).toContain("Knowledge draft published");
+    expect(rendered).toContain("Iris / published");
+    expect(rendered).toContain("Result: published");
+    expect(rendered).toContain("Knowledge base sync: completed");
+    expect(rendered).not.toMatch(/Full draft body|secret evidence text|oc_group|ou_committed_actor/iu);
+    expect(JSON.parse(rendered)).toMatchObject({ schema: "2.0" });
+  });
+
   it.each([
     [
       "confirm",
