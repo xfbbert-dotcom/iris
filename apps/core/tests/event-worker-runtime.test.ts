@@ -226,6 +226,7 @@ describe("createEventWorkerRuntime", () => {
     const replier = { replyText: vi.fn() };
     const mentionAnswerResponder = { maybeRespond: vi.fn() };
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const knowledgeDraftCommand = { execute: vi.fn() };
     const registeredUserSubmittedSource: DocumentSource = {
       id: "user-source-1",
       sourceType: "user_submitted_document",
@@ -286,8 +287,10 @@ describe("createEventWorkerRuntime", () => {
       dependencies,
       runtimeController,
       answerDraftOrchestrator,
+      knowledgeDraftCommand,
     } as Parameters<typeof createEventWorkerRuntime>[0] & {
       answerDraftOrchestrator: typeof answerDraftOrchestrator;
+      knowledgeDraftCommand: typeof knowledgeDraftCommand;
     });
 
     expect(dependencies.createFeishuTenantAccessTokenProvider).toHaveBeenCalledWith({
@@ -304,6 +307,7 @@ describe("createEventWorkerRuntime", () => {
     expect(dependencies.createMentionAnswerResponder).toHaveBeenCalledWith({
       botOpenId: "ou_iris",
       answerDraftOrchestrator,
+      knowledgeDraftCommand,
       replier,
       canReplyWhenMentioned: expect.any(Function),
       canRegisterUserSubmittedDocuments: expect.any(Function),

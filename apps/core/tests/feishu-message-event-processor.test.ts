@@ -481,10 +481,49 @@ describe("FeishuMessageEventProcessor", () => {
       messageId: "message-1",
       chatId: "chat-1",
       senderId: "open-1",
+      senderOpenId: "open-1",
       text: "@_user_1 帮我总结",
       mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
       observedAt: new Date("2026-07-01T17:00:00.000Z"),
     });
+  });
+
+  it("does not present a union ID fallback as a Feishu open ID", async () => {
+    const messages = {
+      upsertMessage: vi.fn(async (input) => ({
+        id: "feishu:message-union-only",
+        createdAt: new Date(),
+        ...input,
+      })),
+    };
+    const mentionAnswerResponder = {
+      maybeRespond: vi.fn(async () => ({ status: "skipped" as const, reason: "not_mentioned" as const })),
+    };
+    const processor = createFeishuMessageEventProcessor({ messages, mentionAnswerResponder });
+
+    await processor.process(rawEventFixture({
+      rawBody: {
+        header: { event_id: "event-union-only", event_type: "im.message.receive_v1" },
+        event: {
+          sender: { sender_id: { union_id: "on_union_only" } },
+          message: {
+            message_id: "message-union-only",
+            chat_id: "chat-1",
+            message_type: "text",
+            content: "{\"text\":\"@_user_1 create a knowledge draft\"}",
+            mentions: [{ key: "@_user_1", id: { open_id: "ou_iris" }, name: "Iris" }],
+            create_time: "1782925200000",
+          },
+        },
+      },
+    }));
+
+    expect(mentionAnswerResponder.maybeRespond).toHaveBeenCalledWith(expect.objectContaining({
+      senderId: "on_union_only",
+    }));
+    expect(mentionAnswerResponder.maybeRespond).not.toHaveBeenCalledWith(expect.objectContaining({
+      senderOpenId: expect.any(String),
+    }));
   });
 
   it("persists only structured Feishu mention open IDs", async () => {
@@ -727,6 +766,7 @@ describe("FeishuMessageEventProcessor", () => {
       messageId: "message-1",
       chatId: "chat-1",
       senderId: "open-1",
+      senderOpenId: "open-1",
       text: "Hello",
       mentions: [],
       observedAt: new Date("2026-07-01T17:00:00.000Z"),
@@ -773,6 +813,7 @@ describe("FeishuMessageEventProcessor", () => {
       messageId: "message-1",
       chatId: "chat-1",
       senderId: "open-1",
+      senderOpenId: "open-1",
       text: "Hello",
       mentions: [],
       observedAt: new Date("2026-07-01T17:00:00.000Z"),
@@ -842,6 +883,7 @@ describe("FeishuMessageEventProcessor", () => {
       messageId: "message-1",
       chatId: "chat-1",
       senderId: "open-1",
+      senderOpenId: "open-1",
       text: "@_user_1 please read https://docs.feishu.cn/docx/a",
       mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
       observedAt: new Date("2026-07-01T17:00:00.000Z"),
@@ -904,6 +946,7 @@ describe("FeishuMessageEventProcessor", () => {
       messageId: "message-1",
       chatId: "chat-1",
       senderId: "open-1",
+      senderOpenId: "open-1",
       text: "@_user_1 please help",
       mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
       observedAt: new Date("2026-07-01T17:00:00.000Z"),

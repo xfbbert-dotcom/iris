@@ -5,10 +5,347 @@ import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-m
 import { createFeishuDocumentLinkExtractor } from "../src/documents/feishu-document-link-extractor.js";
 import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
 import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
+import type { ChatKnowledgeDraftCommand } from "../src/knowledge-governance/chat-knowledge-draft-command.js";
+import { ChatKnowledgeDraftModelUnavailableError } from "../src/knowledge-governance/chat-knowledge-draft-generator.js";
 
 type ReplyTextInput = Parameters<FeishuMessageReplier["replyText"]>[0];
 
 describe("FeishuMentionAnswerResponder", () => {
+  it("handles an explicit knowledge-draft command before ordinary answer drafting", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const knowledgeDraftCommand = {
+      execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>(async () => ({
+        status: "created",
+        draftId: "draft-1",
+        presentationId: "presentation-1",
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-draft" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      knowledgeDraftCommand,
+      replier,
+      canReplyWhenMentioned: vi.fn(() => true),
+    });
+    const input = {
+      messageId: "om_create_draft",
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      senderOpenId: "ou_owner",
+      text: "@_user_1 \u628a\u521a\u624d\u8ba8\u8bba\u6574\u7406\u6210\u77e5\u8bc6\u8349\u7a3f",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      observedAt: new Date("2026-08-02T03:00:00.000Z"),
+    };
+
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-draft",
+    });
+    await expect(responder.maybeRespond(input)).resolves.toEqual({
+      status: "skipped",
+      reason: "duplicate_message",
+    });
+    expect(knowledgeDraftCommand.execute).toHaveBeenCalledWith({
+      messageId: "om_create_draft",
+      chatId: "oc_pilot",
+      requesterOpenId: "ou_owner",
+      requestText: "\u628a\u521a\u624d\u8ba8\u8bba\u6574\u7406\u6210\u77e5\u8bc6\u8349\u7a3f",
+      observedAt: new Date("2026-08-02T03:00:00.000Z"),
+    });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_create_draft",
+      text: "\u77e5\u8bc6\u8349\u7a3f\u5df2\u751f\u6210\uff0c\u7fa4\u786e\u8ba4\u5361\u7247\u6b63\u5728\u53d1\u9001\u3002\u5f53\u524d\u5c1a\u672a\u5199\u5165\u77e5\u8bc6\u5e93\u3002",
+      replyInThread: true,
+      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+    });
+  });
+
+  it.each([
+    "@_user_1 \u80fd\u5e2e\u6211\u521b\u5efa\u4e00\u4efd\u77e5\u8bc6\u8349\u7a3f\u5417\uff1f",
+    "@_user_1 Can you create a knowledge draft from this discussion?",
+  ])("treats a polite knowledge-draft request as an explicit command: %s", async (text) => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const knowledgeDraftCommand = {
+      execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>(async () => ({
+        status: "created",
+        draftId: "draft-polite",
+        presentationId: "presentation-polite",
+      })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-polite" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      knowledgeDraftCommand,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: `om_polite_${text.length}`,
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      senderOpenId: "ou_owner",
+      text,
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(knowledgeDraftCommand.execute).toHaveBeenCalledOnce();
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
+  it("keeps an ordinary knowledge-base question on the answer path", async () => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "A normal answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const knowledgeDraftCommand = { execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>() };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-normal" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      knowledgeDraftCommand,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_knowledge_question",
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      text: "@_user_1 \u77e5\u8bc6\u5e93\u662f\u4ec0\u4e48\uff1f",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(knowledgeDraftCommand.execute).not.toHaveBeenCalled();
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "@_user_1 \u77e5\u8bc6\u8349\u7a3f\u662f\u4ec0\u4e48\uff1f",
+    "@_user_1 \u5982\u4f55\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\uff1f",
+    "@_user_1 \u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u9700\u8981\u4ec0\u4e48\u6d41\u7a0b\uff1f",
+    "@_user_1 \u4e0d\u8981\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f",
+    "@_user_1 \u522b\u628a\u8fd9\u6bb5\u8ba8\u8bba\u6574\u7406\u5230\u77e5\u8bc6\u5e93",
+  ])("does not persist a draft for a question or negated command: %s", async (text) => {
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "A normal answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const knowledgeDraftCommand = { execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>() };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-normal" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      knowledgeDraftCommand,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: `om_non_command_${text.length}`,
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      senderOpenId: "ou_owner",
+      text,
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(knowledgeDraftCommand.execute).not.toHaveBeenCalled();
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when an explicit draft command has no requester identity", async () => {
+    const knowledgeDraftCommand = { execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>() };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-no-sender" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator: { generateDraft: vi.fn() },
+      knowledgeDraftCommand,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_draft_no_sender",
+      chatId: "oc_pilot",
+      senderId: "on_union_id_is_not_an_open_id",
+      text: "@_user_1 create a knowledge draft",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(knowledgeDraftCommand.execute).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "\u6682\u65f6\u65e0\u6cd5\u786e\u8ba4\u8bf7\u6c42\u4eba\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002",
+    }));
+  });
+
+  it("does not fall through to ordinary answering when the draft command is unavailable", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-disabled" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_draft_unavailable",
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      senderOpenId: "ou_owner",
+      text: "@_user_1 create a knowledge draft",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "\u5f53\u524d\u77e5\u8bc6\u8349\u7a3f\u529f\u80fd\u672a\u5f00\u653e\uff0c\u672a\u521b\u5efa\u8349\u7a3f\uff0c\u4e5f\u672a\u5199\u5165\u77e5\u8bc6\u5e93\u3002",
+    }));
+  });
+
+  it.each([
+    {
+      status: "runtime_disabled" as const,
+      expected: "\u5f53\u524d\u77e5\u8bc6\u8349\u7a3f\u529f\u80fd\u672a\u5f00\u653e\uff0c\u672a\u521b\u5efa\u8349\u7a3f\uff0c\u4e5f\u672a\u5199\u5165\u77e5\u8bc6\u5e93\u3002",
+    },
+    {
+      status: "no_context" as const,
+      expected: "\u6700\u8fd1\u6ca1\u6709\u53ef\u6574\u7406\u7684\u7fa4\u804a\u5185\u5bb9\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002",
+    },
+    {
+      status: "target_unavailable" as const,
+      expected: "\u5f53\u524d\u7fa4\u5c1a\u672a\u914d\u7f6e\u552f\u4e00\u7684\u77e5\u8bc6\u5e93\u53d1\u5e03\u4f4d\u7f6e\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002",
+    },
+  ])("returns a bounded $status draft outcome", async ({ status, expected }) => {
+    const knowledgeDraftCommand = {
+      execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>(async () => ({ status })),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-outcome" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator: { generateDraft: vi.fn() },
+      knowledgeDraftCommand,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: `om_${status}`,
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      senderOpenId: "ou_owner",
+      text: "@_user_1 archive this discussion to the knowledge base",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({ text: expected }));
+  });
+
+  it("uses the capacity fallback for draft generation without exposing provider detail", async () => {
+    const knowledgeDraftCommand = {
+      execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>(async () => {
+        throw new ChatKnowledgeDraftModelUnavailableError(
+          new ModelProviderHttpError(429, "private quota detail"),
+        );
+      }),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-capacity" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator: { generateDraft: vi.fn() },
+      knowledgeDraftCommand,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_draft_capacity",
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      senderOpenId: "ou_owner",
+      text: "@_user_1 create a knowledge draft",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "\u6a21\u578b\u670d\u52a1\u6682\u65f6\u8fbe\u5230\u4f7f\u7528\u4e0a\u9650\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002\u6062\u590d\u540e\u8bf7\u518d @\u6211\u4e00\u6b21\u3002",
+    }));
+  });
+
+  it.each([
+    {
+      name: "provider 503",
+      error: new ModelProviderHttpError(503, "private upstream detail"),
+    },
+    {
+      name: "provider timeout",
+      error: new Error("model provider request timed out"),
+    },
+  ])("returns a bounded non-creation reply for $name", async ({ error }) => {
+    const knowledgeDraftCommand = {
+      execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>(async () => {
+        throw error;
+      }),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-unavailable" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator: { generateDraft: vi.fn() },
+      knowledgeDraftCommand,
+      replier,
+    });
+
+    await expect(responder.maybeRespond({
+      messageId: `om_draft_unavailable_${error.message.length}`,
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      senderOpenId: "ou_owner",
+      text: "@_user_1 create a knowledge draft",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    })).resolves.toMatchObject({ status: "replied" });
+
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "\u6a21\u578b\u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002\u8bf7\u7a0d\u540e\u518d @\u6211\u4e00\u6b21\u3002",
+    }));
+  });
+
+  it("reports invalid draft model output as a safe non-creation", async () => {
+    const knowledgeDraftCommand = {
+      execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>(async () => {
+        throw new Error("knowledge draft model response is invalid");
+      }),
+    };
+    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-invalid" })) };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator: { generateDraft: vi.fn() },
+      knowledgeDraftCommand,
+      replier,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_draft_invalid",
+      chatId: "oc_pilot",
+      senderId: "ou_owner",
+      senderOpenId: "ou_owner",
+      text: "@_user_1 create a knowledge draft",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: "\u672a\u751f\u6210\u53ef\u9760\u7684\u77e5\u8bc6\u8349\u7a3f\uff0c\u6ca1\u6709\u521b\u5efa\u6216\u53d1\u5e03\u4efb\u4f55\u5185\u5bb9\u3002",
+    }));
+  });
+
   it("drafts an answer and replies when the configured Iris bot is mentioned", async () => {
     const answerDraftOrchestrator = {
       generateDraft: vi.fn(async () => ({

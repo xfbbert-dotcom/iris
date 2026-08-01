@@ -169,6 +169,7 @@ function maybeRespondToMention(
     messageId: parsed.providerMessageId,
     chatId: parsed.chatId,
     senderId: parsed.senderId,
+    ...(parsed.senderOpenId === undefined ? {} : { senderOpenId: parsed.senderOpenId }),
     text: parsed.text,
     mentions: parsed.mentions,
     observedAt: parsed.sentAt,

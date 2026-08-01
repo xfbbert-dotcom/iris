@@ -97,6 +97,10 @@ import {
 } from "./proactive-signals/proactive-signal-repository.js";
 import { registerKnowledgeDraftApi } from "./knowledge-governance/knowledge-draft-api.js";
 import {
+  createChatKnowledgeDraftCommand,
+  type ChatKnowledgeDraftCommand,
+} from "./knowledge-governance/chat-knowledge-draft-command.js";
+import {
   createKnowledgeDraftRuntime as createDefaultKnowledgeDraftRuntime,
   type KnowledgeDraftRuntime,
 } from "./runtime/knowledge-draft-runtime.js";
@@ -134,6 +138,7 @@ type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   memoryExtractionPlanner?: MemoryExtractionRuntime["planner"];
+  knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
 };
 
 type MemoryExtractionRuntimeFactoryInput = {
@@ -417,6 +422,19 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ? {}
         : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
     });
+    const chatKnowledgeDraftCommand =
+      answerDraftRuntime?.chatKnowledgeDraftGenerator !== undefined &&
+        knowledgeDraftRuntime !== undefined &&
+        knowledgeCardRuntime !== undefined &&
+        actionApprovalRuntime !== undefined
+        ? createChatKnowledgeDraftCommand({
+            generator: answerDraftRuntime.chatKnowledgeDraftGenerator,
+            canReadGroupContext: runtimeController.canReadGroupContext.bind(runtimeController),
+            draftRuntime: knowledgeDraftRuntime,
+            cardRuntime: knowledgeCardRuntime,
+            actionApprovalRuntime,
+          })
+        : undefined;
     actionReviewRuntime = (
       dependencies.createActionReviewRuntime ?? createDefaultActionReviewRuntime
     )({ actionApprovalRuntime });
@@ -467,6 +485,9 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ...(memoryExtractionRuntime === undefined
           ? {}
           : { memoryExtractionPlanner: memoryExtractionRuntime.planner }),
+        ...(chatKnowledgeDraftCommand === undefined
+          ? {}
+          : { knowledgeDraftCommand: chatKnowledgeDraftCommand }),
       });
     const eventWorkerPrerequisite =
       proactiveSignalDeliveryStartup ??

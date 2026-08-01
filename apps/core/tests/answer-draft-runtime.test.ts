@@ -94,6 +94,7 @@ describe("createAnswerDraftRuntime", () => {
       model: "model-a",
       timeoutMs: 30000,
     });
+    expect(runtime?.chatKnowledgeDraftGenerator).toBeDefined();
 
     await runtime?.close();
     expect(pool.end).toHaveBeenCalled();

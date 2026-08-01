@@ -57,6 +57,7 @@ import {
   type RawEventWorkerLoop,
 } from "../events/raw-event-worker-loop.js";
 import type { MemoryExtractionPlanner } from "../memory-extraction/memory-extraction-planner.js";
+import type { ChatKnowledgeDraftCommand } from "../knowledge-governance/chat-knowledge-draft-command.js";
 import { closeRuntimeResources } from "./runtime-close.js";
 import { observeStartupPromise } from "./startup-promise.js";
 
@@ -131,12 +132,14 @@ export function createEventWorkerRuntime({
   runtimeController,
   answerDraftOrchestrator,
   memoryExtractionPlanner,
+  knowledgeDraftCommand,
 }: {
   env?: EnvLike;
   dependencies?: EventWorkerRuntimeDependencies;
   runtimeController?: RuntimeGate;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
+  knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
 } = {}): EventWorkerRuntime | undefined {
   const runtimeConfig = readEventWorkerRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
@@ -150,6 +153,7 @@ export function createEventWorkerRuntime({
     runtimeController,
     answerDraftOrchestrator,
     memoryExtractionPlanner,
+    knowledgeDraftCommand,
   });
 }
 
@@ -160,6 +164,7 @@ function createEnabledEventWorkerRuntime({
   runtimeController,
   answerDraftOrchestrator,
   memoryExtractionPlanner,
+  knowledgeDraftCommand,
 }: {
   env: EnvLike;
   runtimeConfig: Extract<EventWorkerRuntimeConfig, { enabled: true }>;
@@ -167,6 +172,7 @@ function createEnabledEventWorkerRuntime({
   runtimeController: RuntimeGate | undefined;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
   memoryExtractionPlanner: Pick<MemoryExtractionPlanner, "registerMessage"> | undefined;
+  knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
 }): EventWorkerRuntime {
   const createRedis =
     dependencies.createRedisClient ??
@@ -204,6 +210,7 @@ function createEnabledEventWorkerRuntime({
   const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
     env,
     answerDraftOrchestrator,
+    knowledgeDraftCommand,
     runtimeController,
     documentLinkExtractor,
     userSubmittedDocumentRegistrar: {
@@ -320,6 +327,7 @@ function createEnabledEventWorkerRuntime({
 function createOptionalMentionAnswerResponder({
   env,
   answerDraftOrchestrator,
+  knowledgeDraftCommand,
   runtimeController,
   documentLinkExtractor,
   userSubmittedDocumentRegistrar,
@@ -329,6 +337,7 @@ function createOptionalMentionAnswerResponder({
 }: {
   env: EnvLike;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
+  knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
   runtimeController: RuntimeGate | undefined;
   documentLinkExtractor: ReturnType<typeof createFeishuDocumentLinkExtractor>;
   userSubmittedDocumentRegistrar: Pick<AsyncDocumentSourceRegistry, "registerUserSubmittedDocument">;
@@ -368,6 +377,7 @@ function createOptionalMentionAnswerResponder({
     responder: createMentionResponder({
       botOpenId,
       answerDraftOrchestrator,
+      ...(knowledgeDraftCommand === undefined ? {} : { knowledgeDraftCommand }),
       replier,
       documentLinkExtractor,
       userSubmittedDocumentRegistrar,

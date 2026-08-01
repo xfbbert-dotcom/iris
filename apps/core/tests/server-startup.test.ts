@@ -26,6 +26,8 @@ import type { ProactiveSignalPlannerRuntime } from "../src/runtime/proactive-sig
 import type { ReindexWorkerRuntime } from "../src/runtime/reindex-worker-runtime.js";
 import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runtime.js";
 import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
+import type { KnowledgeDraftRuntime } from "../src/runtime/knowledge-draft-runtime.js";
+import type { AnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
 import { isolateEnvVar } from "./test-env.js";
 
 let restorePort: () => void = () => undefined;
@@ -51,6 +53,47 @@ afterEach(async () => {
 });
 
 describe("Core server startup", () => {
+  it("wires the governed chat knowledge-draft command into the event worker", async () => {
+    const answerDraftRuntime: AnswerDraftRuntime = {
+      answerDraftOrchestrator: { generateDraft: vi.fn() },
+      chatKnowledgeDraftGenerator: {
+        generate: vi.fn(async () => ({ status: "no_context" as const })),
+      },
+      close: vi.fn(async () => undefined),
+    };
+    const knowledgeDraftRuntime: KnowledgeDraftRuntime = {
+      repository: {} as KnowledgeDraftRuntime["repository"],
+      canCreateDraft: vi.fn(() => true),
+      getStatus: vi.fn(),
+      close: vi.fn(async () => undefined),
+    };
+    const knowledgeCardRuntime = fakeKnowledgeCardRuntime();
+    const actionApprovalRuntime = fakeActionApprovalRuntime();
+    const createEventWorkerRuntime = vi.fn(() => undefined);
+    const app = buildApp({
+      createAgentExecutionLedgerRuntime: () => undefined,
+      createAnswerDraftRuntime: () => answerDraftRuntime,
+      createReindexWorkerRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => undefined,
+      createConversationStateInspectionRuntime: () => undefined,
+      createProactiveSignalRuntime: () => undefined,
+      createKnowledgeDraftRuntime: () => knowledgeDraftRuntime,
+      createKnowledgeCardRuntime: () => knowledgeCardRuntime,
+      createActionApprovalRuntime: () => actionApprovalRuntime,
+      createActionReviewRuntime: () => undefined,
+      createProactiveSignalPlannerRuntime: () => undefined,
+      createProactiveSignalDeliveryRuntime: () => undefined,
+      createEventWorkerRuntime,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    expect(createEventWorkerRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      answerDraftOrchestrator: answerDraftRuntime.answerDraftOrchestrator,
+      knowledgeDraftCommand: expect.objectContaining({ execute: expect.any(Function) }),
+    }));
+    await app.close();
+  });
+
   it("rejects an invalid port before creating runtime resources", async () => {
     process.env.PORT = "65536";
     process.env.IRIS_INTERNAL_API_TOKEN = "operator-secret";

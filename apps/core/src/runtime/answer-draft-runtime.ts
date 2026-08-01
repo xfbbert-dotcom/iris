@@ -82,9 +82,14 @@ import {
   type ConversationStateContextProvider,
 } from "../conversation-state/conversation-state-context-provider.js";
 import type { PostgresConversationStateDataSource } from "../conversation-state/postgres-conversation-state-repository.js";
+import {
+  createChatKnowledgeDraftGenerator,
+  type ChatKnowledgeDraftGenerator,
+} from "../knowledge-governance/chat-knowledge-draft-generator.js";
 
 export type AnswerDraftRuntime = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  chatKnowledgeDraftGenerator?: ChatKnowledgeDraftGenerator;
   groupMemoryService?: GroupMemoryService;
   close(): Promise<void>;
 };
@@ -319,6 +324,13 @@ export function createAnswerDraftRuntime({
 
   return {
     answerDraftOrchestrator,
+    chatKnowledgeDraftGenerator: createChatKnowledgeDraftGenerator({
+      repository: conversationMessages,
+      model,
+      canReadGroupContext: (groupId) => (
+        runtimeController?.canReadGroupContext?.(groupId) === true
+      ),
+    }),
     ...(groupMemoryService === undefined ? {} : { groupMemoryService }),
     close() {
       return pool.end();

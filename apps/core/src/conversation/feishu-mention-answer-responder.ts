@@ -4,7 +4,12 @@ import type { AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator
 import type { RegisterUserSubmittedDocumentInput } from "../documents/document-source-registry.js";
 import type { FeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
 import type { FeishuMessageReplier } from "../feishu/feishu-message-replier.js";
-import { isModelProviderCapacityError } from "../model/model-provider-error.js";
+import type { ChatKnowledgeDraftCommand } from "../knowledge-governance/chat-knowledge-draft-command.js";
+import { ChatKnowledgeDraftModelUnavailableError } from "../knowledge-governance/chat-knowledge-draft-generator.js";
+import {
+  ModelProviderHttpError,
+  isModelProviderCapacityError,
+} from "../model/model-provider-error.js";
 
 export type FeishuMessageMention = {
   key: string;
@@ -16,6 +21,7 @@ export type FeishuMentionAnswerInput = {
   messageId: string;
   chatId: string;
   senderId?: string;
+  senderOpenId?: string;
   text?: string;
   mentions: FeishuMessageMention[];
   observedAt?: Date;
@@ -38,6 +44,7 @@ export type FeishuMentionAnswerResponderDependencies = {
   replier: Pick<FeishuMessageReplier, "replyText">;
   canReplyWhenMentioned?: (chatId: string) => boolean;
   canRegisterUserSubmittedDocuments?: (chatId: string) => boolean;
+  knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
   documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
   userSubmittedDocumentRegistrar?: Pick<
     UserSubmittedDocumentRegistrar,
@@ -67,6 +74,41 @@ const USER_SUBMITTED_DOCUMENT_DISABLED =
   "\u5f53\u524d\u6587\u6863\u8bfb\u53d6\u80fd\u529b\u5df2\u5173\u95ed\uff0c\u6211\u4e0d\u4f1a\u6536\u5f55\u8fd9\u4e2a\u6587\u6863\u3002";
 const USER_SUBMITTED_DOCUMENT_SENDER_REQUIRED =
   "\u6211\u6682\u65f6\u65e0\u6cd5\u786e\u8ba4\u63d0\u4ea4\u4eba\uff0c\u4e0d\u80fd\u6536\u5f55\u8fd9\u4e2a\u6587\u6863\u3002";
+const KNOWLEDGE_DRAFT_CREATED =
+  "\u77e5\u8bc6\u8349\u7a3f\u5df2\u751f\u6210\uff0c\u7fa4\u786e\u8ba4\u5361\u7247\u6b63\u5728\u53d1\u9001\u3002\u5f53\u524d\u5c1a\u672a\u5199\u5165\u77e5\u8bc6\u5e93\u3002";
+const KNOWLEDGE_DRAFT_RUNTIME_DISABLED =
+  "\u5f53\u524d\u77e5\u8bc6\u8349\u7a3f\u529f\u80fd\u672a\u5f00\u653e\uff0c\u672a\u521b\u5efa\u8349\u7a3f\uff0c\u4e5f\u672a\u5199\u5165\u77e5\u8bc6\u5e93\u3002";
+const KNOWLEDGE_DRAFT_NO_CONTEXT =
+  "\u6700\u8fd1\u6ca1\u6709\u53ef\u6574\u7406\u7684\u7fa4\u804a\u5185\u5bb9\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002";
+const KNOWLEDGE_DRAFT_TARGET_UNAVAILABLE =
+  "\u5f53\u524d\u7fa4\u5c1a\u672a\u914d\u7f6e\u552f\u4e00\u7684\u77e5\u8bc6\u5e93\u53d1\u5e03\u4f4d\u7f6e\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002";
+const KNOWLEDGE_DRAFT_SENDER_REQUIRED =
+  "\u6682\u65f6\u65e0\u6cd5\u786e\u8ba4\u8bf7\u6c42\u4eba\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002";
+const KNOWLEDGE_DRAFT_MODEL_CAPACITY =
+  "\u6a21\u578b\u670d\u52a1\u6682\u65f6\u8fbe\u5230\u4f7f\u7528\u4e0a\u9650\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002\u6062\u590d\u540e\u8bf7\u518d @\u6211\u4e00\u6b21\u3002";
+const KNOWLEDGE_DRAFT_MODEL_INVALID =
+  "\u672a\u751f\u6210\u53ef\u9760\u7684\u77e5\u8bc6\u8349\u7a3f\uff0c\u6ca1\u6709\u521b\u5efa\u6216\u53d1\u5e03\u4efb\u4f55\u5185\u5bb9\u3002";
+const KNOWLEDGE_DRAFT_MODEL_UNAVAILABLE =
+  "\u6a21\u578b\u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u672a\u521b\u5efa\u77e5\u8bc6\u8349\u7a3f\u3002\u8bf7\u7a0d\u540e\u518d @\u6211\u4e00\u6b21\u3002";
+const KNOWLEDGE_DRAFT_MODEL_INVALID_ERROR_MESSAGE =
+  "knowledge draft model response is invalid";
+const knowledgeDraftIntentPatterns = [
+  /(?:\u521b\u5efa|\u751f\u6210|\u4ea7\u51fa|\u5236\u4f5c|\u51c6\u5907|\u6574\u7406|\u603b\u7ed3).{0,16}(?:\u4e00\u4efd|\u4e00\u4e2a)?(?:\u53ef\u5ba1\u9605\u7684)?\u77e5\u8bc6\u8349\u7a3f/u,
+  /(?:\u628a|\u5c06).{0,48}(?:\u6574\u7406|\u603b\u7ed3|\u6c89\u6dc0)(?:\u6210|\u4e3a).{0,4}\u77e5\u8bc6\u8349\u7a3f/u,
+  /(?:\u5f52\u6863|\u6c89\u6dc0|\u6574\u7406|\u603b\u7ed3).{0,12}(?:\u5230|\u8fdb|\u4e3a)(?:\u98de\u4e66)?\u77e5\u8bc6\u5e93/u,
+  /\b(?:create|make|prepare|generate)\s+(?:a\s+)?knowledge\s+draft\b/iu,
+  /\b(?:archive|capture|save)\b.{0,64}\bknowledge\s*base\b/iu,
+] as const;
+const negatedKnowledgeDraftIntentPatterns = [
+  /(?:\u4e0d\u8981|\u522b|\u65e0\u9700|\u4e0d\u7528|\u7981\u6b62|\u53d6\u6d88).{0,20}(?:\u521b\u5efa|\u751f\u6210|\u4ea7\u51fa|\u5236\u4f5c|\u51c6\u5907|\u6574\u7406|\u603b\u7ed3|\u5f52\u6863|\u6c89\u6dc0)/u,
+  /\b(?:do\s+not|don't|dont|never)\b.{0,32}\b(?:create|make|prepare|generate|archive|capture|save)\b/iu,
+] as const;
+const knowledgeDraftQuestionPatterns = [
+  /^(?:\u5982\u4f55|\u600e\u4e48|\u600e\u6837|\u4e3a\u4ec0\u4e48|\u4f55\u65f6|\u54ea\u91cc|\u5728\u54ea).{0,64}(?:\u77e5\u8bc6\u8349\u7a3f|\u77e5\u8bc6\u5e93)/u,
+  /(?:\u521b\u5efa|\u751f\u6210|\u4ea7\u51fa|\u5236\u4f5c|\u51c6\u5907|\u6574\u7406|\u603b\u7ed3).{0,16}\u77e5\u8bc6\u8349\u7a3f.{0,20}(?:\u9700\u8981\u4ec0\u4e48|\u600e\u4e48|\u5982\u4f55|\u4ec0\u4e48\u6d41\u7a0b|\u54ea\u4e9b\u6b65\u9aa4|\u6709\u4ec0\u4e48\u8981\u6c42)[\uff1f?]?$/u,
+  /^(?:how|what|why|when|where)\b.{0,80}\bknowledge\s+draft\b/iu,
+  /^(?:can|could|should|would)\s+i\b.{0,80}\bknowledge\s+draft\b/iu,
+] as const;
 const userSubmittedDocumentIntentPatterns = [
   /\b(?:add|submit|register|index)\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
   /\bread\s+(?:this\s+)?(?:feishu\s+)?doc(?:ument)?\b/iu,
@@ -80,6 +122,7 @@ export function createFeishuMentionAnswerResponder({
   replier,
   canReplyWhenMentioned = () => true,
   canRegisterUserSubmittedDocuments = () => true,
+  knowledgeDraftCommand,
   documentLinkExtractor,
   userSubmittedDocumentRegistrar,
 }: FeishuMentionAnswerResponderDependencies): FeishuMentionAnswerResponder {
@@ -120,11 +163,52 @@ export function createFeishuMentionAnswerResponder({
         }
 
         const fullQuestion = stripMentionKeys(input.text, botMentionKeys);
+        const normalizedSenderId = normalizeOptionalText(input.senderId);
+        const normalizedSenderOpenId = normalizeOptionalText(input.senderOpenId);
+        if (detectKnowledgeDraftCommand(fullQuestion)) {
+          let replyText: string;
+          if (knowledgeDraftCommand === undefined) {
+            replyText = KNOWLEDGE_DRAFT_RUNTIME_DISABLED;
+          } else if (normalizedSenderOpenId === undefined) {
+            replyText = KNOWLEDGE_DRAFT_SENDER_REQUIRED;
+          } else {
+            try {
+              const commandResult = await knowledgeDraftCommand.execute({
+                messageId: input.messageId,
+                chatId: input.chatId,
+                requesterOpenId: normalizedSenderOpenId,
+                requestText: fullQuestion,
+                observedAt: input.observedAt ?? new Date(),
+              });
+              replyText = knowledgeDraftReplyText(commandResult.status);
+            } catch (error) {
+              if (isKnowledgeDraftModelCapacityError(error)) {
+                replyText = KNOWLEDGE_DRAFT_MODEL_CAPACITY;
+              } else if (isInvalidKnowledgeDraftModelResponse(error)) {
+                replyText = KNOWLEDGE_DRAFT_MODEL_INVALID;
+              } else if (isKnowledgeDraftModelUnavailableError(error)) {
+                replyText = KNOWLEDGE_DRAFT_MODEL_UNAVAILABLE;
+              } else {
+                throw error;
+              }
+            }
+          }
+          const result = toRepliedResult(
+            await replier.replyText({
+              messageId: input.messageId,
+              text: replyText,
+              replyInThread: true,
+              uuid: replyUuid,
+            }),
+          );
+          replyDeduper.markHandled(input.messageId);
+          return result;
+        }
+
         const userSubmittedDocumentCommand = detectUserSubmittedDocumentCommand({
           text: fullQuestion,
           documentLinkExtractor,
         });
-        const normalizedSenderId = normalizeOptionalText(input.senderId);
         if (userSubmittedDocumentCommand.intent) {
           if (documentLinkExtractor === undefined || userSubmittedDocumentRegistrar === undefined) {
             const result = toRepliedResult(
@@ -342,6 +426,32 @@ function detectUserSubmittedDocumentCommand({
   return { intent: true, sourceUri: documentLinkExtractor.extractLinks(text)[0]?.sourceUri };
 }
 
+function detectKnowledgeDraftCommand(text: string): boolean {
+  if (
+    negatedKnowledgeDraftIntentPatterns.some((pattern) => pattern.test(text)) ||
+    knowledgeDraftQuestionPatterns.some((pattern) => pattern.test(text))
+  ) {
+    return false;
+  }
+  return knowledgeDraftIntentPatterns.some((pattern) => pattern.test(text));
+}
+
+function knowledgeDraftReplyText(
+  status: "created" | "already_created" | "runtime_disabled" | "no_context" | "target_unavailable",
+): string {
+  switch (status) {
+    case "created":
+    case "already_created":
+      return KNOWLEDGE_DRAFT_CREATED;
+    case "runtime_disabled":
+      return KNOWLEDGE_DRAFT_RUNTIME_DISABLED;
+    case "no_context":
+      return KNOWLEDGE_DRAFT_NO_CONTEXT;
+    case "target_unavailable":
+      return KNOWLEDGE_DRAFT_TARGET_UNAVAILABLE;
+  }
+}
+
 function truncateQuestion(value: string): string {
   if (value.length <= MAX_MENTION_QUESTION_CHARS) {
     return value;
@@ -365,6 +475,23 @@ function toRepliedResult(result: { replyMessageId?: string }): FeishuMentionAnsw
 
 function isBlankModelAnswerError(error: unknown): boolean {
   return error instanceof Error && error.message === BLANK_MODEL_ANSWER_ERROR_MESSAGE;
+}
+
+function isInvalidKnowledgeDraftModelResponse(error: unknown): boolean {
+  return error instanceof Error && error.message === KNOWLEDGE_DRAFT_MODEL_INVALID_ERROR_MESSAGE;
+}
+
+function isKnowledgeDraftModelCapacityError(error: unknown): boolean {
+  return isModelProviderCapacityError(error) || (
+    error instanceof ChatKnowledgeDraftModelUnavailableError &&
+    isModelProviderCapacityError(error.providerCause)
+  );
+}
+
+function isKnowledgeDraftModelUnavailableError(error: unknown): boolean {
+  if (error instanceof ChatKnowledgeDraftModelUnavailableError) return true;
+  if (error instanceof ModelProviderHttpError) return true;
+  return error instanceof Error && error.message.startsWith("model provider ");
 }
 
 function normalizeRequiredOpenId(value: string): string {
