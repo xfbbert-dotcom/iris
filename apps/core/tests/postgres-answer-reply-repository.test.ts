@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -135,6 +135,137 @@ describe("answer reply persisted row validation", () => {
     }],
   ])("rejects a malformed event with %s", async (_label, overrides) => {
     const repository = repositoryForRows({ events: [eventRow(overrides)] });
+
+    await expect(findTestReceipt(repository)).rejects.toThrow(
+      "answer reply persistence failed",
+    );
+  });
+});
+
+describe("answer reply assembled receipt validation", () => {
+  it.each([
+    ["source trace IDs", {
+      sources: [sourceTraceRow({ id: "answer-reply-source-not-deterministic" })],
+    }],
+    ["event IDs", {
+      events: [eventRow({ id: "answer-reply-event-not-deterministic" })],
+    }],
+    ["source trace ownership", {
+      sources: [sourceTraceRow({ delivery_id: createAnswerReplyDeliveryId(
+        "feishu",
+        "incoming-other-owner",
+      ) })],
+    }],
+    ["event ownership", {
+      events: [eventRow({ delivery_id: createAnswerReplyDeliveryId(
+        "feishu",
+        "incoming-other-owner",
+      ) })],
+    }],
+  ])("rejects invalid assembled %s", async (_label, rows) => {
+    const repository = repositoryForRows(rows);
+
+    await expect(findTestReceipt(repository)).rejects.toThrow(
+      "answer reply persistence failed",
+    );
+  });
+
+  it.each([
+    ["a source prompt-rank gap", {
+      sources: [sourceTraceRow({
+        prompt_rank: 2,
+        document_source_id: "source-b",
+      })],
+      events: [eventRow({
+        source_count: 1,
+        document_source_ids: ["source-b"],
+      })],
+    }],
+    ["sources returned out of rank order", {
+      sources: [
+        sourceTraceRow({
+          prompt_rank: 2,
+          document_source_id: "source-b",
+        }),
+        sourceTraceRow(),
+      ],
+      events: [eventRow({
+        source_count: 2,
+        document_source_ids: ["source-b", "source-a"],
+      })],
+    }],
+    ["an event sequence gap", {
+      delivery: sendingDeliveryRow({ version: 2 }),
+      events: [
+        eventRow(),
+        eventRow({
+          sequence: 3,
+          event_type: "send_started",
+          attempt_number: 1,
+          created_at: new Date("2026-08-02T00:01:00.000Z"),
+        }),
+      ],
+    }],
+    ["events returned out of sequence order", {
+      delivery: sendingDeliveryRow({ version: 2 }),
+      events: [
+        eventRow({
+          sequence: 2,
+          event_type: "send_started",
+          attempt_number: 1,
+          created_at: new Date("2026-08-02T00:01:00.000Z"),
+        }),
+        eventRow(),
+      ],
+    }],
+    ["an event source-count mismatch", {
+      events: [eventRow({ source_count: 2 })],
+    }],
+    ["an unknown event document source ID", {
+      events: [eventRow({ document_source_ids: ["source-unknown"] })],
+    }],
+    ["event document source IDs outside trace order", {
+      sources: [
+        sourceTraceRow(),
+        sourceTraceRow({
+          prompt_rank: 2,
+          document_source_id: "source-b",
+        }),
+      ],
+      events: [eventRow({
+        source_count: 2,
+        document_source_ids: ["source-b", "source-a"],
+      })],
+    }],
+    ["a delivery version without its event", {
+      delivery: sendingDeliveryRow({ version: 2 }),
+      events: [eventRow()],
+    }],
+    ["a delivery state outside its event history", {
+      delivery: deliveryRow({ version: 2 }),
+      events: [
+        eventRow(),
+        eventRow({
+          sequence: 2,
+          event_type: "permission_blocked",
+          created_at: new Date("2026-08-02T00:01:00.000Z"),
+        }),
+      ],
+    }],
+    ["a noncontiguous answer attempt number", {
+      delivery: sendingDeliveryRow({ version: 2 }),
+      events: [
+        eventRow(),
+        eventRow({
+          sequence: 2,
+          event_type: "send_started",
+          attempt_number: 2,
+          created_at: new Date("2026-08-02T00:01:00.000Z"),
+        }),
+      ],
+    }],
+  ])("rejects an assembled receipt with %s", async (_label, rows) => {
+    const repository = repositoryForRows(rows);
 
     await expect(findTestReceipt(repository)).rejects.toThrow(
       "answer reply persistence failed",
@@ -489,7 +620,7 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
       { eventType: "safe_notice_send_started", attemptNumber: 1 },
       { eventType: "safe_notice_send_started", attemptNumber: 2 },
       { eventType: "safe_notice_sent", attemptNumber: undefined },
-    ]);
+  ]);
   });
 
   it("prevents update, delete, and truncate of traces and events", async () => {
@@ -656,6 +787,67 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     })).rejects.toThrow("answer reply persistence failed");
   });
 
+  const assembledCorruptionCases: Array<[
+    string,
+    (fixture: RawReceiptFixture) => void,
+  ]> = [
+    ["a nondeterministic source trace ID", (fixture) => {
+      fixture.sources[0]!.id = "answer-reply-source-not-deterministic";
+    }],
+    ["a nondeterministic event ID", (fixture) => {
+      fixture.events[0]!.id = "answer-reply-event-not-deterministic";
+    }],
+    ["a source prompt-rank gap", (fixture) => {
+      fixture.sources[0]!.prompt_rank = 2;
+      fixture.sources[0]!.id = testSourceTraceId(fixture.delivery.id as string, 2);
+    }],
+    ["an event sequence gap", (fixture) => {
+      makeRawFixtureSending(fixture, 2);
+      fixture.events.push(eventRow({
+        id: testEventId(fixture.delivery.id as string, 3),
+        delivery_id: fixture.delivery.id,
+        sequence: 3,
+        event_type: "send_started",
+        attempt_number: 1,
+        created_at: new Date("2026-08-02T00:01:00.000Z"),
+      }));
+    }],
+    ["an event source-count mismatch", (fixture) => {
+      fixture.events[0]!.source_count = 2;
+    }],
+    ["an unknown event document source ID", (fixture) => {
+      fixture.events[0]!.document_source_ids = ["source-unknown"];
+    }],
+    ["event document source IDs outside trace order", (fixture) => {
+      fixture.sources.push(sourceTraceRow({
+        id: testSourceTraceId(fixture.delivery.id as string, 2),
+        delivery_id: fixture.delivery.id,
+        prompt_rank: 2,
+        document_source_id: "source-b",
+      }));
+      fixture.events[0]!.source_count = 2;
+      fixture.events[0]!.document_source_ids = ["source-b", "source-a"];
+    }],
+    ["a delivery version without its event", (fixture) => {
+      fixture.delivery.version = 2;
+    }],
+  ];
+
+  it.each(assembledCorruptionCases)("rejects persisted assembled corruption with %s", async (
+    _label,
+    corrupt,
+  ) => {
+    const fixture = rawReceiptFixture(`assembled-${randomUUID()}`);
+    corrupt(fixture);
+    await insertRawReceipt(pool!, fixture);
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+
+    await expect(repository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: fixture.incomingMessageId,
+    })).rejects.toThrow("answer reply persistence failed");
+  });
+
   it("counts unresolved answers, unsent safe notices, and reconciliation cases", async () => {
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const baseline = await repository.getStatus();
@@ -799,9 +991,15 @@ function deliveryRow(overrides: Record<string, unknown> = {}) {
 }
 
 function sourceTraceRow(overrides: Record<string, unknown> = {}) {
+  const deliveryId = typeof overrides.delivery_id === "string"
+    ? overrides.delivery_id
+    : createAnswerReplyDeliveryId("feishu", "incoming-row-test");
+  const promptRank = typeof overrides.prompt_rank === "number"
+    ? overrides.prompt_rank
+    : 1;
   return {
-    id: "answer-reply-source-row-test",
-    delivery_id: createAnswerReplyDeliveryId("feishu", "incoming-row-test"),
+    id: testSourceTraceId(deliveryId, promptRank),
+    delivery_id: deliveryId,
     prompt_rank: 1,
     citation_rank: 1,
     document_source_id: "source-a",
@@ -819,9 +1017,15 @@ function sourceTraceRow(overrides: Record<string, unknown> = {}) {
 }
 
 function eventRow(overrides: Record<string, unknown> = {}) {
+  const deliveryId = typeof overrides.delivery_id === "string"
+    ? overrides.delivery_id
+    : createAnswerReplyDeliveryId("feishu", "incoming-row-test");
+  const sequence = typeof overrides.sequence === "number"
+    ? overrides.sequence
+    : 1;
   return {
-    id: "answer-reply-event-row-test",
-    delivery_id: createAnswerReplyDeliveryId("feishu", "incoming-row-test"),
+    id: testEventId(deliveryId, sequence),
+    delivery_id: deliveryId,
     sequence: "1",
     event_type: "prepared",
     attempt_number: null,
@@ -830,6 +1034,154 @@ function eventRow(overrides: Record<string, unknown> = {}) {
     created_at: new Date("2026-08-02T00:00:00.000Z"),
     ...overrides,
   };
+}
+
+function sendingDeliveryRow(overrides: Record<string, unknown> = {}) {
+  return deliveryRow({
+    state: "sending",
+    attempt_count: 1,
+    version: 2,
+    updated_at: new Date("2026-08-02T00:01:00.000Z"),
+    last_send_started_at: new Date("2026-08-02T00:01:00.000Z"),
+    ...overrides,
+  });
+}
+
+type RawReceiptFixture = {
+  incomingMessageId: string;
+  delivery: Record<string, unknown>;
+  sources: Array<Record<string, unknown>>;
+  events: Array<Record<string, unknown>>;
+};
+
+function rawReceiptFixture(suffix: string): RawReceiptFixture {
+  const incomingMessageId = `incoming-${suffix}`;
+  const deliveryId = createAnswerReplyDeliveryId("feishu", incomingMessageId);
+  return {
+    incomingMessageId,
+    delivery: deliveryRow({
+      id: deliveryId,
+      incoming_message_id: incomingMessageId,
+      reply_uuid: createAnswerReplyUuid(incomingMessageId),
+      safe_notice_uuid: createAnswerReplySafeNoticeUuid(incomingMessageId),
+    }),
+    sources: [sourceTraceRow({
+      id: testSourceTraceId(deliveryId, 1),
+      delivery_id: deliveryId,
+    })],
+    events: [eventRow({
+      id: testEventId(deliveryId, 1),
+      delivery_id: deliveryId,
+    })],
+  };
+}
+
+function makeRawFixtureSending(fixture: RawReceiptFixture, version: number): void {
+  fixture.delivery.state = "sending";
+  fixture.delivery.attempt_count = 1;
+  fixture.delivery.version = version;
+  fixture.delivery.updated_at = new Date("2026-08-02T00:01:00.000Z");
+  fixture.delivery.last_send_started_at = new Date("2026-08-02T00:01:00.000Z");
+}
+
+async function insertRawReceipt(pool: pg.Pool, fixture: RawReceiptFixture): Promise<void> {
+  const delivery = fixture.delivery;
+  await pool.query(
+    `INSERT INTO answer_reply_deliveries (
+       id, provider, incoming_message_id, chat_id, reply_uuid,
+       safe_notice_uuid, state, prepared_reply_text,
+       rendered_reply_fingerprint, semantic_fingerprint,
+       reply_message_id, safe_notice_message_id, attempt_count,
+       safe_notice_attempt_count, version, created_at, updated_at,
+       last_send_started_at, sent_at, permission_blocked_at,
+       reconciliation_required_at, safe_notice_sent_at
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+       $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+     )`,
+    [
+      delivery.id,
+      delivery.provider,
+      delivery.incoming_message_id,
+      delivery.chat_id,
+      delivery.reply_uuid,
+      delivery.safe_notice_uuid,
+      delivery.state,
+      delivery.prepared_reply_text,
+      delivery.rendered_reply_fingerprint,
+      delivery.semantic_fingerprint,
+      delivery.reply_message_id,
+      delivery.safe_notice_message_id,
+      delivery.attempt_count,
+      delivery.safe_notice_attempt_count,
+      delivery.version,
+      delivery.created_at,
+      delivery.updated_at,
+      delivery.last_send_started_at,
+      delivery.sent_at,
+      delivery.permission_blocked_at,
+      delivery.reconciliation_required_at,
+      delivery.safe_notice_sent_at,
+    ],
+  );
+  for (const source of fixture.sources) {
+    await pool.query(
+      `INSERT INTO answer_reply_source_traces (
+         id, delivery_id, prompt_rank, citation_rank, document_source_id,
+         document_snapshot_id, fragment_id, chunk_index, source_type,
+         source_uri, source_title, content_hash, embedding_profile_id,
+         initial_permission_checked_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+       )`,
+      [
+        source.id,
+        source.delivery_id,
+        source.prompt_rank,
+        source.citation_rank,
+        source.document_source_id,
+        source.document_snapshot_id,
+        source.fragment_id,
+        source.chunk_index,
+        source.source_type,
+        source.source_uri,
+        source.source_title,
+        source.content_hash,
+        source.embedding_profile_id,
+        source.initial_permission_checked_at,
+      ],
+    );
+  }
+  for (const event of fixture.events) {
+    await pool.query(
+      `INSERT INTO answer_reply_delivery_events (
+         id, delivery_id, sequence, event_type, attempt_number,
+         source_count, document_source_ids, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        event.id,
+        event.delivery_id,
+        event.sequence,
+        event.event_type,
+        event.attempt_number,
+        event.source_count,
+        event.document_source_ids,
+        event.created_at,
+      ],
+    );
+  }
+}
+
+function testSourceTraceId(deliveryId: string, promptRank: number): string {
+  return `answer-reply-source-${testSha256(JSON.stringify([deliveryId, promptRank]))}`;
+}
+
+function testEventId(deliveryId: string, sequence: number): string {
+  return `answer-reply-event-${testSha256(JSON.stringify([deliveryId, sequence]))}`;
+}
+
+function testSha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function receiptReadBarrier(pool: pg.Pool): {

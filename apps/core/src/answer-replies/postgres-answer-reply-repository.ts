@@ -520,7 +520,7 @@ async function loadReceipt(
     loadSources(queryable, delivery.id),
     loadEvents(queryable, delivery.id),
   ]);
-  return { delivery, sources, events };
+  return requireAssembledReceipt({ delivery, sources, events });
 }
 
 async function loadSources(
@@ -997,6 +997,187 @@ function createSourceTraceId(deliveryId: string, promptRank: number): string {
 
 function createEventId(deliveryId: string, sequence: number): string {
   return `answer-reply-event-${sha256(JSON.stringify([deliveryId, sequence]))}`;
+}
+
+function requireAssembledReceipt(receipt: AnswerReplyReceipt): AnswerReplyReceipt {
+  const { delivery, sources, events } = receipt;
+  for (const [index, source] of sources.entries()) {
+    const promptRank = index + 1;
+    if (
+      source.deliveryId !== delivery.id
+      || source.promptRank !== promptRank
+      || source.id !== createSourceTraceId(delivery.id, promptRank)
+    ) {
+      throw new Error("answer reply database row is invalid");
+    }
+  }
+
+  if (events.length !== delivery.version) {
+    throw new Error("answer reply database row is invalid");
+  }
+
+  const authoritativeDocumentSourceIds = uniqueDocumentSourceIds(sources);
+  let answerAttemptCount = 0;
+  let safeNoticeAttemptCount = 0;
+  let ledgerState: AnswerReplyDeliveryState | undefined;
+  let safeNoticeSent = false;
+  let previousEventAt: Date | undefined;
+  let lastSendStartedAt: Date | undefined;
+  let sentAt: Date | undefined;
+  let permissionBlockedAt: Date | undefined;
+  let reconciliationRequiredAt: Date | undefined;
+  let safeNoticeSentAt: Date | undefined;
+
+  for (const [index, event] of events.entries()) {
+    const sequence = index + 1;
+    if (
+      event.deliveryId !== delivery.id
+      || event.sequence !== sequence
+      || event.id !== createEventId(delivery.id, sequence)
+      || event.sourceCount !== sources.length
+      || event.createdAt.getTime() < delivery.createdAt.getTime()
+      || event.createdAt.getTime() > delivery.updatedAt.getTime()
+      || (
+        previousEventAt !== undefined
+        && event.createdAt.getTime() < previousEventAt.getTime()
+      )
+    ) {
+      throw new Error("answer reply database row is invalid");
+    }
+
+    const isPermissionEvent = event.eventType === "permission_blocked"
+      || event.eventType === "reconciliation_required";
+    if (
+      isPermissionEvent
+        ? event.documentSourceIds.length < 1
+          || !isTraceOrderedSubset(
+            event.documentSourceIds,
+            authoritativeDocumentSourceIds,
+          )
+        : !arraysEqual(event.documentSourceIds, authoritativeDocumentSourceIds)
+    ) {
+      throw new Error("answer reply database row is invalid");
+    }
+
+    switch (event.eventType) {
+      case "prepared":
+        if (sequence !== 1 || ledgerState !== undefined) {
+          throw new Error("answer reply database row is invalid");
+        }
+        ledgerState = "prepared";
+        break;
+      case "send_started":
+        if (
+          (ledgerState !== "prepared" && ledgerState !== "sending")
+          || safeNoticeSent
+        ) {
+          throw new Error("answer reply database row is invalid");
+        }
+        answerAttemptCount += 1;
+        if (event.attemptNumber !== answerAttemptCount) {
+          throw new Error("answer reply database row is invalid");
+        }
+        ledgerState = "sending";
+        lastSendStartedAt = event.createdAt;
+        break;
+      case "sent":
+        if (ledgerState !== "sending" || safeNoticeSent) {
+          throw new Error("answer reply database row is invalid");
+        }
+        ledgerState = "sent";
+        sentAt = event.createdAt;
+        break;
+      case "permission_blocked":
+        if (ledgerState !== "prepared" || answerAttemptCount !== 0 || safeNoticeSent) {
+          throw new Error("answer reply database row is invalid");
+        }
+        ledgerState = "permission_blocked";
+        permissionBlockedAt = event.createdAt;
+        break;
+      case "reconciliation_required":
+        if (ledgerState !== "sending" || answerAttemptCount < 1 || safeNoticeSent) {
+          throw new Error("answer reply database row is invalid");
+        }
+        ledgerState = "reconciliation_required";
+        reconciliationRequiredAt = event.createdAt;
+        break;
+      case "safe_notice_send_started":
+        if (
+          (ledgerState !== "permission_blocked"
+            && ledgerState !== "reconciliation_required")
+          || safeNoticeSent
+        ) {
+          throw new Error("answer reply database row is invalid");
+        }
+        safeNoticeAttemptCount += 1;
+        if (event.attemptNumber !== safeNoticeAttemptCount) {
+          throw new Error("answer reply database row is invalid");
+        }
+        break;
+      case "safe_notice_sent":
+        if (
+          (ledgerState !== "permission_blocked"
+            && ledgerState !== "reconciliation_required")
+          || safeNoticeAttemptCount < 1
+          || safeNoticeSent
+        ) {
+          throw new Error("answer reply database row is invalid");
+        }
+        safeNoticeSent = true;
+        safeNoticeSentAt = event.createdAt;
+        break;
+    }
+    previousEventAt = event.createdAt;
+  }
+
+  if (
+    ledgerState !== delivery.state
+    || answerAttemptCount !== delivery.attemptCount
+    || safeNoticeAttemptCount !== delivery.safeNoticeAttemptCount
+    || safeNoticeSent !== (delivery.safeNoticeSentAt !== undefined)
+    || !datesEqual(events[0]?.createdAt, delivery.createdAt)
+    || !datesEqual(events.at(-1)?.createdAt, delivery.updatedAt)
+    || !datesEqual(lastSendStartedAt, delivery.lastSendStartedAt)
+    || !datesEqual(sentAt, delivery.sentAt)
+    || !datesEqual(permissionBlockedAt, delivery.permissionBlockedAt)
+    || !datesEqual(reconciliationRequiredAt, delivery.reconciliationRequiredAt)
+    || !datesEqual(safeNoticeSentAt, delivery.safeNoticeSentAt)
+  ) {
+    throw new Error("answer reply database row is invalid");
+  }
+
+  return receipt;
+}
+
+function isTraceOrderedSubset(
+  candidate: readonly string[],
+  authoritative: readonly string[],
+): boolean {
+  let authoritativeIndex = 0;
+  for (const documentSourceId of candidate) {
+    while (
+      authoritativeIndex < authoritative.length
+      && authoritative[authoritativeIndex] !== documentSourceId
+    ) {
+      authoritativeIndex += 1;
+    }
+    if (authoritativeIndex === authoritative.length) {
+      return false;
+    }
+    authoritativeIndex += 1;
+  }
+  return true;
+}
+
+function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length
+    && left.every((value, index) => value === right[index]);
+}
+
+function datesEqual(left: Date | undefined, right: Date | undefined): boolean {
+  return left === undefined
+    ? right === undefined
+    : right !== undefined && left.getTime() === right.getTime();
 }
 
 function fingerprint(value: unknown): string {
