@@ -133,6 +133,7 @@ try {
     publicInternalStatus: 404,
     publicInternalReadiness: 404,
     publicIngressReadiness: 404,
+    publicAnswerReply: 404,
     privateInternalStatusWithoutToken: 401,
     privateInternalStatusWithWrongToken: 401,
     privateInternalStatusWithToken: 200,
@@ -334,6 +335,10 @@ async function runPublicBoundaryChecks() {
   await expectStatus(`${publicBaseUrl}/internal/status`, 404);
   await expectStatus(`${publicBaseUrl}/internal/readiness`, 404);
   await expectStatus(`${publicBaseUrl}/internal/ingress-readiness`, 404);
+  await expectStatus(
+    `${publicBaseUrl}/internal/answer-replies/feishu/public-boundary-probe`,
+    404,
+  );
   return {
     feishuEventsBoundary: events,
     feishuCardActionsBoundary: cardActions,

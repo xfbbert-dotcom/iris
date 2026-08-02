@@ -129,6 +129,7 @@ import { registerKnowledgeCardApi } from "./knowledge-cards/knowledge-card-api.j
 import { registerActionProposalApi } from "./action-approvals/action-proposal-api.js";
 import { registerActionReviewApi } from "./action-reviews/action-review-api.js";
 import { registerAgentExecutionLedgerApi } from "./agent-runtime/agent-execution-ledger-api.js";
+import { registerAnswerReplyApi } from "./answer-replies/answer-reply-api.js";
 import {
   createAgentExecutionLedgerRuntime as createDefaultAgentExecutionLedgerRuntime,
   type AgentExecutionLedgerRuntime,
@@ -541,7 +542,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     runtimeController,
   });
   startupGateway = gateway;
-  const app = Fastify({ logger: false, bodyLimit: maxJsonBodyBytes });
+  const app = Fastify({
+    logger: false,
+    bodyLimit: maxJsonBodyBytes,
+  });
   startupApp = app;
 
   if (
@@ -596,6 +600,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  registerAnswerReplyApi(app, eventWorkerRuntime?.answerReplies);
   registerGroupMemoryApi(app, groupMemoryService, {
     authenticationConfigured: internalApiToken !== undefined,
   });

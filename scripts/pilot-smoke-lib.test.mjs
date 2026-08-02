@@ -193,11 +193,13 @@ test("probes both public callback paths while every public internal path stays h
     assert.equal(checks.publicInternalStatus, 404);
     assert.equal(checks.publicInternalReadiness, 404);
     assert.equal(checks.publicIngressReadiness, 404);
+    assert.equal(checks.publicAnswerReply, 404);
     assert.match(result.log, /public-feishu-events-boundary/u);
     assert.match(result.log, /public-feishu-card-actions-boundary/u);
     assert.match(result.log, /public-internal-status-404/u);
     assert.match(result.log, /public-internal-readiness-404/u);
     assert.match(result.log, /public-internal-ingress-readiness-404/u);
+    assert.match(result.log, /public-answer-reply-404/u);
   } finally {
     result.cleanup();
   }
@@ -721,6 +723,13 @@ globalThis.fetch = async (input, init = {}) => {
       return json({ error: "unauthorized" }, 401);
     }
     return json({ ok: true, status: "ready" });
+  }
+  if (url.pathname === "/internal/answer-replies/feishu/public-boundary-probe") {
+    if (url.port !== "3000") {
+      log("public-answer-reply-404");
+      return json({ error: "not_found" }, 404);
+    }
+    throw new Error("Unexpected private answer-reply smoke URL");
   }
   if (url.pathname === "/internal/runtime-control/global") {
     const enabled = JSON.parse(init.body).enabled;
