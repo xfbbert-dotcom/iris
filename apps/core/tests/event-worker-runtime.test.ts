@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { AnswerSourcePermissionVerifier } from "../src/answer-replies/answer-source-permission-verifier.js";
 import type { FeishuMentionAnswerResponderDependencies } from "../src/conversation/feishu-mention-answer-responder.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import { createEventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
@@ -48,6 +49,7 @@ describe("createEventWorkerRuntime", () => {
 
   it("composes Redis queue, message repository, processor, worker, and loop when enabled", async () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
+    const answerReplyRepository = fakeAnswerReplyRepository();
     const redisClient = {
       connect: vi.fn(async () => redisClient),
       eval: vi.fn(async () => 1),
@@ -113,6 +115,7 @@ describe("createEventWorkerRuntime", () => {
     };
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),
+      createPostgresAnswerReplyRepository: vi.fn(() => answerReplyRepository),
       createRedisClient: vi.fn(() => redisClient),
       createConversationMessageRepository: vi.fn(() => messages),
       createMessageReplayGuard: vi.fn(() => messageReplayGuard),
@@ -176,6 +179,9 @@ describe("createEventWorkerRuntime", () => {
       mentionRepliesUnavailableReason: "missing_bot_open_id",
       pendingEventCount: 42,
       deadLetterEventCount: 5,
+      answerReplyUnresolvedCount: 2,
+      answerReplyPendingSafeNoticeCount: 1,
+      answerReplyReconciliationRequiredCount: 1,
       latestBatch: {
         status: "succeeded",
         startedAt: new Date("2026-07-02T01:00:00.000Z"),
@@ -196,7 +202,12 @@ describe("createEventWorkerRuntime", () => {
   });
 
   it("composes mention answer replies when bot identity and answer drafting are configured", async () => {
+    const compositionOrder: string[] = [];
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
+    const answerReplyRepository = fakeAnswerReplyRepository();
+    const answerReplyDeliveryService = { respond: vi.fn() };
+    let deliveryServiceVerifier: AnswerSourcePermissionVerifier | undefined;
+    const now = () => new Date("2026-08-02T06:07:08.000Z");
     const redisClient = {
       connect: vi.fn(async () => redisClient),
       eval: vi.fn(async () => 1),
@@ -254,7 +265,17 @@ describe("createEventWorkerRuntime", () => {
       canReplyWhenMentioned: vi.fn(() => true),
     };
     const dependencies = {
-      createPostgresPool: vi.fn(() => pool),
+      createPostgresPool: vi.fn(() => {
+        compositionOrder.push("pool");
+        return pool;
+      }),
+      createPostgresAnswerReplyRepository: vi.fn(() => answerReplyRepository),
+      createAnswerReplyDeliveryService: vi.fn(
+        (input: { verifier: AnswerSourcePermissionVerifier }) => {
+          deliveryServiceVerifier = input.verifier;
+          return answerReplyDeliveryService;
+        },
+      ),
       createRedisClient: vi.fn(() => redisClient),
       createConversationMessageRepository: vi.fn(() => messages),
       createDocumentSourceRegistry: vi.fn(() => documentSources),
@@ -268,6 +289,7 @@ describe("createEventWorkerRuntime", () => {
       createFeishuMessageReplier: vi.fn(() => replier),
       createMentionAnswerResponder: vi.fn(
         (input: FeishuMentionAnswerResponderDependencies) => {
+          compositionOrder.push("responder");
           mentionResponderInput = input;
           return mentionAnswerResponder;
         },
@@ -288,6 +310,7 @@ describe("createEventWorkerRuntime", () => {
       runtimeController,
       answerDraftOrchestrator,
       knowledgeDraftCommand,
+      now,
     } as Parameters<typeof createEventWorkerRuntime>[0] & {
       answerDraftOrchestrator: typeof answerDraftOrchestrator;
       knowledgeDraftCommand: typeof knowledgeDraftCommand;
@@ -304,11 +327,29 @@ describe("createEventWorkerRuntime", () => {
       tokenProvider,
       timeoutMs: 10000,
     });
+    expect(compositionOrder).toEqual(["pool", "responder"]);
+    expect(dependencies.createPostgresAnswerReplyRepository).toHaveBeenCalledOnce();
+    expect(dependencies.createPostgresAnswerReplyRepository).toHaveBeenCalledWith({
+      dataSource: pool,
+    });
+    expect(dependencies.createAnswerReplyDeliveryService).toHaveBeenCalledOnce();
+    expect(dependencies.createAnswerReplyDeliveryService).toHaveBeenCalledWith({
+      repository: answerReplyRepository,
+      replier,
+      verifier: expect.any(Object),
+      now,
+    });
+    await expect(deliveryServiceVerifier?.verify({
+      chatId: "oc_pilot",
+      documentSourceIds: ["source-1"],
+    })).resolves.toEqual([{ documentSourceId: "source-1", outcome: "error" }]);
     expect(dependencies.createMentionAnswerResponder).toHaveBeenCalledWith({
       botOpenId: "ou_iris",
       answerDraftOrchestrator,
+      answerReplyDeliveryService,
       knowledgeDraftCommand,
       replier,
+      now,
       canReplyWhenMentioned: expect.any(Function),
       canRegisterUserSubmittedDocuments: expect.any(Function),
       documentLinkExtractor: expect.any(Object),
@@ -339,18 +380,25 @@ describe("createEventWorkerRuntime", () => {
         runtimeController,
       }),
     );
+    expect(runtime?.answerReplies).toBeDefined();
+    expect(Object.keys(runtime?.answerReplies ?? {})).toEqual(["findByIncomingMessage"]);
+    expect(runtime?.answerReplies).not.toHaveProperty("prepare");
     await expect(runtime?.getStatus()).resolves.toMatchObject({
       enabled: true,
       mentionRepliesEnabled: true,
+      answerReplyUnresolvedCount: 2,
+      answerReplyPendingSafeNoticeCount: 1,
+      answerReplyReconciliationRequiredCount: 1,
     });
-    await expect(runtime?.getStatus()).resolves.not.toHaveProperty(
-      "mentionRepliesUnavailableReason",
-    );
+    answerReplyRepository.getStatus.mockRejectedValueOnce(new Error("answer status unavailable"));
+    await expect(runtime?.getStatus()).rejects.toThrow("answer status unavailable");
     await runtime?.close();
+    expect(pool.end).toHaveBeenCalledOnce();
   });
 
   it("does not compose mention replies and reports missing setup reasons", async () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
+    const answerReplyRepository = fakeAnswerReplyRepository();
     const redisClient = {
       connect: vi.fn(async () => redisClient),
       eval: vi.fn(async () => 1),
@@ -364,6 +412,7 @@ describe("createEventWorkerRuntime", () => {
     };
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),
+      createPostgresAnswerReplyRepository: vi.fn(() => answerReplyRepository),
       createRedisClient: vi.fn(() => redisClient),
       createConversationMessageRepository: vi.fn(() => ({
         upsertMessage: vi.fn(),
@@ -456,5 +505,22 @@ function enabledEnv() {
     IRIS_EVENT_WORKER_ENABLED: "true",
     REDIS_URL: "redis://localhost:6379",
     DATABASE_URL: "postgres://example",
+  };
+}
+
+function fakeAnswerReplyRepository() {
+  return {
+    findByIncomingMessage: vi.fn(async () => undefined),
+    prepare: vi.fn(),
+    beginAnswerSend: vi.fn(),
+    completeAnswerSend: vi.fn(),
+    blockForPermission: vi.fn(),
+    beginSafeNoticeSend: vi.fn(),
+    completeSafeNoticeSend: vi.fn(),
+    getStatus: vi.fn(async () => ({
+      unresolvedCount: 2,
+      pendingSafeNoticeCount: 1,
+      reconciliationRequiredCount: 1,
+    })),
   };
 }

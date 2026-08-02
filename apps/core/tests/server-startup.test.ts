@@ -90,6 +90,7 @@ describe("Core server startup", () => {
 
     expect(createEventWorkerRuntime).toHaveBeenCalledWith(expect.objectContaining({
       answerDraftOrchestrator: answerDraftRuntime.answerDraftOrchestrator,
+      answerSourcePermissionVerifier: answerDraftRuntime.answerSourcePermissionVerifier,
       knowledgeDraftCommand: expect.objectContaining({ execute: expect.any(Function) }),
     }));
     await app.close();

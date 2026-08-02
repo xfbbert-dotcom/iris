@@ -134,9 +134,11 @@ describe("FeishuMessageEventProcessor", () => {
       ) => registry.registerUserSubmittedDocument(input),
     };
     const documentLinkExtractor = createFeishuDocumentLinkExtractor();
+    const answerReplyDeliveryService = { respond: vi.fn() };
     const mentionAnswerResponder = createFeishuMentionAnswerResponder({
       botOpenId: "ou_iris",
       answerDraftOrchestrator: { generateDraft: vi.fn() },
+      answerReplyDeliveryService,
       replier: { replyText: vi.fn(async () => ({ replyMessageId: "reply-1" })) },
       documentLinkExtractor,
       userSubmittedDocumentRegistrar: asyncRegistry,
@@ -187,6 +189,7 @@ describe("FeishuMessageEventProcessor", () => {
     const source = registry.findSourceByUri(sourceUri);
     expect(source?.sourceType).toBe("user_submitted_document");
     expect(source?.canUseForKnowledgeDrafts).toBe(false);
+    expect(answerReplyDeliveryService.respond).not.toHaveBeenCalled();
     expect(source?.evidence.map((evidence) => evidence.kind)).toEqual([
       "user_submission",
       "group_message",

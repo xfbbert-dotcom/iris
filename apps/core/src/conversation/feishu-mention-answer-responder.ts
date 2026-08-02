@@ -1,6 +1,10 @@
-import { createHash } from "node:crypto";
-
 import type { AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
+import type { AnswerReplyDeliveryService } from "../answer-replies/answer-reply-delivery-service.js";
+import {
+  createAnswerReplySafeNoticeUuid,
+  createAnswerReplyUuid,
+} from "../answer-replies/answer-reply-repository.js";
+import { renderAnswerWithSourceCitations } from "../answer-replies/answer-source-citation-renderer.js";
 import type { RegisterUserSubmittedDocumentInput } from "../documents/document-source-registry.js";
 import type { FeishuDocumentLinkExtractor } from "../documents/feishu-document-link-extractor.js";
 import type { FeishuMessageReplier } from "../feishu/feishu-message-replier.js";
@@ -41,7 +45,9 @@ export type FeishuMentionAnswerResponder = {
 export type FeishuMentionAnswerResponderDependencies = {
   botOpenId: string;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  answerReplyDeliveryService: Pick<AnswerReplyDeliveryService, "respond">;
   replier: Pick<FeishuMessageReplier, "replyText">;
+  now?: () => Date;
   canReplyWhenMentioned?: (chatId: string) => boolean;
   canRegisterUserSubmittedDocuments?: (chatId: string) => boolean;
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
@@ -119,7 +125,9 @@ const userSubmittedDocumentIntentPatterns = [
 export function createFeishuMentionAnswerResponder({
   botOpenId,
   answerDraftOrchestrator,
+  answerReplyDeliveryService,
   replier,
+  now = () => new Date(),
   canReplyWhenMentioned = () => true,
   canRegisterUserSubmittedDocuments = () => true,
   knowledgeDraftCommand,
@@ -148,7 +156,7 @@ export function createFeishuMentionAnswerResponder({
           return { status: "skipped", reason: "runtime_disabled" };
         }
 
-        const replyUuid = createReplyUuid(input.messageId);
+        const replyUuid = createAnswerReplyUuid(input.messageId);
         if (input.text === undefined) {
           const result = toRepliedResult(
             await replier.replyText({
@@ -292,21 +300,39 @@ export function createFeishuMentionAnswerResponder({
           return result;
         }
 
-        let answerText: string;
         try {
-          const answer = await answerDraftOrchestrator.generateDraft({
-            executionId: input.messageId,
-            question,
-            chatId: input.chatId,
-            ...(normalizedSenderId === undefined ? {} : { askerId: normalizedSenderId }),
-            liveChatMessages: [
-              {
-                speaker: normalizeOptionalText(input.senderId) ?? "unknown",
-                text: question,
+          const result = toRepliedResult(
+            await answerReplyDeliveryService.respond({
+              provider: "feishu",
+              incomingMessageId: input.messageId,
+              chatId: input.chatId,
+              replyUuid,
+              safeNoticeUuid: createAnswerReplySafeNoticeUuid(input.messageId),
+              prepareAnswer: async () => {
+                const answer = await answerDraftOrchestrator.generateDraft({
+                  executionId: input.messageId,
+                  question,
+                  chatId: input.chatId,
+                  ...(normalizedSenderId === undefined ? {} : { askerId: normalizedSenderId }),
+                  liveChatMessages: [{
+                    speaker: normalizedSenderId ?? "unknown",
+                    text: question,
+                  }],
+                });
+                const preparedAt = now();
+                return {
+                  ...renderAnswerWithSourceCitations({
+                    answerText: answer.answerText,
+                    allowedFragments: answer.allowedFragments,
+                    initialPermissionCheckedAt: preparedAt,
+                  }),
+                  preparedAt,
+                };
               },
-            ],
-          });
-          answerText = answer.answerText;
+            }),
+          );
+          replyDeduper.markHandled(input.messageId);
+          return result;
         } catch (error) {
           const fallbackText = isBlankModelAnswerError(error)
             ? BLANK_MODEL_ANSWER_FALLBACK
@@ -328,17 +354,6 @@ export function createFeishuMentionAnswerResponder({
           replyDeduper.markHandled(input.messageId);
           return result;
         }
-
-        const result = toRepliedResult(
-          await replier.replyText({
-            messageId: input.messageId,
-            text: answerText,
-            replyInThread: true,
-            uuid: replyUuid,
-          }),
-        );
-        replyDeduper.markHandled(input.messageId);
-        return result;
       } catch (error) {
         replyDeduper.release(input.messageId);
         throw error;
@@ -459,11 +474,6 @@ function truncateQuestion(value: string): string {
 
   const prefixChars = MAX_MENTION_QUESTION_CHARS - TRUNCATION_MARKER.length;
   return `${value.slice(0, prefixChars).trimEnd()}${TRUNCATION_MARKER}`;
-}
-
-function createReplyUuid(messageId: string): string {
-  const digest = createHash("sha256").update(messageId).digest("hex");
-  return `iris-${digest.slice(0, 45)}`;
 }
 
 function toRepliedResult(result: { replyMessageId?: string }): FeishuMentionAnswerResult {

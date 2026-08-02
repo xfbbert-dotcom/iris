@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
-import { createFeishuMentionAnswerResponder } from "../src/conversation/feishu-mention-answer-responder.js";
+import type {
+  AnswerReplyDeliveryRequest,
+  AnswerReplyDeliveryService,
+} from "../src/answer-replies/answer-reply-delivery-service.js";
+import {
+  createFeishuMentionAnswerResponder as createProductionFeishuMentionAnswerResponder,
+  type FeishuMentionAnswerResponderDependencies,
+} from "../src/conversation/feishu-mention-answer-responder.js";
+import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
 import { createFeishuDocumentLinkExtractor } from "../src/documents/feishu-document-link-extractor.js";
 import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.js";
 import { ModelProviderHttpError } from "../src/model/model-provider-error.js";
@@ -13,6 +21,7 @@ type ReplyTextInput = Parameters<FeishuMessageReplier["replyText"]>[0];
 describe("FeishuMentionAnswerResponder", () => {
   it("handles an explicit knowledge-draft command before ordinary answer drafting", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const answerReplyDeliveryService = { respond: vi.fn() };
     const knowledgeDraftCommand = {
       execute: vi.fn<ChatKnowledgeDraftCommand["execute"]>(async () => ({
         status: "created",
@@ -24,6 +33,7 @@ describe("FeishuMentionAnswerResponder", () => {
     const responder = createFeishuMentionAnswerResponder({
       botOpenId: "ou_iris",
       answerDraftOrchestrator,
+      answerReplyDeliveryService,
       knowledgeDraftCommand,
       replier,
       canReplyWhenMentioned: vi.fn(() => true),
@@ -54,6 +64,7 @@ describe("FeishuMentionAnswerResponder", () => {
       observedAt: new Date("2026-08-02T03:00:00.000Z"),
     });
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(answerReplyDeliveryService.respond).not.toHaveBeenCalled();
     expect(replier.replyText).toHaveBeenCalledWith({
       messageId: "om_create_draft",
       text: "\u77e5\u8bc6\u8349\u7a3f\u5df2\u751f\u6210\uff0c\u7fa4\u786e\u8ba4\u5361\u7247\u6b63\u5728\u53d1\u9001\u3002\u5f53\u524d\u5c1a\u672a\u5199\u5165\u77e5\u8bc6\u5e93\u3002",
@@ -405,6 +416,156 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(replyInput?.uuid?.length).toBe(50);
   });
 
+  it("prepares a cited ordinary answer lazily through the durable delivery service", async () => {
+    const preparedAt = new Date("2026-08-02T04:05:06.000Z");
+    const allowedFragment = answerFragment();
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Grounded answer.",
+        promptContext: "<document_context></document_context>",
+        allowedFragments: [allowedFragment],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 1,
+        usedGroupMemories: [],
+      })),
+    };
+    let deliveryRequest: AnswerReplyDeliveryRequest | undefined;
+    let preparedAnswer: Awaited<ReturnType<AnswerReplyDeliveryRequest["prepareAnswer"]>> | undefined;
+    const answerReplyDeliveryService = {
+      respond: vi.fn<AnswerReplyDeliveryService["respond"]>(async (request) => {
+        deliveryRequest = request;
+        preparedAnswer = await request.prepareAnswer();
+        return { replyMessageId: "reply-from-service" };
+      }),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      answerReplyDeliveryService,
+      replier: { replyText: vi.fn() },
+      now: () => preparedAt,
+    });
+
+    await expect(responder.maybeRespond({
+      messageId: "om_cited_answer",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize the wiki",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    })).resolves.toEqual({
+      status: "replied",
+      replyMessageId: "reply-from-service",
+    });
+
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledOnce();
+    expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledWith({
+      executionId: "om_cited_answer",
+      question: "summarize the wiki",
+      chatId: "oc_group_1",
+      askerId: "ou_alice",
+      liveChatMessages: [{ speaker: "ou_alice", text: "summarize the wiki" }],
+    });
+    expect(deliveryRequest).toMatchObject({
+      provider: "feishu",
+      incomingMessageId: "om_cited_answer",
+      chatId: "oc_group_1",
+      replyUuid: "iris-1d3e446e24c6a2c7bfd8e1004e7c26b2d0d901c9d367a",
+      safeNoticeUuid: "iris-safe-1d3e446e24c6a2c7bfd8e1004e7c26b2d0d901c9",
+      prepareAnswer: expect.any(Function),
+    });
+    expect(preparedAnswer).toEqual({
+      renderedText:
+        "Grounded answer.\n\n" +
+        "Iris \u53c2\u8003\u8d44\u6599\uff1a\n" +
+        "[1] [\u77e5\u8bc6\u5e93] Quello Life Engine\n" +
+        "https://tenant.feishu.cn/wiki/wikiA",
+      sourceTraces: [{
+        promptRank: 1,
+        citationRank: 1,
+        documentSourceId: "source-wiki-a",
+        documentSnapshotId: "snapshot-a",
+        fragmentId: "fragment-a-2",
+        chunkIndex: 2,
+        sourceType: "feishu_wiki",
+        sourceUri: "https://tenant.feishu.cn/wiki/wikiA",
+        sourceTitle: "Quello Life Engine",
+        contentHash: "hash-fragment-a-2",
+        embeddingProfileId: "profile-1",
+        initialPermissionCheckedAt: preparedAt,
+      }],
+      preparedAt,
+    });
+  });
+
+  it("resumes a durable ordinary answer without generating another draft", async () => {
+    const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const answerReplyDeliveryService = {
+      respond: vi.fn<AnswerReplyDeliveryService["respond"]>(async () => ({
+        replyMessageId: "reply-resumed",
+      })),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      answerReplyDeliveryService,
+      replier: { replyText: vi.fn() },
+    });
+
+    await expect(responder.maybeRespond({
+      messageId: "om_resumed_answer",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 summarize",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    })).resolves.toEqual({ status: "replied", replyMessageId: "reply-resumed" });
+
+    expect(answerReplyDeliveryService.respond).toHaveBeenCalledOnce();
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+  });
+
+  it("prepares a source-free ordinary answer without a citation footer or trace", async () => {
+    const preparedAt = new Date("2026-08-02T05:06:07.000Z");
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "Source-free answer.",
+        promptContext: "<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    let preparedAnswer: Awaited<ReturnType<AnswerReplyDeliveryRequest["prepareAnswer"]>> | undefined;
+    const answerReplyDeliveryService = {
+      respond: vi.fn<AnswerReplyDeliveryService["respond"]>(async (request) => {
+        preparedAnswer = await request.prepareAnswer();
+        return { replyMessageId: "reply-source-free" };
+      }),
+    };
+    const responder = createFeishuMentionAnswerResponder({
+      botOpenId: "ou_iris",
+      answerDraftOrchestrator,
+      answerReplyDeliveryService,
+      replier: { replyText: vi.fn() },
+      now: () => preparedAt,
+    });
+
+    await responder.maybeRespond({
+      messageId: "om_source_free",
+      chatId: "oc_group_1",
+      senderId: "ou_alice",
+      text: "@_user_1 answer from chat",
+      mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+    });
+
+    expect(preparedAnswer).toEqual({
+      renderedText: "Source-free answer.",
+      sourceTraces: [],
+      preparedAt,
+    });
+    expect(preparedAnswer?.renderedText).not.toContain("Iris \u53c2\u8003\u8d44\u6599\uff1a");
+  });
+
   it("skips messages that mention another user but not Iris", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
     const replier = { replyText: vi.fn() };
@@ -509,6 +670,7 @@ describe("FeishuMentionAnswerResponder", () => {
 
   it("registers a user-submitted Feishu document from an explicit mention command without drafting an answer", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
+    const answerReplyDeliveryService = { respond: vi.fn() };
     const registerUserSubmittedDocument = vi.fn(async () => ({
       source: { id: "doc-source-1" },
       enqueue: { status: "enqueued" as const, jobId: "sync-job-1" },
@@ -517,6 +679,7 @@ describe("FeishuMentionAnswerResponder", () => {
     const responder = createFeishuMentionAnswerResponder({
       botOpenId: "ou_iris",
       answerDraftOrchestrator,
+      answerReplyDeliveryService,
       replier,
       canReplyWhenMentioned: vi.fn(() => true),
       documentLinkExtractor: createFeishuDocumentLinkExtractor(),
@@ -542,6 +705,7 @@ describe("FeishuMentionAnswerResponder", () => {
       observedAt: new Date("2026-07-24T02:30:00.000Z"),
     });
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(answerReplyDeliveryService.respond).not.toHaveBeenCalled();
     expect(replier.replyText).toHaveBeenCalledWith({
       messageId: "om_user_doc_submission",
       text: "\u5df2\u6536\u5230\u8fd9\u4e2a\u6587\u6863\uff0c\u6211\u4f1a\u540c\u6b65\u5b83\u7684\u5185\u5bb9\u3002\u540c\u6b65\u5b8c\u6210\u540e\uff0c\u4f60\u53ef\u4ee5\u76f4\u63a5 @\u6211\u63d0\u95ee\u3002",
@@ -898,10 +1062,21 @@ describe("FeishuMentionAnswerResponder", () => {
         throw new Error("model answer draft must not be blank");
       }),
     };
-    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-blank" })) };
+    let preparedReceiptCount = 0;
+    const answerReplyDeliveryService = {
+      respond: vi.fn<AnswerReplyDeliveryService["respond"]>(async (request) => {
+        const prepared = await request.prepareAnswer();
+        preparedReceiptCount += 1;
+        return { replyMessageId: prepared.renderedText };
+      }),
+    };
+    const replier = {
+      replyText: vi.fn(async (_input: ReplyTextInput) => ({ replyMessageId: "reply-blank" })),
+    };
     const responder = createFeishuMentionAnswerResponder({
       botOpenId: "ou_iris",
       answerDraftOrchestrator,
+      answerReplyDeliveryService,
       replier,
       canReplyWhenMentioned: vi.fn(() => true),
     });
@@ -923,12 +1098,16 @@ describe("FeishuMentionAnswerResponder", () => {
     });
 
     expect(replier.replyText).toHaveBeenCalledOnce();
-    expect(replier.replyText).toHaveBeenCalledWith({
+    const fallbackReply = replier.replyText.mock.calls[0]?.[0];
+    expect(fallbackReply).toEqual({
       messageId: "om_blank_model_answer",
       text: "我没拿到可用答案，你可以换个说法再问我一次。",
       replyInThread: true,
-      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+      uuid: "iris-7900347c03b79015c84fd1ec6c58db825f66e3d133bdd",
     });
+    expect(fallbackReply?.text.length).toBeLessThanOrEqual(8000);
+    expect(answerReplyDeliveryService.respond).toHaveBeenCalledOnce();
+    expect(preparedReceiptCount).toBe(0);
   });
 
   it("replies once with a recoverable message when the model reaches its capacity limit", async () => {
@@ -940,10 +1119,21 @@ describe("FeishuMentionAnswerResponder", () => {
         );
       }),
     };
-    const replier = { replyText: vi.fn(async () => ({ replyMessageId: "reply-capacity" })) };
+    let preparedReceiptCount = 0;
+    const answerReplyDeliveryService = {
+      respond: vi.fn<AnswerReplyDeliveryService["respond"]>(async (request) => {
+        const prepared = await request.prepareAnswer();
+        preparedReceiptCount += 1;
+        return { replyMessageId: prepared.renderedText };
+      }),
+    };
+    const replier = {
+      replyText: vi.fn(async (_input: ReplyTextInput) => ({ replyMessageId: "reply-capacity" })),
+    };
     const responder = createFeishuMentionAnswerResponder({
       botOpenId: "ou_iris",
       answerDraftOrchestrator,
+      answerReplyDeliveryService,
       replier,
       canReplyWhenMentioned: vi.fn(() => true),
     });
@@ -965,12 +1155,16 @@ describe("FeishuMentionAnswerResponder", () => {
     });
 
     expect(replier.replyText).toHaveBeenCalledOnce();
-    expect(replier.replyText).toHaveBeenCalledWith({
+    const fallbackReply = replier.replyText.mock.calls[0]?.[0];
+    expect(fallbackReply).toEqual({
       messageId: "om_model_capacity",
       text: "模型服务暂时达到使用上限，我现在无法可靠回答。恢复后，请再 @我一次。",
       replyInThread: true,
-      uuid: expect.stringMatching(/^iris-[a-f0-9]{45}$/u),
+      uuid: "iris-05b16c71a9f4fa2fd04f9e214e9c7b8487352b93476c7",
     });
+    expect(fallbackReply?.text.length).toBeLessThanOrEqual(8000);
+    expect(answerReplyDeliveryService.respond).toHaveBeenCalledOnce();
+    expect(preparedReceiptCount).toBe(0);
   });
 
   it("keeps non-capacity model HTTP failures on the retry path", async () => {
@@ -1233,3 +1427,45 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(replier.replyText).toHaveBeenCalledTimes(2);
   });
 });
+
+function createFeishuMentionAnswerResponder(
+  input: Omit<FeishuMentionAnswerResponderDependencies, "answerReplyDeliveryService"> & {
+    answerReplyDeliveryService?: Pick<AnswerReplyDeliveryService, "respond">;
+  },
+) {
+  const answerReplyDeliveryService = input.answerReplyDeliveryService ?? {
+    async respond(request: AnswerReplyDeliveryRequest) {
+      const prepared = await request.prepareAnswer();
+      return input.replier.replyText({
+        messageId: request.incomingMessageId,
+        text: prepared.renderedText,
+        replyInThread: true,
+        uuid: request.replyUuid,
+      });
+    },
+  };
+  return createProductionFeishuMentionAnswerResponder({
+    ...input,
+    answerReplyDeliveryService,
+  });
+}
+
+function answerFragment(
+  overrides: Partial<RetrievedDocumentFragment> = {},
+): RetrievedDocumentFragment {
+  return {
+    id: "fragment-a-2",
+    documentSourceId: "source-wiki-a",
+    documentSnapshotId: "snapshot-a",
+    sourceUri: "https://tenant.feishu.cn/wiki/wikiA?from=chat#section",
+    chunkIndex: 2,
+    text: "Life Engine context",
+    contentHash: "hash-fragment-a-2",
+    embedding: [1, 0, 0],
+    embeddingProfileId: "profile-1",
+    createdAt: new Date("2026-08-02T03:00:00.000Z"),
+    sourceTitle: "Quello Life Engine",
+    sourceType: "feishu_wiki",
+    ...overrides,
+  };
+}

@@ -10,6 +10,15 @@ import {
 } from "../config/env.js";
 import type { AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
 import {
+  createAnswerReplyDeliveryService,
+} from "../answer-replies/answer-reply-delivery-service.js";
+import type { AnswerReplyRepository } from "../answer-replies/answer-reply-repository.js";
+import { createPostgresAnswerReplyRepository } from "../answer-replies/postgres-answer-reply-repository.js";
+import {
+  createUnavailableAnswerSourcePermissionVerifier,
+  type AnswerSourcePermissionVerifier,
+} from "../answer-replies/answer-source-permission-verifier.js";
+import {
   createFeishuMentionAnswerResponder,
   type FeishuMentionAnswerResponder,
 } from "../conversation/feishu-mention-answer-responder.js";
@@ -70,6 +79,7 @@ export type EventWorkerRuntime = {
     delete(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
     replayBatch(input: { ids: string[] }): Promise<ReplayRawEventDeadLettersResult>;
   };
+  answerReplies?: Pick<AnswerReplyRepository, "findByIncomingMessage">;
   getStatus(): Promise<EventWorkerRuntimeStatus>;
   start(): void;
   close(): Promise<void>;
@@ -84,6 +94,9 @@ export type EventWorkerRuntimeStatus = {
   mentionRepliesUnavailableReason?: MentionReplyUnavailableReason;
   pendingEventCount: number;
   deadLetterEventCount: number;
+  answerReplyUnresolvedCount?: number;
+  answerReplyPendingSafeNoticeCount?: number;
+  answerReplyReconciliationRequiredCount?: number;
   latestBatch?: RawEventWorkerBatchSnapshot;
 };
 export type MentionReplyUnavailableReason =
@@ -110,6 +123,8 @@ type GroupVisibleDocumentRegistry = Pick<
 export type EventWorkerRuntimeDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => PostgresPool;
   createRedisClient?: (url: string) => RedisClient;
+  createPostgresAnswerReplyRepository?: typeof createPostgresAnswerReplyRepository;
+  createAnswerReplyDeliveryService?: typeof createAnswerReplyDeliveryService;
   createConversationMessageRepository?: typeof createPostgresConversationMessageRepository;
   createMessageReplayGuard?: typeof createPostgresConversationMessageReplayGuard;
   createDocumentSourceRegistry?: (pool: PostgresPool) => GroupVisibleDocumentRegistry;
@@ -131,15 +146,19 @@ export function createEventWorkerRuntime({
   dependencies = {},
   runtimeController,
   answerDraftOrchestrator,
+  answerSourcePermissionVerifier,
   memoryExtractionPlanner,
   knowledgeDraftCommand,
+  now = () => new Date(),
 }: {
   env?: EnvLike;
   dependencies?: EventWorkerRuntimeDependencies;
   runtimeController?: RuntimeGate;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
+  now?: () => Date;
 } = {}): EventWorkerRuntime | undefined {
   const runtimeConfig = readEventWorkerRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
@@ -152,8 +171,10 @@ export function createEventWorkerRuntime({
     dependencies,
     runtimeController,
     answerDraftOrchestrator,
+    answerSourcePermissionVerifier,
     memoryExtractionPlanner,
     knowledgeDraftCommand,
+    now,
   });
 }
 
@@ -163,21 +184,30 @@ function createEnabledEventWorkerRuntime({
   dependencies,
   runtimeController,
   answerDraftOrchestrator,
+  answerSourcePermissionVerifier,
   memoryExtractionPlanner,
   knowledgeDraftCommand,
+  now,
 }: {
   env: EnvLike;
   runtimeConfig: Extract<EventWorkerRuntimeConfig, { enabled: true }>;
   dependencies: EventWorkerRuntimeDependencies;
   runtimeController: RuntimeGate | undefined;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
+  answerSourcePermissionVerifier: AnswerSourcePermissionVerifier | undefined;
   memoryExtractionPlanner: Pick<MemoryExtractionPlanner, "registerMessage"> | undefined;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
+  now: () => Date;
 }): EventWorkerRuntime {
+  preflightMentionAnswerConfiguration(env);
   const createRedis =
     dependencies.createRedisClient ??
     ((url: string) => createClient({ url }) as unknown as RedisClient);
   const createPool = dependencies.createPostgresPool ?? createPostgresPool;
+  const createAnswerReplies =
+    dependencies.createPostgresAnswerReplyRepository ?? createPostgresAnswerReplyRepository;
+  const createAnswerReplyService =
+    dependencies.createAnswerReplyDeliveryService ?? createAnswerReplyDeliveryService;
   const createMessages =
     dependencies.createConversationMessageRepository ??
     createPostgresConversationMessageRepository;
@@ -202,34 +232,10 @@ function createEnabledEventWorkerRuntime({
     dependencies.createMentionAnswerResponder ?? createFeishuMentionAnswerResponder;
   const createProcessor = dependencies.createProcessor ?? createFeishuMessageEventProcessor;
   const createLoop = dependencies.createWorkerLoop ?? createRawEventWorkerLoop;
-  const documentLinkExtractor = createDocumentLinkExtractor();
-  let userSubmittedDocumentRegistrar:
-    | Pick<AsyncDocumentSourceRegistry, "registerUserSubmittedDocument">
-    | undefined;
-
-  const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
-    env,
-    answerDraftOrchestrator,
-    knowledgeDraftCommand,
-    runtimeController,
-    documentLinkExtractor,
-    userSubmittedDocumentRegistrar: {
-      registerUserSubmittedDocument(input) {
-        if (userSubmittedDocumentRegistrar === undefined) {
-          throw new Error("user submitted document registrar unavailable");
-        }
-
-        return userSubmittedDocumentRegistrar.registerUserSubmittedDocument(input);
-      },
-    },
-    createTokenProvider,
-    createMessageReplier,
-    createMentionResponder,
-  });
-  const mentionAnswerResponder = mentionAnswerReadiness.responder;
   const pool = createPool(readDatabaseConfig(env));
   const redis = createRedis(runtimeConfig.redisUrl);
   const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
+  const documentLinkExtractor = createDocumentLinkExtractor();
   const messages = createMessages({ queryable: pool });
   const messageReplayGuard = createMessageReplayGuard({ dataSource: pool as never });
   const documentSources = createDocumentSources(pool);
@@ -237,13 +243,34 @@ function createEnabledEventWorkerRuntime({
     createLazyRedisDocumentSyncQueueClient(redisConnection),
   );
   const syncPlanner = createDiscoveredSyncPlanner({ queue: documentSyncQueue });
-  userSubmittedDocumentRegistrar = {
+  const userSubmittedDocumentRegistrar: Pick<
+    AsyncDocumentSourceRegistry,
+    "registerUserSubmittedDocument"
+  > = {
     async registerUserSubmittedDocument(input) {
       const source = await documentSources.registerUserSubmittedDocument(input);
       await syncPlanner.planRegisteredSources([source]);
       return source;
     },
   };
+  const answerReplyRepository = createAnswerReplies({ dataSource: pool as never });
+  const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
+    env,
+    answerDraftOrchestrator,
+    answerSourcePermissionVerifier:
+      answerSourcePermissionVerifier ?? createUnavailableAnswerSourcePermissionVerifier(),
+    knowledgeDraftCommand,
+    runtimeController,
+    documentLinkExtractor,
+    userSubmittedDocumentRegistrar,
+    answerReplyRepository,
+    now,
+    createTokenProvider,
+    createMessageReplier,
+    createAnswerReplyService,
+    createMentionResponder,
+  });
+  const mentionAnswerResponder = mentionAnswerReadiness.responder;
   const groupVisibleDocumentRegistrar = createGroupVisibleRegistrar({
     registry: documentSources,
     syncPlanner,
@@ -273,6 +300,11 @@ function createEnabledEventWorkerRuntime({
 
   return {
     rawEventQueue: queue,
+    answerReplies: {
+      findByIncomingMessage(input) {
+        return answerReplyRepository.findByIncomingMessage(input);
+      },
+    },
     deadLetters: {
       list(input) {
         return queue.listDeadLetters(input);
@@ -294,6 +326,7 @@ function createEnabledEventWorkerRuntime({
       const loopSnapshot = loop.getSnapshot();
       const pendingEventCount = await queue.getPendingCount();
       const deadLetterEventCount = await queue.getDeadLetterCount();
+      const answerReplyStatus = await answerReplyRepository.getStatus();
 
       return {
         enabled: true,
@@ -306,6 +339,10 @@ function createEnabledEventWorkerRuntime({
           : { mentionRepliesUnavailableReason: mentionAnswerReadiness.unavailableReason }),
         pendingEventCount,
         deadLetterEventCount,
+        answerReplyUnresolvedCount: answerReplyStatus.unresolvedCount,
+        answerReplyPendingSafeNoticeCount: answerReplyStatus.pendingSafeNoticeCount,
+        answerReplyReconciliationRequiredCount:
+          answerReplyStatus.reconciliationRequiredCount,
         ...(loopSnapshot.latestBatch === undefined
           ? {}
           : { latestBatch: loopSnapshot.latestBatch }),
@@ -327,22 +364,30 @@ function createEnabledEventWorkerRuntime({
 function createOptionalMentionAnswerResponder({
   env,
   answerDraftOrchestrator,
+  answerSourcePermissionVerifier,
   knowledgeDraftCommand,
   runtimeController,
   documentLinkExtractor,
   userSubmittedDocumentRegistrar,
+  answerReplyRepository,
+  now,
   createTokenProvider,
   createMessageReplier,
+  createAnswerReplyService,
   createMentionResponder,
 }: {
   env: EnvLike;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
+  answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
   runtimeController: RuntimeGate | undefined;
   documentLinkExtractor: ReturnType<typeof createFeishuDocumentLinkExtractor>;
   userSubmittedDocumentRegistrar: Pick<AsyncDocumentSourceRegistry, "registerUserSubmittedDocument">;
+  answerReplyRepository: AnswerReplyRepository;
+  now: () => Date;
   createTokenProvider: typeof createFeishuTenantAccessTokenProvider;
   createMessageReplier: typeof createFeishuMessageReplier;
+  createAnswerReplyService: typeof createAnswerReplyDeliveryService;
   createMentionResponder: typeof createFeishuMentionAnswerResponder;
 }): {
   responder?: Pick<FeishuMentionAnswerResponder, "maybeRespond">;
@@ -372,13 +417,21 @@ function createOptionalMentionAnswerResponder({
     tokenProvider,
     timeoutMs: feishuConfig.documentFetchTimeoutMs,
   });
+  const answerReplyDeliveryService = createAnswerReplyService({
+    repository: answerReplyRepository,
+    verifier: answerSourcePermissionVerifier,
+    replier,
+    now,
+  });
 
   return {
     responder: createMentionResponder({
       botOpenId,
       answerDraftOrchestrator,
+      answerReplyDeliveryService,
       ...(knowledgeDraftCommand === undefined ? {} : { knowledgeDraftCommand }),
       replier,
+      now,
       documentLinkExtractor,
       userSubmittedDocumentRegistrar,
       ...(runtimeController?.canReplyWhenMentioned === undefined
@@ -392,6 +445,12 @@ function createOptionalMentionAnswerResponder({
           }),
     }),
   };
+}
+
+function preflightMentionAnswerConfiguration(env: EnvLike): void {
+  if (readOptionalFeishuBotOpenId(env) !== undefined) {
+    readOptionalFeishuOpenApiConfig(env);
+  }
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): GroupVisibleDocumentRegistry {

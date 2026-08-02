@@ -482,6 +482,12 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         ...(answerDraftOrchestrator === undefined
           ? {}
           : { answerDraftOrchestrator }),
+        ...(answerDraftRuntime?.answerSourcePermissionVerifier === undefined
+          ? {}
+          : {
+              answerSourcePermissionVerifier:
+                answerDraftRuntime.answerSourcePermissionVerifier,
+            }),
         ...(memoryExtractionRuntime === undefined
           ? {}
           : { memoryExtractionPlanner: memoryExtractionRuntime.planner }),
