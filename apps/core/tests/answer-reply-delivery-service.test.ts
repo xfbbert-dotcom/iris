@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,11 +5,23 @@ import {
   createAnswerReplyDeliveryService,
   type AnswerReplyDeliveryRequest,
 } from "../src/answer-replies/answer-reply-delivery-service.js";
+import {
+  createAnswerReplyEventId,
+  createAnswerReplyRenderedFingerprint,
+  createAnswerReplySemanticFingerprint,
+  createAnswerReplySourceTraceId,
+} from "../src/answer-replies/answer-reply-receipt-validator.js";
 import type {
+  AnswerReplyDeliveryEvent,
   AnswerReplyReceipt,
   AnswerReplyRepository,
   PrepareAnswerReplyInput,
   VersionedTransitionInput,
+} from "../src/answer-replies/answer-reply-repository.js";
+import {
+  createAnswerReplyDeliveryId,
+  createAnswerReplySafeNoticeUuid,
+  createAnswerReplyUuid,
 } from "../src/answer-replies/answer-reply-repository.js";
 import type { AnswerReplySourceTraceInput } from "../src/answer-replies/answer-source-citation-renderer.js";
 import type {
@@ -23,8 +33,10 @@ import type { FeishuMessageReplier } from "../src/feishu/feishu-message-replier.
 const preparedAt = new Date("2026-08-02T01:00:00.000Z");
 const transitionAt = new Date("2026-08-02T01:01:00.000Z");
 const preparedText = "SENSITIVE prepared answer";
-const preparedReplyUuid = "iris-normal-reply-uuid";
-const safeNoticeUuid = "iris-safe-notice-uuid";
+const incomingMessageId = "om_1";
+const preparedDeliveryId = createAnswerReplyDeliveryId("feishu", incomingMessageId);
+const preparedReplyUuid = createAnswerReplyUuid(incomingMessageId);
+const safeNoticeUuid = createAnswerReplySafeNoticeUuid(incomingMessageId);
 
 describe("AnswerReplyDeliveryService", () => {
   it("persists the prepared payload exactly and retries the stored answer and UUID", async () => {
@@ -69,7 +81,7 @@ describe("AnswerReplyDeliveryService", () => {
       uuid: preparedReplyUuid,
     });
     expect(harness.repository.completeAnswerSend).toHaveBeenCalledWith({
-      deliveryId: "delivery-1",
+      deliveryId: preparedDeliveryId,
       expectedVersion: 3,
       replyMessageId: "reply-1",
       at: transitionAt,
@@ -160,6 +172,43 @@ describe("AnswerReplyDeliveryService", () => {
       .resolves.toEqual({ replyMessageId: "reply-default" });
   });
 
+  it("allows inherited same-key work after its ancestor response is complete", async () => {
+    const harness = createHarness();
+    const releaseDelayedCall = createGate();
+    const delayedPrepare = vi.fn(async () => preparedAnswer({
+      renderedText: "delayed replacement must not run",
+    }));
+    let resolveDelayed!: (value: { replyMessageId?: string }) => void;
+    let rejectDelayed!: (error: unknown) => void;
+    const delayedResult = new Promise<{ replyMessageId?: string }>((resolve, reject) => {
+      resolveDelayed = resolve;
+      rejectDelayed = reject;
+    });
+    const firstPrepare = vi.fn(async () => {
+      setTimeout(async () => {
+        await releaseDelayedCall.promise;
+        try {
+          resolveDelayed(await harness.service.respond(request(delayedPrepare)));
+        } catch (error) {
+          rejectDelayed(error);
+        }
+      }, 0);
+      return preparedAnswer();
+    });
+
+    await expect(harness.service.respond(request(firstPrepare))).resolves.toEqual({
+      replyMessageId: "reply-default",
+    });
+    releaseDelayedCall.open();
+
+    await expect(withTimeout(delayedResult)).resolves.toEqual({
+      replyMessageId: "reply-default",
+    });
+    expect(delayedPrepare).not.toHaveBeenCalled();
+    expect(harness.repository.findByIncomingMessage).toHaveBeenCalledTimes(2);
+    expect(harness.replier.replyText).toHaveBeenCalledTimes(1);
+  });
+
   it("allows different delivery keys to progress concurrently", async () => {
     const harness = createHarness();
     const firstPrepareStarted = createGate();
@@ -176,8 +225,8 @@ describe("AnswerReplyDeliveryService", () => {
     const secondResponse = harness.service.respond(request(secondPrepare, {
       incomingMessageId: "om_2",
       chatId: "oc_2",
-      replyUuid: "iris-normal-reply-uuid-2",
-      safeNoticeUuid: "iris-safe-notice-uuid-2",
+      replyUuid: createAnswerReplyUuid("om_2"),
+      safeNoticeUuid: createAnswerReplySafeNoticeUuid("om_2"),
     }));
 
     await expect(withTimeout(secondResponse)).resolves.toEqual({
@@ -189,15 +238,92 @@ describe("AnswerReplyDeliveryService", () => {
     await expect(firstResponse).resolves.toEqual({ replyMessageId: "reply-default" });
   });
 
-  it("rejects a foreign lookup receipt before dispatch", async () => {
-    const harness = createHarness();
-    harness.repository.receipt = receipt({ incomingMessageId: "om_foreign" });
-    const prepareAnswer = vi.fn(async () => preparedAnswer());
+  it.each([
+    ["incoming message", () => receipt({ incomingMessageId: "om_foreign" })],
+    ["chat", () => receipt({ chatId: "oc_foreign" })],
+    ["delivery ID", () => receipt({ id: "foreign-delivery" })],
+    ["reply UUID", () => receipt({ replyUuid: "foreign-reply-uuid" })],
+    ["safe-notice UUID", () => receipt({ safeNoticeUuid: "foreign-safe-uuid" })],
+  ] satisfies Array<[string, () => AnswerReplyReceipt]>)(
+    "rejects a lookup receipt with foreign %s before dispatch",
+    async (_label, malformedReceipt) => {
+      const harness = createHarness();
+      harness.repository.receipt = malformedReceipt();
+      const prepareAnswer = vi.fn(async () => preparedAnswer());
 
-    const error = await harness.service.respond(request(prepareAnswer)).catch((caught) => caught);
+      const error = await harness.service.respond(request(prepareAnswer))
+        .catch((caught) => caught);
+
+      expectStableContractError(error);
+      expect(prepareAnswer).not.toHaveBeenCalled();
+      expectNoDispatchCalls(harness);
+    },
+  );
+
+  it.each([
+    ["version without events", (value: AnswerReplyReceipt) => withDelivery(value, {
+      version: 99,
+    })],
+    ["dropped event ledger", (value: AnswerReplyReceipt) => ({ ...value, events: [] })],
+    ["event sequence", (value: AnswerReplyReceipt) => changeEvent(value, 0, {
+      sequence: 2,
+    })],
+    ["event type", (value: AnswerReplyReceipt) => changeEvent(value, 0, {
+      eventType: "sent",
+    })],
+    ["event attempt", (value: AnswerReplyReceipt) => changeEvent(value, 0, {
+      attemptNumber: 1,
+    })],
+    ["event source facts", (value: AnswerReplyReceipt) => changeEvent(value, 0, {
+      documentSourceIds: ["source-foreign"],
+    })],
+    ["event timestamp", (value: AnswerReplyReceipt) => changeEvent(value, 0, {
+      createdAt: transitionAt,
+    })],
+  ] satisfies Array<[string, (value: AnswerReplyReceipt) => AnswerReplyReceipt]>)(
+    "rejects loaded receipt corruption with %s before dispatch",
+    async (_label, mutate) => {
+      const harness = createHarness();
+      harness.repository.receipt = mutate(receipt());
+
+      const error = await harness.service.respond(request(vi.fn())).catch((caught) => caught);
+
+      expectStableContractError(error);
+      expectNoDispatchCalls(harness);
+    },
+  );
+
+  it.each([
+    ["reply UUID", { replyUuid: "foreign-request-reply-uuid" }],
+    ["safe-notice UUID", { safeNoticeUuid: "foreign-request-safe-uuid" }],
+  ] satisfies Array<[
+    string,
+    Partial<Omit<AnswerReplyDeliveryRequest, "prepareAnswer">>,
+  ]>)("rejects a nondeterministic request %s before dispatch", async (_label, overrides) => {
+    const harness = createHarness();
+    harness.repository.receipt = receipt();
+
+    const error = await harness.service.respond(request(vi.fn(), overrides))
+      .catch((caught) => caught);
 
     expectStableContractError(error);
-    expect(prepareAnswer).not.toHaveBeenCalled();
+    expectNoDispatchCalls(harness);
+  });
+
+  it.each([
+    ["missing envelope", undefined],
+    ["null envelope", null],
+    ["missing outcome", { receipt: receipt() }],
+    ["unknown outcome", { outcome: "foreign", receipt: receipt() }],
+    ["missing receipt", { outcome: "applied" }],
+  ])("rejects a prepare result with %s before dispatch", async (_label, result) => {
+    const harness = createHarness();
+    harness.repository.prepare.mockResolvedValueOnce(result as never);
+
+    const error = await harness.service.respond(request(vi.fn(async () => preparedAnswer())))
+      .catch((caught) => caught);
+
+    expectStableContractError(error);
     expectNoDispatchCalls(harness);
   });
 
@@ -216,7 +342,7 @@ describe("AnswerReplyDeliveryService", () => {
       safeNoticeUuid: "foreign-safe-uuid",
     })],
     ["rendered fingerprint", (value: AnswerReplyReceipt) => withDelivery(value, {
-      renderedReplyFingerprint: fingerprint("foreign answer"),
+      renderedReplyFingerprint: createAnswerReplyRenderedFingerprint("foreign answer"),
     })],
     ["prepared text", (value: AnswerReplyReceipt) => withDelivery(value, {
       preparedReplyText: "foreign answer",
@@ -239,6 +365,56 @@ describe("AnswerReplyDeliveryService", () => {
       expectNoDispatchCalls(harness);
     },
   );
+
+  it("rejects an applied prepare receipt with a foreign preparation timestamp", async () => {
+    const harness = createHarness();
+    const malformed = receipt();
+    malformed.delivery.createdAt = transitionAt;
+    malformed.delivery.updatedAt = transitionAt;
+    malformed.events[0]!.createdAt = transitionAt;
+    harness.repository.prepare.mockResolvedValueOnce({
+      outcome: "applied",
+      receipt: malformed,
+    });
+
+    const error = await harness.service.respond(request(vi.fn(async () => preparedAnswer())))
+      .catch((caught) => caught);
+
+    expectStableContractError(error);
+    expectNoDispatchCalls(harness);
+  });
+
+  it("rejects an applied prepare receipt that has already progressed", async () => {
+    const harness = createHarness();
+    harness.repository.prepare.mockResolvedValueOnce({
+      outcome: "applied",
+      receipt: beginAnswerReceipt(receipt()),
+    });
+
+    const error = await harness.service.respond(request(vi.fn(async () => preparedAnswer())))
+      .catch((caught) => caught);
+
+    expectStableContractError(error);
+    expectNoDispatchCalls(harness);
+  });
+
+  it("accepts an exact already-applied prepare receipt that has progressed", async () => {
+    const harness = createHarness();
+    const progressed = beginAnswerReceipt(receipt());
+    harness.repository.receipt = progressed;
+    harness.repository.findByIncomingMessage.mockResolvedValueOnce(undefined);
+    const prepareResult: Awaited<ReturnType<AnswerReplyRepository["prepare"]>> = {
+      outcome: "already_applied",
+      receipt: progressed,
+    };
+    harness.repository.prepare.mockResolvedValueOnce(prepareResult);
+
+    await expect(harness.service.respond(request(vi.fn(async () => preparedAnswer()))))
+      .resolves.toEqual({ replyMessageId: "reply-default" });
+
+    expect(harness.verifier.verify).toHaveBeenCalledTimes(1);
+    expect(harness.replier.replyText).toHaveBeenCalledTimes(1);
+  });
 
   it("checks each unique source in first-seen order before every answer attempt", async () => {
     const harness = createHarness({
@@ -335,7 +511,7 @@ describe("AnswerReplyDeliveryService", () => {
         .resolves.toEqual({ replyMessageId: "reply-default" });
 
       expect(harness.repository.blockForPermission).toHaveBeenCalledWith({
-        deliveryId: "delivery-1",
+        deliveryId: preparedDeliveryId,
         expectedVersion: 1,
         documentSourceIds: ["source-a"],
         at: transitionAt,
@@ -377,7 +553,7 @@ describe("AnswerReplyDeliveryService", () => {
     }))));
 
     expect(harness.repository.blockForPermission).toHaveBeenCalledWith({
-      deliveryId: "delivery-1",
+      deliveryId: preparedDeliveryId,
       expectedVersion: 1,
       documentSourceIds: ["source-a", "source-b"],
       at: transitionAt,
@@ -395,7 +571,7 @@ describe("AnswerReplyDeliveryService", () => {
       .resolves.toEqual({ replyMessageId: "reply-default" });
 
     expect(harness.repository.blockForPermission).toHaveBeenCalledWith({
-      deliveryId: "delivery-1",
+      deliveryId: preparedDeliveryId,
       expectedVersion: 1,
       documentSourceIds: ["source-a"],
       at: transitionAt,
@@ -453,7 +629,7 @@ describe("AnswerReplyDeliveryService", () => {
       uuid: safeNoticeUuid,
     });
     expect(harness.repository.completeSafeNoticeSend).toHaveBeenCalledWith({
-      deliveryId: "delivery-1",
+      deliveryId: preparedDeliveryId,
       expectedVersion: 3,
       safeNoticeMessageId: "safe-message-id",
       at: transitionAt,
@@ -492,15 +668,10 @@ describe("AnswerReplyDeliveryService", () => {
 
   it("returns a sent receipt without preparing, verifying, or calling Feishu", async () => {
     const harness = createHarness();
-    harness.repository.receipt = receipt({
-      state: "sent",
-      preparedReplyText: undefined,
-      replyMessageId: "stored-reply-id",
-      attemptCount: 1,
-      lastSendStartedAt: preparedAt,
-      sentAt: transitionAt,
-      updatedAt: transitionAt,
-    });
+    harness.repository.receipt = completedAnswerReceipt(
+      beginAnswerReceipt(receipt(), preparedAt),
+      "stored-reply-id",
+    );
     const prepareAnswer = vi.fn();
 
     await expect(harness.service.respond(request(prepareAnswer))).resolves.toEqual({
@@ -518,21 +689,13 @@ describe("AnswerReplyDeliveryService", () => {
     "returns a terminal %s safe notice without another external call",
     async (state) => {
       const harness = createHarness();
-      harness.repository.receipt = receipt({
-        state,
-        preparedReplyText: undefined,
-        safeNoticeMessageId: "stored-safe-id",
-        safeNoticeAttemptCount: 1,
-        safeNoticeSentAt: transitionAt,
-        updatedAt: transitionAt,
-        ...(state === "permission_blocked"
-          ? { permissionBlockedAt: transitionAt }
-          : {
-              reconciliationRequiredAt: transitionAt,
-              attemptCount: 1,
-              lastSendStartedAt: preparedAt,
-            }),
-      });
+      const blocked = state === "permission_blocked"
+        ? blockedReceipt(receipt(), ["source-a"], preparedAt)
+        : blockedReceipt(beginAnswerReceipt(receipt(), preparedAt));
+      harness.repository.receipt = completedSafeNoticeReceipt(
+        beginSafeNoticeReceipt(blocked),
+        "stored-safe-id",
+      );
       const prepareAnswer = vi.fn();
 
       await expect(harness.service.respond(request(prepareAnswer))).resolves.toEqual({
@@ -649,17 +812,13 @@ describe("AnswerReplyDeliveryService", () => {
     ["introduced sent timestamp", (value: AnswerReplyReceipt) => withDelivery(value, {
       sentAt: transitionAt,
     })],
+    ["dropped new event", dropLastEvent],
+    ["mutated prior event prefix", changePriorSendEventTimestamp],
   ] satisfies Array<[string, (value: AnswerReplyReceipt) => AnswerReplyReceipt]>)(
     "rejects beginAnswerSend with %s before calling Feishu",
     async (_label, mutate) => {
       const harness = createHarness();
-      const prior = receipt({
-        state: "sending",
-        attemptCount: 1,
-        version: 2,
-        lastSendStartedAt: preparedAt,
-        updatedAt: preparedAt,
-      });
+      const prior = beginAnswerReceipt(receipt(), preparedAt);
       harness.repository.receipt = prior;
       const valid = beginAnswerReceipt(prior);
       harness.repository.beginAnswerSend.mockResolvedValueOnce(mutate(valid));
@@ -701,6 +860,7 @@ describe("AnswerReplyDeliveryService", () => {
     ["introduced unrelated timestamp", (value: AnswerReplyReceipt) => withDelivery(value, {
       reconciliationRequiredAt: transitionAt,
     })],
+    ["dropped new event", dropLastEvent],
   ] satisfies Array<[string, (value: AnswerReplyReceipt) => AnswerReplyReceipt]>)(
     "rejects blockForPermission with %s before sending a notice",
     async (_label, mutate) => {
@@ -752,6 +912,7 @@ describe("AnswerReplyDeliveryService", () => {
     ["introduced answer timestamp", (value: AnswerReplyReceipt) => withDelivery(value, {
       sentAt: transitionAt,
     })],
+    ["dropped new event", dropLastEvent],
   ] satisfies Array<[string, (value: AnswerReplyReceipt) => AnswerReplyReceipt]>)(
     "rejects beginSafeNoticeSend with %s before calling Feishu",
     async (_label, mutate) => {
@@ -797,6 +958,7 @@ describe("AnswerReplyDeliveryService", () => {
     ["introduced unrelated timestamp", (value: AnswerReplyReceipt) => withDelivery(value, {
       permissionBlockedAt: transitionAt,
     })],
+    ["dropped new event", dropLastEvent],
   ] satisfies Array<[string, (value: AnswerReplyReceipt) => AnswerReplyReceipt]>)(
     "rejects completeAnswerSend with %s after the single Feishu call",
     async (_label, mutate) => {
@@ -851,6 +1013,7 @@ describe("AnswerReplyDeliveryService", () => {
     ["introduced answer timestamp", (value: AnswerReplyReceipt) => withDelivery(value, {
       sentAt: transitionAt,
     })],
+    ["dropped new event", dropLastEvent],
   ] satisfies Array<[string, (value: AnswerReplyReceipt) => AnswerReplyReceipt]>)(
     "rejects completeSafeNoticeSend with %s after the single Feishu call",
     async (_label, mutate) => {
@@ -1009,21 +1172,35 @@ function receipt(
   deliveryOverrides: Partial<AnswerReplyReceipt["delivery"]> = {},
   sourceTraces: AnswerReplySourceTraceInput[] = [sourceTrace()],
 ): AnswerReplyReceipt {
-  const deliveryId = deliveryOverrides.id ?? "delivery-1";
+  const provider = deliveryOverrides.provider ?? "feishu";
+  const receiptIncomingMessageId = deliveryOverrides.incomingMessageId ?? incomingMessageId;
+  const receiptChatId = deliveryOverrides.chatId ?? "oc_1";
+  const deliveryId = deliveryOverrides.id
+    ?? createAnswerReplyDeliveryId("feishu", receiptIncomingMessageId);
+  const renderedReplyFingerprint = deliveryOverrides.renderedReplyFingerprint
+    ?? createAnswerReplyRenderedFingerprint(preparedText);
+  const semanticFingerprint = deliveryOverrides.semanticFingerprint
+    ?? createAnswerReplySemanticFingerprint({
+      provider: "feishu",
+      incomingMessageId: receiptIncomingMessageId,
+      chatId: receiptChatId,
+      renderedReplyFingerprint,
+      sourceTraces,
+    });
   return {
     delivery: {
       id: deliveryId,
-      provider: "feishu",
-      incomingMessageId: "om_1",
-      chatId: "oc_1",
-      replyUuid: preparedReplyUuid,
-      safeNoticeUuid,
+      provider,
+      incomingMessageId: receiptIncomingMessageId,
+      chatId: receiptChatId,
+      replyUuid: deliveryOverrides.replyUuid
+        ?? createAnswerReplyUuid(receiptIncomingMessageId),
+      safeNoticeUuid: deliveryOverrides.safeNoticeUuid
+        ?? createAnswerReplySafeNoticeUuid(receiptIncomingMessageId),
       state: "prepared",
       preparedReplyText: preparedText,
-      renderedReplyFingerprint: fingerprint(
-        deliveryOverrides.preparedReplyText ?? preparedText,
-      ),
-      semanticFingerprint: "c".repeat(64),
+      renderedReplyFingerprint,
+      semanticFingerprint,
       attemptCount: 0,
       safeNoticeAttemptCount: 0,
       version: 1,
@@ -1033,11 +1210,11 @@ function receipt(
     },
     sources: sourceTraces.map((trace, index) => ({
       ...trace,
-      id: `trace-${index + 1}`,
+      id: createAnswerReplySourceTraceId(deliveryId, index + 1),
       deliveryId,
     })),
     events: [{
-      id: "event-1",
+      id: createAnswerReplyEventId(deliveryId, 1),
       deliveryId,
       sequence: 1,
       eventType: "prepared",
@@ -1058,63 +1235,120 @@ function withDelivery(
   };
 }
 
-function beginAnswerReceipt(prior: AnswerReplyReceipt): AnswerReplyReceipt {
-  return withDelivery(prior, {
+function beginAnswerReceipt(
+  prior: AnswerReplyReceipt,
+  at = transitionAt,
+): AnswerReplyReceipt {
+  const updated = withDelivery(prior, {
     state: "sending",
     attemptCount: prior.delivery.attemptCount + 1,
     version: prior.delivery.version + 1,
-    lastSendStartedAt: transitionAt,
-    updatedAt: transitionAt,
+    lastSendStartedAt: at,
+    updatedAt: at,
+  });
+  return appendEvent(updated, prior, "send_started", at, {
+    attemptNumber: updated.delivery.attemptCount,
   });
 }
 
 function completedAnswerReceipt(
   prior: AnswerReplyReceipt,
   replyMessageId: string | undefined,
+  at = transitionAt,
 ): AnswerReplyReceipt {
-  return withDelivery(prior, {
+  const updated = withDelivery(prior, {
     state: "sent",
     preparedReplyText: undefined,
     replyMessageId,
     version: prior.delivery.version + 1,
-    sentAt: transitionAt,
-    updatedAt: transitionAt,
+    sentAt: at,
+    updatedAt: at,
   });
+  return appendEvent(updated, prior, "sent", at);
 }
 
-function blockedReceipt(prior: AnswerReplyReceipt): AnswerReplyReceipt {
+function blockedReceipt(
+  prior: AnswerReplyReceipt,
+  documentSourceIds = uniqueSourceIds(prior),
+  at = transitionAt,
+): AnswerReplyReceipt {
   const state = prior.delivery.attemptCount === 0
     ? "permission_blocked" as const
     : "reconciliation_required" as const;
-  return withDelivery(prior, {
+  const updated = withDelivery(prior, {
     state,
     preparedReplyText: undefined,
     version: prior.delivery.version + 1,
-    updatedAt: transitionAt,
+    updatedAt: at,
     ...(state === "permission_blocked"
-      ? { permissionBlockedAt: transitionAt }
-      : { reconciliationRequiredAt: transitionAt }),
+      ? { permissionBlockedAt: at }
+      : { reconciliationRequiredAt: at }),
   });
+  return appendEvent(updated, prior, state, at, { documentSourceIds });
 }
 
-function beginSafeNoticeReceipt(prior: AnswerReplyReceipt): AnswerReplyReceipt {
-  return withDelivery(prior, {
+function beginSafeNoticeReceipt(
+  prior: AnswerReplyReceipt,
+  at = transitionAt,
+): AnswerReplyReceipt {
+  const updated = withDelivery(prior, {
     safeNoticeAttemptCount: prior.delivery.safeNoticeAttemptCount + 1,
     version: prior.delivery.version + 1,
-    updatedAt: transitionAt,
+    updatedAt: at,
+  });
+  return appendEvent(updated, prior, "safe_notice_send_started", at, {
+    attemptNumber: updated.delivery.safeNoticeAttemptCount,
   });
 }
 
 function completedSafeNoticeReceipt(
   prior: AnswerReplyReceipt,
   safeNoticeMessageId: string | undefined,
+  at = transitionAt,
 ): AnswerReplyReceipt {
-  return withDelivery(prior, {
+  const updated = withDelivery(prior, {
     safeNoticeMessageId,
-    safeNoticeSentAt: transitionAt,
+    safeNoticeSentAt: at,
     version: prior.delivery.version + 1,
-    updatedAt: transitionAt,
+    updatedAt: at,
   });
+  return appendEvent(updated, prior, "safe_notice_sent", at);
+}
+
+function appendEvent(
+  updated: AnswerReplyReceipt,
+  prior: AnswerReplyReceipt,
+  eventType: AnswerReplyDeliveryEvent["eventType"],
+  at: Date,
+  {
+    attemptNumber,
+    documentSourceIds = uniqueSourceIds(prior),
+  }: {
+    attemptNumber?: number;
+    documentSourceIds?: string[];
+  } = {},
+): AnswerReplyReceipt {
+  const sequence = prior.delivery.version + 1;
+  return {
+    ...updated,
+    events: [
+      ...prior.events,
+      {
+        id: createAnswerReplyEventId(prior.delivery.id, sequence),
+        deliveryId: prior.delivery.id,
+        sequence,
+        eventType,
+        ...(attemptNumber === undefined ? {} : { attemptNumber }),
+        sourceCount: prior.sources.length,
+        documentSourceIds,
+        createdAt: at,
+      },
+    ],
+  };
+}
+
+function uniqueSourceIds(receiptValue: AnswerReplyReceipt): string[] {
+  return [...new Set(receiptValue.sources.map(({ documentSourceId }) => documentSourceId))];
 }
 
 function changeFirstSource(value: AnswerReplyReceipt): AnswerReplyReceipt {
@@ -1142,6 +1376,27 @@ function changeFirstEventDelivery(value: AnswerReplyReceipt): AnswerReplyReceipt
       ? { ...event, deliveryId: "foreign-delivery" }
       : event),
   };
+}
+
+function changeEvent(
+  value: AnswerReplyReceipt,
+  index: number,
+  overrides: Partial<AnswerReplyDeliveryEvent>,
+): AnswerReplyReceipt {
+  return {
+    ...value,
+    events: value.events.map((event, eventIndex) => eventIndex === index
+      ? { ...event, ...overrides }
+      : event),
+  };
+}
+
+function dropLastEvent(value: AnswerReplyReceipt): AnswerReplyReceipt {
+  return { ...value, events: value.events.slice(0, -1) };
+}
+
+function changePriorSendEventTimestamp(value: AnswerReplyReceipt): AnswerReplyReceipt {
+  return changeEvent(value, 1, { createdAt: transitionAt });
 }
 
 function expectOnlySafeNoticeWasSent(harness: Harness): void {
@@ -1174,10 +1429,6 @@ function expectNoDispatchCalls(harness: Harness): void {
   expect(harness.repository.beginSafeNoticeSend).not.toHaveBeenCalled();
   expect(harness.repository.completeSafeNoticeSend).not.toHaveBeenCalled();
   expect(harness.replier.replyText).not.toHaveBeenCalled();
-}
-
-function fingerprint(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function createGate(): { promise: Promise<void>; open(): void } {
@@ -1225,42 +1476,34 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
     incomingMessageId: string;
   }) => this.receipts.get(receiptKey(input.provider, input.incomingMessageId)));
 
-  prepare = vi.fn(async (input: PrepareAnswerReplyInput) => {
+  prepare = vi.fn(async (
+    input: PrepareAnswerReplyInput,
+  ): ReturnType<AnswerReplyRepository["prepare"]> => {
     const key = receiptKey(input.provider, input.incomingMessageId);
     let current = this.receipts.get(key);
     if (current === undefined) {
       current = receipt({
-        id: input.incomingMessageId === "om_1" ? "delivery-1" : `delivery-${input.incomingMessageId}`,
+        id: createAnswerReplyDeliveryId(input.provider, input.incomingMessageId),
         provider: input.provider,
         incomingMessageId: input.incomingMessageId,
         chatId: input.chatId,
         replyUuid: input.replyUuid,
         safeNoticeUuid: input.safeNoticeUuid,
         preparedReplyText: input.renderedText,
-        renderedReplyFingerprint: fingerprint(input.renderedText),
+        renderedReplyFingerprint: createAnswerReplyRenderedFingerprint(input.renderedText),
         createdAt: input.at,
         updatedAt: input.at,
       }, [...input.sourceTraces]);
       this.receipts.set(key, current);
     }
-    return { outcome: "applied" as const, receipt: current };
+    return { outcome: "applied", receipt: current };
   });
 
   beginAnswerSend = vi.fn(async (
     input: VersionedTransitionInput,
   ): Promise<AnswerReplyReceipt> => {
     const current = this.requireReceipt(input.deliveryId);
-    const updated: AnswerReplyReceipt = {
-      ...current,
-      delivery: {
-        ...current.delivery,
-        state: "sending",
-        attemptCount: current.delivery.attemptCount + 1,
-        version: current.delivery.version + 1,
-        updatedAt: input.at,
-        lastSendStartedAt: input.at,
-      },
-    };
+    const updated = beginAnswerReceipt(current, input.at);
     this.storeReceipt(updated);
     return updated;
   });
@@ -1269,18 +1512,7 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
     input: VersionedTransitionInput & { replyMessageId?: string },
   ): Promise<AnswerReplyReceipt> => {
     const current = this.requireReceipt(input.deliveryId);
-    const updated: AnswerReplyReceipt = {
-      ...current,
-      delivery: {
-        ...current.delivery,
-        state: "sent",
-        preparedReplyText: undefined,
-        ...(input.replyMessageId === undefined ? {} : { replyMessageId: input.replyMessageId }),
-        version: current.delivery.version + 1,
-        updatedAt: input.at,
-        sentAt: input.at,
-      },
-    };
+    const updated = completedAnswerReceipt(current, input.replyMessageId, input.at);
     this.storeReceipt(updated);
     return updated;
   });
@@ -1289,22 +1521,7 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
     input: VersionedTransitionInput & { documentSourceIds: string[] },
   ): Promise<AnswerReplyReceipt> => {
     const current = this.requireReceipt(input.deliveryId);
-    const state = current.delivery.attemptCount === 0
-      ? "permission_blocked" as const
-      : "reconciliation_required" as const;
-    const updated: AnswerReplyReceipt = {
-      ...current,
-      delivery: {
-        ...current.delivery,
-        state,
-        preparedReplyText: undefined,
-        version: current.delivery.version + 1,
-        updatedAt: input.at,
-        ...(state === "permission_blocked"
-          ? { permissionBlockedAt: input.at }
-          : { reconciliationRequiredAt: input.at }),
-      },
-    };
+    const updated = blockedReceipt(current, input.documentSourceIds, input.at);
     this.storeReceipt(updated);
     return updated;
   });
@@ -1313,15 +1530,7 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
     input: VersionedTransitionInput,
   ): Promise<AnswerReplyReceipt> => {
     const current = this.requireReceipt(input.deliveryId);
-    const updated: AnswerReplyReceipt = {
-      ...current,
-      delivery: {
-        ...current.delivery,
-        safeNoticeAttemptCount: current.delivery.safeNoticeAttemptCount + 1,
-        version: current.delivery.version + 1,
-        updatedAt: input.at,
-      },
-    };
+    const updated = beginSafeNoticeReceipt(current, input.at);
     this.storeReceipt(updated);
     return updated;
   });
@@ -1330,18 +1539,11 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
     input: VersionedTransitionInput & { safeNoticeMessageId?: string },
   ): Promise<AnswerReplyReceipt> => {
     const current = this.requireReceipt(input.deliveryId);
-    const updated: AnswerReplyReceipt = {
-      ...current,
-      delivery: {
-        ...current.delivery,
-        ...(input.safeNoticeMessageId === undefined
-          ? {}
-          : { safeNoticeMessageId: input.safeNoticeMessageId }),
-        version: current.delivery.version + 1,
-        updatedAt: input.at,
-        safeNoticeSentAt: input.at,
-      },
-    };
+    const updated = completedSafeNoticeReceipt(
+      current,
+      input.safeNoticeMessageId,
+      input.at,
+    );
     this.storeReceipt(updated);
     return updated;
   });
