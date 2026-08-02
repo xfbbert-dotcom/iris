@@ -87,7 +87,7 @@ const compose = (...args: string[]) => [
   ...args,
 ];
 
-let app: ReturnType<typeof buildApp> | undefined;
+let app: Awaited<ReturnType<typeof buildApp>> | undefined;
 let pythonWorker: ChildProcess | undefined;
 let fakeProvider: FakeProvider | undefined;
 let pool: pg.Pool | undefined;
@@ -163,7 +163,7 @@ try {
     createDefaultRuntimeConfig({ IRIS_RUNTIME_GLOBAL_ENABLED: "true" }),
   );
 
-  app = buildApp({
+  app = await buildApp({
     internalApiToken,
     runtimeController,
     verifyFeishuRequest: () => true,

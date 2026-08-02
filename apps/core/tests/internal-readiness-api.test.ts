@@ -21,7 +21,7 @@ afterEach(() => {
 
 describe("GET /internal/readiness", () => {
   it("returns the internal rollout readiness report for the configured environment", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       readinessEnv: readyRolloutEnv(),
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -47,7 +47,7 @@ describe("GET /internal/readiness", () => {
   });
 
   it("remains ready when the optional extraction AI worker is unhealthy", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       readinessEnv: readyRolloutEnv(),
       createAnswerDraftRuntime: () => undefined,
       createMemoryExtractionRuntime: () =>
@@ -67,7 +67,7 @@ describe("GET /internal/readiness", () => {
   });
 
   it("uses live action-review runtime and migration facts when the feature is enabled", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       readinessEnv: readyActionReviewEnv(),
       ...readyActionReviewRuntimeDependencies(true),
       createAnswerDraftRuntime: () => undefined,
@@ -89,7 +89,7 @@ describe("GET /internal/readiness", () => {
   });
 
   it("blocks live action-review readiness when migration 0034 is missing", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       readinessEnv: readyActionReviewEnv(),
       ...readyActionReviewRuntimeDependencies(false),
       createAnswerDraftRuntime: () => undefined,
@@ -113,7 +113,7 @@ describe("GET /internal/readiness", () => {
 
 describe("memory extraction internal API", () => {
   it("returns exact disabled status without a runtime", async () => {
-    const app = buildTestApp({ createMemoryExtractionRuntime: () => undefined });
+    const app = await buildTestApp({ createMemoryExtractionRuntime: () => undefined });
 
     const response = await app.inject({
       method: "GET",
@@ -170,7 +170,7 @@ describe("memory extraction internal API", () => {
   });
 
   it("keeps the memory dead-letter list observable when extraction runtime is disabled", async () => {
-    const app = buildTestApp({ createMemoryExtractionRuntime: () => undefined });
+    const app = await buildTestApp({ createMemoryExtractionRuntime: () => undefined });
 
     const response = await app.inject({
       method: "GET",
@@ -184,7 +184,7 @@ describe("memory extraction internal API", () => {
 
   it("requires the exact configured bearer token for every recovery surface", async () => {
     const runtime = fakeMemoryExtractionRuntime();
-    const app = buildTestApp({
+    const app = await buildTestApp({
       internalApiToken: "internal-token",
       createMemoryExtractionRuntime: () => runtime,
     });
@@ -236,7 +236,7 @@ describe("memory extraction internal API", () => {
         }),
       ),
     });
-    const app = buildTestApp({ createMemoryExtractionRuntime: () => runtime });
+    const app = await buildTestApp({ createMemoryExtractionRuntime: () => runtime });
 
     const direct = await app.inject({
       method: "GET",
@@ -333,7 +333,7 @@ describe("memory extraction internal API", () => {
         throw new Error("database returned raw candidate and secret-token");
       }),
     });
-    const app = buildTestApp({ createMemoryExtractionRuntime: () => runtime });
+    const app = await buildTestApp({ createMemoryExtractionRuntime: () => runtime });
 
     const direct = await app.inject({
       method: "GET",
@@ -362,7 +362,7 @@ describe("memory extraction internal API", () => {
     [memoryExtractionStatus({ running: false }), "stopped", undefined],
     [memoryExtractionStatus({ deadLetterJobCount: 2 }), "degraded", "dead_letters_present"],
   ])("degrades consolidated status for stopped runtime or DLQ backlog", async (status, componentStatus, degradedReason) => {
-    const app = buildTestApp({
+    const app = await buildTestApp({
       createMemoryExtractionRuntime: () =>
         fakeMemoryExtractionRuntime({ getStatus: vi.fn(async () => status) }),
     });
@@ -410,7 +410,7 @@ describe("memory extraction internal API", () => {
         delete: vi.fn(async () => "not_found" as const),
       },
     });
-    const app = buildTestApp({ createMemoryExtractionRuntime: () => runtime });
+    const app = await buildTestApp({ createMemoryExtractionRuntime: () => runtime });
 
     const response = await app.inject({
       method: "GET",
@@ -478,7 +478,7 @@ describe("memory extraction internal API", () => {
           .mockResolvedValueOnce("not_found" as const),
       },
     });
-    const app = buildTestApp({
+    const app = await buildTestApp({
       auditLog,
       createMemoryExtractionRuntime: () => runtime,
     });
@@ -568,7 +568,7 @@ describe("memory extraction internal API", () => {
         delete: vi.fn(async () => "not_found" as const),
       },
     });
-    const app = buildTestApp({
+    const app = await buildTestApp({
       auditLog,
       createMemoryExtractionRuntime: () => runtime,
     });
@@ -622,7 +622,7 @@ describe("memory extraction internal API", () => {
         delete: vi.fn(async () => "not_found" as const),
       },
     });
-    const app = buildTestApp({
+    const app = await buildTestApp({
       auditLog,
       createMemoryExtractionRuntime: () => runtime,
     });
@@ -648,8 +648,8 @@ describe("memory extraction internal API", () => {
   });
 });
 
-function buildTestApp(overrides: Parameters<typeof buildApp>[0] = {}) {
-  return buildApp({
+async function buildTestApp(overrides: Parameters<typeof buildApp>[0] = {}) {
+  return await buildApp({
     createAnswerDraftRuntime: () => undefined,
     createEventWorkerRuntime: () => undefined,
     createDocumentSyncRuntime: () => undefined,

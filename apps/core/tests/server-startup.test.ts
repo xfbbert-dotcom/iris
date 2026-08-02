@@ -78,7 +78,7 @@ describe("Core server startup", () => {
       capturedAnswerSourcePermissionVerifier = input?.answerSourcePermissionVerifier;
       return undefined;
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAgentExecutionLedgerRuntime: () => undefined,
       createAnswerDraftRuntime: () => answerDraftRuntime,
       createReindexWorkerRuntime: () => undefined,
@@ -103,6 +103,52 @@ describe("Core server startup", () => {
     expect(capturedAnswerSourcePermissionVerifier).toBe(
       answerDraftRuntime.answerSourcePermissionVerifier,
     );
+    await app.close();
+  });
+
+  it("does not expose or start the app before async event runtime construction settles", async () => {
+    const eventWorkerRuntime = fakeEventWorkerRuntime({
+      start: vi.fn(),
+    });
+    let resolveConstruction: (
+      runtime: EventWorkerRuntime | undefined,
+    ) => void = () => undefined;
+    const pendingConstruction = new Promise<EventWorkerRuntime | undefined>((resolve) => {
+      resolveConstruction = resolve;
+    });
+    const createEventWorkerRuntime: NonNullable<
+      BuildAppDependencies["createEventWorkerRuntime"]
+    > = () => pendingConstruction;
+    let settled = false;
+
+    const appConstruction = buildApp({
+      createAgentExecutionLedgerRuntime: () => undefined,
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => undefined,
+      createConversationStateInspectionRuntime: () => undefined,
+      createProactiveSignalRuntime: () => undefined,
+      createKnowledgeDraftRuntime: () => undefined,
+      createKnowledgeCardRuntime: () => undefined,
+      createActionApprovalRuntime: () => undefined,
+      createActionReviewRuntime: () => undefined,
+      createProactiveSignalPlannerRuntime: () => undefined,
+      createProactiveSignalDeliveryRuntime: () => undefined,
+      createEventWorkerRuntime,
+      createDocumentSyncRuntime: () => undefined,
+    });
+    void Promise.resolve(appConstruction).then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(eventWorkerRuntime.start).not.toHaveBeenCalled();
+
+    resolveConstruction(eventWorkerRuntime);
+    const app = await appConstruction;
+    expect(eventWorkerRuntime.start).toHaveBeenCalledOnce();
     await app.close();
   });
 
@@ -377,7 +423,7 @@ describe("Core server startup", () => {
       }),
     });
     const createKnowledgeCardRuntime = vi.fn(() => knowledgeCardRuntime);
-    const app = buildApp({
+    const app = await buildApp({
       runtimeController,
       createProactiveSignalRuntime: () => proactiveSignalRuntime,
       createKnowledgeCardRuntime,
@@ -492,7 +538,7 @@ describe("Core server startup", () => {
     let app: FastifyInstance | undefined;
     let startupError: unknown;
     try {
-      app = buildApp({
+      app = await buildApp({
         createAnswerDraftRuntime: () => undefined,
         createAgentExecutionLedgerRuntime: () => undefined,
         createReindexWorkerRuntime: () => undefined,
@@ -616,7 +662,7 @@ describe("Core server startup", () => {
       start: vi.fn(() => startup),
       close: vi.fn(async () => undefined),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createMemoryExtractionRuntime: () => undefined,

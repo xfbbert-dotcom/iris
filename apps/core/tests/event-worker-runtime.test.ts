@@ -9,11 +9,11 @@ import {
 } from "../src/runtime/event-worker-runtime.js";
 
 describe("createEventWorkerRuntime", () => {
-  it("returns undefined when the event worker is disabled", () => {
-    expect(createEventWorkerRuntime({ env: {} })).toBeUndefined();
+  it("returns undefined when the event worker is disabled", async () => {
+    await expect(createEventWorkerRuntime({ env: {} })).resolves.toBeUndefined();
   });
 
-  it("preflights partial mention reply config before opening resources", () => {
+  it("preflights partial mention reply config before opening resources", async () => {
     const createPostgresPool = vi.fn(() => ({
       query: vi.fn(),
       end: vi.fn(async () => undefined),
@@ -31,7 +31,7 @@ describe("createEventWorkerRuntime", () => {
     };
     const createRedisClient = vi.fn(() => redisClient);
 
-    expect(() =>
+    await expect(
       createEventWorkerRuntime({
         env: {
           ...enabledEnv(),
@@ -43,7 +43,7 @@ describe("createEventWorkerRuntime", () => {
           createRedisClient,
         },
       }),
-    ).toThrow("FEISHU_APP_SECRET is required");
+    ).rejects.toThrow("FEISHU_APP_SECRET is required");
 
     expect(createPostgresPool).not.toHaveBeenCalled();
     expect(createRedisClient).not.toHaveBeenCalled();
@@ -131,7 +131,7 @@ describe("createEventWorkerRuntime", () => {
       createWorkerLoop: vi.fn(() => loop),
     };
 
-    const runtime = createEventWorkerRuntime({
+    const runtime = await createEventWorkerRuntime({
       env: enabledEnv(),
       dependencies,
       runtimeController,
@@ -302,7 +302,7 @@ describe("createEventWorkerRuntime", () => {
     };
 
     let mentionResponderInput: FeishuMentionAnswerResponderDependencies | undefined;
-    const runtime = createEventWorkerRuntime({
+    const runtime = await createEventWorkerRuntime({
       env: {
         ...enabledEnv(),
         FEISHU_APP_ID: "app-id",
@@ -399,41 +399,101 @@ describe("createEventWorkerRuntime", () => {
     expect(pool.end).toHaveBeenCalledOnce();
   });
 
-  it("cleans up opened resources when early answer repository composition fails", async () => {
-    const fixture = createConstructionFailureFixture();
+  it("awaits both acquired-resource cleanups before rejecting an early composition failure", async () => {
+    const redisCleanup = createDeferred<void>();
+    const poolCleanup = createDeferred<void>();
+    const fixture = createConstructionFailureFixture({ redisCleanup, poolCleanup });
     const compositionError = new Error("answer repository composition failed");
     fixture.dependencies.createPostgresAnswerReplyRepository = vi.fn(() => {
       throw compositionError;
     });
+    let settled = false;
 
-    expect(() => createEventWorkerRuntime({
+    const construction = createEventWorkerRuntime({
       env: enabledEnv(),
       dependencies: fixture.dependencies,
-    })).toThrow(compositionError);
-
-    await vi.waitFor(() => {
-      expect(fixture.redisClient.quit).toHaveBeenCalledOnce();
-      expect(fixture.pool.end).toHaveBeenCalledOnce();
     });
+    void construction.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+
+    await Promise.resolve();
+    expect(fixture.redisClient.quit).toHaveBeenCalledOnce();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    redisCleanup.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    poolCleanup.resolve();
+    await expect(construction).rejects.toBe(compositionError);
   });
 
-  it("cleans up opened resources once and preserves a late composition error", async () => {
-    const cleanupError = new Error("resource cleanup failed");
-    const fixture = createConstructionFailureFixture({ cleanupError });
+  it("preserves a late composition error after both acquired-resource cleanups reject", async () => {
+    const redisCleanup = createDeferred<void>();
+    const poolCleanup = createDeferred<void>();
+    const fixture = createConstructionFailureFixture({ redisCleanup, poolCleanup });
     const compositionError = new Error("worker loop composition failed");
     fixture.dependencies.createWorkerLoop = vi.fn(() => {
       throw compositionError;
     });
+    let settled = false;
 
-    expect(() => createEventWorkerRuntime({
+    const construction = createEventWorkerRuntime({
       env: enabledEnv(),
       dependencies: fixture.dependencies,
-    })).toThrow(compositionError);
-
-    await vi.waitFor(() => {
-      expect(fixture.redisClient.quit).toHaveBeenCalledOnce();
-      expect(fixture.pool.end).toHaveBeenCalledOnce();
     });
+    void construction.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+
+    await Promise.resolve();
+    expect(fixture.redisClient.quit).toHaveBeenCalledOnce();
+    expect(fixture.pool.end).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    redisCleanup.reject(new Error("Redis cleanup failed"));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    poolCleanup.reject(new Error("pool cleanup failed"));
+    await expect(construction).rejects.toBe(compositionError);
+  });
+
+  it("awaits pool-only cleanup when Redis acquisition fails", async () => {
+    const poolCleanup = createDeferred<void>();
+    const pool = {
+      query: vi.fn(),
+      end: vi.fn(() => poolCleanup.promise),
+    };
+    const redisAcquisitionError = new Error("Redis client composition failed");
+    const createRedisClient = vi.fn(() => {
+      throw redisAcquisitionError;
+    });
+    let settled = false;
+
+    const construction = createEventWorkerRuntime({
+      env: enabledEnv(),
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createRedisClient,
+      },
+    });
+    void construction.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+
+    await Promise.resolve();
+    expect(createRedisClient).toHaveBeenCalledOnce();
+    expect(pool.end).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    poolCleanup.reject(new Error("pool cleanup failed"));
+    await expect(construction).rejects.toBe(redisAcquisitionError);
   });
 
   it("does not compose mention replies and reports missing setup reasons", async () => {
@@ -480,7 +540,7 @@ describe("createEventWorkerRuntime", () => {
       })),
     };
 
-    const runtime = createEventWorkerRuntime({
+    const runtime = await createEventWorkerRuntime({
       env: {
         ...enabledEnv(),
         FEISHU_APP_ID: "app-id",
@@ -503,7 +563,7 @@ describe("createEventWorkerRuntime", () => {
     });
     await runtime?.close();
 
-    const missingFeishuConfigRuntime = createEventWorkerRuntime({
+    const missingFeishuConfigRuntime = await createEventWorkerRuntime({
       env: {
         ...enabledEnv(),
         IRIS_FEISHU_BOT_OPEN_ID: "ou_iris",
@@ -521,7 +581,7 @@ describe("createEventWorkerRuntime", () => {
     });
     await missingFeishuConfigRuntime?.close();
 
-    const missingAnswerDraftRuntime = createEventWorkerRuntime({
+    const missingAnswerDraftRuntime = await createEventWorkerRuntime({
       env: {
         ...enabledEnv(),
         FEISHU_APP_ID: "app-id",
@@ -566,17 +626,15 @@ function fakeAnswerReplyRepository() {
 }
 
 function createConstructionFailureFixture({
-  cleanupError,
+  redisCleanup,
+  poolCleanup,
 }: {
-  cleanupError?: Error;
+  redisCleanup?: Deferred<void>;
+  poolCleanup?: Deferred<void>;
 } = {}) {
   const pool = {
     query: vi.fn(),
-    end: vi.fn(async () => {
-      if (cleanupError !== undefined) {
-        throw cleanupError;
-      }
-    }),
+    end: vi.fn(() => poolCleanup?.promise ?? Promise.resolve()),
   };
   const redisClient = {
     connect: vi.fn(async () => redisClient),
@@ -587,11 +645,7 @@ function createConstructionFailureFixture({
     lRange: vi.fn(async () => []),
     lRem: vi.fn(async () => 0),
     sRem: vi.fn(async () => 0),
-    quit: vi.fn(async () => {
-      if (cleanupError !== undefined) {
-        throw cleanupError;
-      }
-    }),
+    quit: vi.fn(() => redisCleanup?.promise ?? Promise.resolve()),
   };
   const dependencies: EventWorkerRuntimeDependencies = {
     createPostgresPool: vi.fn(() => pool),
@@ -624,4 +678,20 @@ function createConstructionFailureFixture({
   };
 
   return { dependencies, pool, redisClient };
+}
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (error: unknown) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

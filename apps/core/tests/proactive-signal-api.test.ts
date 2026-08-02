@@ -13,7 +13,7 @@ describe("proactive signal API", () => {
     const controller = new RuntimeController(createDefaultRuntimeConfig({}));
     controller.pauseProactiveBehavior();
     const store = createStore();
-    const app = createApp({ store, controller });
+    const app = await createApp({ store, controller });
 
     const response = await app.inject({
       method: "POST",
@@ -63,7 +63,7 @@ describe("proactive signal API", () => {
         evidenceMessageIds: ["message-action"],
       },
     ]);
-    const app = createApp({ store, now: () => new Date("2026-07-23T10:00:00.000Z") });
+    const app = await createApp({ store, now: () => new Date("2026-07-23T10:00:00.000Z") });
 
     const response = await app.inject({
       method: "POST",
@@ -129,7 +129,7 @@ describe("proactive signal API", () => {
         evidenceMessageIds: ["message-thread"],
       },
     ]);
-    const app = createApp({ store, proactiveSignalRepository: repository });
+    const app = await createApp({ store, proactiveSignalRepository: repository });
 
     const response = await app.inject({
       method: "POST",
@@ -189,7 +189,7 @@ describe("proactive signal API", () => {
         deliveryId: "delivery-a",
       }),
     } as unknown as ProactiveSignalRepository;
-    const app = createApp({ store, proactiveSignalRepository: repository });
+    const app = await createApp({ store, proactiveSignalRepository: repository });
 
     const list = await app.inject({
       method: "GET",
@@ -237,7 +237,7 @@ describe("proactive signal API", () => {
         deliveryId: "delivery-a",
       }),
     } as unknown as ProactiveSignalRepository;
-    const app = createApp({ store, proactiveSignalRepository: repository });
+    const app = await createApp({ store, proactiveSignalRepository: repository });
 
     const response = await app.inject({
       method: "POST",
@@ -269,7 +269,7 @@ describe("proactive signal API", () => {
       lastFeedbackAt: new Date("2026-07-27T00:00:00.000Z"),
     });
     const now = () => new Date("2026-07-27T01:00:00.000Z");
-    const app = createApp({
+    const app = await createApp({
       store: createStore(),
       proactiveSignalRepository: repository as unknown as ProactiveSignalRepository,
       now,
@@ -309,7 +309,7 @@ describe("proactive signal API", () => {
       helpfulRate: null,
       activeSuppressionCount: 0,
     });
-    const app = createApp({
+    const app = await createApp({
       store: createStore(),
       proactiveSignalRepository: repository as unknown as ProactiveSignalRepository,
     });
@@ -335,7 +335,7 @@ describe("proactive signal API", () => {
 
   it("rejects unauthenticated and invalid feedback summary requests", async () => {
     const repository = createRepository();
-    const app = createApp({
+    const app = await createApp({
       store: createStore(),
       proactiveSignalRepository: repository as unknown as ProactiveSignalRepository,
     });
@@ -358,7 +358,7 @@ describe("proactive signal API", () => {
   });
 
   it("returns stable feedback summary repository errors without leaking details", async () => {
-    const unavailableApp = createApp({ store: createStore() });
+    const unavailableApp = await createApp({ store: createStore() });
     const unavailable = await unavailableApp.inject({
       method: "GET",
       url: "/internal/proactive-signals/groups/oc_pilot/feedback-summary",
@@ -370,7 +370,7 @@ describe("proactive signal API", () => {
 
     const repository = createRepository();
     repository.getFeedbackSummary.mockRejectedValue(new Error("database password exposed"));
-    const failingApp = createApp({
+    const failingApp = await createApp({
       store: createStore(),
       proactiveSignalRepository: repository as unknown as ProactiveSignalRepository,
     });
@@ -401,7 +401,7 @@ function createRepository() {
   };
 }
 
-function createApp({
+async function createApp({
   store,
   controller = new RuntimeController(createDefaultRuntimeConfig({})),
   now = () => new Date("2026-07-23T10:00:00.000Z"),
@@ -412,7 +412,7 @@ function createApp({
   now?: () => Date;
   proactiveSignalRepository?: ProactiveSignalRepository;
 }) {
-  return buildApp({
+  return await buildApp({
     internalApiToken: "operator-secret",
     runtimeController: controller,
     conversationStateInspectionStore: store,

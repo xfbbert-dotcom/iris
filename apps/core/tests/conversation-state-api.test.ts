@@ -11,7 +11,7 @@ const authorization = { authorization: "Bearer operator-secret" };
 describe("conversation state operator API", () => {
   it("requires the configured bearer token for all five routes", async () => {
     const store = createStore();
-    const app = createApp(store);
+    const app = await createApp(store);
 
     for (const url of [
       "/internal/conversation-state/status",
@@ -38,7 +38,7 @@ describe("conversation state operator API", () => {
 
   it("fails closed when bearer authentication is not configured", async () => {
     const store = createStore();
-    const app = buildApp({
+    const app = await buildApp({
       conversationStateInspectionStore: store,
       createAnswerDraftRuntime: () => undefined,
       createMemoryExtractionRuntime: () => undefined,
@@ -69,7 +69,7 @@ describe("conversation state operator API", () => {
       affectedActionCount: 1,
       deletedMemoryCount: 2,
     });
-    const app = createApp(store);
+    const app = await createApp(store);
     const url = "/internal/conversation-state/groups/group-a/messages/message-a/evidence";
 
     const unauthorized = await app.inject({
@@ -121,7 +121,7 @@ describe("conversation state operator API", () => {
         evidenceMessageIds: ["message-a"],
       },
     ]);
-    const app = createApp(store);
+    const app = await createApp(store);
 
     const response = await app.inject({
       method: "GET",
@@ -166,7 +166,7 @@ describe("conversation state operator API", () => {
         evidenceMessageIds: ["message-a", "message-b"],
       },
     ]);
-    const app = createApp(store);
+    const app = await createApp(store);
 
     const response = await app.inject({
       method: "GET",
@@ -217,7 +217,7 @@ describe("conversation state operator API", () => {
         evidenceMessageIds: ["message-completion"],
       },
     ]);
-    const app = createApp(store);
+    const app = await createApp(store);
 
     const threadResponse = await app.inject({
       method: "GET",
@@ -257,7 +257,7 @@ describe("conversation state operator API", () => {
 
   it("rejects unbounded group, entity, and limit inputs before querying", async () => {
     const store = createStore();
-    const app = createApp(store);
+    const app = await createApp(store);
     const oversized = "x".repeat(513);
 
     for (const url of [
@@ -292,7 +292,7 @@ describe("conversation state operator API", () => {
       actions: { open: 5, completed: 6, cancelled: 7 },
       projectionRepairs: { pending: 0, processing: 0, completed: 8, failed: 0 },
     });
-    const app = createApp(store);
+    const app = await createApp(store);
 
     const response = await app.inject({
       method: "GET",
@@ -345,7 +345,7 @@ describe("conversation state operator API", () => {
   it("returns bounded generic failures without leaking database or message content", async () => {
     const store = createStore();
     store.listThreads.mockRejectedValue(new Error("raw message text SELECT failed at postgres.internal"));
-    const app = createApp(store);
+    const app = await createApp(store);
 
     const response = await app.inject({
       method: "GET",
@@ -364,8 +364,8 @@ describe("conversation state operator API", () => {
   });
 });
 
-function createApp(store: ConversationStateInspectionStore) {
-  return buildApp({
+async function createApp(store: ConversationStateInspectionStore) {
+  return await buildApp({
     internalApiToken: "operator-secret",
     conversationStateInspectionStore: store,
     createAnswerDraftRuntime: () => undefined,

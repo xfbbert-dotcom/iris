@@ -17,7 +17,7 @@ describe("agent execution ledger app composition", () => {
     const createAnswerDraftRuntime = vi.fn(() => undefined);
     const createActionApprovalRuntime = vi.fn(() => undefined);
     const createProactiveSignalDeliveryRuntime = vi.fn(() => undefined);
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       now: () => new Date("2026-07-27T14:00:00.000Z"),
       createAgentExecutionLedgerRuntime,
@@ -86,7 +86,7 @@ describe("agent execution ledger app composition", () => {
         lastWriteFailureAt: new Date("2026-07-27T13:59:00.000Z"),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createAgentExecutionLedgerRuntime: () => runtime,
       createAnswerDraftRuntime: () => undefined,

@@ -4,7 +4,7 @@ import { buildApp } from "../src/app.js";
 
 describe("Admin Console routes", () => {
   it("serves the static console shell without weakening internal API auth", async () => {
-    const app = buildApp({ internalApiToken: "operator-secret" });
+    const app = await buildApp({ internalApiToken: "operator-secret" });
 
     const page = await app.inject({ method: "GET", url: "/admin" });
     const unauthorizedInternal = await app.inject({ method: "GET", url: "/internal/status" });
@@ -20,7 +20,7 @@ describe("Admin Console routes", () => {
   });
 
   it("serves static console assets with bounded cache and no token material", async () => {
-    const app = buildApp({ internalApiToken: "operator-secret" });
+    const app = await buildApp({ internalApiToken: "operator-secret" });
 
     const css = await app.inject({ method: "GET", url: "/admin/console.css" });
     const js = await app.inject({ method: "GET", url: "/admin/console.js" });
@@ -39,7 +39,7 @@ describe("Admin Console routes", () => {
   });
 
   it("does not expose document-source governance without the internal bearer token", async () => {
-    const app = buildApp({ internalApiToken: "operator-secret" });
+    const app = await buildApp({ internalApiToken: "operator-secret" });
 
     const unauthorizedList = await app.inject({
       method: "GET",

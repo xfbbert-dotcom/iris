@@ -10,7 +10,7 @@ import type { ActionApprovalRuntime } from "../src/runtime/action-approval-runti
 describe("action proposal internal API", () => {
   it("authenticates before parsing a body and exposes no human approval route", async () => {
     const harness = createHarness();
-    const app = buildApp(harness.dependencies);
+    const app = await buildApp(harness.dependencies);
 
     const unauthorized = await app.inject({
       method: "PUT",
@@ -34,7 +34,7 @@ describe("action proposal internal API", () => {
 
   it("lists bounded proposals and returns 404 for an unknown exact id", async () => {
     const harness = createHarness();
-    const app = buildApp(harness.dependencies);
+    const app = await buildApp(harness.dependencies);
 
     const list = await app.inject({
       method: "GET",
@@ -62,7 +62,7 @@ describe("action proposal internal API", () => {
 
   it("applies revision governance with the operator header instead of a human approval fact", async () => {
     const harness = createHarness();
-    const app = buildApp(harness.dependencies);
+    const app = await buildApp(harness.dependencies);
 
     const response = await app.inject({
       method: "POST",
@@ -96,7 +96,7 @@ describe("action proposal internal API", () => {
 
   it("requires exact versioned policy and role-grant writes", async () => {
     const harness = createHarness();
-    const app = buildApp(harness.dependencies);
+    const app = await buildApp(harness.dependencies);
     const headers = { ...authorizedHeaders(), "x-iris-operator": "operator@example.com" };
 
     const policy = await app.inject({
@@ -143,7 +143,7 @@ describe("action proposal internal API", () => {
 
   it("returns content-free runtime status", async () => {
     const harness = createHarness();
-    const app = buildApp(harness.dependencies);
+    const app = await buildApp(harness.dependencies);
     const response = await app.inject({
       method: "GET",
       url: "/internal/action-approvals/status",

@@ -13,7 +13,7 @@ const authorization = { authorization: "Bearer operator-secret" };
 
 describe("knowledge card API", () => {
   it("always returns a safe HTTP 200 error toast when the public runtime is absent", async () => {
-    const app = createApp(undefined);
+    const app = await createApp(undefined);
     const response = await app.inject({
       method: "POST",
       url: "/feishu/card-actions",
@@ -33,7 +33,7 @@ describe("knowledge card API", () => {
       statusCode: 200,
       body: { toast: { type: "info", content: "accepted" } },
     });
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
     const response = await app.inject({
       method: "POST",
       url: "/feishu/card-actions",
@@ -83,7 +83,7 @@ describe("knowledge card API", () => {
             contentHash: inputs[0].contentHash,
             createdAt: inputs[0].at,
           }));
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
     const request = {
       method: "POST" as const,
       url: "/internal/knowledge-drafts/draft-1/presentations",
@@ -134,7 +134,7 @@ describe("knowledge card API", () => {
 
   it("requires the exact two-field create body and rejects caller-supplied authority", async () => {
     const runtime = runtimeFixture();
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
     for (const payload of [
       { expectedVersion: 7 },
       { expectedVersion: 7, operationKey: "operation", revisionNumber: 3 },
@@ -171,7 +171,7 @@ describe("knowledge card API", () => {
       });
       throw new KnowledgeCardOperationConflictError();
     });
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
     const response = await app.inject({
       method: "POST",
       url: "/internal/knowledge-drafts/draft-1/presentations",
@@ -188,7 +188,7 @@ describe("knowledge card API", () => {
   it("returns review_surface_required without persistence when full content cannot be rendered", async () => {
     const runtime = runtimeFixture();
     vi.mocked(runtime.repository.getDraft).mockResolvedValue(currentDraft({ content: "x".repeat(8_001) }));
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
     const response = await app.inject({
       method: "POST",
       url: "/internal/knowledge-drafts/draft-1/presentations",
@@ -205,7 +205,7 @@ describe("knowledge card API", () => {
   it("fails closed with 403 for a disabled runtime layer and 503 only when runtime is absent", async () => {
     const disabledRuntime = runtimeFixture();
     vi.mocked(disabledRuntime.canUseKnowledgeCards).mockReturnValue(false);
-    const disabledApp = createApp(disabledRuntime);
+    const disabledApp = await createApp(disabledRuntime);
     const disabled = await disabledApp.inject({
       method: "POST",
       url: "/internal/knowledge-drafts/draft-1/presentations",
@@ -217,7 +217,7 @@ describe("knowledge card API", () => {
     expect(disabledRuntime.repository.createPresentation).not.toHaveBeenCalled();
     await disabledApp.close();
 
-    const absentApp = createApp(undefined);
+    const absentApp = await createApp(undefined);
     const absent = await absentApp.inject({
       method: "POST",
       url: "/internal/knowledge-drafts/draft-1/presentations",
@@ -232,7 +232,7 @@ describe("knowledge card API", () => {
   it("lists bounded presentations and reports content-free queue and loop status", async () => {
     const runtime = runtimeFixture();
     vi.mocked(runtime.repository.listPresentations).mockResolvedValue([presentation()]);
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
     const list = await app.inject({
       method: "GET",
       url: "/internal/knowledge-drafts/draft-1/presentations?limit=7",
@@ -267,7 +267,7 @@ describe("knowledge card API", () => {
 
   it("adds content-free knowledge cards to consolidated status and enabled readiness", async () => {
     const runtime = runtimeFixture();
-    const app = createApp(runtime, {
+    const app = await createApp(runtime, {
       readinessEnv: {
         DATABASE_URL: "postgres://iris:iris@localhost:5432/iris",
         REDIS_URL: "redis://localhost:6379",
@@ -395,7 +395,7 @@ describe("knowledge card API", () => {
     ]);
     vi.mocked(runtime.deadLetters.replay).mockResolvedValue("replayed");
     vi.mocked(runtime.deadLetters.delete).mockResolvedValue("deleted");
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
 
     expect((await app.inject({
       method: "GET",
@@ -504,7 +504,7 @@ describe("knowledge card API", () => {
         attempts: 1,
       },
     }]);
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
 
     const response = await app.inject({
       method: "GET",
@@ -524,11 +524,11 @@ describe("knowledge card API", () => {
   });
 });
 
-function createApp(
+async function createApp(
   runtime: KnowledgeCardRuntime | undefined,
   overrides: { readinessEnv?: Record<string, string | undefined> } = {},
 ) {
-  return buildApp({
+  return await buildApp({
     internalApiToken: "operator-secret",
     now: () => new Date("2026-07-19T08:00:00.000Z"),
     createAnswerDraftRuntime: () => undefined,

@@ -10,7 +10,7 @@ const rootSourceUri = "https://tenant.feishu.cn/wiki/root_1?from=space";
 describe("Wiki space internal API", () => {
   it("registers a locally validated wiki root without normalizing it before the runtime", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       now: () => registeredAt,
       createDocumentSyncRuntime: () => runtime,
@@ -46,7 +46,7 @@ describe("Wiki space internal API", () => {
     ["oversized root URI", { rootSourceUri: `https://tenant.feishu.cn/wiki/${"a".repeat(8_170)}` }],
   ])("rejects %s before registering", async (_name, payload) => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => runtime,
     });
@@ -66,7 +66,7 @@ describe("Wiki space internal API", () => {
 
   it("requires internal authorization before wiki space operations", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => runtime,
     });
@@ -84,7 +84,7 @@ describe("Wiki space internal API", () => {
   });
 
   it("returns the safe unavailable error when the document sync runtime is absent", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => undefined,
     });
@@ -107,7 +107,7 @@ describe("Wiki space internal API", () => {
         list: vi.fn(async () => [wikiSpaceAuthorization()]),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => runtime,
     });
@@ -129,7 +129,7 @@ describe("Wiki space internal API", () => {
 
   it("rejects invalid wiki space list limits", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => runtime,
     });
@@ -153,7 +153,7 @@ describe("Wiki space internal API", () => {
         requestScan: vi.fn(async () => wikiSpaceAuthorization({ scanState: "pending" })),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       now: () => registeredAt,
       createDocumentSyncRuntime: () => runtime,
@@ -179,7 +179,7 @@ describe("Wiki space internal API", () => {
 
   it("returns a safe not found error for a missing wiki space rescan", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => runtime,
     });
@@ -205,7 +205,7 @@ describe("Wiki space internal API", () => {
         setEnabled: vi.fn(async () => wikiSpaceAuthorization({ enabled, scanState })),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       now: () => registeredAt,
       createDocumentSyncRuntime: () => runtime,
@@ -233,7 +233,7 @@ describe("Wiki space internal API", () => {
 
   it("rejects invalid wiki space enable requests", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => runtime,
     });
@@ -260,7 +260,7 @@ describe("Wiki space internal API", () => {
     "returns a controlled invalid request for %s wiki space IDs with %i characters",
     async (method, idLength, suffix) => {
       const runtime = fakeDocumentSyncRuntime();
-      const app = buildApp({
+      const app = await buildApp({
         internalApiToken: "operator-secret",
         createDocumentSyncRuntime: () => runtime,
       });
@@ -287,7 +287,7 @@ describe("Wiki space internal API", () => {
     "returns the default 404 for authenticated %s shape mismatches before parsing malformed JSON",
     async (method, url) => {
       const runtime = fakeDocumentSyncRuntime();
-      const app = buildApp({
+      const app = await buildApp({
         internalApiToken: "operator-secret",
         createDocumentSyncRuntime: () => runtime,
       });
@@ -322,7 +322,7 @@ describe("Wiki space internal API", () => {
     "rejects authenticated %s wiki space IDs with %i characters before parsing malformed JSON",
     async (method, idLength, suffix) => {
       const runtime = fakeDocumentSyncRuntime();
-      const app = buildApp({
+      const app = await buildApp({
         internalApiToken: "operator-secret",
         createDocumentSyncRuntime: () => runtime,
       });
@@ -352,7 +352,7 @@ describe("Wiki space internal API", () => {
     "authenticates exact overlong %s requests before parsing malformed JSON",
     async (method, suffix) => {
       const runtime = fakeDocumentSyncRuntime();
-      const app = buildApp({
+      const app = await buildApp({
         internalApiToken: "operator-secret",
         createDocumentSyncRuntime: () => runtime,
       });
@@ -374,7 +374,7 @@ describe("Wiki space internal API", () => {
 
   it("keeps unrelated and method-mismatched request targets on the default 404 boundary", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => runtime,
     });
@@ -405,7 +405,7 @@ describe("Wiki space internal API", () => {
 
   it("authenticates overlong wiki space request targets before returning validation errors", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => runtime,
     });
@@ -442,7 +442,7 @@ describe("Wiki space internal API", () => {
         }),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createDocumentSyncRuntime: () => runtime,
     });

@@ -762,7 +762,7 @@ describe("Core App Feishu route", () => {
       enqueue: vi.fn(async () => undefined),
       getPendingCount: vi.fn(async () => 0),
     };
-    const app = buildApp({
+    const app = await buildApp({
       rawEventQueue,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -790,7 +790,7 @@ describe("Core App Feishu route", () => {
   });
 
   it("limits the dedicated ingress health token to the readiness route", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-token",
       ingressHealthToken: "ingress-health-token",
       rawEventQueue: {
@@ -820,7 +820,7 @@ describe("Core App Feishu route", () => {
 
   it("returns 200 from the Feishu callback route", async () => {
     const queue = new InMemoryEventQueue();
-    const app = buildApp({ queue });
+    const app = await buildApp({ queue });
 
     const response = await app.inject({
       method: "POST",
@@ -840,7 +840,7 @@ describe("Core App Feishu route", () => {
 
   it("returns 401 and does not enqueue when the Feishu verifier rejects", async () => {
     const queue = new InMemoryEventQueue();
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       verifyFeishuRequest: () => false
     });
@@ -859,7 +859,7 @@ describe("Core App Feishu route", () => {
 
   it("returns the Feishu URL verification challenge without enqueueing", async () => {
     const queue = new InMemoryEventQueue();
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       verifyFeishuRequest: () => true
     });
@@ -877,7 +877,7 @@ describe("Core App Feishu route", () => {
 
   it("rejects URL verification before challenge handling when the Feishu verifier rejects", async () => {
     const queue = new InMemoryEventQueue();
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       verifyFeishuRequest: () => false
     });
@@ -896,7 +896,7 @@ describe("Core App Feishu route", () => {
   it("returns 400 and skips Feishu handling when JSON is malformed", async () => {
     const queue = new InMemoryEventQueue();
     let verifierCalled = false;
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       verifyFeishuRequest: () => {
         verifierCalled = true;
@@ -919,7 +919,7 @@ describe("Core App Feishu route", () => {
   it("returns 413 and skips Feishu handling when JSON is oversized", async () => {
     const queue = new InMemoryEventQueue();
     let verifierCalled = false;
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       verifyFeishuRequest: () => {
         verifierCalled = true;
@@ -950,7 +950,7 @@ describe("Core App Feishu route", () => {
   it("passes the raw JSON body to the Feishu verifier", async () => {
     const queue = new InMemoryEventQueue();
     let observedRawBody: string | undefined;
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       verifyFeishuRequest: (request) => {
         observedRawBody = request.rawBody;
@@ -971,7 +971,7 @@ describe("Core App Feishu route", () => {
   it("uses the event worker raw queue for Feishu callbacks by default", async () => {
     const queue = new InMemoryEventQueue();
     const rawEventQueue = { enqueue: vi.fn(async () => undefined) };
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       createEventWorkerRuntime: () => ({
         rawEventQueue,
@@ -1037,7 +1037,7 @@ describe("Core App Feishu route", () => {
 
     try {
       const queue = new InMemoryEventQueue();
-      const app = buildApp({ queue });
+      const app = await buildApp({ queue });
 
       const rejectedResponse = await app.inject({
         method: "POST",

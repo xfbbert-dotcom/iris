@@ -40,7 +40,7 @@ describe("installGracefulShutdown", () => {
         closeOrder.push("event");
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createMemoryExtractionRuntime: () => extractionRuntime,

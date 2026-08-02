@@ -7,7 +7,7 @@ import {
 } from "../src/memory/group-memory-repository.js";
 import type { GroupMemoryService } from "../src/memory/group-memory-service.js";
 
-const apps: Array<ReturnType<typeof buildApp>> = [];
+const apps: Array<Awaited<ReturnType<typeof buildApp>>> = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -17,7 +17,7 @@ afterEach(async () => {
 describe("group memory internal API", () => {
   it("requires the internal bearer token", async () => {
     const service = fakeService();
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "GET",
@@ -32,7 +32,7 @@ describe("group memory internal API", () => {
     vi.stubEnv("IRIS_INTERNAL_API_TOKEN", "");
     vi.stubEnv("IRIS_INGRESS_HEALTH_TOKEN", "");
     const service = fakeService();
-    const app = buildApp({
+    const app = await buildApp({
       groupMemoryService: service,
       verifyFeishuRequest: () => true,
       createAnswerDraftRuntime: () => undefined,
@@ -57,7 +57,7 @@ describe("group memory internal API", () => {
 
   it("rejects malformed JSON before invoking the memory service", async () => {
     const service = fakeService();
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "POST",
@@ -77,7 +77,7 @@ describe("group memory internal API", () => {
 
   it("rejects oversized JSON before invoking the memory service", async () => {
     const service = fakeService();
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "POST",
@@ -98,7 +98,7 @@ describe("group memory internal API", () => {
     const service = fakeService({
       create: vi.fn(async () => ({ memory, created: true })),
     });
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "POST",
@@ -142,7 +142,7 @@ describe("group memory internal API", () => {
     ["oversized operator", { "x-iris-operator": "x".repeat(513) }],
   ])("rejects mutations with %s", async (_label, operatorHeaders) => {
     const service = fakeService();
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "POST",
@@ -158,7 +158,7 @@ describe("group memory internal API", () => {
 
   it("lists only the explicitly requested group", async () => {
     const service = fakeService({ list: vi.fn(async () => [sampleMemory()]) });
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "GET",
@@ -177,7 +177,7 @@ describe("group memory internal API", () => {
 
   it("rejects list requests without a group boundary", async () => {
     const service = fakeService();
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "GET",
@@ -193,7 +193,7 @@ describe("group memory internal API", () => {
     "rejects an out-of-contract list limit of %s",
     async (limit) => {
       const service = fakeService();
-      const app = createApp(service);
+      const app = await createApp(service);
 
       const response = await app.inject({
         method: "GET",
@@ -211,7 +211,7 @@ describe("group memory internal API", () => {
     const service = fakeService({
       correct: vi.fn(async () => ({ memory: replacement, created: true })),
     });
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "POST",
@@ -243,7 +243,7 @@ describe("group memory internal API", () => {
     const service = fakeService({
       correct: vi.fn(async () => { throw new Error("group memory not found"); }),
     });
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "POST",
@@ -264,7 +264,7 @@ describe("group memory internal API", () => {
 
   it("returns 404 for a missing memory deletion", async () => {
     const service = fakeService({ delete: vi.fn(async () => "not_found" as const) });
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "DELETE",
@@ -283,7 +283,7 @@ describe("group memory internal API", () => {
     const service = fakeService({
       list: vi.fn(async () => { throw new Error("postgres://secret@db/internal"); }),
     });
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "GET",
@@ -302,7 +302,7 @@ describe("group memory internal API", () => {
         throw new GroupMemoryIdempotencyConflictError();
       }),
     });
-    const app = createApp(service);
+    const app = await createApp(service);
 
     const response = await app.inject({
       method: "POST",
@@ -328,8 +328,8 @@ describe("group memory internal API", () => {
   });
 });
 
-function createApp(groupMemoryService: GroupMemoryService) {
-  const app = buildApp({
+async function createApp(groupMemoryService: GroupMemoryService) {
+  const app = await buildApp({
     internalApiToken: "internal-token",
     groupMemoryService,
     verifyFeishuRequest: () => true,

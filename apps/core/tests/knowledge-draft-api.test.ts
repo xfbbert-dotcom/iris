@@ -12,7 +12,7 @@ const authorization = { authorization: "Bearer operator-secret" };
 describe("knowledge draft governance API", () => {
   it("requires the internal bearer token for every governance surface", async () => {
     const runtime = runtimeFixture();
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
     const routes = [
       { method: "POST" as const, url: "/internal/knowledge-drafts", payload: createPayload() },
       { method: "GET" as const, url: "/internal/knowledge-drafts" },
@@ -48,7 +48,7 @@ describe("knowledge draft governance API", () => {
   });
 
   it("fails closed when runtime or operator authentication is unavailable", async () => {
-    const noRuntime = buildApp({ ...disabledRuntimeFactories(), internalApiToken: "operator-secret" });
+    const noRuntime = await buildApp({ ...disabledRuntimeFactories(), internalApiToken: "operator-secret" });
     expect((await noRuntime.inject({
       method: "GET",
       url: "/internal/knowledge-drafts/status",
@@ -57,7 +57,7 @@ describe("knowledge draft governance API", () => {
     await noRuntime.close();
 
     const runtime = runtimeFixture();
-    const noAuth = buildApp({
+    const noAuth = await buildApp({
       ...disabledRuntimeFactories(),
       createKnowledgeDraftRuntime: () => runtime,
     });
@@ -70,7 +70,7 @@ describe("knowledge draft governance API", () => {
 
   it("creates a normalized draft only while the exact runtime gate is open", async () => {
     const runtime = runtimeFixture();
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
     const response = await app.inject({
       method: "POST",
       url: "/internal/knowledge-drafts",
@@ -106,7 +106,7 @@ describe("knowledge draft governance API", () => {
 
     const closedRuntime = runtimeFixture();
     vi.mocked(closedRuntime.canCreateDraft).mockReturnValue(false);
-    const closedApp = createApp(closedRuntime);
+    const closedApp = await createApp(closedRuntime);
     const blocked = await closedApp.inject({
       method: "POST",
       url: "/internal/knowledge-drafts",
@@ -124,7 +124,7 @@ describe("knowledge draft governance API", () => {
     vi.mocked(runtime.repository.getDraft).mockResolvedValue(redactedDraft());
     vi.mocked(runtime.repository.listDrafts).mockResolvedValue([draft()]);
     vi.mocked(runtime.repository.listEvents).mockResolvedValue([event()]);
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
 
     const list = await app.inject({
       method: "GET",
@@ -166,7 +166,7 @@ describe("knowledge draft governance API", () => {
   it("allows governance mutations while creation is disabled and maps conflicts safely", async () => {
     const runtime = runtimeFixture();
     vi.mocked(runtime.canCreateDraft).mockReturnValue(false);
-    const app = createApp(runtime);
+    const app = await createApp(runtime);
     for (const [path, payload, method] of [
       ["revisions", revisePayload(), "reviseDraft"],
       ["request-revision", transitionPayload(), "requestRevision"],
@@ -211,7 +211,7 @@ describe("knowledge draft governance API", () => {
   });
 
   it("rejects malformed values and exposes no Phase 5B route", async () => {
-    const app = createApp(runtimeFixture());
+    const app = await createApp(runtimeFixture());
     for (const request of [
       { method: "POST" as const, url: "/internal/knowledge-drafts", payload: { ...createPayload(), id: " " } },
       { method: "GET" as const, url: "/internal/knowledge-drafts?limit=0" },
@@ -231,8 +231,8 @@ describe("knowledge draft governance API", () => {
   });
 });
 
-function createApp(runtime: KnowledgeDraftRuntime) {
-  return buildApp({
+async function createApp(runtime: KnowledgeDraftRuntime) {
+  return await buildApp({
     ...disabledRuntimeFactories(),
     internalApiToken: "operator-secret",
     createKnowledgeDraftRuntime: () => runtime,

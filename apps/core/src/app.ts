@@ -168,7 +168,9 @@ export type BuildAppDependencies = {
   createAgentExecutionLedgerRuntime?: (
     input?: Parameters<typeof createDefaultAgentExecutionLedgerRuntime>[0],
   ) => AgentExecutionLedgerRuntime | undefined;
-  createEventWorkerRuntime?: (input?: EventWorkerRuntimeFactoryInput) => EventWorkerRuntime | undefined;
+  createEventWorkerRuntime?: (
+    input?: EventWorkerRuntimeFactoryInput,
+  ) => EventWorkerRuntime | undefined | Promise<EventWorkerRuntime | undefined>;
   createMemoryExtractionRuntime?: (
     input?: MemoryExtractionRuntimeFactoryInput,
   ) => MemoryExtractionRuntime | undefined;
@@ -325,7 +327,7 @@ const memoryExtractionFailureClassifications = new Set([
   "internal_error",
 ]);
 
-export function buildApp(dependencies: BuildAppDependencies = {}) {
+export async function buildApp(dependencies: BuildAppDependencies = {}) {
   const internalApiToken =
     readInternalApiToken(dependencies.internalApiToken) ??
     readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
@@ -478,25 +480,26 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
           (proactiveSignalPlannerStartup ?? actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
             .then(() => proactiveSignalDeliveryRuntime!.start()),
         );
-    eventWorkerRuntime =
-      (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
-        runtimeController,
-        ...(answerDraftOrchestrator === undefined
-          ? {}
-          : { answerDraftOrchestrator }),
-        ...(answerDraftRuntime?.answerSourcePermissionVerifier === undefined
-          ? {}
-          : {
-              answerSourcePermissionVerifier:
-                answerDraftRuntime.answerSourcePermissionVerifier,
-            }),
-        ...(memoryExtractionRuntime === undefined
-          ? {}
-          : { memoryExtractionPlanner: memoryExtractionRuntime.planner }),
-        ...(chatKnowledgeDraftCommand === undefined
-          ? {}
-          : { knowledgeDraftCommand: chatKnowledgeDraftCommand }),
-      });
+    eventWorkerRuntime = await (
+      dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime
+    )({
+      runtimeController,
+      ...(answerDraftOrchestrator === undefined
+        ? {}
+        : { answerDraftOrchestrator }),
+      ...(answerDraftRuntime?.answerSourcePermissionVerifier === undefined
+        ? {}
+        : {
+            answerSourcePermissionVerifier:
+              answerDraftRuntime.answerSourcePermissionVerifier,
+          }),
+      ...(memoryExtractionRuntime === undefined
+        ? {}
+        : { memoryExtractionPlanner: memoryExtractionRuntime.planner }),
+      ...(chatKnowledgeDraftCommand === undefined
+        ? {}
+        : { knowledgeDraftCommand: chatKnowledgeDraftCommand }),
+    });
     const eventWorkerPrerequisite =
       proactiveSignalDeliveryStartup ??
       proactiveSignalPlannerStartup ??
@@ -3297,7 +3300,7 @@ export async function startServer({
   let runtimeStartupCleanup: Promise<void> | undefined;
   let app;
   try {
-    app = buildApp({
+    app = await buildApp({
       ...productionAppDependencies,
       internalApiToken,
       runtimeControl: runtimeControlRuntime.runtimeControl,

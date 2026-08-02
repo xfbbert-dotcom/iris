@@ -29,7 +29,7 @@ describe("runtime cleanup", () => {
         throw eventCloseError;
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => undefined,
@@ -61,7 +61,7 @@ describe("runtime cleanup", () => {
         throw knowledgeCardCloseError;
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => undefined,
@@ -104,7 +104,7 @@ describe("runtime cleanup", () => {
         throw eventCloseError;
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => undefined,

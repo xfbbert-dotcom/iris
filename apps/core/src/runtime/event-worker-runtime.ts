@@ -141,7 +141,7 @@ export type EventWorkerRuntimeDependencies = {
   createWorkerLoop?: typeof createRawEventWorkerLoop;
 };
 
-export function createEventWorkerRuntime({
+export async function createEventWorkerRuntime({
   env = process.env,
   dependencies = {},
   runtimeController,
@@ -159,7 +159,7 @@ export function createEventWorkerRuntime({
   memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
   now?: () => Date;
-} = {}): EventWorkerRuntime | undefined {
+} = {}): Promise<EventWorkerRuntime | undefined> {
   const runtimeConfig = readEventWorkerRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
     return undefined;
@@ -178,7 +178,7 @@ export function createEventWorkerRuntime({
   });
 }
 
-function createEnabledEventWorkerRuntime({
+async function createEnabledEventWorkerRuntime({
   env,
   runtimeConfig,
   dependencies,
@@ -198,7 +198,7 @@ function createEnabledEventWorkerRuntime({
   memoryExtractionPlanner: Pick<MemoryExtractionPlanner, "registerMessage"> | undefined;
   knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
   now: () => Date;
-}): EventWorkerRuntime {
+}): Promise<EventWorkerRuntime> {
   preflightMentionAnswerConfiguration(env);
   const createRedis =
     dependencies.createRedisClient ??
@@ -237,7 +237,7 @@ function createEnabledEventWorkerRuntime({
   try {
     redis = createRedis(runtimeConfig.redisUrl);
   } catch (error) {
-    cleanupFailedEventWorkerRuntimeConstruction({ pool });
+    await cleanupFailedEventWorkerRuntimeConstruction({ pool });
     throw error;
   }
   let resolveRedisConnection: (client: RedisClient) => void = () => undefined;
@@ -379,7 +379,7 @@ function createEnabledEventWorkerRuntime({
     };
   } catch (error) {
     rejectRedisConnection(error);
-    cleanupFailedEventWorkerRuntimeConstruction({ redis, pool });
+    await cleanupFailedEventWorkerRuntimeConstruction({ redis, pool });
     throw error;
   }
 }
@@ -476,25 +476,21 @@ function preflightMentionAnswerConfiguration(env: EnvLike): void {
   }
 }
 
-function cleanupFailedEventWorkerRuntimeConstruction({
+async function cleanupFailedEventWorkerRuntimeConstruction({
   redis,
   pool,
 }: {
   redis?: RedisClient;
   pool: PostgresPool;
-}): void {
+}): Promise<void> {
+  const cleanupSteps: Array<() => Promise<unknown>> = [];
   if (redis !== undefined) {
-    ignoreCleanupFailure(() => redis.quit());
+    cleanupSteps.push(() => redis.quit());
   }
-  ignoreCleanupFailure(() => pool.end());
-}
-
-function ignoreCleanupFailure(cleanup: () => Promise<unknown>): void {
-  try {
-    void cleanup().catch(() => undefined);
-  } catch {
-    // Preserve the synchronous runtime construction error.
-  }
+  cleanupSteps.push(() => pool.end());
+  await Promise.allSettled(
+    cleanupSteps.map(async (cleanup) => cleanup()),
+  );
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): GroupVisibleDocumentRegistry {

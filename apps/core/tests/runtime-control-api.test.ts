@@ -27,7 +27,7 @@ afterEach(() => {
 
 describe("runtime control API", () => {
   it("returns runtime control status", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -76,7 +76,7 @@ describe("runtime control API", () => {
         error: "runtime_control_persistence_failed",
       },
     }));
-    const app = buildApp({
+    const app = await buildApp({
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ getStatus }),
       ),
@@ -118,7 +118,7 @@ describe("runtime control API", () => {
       },
     });
     const controller = runtimeControllerFromStatus(status);
-    const app = buildApp({
+    const app = await buildApp({
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ getStatus: vi.fn(async () => status) }),
         controller,
@@ -168,7 +168,7 @@ describe("runtime control API", () => {
         usedGroupMemories: [],
       })),
     };
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       answerDraftOrchestrator,
       runtimeControl: pairedRuntimeControl(
@@ -198,10 +198,10 @@ describe("runtime control API", () => {
     expect(queue.events).toEqual([]);
   });
 
-  it("rejects ambiguous paired and legacy controller injection", () => {
+  it("rejects ambiguous paired and legacy controller injection", async () => {
     const pairedController = new RuntimeController(createDefaultRuntimeConfig());
 
-    expect(() => buildApp({
+    await expect(buildApp({
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub(),
         pairedController,
@@ -211,7 +211,7 @@ describe("runtime control API", () => {
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
-    })).toThrow("runtimeControl cannot be combined with runtimeController");
+    })).rejects.toThrow("runtimeControl cannot be combined with runtimeController");
   });
 
   it("sanitizes rejected status reads into safe dedicated and aggregate degradation", async () => {
@@ -221,7 +221,7 @@ describe("runtime control API", () => {
     const getStatus = vi.fn(async () => {
       throw new Error(`connection failed for ${secret}`);
     });
-    const app = buildApp({
+    const app = await buildApp({
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ getStatus }),
         controller,
@@ -275,7 +275,7 @@ describe("runtime control API", () => {
         ok: true,
       },
     }));
-    const app = buildApp({
+    const app = await buildApp({
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ getStatus }),
         controller,
@@ -325,7 +325,7 @@ describe("runtime control API", () => {
 
   it("globally disables and re-enables Feishu event ingestion", async () => {
     const queue = new InMemoryEventQueue();
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -388,7 +388,7 @@ describe("runtime control API", () => {
   it("maps ordinary mutation conflicts to HTTP 409 without auditing success", async () => {
     const auditLog = new InMemoryAuditLog();
     const setGlobal = vi.fn(async () => ({ kind: "conflict" as const }));
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGlobal }),
@@ -417,7 +417,7 @@ describe("runtime control API", () => {
     const runtimeController = new RuntimeController(createDefaultRuntimeConfig());
     const auditLog = new InMemoryAuditLog();
     const setGroup = vi.fn(async () => ({ kind: "persistence_failed" as const }));
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGroup }),
@@ -465,7 +465,7 @@ describe("runtime control API", () => {
         }),
       };
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGlobal }),
@@ -505,7 +505,7 @@ describe("runtime control API", () => {
     const setCapabilities = vi.fn(async () => {
       throw new RuntimeControlInputError("capabilities");
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setCapabilities }),
@@ -534,7 +534,7 @@ describe("runtime control API", () => {
       throw new Error(`write failed for ${secret}`);
     });
     const controller = new RuntimeController(createDefaultRuntimeConfig());
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGroup }),
@@ -582,7 +582,7 @@ describe("runtime control API", () => {
         }),
       };
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGlobal }),
@@ -640,7 +640,7 @@ describe("runtime control API", () => {
         }),
       };
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGroup }),
@@ -701,7 +701,7 @@ describe("runtime control API", () => {
         }),
       };
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setCapabilities }),
@@ -758,7 +758,7 @@ describe("runtime control API", () => {
         }),
       };
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGlobal }),
@@ -814,7 +814,7 @@ describe("runtime control API", () => {
         revision: 8,
       }),
     }));
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGlobal }),
@@ -855,7 +855,7 @@ describe("runtime control API", () => {
       previousSnapshot: runtimeControllerSnapshot(),
       status,
     }));
-    const app = buildApp({
+    const app = await buildApp({
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGlobal }),
         controller,
@@ -891,7 +891,7 @@ describe("runtime control API", () => {
     const auditLog = new InMemoryAuditLog();
     const setGlobal = vi.fn(async () => ({ kind: "conflict" as const }));
     const controller = new RuntimeController(createDefaultRuntimeConfig());
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGlobal }),
@@ -921,7 +921,7 @@ describe("runtime control API", () => {
   it("trims a valid bounded operator header before calling the service", async () => {
     const controller = new RuntimeController(createDefaultRuntimeConfig());
     const setGlobal = vi.fn(async () => ({ kind: "conflict" as const }));
-    const app = buildApp({
+    const app = await buildApp({
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setGlobal }),
         controller,
@@ -947,7 +947,7 @@ describe("runtime control API", () => {
   });
 
   it("surfaces global runtime disablement in consolidated status", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -1000,7 +1000,7 @@ describe("runtime control API", () => {
 
   it("disables and re-enables Feishu event ingestion for one group", async () => {
     const queue = new InMemoryEventQueue();
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -1061,7 +1061,7 @@ describe("runtime control API", () => {
   });
 
   it("rejects invalid runtime control requests", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -1096,7 +1096,7 @@ describe("runtime control API", () => {
         usedGroupMemories: [],
       })),
     };
-    const app = buildApp({
+    const app = await buildApp({
       answerDraftOrchestrator,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -1134,7 +1134,7 @@ describe("runtime control API", () => {
         usedGroupMemories: [],
       })),
     };
-    const app = buildApp({
+    const app = await buildApp({
       answerDraftOrchestrator,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -1179,7 +1179,7 @@ describe("runtime control API", () => {
   });
 
   it("updates runtime capabilities", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -1233,7 +1233,7 @@ describe("runtime control API", () => {
         },
       }),
     }));
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ setCapabilities }),
@@ -1279,7 +1279,7 @@ describe("runtime control API", () => {
         error: "runtime_control_persistence_failed",
       },
     }));
-    const app = buildApp({
+    const app = await buildApp({
       runtimeControl: pairedRuntimeControl(
         createRuntimeControlServiceStub({ getStatus }),
       ),
@@ -1324,7 +1324,7 @@ describe("runtime control API", () => {
   it("records successful runtime control changes in the audit log", async () => {
     const recordedAt = new Date("2026-07-04T06:20:00.000Z");
     const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -1407,7 +1407,7 @@ describe("runtime control API", () => {
       }
     }
 
-    const app = buildApp({
+    const app = await buildApp({
       auditLog: new FailingAuditLog(),
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -1431,7 +1431,7 @@ describe("runtime control API", () => {
   it("records an optional operator hint on runtime control audit events", async () => {
     const recordedAt = new Date("2026-07-04T06:25:00.000Z");
     const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -1470,7 +1470,7 @@ describe("runtime control API", () => {
 
   it("filters runtime control audit events by operator hint", async () => {
     const auditLog = new InMemoryAuditLog();
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -1514,7 +1514,7 @@ describe("runtime control API", () => {
   });
 
   it("rejects invalid runtime capability updates", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -1556,7 +1556,7 @@ describe("runtime control API", () => {
         usedGroupMemories: [],
       })),
     };
-    const app = buildApp({
+    const app = await buildApp({
       answerDraftOrchestrator,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
