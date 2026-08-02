@@ -854,6 +854,9 @@ describe("GET /internal/status", () => {
         mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
         pendingEventCount: 3,
         deadLetterEventCount: 1,
+        answerReplyUnresolvedCount: 2,
+        answerReplyPendingSafeNoticeCount: 1,
+        answerReplyReconciliationRequiredCount: 1,
       })),
     });
     const documentSyncRuntime = fakeDocumentSyncRuntime({
@@ -1021,6 +1024,9 @@ describe("GET /internal/status", () => {
           mentionRepliesUnavailableReason: "missing_bot_open_id",
           pendingEventCount: 3,
           deadLetterEventCount: 1,
+          answerReplyUnresolvedCount: 2,
+          answerReplyPendingSafeNoticeCount: 1,
+          answerReplyReconciliationRequiredCount: 1,
           degradedReason: "dead_letters_present",
         },
         documentSync: {
@@ -1140,6 +1146,9 @@ describe("GET /internal/status", () => {
         mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
         pendingEventCount: 2,
         deadLetterEventCount: 0,
+        answerReplyUnresolvedCount: 0,
+        answerReplyPendingSafeNoticeCount: 0,
+        answerReplyReconciliationRequiredCount: 0,
         latestBatch: {
           status: "failed" as const,
           startedAt,
@@ -1284,6 +1293,9 @@ describe("GET /internal/status", () => {
         mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
         pendingEventCount: 2,
         deadLetterEventCount: 0,
+        answerReplyUnresolvedCount: 0,
+        answerReplyPendingSafeNoticeCount: 0,
+        answerReplyReconciliationRequiredCount: 0,
         latestBatch: {
           status: "succeeded" as const,
           startedAt,
@@ -1407,6 +1419,9 @@ describe("GET /internal/status", () => {
           mentionRepliesEnabled: true,
           pendingEventCount: 0,
           deadLetterEventCount: statusReadCount === 1 ? 1 : 0,
+          answerReplyUnresolvedCount: 0,
+          answerReplyPendingSafeNoticeCount: 0,
+          answerReplyReconciliationRequiredCount: 0,
           latestBatch: {
             status: "succeeded" as const,
             startedAt,
@@ -1470,6 +1485,9 @@ describe("GET /internal/status", () => {
           mentionRepliesEnabled: true,
           pendingEventCount: 0,
           deadLetterEventCount: 0,
+          answerReplyUnresolvedCount: 0,
+          answerReplyPendingSafeNoticeCount: 0,
+          answerReplyReconciliationRequiredCount: 0,
         };
         if (statusReadCount === 1) {
           return {
@@ -1555,6 +1573,9 @@ describe("GET /internal/status", () => {
         mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
         pendingEventCount: 0,
         deadLetterEventCount: 0,
+        answerReplyUnresolvedCount: 0,
+        answerReplyPendingSafeNoticeCount: 0,
+        answerReplyReconciliationRequiredCount: 0,
       })),
     });
     const app = await buildApp({
@@ -1581,6 +1602,9 @@ describe("GET /internal/status", () => {
       mentionRepliesUnavailableReason: "missing_bot_open_id",
       pendingEventCount: 0,
       deadLetterEventCount: 0,
+      answerReplyUnresolvedCount: 0,
+      answerReplyPendingSafeNoticeCount: 0,
+      answerReplyReconciliationRequiredCount: 0,
       degradedReason: "mention_replies_unavailable",
     });
     expect(response.json().summary.degradedComponents).toContain("eventWorker");
@@ -2922,6 +2946,9 @@ describe("GET /internal/events/status", () => {
         mentionRepliesEnabled: true,
         pendingEventCount: 7,
         deadLetterEventCount: 2,
+        answerReplyUnresolvedCount: 3,
+        answerReplyPendingSafeNoticeCount: 1,
+        answerReplyReconciliationRequiredCount: 1,
         latestBatch: {
           status: "succeeded" as const,
           startedAt: new Date("2026-07-02T01:00:00.000Z"),
@@ -2953,6 +2980,9 @@ describe("GET /internal/events/status", () => {
       mentionRepliesEnabled: true,
       pendingEventCount: 7,
       deadLetterEventCount: 2,
+      answerReplyUnresolvedCount: 3,
+      answerReplyPendingSafeNoticeCount: 1,
+      answerReplyReconciliationRequiredCount: 1,
       latestBatch: {
         status: "succeeded",
         startedAt: "2026-07-02T01:00:00.000Z",
@@ -5488,6 +5518,9 @@ function fakeEventRuntime(overrides: Partial<EventWorkerRuntime> = {}): EventWor
       mentionRepliesEnabled: false,
       pendingEventCount: 0,
       deadLetterEventCount: 0,
+      answerReplyUnresolvedCount: 0,
+      answerReplyPendingSafeNoticeCount: 0,
+      answerReplyReconciliationRequiredCount: 0,
     })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),

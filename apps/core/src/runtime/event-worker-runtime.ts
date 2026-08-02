@@ -94,9 +94,9 @@ export type EventWorkerRuntimeStatus = {
   mentionRepliesUnavailableReason?: MentionReplyUnavailableReason;
   pendingEventCount: number;
   deadLetterEventCount: number;
-  answerReplyUnresolvedCount?: number;
-  answerReplyPendingSafeNoticeCount?: number;
-  answerReplyReconciliationRequiredCount?: number;
+  answerReplyUnresolvedCount: number;
+  answerReplyPendingSafeNoticeCount: number;
+  answerReplyReconciliationRequiredCount: number;
   latestBatch?: RawEventWorkerBatchSnapshot;
 };
 export type MentionReplyUnavailableReason =

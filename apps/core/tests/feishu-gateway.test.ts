@@ -995,6 +995,9 @@ describe("Core App Feishu route", () => {
           mentionRepliesEnabled: false,
           pendingEventCount: 0,
           deadLetterEventCount: 0,
+          answerReplyUnresolvedCount: 0,
+          answerReplyPendingSafeNoticeCount: 0,
+          answerReplyReconciliationRequiredCount: 0,
         })),
       }),
     });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import type { AnswerSourcePermissionVerifier } from "../src/answer-replies/answer-source-permission-verifier.js";
 import type { FeishuMentionAnswerResponderDependencies } from "../src/conversation/feishu-mention-answer-responder.js";
@@ -6,7 +6,14 @@ import type { DocumentSource } from "../src/documents/document-source-registry.j
 import {
   createEventWorkerRuntime,
   type EventWorkerRuntimeDependencies,
+  type EventWorkerRuntimeStatus,
 } from "../src/runtime/event-worker-runtime.js";
+
+expectTypeOf<EventWorkerRuntimeStatus["answerReplyUnresolvedCount"]>().toEqualTypeOf<number>();
+expectTypeOf<EventWorkerRuntimeStatus["answerReplyPendingSafeNoticeCount"]>().toEqualTypeOf<number>();
+expectTypeOf<
+  EventWorkerRuntimeStatus["answerReplyReconciliationRequiredCount"]
+>().toEqualTypeOf<number>();
 
 describe("createEventWorkerRuntime", () => {
   it("returns undefined when the event worker is disabled", async () => {
@@ -386,13 +393,15 @@ describe("createEventWorkerRuntime", () => {
     expect(runtime?.answerReplies).toBeDefined();
     expect(Object.keys(runtime?.answerReplies ?? {})).toEqual(["findByIncomingMessage"]);
     expect(runtime?.answerReplies).not.toHaveProperty("prepare");
-    await expect(runtime?.getStatus()).resolves.toMatchObject({
+    const status = await runtime?.getStatus();
+    expect(status).toMatchObject({
       enabled: true,
       mentionRepliesEnabled: true,
       answerReplyUnresolvedCount: 2,
       answerReplyPendingSafeNoticeCount: 1,
       answerReplyReconciliationRequiredCount: 1,
     });
+    expect(status).not.toHaveProperty("mentionRepliesUnavailableReason");
     answerReplyRepository.getStatus.mockRejectedValueOnce(new Error("answer status unavailable"));
     await expect(runtime?.getStatus()).rejects.toThrow("answer status unavailable");
     await runtime?.close();
