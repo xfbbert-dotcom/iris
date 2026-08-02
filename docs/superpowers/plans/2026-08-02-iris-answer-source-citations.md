@@ -636,7 +636,10 @@ git commit -m "feat(core): expose answer source permission rechecks"
 ### Task 5: Deliver Or Resume An Exact Prepared Answer
 
 **Files:**
+- Create: `apps/core/src/answer-replies/answer-reply-receipt-validator.ts`
 - Create: `apps/core/src/answer-replies/answer-reply-delivery-service.ts`
+- Modify: `apps/core/src/answer-replies/postgres-answer-reply-repository.ts`
+- Create: `apps/core/tests/answer-reply-receipt-validator.test.ts`
 - Create: `apps/core/tests/answer-reply-delivery-service.test.ts`
 
 **Interfaces:**
@@ -741,6 +744,12 @@ const result = await repository.prepare({
 const receipt = result.receipt;
 ```
 
+Anchor every loaded receipt to the exact request: provider, incoming message ID, chat
+ID, deterministic delivery ID, normal reply UUID, and safe-notice UUID. Validate the
+`prepare()` result envelope and outcome. For `applied`, require the exact prepared
+payload and preparation timestamp; for `already_applied`, require the same immutable
+semantic fingerprint even if the delivery has already progressed.
+
 Implement this exact dispatch for the resulting receipt:
 
 ```ts
@@ -772,6 +781,17 @@ its begin transition, the permission-block state to match the prior answer-attem
 count, and resolved/blocked receipts to have no prepared answer text. A stale or
 malformed transition receipt fails before Feishu is called.
 
+Do not duplicate the repository ledger state machine in the service. Extract the
+existing assembled-receipt validator and deterministic receipt/fingerprint helpers
+into one pure `answer-reply-receipt-validator.ts` module. Both the PostgreSQL
+repository and delivery service must call that shared validator. Service-specific
+checks are limited to request anchoring and the exact one-event transition delta.
+
+The same-key recursion guard must pair inherited async context with a still-active
+invocation token. Awaited recursive entry fails fast, while a child async resource that
+runs only after its parent response finishes is allowed to load the durable terminal
+receipt.
+
 On denied/error, call `blockForPermission` before any notice. Send only `ANSWER_PERMISSION_CHANGED_NOTICE` using `safeNoticeUuid`; after notice success call `completeSafeNoticeSend`. A blocked receipt never reloads or reconstructs prepared answer text.
 
 - [ ] **Step 5: Run delivery tests and verify GREEN**
@@ -783,7 +803,7 @@ Expected: every exact-retry and permission test passes.
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add apps/core/src/answer-replies/answer-reply-delivery-service.ts apps/core/tests/answer-reply-delivery-service.test.ts
+git add apps/core/src/answer-replies/answer-reply-receipt-validator.ts apps/core/src/answer-replies/answer-reply-delivery-service.ts apps/core/src/answer-replies/postgres-answer-reply-repository.ts apps/core/tests/answer-reply-receipt-validator.test.ts apps/core/tests/answer-reply-delivery-service.test.ts
 git commit -m "feat(core): deliver permission-safe prepared answers"
 ```
 

@@ -272,6 +272,12 @@ the verifier, and the Feishu replier into the mention responder. Pool creation o
 before responder composition so the repository shares the event worker's existing
 database lifecycle.
 
+Repository reads and delivery boundaries reuse one pure assembled-receipt validator
+for deterministic IDs, fingerprints, ordered source facts, lifecycle events, and
+version/state coherence. The delivery service adds only request anchoring and exact
+transition-delta checks; it does not maintain a second copy of the durable state
+machine.
+
 The mention responder remains the coordinator for ordinary answers. Knowledge-draft
 commands, document-submission commands, and existing bounded fallback replies retain
 their current behavior and do not receive source footers.
