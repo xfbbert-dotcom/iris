@@ -127,7 +127,12 @@ fully entailed by these sources". The UI must not claim stronger evidence semant
 `document_sources` join:
 
 - `sourceTitle?: string`;
-- `sourceType: DocumentSourceType`.
+- `sourceType: RetrievedDocumentSourceType`, where the retrieval-facing values are
+  exactly `feishu_wiki`, `feishu_group_document`, and `manual_upload`.
+
+The repository maps the existing persisted `DocumentSourceType` values into this
+retrieval-only vocabulary at the boundary. Persisted enum names never leak into the
+renderer or durable answer-source trace.
 
 The search query already joins `document_sources` for policy filtering, so this does
 not add another read. Fragment list and indexing APIs remain unchanged.

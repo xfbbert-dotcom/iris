@@ -62,9 +62,14 @@
 ```ts
 export type RetrievedDocumentFragment = DocumentFragment & {
   sourceTitle?: string;
-  sourceType: DocumentSourceType;
+  sourceType: RetrievedDocumentSourceType;
   distance?: number;
 };
+
+export type RetrievedDocumentSourceType =
+  | "feishu_group_document"
+  | "feishu_wiki"
+  | "manual_upload";
 ```
 
 - [ ] **Step 1: Write a failing retrieval-metadata test**
@@ -89,7 +94,7 @@ Add a test whose fake query returns one row with `source_title` and `source_type
 }
 ```
 
-Assert that the SQL contains `ds.title as source_title` and `ds.source_type`, and that the mapped result contains `sourceTitle: "Quello Life Engine"`, `sourceType: "authorized_wiki_document"`, and `distance: 0.125`.
+Assert that the SQL contains `ds.title as source_title` and `ds.source_type`, and that the mapped result contains `sourceTitle: "Quello Life Engine"`, `sourceType: "feishu_wiki"`, and `distance: 0.125`.
 
 - [ ] **Step 2: Run the focused test and verify RED**
 
@@ -110,17 +115,17 @@ source_title: string | null;
 source_type: DocumentSourceType;
 ```
 
-Select the two columns beside `f.*`, then map them with these exact rules:
+Select the two columns beside `f.*`, then trim and bound the title and map the persisted
+registry type into the retrieval-only vocabulary with an exhaustive table:
 
 ```ts
-const sourceTitle = row.source_title?.trim();
-return {
-  ...mapFragmentRow(row),
-  ...(sourceTitle === undefined || sourceTitle.length === 0
-    ? {}
-    : { sourceTitle }),
-  sourceType: row.source_type,
-  distance: row.distance === undefined ? undefined : Number(row.distance),
+const RETRIEVED_SOURCE_TYPE_BY_PERSISTED_SOURCE_TYPE: Record<
+  DocumentSourceType,
+  RetrievedDocumentSourceType
+> = {
+  group_visible_document: "feishu_group_document",
+  authorized_wiki_document: "feishu_wiki",
+  user_submitted_document: "manual_upload",
 };
 ```
 
@@ -129,10 +134,11 @@ Reject a source type outside the three `DocumentSourceType` values and a title l
 Update the two shared `fragment()` test fixtures to default to:
 
 ```ts
-sourceType: "authorized_wiki_document",
+sourceType: "feishu_wiki",
 ```
 
-Individual source-policy tests may override that value when the fixture represents a group-visible or user-submitted source. Do not make production `sourceType` optional to preserve old fixtures.
+Individual source-policy tests may override that value with `feishu_group_document` or
+`manual_upload`. Do not make production `sourceType` optional to preserve old fixtures.
 
 - [ ] **Step 4: Run the focused test and verify GREEN**
 
@@ -167,7 +173,7 @@ export type AnswerReplySourceTraceInput = {
   documentSnapshotId: string;
   fragmentId: string;
   chunkIndex: number;
-  sourceType: DocumentSourceType;
+  sourceType: RetrievedDocumentSourceType;
   sourceUri: string;
   sourceTitle?: string;
   contentHash: string;
@@ -235,10 +241,10 @@ Expected: module-not-found failure.
 Use `normalizeFeishuDocumentSourceUri()` from `feishu-document-body-fetcher.ts`; do not add a second URL parser. Normalize every fragment before grouping, require metadata consistency for duplicate `documentSourceId` values, and map labels exactly:
 
 ```ts
-const SOURCE_LABELS: Record<DocumentSourceType, string> = {
-  authorized_wiki_document: "知识库",
-  group_visible_document: "群文档",
-  user_submitted_document: "用户文档",
+const SOURCE_LABELS: Record<RetrievedDocumentSourceType, string> = {
+  feishu_wiki: "知识库",
+  feishu_group_document: "群文档",
+  manual_upload: "用户文档",
 };
 ```
 
