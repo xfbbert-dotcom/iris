@@ -165,8 +165,8 @@ export function createPostgresAnswerReplyRepository(input: {
         "incomingMessageId",
         findInput.incomingMessageId,
       );
-      try {
-        const result = await dataSource.query<DeliveryRow>(
+      return withReadOnlyRepeatableRead(dataSource, async (client) => {
+        const result = await client.query<DeliveryRow>(
           `SELECT ${DELIVERY_COLUMNS}
            FROM answer_reply_deliveries
            WHERE provider = $1 AND incoming_message_id = $2`,
@@ -175,10 +175,8 @@ export function createPostgresAnswerReplyRepository(input: {
         const row = result.rows[0];
         return row === undefined
           ? undefined
-          : loadReceipt(dataSource, mapDelivery(row));
-      } catch {
-        throw new AnswerReplyPersistenceError();
-      }
+          : await loadReceipt(client, mapDelivery(row));
+      });
     },
 
     async prepare(prepareInput) {
@@ -317,13 +315,17 @@ export function createPostgresAnswerReplyRepository(input: {
 
     async blockForPermission(transitionInput) {
       const normalized = normalizeTransitionInput(transitionInput);
-      const blockedDocumentSourceIds = requireDocumentSourceIds(
+      const requestedDocumentSourceIds = requireDocumentSourceIds(
         transitionInput.documentSourceIds,
       );
       return withLockedDelivery(dataSource, normalized, async (client, delivery, sources) => {
         if (delivery.state !== "prepared" && delivery.state !== "sending") {
           throw new AnswerReplyTransitionError();
         }
+        const blockedDocumentSourceIds = requireAuthoritativeDocumentSourceIds(
+          requestedDocumentSourceIds,
+          sources,
+        );
         const nextVersion = delivery.version + 1;
         const state = delivery.attemptCount === 0
           ? "permission_blocked" as const
@@ -667,6 +669,33 @@ async function withTransaction<T>(
   }
 }
 
+async function withReadOnlyRepeatableRead<T>(
+  dataSource: PostgresAnswerReplyDataSource,
+  operation: (client: AnswerReplyTransactionClient) => Promise<T>,
+): Promise<T> {
+  let client: AnswerReplyTransactionClient | undefined;
+  try {
+    client = await dataSource.connect();
+    await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const result = await operation(client);
+    await client.query("COMMIT");
+    return result;
+  } catch {
+    if (client !== undefined) {
+      await client.query("ROLLBACK").catch(() => undefined);
+    }
+    throw new AnswerReplyPersistenceError();
+  } finally {
+    if (client !== undefined) {
+      try {
+        client.release();
+      } catch {
+        // Connection release failures must not expose driver details or content.
+      }
+    }
+  }
+}
+
 function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepareInput {
   const provider = requireProvider(input.provider);
   const incomingMessageId = requireReference("incomingMessageId", input.incomingMessageId);
@@ -784,6 +813,19 @@ function requireDocumentSourceIds(value: string[]): string[] {
   return normalized;
 }
 
+function requireAuthoritativeDocumentSourceIds(
+  requested: readonly string[],
+  sources: readonly AnswerReplySourceTrace[],
+): string[] {
+  const authoritative = uniqueDocumentSourceIds(sources);
+  const authoritativeSet = new Set(authoritative);
+  if (requested.some((documentSourceId) => !authoritativeSet.has(documentSourceId))) {
+    throw new AnswerReplyTransitionError();
+  }
+  const requestedSet = new Set(requested);
+  return authoritative.filter((documentSourceId) => requestedSet.has(documentSourceId));
+}
+
 function requireSafeNoticePending(delivery: AnswerReplyDelivery): void {
   if (
     (delivery.state !== "permission_blocked" && delivery.state !== "reconciliation_required")
@@ -796,28 +838,47 @@ function requireSafeNoticePending(delivery: AnswerReplyDelivery): void {
 function mapDelivery(row: DeliveryRow): AnswerReplyDelivery {
   const provider = requireDatabaseEnum(row.provider, ["feishu"] as const);
   const state = requireDatabaseEnum(row.state, DELIVERY_STATES);
-  return {
-    id: requireDatabaseString(row.id),
+  const incomingMessageId = requireDatabaseBoundedString(
+    row.incoming_message_id,
+    MAX_REFERENCE_CHARS,
+  );
+  const delivery: AnswerReplyDelivery = {
+    id: requireDatabaseBoundedString(row.id, MAX_REFERENCE_CHARS),
     provider,
-    incomingMessageId: requireDatabaseString(row.incoming_message_id),
-    chatId: requireDatabaseString(row.chat_id),
-    replyUuid: requireDatabaseString(row.reply_uuid),
-    safeNoticeUuid: requireDatabaseString(row.safe_notice_uuid),
+    incomingMessageId,
+    chatId: requireDatabaseBoundedString(row.chat_id, MAX_REFERENCE_CHARS),
+    replyUuid: requireDatabaseBoundedString(row.reply_uuid, 50),
+    safeNoticeUuid: requireDatabaseBoundedString(row.safe_notice_uuid, 50),
     state,
     ...(row.prepared_reply_text === null
       ? {}
-      : { preparedReplyText: requireDatabaseString(row.prepared_reply_text) }),
+      : {
+          preparedReplyText: requireDatabaseExactText(
+            row.prepared_reply_text,
+            MAX_REPLY_CHARS,
+          ),
+        }),
     renderedReplyFingerprint: requireDatabaseFingerprint(row.rendered_reply_fingerprint),
     semanticFingerprint: requireDatabaseFingerprint(row.semantic_fingerprint),
     ...(row.reply_message_id === null
       ? {}
-      : { replyMessageId: requireDatabaseString(row.reply_message_id) }),
+      : {
+          replyMessageId: requireDatabaseBoundedString(
+            row.reply_message_id,
+            MAX_REFERENCE_CHARS,
+          ),
+        }),
     ...(row.safe_notice_message_id === null
       ? {}
-      : { safeNoticeMessageId: requireDatabaseString(row.safe_notice_message_id) }),
-    attemptCount: requireSafeInteger(row.attempt_count),
-    safeNoticeAttemptCount: requireSafeInteger(row.safe_notice_attempt_count),
-    version: requireSafeInteger(row.version),
+      : {
+          safeNoticeMessageId: requireDatabaseBoundedString(
+            row.safe_notice_message_id,
+            MAX_REFERENCE_CHARS,
+          ),
+        }),
+    attemptCount: requireDatabaseInteger(row.attempt_count, 0),
+    safeNoticeAttemptCount: requireDatabaseInteger(row.safe_notice_attempt_count, 0),
+    version: requireDatabaseInteger(row.version, 1),
     createdAt: requireDatabaseDate(row.created_at),
     updatedAt: requireDatabaseDate(row.updated_at),
     ...(row.last_send_started_at === null
@@ -838,43 +899,80 @@ function mapDelivery(row: DeliveryRow): AnswerReplyDelivery {
       ? {}
       : { safeNoticeSentAt: requireDatabaseDate(row.safe_notice_sent_at) }),
   };
+  requireDeliveryContract(delivery);
+  if (
+    delivery.id !== createAnswerReplyDeliveryId(provider, incomingMessageId)
+    || delivery.replyUuid !== createAnswerReplyUuid(incomingMessageId)
+    || delivery.safeNoticeUuid !== createAnswerReplySafeNoticeUuid(incomingMessageId)
+  ) {
+    throw new Error("answer reply database row is invalid");
+  }
+  return delivery;
 }
 
 function mapSourceTrace(row: SourceTraceRow): AnswerReplySourceTrace {
   const sourceType = requireDatabaseEnum(row.source_type, SOURCE_TYPES);
   return {
-    id: requireDatabaseString(row.id),
-    deliveryId: requireDatabaseString(row.delivery_id),
-    promptRank: requireSafeInteger(row.prompt_rank),
+    id: requireDatabaseBoundedString(row.id, MAX_REFERENCE_CHARS),
+    deliveryId: requireDatabaseBoundedString(row.delivery_id, MAX_REFERENCE_CHARS),
+    promptRank: requireDatabaseInteger(row.prompt_rank, 1),
     ...(row.citation_rank === null
       ? {}
-      : { citationRank: requireSafeInteger(row.citation_rank) }),
-    documentSourceId: requireDatabaseString(row.document_source_id),
-    documentSnapshotId: requireDatabaseString(row.document_snapshot_id),
-    fragmentId: requireDatabaseString(row.fragment_id),
-    chunkIndex: requireSafeInteger(row.chunk_index),
+      : { citationRank: requireDatabaseInteger(row.citation_rank, 1, 3) }),
+    documentSourceId: requireDatabaseBoundedString(
+      row.document_source_id,
+      MAX_REFERENCE_CHARS,
+    ),
+    documentSnapshotId: requireDatabaseBoundedString(
+      row.document_snapshot_id,
+      MAX_REFERENCE_CHARS,
+    ),
+    fragmentId: requireDatabaseBoundedString(row.fragment_id, MAX_REFERENCE_CHARS),
+    chunkIndex: requireDatabaseInteger(row.chunk_index, 0),
     sourceType,
-    sourceUri: requireDatabaseString(row.source_uri),
+    sourceUri: requireDatabaseSourceUri(row.source_uri),
     ...(row.source_title === null
       ? {}
-      : { sourceTitle: requireDatabaseString(row.source_title) }),
+      : {
+          sourceTitle: requireDatabaseBoundedString(
+            row.source_title,
+            MAX_REFERENCE_CHARS,
+          ),
+        }),
     contentHash: requireDatabaseFingerprint(row.content_hash),
-    embeddingProfileId: requireDatabaseString(row.embedding_profile_id),
+    embeddingProfileId: requireDatabaseBoundedString(
+      row.embedding_profile_id,
+      MAX_REFERENCE_CHARS,
+    ),
     initialPermissionCheckedAt: requireDatabaseDate(row.initial_permission_checked_at),
   };
 }
 
 function mapEvent(row: EventRow): AnswerReplyDeliveryEvent {
+  const eventType = requireDatabaseEnum(row.event_type, EVENT_TYPES);
+  const attemptNumber = row.attempt_number === null
+    ? undefined
+    : requireDatabaseInteger(row.attempt_number, 1);
+  const sourceCount = requireDatabaseInteger(row.source_count, 0, MAX_SOURCE_TRACES);
+  const documentSourceIds = requireDatabaseDocumentSourceIds(
+    row.document_source_ids,
+    sourceCount,
+  );
+  const attemptRequired = eventType === "send_started"
+    || eventType === "safe_notice_send_started";
+  if (attemptRequired !== (attemptNumber !== undefined)) {
+    throw new Error("answer reply database row is invalid");
+  }
   return {
-    id: requireDatabaseString(row.id),
-    deliveryId: requireDatabaseString(row.delivery_id),
-    sequence: requireSafeInteger(row.sequence),
-    eventType: requireDatabaseEnum(row.event_type, EVENT_TYPES),
+    id: requireDatabaseBoundedString(row.id, MAX_REFERENCE_CHARS),
+    deliveryId: requireDatabaseBoundedString(row.delivery_id, MAX_REFERENCE_CHARS),
+    sequence: requireDatabaseInteger(row.sequence, 1),
+    eventType,
     ...(row.attempt_number === null
       ? {}
-      : { attemptNumber: requireSafeInteger(row.attempt_number) }),
-    sourceCount: requireSafeInteger(row.source_count),
-    documentSourceIds: requireDatabaseStringArray(row.document_source_ids),
+      : { attemptNumber }),
+    sourceCount,
+    documentSourceIds,
     createdAt: requireDatabaseDate(row.created_at),
   };
 }
@@ -999,15 +1097,32 @@ function requireDate(value: unknown): Date {
   return new Date(value.getTime());
 }
 
-function requireDatabaseString(value: unknown): string {
-  if (typeof value !== "string") {
+function requireDatabaseBoundedString(value: unknown, maxChars: number): string {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > maxChars
+    || value.trim() !== value
+  ) {
+    throw new Error("answer reply database row is invalid");
+  }
+  return value;
+}
+
+function requireDatabaseExactText(value: unknown, maxChars: number): string {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > maxChars
+    || value.trim().length < 1
+  ) {
     throw new Error("answer reply database row is invalid");
   }
   return value;
 }
 
 function requireDatabaseFingerprint(value: unknown): string {
-  const result = requireDatabaseString(value);
+  const result = requireDatabaseBoundedString(value, 64);
   if (!FINGERPRINT_PATTERN.test(result)) {
     throw new Error("answer reply database row is invalid");
   }
@@ -1015,16 +1130,27 @@ function requireDatabaseFingerprint(value: unknown): string {
 }
 
 function requireDatabaseDate(value: unknown): Date {
-  const result = value instanceof Date ? value : new Date(String(value));
-  if (!Number.isFinite(result.getTime())) {
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
     throw new Error("answer reply database row is invalid");
   }
-  return new Date(result.getTime());
+  return new Date(value.getTime());
 }
 
 function requireSafeInteger(value: unknown): number {
   const result = typeof value === "number" ? value : Number(value);
   if (!Number.isSafeInteger(result) || result < 0) {
+    throw new Error("answer reply database row is invalid");
+  }
+  return result;
+}
+
+function requireDatabaseInteger(
+  value: unknown,
+  minimum: number,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number {
+  const result = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(result) || result < minimum || result > maximum) {
     throw new Error("answer reply database row is invalid");
   }
   return result;
@@ -1040,11 +1166,98 @@ function requireDatabaseEnum<T extends string>(
   return value as T;
 }
 
-function requireDatabaseStringArray(value: unknown): string[] {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+function requireDatabaseSourceUri(value: unknown): string {
+  const sourceUri = requireDatabaseBoundedString(value, MAX_SOURCE_URI_CHARS);
+  const normalized = normalizeFeishuDocumentSourceUri(sourceUri);
+  if (normalized === undefined || normalized !== sourceUri) {
     throw new Error("answer reply database row is invalid");
   }
-  return [...value] as string[];
+  return sourceUri;
+}
+
+function requireDatabaseDocumentSourceIds(
+  value: unknown,
+  sourceCount: number,
+): string[] {
+  if (!Array.isArray(value) || value.length > MAX_SOURCE_TRACES || value.length > sourceCount) {
+    throw new Error("answer reply database row is invalid");
+  }
+  const result = value.map((item) =>
+    requireDatabaseBoundedString(item, MAX_REFERENCE_CHARS));
+  if (new Set(result).size !== result.length) {
+    throw new Error("answer reply database row is invalid");
+  }
+  return result;
+}
+
+function requireDeliveryContract(delivery: AnswerReplyDelivery): void {
+  const timestamps = [
+    delivery.lastSendStartedAt,
+    delivery.sentAt,
+    delivery.permissionBlockedAt,
+    delivery.reconciliationRequiredAt,
+    delivery.safeNoticeSentAt,
+  ].filter((value): value is Date => value !== undefined);
+  if (
+    delivery.updatedAt.getTime() < delivery.createdAt.getTime()
+    || timestamps.some((value) => value.getTime() > delivery.updatedAt.getTime())
+    || (delivery.attemptCount === 0) !== (delivery.lastSendStartedAt === undefined)
+    || (delivery.safeNoticeMessageId !== undefined && delivery.safeNoticeSentAt === undefined)
+    || (delivery.safeNoticeSentAt !== undefined && delivery.safeNoticeAttemptCount === 0)
+  ) {
+    throw new Error("answer reply database row is invalid");
+  }
+
+  const hasPreparedText = delivery.preparedReplyText !== undefined;
+  const isSafeNoticeState = delivery.state === "permission_blocked"
+    || delivery.state === "reconciliation_required";
+  if (
+    !isSafeNoticeState
+    && (
+      delivery.safeNoticeAttemptCount !== 0
+      || delivery.safeNoticeMessageId !== undefined
+      || delivery.safeNoticeSentAt !== undefined
+    )
+  ) {
+    throw new Error("answer reply database row is invalid");
+  }
+
+  const validState = delivery.state === "prepared"
+    ? hasPreparedText
+      && delivery.attemptCount === 0
+      && delivery.replyMessageId === undefined
+      && delivery.sentAt === undefined
+      && delivery.permissionBlockedAt === undefined
+      && delivery.reconciliationRequiredAt === undefined
+    : delivery.state === "sending"
+      ? hasPreparedText
+        && delivery.attemptCount > 0
+        && delivery.replyMessageId === undefined
+        && delivery.sentAt === undefined
+        && delivery.permissionBlockedAt === undefined
+        && delivery.reconciliationRequiredAt === undefined
+      : delivery.state === "sent"
+        ? !hasPreparedText
+          && delivery.attemptCount > 0
+          && delivery.sentAt !== undefined
+          && delivery.permissionBlockedAt === undefined
+          && delivery.reconciliationRequiredAt === undefined
+        : delivery.state === "permission_blocked"
+          ? !hasPreparedText
+            && delivery.attemptCount === 0
+            && delivery.replyMessageId === undefined
+            && delivery.sentAt === undefined
+            && delivery.permissionBlockedAt !== undefined
+            && delivery.reconciliationRequiredAt === undefined
+          : !hasPreparedText
+            && delivery.attemptCount > 0
+            && delivery.replyMessageId === undefined
+            && delivery.sentAt === undefined
+            && delivery.permissionBlockedAt === undefined
+            && delivery.reconciliationRequiredAt !== undefined;
+  if (!validState) {
+    throw new Error("answer reply database row is invalid");
+  }
 }
 
 function isContentFreeDomainError(error: unknown): boolean {

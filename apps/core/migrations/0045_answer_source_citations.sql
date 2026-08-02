@@ -1,3 +1,38 @@
+CREATE FUNCTION answer_reply_document_source_ids_valid(
+  document_source_ids TEXT[],
+  source_count INTEGER
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+DECLARE
+  document_source_id TEXT;
+  seen_document_source_ids TEXT[] := ARRAY[]::TEXT[];
+BEGIN
+  IF COALESCE(array_ndims(document_source_ids), 1) <> 1
+    OR cardinality(document_source_ids) > 1000
+    OR cardinality(document_source_ids) > source_count THEN
+    RETURN FALSE;
+  END IF;
+
+  FOREACH document_source_id IN ARRAY document_source_ids LOOP
+    IF document_source_id IS NULL
+      OR document_source_id !~ '[^[:space:]]'
+      OR document_source_id ~ '^[[:space:]]|[[:space:]]$'
+      OR char_length(document_source_id) NOT BETWEEN 1 AND 512
+      OR document_source_id = ANY(seen_document_source_ids) THEN
+      RETURN FALSE;
+    END IF;
+    seen_document_source_ids := array_append(seen_document_source_ids, document_source_id);
+  END LOOP;
+
+  RETURN TRUE;
+END;
+$$;
+
 CREATE TABLE answer_reply_deliveries (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   provider TEXT NOT NULL CHECK (
@@ -96,16 +131,12 @@ CREATE TABLE answer_reply_delivery_events (
   )),
   attempt_number INTEGER CHECK (attempt_number IS NULL OR attempt_number > 0),
   source_count INTEGER NOT NULL CHECK (source_count BETWEEN 0 AND 1000),
-  document_source_ids TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] CHECK (
-    cardinality(document_source_ids) <= 1000
-    AND cardinality(document_source_ids) <= source_count
-    AND array_position(document_source_ids, NULL) IS NULL
-    AND array_position(document_source_ids, '') IS NULL
-    AND char_length(array_to_string(document_source_ids, ''))
-      <= cardinality(document_source_ids) * 512
-  ),
+  document_source_ids TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
   created_at TIMESTAMPTZ NOT NULL,
   UNIQUE (delivery_id, sequence),
+  CONSTRAINT answer_reply_delivery_events_document_source_ids_check CHECK (
+    answer_reply_document_source_ids_valid(document_source_ids, source_count)
+  ),
   CHECK (
     (event_type IN ('send_started', 'safe_notice_send_started') AND attempt_number IS NOT NULL)
     OR (event_type NOT IN ('send_started', 'safe_notice_send_started') AND attempt_number IS NULL)

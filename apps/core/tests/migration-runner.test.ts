@@ -42,6 +42,15 @@ describe("runMigrations", () => {
     expect(normalized).toContain("version");
     expect(normalized).toContain("answer_reply_source_traces_append_only");
     expect(normalized).toContain("answer_reply_delivery_events_append_only");
+    expect(normalized).toContain(
+      "create function answer_reply_document_source_ids_valid",
+    );
+    expect(normalized).toContain(
+      "constraint answer_reply_delivery_events_document_source_ids_check check",
+    );
+    expect(normalized).toContain(
+      "answer_reply_document_source_ids_valid(document_source_ids, source_count)",
+    );
 
     expect(sourceTraceTable).toBeDefined();
     expect(sourceTraceTable).not.toMatch(

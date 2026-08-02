@@ -12,7 +12,10 @@ import {
   createAnswerReplyUuid,
   type PrepareAnswerReplyInput,
 } from "../src/answer-replies/answer-reply-repository.js";
-import { createPostgresAnswerReplyRepository } from "../src/answer-replies/postgres-answer-reply-repository.js";
+import {
+  createPostgresAnswerReplyRepository,
+  type PostgresAnswerReplyDataSource,
+} from "../src/answer-replies/postgres-answer-reply-repository.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
@@ -52,6 +55,90 @@ describe("answer reply deterministic identifiers", () => {
         sourceUri: "https://user:secret@tenant.feishu.cn/wiki/document-a",
       })],
     }))).rejects.toThrow("sourceTrace sourceUri is invalid");
+  });
+});
+
+describe("answer reply persisted row validation", () => {
+  it.each([
+    ["blank delivery ID", { id: " " }],
+    ["oversized reply UUID", { reply_uuid: "u".repeat(51) }],
+    ["prepared delivery without text", { prepared_reply_text: null }],
+    ["sent delivery retaining text", {
+      state: "sent",
+      attempt_count: 1,
+      last_send_started_at: new Date("2026-08-02T00:01:00.000Z"),
+      sent_at: new Date("2026-08-02T00:02:00.000Z"),
+    }],
+    ["sent delivery without sent timestamp", {
+      state: "sent",
+      prepared_reply_text: null,
+      attempt_count: 1,
+      last_send_started_at: new Date("2026-08-02T00:01:00.000Z"),
+    }],
+    ["permission block after an attempt", {
+      state: "permission_blocked",
+      prepared_reply_text: null,
+      attempt_count: 1,
+      last_send_started_at: new Date("2026-08-02T00:01:00.000Z"),
+      permission_blocked_at: new Date("2026-08-02T00:02:00.000Z"),
+    }],
+    ["reconciliation without an attempt", {
+      state: "reconciliation_required",
+      prepared_reply_text: null,
+      reconciliation_required_at: new Date("2026-08-02T00:02:00.000Z"),
+    }],
+    ["safe notice timestamp without an attempt", {
+      state: "permission_blocked",
+      prepared_reply_text: null,
+      permission_blocked_at: new Date("2026-08-02T00:02:00.000Z"),
+      safe_notice_sent_at: new Date("2026-08-02T00:03:00.000Z"),
+    }],
+  ])("rejects a malformed %s row", async (_label, overrides) => {
+    const repository = repositoryForRows({ delivery: deliveryRow(overrides) });
+
+    await expect(findTestReceipt(repository)).rejects.toThrow(
+      "answer reply persistence failed",
+    );
+  });
+
+  it.each([
+    ["credential-bearing URI", {
+      source_uri: "https://user:secret@tenant.feishu.cn/wiki/document-a",
+    }],
+    ["noncanonical URI", {
+      source_uri: "https://tenant.feishu.cn/wiki/document-a?credential=secret",
+    }],
+    ["blank document source ID", { document_source_id: " " }],
+    ["zero prompt rank", { prompt_rank: 0 }],
+    ["citation rank above three", { citation_rank: 4 }],
+  ])("rejects a malformed source trace with %s", async (_label, overrides) => {
+    const repository = repositoryForRows({ sources: [sourceTraceRow(overrides)] });
+
+    await expect(findTestReceipt(repository)).rejects.toThrow(
+      "answer reply persistence failed",
+    );
+  });
+
+  it.each([
+    ["multidimensional values", { document_source_ids: [["source-a"]] }],
+    ["blank values", { document_source_ids: [" "] }],
+    ["oversized values", { document_source_ids: ["x".repeat(513)] }],
+    ["duplicate values", { document_source_ids: ["source-a", "source-a"] }],
+    ["cardinality above source count", {
+      source_count: 1,
+      document_source_ids: ["source-a", "source-b"],
+    }],
+    ["zero event sequence", { sequence: 0 }],
+    ["missing send-start attempt", {
+      event_type: "send_started",
+      attempt_number: null,
+    }],
+  ])("rejects a malformed event with %s", async (_label, overrides) => {
+    const repository = repositoryForRows({ events: [eventRow(overrides)] });
+
+    await expect(findTestReceipt(repository)).rejects.toThrow(
+      "answer reply persistence failed",
+    );
   });
 });
 
@@ -294,6 +381,48 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     });
   });
 
+  it("rejects unknown permission document IDs without mutating the receipt", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput("blocked-unknown"));
+
+    await expect(repository.blockForPermission({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: 1,
+      documentSourceIds: ["Bearer credential-like-free-form-value"],
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    })).rejects.toThrow("answer reply transition invalid");
+
+    const after = await repository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: prepared.receipt.delivery.incomingMessageId,
+    });
+    expect(after?.delivery).toMatchObject({ state: "prepared", version: 1 });
+    expect(after?.delivery.preparedReplyText).toBe("Answer body");
+    expect(after?.events.map(({ eventType }) => eventType)).toEqual(["prepared"]);
+  });
+
+  it("records accepted permission document IDs in immutable trace order", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput("blocked-order", {
+      sourceTraces: [sourceTrace(), sourceTrace({
+        promptRank: 2,
+        citationRank: 2,
+        documentSourceId: "source-b",
+        documentSnapshotId: "snapshot-b",
+        fragmentId: "fragment-b",
+      })],
+    }));
+
+    const blocked = await repository.blockForPermission({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: 1,
+      documentSourceIds: ["source-b", "source-a"],
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    });
+
+    expect(blocked.events.at(-1)?.documentSourceIds).toEqual(["source-a", "source-b"]);
+  });
+
   it("records reconciliation_required after a send attempt began", async () => {
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const prepared = await repository.prepare(prepareInput("reconciliation"));
@@ -391,6 +520,37 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
       .rejects.toThrow("knowledge draft history is append-only");
   });
 
+  it.each([
+    ["an oversized value hidden by a short value", ["x".repeat(1023), "y"], 2],
+    ["a whitespace-only value", [" "], 1],
+    ["a tab-only value", ["\t"], 1],
+    ["duplicate values", ["source-a", "source-a"], 2],
+    ["a multidimensional array", [["source-a"]], 1],
+  ])("rejects event document source IDs containing %s", async (
+    _label,
+    documentSourceIds,
+    sourceCount,
+  ) => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput(`event-array-${randomUUID()}`));
+
+    await expect(pool!.query(
+      `INSERT INTO answer_reply_delivery_events (
+         id, delivery_id, sequence, event_type, attempt_number,
+         source_count, document_source_ids, created_at
+       ) VALUES ($1, $2, 2, 'sent', NULL, $3, $4, $5)`,
+      [
+        `invalid-event-${randomUUID()}`,
+        prepared.receipt.delivery.id,
+        sourceCount,
+        documentSourceIds,
+        new Date("2026-08-02T00:01:00.000Z"),
+      ],
+    )).rejects.toMatchObject({
+      constraint: "answer_reply_delivery_events_document_source_ids_check",
+    });
+  });
+
   it("returns sources and events in deterministic rank and sequence order", async () => {
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const prepared = await repository.prepare(prepareInput("ordering", {
@@ -419,6 +579,81 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
 
     expect(loaded?.sources.map(({ promptRank }) => promptRank)).toEqual([1, 2]);
     expect(loaded?.events.map(({ sequence }) => sequence)).toEqual([1, 2, 3]);
+  });
+
+  it("reads delivery, sources, and events from one repeatable snapshot", async () => {
+    const transitionRepository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await transitionRepository.prepare(prepareInput("coherent-snapshot"));
+    const barrier = receiptReadBarrier(pool!);
+    const readRepository = createPostgresAnswerReplyRepository({
+      dataSource: barrier.dataSource,
+    });
+
+    const receiptPromise = readRepository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: prepared.receipt.delivery.incomingMessageId,
+    });
+    await barrier.deliveryRead;
+    try {
+      await transitionRepository.beginAnswerSend({
+        deliveryId: prepared.receipt.delivery.id,
+        expectedVersion: 1,
+        at: new Date("2026-08-02T00:01:00.000Z"),
+      });
+    } finally {
+      barrier.resume();
+    }
+
+    const receipt = await receiptPromise;
+    expect(receipt?.delivery.version).toBe(1);
+    expect(receipt?.delivery.state).toBe("prepared");
+    expect(receipt?.events.map(({ sequence }) => sequence)).toEqual([1]);
+  });
+
+  it("rejects a persisted credential-bearing source URI", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput("persisted-credential-uri"));
+    await pool!.query(
+      `INSERT INTO answer_reply_source_traces (
+         id, delivery_id, prompt_rank, citation_rank, document_source_id,
+         document_snapshot_id, fragment_id, chunk_index, source_type,
+         source_uri, source_title, content_hash, embedding_profile_id,
+         initial_permission_checked_at
+       ) VALUES (
+         $1, $2, 2, NULL, $3, $4, $5, 1, 'feishu_wiki',
+         $6, NULL, $7, $8, $9
+       )`,
+      [
+        `corrupt-source-${randomUUID()}`,
+        prepared.receipt.delivery.id,
+        "corrupt-source-id",
+        "corrupt-snapshot-id",
+        "corrupt-fragment-id",
+        "https://user:secret@tenant.feishu.cn/wiki/corrupt-document",
+        "b".repeat(64),
+        "embedding-profile-a",
+        new Date("2026-08-02T00:00:00.000Z"),
+      ],
+    );
+
+    await expect(repository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: prepared.receipt.delivery.incomingMessageId,
+    })).rejects.toThrow("answer reply persistence failed");
+  });
+
+  it("rejects a persisted delivery with a contradictory terminal timestamp", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput("persisted-terminal-timestamp"));
+    await pool!.query(
+      "UPDATE answer_reply_deliveries SET sent_at = $2 WHERE id = $1",
+      [prepared.receipt.delivery.id, new Date("2026-08-02T00:01:00.000Z")],
+    );
+
+    await expect(repository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: prepared.receipt.delivery.incomingMessageId,
+    })).rejects.toThrow("answer reply persistence failed");
   });
 
   it("counts unresolved answers, unsent safe notices, and reconciliation cases", async () => {
@@ -495,5 +730,160 @@ function sourceTrace(
     embeddingProfileId: "embedding-profile-a",
     initialPermissionCheckedAt: new Date("2026-08-01T23:59:00.000Z"),
     ...overrides,
+  };
+}
+
+function repositoryForRows(overrides: {
+  delivery?: Record<string, unknown>;
+  sources?: Array<Record<string, unknown>>;
+  events?: Array<Record<string, unknown>>;
+} = {}) {
+  const query = async (sql: string) => {
+    if (/from answer_reply_deliveries/iu.test(sql)) {
+      return { rows: [overrides.delivery ?? deliveryRow()] };
+    }
+    if (/from answer_reply_source_traces/iu.test(sql)) {
+      return { rows: overrides.sources ?? [sourceTraceRow()] };
+    }
+    if (/from answer_reply_delivery_events/iu.test(sql)) {
+      return { rows: overrides.events ?? [eventRow()] };
+    }
+    return { rows: [] };
+  };
+  const dataSource = {
+    query,
+    async connect() {
+      return { query, release() {} };
+    },
+  } as unknown as PostgresAnswerReplyDataSource;
+  return createPostgresAnswerReplyRepository({ dataSource });
+}
+
+function findTestReceipt(
+  repository: ReturnType<typeof createPostgresAnswerReplyRepository>,
+) {
+  return repository.findByIncomingMessage({
+    provider: "feishu",
+    incomingMessageId: "incoming-row-test",
+  });
+}
+
+function deliveryRow(overrides: Record<string, unknown> = {}) {
+  const at = new Date("2026-08-02T00:00:00.000Z");
+  const incomingMessageId = "incoming-row-test";
+  return {
+    id: createAnswerReplyDeliveryId("feishu", incomingMessageId),
+    provider: "feishu",
+    incoming_message_id: incomingMessageId,
+    chat_id: "chat-a",
+    reply_uuid: createAnswerReplyUuid(incomingMessageId),
+    safe_notice_uuid: createAnswerReplySafeNoticeUuid(incomingMessageId),
+    state: "prepared",
+    prepared_reply_text: "Answer body",
+    rendered_reply_fingerprint: "a".repeat(64),
+    semantic_fingerprint: "b".repeat(64),
+    reply_message_id: null,
+    safe_notice_message_id: null,
+    attempt_count: 0,
+    safe_notice_attempt_count: 0,
+    version: "1",
+    created_at: at,
+    updated_at: at,
+    last_send_started_at: null,
+    sent_at: null,
+    permission_blocked_at: null,
+    reconciliation_required_at: null,
+    safe_notice_sent_at: null,
+    ...overrides,
+  };
+}
+
+function sourceTraceRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "answer-reply-source-row-test",
+    delivery_id: createAnswerReplyDeliveryId("feishu", "incoming-row-test"),
+    prompt_rank: 1,
+    citation_rank: 1,
+    document_source_id: "source-a",
+    document_snapshot_id: "snapshot-a",
+    fragment_id: "fragment-a",
+    chunk_index: 0,
+    source_type: "feishu_wiki",
+    source_uri: "https://tenant.feishu.cn/wiki/document-a",
+    source_title: "Document A",
+    content_hash: "c".repeat(64),
+    embedding_profile_id: "embedding-profile-a",
+    initial_permission_checked_at: new Date("2026-08-02T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function eventRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "answer-reply-event-row-test",
+    delivery_id: createAnswerReplyDeliveryId("feishu", "incoming-row-test"),
+    sequence: "1",
+    event_type: "prepared",
+    attempt_number: null,
+    source_count: 1,
+    document_source_ids: ["source-a"],
+    created_at: new Date("2026-08-02T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function receiptReadBarrier(pool: pg.Pool): {
+  dataSource: PostgresAnswerReplyDataSource;
+  deliveryRead: Promise<void>;
+  resume(): void;
+} {
+  let markDeliveryRead: (() => void) | undefined;
+  let resumeRead: (() => void) | undefined;
+  let intercepted = false;
+  const deliveryRead = new Promise<void>((resolve) => {
+    markDeliveryRead = resolve;
+  });
+  const resumePromise = new Promise<void>((resolve) => {
+    resumeRead = resolve;
+  });
+  const queryWithBarrier = async (
+    sql: string,
+    execute: () => Promise<{ rows: Array<Record<string, unknown>> }>,
+  ) => {
+    const result = await execute();
+    if (
+      !intercepted
+      && /from answer_reply_deliveries/iu.test(sql)
+      && /where provider = \$1 and incoming_message_id = \$2/iu.test(sql)
+      && !/for update/iu.test(sql)
+    ) {
+      intercepted = true;
+      markDeliveryRead?.();
+      await resumePromise;
+    }
+    return result;
+  };
+  const dataSource = {
+    query(sql: string, values?: unknown[]) {
+      return queryWithBarrier(sql, () => pool.query(sql, values));
+    },
+    async connect() {
+      const client = await pool.connect();
+      return {
+        query(sql: string, values?: unknown[]) {
+          return queryWithBarrier(sql, () => client.query(sql, values));
+        },
+        release() {
+          client.release();
+        },
+      };
+    },
+  } as unknown as PostgresAnswerReplyDataSource;
+  return {
+    dataSource,
+    deliveryRead,
+    resume() {
+      resumeRead?.();
+    },
   };
 }
