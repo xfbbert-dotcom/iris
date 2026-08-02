@@ -1187,6 +1187,29 @@ For the controller-approved one-group pass:
    Stop immediately and keep the loop disabled if binding, membership, queue, privacy, or runtime
    gate evidence is not clean; do not replay queues or make extra model requests during triage.
 
+## Answer-Source Citation Gray Gate
+
+Migration `0045_answer_source_citations.sql` adds durable answer deliveries plus append-only source
+and event evidence. Apply it only through
+`docs/runbooks/iris-answer-source-citations-acceptance.md` after exact-SHA Core and AI Worker CI is
+successful and an encrypted PostgreSQL backup has completed.
+
+Keep `globalEnabled=false`, `desiredGlobalEnabled=false`, and Caddy stopped through migration and
+all private receipt gates. Public acceptance is bounded to `/health=200` and public
+`/internal/answer-replies/feishu/probe=404` while Iris remains disabled, followed by one authorized
+answer in only the existing pilot group and one source-permission revocation check. Do not spend
+Gemini quota on repeated probes.
+
+The visible answer must contain `Iris 参考资料：`, the correct title, and canonical Feishu URL.
+The private receipt may contain source/snapshot/fragment identifiers, chunk index, content hash,
+title, URI, fingerprints, and delivery metadata, but never answer text, fragment text, prompt
+context, tokens, or secrets. Final event, document-sync, and reindex pending/DLQ counts and all
+three answer-reply status counts must be zero.
+
+Any failed gate restores durable global disablement and stops Caddy until the failure is understood.
+Restore the previously approved pilot runtime state only after every citation and revocation gate
+passes.
+
 ## Verification Before Internal Use
 
 Run the local verification suite before changing rollout configuration:

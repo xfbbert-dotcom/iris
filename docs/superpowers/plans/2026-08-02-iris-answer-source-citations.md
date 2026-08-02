@@ -1100,7 +1100,7 @@ git commit -m "feat(core): expose private answer receipt inspection"
 - Consumes: completed Tasks 1-7
 - Produces: reproducible local evidence, draft PR, fail-closed deployment, and real pilot evidence
 
-- [ ] **Step 1: Write the bounded acceptance runbook**
+- [x] **Step 1: Write the bounded acceptance runbook**
 
 Document these exact gates:
 
@@ -1119,7 +1119,7 @@ Document these exact gates:
 
 The runbook must state that any failure restores global disablement and stops Caddy until the failing gate is understood.
 
-- [ ] **Step 2: Run all focused feature tests**
+- [x] **Step 2: Run all focused feature tests**
 
 Run:
 
@@ -1129,7 +1129,7 @@ npm exec --workspace apps/core -- vitest run tests/document-fragment-repository.
 
 Expected: zero failures; Postgres-only cases skip only when `IRIS_TEST_DATABASE_URL` is absent.
 
-- [ ] **Step 3: Run full local verification**
+- [x] **Step 3: Run full local verification**
 
 Run each command separately:
 
@@ -1147,7 +1147,7 @@ npm run pilot:config
 
 Expected: every command exits 0. Record exact test counts and any legitimate database-test skips in the PR document.
 
-- [ ] **Step 4: Review scope and sensitive-data boundaries**
+- [x] **Step 4: Review scope and sensitive-data boundaries**
 
 Run:
 
