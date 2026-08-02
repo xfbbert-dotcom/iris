@@ -65,8 +65,7 @@ export function renderAnswerWithSourceCitations(input: {
       throw new Error(`Feishu document source URI is too long for ${fragment.documentSourceId}`);
     }
 
-    const sourceType = SOURCE_LABELS[fragment.sourceType];
-    if (sourceType === undefined) {
+    if (!Object.hasOwn(SOURCE_LABELS, fragment.sourceType)) {
       throw new Error(`invalid retrieved document source type for ${fragment.documentSourceId}`);
     }
 
@@ -109,7 +108,7 @@ export function renderAnswerWithSourceCitations(input: {
       chunkIndex: fragment.chunkIndex,
       sourceType: fragment.sourceType,
       sourceUri,
-      ...(sourceTitle === undefined ? {} : { sourceTitle: truncateWithMarker(sourceTitle, MAX_VISIBLE_TITLE_CHARS) }),
+      ...(sourceTitle === undefined ? {} : { sourceTitle }),
       contentHash: fragment.contentHash,
       embeddingProfileId: fragment.embeddingProfileId,
       initialPermissionCheckedAt: new Date(input.initialPermissionCheckedAt.getTime()),
@@ -124,6 +123,7 @@ export function renderAnswerWithSourceCitations(input: {
   }
 
   const footer = buildFooter(documents);
+  // Bounded source metadata should keep this branch unreachable; retain it as a fail-closed guard.
   if (footer.length + 2 > MAX_REPLY_CHARS) {
     throw new Error("answer source citation footer cannot fit within the reply limit");
   }

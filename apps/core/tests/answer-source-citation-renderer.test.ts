@@ -160,6 +160,20 @@ describe("answer source citation renderer", () => {
     }
   });
 
+  it("rejects runtime source types outside the exact public source type set", () => {
+    for (const sourceType of ["toString", "constructor", "__proto__", "unknown"]) {
+      expect(() =>
+        renderAnswerWithSourceCitations({
+          answerText: "Answer body",
+          allowedFragments: [
+            fragment({ sourceType: sourceType as RetrievedDocumentSourceType }),
+          ],
+          initialPermissionCheckedAt: checkedAt,
+        }),
+      ).toThrow();
+    }
+  });
+
   it("uses 飞书文档 when the registered title is blank", () => {
     const result = renderAnswerWithSourceCitations({
       answerText: "Answer body",
@@ -172,15 +186,15 @@ describe("answer source citation renderer", () => {
   });
 
   it("truncates a visible title to 120 characters with the shared marker", () => {
+    const longTitle = "T".repeat(121);
     const result = renderAnswerWithSourceCitations({
       answerText: "Answer body",
-      allowedFragments: [fragment({ sourceTitle: "T".repeat(121) })],
+      allowedFragments: [fragment({ sourceTitle: longTitle })],
       initialPermissionCheckedAt: checkedAt,
     });
 
     expect(result.renderedText).toContain(`[知识库] ${"T".repeat(104)} ... [truncated]`);
-    expect(result.renderedText).not.toContain("T".repeat(121));
-    expect(result.sourceTraces[0]?.sourceTitle).toBe("T".repeat(104) + " ... [truncated]");
+    expect(result.sourceTraces[0]?.sourceTitle).toBe(longTitle);
   });
 
   it("reserves the footer before truncating an 8000-character answer body", () => {
@@ -195,21 +209,39 @@ describe("answer source citation renderer", () => {
     expect(result.renderedText.endsWith("https://tenant.feishu.cn/wiki/wikiA")).toBe(true);
   });
 
-  it("rejects a footer whose own bounded content cannot fit in 8000 characters", () => {
-    const longTenant = "tenant-" + "x".repeat(7950);
-
-    expect(() =>
-      renderAnswerWithSourceCitations({
-        answerText: "Answer body",
-        allowedFragments: [
-          fragment({
-            documentSourceId: "long-source",
-            sourceUri: `https://${longTenant}.feishu.cn/wiki/wikiA`,
-          }),
-        ],
-        initialPermissionCheckedAt: checkedAt,
+  it("keeps the maximum valid bounded footer within 8000 characters", () => {
+    const allowedFragments = [
+      fragment({
+        documentSourceId: "maximum-source-a",
+        sourceTitle: "A".repeat(512),
+        sourceUri: maximumValidSourceUri("a"),
       }),
-    ).toThrow();
+      fragment({
+        documentSourceId: "maximum-source-b",
+        sourceTitle: "B".repeat(512),
+        sourceUri: maximumValidSourceUri("b"),
+        sourceType: "feishu_group_document",
+      }),
+      fragment({
+        documentSourceId: "maximum-source-c",
+        sourceTitle: "C".repeat(512),
+        sourceUri: maximumValidSourceUri("c"),
+        sourceType: "manual_upload",
+      }),
+    ];
+
+    expect(allowedFragments.every((item) => item.sourceUri.length === 2048)).toBe(true);
+    expect(allowedFragments.every((item) => item.sourceTitle?.length === 512)).toBe(true);
+
+    const result = renderAnswerWithSourceCitations({
+      answerText: "A".repeat(8000),
+      allowedFragments,
+      initialPermissionCheckedAt: checkedAt,
+    });
+
+    expect(result.renderedText.length).toBeLessThanOrEqual(8000);
+    expect(result.renderedText).toContain(" ... [truncated]");
+    expect(result.renderedText.endsWith(allowedFragments[2].sourceUri)).toBe(true);
   });
 });
 
@@ -231,4 +263,10 @@ function fragment(
     sourceType,
     ...overrides,
   };
+}
+
+function maximumValidSourceUri(suffix: string): string {
+  const path = `/wiki/${"w".repeat(512)}`;
+  const hostLabelLength = 2048 - "https://".length - ".feishu.cn".length - path.length;
+  return `https://${"t".repeat(hostLabelLength - 1)}${suffix}.feishu.cn${path}`;
 }
