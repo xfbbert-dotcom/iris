@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { DocumentChunk } from "./document-chunker.js";
-import type { DocumentSourceType } from "./document-source-registry.js";
+import {
+  DOCUMENT_SOURCE_METADATA_MAX_CHARS,
+  type DocumentSourceType,
+} from "./document-source-registry.js";
 
 const MAX_FRAGMENT_SEARCH_LIMIT = 100;
 const MAX_GROUP_ID_CHARS = 512;
@@ -42,6 +45,8 @@ export type DocumentFragment = {
 };
 
 export type RetrievedDocumentFragment = DocumentFragment & {
+  sourceTitle?: string;
+  sourceType: DocumentSourceType;
   distance?: number;
 };
 
@@ -94,6 +99,8 @@ type DocumentFragmentRow = {
 };
 
 type RetrievedDocumentFragmentRow = DocumentFragmentRow & {
+  source_title: string | null;
+  source_type: DocumentSourceType;
   distance?: number | string;
 };
 
@@ -230,6 +237,8 @@ with latest_snapshots as (
 )
 select
   f.*,
+  ds.title as source_title,
+  ds.source_type,
   e.embedding,
   e.embedding <=> $2::vector as distance
 from document_fragments f
@@ -428,10 +437,28 @@ do update set
 }
 
 function mapRetrievedFragmentRow(row: RetrievedDocumentFragmentRow): RetrievedDocumentFragment {
+  const sourceTitle = row.source_title?.trim();
+  if (!isDocumentSourceType(row.source_type)) {
+    throw new Error(`invalid document source type: ${String(row.source_type)}`);
+  }
+  if (sourceTitle !== undefined && sourceTitle.length > DOCUMENT_SOURCE_METADATA_MAX_CHARS) {
+    throw new Error(
+      `source title must be at most ${DOCUMENT_SOURCE_METADATA_MAX_CHARS} characters`,
+    );
+  }
+
   return {
     ...mapFragmentRow(row),
+    ...(sourceTitle === undefined || sourceTitle.length === 0 ? {} : { sourceTitle }),
+    sourceType: row.source_type,
     distance: row.distance === undefined ? undefined : Number(row.distance),
   };
+}
+
+function isDocumentSourceType(value: unknown): value is DocumentSourceType {
+  return value === "group_visible_document"
+    || value === "authorized_wiki_document"
+    || value === "user_submitted_document";
 }
 
 function mapFragmentRow(row: DocumentFragmentRow): DocumentFragment {

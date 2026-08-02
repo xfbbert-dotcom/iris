@@ -11,9 +11,29 @@ import {
   type DocumentFragment,
   type Queryable,
 } from "../src/documents/document-fragment-repository.js";
+import { DOCUMENT_SOURCE_METADATA_MAX_CHARS } from "../src/documents/document-source-registry.js";
 
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function retrievedRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "fragment-1",
+    document_source_id: "source-1",
+    document_snapshot_id: "snapshot-1",
+    source_uri: "https://example.feishu.cn/wiki/wikcnSource1",
+    source_title: "Quello Life Engine",
+    source_type: "authorized_wiki_document",
+    chunk_index: 0,
+    text: "Life Engine context",
+    content_hash: "a".repeat(64),
+    embedding: "[1,0,0,0,0,0]",
+    embedding_profile_id: "static-dev-6d",
+    created_at: new Date("2026-08-02T02:00:00.000Z"),
+    distance: "0.125",
+    ...overrides,
+  };
 }
 
 function queryableFrom(query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[] }>): Queryable {
@@ -452,6 +472,91 @@ describe("DocumentFragmentRepository", () => {
         limit: 3,
       }),
     ).resolves.toEqual([]);
+  });
+
+  it("carries source metadata through similarity search results", async () => {
+    const query = vi.fn(async (sql: string) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("ds.title as source_title");
+      expect(normalized).toContain("ds.source_type");
+      return {
+        rows: [
+          {
+            id: "fragment-1",
+            document_source_id: "source-1",
+            document_snapshot_id: "snapshot-1",
+            source_uri: "https://example.feishu.cn/wiki/wikcnSource1",
+            source_title: " Quello Life Engine ",
+            source_type: "authorized_wiki_document",
+            chunk_index: 0,
+            text: "Life Engine context",
+            content_hash: "a".repeat(64),
+            embedding: "[1,0,0,0,0,0]",
+            embedding_profile_id: "static-dev-6d",
+            created_at: new Date("2026-08-02T02:00:00.000Z"),
+            distance: "0.125",
+          },
+        ],
+      };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    const result = await repository.searchSimilarFragments({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 0, 0, 0, 0, 0],
+      limit: 1,
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        sourceTitle: "Quello Life Engine",
+        sourceType: "authorized_wiki_document",
+        distance: 0.125,
+      }),
+    ]);
+  });
+
+  it("rejects an invalid source type in similarity search results", async () => {
+    const query = vi.fn(async () => ({ rows: [retrievedRow({ source_type: "invalid" })] }));
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 1,
+      }),
+    ).rejects.toThrow("invalid document source type");
+  });
+
+  it("rejects an overlong source title in similarity search results", async () => {
+    const query = vi.fn(async () => ({
+      rows: [retrievedRow({ source_title: "x".repeat(DOCUMENT_SOURCE_METADATA_MAX_CHARS + 1) })],
+    }));
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(
+      repository.searchSimilarFragments({
+        embeddingProfileId: "static-dev-6d",
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 1,
+      }),
+    ).rejects.toThrow(`source title must be at most ${DOCUMENT_SOURCE_METADATA_MAX_CHARS} characters`);
   });
 
   it("routes 768-dimensional writes to the 768 embedding table", async () => {
