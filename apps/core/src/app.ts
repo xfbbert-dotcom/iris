@@ -36,6 +36,7 @@ import type { EventQueue } from "./queues/event-queue.js";
 import { InMemoryEventQueue } from "./queues/in-memory-event-queue.js";
 import type { RawEventQueue } from "./events/raw-event-queue.js";
 import type { AnswerDraftOrchestrator } from "./agent/answer-draft-orchestrator.js";
+import type { AnswerSourcePermissionVerifier } from "./answer-replies/answer-source-permission-verifier.js";
 import type { LiveChatMessage } from "./memory/context-assembly.js";
 import {
   createAnswerDraftRuntime as createDefaultAnswerDraftRuntime,
@@ -137,6 +138,7 @@ import { observeStartupPromise } from "./runtime/startup-promise.js";
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
   memoryExtractionPlanner?: MemoryExtractionRuntime["planner"];
   knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
 };

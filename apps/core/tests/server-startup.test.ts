@@ -28,6 +28,7 @@ import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runti
 import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
 import type { KnowledgeDraftRuntime } from "../src/runtime/knowledge-draft-runtime.js";
 import type { AnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
+import type { AnswerSourcePermissionVerifier } from "../src/answer-replies/answer-source-permission-verifier.js";
 import { isolateEnvVar } from "./test-env.js";
 
 let restorePort: () => void = () => undefined;
@@ -70,7 +71,13 @@ describe("Core server startup", () => {
     };
     const knowledgeCardRuntime = fakeKnowledgeCardRuntime();
     const actionApprovalRuntime = fakeActionApprovalRuntime();
-    const createEventWorkerRuntime = vi.fn(() => undefined);
+    let capturedAnswerSourcePermissionVerifier: AnswerSourcePermissionVerifier | undefined;
+    const createEventWorkerRuntime = vi.fn<NonNullable<
+      BuildAppDependencies["createEventWorkerRuntime"]
+    >>((input) => {
+      capturedAnswerSourcePermissionVerifier = input?.answerSourcePermissionVerifier;
+      return undefined;
+    });
     const app = buildApp({
       createAgentExecutionLedgerRuntime: () => undefined,
       createAnswerDraftRuntime: () => answerDraftRuntime,
@@ -93,6 +100,9 @@ describe("Core server startup", () => {
       answerSourcePermissionVerifier: answerDraftRuntime.answerSourcePermissionVerifier,
       knowledgeDraftCommand: expect.objectContaining({ execute: expect.any(Function) }),
     }));
+    expect(capturedAnswerSourcePermissionVerifier).toBe(
+      answerDraftRuntime.answerSourcePermissionVerifier,
+    );
     await app.close();
   });
 

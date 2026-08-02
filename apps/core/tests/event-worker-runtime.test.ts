@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { AnswerSourcePermissionVerifier } from "../src/answer-replies/answer-source-permission-verifier.js";
 import type { FeishuMentionAnswerResponderDependencies } from "../src/conversation/feishu-mention-answer-responder.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
-import { createEventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
+import {
+  createEventWorkerRuntime,
+  type EventWorkerRuntimeDependencies,
+} from "../src/runtime/event-worker-runtime.js";
 
 describe("createEventWorkerRuntime", () => {
   it("returns undefined when the event worker is disabled", () => {
@@ -396,6 +399,43 @@ describe("createEventWorkerRuntime", () => {
     expect(pool.end).toHaveBeenCalledOnce();
   });
 
+  it("cleans up opened resources when early answer repository composition fails", async () => {
+    const fixture = createConstructionFailureFixture();
+    const compositionError = new Error("answer repository composition failed");
+    fixture.dependencies.createPostgresAnswerReplyRepository = vi.fn(() => {
+      throw compositionError;
+    });
+
+    expect(() => createEventWorkerRuntime({
+      env: enabledEnv(),
+      dependencies: fixture.dependencies,
+    })).toThrow(compositionError);
+
+    await vi.waitFor(() => {
+      expect(fixture.redisClient.quit).toHaveBeenCalledOnce();
+      expect(fixture.pool.end).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("cleans up opened resources once and preserves a late composition error", async () => {
+    const cleanupError = new Error("resource cleanup failed");
+    const fixture = createConstructionFailureFixture({ cleanupError });
+    const compositionError = new Error("worker loop composition failed");
+    fixture.dependencies.createWorkerLoop = vi.fn(() => {
+      throw compositionError;
+    });
+
+    expect(() => createEventWorkerRuntime({
+      env: enabledEnv(),
+      dependencies: fixture.dependencies,
+    })).toThrow(compositionError);
+
+    await vi.waitFor(() => {
+      expect(fixture.redisClient.quit).toHaveBeenCalledOnce();
+      expect(fixture.pool.end).toHaveBeenCalledOnce();
+    });
+  });
+
   it("does not compose mention replies and reports missing setup reasons", async () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const answerReplyRepository = fakeAnswerReplyRepository();
@@ -523,4 +563,65 @@ function fakeAnswerReplyRepository() {
       reconciliationRequiredCount: 1,
     })),
   };
+}
+
+function createConstructionFailureFixture({
+  cleanupError,
+}: {
+  cleanupError?: Error;
+} = {}) {
+  const pool = {
+    query: vi.fn(),
+    end: vi.fn(async () => {
+      if (cleanupError !== undefined) {
+        throw cleanupError;
+      }
+    }),
+  };
+  const redisClient = {
+    connect: vi.fn(async () => redisClient),
+    eval: vi.fn(async () => 1),
+    rPush: vi.fn(async () => 1),
+    lPop: vi.fn(async () => null),
+    lLen: vi.fn(async () => 0),
+    lRange: vi.fn(async () => []),
+    lRem: vi.fn(async () => 0),
+    sRem: vi.fn(async () => 0),
+    quit: vi.fn(async () => {
+      if (cleanupError !== undefined) {
+        throw cleanupError;
+      }
+    }),
+  };
+  const dependencies: EventWorkerRuntimeDependencies = {
+    createPostgresPool: vi.fn(() => pool),
+    createRedisClient: vi.fn(() => redisClient),
+    createPostgresAnswerReplyRepository: vi.fn(() => fakeAnswerReplyRepository()),
+    createConversationMessageRepository: vi.fn(() => ({
+      upsertMessage: vi.fn(),
+      listRecentByChat: vi.fn(),
+    })),
+    createMessageReplayGuard: vi.fn(() => ({ runUnlessDeleted: vi.fn() })),
+    createDocumentSourceRegistry: vi.fn(() => ({
+      registerGroupVisibleDocument: vi.fn(),
+      registerUserSubmittedDocument: vi.fn(),
+    })),
+    createDocumentLinkExtractor: vi.fn(() => ({ extractLinks: vi.fn(() => []) })),
+    createDocumentSyncQueue: vi.fn(() => ({ enqueue: vi.fn() })),
+    createDiscoveredDocumentSyncPlanner: vi.fn(() => ({
+      planRegisteredSources: vi.fn(async () => ({ enqueuedCount: 0, skippedCount: 0 })),
+    })),
+    createGroupVisibleDocumentRegistrar: vi.fn(() => ({
+      registerDiscoveredLinks: vi.fn(),
+    })),
+    createProcessor: vi.fn(() => ({ process: vi.fn() })),
+    createWorkerLoop: vi.fn(() => ({
+      start: vi.fn(),
+      stop: vi.fn(async () => undefined),
+      isRunning: vi.fn(() => false),
+      getSnapshot: vi.fn(() => ({ running: false, intervalMs: 1000, batchLimit: 50 })),
+    })),
+  };
+
+  return { dependencies, pool, redisClient };
 }

@@ -233,132 +233,155 @@ function createEnabledEventWorkerRuntime({
   const createProcessor = dependencies.createProcessor ?? createFeishuMessageEventProcessor;
   const createLoop = dependencies.createWorkerLoop ?? createRawEventWorkerLoop;
   const pool = createPool(readDatabaseConfig(env));
-  const redis = createRedis(runtimeConfig.redisUrl);
-  const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
-  const documentLinkExtractor = createDocumentLinkExtractor();
-  const messages = createMessages({ queryable: pool });
-  const messageReplayGuard = createMessageReplayGuard({ dataSource: pool as never });
-  const documentSources = createDocumentSources(pool);
-  const documentSyncQueue = createDocumentSyncQueue(
-    createLazyRedisDocumentSyncQueueClient(redisConnection),
-  );
-  const syncPlanner = createDiscoveredSyncPlanner({ queue: documentSyncQueue });
-  const userSubmittedDocumentRegistrar: Pick<
-    AsyncDocumentSourceRegistry,
-    "registerUserSubmittedDocument"
-  > = {
-    async registerUserSubmittedDocument(input) {
-      const source = await documentSources.registerUserSubmittedDocument(input);
-      await syncPlanner.planRegisteredSources([source]);
-      return source;
-    },
-  };
-  const answerReplyRepository = createAnswerReplies({ dataSource: pool as never });
-  const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
-    env,
-    answerDraftOrchestrator,
-    answerSourcePermissionVerifier:
-      answerSourcePermissionVerifier ?? createUnavailableAnswerSourcePermissionVerifier(),
-    knowledgeDraftCommand,
-    runtimeController,
-    documentLinkExtractor,
-    userSubmittedDocumentRegistrar,
-    answerReplyRepository,
-    now,
-    createTokenProvider,
-    createMessageReplier,
-    createAnswerReplyService,
-    createMentionResponder,
-  });
-  const mentionAnswerResponder = mentionAnswerReadiness.responder;
-  const groupVisibleDocumentRegistrar = createGroupVisibleRegistrar({
-    registry: documentSources,
-    syncPlanner,
-  });
-  const processor = createProcessor({
-    messages,
-    messageReplayGuard,
-    documentLinkExtractor,
-    groupVisibleDocumentRegistrar,
-    ...(mentionAnswerResponder === undefined ? {} : { mentionAnswerResponder }),
-    ...(memoryExtractionPlanner === undefined ? {} : { memoryExtractionPlanner }),
-    ...(runtimeController === undefined ? {} : { runtimeController }),
-  });
-  const queue = createRedisRawEventQueue({
-    client: createLazyRedisQueueClient(redisConnection),
-  });
-  const worker = createRawEventWorker({
-    queue,
-    processor,
-  });
-  const loop: RawEventWorkerLoop = createLoop({
-    worker,
-    intervalMs: runtimeConfig.intervalMs,
-    batchLimit: runtimeConfig.batchLimit,
-    onError: () => undefined,
-  });
+  let redis: RedisClient;
+  try {
+    redis = createRedis(runtimeConfig.redisUrl);
+  } catch (error) {
+    cleanupFailedEventWorkerRuntimeConstruction({ pool });
+    throw error;
+  }
+  let resolveRedisConnection: (client: RedisClient) => void = () => undefined;
+  let rejectRedisConnection: (error: unknown) => void = () => undefined;
+  const redisConnection = observeStartupPromise(new Promise<RedisClient>((resolve, reject) => {
+    resolveRedisConnection = resolve;
+    rejectRedisConnection = reject;
+  }));
 
-  return {
-    rawEventQueue: queue,
-    answerReplies: {
-      findByIncomingMessage(input) {
-        return answerReplyRepository.findByIncomingMessage(input);
+  try {
+    const documentLinkExtractor = createDocumentLinkExtractor();
+    const messages = createMessages({ queryable: pool });
+    const messageReplayGuard = createMessageReplayGuard({ dataSource: pool as never });
+    const documentSources = createDocumentSources(pool);
+    const documentSyncQueue = createDocumentSyncQueue(
+      createLazyRedisDocumentSyncQueueClient(redisConnection),
+    );
+    const syncPlanner = createDiscoveredSyncPlanner({ queue: documentSyncQueue });
+    const userSubmittedDocumentRegistrar: Pick<
+      AsyncDocumentSourceRegistry,
+      "registerUserSubmittedDocument"
+    > = {
+      async registerUserSubmittedDocument(input) {
+        const source = await documentSources.registerUserSubmittedDocument(input);
+        await syncPlanner.planRegisteredSources([source]);
+        return source;
       },
-    },
-    deadLetters: {
-      list(input) {
-        return queue.listDeadLetters(input);
-      },
-      replay(id) {
-        return queue.replayDeadLetter(id);
-      },
-      delete(id) {
-        return queue.deleteDeadLetter(id);
-      },
-      replayBatch(input) {
-        return queue.replayDeadLetters(input);
-      },
-    },
-    start() {
-      loop.start();
-    },
-    async getStatus() {
-      const loopSnapshot = loop.getSnapshot();
-      const pendingEventCount = await queue.getPendingCount();
-      const deadLetterEventCount = await queue.getDeadLetterCount();
-      const answerReplyStatus = await answerReplyRepository.getStatus();
+    };
+    const answerReplyRepository = createAnswerReplies({ dataSource: pool as never });
+    const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
+      env,
+      answerDraftOrchestrator,
+      answerSourcePermissionVerifier:
+        answerSourcePermissionVerifier ?? createUnavailableAnswerSourcePermissionVerifier(),
+      knowledgeDraftCommand,
+      runtimeController,
+      documentLinkExtractor,
+      userSubmittedDocumentRegistrar,
+      answerReplyRepository,
+      now,
+      createTokenProvider,
+      createMessageReplier,
+      createAnswerReplyService,
+      createMentionResponder,
+    });
+    const mentionAnswerResponder = mentionAnswerReadiness.responder;
+    const groupVisibleDocumentRegistrar = createGroupVisibleRegistrar({
+      registry: documentSources,
+      syncPlanner,
+    });
+    const processor = createProcessor({
+      messages,
+      messageReplayGuard,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+      ...(mentionAnswerResponder === undefined ? {} : { mentionAnswerResponder }),
+      ...(memoryExtractionPlanner === undefined ? {} : { memoryExtractionPlanner }),
+      ...(runtimeController === undefined ? {} : { runtimeController }),
+    });
+    const queue = createRedisRawEventQueue({
+      client: createLazyRedisQueueClient(redisConnection),
+    });
+    const worker = createRawEventWorker({
+      queue,
+      processor,
+    });
+    const loop: RawEventWorkerLoop = createLoop({
+      worker,
+      intervalMs: runtimeConfig.intervalMs,
+      batchLimit: runtimeConfig.batchLimit,
+      onError: () => undefined,
+    });
+    const redisStartup = redis.connect();
+    void redisStartup.then(
+      () => resolveRedisConnection(redis),
+      (error) => rejectRedisConnection(error),
+    );
 
-      return {
-        enabled: true,
-        running: loopSnapshot.running,
-        intervalMs: loopSnapshot.intervalMs,
-        batchLimit: loopSnapshot.batchLimit,
-        mentionRepliesEnabled: mentionAnswerResponder !== undefined,
-        ...(mentionAnswerReadiness.unavailableReason === undefined
-          ? {}
-          : { mentionRepliesUnavailableReason: mentionAnswerReadiness.unavailableReason }),
-        pendingEventCount,
-        deadLetterEventCount,
-        answerReplyUnresolvedCount: answerReplyStatus.unresolvedCount,
-        answerReplyPendingSafeNoticeCount: answerReplyStatus.pendingSafeNoticeCount,
-        answerReplyReconciliationRequiredCount:
-          answerReplyStatus.reconciliationRequiredCount,
-        ...(loopSnapshot.latestBatch === undefined
-          ? {}
-          : { latestBatch: loopSnapshot.latestBatch }),
-      };
-    },
-    async close() {
-      await closeRuntimeResources([
-        () => loop.stop(),
-        async () => {
-          const client = await redisConnection;
-          await client.quit();
+    return {
+      rawEventQueue: queue,
+      answerReplies: {
+        findByIncomingMessage(input) {
+          return answerReplyRepository.findByIncomingMessage(input);
         },
-        () => pool.end(),
-      ]);
-    },
-  };
+      },
+      deadLetters: {
+        list(input) {
+          return queue.listDeadLetters(input);
+        },
+        replay(id) {
+          return queue.replayDeadLetter(id);
+        },
+        delete(id) {
+          return queue.deleteDeadLetter(id);
+        },
+        replayBatch(input) {
+          return queue.replayDeadLetters(input);
+        },
+      },
+      start() {
+        loop.start();
+      },
+      async getStatus() {
+        const loopSnapshot = loop.getSnapshot();
+        const pendingEventCount = await queue.getPendingCount();
+        const deadLetterEventCount = await queue.getDeadLetterCount();
+        const answerReplyStatus = await answerReplyRepository.getStatus();
+
+        return {
+          enabled: true,
+          running: loopSnapshot.running,
+          intervalMs: loopSnapshot.intervalMs,
+          batchLimit: loopSnapshot.batchLimit,
+          mentionRepliesEnabled: mentionAnswerResponder !== undefined,
+          ...(mentionAnswerReadiness.unavailableReason === undefined
+            ? {}
+            : { mentionRepliesUnavailableReason: mentionAnswerReadiness.unavailableReason }),
+          pendingEventCount,
+          deadLetterEventCount,
+          answerReplyUnresolvedCount: answerReplyStatus.unresolvedCount,
+          answerReplyPendingSafeNoticeCount: answerReplyStatus.pendingSafeNoticeCount,
+          answerReplyReconciliationRequiredCount:
+            answerReplyStatus.reconciliationRequiredCount,
+          ...(loopSnapshot.latestBatch === undefined
+            ? {}
+            : { latestBatch: loopSnapshot.latestBatch }),
+        };
+      },
+      async close() {
+        await closeRuntimeResources([
+          () => loop.stop(),
+          async () => {
+            const client = await redisConnection;
+            await client.quit();
+          },
+          () => pool.end(),
+        ]);
+      },
+    };
+  } catch (error) {
+    rejectRedisConnection(error);
+    cleanupFailedEventWorkerRuntimeConstruction({ redis, pool });
+    throw error;
+  }
 }
 
 function createOptionalMentionAnswerResponder({
@@ -450,6 +473,27 @@ function createOptionalMentionAnswerResponder({
 function preflightMentionAnswerConfiguration(env: EnvLike): void {
   if (readOptionalFeishuBotOpenId(env) !== undefined) {
     readOptionalFeishuOpenApiConfig(env);
+  }
+}
+
+function cleanupFailedEventWorkerRuntimeConstruction({
+  redis,
+  pool,
+}: {
+  redis?: RedisClient;
+  pool: PostgresPool;
+}): void {
+  if (redis !== undefined) {
+    ignoreCleanupFailure(() => redis.quit());
+  }
+  ignoreCleanupFailure(() => pool.end());
+}
+
+function ignoreCleanupFailure(cleanup: () => Promise<unknown>): void {
+  try {
+    void cleanup().catch(() => undefined);
+  } catch {
+    // Preserve the synchronous runtime construction error.
   }
 }
 

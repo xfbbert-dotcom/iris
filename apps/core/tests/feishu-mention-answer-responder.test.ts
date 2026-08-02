@@ -523,6 +523,84 @@ describe("FeishuMentionAnswerResponder", () => {
     expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["blank-shaped", () => new Error("model answer draft must not be blank")],
+    ["capacity-shaped", () => new ModelProviderHttpError(429, "model capacity reached")],
+  ])(
+    "keeps %s delivery failures before preparation on the retry path",
+    async (_label, createServiceError) => {
+      const serviceError = createServiceError();
+      const answerDraftOrchestrator = { generateDraft: vi.fn() };
+      const answerReplyDeliveryService = {
+        respond: vi.fn<AnswerReplyDeliveryService["respond"]>(async () => {
+          throw serviceError;
+        }),
+      };
+      const replier = { replyText: vi.fn() };
+      const responder = createFeishuMentionAnswerResponder({
+        botOpenId: "ou_iris",
+        answerDraftOrchestrator,
+        answerReplyDeliveryService,
+        replier,
+      });
+
+      await expect(responder.maybeRespond({
+        messageId: "om_delivery_failure_before_prepare",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 summarize",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      })).rejects.toBe(serviceError);
+
+      expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+      expect(replier.replyText).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["blank-shaped", () => new Error("model answer draft must not be blank")],
+    ["capacity-shaped", () => new ModelProviderHttpError(429, "model capacity reached")],
+  ])(
+    "keeps %s delivery failures after successful preparation on the retry path",
+    async (_label, createServiceError) => {
+      const serviceError = createServiceError();
+      const answerDraftOrchestrator = {
+        generateDraft: vi.fn(async () => ({
+          answerText: "Prepared answer.",
+          promptContext: "<live_chat_context></live_chat_context>",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+          usedGroupMemories: [],
+        })),
+      };
+      const answerReplyDeliveryService = {
+        respond: vi.fn<AnswerReplyDeliveryService["respond"]>(async (request) => {
+          await request.prepareAnswer();
+          throw serviceError;
+        }),
+      };
+      const replier = { replyText: vi.fn() };
+      const responder = createFeishuMentionAnswerResponder({
+        botOpenId: "ou_iris",
+        answerDraftOrchestrator,
+        answerReplyDeliveryService,
+        replier,
+      });
+
+      await expect(responder.maybeRespond({
+        messageId: "om_delivery_failure_after_prepare",
+        chatId: "oc_group_1",
+        senderId: "ou_alice",
+        text: "@_user_1 summarize",
+        mentions: [{ key: "@_user_1", openId: "ou_iris", name: "Iris" }],
+      })).rejects.toBe(serviceError);
+
+      expect(answerDraftOrchestrator.generateDraft).toHaveBeenCalledOnce();
+      expect(replier.replyText).not.toHaveBeenCalled();
+    },
+  );
+
   it("prepares a source-free ordinary answer without a citation footer or trace", async () => {
     const preparedAt = new Date("2026-08-02T05:06:07.000Z");
     const answerDraftOrchestrator = {

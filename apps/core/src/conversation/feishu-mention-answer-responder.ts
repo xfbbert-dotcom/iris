@@ -69,6 +69,15 @@ const BLANK_MODEL_ANSWER_FALLBACK = "我没拿到可用答案，你可以换个�
 const MODEL_CAPACITY_FALLBACK =
   "模型服务暂时达到使用上限，我现在无法可靠回答。恢复后，请再 @我一次。";
 const BLANK_MODEL_ANSWER_ERROR_MESSAGE = "model answer draft must not be blank";
+type ModelAnswerFallbackKind = "blank" | "capacity";
+
+class ModelAnswerFallbackSignal extends Error {
+  constructor(readonly kind: ModelAnswerFallbackKind) {
+    super("model answer fallback required");
+    this.name = "ModelAnswerFallbackSignal";
+  }
+}
+
 const MAX_MENTION_QUESTION_CHARS = 4000;
 const MAX_RECENT_REPLY_MESSAGE_IDS = 1000;
 const TRUNCATION_MARKER = " ... [truncated]";
@@ -309,16 +318,27 @@ export function createFeishuMentionAnswerResponder({
               replyUuid,
               safeNoticeUuid: createAnswerReplySafeNoticeUuid(input.messageId),
               prepareAnswer: async () => {
-                const answer = await answerDraftOrchestrator.generateDraft({
-                  executionId: input.messageId,
-                  question,
-                  chatId: input.chatId,
-                  ...(normalizedSenderId === undefined ? {} : { askerId: normalizedSenderId }),
-                  liveChatMessages: [{
-                    speaker: normalizedSenderId ?? "unknown",
-                    text: question,
-                  }],
-                });
+                let answer: Awaited<ReturnType<AnswerDraftOrchestrator["generateDraft"]>>;
+                try {
+                  answer = await answerDraftOrchestrator.generateDraft({
+                    executionId: input.messageId,
+                    question,
+                    chatId: input.chatId,
+                    ...(normalizedSenderId === undefined ? {} : { askerId: normalizedSenderId }),
+                    liveChatMessages: [{
+                      speaker: normalizedSenderId ?? "unknown",
+                      text: question,
+                    }],
+                  });
+                } catch (error) {
+                  if (isBlankModelAnswerError(error)) {
+                    throw new ModelAnswerFallbackSignal("blank");
+                  }
+                  if (isModelProviderCapacityError(error)) {
+                    throw new ModelAnswerFallbackSignal("capacity");
+                  }
+                  throw error;
+                }
                 const preparedAt = now();
                 return {
                   ...renderAnswerWithSourceCitations({
@@ -334,14 +354,12 @@ export function createFeishuMentionAnswerResponder({
           replyDeduper.markHandled(input.messageId);
           return result;
         } catch (error) {
-          const fallbackText = isBlankModelAnswerError(error)
-            ? BLANK_MODEL_ANSWER_FALLBACK
-            : isModelProviderCapacityError(error)
-              ? MODEL_CAPACITY_FALLBACK
-              : undefined;
-          if (fallbackText === undefined) {
+          if (!(error instanceof ModelAnswerFallbackSignal)) {
             throw error;
           }
+          const fallbackText = error.kind === "blank"
+            ? BLANK_MODEL_ANSWER_FALLBACK
+            : MODEL_CAPACITY_FALLBACK;
 
           const result = toRepliedResult(
             await replier.replyText({
