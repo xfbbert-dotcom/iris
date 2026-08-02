@@ -196,12 +196,13 @@ export function createPostgresAnswerReplyRepository(input: {
         const existingRow = existingResult.rows[0];
         if (existingRow !== undefined) {
           const existing = mapDelivery(existingRow);
-          if (existing.semanticFingerprint !== normalized.semanticFingerprint) {
+          const receipt = await loadReceipt(client, existing);
+          if (receipt.delivery.semanticFingerprint !== normalized.semanticFingerprint) {
             throw new AnswerReplyPreparationConflictError();
           }
           return {
             outcome: "already_applied" as const,
-            receipt: await loadReceipt(client, existing),
+            receipt,
           };
         }
 
@@ -712,24 +713,12 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
   const sourceTraces = normalizeSourceTraces(input.sourceTraces);
   const at = requireDate(input.at);
   const renderedReplyFingerprint = sha256(renderedText);
-  const semanticFingerprint = fingerprint({
+  const semanticFingerprint = createSemanticFingerprint({
     provider,
     incomingMessageId,
     chatId,
     renderedReplyFingerprint,
-    sourceTraces: sourceTraces.map((trace) => ({
-      promptRank: trace.promptRank,
-      citationRank: trace.citationRank,
-      documentSourceId: trace.documentSourceId,
-      documentSnapshotId: trace.documentSnapshotId,
-      fragmentId: trace.fragmentId,
-      chunkIndex: trace.chunkIndex,
-      sourceType: trace.sourceType,
-      sourceUri: trace.sourceUri,
-      sourceTitle: trace.sourceTitle,
-      contentHash: trace.contentHash,
-      embeddingProfileId: trace.embeddingProfileId,
-    })),
+    sourceTraces,
   });
   return {
     provider,
@@ -1012,6 +1001,22 @@ function requireAssembledReceipt(receipt: AnswerReplyReceipt): AnswerReplyReceip
     }
   }
 
+  if (
+    (
+      delivery.preparedReplyText !== undefined
+      && sha256(delivery.preparedReplyText) !== delivery.renderedReplyFingerprint
+    )
+    || createSemanticFingerprint({
+      provider: delivery.provider,
+      incomingMessageId: delivery.incomingMessageId,
+      chatId: delivery.chatId,
+      renderedReplyFingerprint: delivery.renderedReplyFingerprint,
+      sourceTraces: sources,
+    }) !== delivery.semanticFingerprint
+  ) {
+    throw new Error("answer reply database row is invalid");
+  }
+
   if (events.length !== delivery.version) {
     throw new Error("answer reply database row is invalid");
   }
@@ -1178,6 +1183,34 @@ function datesEqual(left: Date | undefined, right: Date | undefined): boolean {
   return left === undefined
     ? right === undefined
     : right !== undefined && left.getTime() === right.getTime();
+}
+
+function createSemanticFingerprint(input: {
+  provider: AnswerReplyProvider;
+  incomingMessageId: string;
+  chatId: string;
+  renderedReplyFingerprint: string;
+  sourceTraces: readonly AnswerReplySourceTraceInput[];
+}): string {
+  return fingerprint({
+    provider: input.provider,
+    incomingMessageId: input.incomingMessageId,
+    chatId: input.chatId,
+    renderedReplyFingerprint: input.renderedReplyFingerprint,
+    sourceTraces: input.sourceTraces.map((trace) => ({
+      promptRank: trace.promptRank,
+      citationRank: trace.citationRank,
+      documentSourceId: trace.documentSourceId,
+      documentSnapshotId: trace.documentSnapshotId,
+      fragmentId: trace.fragmentId,
+      chunkIndex: trace.chunkIndex,
+      sourceType: trace.sourceType,
+      sourceUri: trace.sourceUri,
+      sourceTitle: trace.sourceTitle,
+      contentHash: trace.contentHash,
+      embeddingProfileId: trace.embeddingProfileId,
+    })),
+  });
 }
 
 function fingerprint(value: unknown): string {

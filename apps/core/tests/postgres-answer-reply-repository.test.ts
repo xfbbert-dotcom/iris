@@ -101,6 +101,28 @@ describe("answer reply persisted row validation", () => {
     );
   });
 
+  it("rejects prepared text that does not match its rendered fingerprint", async () => {
+    const repository = repositoryForRows({
+      delivery: deliveryRow({ rendered_reply_fingerprint: "d".repeat(64) }),
+    });
+
+    await expect(findTestReceipt(repository)).rejects.toMatchObject({
+      name: "AnswerReplyPersistenceError",
+      message: "answer reply persistence failed",
+    });
+  });
+
+  it("rejects a semantic fingerprint that does not match the receipt facts", async () => {
+    const repository = repositoryForRows({
+      delivery: deliveryRow({ semantic_fingerprint: "d".repeat(64) }),
+    });
+
+    await expect(findTestReceipt(repository)).rejects.toMatchObject({
+      name: "AnswerReplyPersistenceError",
+      message: "answer reply persistence failed",
+    });
+  });
+
   it.each([
     ["credential-bearing URI", {
       source_uri: "https://user:secret@tenant.feishu.cn/wiki/document-a",
@@ -787,6 +809,67 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     })).rejects.toThrow("answer reply persistence failed");
   });
 
+  it("rejects exact replay when the persisted rendered fingerprint is corrupt", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("persisted-rendered-fingerprint");
+    const prepared = await repository.prepare(input);
+    await pool!.query(
+      "UPDATE answer_reply_deliveries SET rendered_reply_fingerprint = $2 WHERE id = $1",
+      [prepared.receipt.delivery.id, "d".repeat(64)],
+    );
+
+    await expect(repository.prepare(input)).rejects.toMatchObject({
+      name: "AnswerReplyPersistenceError",
+      message: "answer reply persistence failed",
+    });
+  });
+
+  it("rejects exact replay when the persisted semantic fingerprint is corrupt", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("persisted-semantic-fingerprint");
+    const prepared = await repository.prepare(input);
+    await pool!.query(
+      "UPDATE answer_reply_deliveries SET semantic_fingerprint = $2 WHERE id = $1",
+      [prepared.receipt.delivery.id, "d".repeat(64)],
+    );
+
+    await expect(repository.prepare(input)).rejects.toMatchObject({
+      name: "AnswerReplyPersistenceError",
+      message: "answer reply persistence failed",
+    });
+  });
+
+  it("validates semantic fingerprints after sent text has been cleared", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput("sent-semantic-fingerprint"));
+    await repository.beginAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    });
+    const sent = await repository.completeAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: 2,
+      at: new Date("2026-08-02T00:02:00.000Z"),
+    });
+    await pool!.query(
+      "UPDATE answer_reply_deliveries SET semantic_fingerprint = $2 WHERE id = $1",
+      [sent.delivery.id, "d".repeat(64)],
+    );
+
+    await expect(repository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: sent.delivery.incomingMessageId,
+    })).rejects.toMatchObject({
+      name: "AnswerReplyPersistenceError",
+      message: "answer reply persistence failed",
+    });
+    await expect(pool!.query(
+      "SELECT prepared_reply_text FROM answer_reply_deliveries WHERE id = $1",
+      [sent.delivery.id],
+    )).resolves.toMatchObject({ rows: [{ prepared_reply_text: null }] });
+  });
+
   const assembledCorruptionCases: Array<[
     string,
     (fixture: RawReceiptFixture) => void,
@@ -963,7 +1046,7 @@ function findTestReceipt(
 function deliveryRow(overrides: Record<string, unknown> = {}) {
   const at = new Date("2026-08-02T00:00:00.000Z");
   const incomingMessageId = "incoming-row-test";
-  return {
+  const row = {
     id: createAnswerReplyDeliveryId("feishu", incomingMessageId),
     provider: "feishu",
     incoming_message_id: incomingMessageId,
@@ -972,8 +1055,8 @@ function deliveryRow(overrides: Record<string, unknown> = {}) {
     safe_notice_uuid: createAnswerReplySafeNoticeUuid(incomingMessageId),
     state: "prepared",
     prepared_reply_text: "Answer body",
-    rendered_reply_fingerprint: "a".repeat(64),
-    semantic_fingerprint: "b".repeat(64),
+    rendered_reply_fingerprint: renderedFingerprint,
+    semantic_fingerprint: "",
     reply_message_id: null,
     safe_notice_message_id: null,
     attempt_count: 0,
@@ -987,6 +1070,15 @@ function deliveryRow(overrides: Record<string, unknown> = {}) {
     reconciliation_required_at: null,
     safe_notice_sent_at: null,
     ...overrides,
+  };
+  if (Object.hasOwn(overrides, "semantic_fingerprint")) {
+    return row;
+  }
+  return {
+    ...row,
+    semantic_fingerprint: testSemanticFingerprintForRows(row, [sourceTraceRow({
+      delivery_id: row.id,
+    })]),
   };
 }
 
@@ -1182,6 +1274,50 @@ function testEventId(deliveryId: string, sequence: number): string {
 
 function testSha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function testSemanticFingerprintForRows(
+  delivery: Record<string, unknown>,
+  sources: Array<Record<string, unknown>>,
+): string {
+  return testFingerprint({
+    provider: delivery.provider,
+    incomingMessageId: delivery.incoming_message_id,
+    chatId: delivery.chat_id,
+    renderedReplyFingerprint: delivery.rendered_reply_fingerprint,
+    sourceTraces: sources.map((source) => ({
+      promptRank: source.prompt_rank,
+      citationRank: source.citation_rank ?? undefined,
+      documentSourceId: source.document_source_id,
+      documentSnapshotId: source.document_snapshot_id,
+      fragmentId: source.fragment_id,
+      chunkIndex: source.chunk_index,
+      sourceType: source.source_type,
+      sourceUri: source.source_uri,
+      sourceTitle: source.source_title ?? undefined,
+      contentHash: source.content_hash,
+      embeddingProfileId: source.embedding_profile_id,
+    })),
+  });
+}
+
+function testFingerprint(value: unknown): string {
+  return testSha256(JSON.stringify(testCanonicalizeFingerprintValue(value)));
+}
+
+function testCanonicalizeFingerprintValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(testCanonicalizeFingerprintValue);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, testCanonicalizeFingerprintValue(item)]),
+    );
+  }
+  return value;
 }
 
 function receiptReadBarrier(pool: pg.Pool): {
