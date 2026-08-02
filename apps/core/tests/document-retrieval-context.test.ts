@@ -23,7 +23,7 @@ describe("DocumentRetrievalContextBuilder", () => {
           embedding: [1, 0, 0, 0, 0, 0],
           embeddingProfileId: "static-dev-6d",
           createdAt: new Date("2026-07-02T01:00:00.000Z"),
-          sourceType: "authorized_wiki_document" as const,
+          sourceType: "feishu_wiki" as const,
           distance: 0.1,
         },
         {
@@ -37,7 +37,7 @@ describe("DocumentRetrievalContextBuilder", () => {
           embedding: [0, 1, 0, 0, 0, 0],
           embeddingProfileId: "static-dev-6d",
           createdAt: new Date("2026-07-02T01:00:00.000Z"),
-          sourceType: "authorized_wiki_document" as const,
+          sourceType: "feishu_wiki" as const,
           distance: 0.2,
         },
       ]),
@@ -663,7 +663,7 @@ function fragment(overrides: {
     embedding: [1, 0, 0, 0, 0, 0],
     embeddingProfileId: "static-dev-6d",
     createdAt: new Date("2026-07-02T01:00:00.000Z"),
-    sourceType: "authorized_wiki_document" as const,
+    sourceType: "feishu_wiki" as const,
     ...overrides,
   };
 }

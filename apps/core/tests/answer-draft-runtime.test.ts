@@ -297,7 +297,7 @@ describe("createAnswerDraftRuntime", () => {
           embedding: [1, 0, 0, 0, 0, 0],
           embeddingProfileId: "static-dev-6d",
           createdAt: new Date("2026-07-02T01:00:00.000Z"),
-          sourceType: "authorized_wiki_document" as const,
+          sourceType: "feishu_wiki" as const,
         },
       ]),
     };
@@ -1477,7 +1477,7 @@ function fragment(
     embedding: [1, 0, 0, 0, 0, 0],
     embeddingProfileId: "static-dev-6d",
     createdAt: new Date("2026-07-02T01:00:00.000Z"),
-    sourceType: "authorized_wiki_document",
+    sourceType: "feishu_wiki",
     ...overrides,
   };
 }

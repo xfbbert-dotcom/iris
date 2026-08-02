@@ -515,14 +515,42 @@ describe("DocumentFragmentRepository", () => {
     expect(result).toEqual([
       expect.objectContaining({
         sourceTitle: "Quello Life Engine",
-        sourceType: "authorized_wiki_document",
+        sourceType: "feishu_wiki",
         distance: 0.125,
       }),
     ]);
   });
 
+  it("maps every persisted source type to its public retrieval source type", async () => {
+    const query = vi.fn(async () => ({
+      rows: [
+        retrievedRow({ id: "fragment-group", source_type: "group_visible_document" }),
+        retrievedRow({ id: "fragment-wiki", source_type: "authorized_wiki_document" }),
+        retrievedRow({ id: "fragment-upload", source_type: "user_submitted_document" }),
+      ],
+    }));
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    const result = await repository.searchSimilarFragments({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 0, 0, 0, 0, 0],
+      limit: 3,
+    });
+
+    expect(result.map((fragment) => fragment.sourceType)).toEqual([
+      "feishu_group_document",
+      "feishu_wiki",
+      "manual_upload",
+    ]);
+  });
+
   it("rejects an invalid source type in similarity search results", async () => {
-    const query = vi.fn(async () => ({ rows: [retrievedRow({ source_type: "invalid" })] }));
+    const query = vi.fn(async () => ({ rows: [retrievedRow({ source_type: "unknown" })] }));
     const repository = createDocumentFragmentRepository({
       queryable: queryableFrom(query),
       embeddingProfiles: {

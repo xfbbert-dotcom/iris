@@ -8,6 +8,14 @@ import {
 
 const MAX_FRAGMENT_SEARCH_LIMIT = 100;
 const MAX_GROUP_ID_CHARS = 512;
+const RETRIEVED_SOURCE_TYPE_BY_PERSISTED_SOURCE_TYPE: Record<
+  DocumentSourceType,
+  RetrievedDocumentSourceType
+> = {
+  group_visible_document: "feishu_group_document",
+  authorized_wiki_document: "feishu_wiki",
+  user_submitted_document: "manual_upload",
+};
 
 export type Queryable = {
   query: <T = unknown>(sql: string, values?: unknown[]) => Promise<{ rows: T[] }>;
@@ -44,9 +52,14 @@ export type DocumentFragment = {
   createdAt: Date;
 };
 
+export type RetrievedDocumentSourceType =
+  | "feishu_group_document"
+  | "feishu_wiki"
+  | "manual_upload";
+
 export type RetrievedDocumentFragment = DocumentFragment & {
   sourceTitle?: string;
-  sourceType: DocumentSourceType;
+  sourceType: RetrievedDocumentSourceType;
   distance?: number;
 };
 
@@ -438,9 +451,6 @@ do update set
 
 function mapRetrievedFragmentRow(row: RetrievedDocumentFragmentRow): RetrievedDocumentFragment {
   const sourceTitle = row.source_title?.trim();
-  if (!isDocumentSourceType(row.source_type)) {
-    throw new Error(`invalid document source type: ${String(row.source_type)}`);
-  }
   if (sourceTitle !== undefined && sourceTitle.length > DOCUMENT_SOURCE_METADATA_MAX_CHARS) {
     throw new Error(
       `source title must be at most ${DOCUMENT_SOURCE_METADATA_MAX_CHARS} characters`,
@@ -450,9 +460,17 @@ function mapRetrievedFragmentRow(row: RetrievedDocumentFragmentRow): RetrievedDo
   return {
     ...mapFragmentRow(row),
     ...(sourceTitle === undefined || sourceTitle.length === 0 ? {} : { sourceTitle }),
-    sourceType: row.source_type,
+    sourceType: mapRetrievedSourceType(row.source_type),
     distance: row.distance === undefined ? undefined : Number(row.distance),
   };
+}
+
+function mapRetrievedSourceType(value: unknown): RetrievedDocumentSourceType {
+  if (!isDocumentSourceType(value)) {
+    throw new Error(`invalid document source type: ${String(value)}`);
+  }
+
+  return RETRIEVED_SOURCE_TYPE_BY_PERSISTED_SOURCE_TYPE[value];
 }
 
 function isDocumentSourceType(value: unknown): value is DocumentSourceType {
