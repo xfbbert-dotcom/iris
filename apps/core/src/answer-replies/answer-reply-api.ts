@@ -70,9 +70,8 @@ function readIncomingMessageId(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim();
-  return normalized.length > 0 && normalized.length <= MAX_INCOMING_MESSAGE_ID_CHARS
-    ? normalized
+  return value === value.trim() && value.length > 0 && value.length <= MAX_INCOMING_MESSAGE_ID_CHARS
+    ? value
     : undefined;
 }
 

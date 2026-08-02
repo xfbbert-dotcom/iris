@@ -122,7 +122,25 @@ describe("answer reply inspection API", () => {
     await app.close();
   });
 
-  it("returns bounded 404 responses when the receipt or answer-reply runtime is unavailable", async () => {
+  it("rejects whitespace-padded incoming message IDs without querying the repository", async () => {
+    const repository = {
+      findByIncomingMessage: vi.fn(async () => receipt()),
+    };
+    const app = await createApp(repository);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/answer-replies/feishu/om_1%20",
+      headers: authorization,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(repository.findByIncomingMessage).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns a bounded 404 when the receipt is absent", async () => {
     const repository = {
       findByIncomingMessage: vi.fn(async () => undefined),
     };
@@ -136,7 +154,9 @@ describe("answer reply inspection API", () => {
     expect(missing.statusCode).toBe(404);
     expect(missing.json()).toEqual({ ok: false, error: "answer_reply_not_found" });
     await app.close();
+  });
 
+  it("keeps the inspection route absent when the event worker has no answer-reply repository", async () => {
     const unavailable = await createApp(undefined);
     const unavailableResponse = await unavailable.inject({
       method: "GET",
@@ -144,7 +164,7 @@ describe("answer reply inspection API", () => {
       headers: authorization,
     });
     expect(unavailableResponse.statusCode).toBe(404);
-    expect(unavailableResponse.json()).toEqual({ ok: false, error: "answer_reply_unavailable" });
+    expect(unavailableResponse.json()).toMatchObject({ statusCode: 404, error: "Not Found" });
     await unavailable.close();
   });
 
@@ -174,7 +194,7 @@ async function createApp(
   return await buildApp({
     ...disabledRuntimeFactories(),
     internalApiToken: "operator-secret",
-    createEventWorkerRuntime: () => repository === undefined ? undefined : fakeEventWorkerRuntime(repository),
+    createEventWorkerRuntime: () => fakeEventWorkerRuntime(repository),
   });
 }
 
@@ -212,7 +232,7 @@ function disabledRuntimeFactories(): Pick<
 }
 
 function fakeEventWorkerRuntime(
-  answerReplies: AnswerReplyInspectionRepository,
+  answerReplies: AnswerReplyInspectionRepository | undefined,
 ): EventWorkerRuntime {
   return {
     answerReplies,

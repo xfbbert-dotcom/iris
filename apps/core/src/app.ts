@@ -600,7 +600,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
-  registerAnswerReplyApi(app, eventWorkerRuntime?.answerReplies);
+  if (eventWorkerRuntime?.answerReplies !== undefined) {
+    registerAnswerReplyApi(app, eventWorkerRuntime.answerReplies);
+  }
   registerGroupMemoryApi(app, groupMemoryService, {
     authenticationConfigured: internalApiToken !== undefined,
   });
