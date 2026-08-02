@@ -276,6 +276,13 @@ The mention responder remains the coordinator for ordinary answers. Knowledge-dr
 commands, document-submission commands, and existing bounded fallback replies retain
 their current behavior and do not receive source footers.
 
+The current 20-30-person internal deployment runs one Core process. Within that
+process, the delivery service serializes first preparation by provider and incoming
+message ID so concurrent duplicate event handling invokes the model callback once and
+losing callers reload the durable receipt. Horizontal multi-Core preparation would
+require a new durable pre-generation claim/lease state and therefore an explicit
+architecture decision; it is outside this slice.
+
 ## Failure Policy
 
 - Delivery preparation failure: do not call Feishu; fail the raw event for retry.

@@ -686,6 +686,13 @@ expect(replier.replyText).toHaveBeenNthCalledWith(2, {
 
 Assert `prepareAnswer` ran exactly once across both calls, the service never accepts replacement text on resume, and `completeAnswerSend` stores the returned Feishu reply ID.
 
+Also add a barrier-controlled concurrent test for two calls with the same
+`(provider, incomingMessageId)`. The service instance must serialize the first
+preparation, let the losing caller reload the durable receipt, and invoke exactly one
+`prepareAnswer` callback. This is the approved single-Core deployment boundary; a
+future horizontally scaled Core deployment requires a separately approved durable
+pre-generation claim state.
+
 - [ ] **Step 2: Write failing permission and safe-notice tests**
 
 Cover:
@@ -757,6 +764,13 @@ sources. Then call `beginAnswerSend`, send the stored `preparedReplyText` with t
 stored UUID, and call `completeAnswerSend`. Let any Feishu or persistence failure
 escape so the existing raw-event worker retries. The retry enters through `respond()`,
 finds the receipt, and never awaits `prepareAnswer()`.
+
+Before every external call, validate the exact transition receipt returned by the
+repository rather than only its broad state. Require immutable identity to match,
+`version` to advance by exactly one, the relevant attempt counter to advance only on
+its begin transition, the permission-block state to match the prior answer-attempt
+count, and resolved/blocked receipts to have no prepared answer text. A stale or
+malformed transition receipt fails before Feishu is called.
 
 On denied/error, call `blockForPermission` before any notice. Send only `ANSWER_PERMISSION_CHANGED_NOTICE` using `safeNoticeUuid`; after notice success call `completeSafeNoticeSend`. A blocked receipt never reloads or reconstructs prepared answer text.
 
