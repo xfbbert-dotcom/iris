@@ -221,10 +221,14 @@ it("rejects conflicting URI, title, or source type metadata for one document ID"
 it("uses 飞书文档 when the registered title is blank");
 it("truncates a visible title to 120 characters with the shared marker");
 it("reserves the footer before truncating an 8000-character answer body");
-it("rejects a footer whose own bounded content cannot fit in 8000 characters");
+it("keeps the maximum valid bounded footer within 8000 characters");
 ```
 
 For the length test, assert `renderedText.length <= 8000`, the text ends with the complete final URL, and the body contains ` ... [truncated]`.
+The maximum valid footer cannot exceed 8,000 characters because only three sources are
+visible, each canonical URI is already bounded to 2,048 characters, and each visible
+title is bounded to 120 characters. Prove that invariant with maximum-valid inputs;
+do not use an invalid overlong URI as evidence for the footer-overflow branch.
 
 - [ ] **Step 3: Run the renderer tests and verify RED**
 
@@ -238,7 +242,7 @@ Expected: module-not-found failure.
 
 - [ ] **Step 4: Implement the pure renderer**
 
-Use `normalizeFeishuDocumentSourceUri()` from `feishu-document-body-fetcher.ts`; do not add a second URL parser. Normalize every fragment before grouping, require metadata consistency for duplicate `documentSourceId` values, and map labels exactly:
+Use `normalizeFeishuDocumentSourceUri()` from `feishu-document-body-fetcher.ts`; do not add a second URL parser. Normalize every fragment before grouping, require metadata consistency for duplicate `documentSourceId` values, reject source-type values that are not own keys in the exact label map, and map labels exactly:
 
 ```ts
 const SOURCE_LABELS: Record<RetrievedDocumentSourceType, string> = {
@@ -258,6 +262,8 @@ const TRUNCATION_MARKER = " ... [truncated]";
 ```
 
 Build the footer first, reserve `footer.length + 2` characters for `\n\n`, and truncate only the answer body. The returned source trace must copy only IDs, bounded metadata, hashes, ranks, and the supplied check timestamp.
+Keep the full normalized, registry-bounded title in the immutable trace; apply the
+120-character display truncation only while building visible footer lines.
 
 - [ ] **Step 5: Run the renderer tests and verify GREEN**
 
