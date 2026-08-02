@@ -1171,7 +1171,7 @@ describe("createAnswerDraftRuntime", () => {
       },
     });
 
-    const result = await runtime!.answerSourcePermissionVerifier!.verify({
+    const result = await runtime!.answerSourcePermissionVerifier.verify({
       chatId: "oc_pilot",
       documentSourceIds: [" source-a ", "source-a", "source-b", "source-missing", "source-disabled", "source-error"],
     });
@@ -1187,14 +1187,36 @@ describe("createAnswerDraftRuntime", () => {
     expect(livePermissionChecker.canReadSource).toHaveBeenCalledTimes(1);
     expect(runtimeController.canRetrieveKnowledgeBase).toHaveBeenCalledTimes(1);
 
-    const malformedResult = await runtime!.answerSourcePermissionVerifier!.verify({
+    const overlongSourceA = `Bearer credential-a-${"a".repeat(520)}`;
+    const overlongSourceB = `Bearer credential-b-${"b".repeat(520)}`;
+    const malformedObject = { credential: "provider-secret" };
+    const malformedResult = await runtime!.answerSourcePermissionVerifier.verify({
       chatId: "oc_pilot",
-      documentSourceIds: ["", "   ", "x".repeat(513)],
+      documentSourceIds: [
+        "",
+        "   ",
+        overlongSourceA,
+        overlongSourceA,
+        overlongSourceB,
+        malformedObject as never,
+        malformedObject as never,
+        42 as never,
+      ],
     });
-    expect(malformedResult).toEqual([
-      { documentSourceId: "invalid-source-id-blank", outcome: "error" },
-      { documentSourceId: "invalid-source-id-too-long", outcome: "error" },
-    ]);
+    expect(malformedResult).toHaveLength(5);
+    expect(malformedResult.every((decision) => decision.outcome === "error")).toBe(true);
+    expect(new Set(malformedResult.map((decision) => decision.documentSourceId)).size).toBe(5);
+    expect(malformedResult.every((decision) => decision.documentSourceId.length <= 512)).toBe(true);
+    expect(JSON.stringify(malformedResult)).not.toContain("provider-secret");
+    expect(JSON.stringify(malformedResult)).not.toContain(overlongSourceA);
+    expect(JSON.stringify(malformedResult)).not.toContain(overlongSourceB);
+
+    await expect(
+      runtime!.answerSourcePermissionVerifier.verify({
+        chatId: "oc_pilot",
+        documentSourceIds: [overlongSourceA, overlongSourceB],
+      }),
+    ).resolves.toEqual(malformedResult.slice(1, 3));
 
     await runtime?.close();
   });
@@ -1241,12 +1263,64 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await expect(
-      runtime!.answerSourcePermissionVerifier!.verify({
+      runtime!.answerSourcePermissionVerifier.verify({
         chatId: "oc_current",
         documentSourceIds: ["source-group"],
       }),
     ).resolves.toEqual([{ documentSourceId: "source-group", outcome: "denied" }]);
     expect(runtimeController.canProcessGroupMessage).not.toHaveBeenCalled();
+
+    await runtime?.close();
+  });
+
+  it("allows group-visible source rechecks for the matching chat scope", async () => {
+    const groupSource = source({
+      id: "source-group-current",
+      sourceType: "group_visible_document",
+      originGroupId: "oc_current",
+      permissionState: "readable",
+    });
+    const sourceRegistry = {
+      findSourceById: vi.fn(async () => groupSource),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn((chatId: string) => chatId === "oc_current"),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(
+      runtime!.answerSourcePermissionVerifier.verify({
+        chatId: "oc_current",
+        documentSourceIds: ["source-group-current"],
+      }),
+    ).resolves.toEqual([{ documentSourceId: "source-group-current", outcome: "allowed" }]);
+    expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("oc_current");
 
     await runtime?.close();
   });
@@ -1274,7 +1348,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await expect(
-      runtime!.answerSourcePermissionVerifier!.verify({
+      runtime!.answerSourcePermissionVerifier.verify({
         chatId: "oc_pilot",
         documentSourceIds: ["source-a", "source-a"],
       }),

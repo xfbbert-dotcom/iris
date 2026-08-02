@@ -56,6 +56,7 @@ describe("Core server startup", () => {
   it("wires the governed chat knowledge-draft command into the event worker", async () => {
     const answerDraftRuntime: AnswerDraftRuntime = {
       answerDraftOrchestrator: { generateDraft: vi.fn() },
+      answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
       chatKnowledgeDraftGenerator: {
         generate: vi.fn(async () => ({ status: "no_context" as const })),
       },
@@ -820,6 +821,7 @@ describe("Core server startup", () => {
           usedGroupMemories: [],
         })),
       },
+      answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
       close: vi.fn(async () => {
         closeOrder.push("answer");
       }),

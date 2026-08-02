@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type AnswerSourcePermissionDecision = {
   documentSourceId: string;
   outcome: "allowed" | "denied" | "error";
@@ -69,32 +71,30 @@ export function createUnavailableAnswerSourcePermissionVerifier(): AnswerSourceP
 
 function normalizeSourceId(documentSourceId: string): NormalizedSourceId {
   if (typeof documentSourceId !== "string") {
-    return {
-      dedupeKey: "invalid:type",
-      documentSourceId: "invalid-source-id-type",
-      valid: false,
-    };
+    return invalidSourceId(`type:${typeof documentSourceId}`);
   }
 
   const normalized = documentSourceId.trim();
   if (normalized.length === 0) {
-    return {
-      dedupeKey: "invalid:blank",
-      documentSourceId: "invalid-source-id-blank",
-      valid: false,
-    };
+    return invalidSourceId("blank");
   }
   if (normalized.length > 512) {
-    return {
-      dedupeKey: "invalid:too-long",
-      documentSourceId: "invalid-source-id-too-long",
-      valid: false,
-    };
+    return invalidSourceId(`overlong:${normalized}`);
   }
 
   return {
     dedupeKey: `valid:${normalized}`,
     documentSourceId: normalized,
     valid: true,
+  };
+}
+
+function invalidSourceId(seed: string): NormalizedSourceId {
+  const digest = createHash("sha256").update(seed).digest("hex");
+  const documentSourceId = `invalid-source-id-${digest}`;
+  return {
+    dedupeKey: `invalid:${digest}`,
+    documentSourceId,
+    valid: false,
   };
 }

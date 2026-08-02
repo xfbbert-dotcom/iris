@@ -379,6 +379,7 @@ describe("answer draft runtime wiring", () => {
             usedGroupMemories: [],
           })),
         },
+        answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
         close,
       })),
     });
@@ -409,6 +410,7 @@ describe("answer draft runtime wiring", () => {
           usedGroupMemories: [],
         })),
       },
+      answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
       close: vi.fn(async () => undefined),
     }));
 
@@ -489,6 +491,7 @@ describe("answer draft runtime wiring", () => {
           usedGroupMemories: [],
         })),
       },
+      answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
       close: vi.fn(async () => undefined),
     };
     const eventWorkerRuntime = fakeEventRuntime();
@@ -526,6 +529,7 @@ describe("answer draft runtime wiring", () => {
           usedGroupMemories: [],
         })),
       },
+      answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
       close: vi.fn(async () => undefined),
     };
     const eventWorkerRuntime = fakeEventRuntime({

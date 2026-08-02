@@ -94,7 +94,7 @@ import {
 
 export type AnswerDraftRuntime = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">;
-  answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
+  answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
   chatKnowledgeDraftGenerator?: ChatKnowledgeDraftGenerator;
   groupMemoryService?: GroupMemoryService;
   close(): Promise<void>;
