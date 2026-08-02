@@ -61,19 +61,32 @@ intended worktree.
 
 ## CI And Deployment Evidence
 
-- Candidate SHA: pending final documentation commit.
-- Draft PR: pending.
-- Core CI: pending.
-- AI Worker CI: pending.
-- PostgreSQL backup identifier: pending.
-- Migration `0045_answer_source_citations.sql`: pending.
-- Core/AI Worker image SHA parity: pending.
-- Public `/health=200`: pending.
-- Public `/internal/answer-replies/feishu/probe=404`: pending.
+- Candidate SHA: `adac01cd2d2f4cd2ef01ed089a60719efa354629`.
+- Draft PR: <https://github.com/xfbbert-dotcom/iris/pull/23>, stacked on
+  `codex/iris-chat-knowledge-drafts`, open and draft.
+- Core CI: success for the exact candidate SHA,
+  <https://github.com/xfbbert-dotcom/iris/actions/runs/30746470862/job/91492812254>.
+- AI Worker CI: success for the exact candidate SHA,
+  <https://github.com/xfbbert-dotcom/iris/actions/runs/30746470862/job/91492812226>.
+- PostgreSQL backup identifier: `iris-20260802T115722Z.bundle.tar.age` (28,228,520 bytes),
+  completed before migration.
+- Migration `0045_answer_source_citations.sql`: present in production `schema_migrations`.
+- Core/AI Worker image SHA parity: `iris-core:adac01cd2d2f4cd2ef01ed089a60719efa354629`
+  and `iris-ai-worker:adac01cd2d2f4cd2ef01ed089a60719efa354629`.
+- Private candidate status and live readiness: healthy and `ready`; mention replies enabled with no
+  unavailable reason while runtime remains globally disabled.
+- Public `/health=200`: passed during the bounded disabled-ingress check.
+- Public `/internal/answer-replies/feishu/probe=404`: passed during the same check.
 - Real citation result: pending.
 - Permission-revocation result: pending.
-- Final queue/DLQ and answer-reply counts: pending.
-- Final runtime/Caddy state: fail-closed pending acceptance.
+- Current queue/DLQ and answer-reply counts: event/document/reindex pending and DLQ counts are zero;
+  `unresolvedCount=0`, `pendingSafeNoticeCount=0`, and `reconciliationRequiredCount=0`.
+- Current runtime/Caddy state: `globalEnabled=false`, `desiredGlobalEnabled=false`, Caddy stopped.
+- Approved production marker remains `b25d8298fd396366c97449dfbe6f11f3dc42f8f9`; the candidate has not
+  been promoted.
 
-This document does not claim CI, deployment, or real Feishu acceptance until exact evidence is
-recorded. PR #22 and this draft PR must remain unmerged pending explicit authorization.
+Real Feishu acceptance remains open. The next single human action is to create a new Wiki page
+titled `Iris Citation Pilot 2026-08-02 2010 CST`, put
+`IRIS-CITATION-PILOT-20260802-2010-CST` plus bounded non-sensitive test text in its body, share that
+page with the Iris app, and return its canonical Feishu URL. Iris remains fail-closed until that
+fixture exists. PR #22 and this draft PR remain unmerged pending explicit authorization.

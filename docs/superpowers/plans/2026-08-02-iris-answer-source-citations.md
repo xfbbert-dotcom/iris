@@ -1159,14 +1159,14 @@ rg -n "preparedReplyText|fragmentText|promptContext|appSecret|tenantAccessToken"
 
 Confirm immutable source/event mappings contain no body text, API mapping does not spread the delivery row, no unrelated files changed, and no secret values entered the repository.
 
-- [ ] **Step 5: Commit operational documentation**
+- [x] **Step 5: Commit operational documentation**
 
 ```powershell
 git add docs/runbooks/iris-answer-source-citations-acceptance.md docs/operations/internal-rollout-runbook.md docs/pull-requests/2026-08-02-iris-answer-source-citations.md docs/superpowers/plans/2026-08-02-iris-answer-source-citations.md
 git commit -m "docs: add answer citation acceptance gates"
 ```
 
-- [ ] **Step 6: Push and open a stacked draft PR**
+- [x] **Step 6: Push and open a stacked draft PR**
 
 Run:
 
@@ -1177,7 +1177,7 @@ gh pr create --repo xfbbert-dotcom/iris --base codex/iris-chat-knowledge-drafts 
 
 Expected: GitHub returns a new draft PR URL. Do not merge PR #22 or the new PR.
 
-- [ ] **Step 7: Require CI before deployment**
+- [x] **Step 7: Require CI before deployment**
 
 Run:
 
@@ -1187,7 +1187,7 @@ gh pr checks --repo xfbbert-dotcom/iris --watch
 
 Expected: the new PR's Core and AI Worker checks both report success for the exact candidate SHA.
 
-- [ ] **Step 8: Execute the fail-closed deployment gates**
+- [x] **Step 8: Execute the fail-closed deployment gates**
 
 Follow `docs/runbooks/iris-answer-source-citations-acceptance.md` exactly. Back up PostgreSQL, apply `0045`, deploy Core and AI Worker images from the same approved SHA, and keep global/desired global false with Caddy stopped through all private gates. Do not consume Gemini quota for repeated probes; use one real pilot answer only after the provider and all internal gates are healthy.
 
