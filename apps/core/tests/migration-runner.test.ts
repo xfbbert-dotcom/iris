@@ -17,6 +17,42 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("defines bounded append-only answer source citation receipts", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0045_answer_source_citations.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+    const sourceTraceTable = normalized.match(
+      /create table answer_reply_source_traces \((.*?)\);/u,
+    )?.[1];
+    const deliveryEventTable = normalized.match(
+      /create table answer_reply_delivery_events \((.*?)\);/u,
+    )?.[1];
+
+    expect(normalized).toContain("create table answer_reply_deliveries");
+    expect(normalized).toContain("create table answer_reply_source_traces");
+    expect(normalized).toContain("create table answer_reply_delivery_events");
+    expect(normalized).toContain("unique (provider, incoming_message_id)");
+    expect(normalized).toContain("prepared_reply_text");
+    expect(normalized).toContain("rendered_reply_fingerprint");
+    expect(normalized).toContain("semantic_fingerprint");
+    expect(normalized).toContain("attempt_count");
+    expect(normalized).toContain("safe_notice_attempt_count");
+    expect(normalized).toContain("version");
+    expect(normalized).toContain("answer_reply_source_traces_append_only");
+    expect(normalized).toContain("answer_reply_delivery_events_append_only");
+
+    expect(sourceTraceTable).toBeDefined();
+    expect(sourceTraceTable).not.toMatch(
+      /(?:^|,)\s*(?:text|fragment_text|prompt|answer_text)\s+/u,
+    );
+    expect(deliveryEventTable).toBeDefined();
+    expect(deliveryEventTable).not.toMatch(
+      /(?:^|,)\s*(?:content|text|fragment_text|prompt|answer_text)\s+/u,
+    );
+  });
+
   it("allows ordered durable updates for the same knowledge card presentation", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0044_knowledge_publication_group_result.sql"),
