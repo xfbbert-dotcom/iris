@@ -52,6 +52,8 @@
 **Files:**
 - Modify: `apps/core/src/documents/document-fragment-repository.ts`
 - Modify: `apps/core/tests/document-fragment-repository.test.ts`
+- Modify: `apps/core/tests/document-retrieval-context.test.ts`
+- Modify: `apps/core/tests/answer-draft-runtime.test.ts`
 
 **Interfaces:**
 - Consumes: existing `document_sources ds` join in `searchSimilarFragments()`
@@ -124,6 +126,14 @@ return {
 
 Reject a source type outside the three `DocumentSourceType` values and a title longer than the existing `DOCUMENT_SOURCE_METADATA_MAX_CHARS` boundary instead of silently passing corrupt metadata downstream.
 
+Update the two shared `fragment()` test fixtures to default to:
+
+```ts
+sourceType: "authorized_wiki_document",
+```
+
+Individual source-policy tests may override that value when the fixture represents a group-visible or user-submitted source. Do not make production `sourceType` optional to preserve old fixtures.
+
 - [ ] **Step 4: Run the focused test and verify GREEN**
 
 Run the Step 2 command.
@@ -133,7 +143,7 @@ Expected: all document-fragment repository tests pass.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add apps/core/src/documents/document-fragment-repository.ts apps/core/tests/document-fragment-repository.test.ts
+git add apps/core/src/documents/document-fragment-repository.ts apps/core/tests/document-fragment-repository.test.ts apps/core/tests/document-retrieval-context.test.ts apps/core/tests/answer-draft-runtime.test.ts
 git commit -m "feat(core): carry answer source metadata"
 ```
 
