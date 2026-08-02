@@ -695,6 +695,8 @@ it("checks each unique source once before every external answer attempt");
 it("sends source-free prepared answers without calling the verifier");
 it("blocks before first send when any source is denied");
 it("blocks before first send when any source check errors");
+it("blocks when verifier decisions are missing, duplicated, reordered, or unexpected");
+it("blocks when the verifier unexpectedly throws");
 it("records reconciliation_required when a prior send had started");
 it("sends only the content-free notice with the separate safe UUID");
 it("retries only the notice after notice delivery fails");
@@ -747,7 +749,14 @@ switch (receipt.delivery.state) {
 }
 ```
 
-Before normal send, derive unique source IDs from immutable traces and require every decision to be `allowed`. Then call `beginAnswerSend`, send the stored `preparedReplyText` with the stored UUID, and call `completeAnswerSend`. Let any Feishu or persistence failure escape so the existing raw-event worker retries. The retry enters through `respond()`, finds the receipt, and never awaits `prepareAnswer()`.
+Before normal send, derive unique source IDs from immutable traces. Require the verifier
+to return exactly one decision for every requested ID in the same order, with no
+missing, duplicate, reordered, or unexpected IDs, and require every decision to be
+`allowed`. Treat a thrown verifier exception as an error decision for the requested
+sources. Then call `beginAnswerSend`, send the stored `preparedReplyText` with the
+stored UUID, and call `completeAnswerSend`. Let any Feishu or persistence failure
+escape so the existing raw-event worker retries. The retry enters through `respond()`,
+finds the receipt, and never awaits `prepareAnswer()`.
 
 On denied/error, call `blockForPermission` before any notice. Send only `ANSWER_PERMISSION_CHANGED_NOTICE` using `safeNoticeUuid`; after notice success call `completeSafeNoticeSend`. A blocked receipt never reloads or reconstructs prepared answer text.
 
