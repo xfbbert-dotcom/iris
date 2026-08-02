@@ -49,6 +49,11 @@ const PERMISSION_OUTCOMES = new Set<AnswerSourcePermissionDecision["outcome"]>([
   "denied",
   "error",
 ]);
+const SOURCE_TYPES = new Set<AnswerReplyReceipt["sources"][number]["sourceType"]>([
+  "feishu_wiki",
+  "feishu_group_document",
+  "manual_upload",
+]);
 
 export function createAnswerReplyDeliveryService({
   repository,
@@ -56,28 +61,54 @@ export function createAnswerReplyDeliveryService({
   replier,
   now = () => new Date(),
 }: AnswerReplyDeliveryServiceDependencies): AnswerReplyDeliveryService {
-  return {
-    async respond(input) {
-      const existing = await repository.findByIncomingMessage({
-        provider: input.provider,
-        incomingMessageId: input.incomingMessageId,
-      });
-      const receipt = existing === undefined
-        ? await prepareReceipt(input)
-        : requireReceipt(existing);
+  const responseTails = new Map<string, Promise<void>>();
 
-      switch (receipt.delivery.state) {
-        case "sent":
-          return optionalReplyId(receipt.delivery.replyMessageId);
-        case "permission_blocked":
-        case "reconciliation_required":
-          return sendOrResumeSafeNotice(receipt);
-        case "prepared":
-        case "sending":
-          return verifyThenSendPreparedAnswer(receipt);
-      }
+  return {
+    respond(input) {
+      return serializeResponse(input);
     },
   };
+
+  async function serializeResponse(
+    input: AnswerReplyDeliveryRequest,
+  ): Promise<{ replyMessageId?: string }> {
+    const key = JSON.stringify([input.provider, input.incomingMessageId]);
+    const previous = responseTails.get(key) ?? Promise.resolve();
+    const response = previous.then(() => respondOnce(input));
+    const settled = response.then(() => undefined, () => undefined);
+    responseTails.set(key, settled);
+
+    try {
+      return await response;
+    } finally {
+      if (responseTails.get(key) === settled) {
+        responseTails.delete(key);
+      }
+    }
+  }
+
+  async function respondOnce(
+    input: AnswerReplyDeliveryRequest,
+  ): Promise<{ replyMessageId?: string }> {
+    const existing = await repository.findByIncomingMessage({
+      provider: input.provider,
+      incomingMessageId: input.incomingMessageId,
+    });
+    const receipt = existing === undefined
+      ? await prepareReceipt(input)
+      : requireReceipt(existing);
+
+    switch (receipt.delivery.state) {
+      case "sent":
+        return optionalReplyId(receipt.delivery.replyMessageId);
+      case "permission_blocked":
+      case "reconciliation_required":
+        return sendOrResumeSafeNotice(receipt);
+      case "prepared":
+      case "sending":
+        return verifyThenSendPreparedAnswer(receipt);
+    }
+  }
 
   async function prepareReceipt(
     input: AnswerReplyDeliveryRequest,
@@ -106,14 +137,14 @@ export function createAnswerReplyDeliveryService({
     );
 
     if (blockedDocumentSourceIds.length > 0) {
-      const blocked = requireBlockedReceipt(
+      const blocked = requireBlockForPermissionReceipt(
         await repository.blockForPermission({
           deliveryId: receipt.delivery.id,
           expectedVersion: receipt.delivery.version,
           documentSourceIds: blockedDocumentSourceIds,
           at: now(),
         }),
-        receipt.delivery,
+        receipt,
       );
       return sendOrResumeSafeNotice(blocked);
     }
@@ -124,7 +155,7 @@ export function createAnswerReplyDeliveryService({
         expectedVersion: receipt.delivery.version,
         at: now(),
       }),
-      receipt.delivery,
+      receipt,
     );
     const reply = await replier.replyText({
       messageId: sending.delivery.incomingMessageId,
@@ -141,7 +172,7 @@ export function createAnswerReplyDeliveryService({
           : { replyMessageId: reply.replyMessageId }),
         at: now(),
       }),
-      sending.delivery,
+      sending,
       reply.replyMessageId,
     );
     return optionalReplyId(sent.delivery.replyMessageId);
@@ -173,7 +204,7 @@ export function createAnswerReplyDeliveryService({
   async function sendOrResumeSafeNotice(
     receipt: AnswerReplyReceipt,
   ): Promise<{ replyMessageId?: string }> {
-    requireBlockedReceipt(receipt, receipt.delivery);
+    requireBlockedState(receipt);
     if (receipt.delivery.safeNoticeSentAt !== undefined) {
       return optionalReplyId(receipt.delivery.safeNoticeMessageId);
     }
@@ -184,7 +215,7 @@ export function createAnswerReplyDeliveryService({
         expectedVersion: receipt.delivery.version,
         at: now(),
       }),
-      receipt.delivery,
+      receipt,
     );
     const reply = await replier.replyText({
       messageId: sending.delivery.incomingMessageId,
@@ -201,7 +232,7 @@ export function createAnswerReplyDeliveryService({
           : { safeNoticeMessageId: reply.replyMessageId }),
         at: now(),
       }),
-      sending.delivery,
+      sending,
       reply.replyMessageId,
     );
     return optionalReplyId(completed.delivery.safeNoticeMessageId);
@@ -209,7 +240,12 @@ export function createAnswerReplyDeliveryService({
 }
 
 function requireReceipt(value: unknown): AnswerReplyReceipt {
-  if (!isRecord(value) || !isRecord(value.delivery) || !Array.isArray(value.sources)) {
+  if (
+    !isRecord(value)
+    || !isRecord(value.delivery)
+    || !Array.isArray(value.sources)
+    || !Array.isArray(value.events)
+  ) {
     throw contractError();
   }
 
@@ -221,10 +257,15 @@ function requireReceipt(value: unknown): AnswerReplyReceipt {
     || !isRequiredString(delivery.chatId)
     || !isRequiredString(delivery.replyUuid)
     || !isRequiredString(delivery.safeNoticeUuid)
+    || !isRequiredString(delivery.renderedReplyFingerprint)
+    || !isRequiredString(delivery.semanticFingerprint)
     || typeof delivery.state !== "string"
     || !DELIVERY_STATES.has(delivery.state as AnswerReplyDelivery["state"])
-    || !Number.isSafeInteger(delivery.version)
-    || (delivery.version as number) < 0
+    || !isNonnegativeSafeInteger(delivery.version)
+    || !isNonnegativeSafeInteger(delivery.attemptCount)
+    || !isNonnegativeSafeInteger(delivery.safeNoticeAttemptCount)
+    || !isValidDate(delivery.createdAt)
+    || !isValidDate(delivery.updatedAt)
   ) {
     throw contractError();
   }
@@ -236,8 +277,55 @@ function requireReceipt(value: unknown): AnswerReplyReceipt {
     throw contractError();
   }
   if (!value.sources.every((source) => (
-    isRecord(source) && isRequiredString(source.documentSourceId)
+    isRecord(source)
+    && isRequiredString(source.id)
+    && source.deliveryId === delivery.id
+    && isPositiveSafeInteger(source.promptRank)
+    && (source.citationRank === undefined || isPositiveSafeInteger(source.citationRank))
+    && isRequiredString(source.documentSourceId)
+    && isRequiredString(source.documentSnapshotId)
+    && isRequiredString(source.fragmentId)
+    && isNonnegativeSafeInteger(source.chunkIndex)
+    && typeof source.sourceType === "string"
+    && SOURCE_TYPES.has(source.sourceType as AnswerReplyReceipt["sources"][number]["sourceType"])
+    && isRequiredString(source.sourceUri)
+    && (source.sourceTitle === undefined || isRequiredString(source.sourceTitle))
+    && isRequiredString(source.contentHash)
+    && isRequiredString(source.embeddingProfileId)
+    && isValidDate(source.initialPermissionCheckedAt)
   ))) {
+    throw contractError();
+  }
+  if (!value.events.every((event) => (
+    isRecord(event)
+    && isRequiredString(event.id)
+    && event.deliveryId === delivery.id
+  ))) {
+    throw contractError();
+  }
+
+  if (
+    delivery.state === "sent"
+    && (delivery.preparedReplyText !== undefined || !isValidDate(delivery.sentAt))
+  ) {
+    throw contractError();
+  }
+  if (
+    delivery.state === "permission_blocked"
+    && (
+      delivery.preparedReplyText !== undefined
+      || !isValidDate(delivery.permissionBlockedAt)
+    )
+  ) {
+    throw contractError();
+  }
+  if (
+    delivery.state === "reconciliation_required"
+    && (
+      delivery.preparedReplyText !== undefined
+      || !isValidDate(delivery.reconciliationRequiredAt)
+    )
+  ) {
     throw contractError();
   }
 
@@ -272,13 +360,16 @@ function hasExactPermissionDecisions(
 
 function requireSendingReceipt(
   value: unknown,
-  previous: AnswerReplyDelivery,
+  previous: AnswerReplyReceipt,
 ): AnswerReplyReceipt {
-  const receipt = requireReceipt(value);
+  const receipt = requireTransitionReceipt(value, previous);
   if (
     receipt.delivery.state !== "sending"
-    || !isSameDelivery(receipt.delivery, previous)
-    || receipt.delivery.preparedReplyText !== previous.preparedReplyText
+    || receipt.delivery.attemptCount !== previous.delivery.attemptCount + 1
+    || receipt.delivery.safeNoticeAttemptCount !== previous.delivery.safeNoticeAttemptCount
+    || receipt.delivery.preparedReplyText !== previous.delivery.preparedReplyText
+    || receipt.delivery.replyMessageId !== previous.delivery.replyMessageId
+    || receipt.delivery.safeNoticeMessageId !== previous.delivery.safeNoticeMessageId
   ) {
     throw contractError();
   }
@@ -287,29 +378,42 @@ function requireSendingReceipt(
 
 function requireSentReceipt(
   value: unknown,
-  previous: AnswerReplyDelivery,
+  previous: AnswerReplyReceipt,
   replyMessageId: string | undefined,
 ): AnswerReplyReceipt {
-  const receipt = requireReceipt(value);
+  const receipt = requireTransitionReceipt(value, previous);
   if (
     receipt.delivery.state !== "sent"
-    || !isSameDelivery(receipt.delivery, previous)
+    || receipt.delivery.attemptCount !== previous.delivery.attemptCount
+    || receipt.delivery.safeNoticeAttemptCount !== previous.delivery.safeNoticeAttemptCount
+    || receipt.delivery.preparedReplyText !== undefined
     || receipt.delivery.replyMessageId !== replyMessageId
+    || receipt.delivery.safeNoticeMessageId !== previous.delivery.safeNoticeMessageId
+    || !isValidDate(receipt.delivery.sentAt)
   ) {
     throw contractError();
   }
   return receipt;
 }
 
-function requireBlockedReceipt(
+function requireBlockForPermissionReceipt(
   value: unknown,
-  previous: AnswerReplyDelivery,
+  previous: AnswerReplyReceipt,
 ): AnswerReplyReceipt {
-  const receipt = requireReceipt(value);
+  const receipt = requireTransitionReceipt(value, previous);
+  const expectedState = previous.delivery.attemptCount === 0
+    ? "permission_blocked"
+    : "reconciliation_required";
   if (
-    (receipt.delivery.state !== "permission_blocked"
-      && receipt.delivery.state !== "reconciliation_required")
-    || !isSameDelivery(receipt.delivery, previous)
+    receipt.delivery.state !== expectedState
+    || receipt.delivery.attemptCount !== previous.delivery.attemptCount
+    || receipt.delivery.safeNoticeAttemptCount !== previous.delivery.safeNoticeAttemptCount
+    || receipt.delivery.preparedReplyText !== undefined
+    || receipt.delivery.replyMessageId !== previous.delivery.replyMessageId
+    || receipt.delivery.safeNoticeMessageId !== previous.delivery.safeNoticeMessageId
+    || (expectedState === "permission_blocked"
+      ? !isValidDate(receipt.delivery.permissionBlockedAt)
+      : !isValidDate(receipt.delivery.reconciliationRequiredAt))
   ) {
     throw contractError();
   }
@@ -318,10 +422,21 @@ function requireBlockedReceipt(
 
 function requireSafeNoticeSendingReceipt(
   value: unknown,
-  previous: AnswerReplyDelivery,
+  previous: AnswerReplyReceipt,
 ): AnswerReplyReceipt {
-  const receipt = requireBlockedReceipt(value, previous);
-  if (receipt.delivery.safeNoticeSentAt !== undefined) {
+  const receipt = requireTransitionReceipt(value, previous);
+  if (
+    receipt.delivery.state !== previous.delivery.state
+    || (receipt.delivery.state !== "permission_blocked"
+      && receipt.delivery.state !== "reconciliation_required")
+    || receipt.delivery.attemptCount !== previous.delivery.attemptCount
+    || receipt.delivery.safeNoticeAttemptCount
+      !== previous.delivery.safeNoticeAttemptCount + 1
+    || receipt.delivery.preparedReplyText !== undefined
+    || receipt.delivery.replyMessageId !== previous.delivery.replyMessageId
+    || receipt.delivery.safeNoticeMessageId !== previous.delivery.safeNoticeMessageId
+    || receipt.delivery.safeNoticeSentAt !== undefined
+  ) {
     throw contractError();
   }
   return receipt;
@@ -329,17 +444,82 @@ function requireSafeNoticeSendingReceipt(
 
 function requireCompletedSafeNoticeReceipt(
   value: unknown,
-  previous: AnswerReplyDelivery,
+  previous: AnswerReplyReceipt,
   safeNoticeMessageId: string | undefined,
 ): AnswerReplyReceipt {
-  const receipt = requireBlockedReceipt(value, previous);
+  const receipt = requireTransitionReceipt(value, previous);
   if (
-    !(receipt.delivery.safeNoticeSentAt instanceof Date)
+    receipt.delivery.state !== previous.delivery.state
+    || (receipt.delivery.state !== "permission_blocked"
+      && receipt.delivery.state !== "reconciliation_required")
+    || receipt.delivery.attemptCount !== previous.delivery.attemptCount
+    || receipt.delivery.safeNoticeAttemptCount
+      !== previous.delivery.safeNoticeAttemptCount
+    || receipt.delivery.preparedReplyText !== undefined
+    || receipt.delivery.replyMessageId !== previous.delivery.replyMessageId
     || receipt.delivery.safeNoticeMessageId !== safeNoticeMessageId
+    || !isValidDate(receipt.delivery.safeNoticeSentAt)
   ) {
     throw contractError();
   }
   return receipt;
+}
+
+function requireBlockedState(receipt: AnswerReplyReceipt): void {
+  if (
+    (receipt.delivery.state !== "permission_blocked"
+      && receipt.delivery.state !== "reconciliation_required")
+    || receipt.delivery.preparedReplyText !== undefined
+  ) {
+    throw contractError();
+  }
+}
+
+function requireTransitionReceipt(
+  value: unknown,
+  previous: AnswerReplyReceipt,
+): AnswerReplyReceipt {
+  const receipt = requireReceipt(value);
+  if (
+    !isSameDelivery(receipt.delivery, previous.delivery)
+    || receipt.delivery.version !== previous.delivery.version + 1
+    || receipt.delivery.renderedReplyFingerprint
+      !== previous.delivery.renderedReplyFingerprint
+    || receipt.delivery.semanticFingerprint !== previous.delivery.semanticFingerprint
+    || !isSameDate(receipt.delivery.createdAt, previous.delivery.createdAt)
+    || !areSourceFactsEqual(receipt.sources, previous.sources)
+  ) {
+    throw contractError();
+  }
+  return receipt;
+}
+
+function areSourceFactsEqual(
+  current: AnswerReplyReceipt["sources"],
+  previous: AnswerReplyReceipt["sources"],
+): boolean {
+  return current.length === previous.length
+    && current.every((source, index) => {
+      const prior = previous[index];
+      return prior !== undefined
+        && source.id === prior.id
+        && source.deliveryId === prior.deliveryId
+        && source.promptRank === prior.promptRank
+        && source.citationRank === prior.citationRank
+        && source.documentSourceId === prior.documentSourceId
+        && source.documentSnapshotId === prior.documentSnapshotId
+        && source.fragmentId === prior.fragmentId
+        && source.chunkIndex === prior.chunkIndex
+        && source.sourceType === prior.sourceType
+        && source.sourceUri === prior.sourceUri
+        && source.sourceTitle === prior.sourceTitle
+        && source.contentHash === prior.contentHash
+        && source.embeddingProfileId === prior.embeddingProfileId
+        && isSameDate(
+          source.initialPermissionCheckedAt,
+          prior.initialPermissionCheckedAt,
+        );
+    });
 }
 
 function isSameDelivery(
@@ -364,6 +544,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isRequiredString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isNonnegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+function isValidDate(value: unknown): value is Date {
+  return value instanceof Date && Number.isFinite(value.getTime());
+}
+
+function isSameDate(current: unknown, previous: unknown): boolean {
+  return isValidDate(current)
+    && isValidDate(previous)
+    && current.getTime() === previous.getTime();
 }
 
 function contractError(): Error {
