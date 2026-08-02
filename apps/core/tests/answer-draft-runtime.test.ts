@@ -1100,6 +1100,189 @@ describe("createAnswerDraftRuntime", () => {
     expect(livePermissionChecker.canReadSource).toHaveBeenCalledWith(sources["source-live-denied"]);
   });
 
+  it("rechecks unique source permissions in first-seen order without throwing", async () => {
+    const sources: Record<string, DocumentSource | undefined> = {
+      "source-a": source({
+        id: "source-a",
+        sourceType: "authorized_wiki_document",
+        sourceUri: "https://example.feishu.cn/wiki/wikcnA",
+        permissionState: "readable",
+      }),
+      "source-b": source({
+        id: "source-b",
+        sourceType: "user_submitted_document",
+        permissionState: "readable",
+      }),
+      "source-disabled": source({
+        id: "source-disabled",
+        sourceType: "user_submitted_document",
+        permissionState: "readable",
+        canUseForAnswering: false,
+      }),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async (id: string) => {
+        if (id === "source-error") {
+          throw new Error("registry secret");
+        }
+        return sources[id];
+      }),
+    };
+    const livePermissionChecker = {
+      canReadSource: vi.fn(async (documentSource: DocumentSource) => {
+        if (documentSource.id === "source-a") {
+          throw new Error("checker secret");
+        }
+        return true;
+      }),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        FEISHU_OPEN_BASE_URL: "https://open.example.com/",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createFeishuDocumentPermissionChecker: vi.fn(() => livePermissionChecker),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime!.answerSourcePermissionVerifier!.verify({
+      chatId: "oc_pilot",
+      documentSourceIds: [" source-a ", "source-a", "source-b", "source-missing", "source-disabled", "source-error"],
+    });
+
+    expect(result).toEqual([
+      { documentSourceId: "source-a", outcome: "error" },
+      { documentSourceId: "source-b", outcome: "allowed" },
+      { documentSourceId: "source-missing", outcome: "denied" },
+      { documentSourceId: "source-disabled", outcome: "denied" },
+      { documentSourceId: "source-error", outcome: "error" },
+    ]);
+    expect(sourceRegistry.findSourceById).toHaveBeenCalledTimes(5);
+    expect(livePermissionChecker.canReadSource).toHaveBeenCalledTimes(1);
+    expect(runtimeController.canRetrieveKnowledgeBase).toHaveBeenCalledTimes(1);
+
+    const malformedResult = await runtime!.answerSourcePermissionVerifier!.verify({
+      chatId: "oc_pilot",
+      documentSourceIds: ["", "   ", "x".repeat(513)],
+    });
+    expect(malformedResult).toEqual([
+      { documentSourceId: "invalid-source-id-blank", outcome: "error" },
+      { documentSourceId: "invalid-source-id-too-long", outcome: "error" },
+    ]);
+
+    await runtime?.close();
+  });
+
+  it("uses the chat scope for group-visible source rechecks", async () => {
+    const groupSource = source({
+      id: "source-group",
+      sourceType: "group_visible_document",
+      originGroupId: "oc_other",
+      permissionState: "readable",
+    });
+    const sourceRegistry = {
+      findSourceById: vi.fn(async () => groupSource),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(
+      runtime!.answerSourcePermissionVerifier!.verify({
+        chatId: "oc_current",
+        documentSourceIds: ["source-group"],
+      }),
+    ).resolves.toEqual([{ documentSourceId: "source-group", outcome: "denied" }]);
+    expect(runtimeController.canProcessGroupMessage).not.toHaveBeenCalled();
+
+    await runtime?.close();
+  });
+
+  it("exposes an unavailable verifier in allow-indexed mode without throwing", async () => {
+    const runtime = createAnswerDraftRuntime({
+      env: enabledEnv(),
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(
+      runtime!.answerSourcePermissionVerifier!.verify({
+        chatId: "oc_pilot",
+        documentSourceIds: ["source-a", "source-a"],
+      }),
+    ).resolves.toEqual([{ documentSourceId: "source-a", outcome: "error" }]);
+
+    await runtime?.close();
+  });
+
   it("uses configured OpenAI-compatible embedding provider when dimensions are 6", async () => {
     const embeddingProvider = { embedTexts: vi.fn(async () => [[0, 1, 0, 0, 0, 0]]) };
     const embeddingProfiles = {

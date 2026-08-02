@@ -66,6 +66,11 @@ import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compati
 import { createOpenAICompatibleModelProvider } from "../model/openai-compatible-model-provider.js";
 import type { GroupMemoryRepository } from "../memory/group-memory-repository.js";
 import {
+  createAnswerSourcePermissionVerifier,
+  createUnavailableAnswerSourcePermissionVerifier,
+  type AnswerSourcePermissionVerifier,
+} from "../answer-replies/answer-source-permission-verifier.js";
+import {
   createPostgresGroupMemoryRepository,
   type PostgresGroupMemoryDataSource,
 } from "../memory/postgres-group-memory-repository.js";
@@ -89,6 +94,7 @@ import {
 
 export type AnswerDraftRuntime = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
   chatKnowledgeDraftGenerator?: ChatKnowledgeDraftGenerator;
   groupMemoryService?: GroupMemoryService;
   close(): Promise<void>;
@@ -322,8 +328,20 @@ export function createAnswerDraftRuntime({
     },
   };
 
+  const answerSourcePermissionVerifier = runtimeConfig.permissionMode === "source-policy"
+    ? createAnswerSourcePermissionVerifier({
+        canReadDocument: createCanReadDocument({
+          permissionMode: runtimeConfig.permissionMode,
+          sourceRegistry,
+          runtimeController,
+          livePermissionChecker,
+        }),
+      })
+    : createUnavailableAnswerSourcePermissionVerifier();
+
   return {
     answerDraftOrchestrator,
+    answerSourcePermissionVerifier,
     chatKnowledgeDraftGenerator: createChatKnowledgeDraftGenerator({
       repository: conversationMessages,
       model,
@@ -514,18 +532,18 @@ function createCanReadDocument({
   runtimeController?: RuntimeRetrievalGate;
   livePermissionChecker?: Pick<FeishuDocumentPermissionChecker, "canReadSource">;
   currentGroupId?: string;
-}): (documentSourceId: string) => Promise<boolean> {
+}): (documentSourceId: string, chatId?: string) => Promise<boolean> {
   if (permissionMode === "allow-indexed") {
     return async () => true;
   }
 
-  return (documentSourceId) =>
+  return (documentSourceId, chatId = currentGroupId) =>
     canReadBySourcePolicy(
       documentSourceId,
       sourceRegistry,
       runtimeController,
       livePermissionChecker,
-      currentGroupId,
+      normalizeCurrentGroupId(chatId),
     );
 }
 
