@@ -67,13 +67,13 @@ intended worktree.
 
 ## CI And Deployment Evidence
 
-- Candidate SHA: `adac01cd2d2f4cd2ef01ed089a60719efa354629`.
+- Candidate SHA: `5b54dfe9ac4819bcec8a434a19cac8232a9e5315`.
 - Draft PR: <https://github.com/xfbbert-dotcom/iris/pull/23>, stacked on
   `codex/iris-chat-knowledge-drafts`, open and draft.
 - Core CI: success for the exact candidate SHA,
-  <https://github.com/xfbbert-dotcom/iris/actions/runs/30746470862/job/91492812254>.
+  <https://github.com/xfbbert-dotcom/iris/actions/runs/30783815666/job/91593450630>.
 - AI Worker CI: success for the exact candidate SHA,
-  <https://github.com/xfbbert-dotcom/iris/actions/runs/30746470862/job/91492812226>.
+  <https://github.com/xfbbert-dotcom/iris/actions/runs/30783815666/job/91593450673>.
 - Evidence-only commit `5ac7fb97d7a44f1b1a9cfb1e445523c9ca369200` changed only Task 8
   reporting/plan documents and passed Core and AI Worker CI in
   <https://github.com/xfbbert-dotcom/iris/actions/runs/30747404889>. It was not deployed over the
@@ -81,19 +81,23 @@ intended worktree.
 - PostgreSQL backup identifier: `iris-20260802T115722Z.bundle.tar.age` (28,228,520 bytes),
   completed before migration.
 - Migration `0045_answer_source_citations.sql`: present in production `schema_migrations`.
-- Core/AI Worker image SHA parity: `iris-core:adac01cd2d2f4cd2ef01ed089a60719efa354629`
-  and `iris-ai-worker:adac01cd2d2f4cd2ef01ed089a60719efa354629`.
+- Core/AI Worker image SHA parity: `iris-core:5b54dfe9ac4819bcec8a434a19cac8232a9e5315`
+  and `iris-ai-worker:5b54dfe9ac4819bcec8a434a19cac8232a9e5315`.
 - Private candidate status and live readiness: healthy and `ready`; mention replies enabled with no
   unavailable reason while runtime remains globally disabled.
 - Public `/health=200`: passed during the bounded disabled-ingress check.
 - Public `/internal/answer-replies/feishu/probe=404`: passed during the same check.
-- Real citation result: pending.
-- Permission-revocation result: pending.
+- Real citation result: passed before the revocation incident and was retained as historical
+  evidence; the recovery window did not repeat the authorized-answer provider call.
+- Permission-revocation result: passed on the exact candidate SHA. The fresh delivery reached
+  `permission_blocked`, made zero answer-send attempts, sent one safe notice, and did not expose the
+  revoked marker or a normal citation block in the latest visible Feishu reply.
 - Current queue/DLQ and answer-reply counts: event/document/reindex pending and DLQ counts are zero;
   `unresolvedCount=0`, `pendingSafeNoticeCount=0`, and `reconciliationRequiredCount=0`.
 - Current runtime/Caddy state: `globalEnabled=false`, `desiredGlobalEnabled=false`, Caddy stopped.
-- Approved production marker remains `b25d8298fd396366c97449dfbe6f11f3dc42f8f9`; the candidate has not
-  been promoted.
+- Approved production marker remains `b25d8298fd396366c97449dfbe6f11f3dc42f8f9`. The recovery candidate
+  was deployed only for bounded fail-closed acceptance and has not been merged or promoted to the
+  controlled daily pilot.
 
 An independent recovery audit on 2026-08-02 rechecked the VPS repository and image SHA, tracked
 cleanliness, healthy private services, encrypted backup ordering, migration count, private
@@ -135,11 +139,35 @@ PostgreSQL tests cover overlap, mixed IDs, reverse order, and exact replay.
 
 Current post-review recovery verification includes 273 focused in-memory tests, all 78
 answer-repository PostgreSQL tests, typecheck, and the complete standard root `npm run verify` gate
-(273.5 seconds), all passing. Exact-SHA CI is still required before deployment. A read-only VPS
-recheck found production still on
-`adac01cd2d2f4cd2ef01ed089a60719efa354629` for both Core and AI Worker, with tracked files clean,
-`globalEnabled=false`, `desiredGlobalEnabled=false`, all 14 groups disabled, Caddy stopped, healthy
-private services, no stale answer/citation timer, and zero event/document/reindex and answer-reply
-work. The corrected commit must pass exact-SHA Core and AI Worker CI and private deployment gates
-before one fresh Feishu revocation message closes the real acceptance. PR #22 and this draft PR
-remain unmerged pending explicit authorization.
+(273.5 seconds), all passing. Exact-SHA Core and AI Worker CI passed for
+`5b54dfe9ac4819bcec8a434a19cac8232a9e5315`. The same SHA was deployed to both private images and
+completed the fresh Feishu revocation gate described below. PR #22 and this draft PR remain
+unmerged pending explicit authorization.
+
+## 2026-08-03 Exact-SHA Revocation Acceptance
+
+The real gate used only the existing approved pilot group and one fresh incoming Feishu message.
+It was protected by a 20-minute root-owned automatic fail-closed timer. All 13 non-pilot groups
+remained disabled, `proactiveSpeech=false`, and Caddy was started last only after the private
+runtime inventory matched the bounded profile. Public `/health` returned `200` and the private
+answer-reply route returned `404` through Caddy.
+
+- Incoming message ID: `om_x100b6833bc5158a0b3042eda0e9f8dd`.
+- Delivery ID: `answer-reply-3a01e3d44fc5bd16f040cbfc5261381916b5d21ab885089351671e1f98e56cf9`.
+- Safe-notice message ID: `om_x100b6833bd0f28a8b103c6ef4d57275`.
+- Revoked source ID: `ebd9370f-32e7-40e2-81c2-2a4fa65de1f4`.
+- Delivery state: `permission_blocked`; answer attempts: `0`; safe-notice attempts: `1`.
+- Event order: `prepared`, `permission_blocked`, `safe_notice_send_started`, `safe_notice_sent`.
+- The revoked source ID appeared only in the permission event and was absent from all persisted
+  source traces. The private receipt exposed no answer or fragment body.
+- The latest visible Feishu segment contained the deterministic permission notice, did not contain
+  the revoked marker, and did not contain the normal citation footer.
+- The execution-ledger runtime is disabled in this deployment profile. A direct content-free table
+  query found zero provider, turn, or permission lifecycle rows for this incoming message; the
+  isolated exact-image gate separately recorded `modelCalls=0` for the same denied path.
+
+Cleanup stopped Caddy first, durably disabled global runtime and all 14 known groups, restored
+`proactiveSpeech=false`, recreated Core fail closed, and removed the transient timer. Final Core,
+AI Worker, PostgreSQL, and Redis health was `healthy`; event/document/reindex pending and DLQ counts
+were all zero; answer-reply unresolved, pending-safe-notice, and reconciliation-required counts were
+all zero. The terminal receipt remained unchanged with one safe notice and zero answer attempts.
