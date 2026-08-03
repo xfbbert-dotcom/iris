@@ -495,6 +495,48 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.promptContext).not.toContain("Denied two");
   });
 
+  it("does not block for a denied overfetch candidate outside the prompt-ranked window", async () => {
+    const canReadDocument = vi.fn(async (documentId: string) => documentId !== "source-denied-3");
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: {
+        searchSimilarFragments: vi.fn(async () => [
+          fragment({
+            id: "allowed-1",
+            documentSourceId: "source-allowed-1",
+            chunkIndex: 0,
+            text: "Allowed one",
+          }),
+          fragment({
+            id: "allowed-2",
+            documentSourceId: "source-allowed-2",
+            chunkIndex: 1,
+            text: "Allowed two",
+          }),
+          fragment({
+            id: "denied-3",
+            documentSourceId: "source-denied-3",
+            chunkIndex: 2,
+            text: "Denied only during overfetch",
+          }),
+        ]),
+      },
+      canReadDocument,
+    });
+
+    const result = await builder.buildContext({
+      queryText: "permission filtered docs",
+      fragmentLimit: 2,
+      liveChatMessages: [],
+    });
+
+    expect(canReadDocument).toHaveBeenCalledWith("source-denied-3");
+    expect(result.allowedFragments.map(({ id }) => id)).toEqual(["allowed-1", "allowed-2"]);
+    expect(result.deniedDocumentIds).toEqual([]);
+    expect(result.promptContext).not.toContain("Denied only during overfetch");
+  });
+
   it("does not allow duplicate fragment IDs to leak denied document text", async () => {
     const fragments = {
       searchSimilarFragments: vi.fn(async () => [

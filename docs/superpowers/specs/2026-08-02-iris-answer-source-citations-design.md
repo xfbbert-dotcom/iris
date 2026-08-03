@@ -164,6 +164,12 @@ Each trace includes:
 
 The trace never copies fragment body text or the model prompt.
 
+A document rejected by the live permission guard is never represented as an answer-source trace,
+because its fragment was not supplied to the model. The retrieval result separately carries the
+bounded, unique IDs of denied documents that occupied the original prompt-ranked window. Denials
+found only in the overfetch backfill window remain audited but do not block an otherwise complete
+prompt.
+
 ## Durable Answer Delivery Facts
 
 Migration `0045_answer_source_citations.sql` introduces three focused tables.
@@ -187,6 +193,15 @@ One authoritative row per successfully generated ordinary Feishu mention answer:
 idempotent. A retry that proposes different text or different source facts conflicts
 and fails closed instead of replacing the original prepared answer.
 
+A prompt-ranked preflight denial is a monotonic safety fact even though it is not a source trace.
+If a concurrent semantic replay finds an unsent `prepared` delivery and supplies denied source IDs,
+the same locked transaction first verifies immutable request identity, then upgrades that delivery
+to `permission_blocked` even when a newly generated blocked placeholder would have a different
+semantic fingerprint. The transaction preserves the already stored answer fingerprint and source
+facts; it never replaces them with replay output. Once blocked, an exact denied-ID replay is
+idempotent; changed denied IDs or a denial arriving after an answer attempt has begun conflict and
+fail closed.
+
 The full rendered reply is required only while the delivery is unresolved. A successful
 `sent` transition clears it and retains its fingerprint. A blocked transition also
 clears it so an answer based on revoked content is not left queued for later delivery.
@@ -208,36 +223,59 @@ provider response bodies.
 The delivery row is the current state; events are the audit history. This is not a
 second conversation or knowledge state machine.
 
+For a preflight `permission_blocked` event, `document_source_ids` may contain denied prompt-ranked
+sources that do not appear in `answer_reply_source_traces`. Its `source_count` is the number of
+persisted prompt traces plus those distinct denied IDs. Later send-time permission and
+reconciliation events remain restricted to the persisted prompt traces. One permission event must
+use exactly one provenance class: either prompt-trace IDs for a send-time check or external denied
+IDs for preflight. Mixing both classes in one event is invalid.
+
 ## Delivery And Retry Flow
 
 For an ordinary @Iris answer:
 
 1. The answer orchestrator retrieves fragments and applies the existing real-time
    permission guard before any fragment enters the model context.
-2. The model produces only the answer body.
+2. If the prompt-ranked window contains any denied source, the orchestrator skips the model/provider
+   call entirely and returns only the bounded blocked-delivery placeholder plus denied source IDs.
+   Otherwise, the model produces only the answer body.
 3. Core deterministically renders the citation footer and complete trace.
 4. In one PostgreSQL transaction, Core prepares the delivery, immutable source traces,
-   and `prepared` event.
-5. Immediately before each external send attempt, Core rechecks every unique document
+   and `prepared` event. If the guard denied a document in the original prompt-ranked window, the
+   same transaction immediately records `permission_blocked`, clears the prepared text, and makes
+   the ordinary answer ineligible for sending.
+5. A preflight-blocked receipt skips source rechecking and answer sending and enters only the
+   deterministic safe-notice path.
+6. Before an unsent `prepared` receipt is resumed, Core reconstructs the same retrieval request and
+   performs a permission-only prompt inspection without regenerating the answer. A newly discovered
+   prompt-ranked denial atomically blocks the stored receipt; the old answer text and source facts
+   are not replaced.
+7. Immediately before each external send attempt, Core rechecks every unique document
    source in the prepared trace through the same source-policy and Feishu live
    permission path.
-6. If all sources remain allowed, Core records `send_started`, calls Feishu with the
+8. If all sources remain allowed, Core records `send_started`, calls Feishu with the
    stored rendered text and deterministic UUID, then records `sent` with the returned
    message ID and clears prepared text.
-7. If Feishu fails or times out, the delivery remains unresolved. The raw event fails
+9. If Feishu fails or times out, the delivery remains unresolved. The raw event fails
    and follows the existing retry/DLQ path. A retry loads the stored reply rather than
    calling the model again.
-8. If a retry receives Feishu's existing idempotent reply, Core records the same
+10. If a retry receives Feishu's existing idempotent reply, Core records the same
    delivery as sent without producing another answer.
 
 Successfully generated ordinary answers without document sources still use the delivery
-receipt, but skip the source-permission recheck and render no footer. Existing model
-capacity, invalid-response, and blank-answer fallbacks remain deterministic direct
-replies; they do not create answer deliveries or document source traces.
+receipt, but skip the source-permission recheck and render no footer. When there is no
+prompt-ranked denial, existing model capacity, invalid-response, and blank-answer fallbacks remain
+deterministic direct replies; they do not create answer deliveries or document source traces. A
+prompt-ranked denial never enters those provider fallbacks because no provider request is made.
 
 ## Permission Revocation And Uncertain Outcomes
 
 Permission denial and permission-check errors are both fail-closed.
+
+If initial retrieval rejects a prompt-ranked source, Core must not send a normal answer assembled
+from lower-ranked backfill fragments. The rejection is propagated independently from the allowed
+source traces and is persisted atomically with preparation as `permission_blocked`. Only the
+content-free safe notice may be sent.
 
 If any prepared source is no longer readable before a send or resend:
 
@@ -328,11 +366,19 @@ Tests must prove:
 - malformed or non-HTTPS source URIs cannot be echoed;
 - prepare is transactional, idempotent for exact replay, and conflicts on changed
   reply or source facts;
+- a concurrent denied replay atomically upgrades an unsent prepared delivery, while changed denied
+  IDs conflict and an exact denied replay appends no event;
+- replay denial evidence selects exactly one provenance class and orders traced IDs by the
+  persisted prompt trace, even when the replay mixes or reverses IDs;
+- resuming an existing unsent receipt performs permission-only prompt inspection, invokes no answer
+  model, and can block a previously source-less receipt without replacing stored answer facts;
 - source traces and delivery events are append-only;
 - a successful send clears prepared answer text and preserves its hash;
 - a failed or timed-out send is retried with the exact stored reply and UUID without a
   second model call;
 - permission is rechecked once per unique source before every external attempt;
+- a prompt-ranked initial denial skips the model/provider request and provider lifecycle events;
+- a prompt-ranked initial denial atomically blocks delivery before any answer-send attempt;
 - permission denial and permission-check error never send sourced text;
 - an uncertain prior attempt plus later denial records reconciliation required;
 - capacity and blank-answer fallbacks remain uncited and bounded;

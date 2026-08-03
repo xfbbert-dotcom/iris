@@ -421,13 +421,13 @@ describe("createAnswerDraftRuntime", () => {
       },
     });
 
-    await runtime?.answerDraftOrchestrator.generateDraft({
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
       question: "What should Iris say?",
       chatId: "chat-muted",
       liveChatMessages: [{ speaker: "Bob", text: "Current explicit request context." }],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(runtimeController.canReadGroupContext).toHaveBeenCalledWith("chat-muted");
     expect(liveChatContextProvider.loadRecentMessages).not.toHaveBeenCalled();
     expect(promptContext).not.toContain("Historical group context should stay hidden.");
@@ -540,7 +540,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).toContain("Allowed text");
     expect(promptContext).not.toContain("Disabled text");
     expect(promptContext).not.toContain("Denied text");
@@ -627,12 +627,12 @@ describe("createAnswerDraftRuntime", () => {
         outcome: "error",
       }),
     ]);
-    expect(observe).toHaveBeenCalledWith(expect.objectContaining({
-      subjectType: "provider_request",
-      subjectId: "turn-source-policy-1",
-      provider: "openai-compatible",
-      modelId: "model-a",
-    }));
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(
+      observe.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.subjectType === "provider_request"),
+    ).toEqual([]);
   });
 
   it("fails closed for Feishu document fragments when live permission checks are unavailable", async () => {
@@ -685,7 +685,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).not.toContain("Feishu cached text");
     expect(result?.allowedFragments).toEqual([]);
     expect(result?.deniedDocumentIds).toEqual(["source-feishu"]);
@@ -764,7 +764,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).not.toContain("Group visible document text");
     expect(promptContext).not.toContain("Knowledge base text");
     expect(promptContext).toContain("User submitted text");
@@ -868,7 +868,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).not.toContain("Other group document text");
     expect(promptContext).toContain("Current group document text");
     expect(promptContext).toContain("User submitted text");
@@ -1007,7 +1007,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).not.toContain("Group document without source evidence");
     expect(promptContext).toContain("User submitted text");
     expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-user"]);
@@ -1091,7 +1091,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).toContain("Live allowed document text");
     expect(promptContext).not.toContain("Live denied document text");
     expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-live-allowed"]);

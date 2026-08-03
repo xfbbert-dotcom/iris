@@ -122,6 +122,9 @@ export function createDocumentRetrievalContextBuilder({
       const meaningfulFragments = retrievedFragments.filter((fragment) =>
         fragment.text.trim().length > 0,
       );
+      const promptRankedDocumentIds = uniqueDocumentSourceIds(
+        meaningfulFragments.slice(0, fragmentLimit),
+      );
 
       const permissionGuardResult = await filterFragmentsByLivePermission({
         fragments: meaningfulFragments.map(toPermissionGuardFragment),
@@ -135,6 +138,7 @@ export function createDocumentRetrievalContextBuilder({
       const allowedFragments = meaningfulFragments.filter((fragment) =>
         allowedFragmentKeys.has(createRetrievedFragmentKey(fragment)),
       ).slice(0, fragmentLimit);
+      const deniedDocumentIdSet = new Set(permissionGuardResult.deniedDocumentIds);
 
       return {
         promptContext: assemblePromptContext({
@@ -149,7 +153,9 @@ export function createDocumentRetrievalContextBuilder({
           liveChatLimit: input.liveChatLimit,
         }),
         allowedFragments,
-        deniedDocumentIds: permissionGuardResult.deniedDocumentIds,
+        deniedDocumentIds: promptRankedDocumentIds.filter((documentSourceId) =>
+          deniedDocumentIdSet.has(documentSourceId),
+        ),
         retrievedFragmentCount: retrievedFragments.length,
         usedGroupMemories: clonePromptGroupMemories(usedGroupMemories),
         usedDiscussionThreads: clonePromptDiscussionThreads(conversationState.threads),
@@ -157,6 +163,20 @@ export function createDocumentRetrievalContextBuilder({
       };
     },
   };
+}
+
+function uniqueDocumentSourceIds(
+  fragments: readonly Pick<RetrievedDocumentFragment, "documentSourceId">[],
+): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const fragment of fragments) {
+    if (!seen.has(fragment.documentSourceId)) {
+      seen.add(fragment.documentSourceId);
+      result.push(fragment.documentSourceId);
+    }
+  }
+  return result;
 }
 
 async function loadConversationState({

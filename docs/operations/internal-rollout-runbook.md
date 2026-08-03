@@ -668,6 +668,11 @@ $env:IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS="10000"
 $env:IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS="2000000"
 ```
 
+Answer-citation acceptance that inspects message history also requires the published Feishu app's
+application-identity `im:message:readonly` scope. Do not enable the user-identity scope for this
+purpose. This scope is an operator evidence prerequisite; it does not replace callback ingestion,
+source permission checks, or durable answer receipts.
+
 `IRIS_FEISHU_BOT_OPEN_ID` lets Iris identify explicit @mentions from Feishu message events. When
 this value, Feishu OpenAPI credentials, and internal answer drafting are configured, the event worker
 can draft an answer and reply to messages that mention the Iris bot. Missing this value keeps event

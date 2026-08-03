@@ -14,6 +14,10 @@ Record evidence in the private deployment log, then copy only content-free ident
 to the PR document. Never record tokens, application secrets, user open IDs, prompts, answer bodies,
 document bodies, or raw provider responses.
 
+If acceptance uses Feishu message-history inspection, the published Iris app must have
+application-identity `im:message:readonly`. User-identity access is not required for this gate.
+Event delivery alone is not evidence that history inspection is available.
+
 ```bash
 export CANDIDATE_SHA=replace-with-full-reviewed-commit-sha
 export DRAFT_PR=replace-with-draft-pr-number
@@ -191,10 +195,20 @@ title, and canonical URL used for the answer, and must contain no answer or frag
 
 ## 6. Permission Revocation
 
-Revoke the Iris app's access to only the new Wiki page. Re-send the same Feishu event by the normal
-platform retry path or repeat the same bounded question once if Feishu cannot replay it. The unique
-marker and original answer must not be emitted. Only the safe permission-changed notice may be sent.
-The receipt must show a permission-blocked terminal path and no answer-send attempt.
+Revoke the Iris app's access to only the new Wiki page. Send the same bounded question as a new
+Feishu message so it receives a fresh incoming message ID; do not reuse a terminal receipt. The
+revoked page must rank inside the original prompt window. Its fragment must be excluded and the
+model/provider must not be called for that turn; lower-ranked backfill must not make a normal answer
+sendable. The unique marker and original answer must not be emitted. Only the safe
+permission-changed notice may be sent. The receipt must show a `prepared` event followed atomically
+by `permission_blocked`, zero answer-send attempts, no denied-source trace, and the denied source ID
+only in the permission event. The content-free execution ledger must contain no provider lifecycle
+event for the blocked turn.
+
+Also exercise one retry of an existing unsent `prepared` receipt. The retry must perform a fresh
+prompt permission inspection without invoking the answer model. If that inspection finds the
+revoked page, the existing receipt must become `permission_blocked`, retain its original immutable
+fingerprints and source facts, clear prepared text, and make zero answer-send attempts.
 
 If a human must change Feishu sharing or send the message, request exactly that one action and stop.
 Keep Iris globally disabled and Caddy stopped while waiting; do not invent message or sharing

@@ -365,6 +365,56 @@ delivery mistakes while implementing it.
   source-level trace and citation acceptance remain explicitly open. Client-native `相关知识` is
   ignored.
 
+### Propagate initial permission denials into durable answer delivery
+
+- **Failure:** A revoked Wiki page was correctly denied before prompt assembly and removed from the
+  source trace, but Iris still sent an ordinary answer based on lower-ranked backfill fragments.
+  The reply was recalled during incident containment. The recalled body could not be recovered, so
+  there is no evidence that the revoked marker itself was emitted.
+- **Root cause:** `DocumentRetrievalContextResult.deniedDocumentIds` stopped at the answer
+  orchestrator boundary. The mention responder passed only allowed source traces to the durable
+  delivery service, whose later permission check could therefore see only sources already allowed
+  into the prompt.
+- **Prevention rule:** Preserve answer traces as prompt-only facts, propagate prompt-ranked denied
+  IDs on a separate bounded field, and atomically transition preparation to `permission_blocked`
+  in the same PostgreSQL transaction. Never invent a trace for denied content and never let
+  lower-ranked backfill make that answer sendable. Treat denied IDs as monotonic idempotency facts:
+  a concurrent replay may upgrade only an unsent prepared delivery even when the blocked candidate
+  has a different semantic fingerprint, but it must preserve the stored answer fingerprint and
+  source facts. Exact denied facts reuse the ledger, and changed denied facts conflict after the
+  block is recorded. Skip the model/provider entirely when the original prompt-ranked window
+  contains any denied source so provider fallbacks cannot bypass the block. Before resuming an old
+  unsent receipt, rerun only prompt retrieval and permission inspection; never regenerate its
+  answer.
+- **Guard:** Retrieval-window, responder propagation, delivery-service, receipt-ledger, and real
+  PostgreSQL regressions prove zero answer attempts, cross-instance prepared-to-blocked upgrade
+  despite a changed blocked placeholder, exact replay without duplicate events, changed-denial
+  conflict after blocking, and safe-notice-only behavior. Delivery tests prove a source-less old
+  prepared receipt is re-inspected and blocked without another answer-model invocation. When replay
+  denial IDs overlap or mix with persisted traces, derive one provenance class from the persisted
+  prompt order so source counts and ledger validation cannot roll back the safety transition.
+  A permission event must contain either prompt-trace IDs or external preflight-denied IDs, never a
+  mixture. Reconciliation events remain restricted to persisted prompt traces. Runtime tests also
+  prove zero model invocations and zero provider lifecycle events for prompt-ranked denial.
+- **Exit condition:** The corrected exact-SHA build passes CI and internal repository acceptance;
+  a fresh real Feishu message after revocation produces only the safe notice, a blocked receipt,
+  and zero answer-send attempts.
+
+### Drain in-flight work before an automatic acceptance shutdown
+
+- **Failure:** A stale automatic-close timer recreated Core while a real Feishu event was still in
+  processing, making the incoming event temporarily disappear from normal inspection and obscuring
+  the actual permission-delivery defect.
+- **Root cause:** The timer controlled service lifecycle without first closing ingress and waiting
+  for the bounded in-flight queue to settle.
+- **Prevention rule:** Before every gray run, enumerate and remove stale acceptance timers. A new
+  shutdown must disable public ingress first, wait for processing to reach zero within a bounded
+  deadline, then stop or recreate Core.
+- **Guard:** Timer inventory is part of preflight and cleanup; queue processing is checked before
+  any service recreation. This reliability follow-up stays separate from the permission fix.
+- **Exit condition:** The next real gray run completes or safely returns its event to retry before
+  shutdown, with no stale timer and all queues/DLQs at zero.
+
 ## Test Architecture
 
 ### Verify every cross-CTE column dependency in migration SQL

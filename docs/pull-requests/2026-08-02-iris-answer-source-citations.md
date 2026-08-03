@@ -9,9 +9,15 @@ receipts to the existing Feishu mention-answer path. It is based on
 - Renders at most three cited sources in prompt rank order with the exact Iris reference footer.
 - Captures immutable source snapshot, fragment, chunk, hash, title, and canonical URI metadata.
 - Rechecks live source permission immediately before sending a prepared answer.
+- Atomically blocks delivery when initial retrieval denies a source inside the prompt-ranked
+  window, without creating a false source trace for denied content.
+- Skips the model/provider entirely for a prompt-ranked denial, preventing provider fallbacks from
+  turning lower-ranked backfill into a normal answer.
 - Clears prepared answer text on every terminal transition while retaining only fingerprints and
   content-free source/event evidence.
 - Replays a previously prepared or sent receipt without another model call or duplicate answer.
+- Re-inspects prompt permissions before resuming an unsent prepared receipt and can atomically block
+  an older source-less receipt without regenerating or replacing its answer.
 - Sends only the bounded safe notice when permission changes before answer delivery.
 - Exposes a private receipt lookup with an explicit response mapping that omits answer and fragment
   body text.
@@ -68,6 +74,10 @@ intended worktree.
   <https://github.com/xfbbert-dotcom/iris/actions/runs/30746470862/job/91492812254>.
 - AI Worker CI: success for the exact candidate SHA,
   <https://github.com/xfbbert-dotcom/iris/actions/runs/30746470862/job/91492812226>.
+- Evidence-only commit `5ac7fb97d7a44f1b1a9cfb1e445523c9ca369200` changed only Task 8
+  reporting/plan documents and passed Core and AI Worker CI in
+  <https://github.com/xfbbert-dotcom/iris/actions/runs/30747404889>. It was not deployed over the
+  exact candidate images.
 - PostgreSQL backup identifier: `iris-20260802T115722Z.bundle.tar.age` (28,228,520 bytes),
   completed before migration.
 - Migration `0045_answer_source_citations.sql`: present in production `schema_migrations`.
@@ -85,8 +95,51 @@ intended worktree.
 - Approved production marker remains `b25d8298fd396366c97449dfbe6f11f3dc42f8f9`; the candidate has not
   been promoted.
 
-Real Feishu acceptance remains open. The next single human action is to create a new Wiki page
-titled `Iris Citation Pilot 2026-08-02 2010 CST`, put
-`IRIS-CITATION-PILOT-20260802-2010-CST` plus bounded non-sensitive test text in its body, share that
-page with the Iris app, and return its canonical Feishu URL. Iris remains fail-closed until that
-fixture exists. PR #22 and this draft PR remain unmerged pending explicit authorization.
+An independent recovery audit on 2026-08-02 rechecked the VPS repository and image SHA, tracked
+cleanliness, healthy private services, encrypted backup ordering, migration count, private
+readiness, unknown-receipt 404, and every required zero count. It then repeated the bounded public
+check once from the operator machine (`/health=200`, private answer-reply path `=404`) and restored
+the same fail-closed state. No model or Feishu event probe was used. A content-free database check
+found zero sources with the prescribed pilot title and zero answer delivery/source/event rows.
+
+## 2026-08-03 Revocation Incident And Recovery
+
+The real pilot subsequently created an isolated Wiki fixture and completed the authorized-answer
+half of the gate. After Iris access was revoked, the live permission guard correctly denied the
+fixture and excluded it from the second prompt. The durable source order proved the denied rank
+disappeared and lower-ranked allowed fragments shifted forward. However, Core then sent an ordinary
+answer based on that backfill. The reply was immediately recalled. Its exact body is unavailable;
+the evidence does not prove that the revoked marker itself was emitted.
+
+The root cause was a dropped boundary signal: retrieval returned `deniedDocumentIds`, but the
+mention responder and durable delivery service persisted only allowed prompt traces. This recovery
+propagates only prompt-ranked denied IDs on a separate bounded field. PostgreSQL now writes
+`prepared` and `permission_blocked` in one transaction, clears prepared text, records zero answer
+attempts, skips the verifier/send path, and sends only the existing deterministic safe notice. The
+answer orchestrator also skips the model/provider request whenever that denied set is non-empty, so
+capacity, blank-answer, and invalid-response fallbacks cannot bypass the block. Denied content
+remains absent from source traces and receipts.
+
+Independent review then found a cross-instance replay edge: the separate denied IDs were not part
+of the existing-record decision. The repository now atomically upgrades only an unsent prepared
+delivery even if the blocked candidate's semantic fingerprint differs, while preserving the stored
+answer fingerprint and source facts. It reuses exact denied facts without appending an event,
+rejects changed denial facts after blocking, and requires each permission event to contain either
+prompt-trace IDs or external preflight IDs, never both. A second review found that an already
+prepared receipt bypassed the new prompt-denial path. The delivery service now performs a fresh
+permission-only prompt inspection before resuming that receipt, without invoking the answer model.
+
+The final repository review also found overlapping replay IDs could double-count or violate trace
+order. The repository now chooses one provenance class from persisted prompt order; real
+PostgreSQL tests cover overlap, mixed IDs, reverse order, and exact replay.
+
+Current post-review recovery verification includes 273 focused in-memory tests, all 78
+answer-repository PostgreSQL tests, typecheck, and the complete standard root `npm run verify` gate
+(273.5 seconds), all passing. Exact-SHA CI is still required before deployment. A read-only VPS
+recheck found production still on
+`adac01cd2d2f4cd2ef01ed089a60719efa354629` for both Core and AI Worker, with tracked files clean,
+`globalEnabled=false`, `desiredGlobalEnabled=false`, all 14 groups disabled, Caddy stopped, healthy
+private services, no stale answer/citation timer, and zero event/document/reindex and answer-reply
+work. The corrected commit must pass exact-SHA Core and AI Worker CI and private deployment gates
+before one fresh Feishu revocation message closes the real acceptance. PR #22 and this draft PR
+remain unmerged pending explicit authorization.

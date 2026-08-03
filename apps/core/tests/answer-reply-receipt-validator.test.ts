@@ -62,6 +62,50 @@ describe("AnswerReplyReceiptValidator", () => {
     }
   });
 
+  it("accepts a preflight permission block for a denied source that was never prompted", () => {
+    const blocked = appendTransition(
+      preparedReceipt(),
+      "permission_blocked",
+      firstSendAt,
+      undefined,
+      ["source-revoked"],
+    );
+    blocked.events.at(-1)!.sourceCount = 2;
+
+    expect(requireValidAnswerReplyReceipt(blocked)).toBe(blocked);
+  });
+
+  it("rejects a permission block that mixes prompted and preflight-denied source IDs", () => {
+    const malformed = appendTransition(
+      preparedReceipt(),
+      "permission_blocked",
+      firstSendAt,
+      undefined,
+      ["source-a", "source-revoked"],
+    );
+    malformed.events.at(-1)!.sourceCount = 2;
+
+    expect(() => requireValidAnswerReplyReceipt(malformed)).toThrow(
+      "answer reply receipt invalid",
+    );
+  });
+
+  it("still rejects a reconciliation event for a source outside the prompt trace", () => {
+    const sending = appendTransition(preparedReceipt(), "send_started", firstSendAt, 1);
+    const malformed = appendTransition(
+      sending,
+      "reconciliation_required",
+      transitionAt,
+      undefined,
+      ["source-revoked"],
+    );
+    malformed.events.at(-1)!.sourceCount = 2;
+
+    expect(() => requireValidAnswerReplyReceipt(malformed)).toThrow(
+      "answer reply receipt invalid",
+    );
+  });
+
   it.each([
     ["delivery ID", (value: AnswerReplyReceipt) => {
       value.delivery.id = "foreign-delivery";

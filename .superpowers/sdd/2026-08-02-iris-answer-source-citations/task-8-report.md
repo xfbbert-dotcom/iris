@@ -2,17 +2,20 @@
 
 ## Status
 
-`NEEDS_CONTEXT`
+`IN_PROGRESS`
 
-All code, documentation, local verification, exact-SHA CI, backup, migration, private deployment,
-and disabled public-boundary gates are complete. Real Feishu citation and permission-revocation
-acceptance is not complete. Iris remains fail-closed; no real-pilot evidence has been invented.
+The first real Feishu citation half-gate completed. The revocation half-gate exposed a dropped
+permission-denial signal between retrieval and durable delivery. The unsafe ordinary reply was
+recalled, production returned to fail-closed, and a tested recovery is now being prepared for
+exact-SHA CI and private deployment. Real revocation acceptance is not yet complete.
 
 ## Intended Commits
 
 - `940463ace17d24baf71603e72cd0b74295826ab3` - `fix(core): require answer reply status counts`
 - `adac01cd2d2f4cd2ef01ed089a60719efa354629` -
   `docs: add answer citation acceptance gates`
+- `5ac7fb97d7a44f1b1a9cfb1e445523c9ca369200` -
+  `docs: record answer citation rollout evidence`
 - The final evidence/report commit is the commit containing this file and is reported in the
   controller-facing Task 8 status.
 
@@ -73,11 +76,15 @@ unrelated untracked file is present in the final intended worktree.
 
 - Draft PR: <https://github.com/xfbbert-dotcom/iris/pull/23>
 - Base: `codex/iris-chat-knowledge-drafts`
-- Candidate head: `adac01cd2d2f4cd2ef01ed089a60719efa354629`
+- Deployed candidate commit: `adac01cd2d2f4cd2ef01ed089a60719efa354629`.
+- Evidence-only PR head before this recovery update:
+  `5ac7fb97d7a44f1b1a9cfb1e445523c9ca369200`.
 - Core CI: success,
   <https://github.com/xfbbert-dotcom/iris/actions/runs/30746470862/job/91492812254>
 - AI Worker CI: success,
   <https://github.com/xfbbert-dotcom/iris/actions/runs/30746470862/job/91492812226>
+- Evidence-only head CI: Core and AI Worker success,
+  <https://github.com/xfbbert-dotcom/iris/actions/runs/30747404889>.
 - PR #22: open, draft, and unmerged.
 - PR #23: open, draft, and unmerged.
 
@@ -114,17 +121,82 @@ evidence because of a status-path assertion and shell transport/Compose invocati
 attempt stopped Caddy. The corrected bounded check passed and restored the verified fail-closed
 state.
 
-## Remaining Pilot Gate
+## Independent Recovery Audit
 
-No new user-owned Wiki fixture exists yet, so enabling the pilot would violate the acceptance
-runbook. The exact next single human action is:
+A new read-only operator audit ran from 2026-08-02 20:18 through 20:29 CST. It did not source or
+print `.env.pilot`, inspect secret values, replay a Feishu event, or call the answer model.
 
-> Create a new Feishu Wiki page titled `Iris Citation Pilot 2026-08-02 2010 CST`, put the marker
-> `IRIS-CITATION-PILOT-20260802-2010-CST` plus bounded non-sensitive test text in its body, share
-> that page with the Iris app, and return its canonical Feishu URL.
+- Local and remote branch state before this report update was clean at evidence-only commit
+  `5ac7fb97d7a44f1b1a9cfb1e445523c9ca369200`; that commit changes only the Task 8 report, PR
+  evidence, and plan checkboxes relative to the deployed candidate.
+- GitHub independently reported PR #23 open and draft on the required base, PR #22 open and draft,
+  exact-candidate run `30746470862` successful, and evidence-only run `30747404889` successful.
+- The VPS repository remained at `adac01cd2d2f4cd2ef01ed089a60719efa354629` with zero tracked
+  changes. All 47 untracked entries were expected operational markers, backups, or evidence; no
+  unexpected source-tree entry was present.
+- The approved pointer still matched `b25d8298fd396366c97449dfbe6f11f3dc42f8f9`. Candidate and
+  source marker files were present but their operational contents were not copied into this report.
+- PostgreSQL, Redis, the embedding model, AI Worker, and Core were running and healthy. Migration
+  `0045` had one row applied at 2026-08-02 12:02:13 UTC, after encrypted backup
+  `iris-20260802T115722Z.bundle.tar.age` (28,228,520 bytes; file time 11:57:39 UTC); the encrypted
+  backup header was valid.
+- Core and AI Worker still ran the exact candidate-tagged images. Private status and readiness were
+  200/`ready`, and an unknown answer receipt remained 404 with no receipt content copied out.
+- Runtime remained `globalEnabled=false` and `desiredGlobalEnabled=false`; event, document-sync,
+  and reindex pending/DLQ counts were `[0,0]`; answer-reply unresolved, pending-safe-notice, and
+  reconciliation-required counts were `[0,0,0]`.
+- After all private prerequisites passed, the runbook's bounded public check was repeated once from
+  the operator machine. Public `/health` returned 200 and the private answer-reply path returned
+  404. An automatic stop was armed before the check; cleanup then re-proved both runtime flags
+  false, every required count zero, and Caddy stopped.
+- The content-free final database check found zero sources with the prescribed new pilot title and
+  zero answer deliveries, source traces, or answer delivery events. No pilot acceptance result
+  exists to inspect or revoke.
 
-After that one action, Task 8 must resume from sync/index/permission verification, enable only the
-existing pilot group for one real answer, capture the incoming message ID and visible cited reply,
-inspect the content-free receipt, perform the permission-revocation check, prove the final zero
-state, and only then decide whether to restore the previously approved pilot runtime. Until then,
-the deployment remains globally disabled with Caddy stopped and both draft PRs unmerged.
+## Revocation Failure And Corrective Gate
+
+The isolated pilot fixture now exists. Its authorized answer completed with an Iris-owned citation.
+After access was revoked, the next fresh message proved that the real-time guard denied the fixture
+and removed it from the prompt trace, but Core still sent an ordinary backfill-based answer. The
+reply was recalled immediately. Its exact body is unavailable, so this report does not claim that
+the revoked marker was emitted.
+
+The corrective implementation keeps denied content out of traces and propagates only bounded IDs
+from the original prompt-ranked window. Preparation and `permission_blocked` now occur in one
+PostgreSQL transaction with cleared text and zero answer attempts; only the safe notice can follow.
+Independent review found that the first implementation did not compare the separate denial fact on
+a cross-instance semantic replay. The repository now atomically upgrades only an unsent prepared
+delivery even when the blocked candidate has a different semantic fingerprint, preserves the
+stored answer fingerprint and source facts, reuses exact denied facts without another event,
+rejects changed denied IDs after blocking, and rejects permission events that mix prompt-trace and
+external preflight IDs. A follow-up review found that an already prepared receipt bypassed this
+new prompt-denial path. The delivery service now performs a fresh permission-only prompt inspection
+before resuming any unsent prepared receipt, without invoking the answer model. The answer
+orchestrator also skips the model/provider request whenever the original prompt-ranked window
+contains a denial, so provider capacity, blank-answer, and invalid-response fallbacks cannot turn
+backfill into a normal reply.
+
+A final repository review found that replay denials overlapping persisted traces could double-count
+sources or preserve caller order, causing receipt validation to roll back the block. The repository
+now selects exactly one evidence provenance class from persisted prompt order. Real PostgreSQL
+regressions cover overlap, mixed external IDs, reverse order, and exact replay.
+
+Current post-review recovery verification passed 273 focused in-memory tests and all 78
+answer-repository PostgreSQL tests, plus typecheck. The complete standard root `npm run verify` gate
+passed in 273.5 seconds; exact-SHA CI remains required before deployment. A diagnostic attempt to
+enable every conditional
+PostgreSQL suite concurrently against the single local database produced unrelated hook/test
+timeouts; the named timeout passed alone in 2.26 seconds, so that diagnostic was not used as a
+release gate.
+
+The latest read-only VPS preflight found deployed HEAD and both Core/AI Worker image tags still at
+`adac01cd2d2f4cd2ef01ed089a60719efa354629`, tracked files clean, Caddy inactive, all four private
+services healthy, both global runtime flags false, all 14 known groups disabled,
+`proactiveSpeech=false`, and every event/document/reindex and answer-reply count zero. Memory
+extraction remains enabled for one approved group but has zero pending, processing, delayed, DLQ,
+or projection-repair work. No answer/citation timer exists. Exact-SHA CI, private deployment, and
+one fresh real Feishu revocation message remain.
+
+Until those gates pass, production remains globally disabled with Caddy stopped and both draft PRs
+unmerged. The next human message must use a fresh incoming message ID; the already-sent terminal
+receipt cannot be reused as revocation evidence.

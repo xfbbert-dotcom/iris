@@ -131,6 +131,7 @@ type NormalizedPrepareInput = {
   safeNoticeUuid: string;
   renderedText: string;
   sourceTraces: AnswerReplySourceTraceInput[];
+  blockedDocumentSourceIds: string[];
   at: Date;
   deliveryId: string;
   renderedReplyFingerprint: string;
@@ -202,7 +203,47 @@ export function createPostgresAnswerReplyRepository(input: {
         if (existingRow !== undefined) {
           const existing = mapDelivery(existingRow);
           const receipt = await loadReceipt(client, existing);
-          if (receipt.delivery.semanticFingerprint !== normalized.semanticFingerprint) {
+          if (!hasSamePrepareIdentity(existing, normalized)) {
+            throw new AnswerReplyPreparationConflictError();
+          }
+          if (normalized.blockedDocumentSourceIds.length > 0) {
+            const permissionEvidence = selectPreflightPermissionEvidence(
+              receipt.sources,
+              normalized.blockedDocumentSourceIds,
+            );
+            if (
+              existing.state === "prepared"
+              && existing.version === 1
+              && existing.attemptCount === 0
+              && receipt.events.length === 1
+              && normalized.at.getTime() >= existing.updatedAt.getTime()
+            ) {
+              await applyPreflightPermissionBlock(client, {
+                deliveryId: existing.id,
+                expectedVersion: existing.version,
+                sourceCount: permissionEvidence.sourceCount,
+                documentSourceIds: permissionEvidence.documentSourceIds,
+                at: normalized.at,
+              });
+              return {
+                outcome: "applied" as const,
+                receipt: await loadReceiptById(client, existing.id),
+              };
+            }
+            const permissionEvent = receipt.events.find(
+              ({ eventType }) => eventType === "permission_blocked",
+            );
+            if (
+              existing.state !== "permission_blocked"
+              || permissionEvent === undefined
+              || !areStringArraysEqual(
+                permissionEvent.documentSourceIds,
+                permissionEvidence.documentSourceIds,
+              )
+            ) {
+              throw new AnswerReplyPreparationConflictError();
+            }
+          } else if (receipt.delivery.semanticFingerprint !== normalized.semanticFingerprint) {
             throw new AnswerReplyPreparationConflictError();
           }
           return {
@@ -249,6 +290,17 @@ export function createPostgresAnswerReplyRepository(input: {
           documentSourceIds: uniqueDocumentSourceIds(normalized.sourceTraces),
           at: normalized.at,
         });
+
+        if (normalized.blockedDocumentSourceIds.length > 0) {
+          await applyPreflightPermissionBlock(client, {
+            deliveryId: normalized.deliveryId,
+            expectedVersion: 1,
+            sourceCount:
+              normalized.sourceTraces.length + normalized.blockedDocumentSourceIds.length,
+            documentSourceIds: normalized.blockedDocumentSourceIds,
+            at: normalized.at,
+          });
+        }
 
         return {
           outcome: "applied" as const,
@@ -626,6 +678,35 @@ async function insertEvent(
   );
 }
 
+async function applyPreflightPermissionBlock(
+  client: AnswerReplyTransactionClient,
+  input: {
+    deliveryId: string;
+    expectedVersion: number;
+    sourceCount: number;
+    documentSourceIds: string[];
+    at: Date;
+  },
+): Promise<void> {
+  await requireSingleRow(client.query<{ id: string }>(
+    `UPDATE answer_reply_deliveries
+     SET state = 'permission_blocked', prepared_reply_text = NULL,
+         version = version + 1, updated_at = $3, permission_blocked_at = $3
+     WHERE id = $1 AND version = $2 AND state = 'prepared'
+       AND attempt_count = 0
+     RETURNING id`,
+    [input.deliveryId, input.expectedVersion, input.at],
+  ));
+  await insertEvent(client, {
+    deliveryId: input.deliveryId,
+    sequence: input.expectedVersion + 1,
+    eventType: "permission_blocked",
+    sourceCount: input.sourceCount,
+    documentSourceIds: input.documentSourceIds,
+    at: input.at,
+  });
+}
+
 async function acquireAdvisoryLock(
   client: AnswerReplyTransactionClient,
   key: string,
@@ -716,6 +797,10 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
   }
   const renderedText = requireExactString("renderedText", input.renderedText, MAX_REPLY_CHARS);
   const sourceTraces = normalizeSourceTraces(input.sourceTraces);
+  const blockedDocumentSourceIds = normalizePreflightBlockedDocumentSourceIds(
+    input.blockedDocumentSourceIds,
+    sourceTraces,
+  );
   const at = requireDate(input.at);
   const renderedReplyFingerprint = createAnswerReplyRenderedFingerprint(renderedText);
   const semanticFingerprint = createAnswerReplySemanticFingerprint({
@@ -733,11 +818,65 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     safeNoticeUuid,
     renderedText,
     sourceTraces,
+    blockedDocumentSourceIds,
     at,
     deliveryId: createAnswerReplyDeliveryId(provider, incomingMessageId),
     renderedReplyFingerprint,
     semanticFingerprint,
   };
+}
+
+function normalizePreflightBlockedDocumentSourceIds(
+  value: readonly string[] | undefined,
+  sourceTraces: readonly AnswerReplySourceTraceInput[],
+): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > MAX_SOURCE_TRACES - sourceTraces.length) {
+    throw new Error("blockedDocumentSourceIds is invalid");
+  }
+  const result = requireDocumentSourceIds(value, true);
+  const sourceTraceIds = new Set(sourceTraces.map(({ documentSourceId }) => documentSourceId));
+  if (result.some((documentSourceId) => sourceTraceIds.has(documentSourceId))) {
+    throw new Error("blockedDocumentSourceIds is invalid");
+  }
+  return result;
+}
+
+function areStringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function selectPreflightPermissionEvidence(
+  sources: readonly AnswerReplySourceTrace[],
+  blockedDocumentSourceIds: readonly string[],
+): { sourceCount: number; documentSourceIds: string[] } {
+  const blockedDocumentSourceIdSet = new Set(blockedDocumentSourceIds);
+  const tracedDocumentSourceIds = uniqueDocumentSourceIds(sources).filter(
+    (documentSourceId) => blockedDocumentSourceIdSet.has(documentSourceId),
+  );
+  if (tracedDocumentSourceIds.length > 0) {
+    return {
+      sourceCount: sources.length,
+      documentSourceIds: tracedDocumentSourceIds,
+    };
+  }
+  return {
+    sourceCount: sources.length + blockedDocumentSourceIds.length,
+    documentSourceIds: [...blockedDocumentSourceIds],
+  };
+}
+
+function hasSamePrepareIdentity(
+  delivery: AnswerReplyDelivery,
+  input: NormalizedPrepareInput,
+): boolean {
+  return delivery.provider === input.provider
+    && delivery.incomingMessageId === input.incomingMessageId
+    && delivery.chatId === input.chatId
+    && delivery.replyUuid === input.replyUuid
+    && delivery.safeNoticeUuid === input.safeNoticeUuid;
 }
 
 function normalizeSourceTraces(
@@ -796,8 +935,12 @@ function normalizeTransitionInput(input: VersionedTransitionInput): VersionedTra
   };
 }
 
-function requireDocumentSourceIds(value: string[]): string[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_SOURCE_TRACES) {
+function requireDocumentSourceIds(value: readonly string[], allowEmpty = false): string[] {
+  if (
+    !Array.isArray(value)
+    || (!allowEmpty && value.length < 1)
+    || value.length > MAX_SOURCE_TRACES
+  ) {
     throw new Error("documentSourceIds is invalid");
   }
   const normalized = value.map((item) => requireReference("documentSourceId", item));

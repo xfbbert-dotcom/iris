@@ -44,7 +44,8 @@ export type FeishuMentionAnswerResponder = {
 
 export type FeishuMentionAnswerResponderDependencies = {
   botOpenId: string;
-  answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">
+    & Partial<Pick<AnswerDraftOrchestrator, "inspectPromptPermissions">>;
   answerReplyDeliveryService: Pick<AnswerReplyDeliveryService, "respond">;
   replier: Pick<FeishuMessageReplier, "replyText">;
   now?: () => Date;
@@ -309,6 +310,16 @@ export function createFeishuMentionAnswerResponder({
           return result;
         }
 
+        const answerDraftInput = {
+          executionId: input.messageId,
+          question,
+          chatId: input.chatId,
+          ...(normalizedSenderId === undefined ? {} : { askerId: normalizedSenderId }),
+          liveChatMessages: [{
+            speaker: normalizedSenderId ?? "unknown",
+            text: question,
+          }],
+        };
         try {
           const result = toRepliedResult(
             await answerReplyDeliveryService.respond({
@@ -317,19 +328,19 @@ export function createFeishuMentionAnswerResponder({
               chatId: input.chatId,
               replyUuid,
               safeNoticeUuid: createAnswerReplySafeNoticeUuid(input.messageId),
+              inspectPromptPermissions: async () => {
+                if (answerDraftOrchestrator.inspectPromptPermissions === undefined) {
+                  throw new Error("answer prompt permission inspection is unavailable");
+                }
+                return {
+                  ...await answerDraftOrchestrator.inspectPromptPermissions(answerDraftInput),
+                  checkedAt: now(),
+                };
+              },
               prepareAnswer: async () => {
                 let answer: Awaited<ReturnType<AnswerDraftOrchestrator["generateDraft"]>>;
                 try {
-                  answer = await answerDraftOrchestrator.generateDraft({
-                    executionId: input.messageId,
-                    question,
-                    chatId: input.chatId,
-                    ...(normalizedSenderId === undefined ? {} : { askerId: normalizedSenderId }),
-                    liveChatMessages: [{
-                      speaker: normalizedSenderId ?? "unknown",
-                      text: question,
-                    }],
-                  });
+                  answer = await answerDraftOrchestrator.generateDraft(answerDraftInput);
                 } catch (error) {
                   if (isBlankModelAnswerError(error)) {
                     throw new ModelAnswerFallbackSignal("blank");
@@ -346,6 +357,9 @@ export function createFeishuMentionAnswerResponder({
                     allowedFragments: answer.allowedFragments,
                     initialPermissionCheckedAt: preparedAt,
                   }),
+                  ...(answer.deniedDocumentIds.length === 0
+                    ? {}
+                    : { blockedDocumentSourceIds: [...answer.deniedDocumentIds] }),
                   preparedAt,
                 };
               },

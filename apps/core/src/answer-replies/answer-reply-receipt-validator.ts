@@ -176,6 +176,7 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
       || typeof event.eventType !== "string"
       || !EVENT_TYPES.has(event.eventType as AnswerReplyDeliveryEventType)
       || !isNonnegativeSafeInteger(event.sourceCount)
+      || event.sourceCount > MAX_SOURCE_TRACES
       || !Array.isArray(event.documentSourceIds)
       || event.documentSourceIds.length > MAX_SOURCE_TRACES
       || !event.documentSourceIds.every((item) =>
@@ -298,6 +299,7 @@ function requireLedgerContract(receipt: AnswerReplyReceipt): void {
   }
 
   const authoritativeDocumentSourceIds = uniqueDocumentSourceIds(sources);
+  const authoritativeDocumentSourceIdSet = new Set(authoritativeDocumentSourceIds);
   let answerAttemptCount = 0;
   let safeNoticeAttemptCount = 0;
   let ledgerState: AnswerReplyDeliveryState | undefined;
@@ -311,10 +313,16 @@ function requireLedgerContract(receipt: AnswerReplyReceipt): void {
 
   for (const [index, event] of events.entries()) {
     const sequence = index + 1;
+    const externalDocumentSourceIds = event.documentSourceIds.filter(
+      (documentSourceId) => !authoritativeDocumentSourceIdSet.has(documentSourceId),
+    );
+    const expectedSourceCount = sources.length + (
+      event.eventType === "permission_blocked" ? externalDocumentSourceIds.length : 0
+    );
     if (
       event.sequence !== sequence
       || event.id !== createAnswerReplyEventId(delivery.id, sequence)
-      || event.sourceCount !== sources.length
+      || event.sourceCount !== expectedSourceCount
       || event.createdAt.getTime() < delivery.createdAt.getTime()
       || event.createdAt.getTime() > delivery.updatedAt.getTime()
       || (
@@ -325,17 +333,22 @@ function requireLedgerContract(receipt: AnswerReplyReceipt): void {
       throw new Error();
     }
 
-    const isPermissionEvent = event.eventType === "permission_blocked"
-      || event.eventType === "reconciliation_required";
-    if (
-      isPermissionEvent
-        ? event.documentSourceIds.length < 1
-          || !isTraceOrderedSubset(
-            event.documentSourceIds,
-            authoritativeDocumentSourceIds,
-          )
-        : !arraysEqual(event.documentSourceIds, authoritativeDocumentSourceIds)
-    ) {
+    const traceDocumentSourceIds = event.documentSourceIds.filter(
+      (documentSourceId) => authoritativeDocumentSourceIdSet.has(documentSourceId),
+    );
+    const validDocumentSourceIds = event.eventType === "permission_blocked"
+      ? event.documentSourceIds.length >= 1
+        && (
+          externalDocumentSourceIds.length === 0
+            ? isTraceOrderedSubset(event.documentSourceIds, authoritativeDocumentSourceIds)
+            : traceDocumentSourceIds.length === 0
+        )
+      : event.eventType === "reconciliation_required"
+        ? event.documentSourceIds.length >= 1
+          && externalDocumentSourceIds.length === 0
+          && isTraceOrderedSubset(event.documentSourceIds, authoritativeDocumentSourceIds)
+        : arraysEqual(event.documentSourceIds, authoritativeDocumentSourceIds);
+    if (!validDocumentSourceIds) {
       throw new Error();
     }
 

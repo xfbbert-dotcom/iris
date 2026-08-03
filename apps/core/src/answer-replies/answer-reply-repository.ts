@@ -75,6 +75,7 @@ export type PrepareAnswerReplyInput = {
   safeNoticeUuid: string;
   renderedText: string;
   sourceTraces: readonly AnswerReplySourceTraceInput[];
+  blockedDocumentSourceIds?: readonly string[];
   at: Date;
 };
 

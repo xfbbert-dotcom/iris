@@ -424,7 +424,7 @@ describe("FeishuMentionAnswerResponder", () => {
         answerText: "Grounded answer.",
         promptContext: "<document_context></document_context>",
         allowedFragments: [allowedFragment],
-        deniedDocumentIds: [],
+        deniedDocumentIds: ["source-revoked"],
         retrievedFragmentCount: 1,
         usedGroupMemories: [],
       })),
@@ -493,6 +493,7 @@ describe("FeishuMentionAnswerResponder", () => {
         embeddingProfileId: "profile-1",
         initialPermissionCheckedAt: preparedAt,
       }],
+      blockedDocumentSourceIds: ["source-revoked"],
       preparedAt,
     });
   });

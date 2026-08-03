@@ -33,9 +33,14 @@ export type AnswerReplyDeliveryRequest = {
   chatId: string;
   replyUuid: string;
   safeNoticeUuid: string;
+  inspectPromptPermissions(): Promise<{
+    blockedDocumentSourceIds: readonly string[];
+    checkedAt: Date;
+  }>;
   prepareAnswer(): Promise<{
     renderedText: string;
     sourceTraces: AnswerReplySourceTraceInput[];
+    blockedDocumentSourceIds?: readonly string[];
     preparedAt: Date;
   }>;
 };
@@ -117,7 +122,10 @@ export function createAnswerReplyDeliveryService({
     });
     const receipt = existing === undefined
       ? await prepareReceipt(input)
-      : requireRequestReceipt(existing, input);
+      : await recheckExistingPromptPermissions(
+          input,
+          requireRequestReceipt(existing, input),
+        );
 
     switch (receipt.delivery.state) {
       case "sent":
@@ -131,10 +139,58 @@ export function createAnswerReplyDeliveryService({
     }
   }
 
-  async function prepareReceipt(
+  async function recheckExistingPromptPermissions(
     input: AnswerReplyDeliveryRequest,
+    receipt: AnswerReplyReceipt,
   ): Promise<AnswerReplyReceipt> {
-    const prepared = await input.prepareAnswer();
+    if (receipt.delivery.state !== "prepared") {
+      return receipt;
+    }
+
+    const inspection = await input.inspectPromptPermissions();
+    if (
+      !isRecord(inspection)
+      || !(inspection.checkedAt instanceof Date)
+      || !Number.isFinite(inspection.checkedAt.getTime())
+    ) {
+      throw contractError();
+    }
+    const blockedDocumentSourceIds = normalizeInspectedBlockedDocumentSourceIds(
+      inspection.blockedDocumentSourceIds,
+    );
+    if (blockedDocumentSourceIds.length === 0) {
+      return receipt;
+    }
+
+    const authoritativeDocumentSourceIds = new Set(
+      receipt.sources.map(({ documentSourceId }) => documentSourceId),
+    );
+    const tracedBlockedDocumentSourceIds = blockedDocumentSourceIds.filter(
+      (documentSourceId) => authoritativeDocumentSourceIds.has(documentSourceId),
+    );
+    if (tracedBlockedDocumentSourceIds.length > 0) {
+      return requireBlockForPermissionReceipt(
+        await repository.blockForPermission({
+          deliveryId: receipt.delivery.id,
+          expectedVersion: receipt.delivery.version,
+          documentSourceIds: tracedBlockedDocumentSourceIds,
+          at: inspection.checkedAt,
+        }),
+        receipt,
+        inspection.checkedAt,
+        tracedBlockedDocumentSourceIds,
+      );
+    }
+
+    if (receipt.delivery.preparedReplyText === undefined) {
+      throw contractError();
+    }
+    const prepared: PreparedAnswer = {
+      renderedText: receipt.delivery.preparedReplyText,
+      sourceTraces: toPreparedSourceTraceInputs(receipt),
+      blockedDocumentSourceIds,
+      preparedAt: inspection.checkedAt,
+    };
     const result: unknown = await repository.prepare({
       provider: input.provider,
       incomingMessageId: input.incomingMessageId,
@@ -143,6 +199,40 @@ export function createAnswerReplyDeliveryService({
       safeNoticeUuid: input.safeNoticeUuid,
       renderedText: prepared.renderedText,
       sourceTraces: prepared.sourceTraces,
+      blockedDocumentSourceIds,
+      at: prepared.preparedAt,
+    });
+    if (
+      !isRecord(result)
+      || (result.outcome !== "applied" && result.outcome !== "already_applied")
+      || !("receipt" in result)
+    ) {
+      throw contractError();
+    }
+    return requirePreparedReceipt(result.receipt, result.outcome, input, prepared);
+  }
+
+  async function prepareReceipt(
+    input: AnswerReplyDeliveryRequest,
+  ): Promise<AnswerReplyReceipt> {
+    const preparedCandidate = await input.prepareAnswer();
+    const blockedDocumentSourceIds = normalizePreflightBlockedDocumentSourceIds(
+      preparedCandidate.blockedDocumentSourceIds,
+      preparedCandidate.sourceTraces,
+    );
+    const prepared: PreparedAnswer = {
+      ...preparedCandidate,
+      ...(blockedDocumentSourceIds.length === 0 ? {} : { blockedDocumentSourceIds }),
+    };
+    const result: unknown = await repository.prepare({
+      provider: input.provider,
+      incomingMessageId: input.incomingMessageId,
+      chatId: input.chatId,
+      replyUuid: input.replyUuid,
+      safeNoticeUuid: input.safeNoticeUuid,
+      renderedText: prepared.renderedText,
+      sourceTraces: prepared.sourceTraces,
+      ...(blockedDocumentSourceIds.length === 0 ? {} : { blockedDocumentSourceIds }),
       at: prepared.preparedAt,
     });
     if (
@@ -329,6 +419,39 @@ function requirePreparedReceipt(
     renderedReplyFingerprint,
     sourceTraces: prepared.sourceTraces,
   });
+  const blockedDocumentSourceIds = prepared.blockedDocumentSourceIds ?? [];
+  const permissionEvent = receipt.events.find(
+    ({ eventType }) => eventType === "permission_blocked",
+  );
+  const blockedReceiptMatches = blockedDocumentSourceIds.length === 0
+    || receipt.delivery.state === "permission_blocked"
+      && receipt.delivery.version >= 2
+      && receipt.delivery.preparedReplyText === undefined
+      && receipt.delivery.attemptCount === 0
+      && receipt.delivery.permissionBlockedAt !== undefined
+      && permissionEvent !== undefined
+      && areStringArraysEqual(
+        permissionEvent.documentSourceIds,
+        blockedDocumentSourceIds,
+      );
+  const appliedReceiptMatches = blockedDocumentSourceIds.length === 0
+    ? receipt.delivery.state === "prepared"
+      && receipt.delivery.version === 1
+      && receipt.delivery.preparedReplyText === prepared.renderedText
+      && isSameDate(receipt.delivery.createdAt, prepared.preparedAt)
+      && isSameDate(receipt.delivery.updatedAt, prepared.preparedAt)
+      && receipt.events.length === 1
+      && receipt.events[0]?.eventType === "prepared"
+      && isSameDate(receipt.events[0].createdAt, prepared.preparedAt)
+    : blockedReceiptMatches
+      && receipt.delivery.version === 2
+      && isSameDate(receipt.delivery.updatedAt, prepared.preparedAt)
+      && isSameDate(receipt.delivery.permissionBlockedAt, prepared.preparedAt)
+      && receipt.events.length === 2
+      && receipt.events[0]?.eventType === "prepared"
+      && receipt.events[1]?.eventType === "permission_blocked"
+      && isSameDate(receipt.events[0].createdAt, receipt.delivery.createdAt)
+      && isSameDate(receipt.events[1].createdAt, prepared.preparedAt);
   if (
     receipt.delivery.renderedReplyFingerprint !== renderedReplyFingerprint
     || receipt.delivery.semanticFingerprint !== semanticFingerprint
@@ -337,20 +460,81 @@ function requirePreparedReceipt(
       && receipt.delivery.preparedReplyText !== prepared.renderedText
     )
     || !arePreparedSourceFactsEqual(receipt.sources, prepared.sourceTraces)
-    || (outcome === "applied" && (
-      receipt.delivery.state !== "prepared"
-      || receipt.delivery.version !== 1
-      || receipt.delivery.preparedReplyText !== prepared.renderedText
-      || !isSameDate(receipt.delivery.createdAt, prepared.preparedAt)
-      || !isSameDate(receipt.delivery.updatedAt, prepared.preparedAt)
-      || receipt.events.length !== 1
-      || receipt.events[0]?.eventType !== "prepared"
-      || !isSameDate(receipt.events[0].createdAt, prepared.preparedAt)
-    ))
+    || !blockedReceiptMatches
+    || (outcome === "applied" && !appliedReceiptMatches)
   ) {
     throw contractError();
   }
   return receipt;
+}
+
+function normalizePreflightBlockedDocumentSourceIds(
+  value: readonly string[] | undefined,
+  sourceTraces: readonly AnswerReplySourceTraceInput[],
+): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > 1000 - sourceTraces.length) {
+    throw contractError();
+  }
+  const authoritative = new Set(sourceTraces.map(({ documentSourceId }) => documentSourceId));
+  const result = value.map((documentSourceId) => {
+    if (
+      typeof documentSourceId !== "string"
+      || documentSourceId.length < 1
+      || documentSourceId.length > 512
+      || documentSourceId.trim() !== documentSourceId
+      || authoritative.has(documentSourceId)
+    ) {
+      throw contractError();
+    }
+    return documentSourceId;
+  });
+  if (new Set(result).size !== result.length) {
+    throw contractError();
+  }
+  return result;
+}
+
+function normalizeInspectedBlockedDocumentSourceIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 1000) {
+    throw contractError();
+  }
+  const result = value.map((documentSourceId) => {
+    if (
+      typeof documentSourceId !== "string"
+      || documentSourceId.length < 1
+      || documentSourceId.length > 512
+      || documentSourceId.trim() !== documentSourceId
+    ) {
+      throw contractError();
+    }
+    return documentSourceId;
+  });
+  if (new Set(result).size !== result.length) {
+    throw contractError();
+  }
+  return result;
+}
+
+function toPreparedSourceTraceInputs(
+  receipt: AnswerReplyReceipt,
+): AnswerReplySourceTraceInput[] {
+  return receipt.sources.map((source) => ({
+    promptRank: source.promptRank,
+    citationRank: source.citationRank,
+    documentSourceId: source.documentSourceId,
+    documentSnapshotId: source.documentSnapshotId,
+    fragmentId: source.fragmentId,
+    chunkIndex: source.chunkIndex,
+    sourceType: source.sourceType,
+    sourceUri: source.sourceUri,
+    sourceTitle: source.sourceTitle,
+    contentHash: source.contentHash,
+    embeddingProfileId: source.embeddingProfileId,
+    initialPermissionCheckedAt: source.initialPermissionCheckedAt,
+  }));
 }
 
 function arePreparedSourceFactsEqual(

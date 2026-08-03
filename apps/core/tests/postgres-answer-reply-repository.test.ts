@@ -410,6 +410,220 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     }
   });
 
+  it("atomically prepares a permission-blocked receipt for a denied prompt candidate", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("preflight-blocked", {
+      sourceTraces: [],
+      blockedDocumentSourceIds: ["source-revoked"],
+    });
+
+    const prepared = await repository.prepare(input);
+
+    expect(prepared.outcome).toBe("applied");
+    expect(prepared.receipt.delivery).toMatchObject({
+      state: "permission_blocked",
+      attemptCount: 0,
+      version: 2,
+      permissionBlockedAt: input.at,
+    });
+    expect(prepared.receipt.delivery.preparedReplyText).toBeUndefined();
+    expect(prepared.receipt.sources).toEqual([]);
+    expect(prepared.receipt.events).toMatchObject([
+      {
+        sequence: 1,
+        eventType: "prepared",
+        sourceCount: 0,
+        documentSourceIds: [],
+      },
+      {
+        sequence: 2,
+        eventType: "permission_blocked",
+        sourceCount: 1,
+        documentSourceIds: ["source-revoked"],
+      },
+    ]);
+  });
+
+  it("keeps allowed traces separate while atomically blocking an external denied source", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("preflight-blocked-with-trace", {
+      blockedDocumentSourceIds: ["source-revoked"],
+    });
+
+    const prepared = await repository.prepare(input);
+
+    expect(prepared.receipt.sources).toHaveLength(1);
+    expect(prepared.receipt.events).toMatchObject([
+      {
+        sequence: 1,
+        eventType: "prepared",
+        sourceCount: 1,
+        documentSourceIds: ["source-a"],
+      },
+      {
+        sequence: 2,
+        eventType: "permission_blocked",
+        sourceCount: 2,
+        documentSourceIds: ["source-revoked"],
+      },
+    ]);
+  });
+
+  it("atomically upgrades an unsent semantic replay when a preflight denial arrives", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("preflight-blocked-replay");
+    const first = await repository.prepare(input);
+    const blockedAt = new Date("2026-08-02T01:00:00.000Z");
+
+    const replay = await repository.prepare({
+      ...input,
+      renderedText: "Answer withheld by the live permission guard.",
+      sourceTraces: [],
+      blockedDocumentSourceIds: ["source-revoked"],
+      at: blockedAt,
+    });
+
+    expect(first.receipt.delivery).toMatchObject({ state: "prepared", version: 1 });
+    expect(replay.outcome).toBe("applied");
+    expect(replay.receipt.delivery).toMatchObject({
+      state: "permission_blocked",
+      version: 2,
+      attemptCount: 0,
+      permissionBlockedAt: blockedAt,
+      updatedAt: blockedAt,
+    });
+    expect(replay.receipt.delivery.preparedReplyText).toBeUndefined();
+    expect(replay.receipt.sources).toEqual(first.receipt.sources);
+    expect(replay.receipt.events.at(-1)).toMatchObject({
+      eventType: "permission_blocked",
+      sourceCount: 2,
+      documentSourceIds: ["source-revoked"],
+      createdAt: blockedAt,
+    });
+  });
+
+  it("records a replay denial as traced evidence when it matches a persisted source", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("preflight-blocked-trace-replay");
+    const first = await repository.prepare(input);
+    const blockedAt = new Date("2026-08-02T01:00:00.000Z");
+
+    const replay = await repository.prepare({
+      ...input,
+      renderedText: "Answer withheld by the live permission guard.",
+      sourceTraces: [],
+      blockedDocumentSourceIds: ["source-a"],
+      at: blockedAt,
+    });
+
+    expect(replay.outcome).toBe("applied");
+    expect(replay.receipt.delivery).toMatchObject({
+      state: "permission_blocked",
+      version: 2,
+      attemptCount: 0,
+      permissionBlockedAt: blockedAt,
+    });
+    expect(replay.receipt.sources).toEqual(first.receipt.sources);
+    expect(replay.receipt.events.at(-1)).toMatchObject({
+      eventType: "permission_blocked",
+      sourceCount: 1,
+      documentSourceIds: ["source-a"],
+      createdAt: blockedAt,
+    });
+  });
+
+  it("uses one traced provenance class when replay denials mix persisted and external IDs", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("preflight-blocked-mixed-replay");
+    const first = await repository.prepare(input);
+    const blockedAt = new Date("2026-08-02T01:00:00.000Z");
+    const blockedInput = {
+      ...input,
+      renderedText: "Answer withheld by the live permission guard.",
+      sourceTraces: [],
+      blockedDocumentSourceIds: ["source-a", "source-revoked"],
+      at: blockedAt,
+    };
+
+    const replay = await repository.prepare(blockedInput);
+    const exactReplay = await repository.prepare({
+      ...blockedInput,
+      at: new Date("2026-08-02T01:01:00.000Z"),
+    });
+
+    expect(replay.outcome).toBe("applied");
+    expect(replay.receipt.sources).toEqual(first.receipt.sources);
+    expect(replay.receipt.events.at(-1)).toMatchObject({
+      eventType: "permission_blocked",
+      sourceCount: 1,
+      documentSourceIds: ["source-a"],
+    });
+    expect(exactReplay.outcome).toBe("already_applied");
+    expect(exactReplay.receipt).toEqual(replay.receipt);
+  });
+
+  it("orders replay denial evidence by the persisted prompt trace", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("preflight-blocked-trace-order", {
+      sourceTraces: [sourceTrace(), sourceTrace({
+        promptRank: 2,
+        citationRank: 2,
+        documentSourceId: "source-b",
+        documentSnapshotId: "snapshot-b",
+        fragmentId: "fragment-b",
+        sourceUri: "https://tenant.feishu.cn/wiki/document-b",
+        sourceTitle: "Document B",
+        contentHash: "b".repeat(64),
+      })],
+    });
+    await repository.prepare(input);
+
+    const replay = await repository.prepare({
+      ...input,
+      renderedText: "Answer withheld by the live permission guard.",
+      sourceTraces: [],
+      blockedDocumentSourceIds: ["source-b", "source-a"],
+      at: new Date("2026-08-02T01:00:00.000Z"),
+    });
+
+    expect(replay.receipt.events.at(-1)).toMatchObject({
+      eventType: "permission_blocked",
+      sourceCount: 2,
+      documentSourceIds: ["source-a", "source-b"],
+    });
+  });
+
+  it("rejects a replay that changes the preflight-denied source facts", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("preflight-blocked-conflict", {
+      blockedDocumentSourceIds: ["source-revoked"],
+    });
+    await repository.prepare(input);
+
+    await expect(repository.prepare({
+      ...input,
+      blockedDocumentSourceIds: ["source-other"],
+      at: new Date("2026-08-02T01:00:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyPreparationConflictError);
+  });
+
+  it("reuses the exact preflight-denied facts without appending another event", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput("preflight-blocked-exact-replay", {
+      blockedDocumentSourceIds: ["source-revoked"],
+    });
+    const first = await repository.prepare(input);
+
+    const replay = await repository.prepare({
+      ...input,
+      at: new Date("2026-08-02T01:00:00.000Z"),
+    });
+
+    expect(replay.outcome).toBe("already_applied");
+    expect(replay.receipt.delivery).toEqual(first.receipt.delivery);
+    expect(replay.receipt.events).toEqual(first.receipt.events);
+  });
+
   it("treats regenerated row IDs and changed timestamps as exact semantic replay", async () => {
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const input = prepareInput("replay");

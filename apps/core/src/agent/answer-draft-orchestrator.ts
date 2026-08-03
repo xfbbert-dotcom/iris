@@ -47,8 +47,15 @@ export type AnswerDraftResult = {
   usedActionItems?: PromptActionItem[];
 };
 
+export type AnswerDraftPermissionInspectionResult = {
+  blockedDocumentSourceIds: string[];
+};
+
 export interface AnswerDraftOrchestrator {
   generateDraft(input: AnswerDraftInput): Promise<AnswerDraftResult>;
+  inspectPromptPermissions(
+    input: AnswerDraftInput,
+  ): Promise<AnswerDraftPermissionInspectionResult>;
 }
 
 type LiveChatContextProvider = {
@@ -64,6 +71,7 @@ const MAX_LIVE_CHAT_LIMIT = 20;
 const MAX_EXECUTION_ID_CHARS = 512;
 const MAX_EXECUTION_OPERATION_KEY_CHARS = 512;
 const TRUNCATION_MARKER = " ... [truncated]";
+const PERMISSION_BLOCKED_ANSWER_DRAFT = "Answer withheld by the live permission guard.";
 
 export function createAnswerDraftOrchestrator({
   contextBuilder,
@@ -82,23 +90,64 @@ export function createAnswerDraftOrchestrator({
   modelId?: string;
   createExecutionId?: () => string;
 }): AnswerDraftOrchestrator {
-  return {
-    async generateDraft(input) {
-      const question = input.question.trim();
-      if (question.length === 0) {
-        throw new Error("question must not be blank");
-      }
-      if (question.length > MAX_ANSWER_DRAFT_QUESTION_CHARS) {
-        throw new Error(`question must be at most ${MAX_ANSWER_DRAFT_QUESTION_CHARS} characters`);
-      }
-      if (input.liveChatMessages.length > MAX_REQUEST_LIVE_CHAT_MESSAGES) {
-        throw new Error(
-          `liveChatMessages must include at most ${MAX_REQUEST_LIVE_CHAT_MESSAGES} messages`,
-        );
-      }
+  function normalizeInput(input: AnswerDraftInput): {
+    question: string;
+    liveChatLimit: number | undefined;
+  } {
+    const question = input.question.trim();
+    if (question.length === 0) {
+      throw new Error("question must not be blank");
+    }
+    if (question.length > MAX_ANSWER_DRAFT_QUESTION_CHARS) {
+      throw new Error(`question must be at most ${MAX_ANSWER_DRAFT_QUESTION_CHARS} characters`);
+    }
+    if (input.liveChatMessages.length > MAX_REQUEST_LIVE_CHAT_MESSAGES) {
+      throw new Error(
+        `liveChatMessages must include at most ${MAX_REQUEST_LIVE_CHAT_MESSAGES} messages`,
+      );
+    }
 
-      assertSafeMagnitudeLimit(input.fragmentLimit, "fragmentLimit");
-      const liveChatLimit = sanitizeLiveChatLimit(input.liveChatLimit);
+    assertSafeMagnitudeLimit(input.fragmentLimit, "fragmentLimit");
+    return {
+      question,
+      liveChatLimit: sanitizeLiveChatLimit(input.liveChatLimit),
+    };
+  }
+
+  async function buildContext(
+    input: AnswerDraftInput,
+    normalized: ReturnType<typeof normalizeInput>,
+  ): Promise<DocumentRetrievalContextResult> {
+    const storedLiveChatMessages = input.chatId === undefined
+      ? []
+      : await liveChatContextProvider?.loadRecentMessages({
+          chatId: input.chatId,
+          limit: normalized.liveChatLimit,
+        }) ?? [];
+    const liveChatMessages = selectLiveChatWindow(
+      dedupeLiveChatMessages([...storedLiveChatMessages, ...input.liveChatMessages]),
+      normalized.liveChatLimit,
+    );
+
+    return contextBuilder.buildContext({
+      queryText: buildRetrievalQueryText(normalized.question, liveChatMessages),
+      liveChatMessages,
+      fragmentLimit: input.fragmentLimit,
+      liveChatLimit: normalized.liveChatLimit,
+      ...(input.askerId === undefined ? {} : { askerId: input.askerId }),
+    });
+  }
+
+  return {
+    async inspectPromptPermissions(input) {
+      const normalized = normalizeInput(input);
+      const context = await buildContext(input, normalized);
+      return { blockedDocumentSourceIds: [...context.deniedDocumentIds] };
+    },
+
+    async generateDraft(input) {
+      const normalized = normalizeInput(input);
+      const { question } = normalized;
       const executionId = resolveAnswerDraftExecutionId(input.executionId, createExecutionId);
       const commonObservation = {
         ...toOptionalObservationReference("groupId", input.chatId),
@@ -115,69 +164,54 @@ export function createAnswerDraftOrchestrator({
       });
 
       try {
-        const storedLiveChatMessages =
-          input.chatId === undefined
-            ? []
-            : await liveChatContextProvider?.loadRecentMessages({
-                chatId: input.chatId,
-                limit: liveChatLimit,
-              }) ?? [];
-        const liveChatMessages = selectLiveChatWindow(
-          dedupeLiveChatMessages([...storedLiveChatMessages, ...input.liveChatMessages]),
-          liveChatLimit,
-        );
-
-        const context = await contextBuilder.buildContext({
-          queryText: buildRetrievalQueryText(question, liveChatMessages),
-          liveChatMessages,
-          fragmentLimit: input.fragmentLimit,
-          liveChatLimit,
-          ...(input.askerId === undefined ? {} : { askerId: input.askerId }),
-        });
-
-        const providerObservation = {
-          ...commonObservation,
-          subjectType: "provider_request" as const,
-          ...(provider === undefined ? {} : { provider }),
-          ...(modelId === undefined ? {} : { modelId }),
-        };
-        await safelyObserve(agentExecutionObserver, {
-          ...providerObservation,
-          eventType: "provider_request_started",
-          phase: "sampling",
-          operationKey: createTurnOperationKey(executionId, "provider:started"),
-          metadata: {},
-        });
+        const context = await buildContext(input, normalized);
 
         let answerText: string;
-        try {
-          const modelResult = await model.generateAnswerDraft({
-            question,
-            promptContext: context.promptContext,
+        if (context.deniedDocumentIds.length > 0) {
+          answerText = PERMISSION_BLOCKED_ANSWER_DRAFT;
+        } else {
+          const providerObservation = {
+            ...commonObservation,
+            subjectType: "provider_request" as const,
+            ...(provider === undefined ? {} : { provider }),
+            ...(modelId === undefined ? {} : { modelId }),
+          };
+          await safelyObserve(agentExecutionObserver, {
+            ...providerObservation,
+            eventType: "provider_request_started",
+            phase: "sampling",
+            operationKey: createTurnOperationKey(executionId, "provider:started"),
+            metadata: {},
           });
-          answerText = truncateAnswerDraftText(modelResult.answerText.trim());
-          if (answerText.length === 0) {
-            throw new Error("model answer draft must not be blank");
+          try {
+            const modelResult = await model.generateAnswerDraft({
+              question,
+              promptContext: context.promptContext,
+            });
+            answerText = truncateAnswerDraftText(modelResult.answerText.trim());
+            if (answerText.length === 0) {
+              throw new Error("model answer draft must not be blank");
+            }
+            await safelyObserve(agentExecutionObserver, {
+              ...providerObservation,
+              eventType: "provider_request_completed",
+              phase: "sampling",
+              outcome: "success",
+              operationKey: createTurnOperationKey(executionId, "provider:completed"),
+              metadata: {},
+            });
+          } catch (error) {
+            await safelyObserve(agentExecutionObserver, {
+              ...providerObservation,
+              eventType: "provider_request_failed",
+              phase: "sampling",
+              outcome: "error",
+              decisionReason: "model_provider_failed",
+              operationKey: createTurnOperationKey(executionId, "provider:failed"),
+              metadata: {},
+            });
+            throw error;
           }
-          await safelyObserve(agentExecutionObserver, {
-            ...providerObservation,
-            eventType: "provider_request_completed",
-            phase: "sampling",
-            outcome: "success",
-            operationKey: createTurnOperationKey(executionId, "provider:completed"),
-            metadata: {},
-          });
-        } catch (error) {
-          await safelyObserve(agentExecutionObserver, {
-            ...providerObservation,
-            eventType: "provider_request_failed",
-            phase: "sampling",
-            outcome: "error",
-            decisionReason: "model_provider_failed",
-            operationKey: createTurnOperationKey(executionId, "provider:failed"),
-            metadata: {},
-          });
-          throw error;
         }
 
         const result = toAnswerDraftResult(answerText, context);

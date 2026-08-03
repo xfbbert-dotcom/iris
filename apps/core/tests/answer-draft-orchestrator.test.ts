@@ -27,7 +27,7 @@ describe("AnswerDraftOrchestrator", () => {
             sourceType: "feishu_wiki" as const,
           },
         ],
-        deniedDocumentIds: ["source-denied"],
+        deniedDocumentIds: [],
         retrievedFragmentCount: 2,
         usedGroupMemories: [{
           id: "memory-1",
@@ -68,7 +68,7 @@ describe("AnswerDraftOrchestrator", () => {
       allowedFragments: [
         expect.objectContaining({ id: "fragment-1", documentSourceId: "source-1" }),
       ],
-      deniedDocumentIds: ["source-denied"],
+      deniedDocumentIds: [],
       retrievedFragmentCount: 2,
       usedGroupMemories: [{
         id: "memory-1",
@@ -80,6 +80,67 @@ describe("AnswerDraftOrchestrator", () => {
       usedDiscussionThreads: [],
       usedActionItems: [],
     });
+  });
+
+  it("skips the model when a prompt-ranked source failed the live permission check", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: ["source-denied"],
+        retrievedFragmentCount: 1,
+        usedGroupMemories: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Must not be generated." })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+
+    const result = await orchestrator.generateDraft({
+      question: "What changed?",
+      liveChatMessages: [],
+    });
+
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      answerText: "Answer withheld by the live permission guard.",
+      deniedDocumentIds: ["source-denied"],
+    });
+  });
+
+  it("rechecks prompt permissions without calling the model provider", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: ["source-denied"],
+        retrievedFragmentCount: 1,
+        usedGroupMemories: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Must not be generated." })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model }) as ReturnType<
+      typeof createAnswerDraftOrchestrator
+    > & {
+      inspectPromptPermissions(input: {
+        question: string;
+        liveChatMessages: [];
+      }): Promise<{ blockedDocumentSourceIds: string[] }>;
+    };
+
+    const result = await orchestrator.inspectPromptPermissions({
+      question: "What changed?",
+      liveChatMessages: [],
+    });
+
+    expect(result).toEqual({ blockedDocumentSourceIds: ["source-denied"] });
+    expect(contextBuilder.buildContext).toHaveBeenCalledTimes(1);
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
   it("rejects blank questions before building context", async () => {
@@ -671,7 +732,7 @@ describe("AnswerDraftOrchestrator", () => {
               sourceType: "feishu_wiki" as const,
             },
           ],
-          deniedDocumentIds: ["source-denied"],
+          deniedDocumentIds: [],
           retrievedFragmentCount: 2,
           usedGroupMemories: [{
             id: "memory-1",
@@ -761,7 +822,7 @@ describe("AnswerDraftOrchestrator", () => {
         metadata: {
           retrievedFragmentCount: 2,
           allowedFragmentCount: 1,
-          deniedDocumentCount: 1,
+          deniedDocumentCount: 0,
           groupMemoryCount: 1,
           discussionThreadCount: 1,
           actionItemCount: 1,

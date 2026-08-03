@@ -92,6 +92,40 @@ describe("AnswerReplyDeliveryService", () => {
     });
   });
 
+  it("rechecks prompt-ranked denial before resuming a source-less prepared answer", async () => {
+    const harness = createHarness();
+    harness.repository.receipt = receipt({}, []);
+    const replacementPrepare = vi.fn(async () => preparedAnswer({
+      renderedText: "REPLACEMENT answer must not be generated",
+      sourceTraces: [],
+    }));
+    const inspectPromptPermissions = vi.fn(async () => ({
+      blockedDocumentSourceIds: ["source-revoked"],
+      checkedAt: transitionAt,
+    }));
+    const replayRequest = request(replacementPrepare, { inspectPromptPermissions });
+
+    await expect(harness.service.respond(replayRequest)).resolves.toEqual({
+      replyMessageId: "reply-default",
+    });
+
+    expect(replacementPrepare).not.toHaveBeenCalled();
+    expect(inspectPromptPermissions).toHaveBeenCalledTimes(1);
+    expect(harness.repository.prepare).toHaveBeenCalledWith({
+      provider: "feishu",
+      incomingMessageId: "om_1",
+      chatId: "oc_1",
+      replyUuid: preparedReplyUuid,
+      safeNoticeUuid,
+      renderedText: preparedText,
+      sourceTraces: [],
+      blockedDocumentSourceIds: ["source-revoked"],
+      at: transitionAt,
+    });
+    expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
+    expectOnlySafeNoticeWasSent(harness);
+  });
+
   it("serializes concurrent first preparation and makes the loser reload the receipt", async () => {
     const harness = createHarness();
     const firstPrepareStarted = createGate();
@@ -497,6 +531,52 @@ describe("AnswerReplyDeliveryService", () => {
       replyInThread: true,
       uuid: preparedReplyUuid,
     });
+  });
+
+  it("atomically blocks when initial retrieval denied a prompt-ranked source", async () => {
+    const harness = createHarness({
+      replyResults: [{ replyMessageId: "safe-preflight" }],
+    });
+    const prepareAnswer = vi.fn(async () => ({
+      ...preparedAnswer({ sourceTraces: [] }),
+      blockedDocumentSourceIds: ["source-revoked"],
+    }));
+
+    await expect(harness.service.respond(request(prepareAnswer))).resolves.toEqual({
+      replyMessageId: "safe-preflight",
+    });
+
+    expect(harness.repository.prepare).toHaveBeenCalledWith(expect.objectContaining({
+      blockedDocumentSourceIds: ["source-revoked"],
+    }));
+    expect(harness.verifier.verify).not.toHaveBeenCalled();
+    expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
+    expect(harness.repository.receipt?.delivery.state).toBe("permission_blocked");
+    expectOnlySafeNoticeWasSent(harness);
+  });
+
+  it("rejects an already-applied prepared receipt that omits the current preflight denial", async () => {
+    const harness = createHarness();
+    const staleReceipt = receipt({}, []);
+    harness.repository.prepare.mockImplementationOnce(async () => {
+      harness.repository.receipt = staleReceipt;
+      return {
+        outcome: "already_applied" as const,
+        receipt: staleReceipt,
+      };
+    });
+    const prepareAnswer = vi.fn(async () => ({
+      ...preparedAnswer({ sourceTraces: [] }),
+      blockedDocumentSourceIds: ["source-revoked"],
+    }));
+
+    await expect(harness.service.respond(request(prepareAnswer))).rejects.toThrow(
+      "answer reply delivery contract invalid",
+    );
+
+    expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
+    expect(harness.repository.beginSafeNoticeSend).not.toHaveBeenCalled();
+    expect(harness.replier.replyText).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1117,6 +1197,10 @@ function request(
     chatId: "oc_1",
     replyUuid: preparedReplyUuid,
     safeNoticeUuid,
+    inspectPromptPermissions: async () => ({
+      blockedDocumentSourceIds: [],
+      checkedAt: transitionAt,
+    }),
     ...overrides,
     prepareAnswer,
   };
@@ -1329,6 +1413,11 @@ function appendEvent(
   } = {},
 ): AnswerReplyReceipt {
   const sequence = prior.delivery.version + 1;
+  const authoritativeDocumentSourceIds = new Set(uniqueSourceIds(prior));
+  const externalDocumentSourceCount = eventType === "permission_blocked"
+    ? documentSourceIds.filter((documentSourceId) =>
+      !authoritativeDocumentSourceIds.has(documentSourceId)).length
+    : 0;
   return {
     ...updated,
     events: [
@@ -1339,7 +1428,7 @@ function appendEvent(
         sequence,
         eventType,
         ...(attemptNumber === undefined ? {} : { attemptNumber }),
-        sourceCount: prior.sources.length,
+        sourceCount: prior.sources.length + externalDocumentSourceCount,
         documentSourceIds,
         createdAt: at,
       },
@@ -1494,6 +1583,20 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
         createdAt: input.at,
         updatedAt: input.at,
       }, [...input.sourceTraces]);
+      if ((input.blockedDocumentSourceIds?.length ?? 0) > 0) {
+        current = blockedReceipt(
+          current,
+          [...input.blockedDocumentSourceIds!],
+          input.at,
+        );
+      }
+      this.receipts.set(key, current);
+    } else if ((input.blockedDocumentSourceIds?.length ?? 0) > 0) {
+      current = blockedReceipt(
+        current,
+        [...input.blockedDocumentSourceIds!],
+        input.at,
+      );
       this.receipts.set(key, current);
     }
     return { outcome: "applied", receipt: current };
