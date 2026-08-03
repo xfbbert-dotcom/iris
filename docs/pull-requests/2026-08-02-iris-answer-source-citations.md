@@ -94,10 +94,11 @@ intended worktree.
   revoked marker or a normal citation block in the latest visible Feishu reply.
 - Current queue/DLQ and answer-reply counts: event/document/reindex pending and DLQ counts are zero;
   `unresolvedCount=0`, `pendingSafeNoticeCount=0`, and `reconciliationRequiredCount=0`.
-- Current runtime/Caddy state: `globalEnabled=false`, `desiredGlobalEnabled=false`, Caddy stopped.
-- Approved production marker remains `b25d8298fd396366c97449dfbe6f11f3dc42f8f9`. The recovery candidate
-  was deployed only for bounded fail-closed acceptance and has not been merged or promoted to the
-  controlled daily pilot.
+- Post-revocation cleanup state at that checkpoint: `globalEnabled=false`,
+  `desiredGlobalEnabled=false`, Caddy stopped.
+- The production marker before the controlled restoration remained
+  `b25d8298fd396366c97449dfbe6f11f3dc42f8f9`. The recovery candidate had not yet been restored to
+  the daily pilot at that checkpoint.
 
 An independent recovery audit on 2026-08-02 rechecked the VPS repository and image SHA, tracked
 cleanliness, healthy private services, encrypted backup ordering, migration count, private
@@ -171,3 +172,37 @@ Cleanup stopped Caddy first, durably disabled global runtime and all 14 known gr
 AI Worker, PostgreSQL, and Redis health was `healthy`; event/document/reindex pending and DLQ counts
 were all zero; answer-reply unresolved, pending-safe-notice, and reconciliation-required counts were
 all zero. The terminal receipt remained unchanged with one safe notice and zero answer attempts.
+
+## 2026-08-03 Controlled Daily Pilot Restoration
+
+After all ten product-level loops in the internal MVP checklist were confirmed green, the existing
+single-group daily pilot was restored on the exact behavior candidate
+`5b54dfe9ac4819bcec8a434a19cac8232a9e5315`. Core and AI Worker both use images tagged with that
+SHA. The draft PR head is the evidence-only commit
+`abcdedf95bf0119adc157bcb331394890a72f11c`; its Core and AI Worker checks both passed in
+<https://github.com/xfbbert-dotcom/iris/actions/runs/30814649624>.
+
+The preflight was fail closed: live and desired global runtime were false, all 14 known groups were
+disabled, Caddy was stopped, readiness was `ready`, persistence was healthy PostgreSQL, and every
+event, answer-reply, document, reindex, memory, and projection-repair pending/DLQ count was zero.
+The existing environment already matched the approved daily profile: memory extraction enabled,
+thread/action extraction allowlisted only to `oc_637a9aca45f01943477f4e17f1fc5b9a`, proactive planner
+and delivery disabled with empty allowlists, knowledge cards disabled with an empty allowlist, and
+wiki-space sync enabled.
+
+Activation enabled only the approved pilot group, durably enabled global runtime, verified all
+capability switches, and started Caddy last. The final bounded profile is:
+
+- `globalEnabled=true`, `desiredGlobalEnabled=true`, PostgreSQL persistence healthy;
+- the pilot group enabled and the other 13 known groups disabled;
+- group context, mention replies, group documents, and knowledge-base retrieval enabled;
+- `proactiveSpeech=false`, `generateKnowledgeDrafts=false`, `writeKnowledgeBase=false`, and
+  `callExternalTools=false`;
+- memory extraction enabled/running/worker-healthy with exactly one thread and action group;
+- one wiki space synced with no pending, retry, dead-letter, or disabled space;
+- all event, answer-reply, document, reindex, memory, and projection-repair counts still zero;
+- Core, AI Worker, PostgreSQL, and Redis healthy; Caddy running;
+- public `/health=200` and public `/internal/status=404`.
+
+No model probe or synthetic Feishu message was sent during this restoration. PR #22 and PR #23
+remain open and unmerged pending explicit merge authorization.
