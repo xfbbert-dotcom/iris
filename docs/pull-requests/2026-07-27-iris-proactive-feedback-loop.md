@@ -117,3 +117,43 @@ first real helpful-feedback path in the authorized pilot group:
 The positive real feedback loop is complete. Negative actor, membership-loss, stale-binding,
 disabled-runtime, and duplicate-callback cases remain external acceptance gates; unit,
 integration, and PostgreSQL race coverage for those paths is already present.
+
+## One-Group Daily Pilot Transition
+
+On 2026-08-04, the governed proactive loop moved from one-off acceptance into a bounded daily
+pilot for group `oc_637a9aca45f01943477f4e17f1fc5b9a`:
+
+- An encrypted pre-change backup was written to
+  `/opt/iris/repository/backups/iris-20260804T070005Z.bundle.tar.age` before any runtime change.
+- Production remained on repository and image commit
+  `c9c6d9cd269e9772b61196dcb0b623b540151f13`; Core and AI Worker used matching tags.
+- Knowledge-card feedback, proactive planning, and proactive delivery were enabled together for
+  exactly the pilot group. The first staging attempt intentionally failed closed because the
+  knowledge-card dependency had not been enabled; no public ingress or partial proactive runtime
+  survived that rejection.
+- A planner scan reused the two historical outcomes as one existing candidate and one active
+  suppression, then produced one new pending candidate:
+  `quiet_open_thread:f7843fb9-ee35-4f90-8c1c-0e6672881392:3`.
+- The operator reviewed that candidate before approving it. Delivery
+  `proactive-delivery:becbab3b0ad6b1688c7d945261d8831bc758182033214c2ce44a5b868d842fed`
+  reached Feishu with status `sent` on exactly one attempt. The card was visually observed in the
+  pilot group with both `helpful` and `irrelevant` controls. The operator did not select either
+  subjective feedback value on behalf of group members.
+- Expiring fail-closed timers protected the bounded activation windows. One timer expired while
+  visual verification was still in progress and restored the full disabled state as designed.
+  After the final gates passed, the replacement timer was explicitly cancelled; no daily-pilot
+  autoclose timer remains active.
+- Final production state is `globalEnabled=true`, `desiredGlobalEnabled=true`,
+  `proactiveSpeech=true`, with the pilot group enabled and all other 13 known groups disabled.
+  Planning and delivery each have a one-group allowlist, and every delivery still requires manual
+  operator approval.
+- Core, AI Worker, Postgres, Redis, the local embedding service, proactive planner, proactive
+  dispatcher, knowledge-card runtime, and Caddy are healthy. Event, document, reindex, memory,
+  approval-interaction, knowledge-card, and proactive delivery pending/error queues are empty.
+- Public `/health` returns `200`; public `/internal/status` returns `404`; malformed event and card
+  callbacks both return `401`. The final content-free evidence record is
+  `/opt/iris/repository/evidence/proactive-daily-pilot-c9c6d9cd-20260804.json` with mode `0600`.
+
+This transition does not make proactive delivery automatic. The planner may prepare a candidate,
+but a human operator must still review and approve each card. Real group-member feedback now drives
+the existing suppression and effectiveness loop during daily use.

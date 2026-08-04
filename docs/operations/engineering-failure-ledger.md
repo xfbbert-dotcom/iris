@@ -22,6 +22,25 @@ delivery mistakes while implementing it.
 - **Exit condition:** The agreed tests and one bounded real pilot workflow pass with no unresolved
   P0/P1 finding.
 
+### Activate coupled runtimes as one rollout unit
+
+- **Failure:** A daily-pilot rollout enabled proactive planning and delivery without enabling the
+  knowledge-card feedback runtime required by delivery. Core correctly refused startup. A later
+  operator gate also read approval-interaction counts from the response root instead of its
+  `queue` object, causing a second unnecessary fail-closed recovery.
+- **Root cause:** The one-off rollout command duplicated configuration dependencies and response
+  schemas instead of treating the deployed runtime contract as one unit.
+- **Prevention rule:** Stage knowledge cards, planner, and delivery together with the same exact
+  group allowlist. Verify the enabled component shape before changing durable runtime state, and
+  read queue counters only from their canonical nested objects.
+- **Guard:** Core startup rejects proactive delivery without a covering knowledge-card allowlist;
+  every bounded opening keeps Caddy stopped until `/internal/status` proves both proactive workers
+  running, then uses an expiring fail-closed timer around runtime activation. Any failed assertion
+  invokes the checked-in autoclose script and recreates Core from the disabled environment.
+- **Exit condition:** The three runtimes are healthy for exactly one group, one reviewed delivery
+  is single-attempt `sent`, all canonical queue/DLQ counters are zero, public boundaries pass, and
+  the fail-closed timer is explicitly cancelled only after those gates.
+
 ## External Providers
 
 ### Treat model capacity and latency as runtime state, not a code hypothesis
