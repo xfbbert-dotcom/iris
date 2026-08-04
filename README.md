@@ -14,22 +14,33 @@ Reusable engineering failures and prevention rules live at:
 
 `docs/operations/engineering-failure-ledger.md`
 
-The Phase 5B-1 knowledge-card confirmation acceptance contract lives at:
+The internal MVP acceptance checklist lives at:
 
-`docs/runbooks/iris-knowledge-card-confirmation-acceptance.md`
+`docs/runbooks/iris-internal-mvp-gray-checklist.md`
 
-Phase 5B-1 is implemented with runtime gates defaulting off and has passed local verification. Real
-Feishu pilot acceptance is still pending. Phase 5B-2 proposal/owner-admin/OAuth workflows and Phase
-5B-3 Feishu knowledge-base writes are not included.
+## Current Product State
 
-The first implementation slice builds:
+All ten required P1 product loops have passed a bounded real-Feishu acceptance run. Production is
+now in a controlled 3-5 person, single-group daily pilot. This does not authorize expansion to all
+20-30 employees; expansion follows only after ordinary pilot use contains no unresolved P0 or P1
+issue.
 
-- TypeScript Core App
-- Feishu ack-first event ingestion
-- runtime capability controls
-- real-time permission guard
-- context assembly with live chat anchoring
-- Python AI worker job contracts
+The implemented internal-MVP loop includes:
+
+- ack-first Feishu event ingestion and shared group context;
+- mention replies grounded in recent chat, long-term memory, group documents, employee-submitted
+  documents, and authorized Feishu Wiki spaces;
+- real-time source permission rechecks and permission-safe citations;
+- semantic discussion-thread and action memory;
+- governed knowledge drafting, group confirmation, OAuth full-text review, approval, and Feishu Wiki
+  publication;
+- operator-reviewed proactive reminders with group-member feedback and suppression;
+- durable runtime controls, fail-closed recovery, private local embeddings, and a lightweight Admin
+  Console.
+
+High-impact capabilities remain bounded: proactive deliveries require human review, knowledge-base
+writes open only for an intentional governed session, and every known non-pilot group remains
+disabled.
 
 ## Local Development
 
