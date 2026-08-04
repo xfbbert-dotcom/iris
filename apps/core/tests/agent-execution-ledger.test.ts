@@ -268,6 +268,75 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     await expect(proactiveRepository.getProactiveSignalDeliveryContext(actionDeliveryId)).resolves.toMatchObject({
       subjectLabel: "Complete customer feedback dashboard acceptance",
     });
+
+    await pool.query(
+      "UPDATE action_items SET retrieval_state = 'invalidated' WHERE id = $1 AND group_id = $2",
+      [actionId, groupId],
+    );
+    await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
+      deliveryId: actionDeliveryId,
+      workerId: "subject-worker-action",
+      at,
+    })).resolves.toEqual({ status: "stale" });
+    await expect(proactiveRepository.getProactiveSignalDeliveryContext(actionDeliveryId)).resolves.not.toHaveProperty(
+      "subjectLabel",
+    );
+    await expect(proactiveRepository.claimProactiveSignalDelivery({
+      workerId: "subject-worker-action-retry",
+      at: new Date(at.getTime() + 1),
+      leaseUntil: new Date(at.getTime() + 30_001),
+    })).resolves.toBeUndefined();
+
+    const parentThreadId = `thread-parent-${suffix}`;
+    await pool.query(
+      `INSERT INTO discussion_threads (
+         id, group_id, title, summary, status, confidence, version,
+         first_evidence_at, last_activity_at, retrieval_state, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'open', 0.95, 1, $5, $5, 'invalidated', $5, $5)`,
+      [parentThreadId, groupId, "Invalidated parent", "Invalidated parent summary", at],
+    );
+    const dependentActionId = `action-dependent-${suffix}`;
+    await pool.query(
+      `INSERT INTO action_items (
+         id, group_id, thread_id, description, owner_ref_type, owner_ref, due_at,
+         status, confidence, version, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'text_label', 'product owner', $5, 'open', 0.95, 1, $6, $6)`,
+      [dependentActionId, groupId, parentThreadId, "Do not expose invalid parent action", at, at],
+    );
+    const dependentCandidate = proactiveCandidate({
+      idempotencyKey: `overdue_action:${dependentActionId}:1`,
+      kind: "overdue_action",
+      priority: "high",
+      groupId,
+      entityId: dependentActionId,
+      reasonCode: "action_due_at_elapsed",
+      suggestedMode: "ask_for_status",
+    });
+    const dependentDeliveryId = await createQueuedProactiveDelivery({
+      repository: proactiveRepository,
+      candidate: dependentCandidate,
+    });
+    const dependentClaim = await proactiveRepository.claimProactiveSignalDelivery({
+      workerId: "subject-worker-dependent",
+      at,
+      leaseUntil: new Date(at.getTime() + 30_000),
+    });
+
+    expect(dependentClaim?.delivery.id).toBe(dependentDeliveryId);
+    await expect(proactiveRepository.getProactiveSignalDeliveryContext(dependentDeliveryId)).resolves.not.toHaveProperty(
+      "subjectLabel",
+    );
+    await proactiveRepository.failProactiveSignalDeliveryPreparation({
+      deliveryId: dependentDeliveryId,
+      workerId: "subject-worker-dependent",
+      errorCode: "stale_delivery",
+      at,
+    });
+    await expect(proactiveRepository.claimProactiveSignalDelivery({
+      workerId: "subject-worker-dependent-retry",
+      at: new Date(at.getTime() + 1),
+      leaseUntil: new Date(at.getTime() + 30_001),
+    })).resolves.toBeUndefined();
   });
 
   it("records feedback only once for an exact sent delivery binding", async () => {

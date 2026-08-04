@@ -105,5 +105,7 @@ function normalizeSubjectLabel(value: string | undefined): string {
 }
 
 function escapeFeishuMarkdown(value: string): string {
-  return value.replace(/([\\`*_{}\[\]()#+\-.!|>~])/gu, "\\$1");
+  return value
+    .replace(/[<>]/gu, (character) => character === "<" ? "＜" : "＞")
+    .replace(/([\\`*_{}\[\]()#+\-.!|~])/gu, "\\$1");
 }

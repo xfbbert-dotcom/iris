@@ -105,6 +105,16 @@ describe("ProactiveSignalCardRenderer", () => {
     expect(Array.from(content).length).toBeLessThan(260);
     expect(result.json).not.toContain("message-a");
   });
+
+  it("neutralizes Feishu mention tags in the visible subject", () => {
+    const result = renderProactiveSignalCard({
+      context: deliveryContext({}, '<at user_id="ou_secret">负责人</at> 请更新状态'),
+    });
+
+    expect(result.json).not.toContain("<at");
+    expect(result.json).not.toContain("</at>");
+    expect(result.json).toContain("负责人");
+  });
 });
 
 function deliveryContext(

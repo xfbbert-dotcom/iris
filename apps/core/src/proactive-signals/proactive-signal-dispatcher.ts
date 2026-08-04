@@ -115,13 +115,7 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<ProactiveSignal
     throw new Error("proactive signal delivery context unavailable");
   }
   if (!isExactClaimContext(input.claim, context)) return failPreparation(input, "stale_delivery");
-  const contextualInput = { ...input, context };
-  let rendered: ProactiveSignalCardRenderResult;
-  try {
-    rendered = input.renderer({ context });
-  } catch {
-    return failPreparation(contextualInput, "stale_delivery");
-  }
+  let contextualInput = { ...input, context };
   if (!readRuntimeGate(input, context.delivery.groupId)) {
     return failPreparation(contextualInput, "runtime_disabled");
   }
@@ -144,6 +138,21 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<ProactiveSignal
     };
   }
   if (authorization.status === "stale") {
+    return failPreparation(contextualInput, "stale_delivery");
+  }
+  try {
+    context = await input.repository.getProactiveSignalDeliveryContext(input.claim.delivery.id);
+  } catch {
+    return failPreparation(contextualInput, "stale_delivery");
+  }
+  if (!isExactClaimContext(input.claim, context)) {
+    return failPreparation(contextualInput, "stale_delivery");
+  }
+  contextualInput = { ...input, context };
+  let rendered: ProactiveSignalCardRenderResult;
+  try {
+    rendered = input.renderer({ context });
+  } catch {
     return failPreparation(contextualInput, "stale_delivery");
   }
   if (!readRuntimeGate(input, context.delivery.groupId)) {

@@ -582,11 +582,26 @@ async function getProactiveSignalDeliveryContext(
      AND thread_state.id = candidate.entity_id
      AND thread_state.group_id = candidate.group_id
      AND thread_state.version = candidate.entity_version
+     AND thread_state.retrieval_state = 'visible'
+     AND thread_state.status = 'open'
     LEFT JOIN action_items action_state
       ON candidate.entity_type = 'action'
      AND action_state.id = candidate.entity_id
      AND action_state.group_id = candidate.group_id
      AND action_state.version = candidate.entity_version
+     AND action_state.retrieval_state = 'visible'
+     AND action_state.status = 'open'
+     AND (
+       action_state.thread_id IS NULL
+       OR EXISTS (
+         SELECT 1
+         FROM discussion_threads dependency
+         WHERE dependency.id = action_state.thread_id
+           AND dependency.group_id = action_state.group_id
+           AND dependency.status IN ('open', 'resolved')
+           AND dependency.retrieval_state = 'visible'
+       )
+     )
     WHERE delivery.id = $1
     LIMIT 1
     `,
@@ -626,7 +641,39 @@ async function beginProactiveSignalDeliveryAttempt(
             AND suppression.kind = candidate.kind
             AND suppression.entity_id = candidate.entity_id
             AND suppression.suppress_until > $3
-        ) AS suppressed
+        ) AS suppressed,
+        CASE candidate.entity_type
+          WHEN 'thread' THEN EXISTS (
+            SELECT 1
+            FROM discussion_threads thread_state
+            WHERE thread_state.id = candidate.entity_id
+              AND thread_state.group_id = candidate.group_id
+              AND thread_state.version = candidate.entity_version
+              AND thread_state.retrieval_state = 'visible'
+              AND thread_state.status = 'open'
+          )
+          WHEN 'action' THEN EXISTS (
+            SELECT 1
+            FROM action_items action_state
+            WHERE action_state.id = candidate.entity_id
+              AND action_state.group_id = candidate.group_id
+              AND action_state.version = candidate.entity_version
+              AND action_state.retrieval_state = 'visible'
+              AND action_state.status = 'open'
+              AND (
+                action_state.thread_id IS NULL
+                OR EXISTS (
+                  SELECT 1
+                  FROM discussion_threads dependency
+                  WHERE dependency.id = action_state.thread_id
+                    AND dependency.group_id = action_state.group_id
+                    AND dependency.status IN ('open', 'resolved')
+                    AND dependency.retrieval_state = 'visible'
+                )
+              )
+          )
+          ELSE FALSE
+        END AS subject_visible
       FROM proactive_signal_delivery_outbox delivery
       JOIN proactive_signal_candidates candidate
         ON candidate.idempotency_key = delivery.candidate_idempotency_key
@@ -644,11 +691,14 @@ async function beginProactiveSignalDeliveryAttempt(
       SET status = 'cancelled',
           lease_worker_id = NULL,
           lease_until = NULL,
-          failure_classification = 'feedback_suppressed',
+          failure_classification = CASE
+            WHEN bound.suppressed THEN 'feedback_suppressed'
+            ELSE 'stale_delivery'
+          END,
           updated_at = $3
       FROM bound
       WHERE delivery.id = bound.id
-        AND bound.suppressed
+        AND (bound.suppressed OR NOT bound.subject_visible)
         AND delivery.status = 'processing'
         AND delivery.lease_worker_id = $2
         AND delivery.lease_until IS NOT NULL
@@ -664,6 +714,7 @@ async function beginProactiveSignalDeliveryAttempt(
         'processing', 'processing', $3
       FROM bound
       WHERE NOT bound.suppressed
+        AND bound.subject_visible
       ON CONFLICT (id) DO NOTHING
       RETURNING id
     ),
@@ -679,8 +730,12 @@ async function beginProactiveSignalDeliveryAttempt(
       RETURNING id
     )
     SELECT CASE
-      WHEN EXISTS (SELECT 1 FROM cancelled) THEN 'suppressed'
-      WHEN EXISTS (SELECT 1 FROM bound WHERE NOT bound.suppressed) THEN 'authorized'
+      WHEN EXISTS (SELECT 1 FROM cancelled)
+        AND EXISTS (SELECT 1 FROM bound WHERE bound.suppressed) THEN 'suppressed'
+      WHEN EXISTS (
+        SELECT 1 FROM bound
+        WHERE NOT bound.suppressed AND bound.subject_visible
+      ) THEN 'authorized'
       ELSE 'stale'
     END AS authorization_status,
     (SELECT COUNT(*) FROM processing_event) AS processing_event_count,
@@ -705,14 +760,41 @@ async function failProactiveSignalDeliveryPreparation(
   queryable: Queryable,
   input: { deliveryId: string; workerId: string; errorCode: string; at: Date },
 ): Promise<void> {
-  await markProactiveSignalDeliveryFailed(queryable, {
-    deliveryId: input.deliveryId,
-    workerId: input.workerId,
-    failureClassification: boundedFailureClassification(input.errorCode),
-    status: "failed",
-    nextAttemptAt: requireDate(input.at, "at"),
-    at: input.at,
-  });
+  const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
+  const workerId = requireBoundedString("workerId", input.workerId);
+  const failureClassification = boundedFailureClassification(input.errorCode);
+  const at = requireDate(input.at, "at");
+  await queryable.query(
+    `
+    WITH updated AS (
+      UPDATE proactive_signal_delivery_outbox delivery
+      SET status = 'cancelled',
+          lease_worker_id = NULL,
+          lease_until = NULL,
+          failure_classification = $3,
+          updated_at = $4
+      WHERE delivery.id = $1
+        AND delivery.status = 'processing'
+        AND delivery.lease_worker_id = $2
+      RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id
+    )
+    INSERT INTO proactive_signal_delivery_events (
+      id, delivery_id, candidate_idempotency_key, group_id, event_type,
+      delivery_status, created_at
+    )
+    SELECT $5, updated.id, updated.candidate_idempotency_key, updated.group_id,
+      'cancelled', 'cancelled', $4
+    FROM updated
+    ON CONFLICT (id) DO NOTHING
+    `,
+    [
+      deliveryId,
+      workerId,
+      failureClassification,
+      at,
+      deliveryEventId(deliveryId, "cancelled", workerId, at),
+    ],
+  );
 }
 
 async function completeProactiveSignalDelivery(

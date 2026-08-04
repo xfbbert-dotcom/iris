@@ -620,8 +620,13 @@ describe("proactive signal persistence", () => {
     expect(sql).toContain("left join action_items");
     expect(sql).toContain("thread_state.group_id = candidate.group_id");
     expect(sql).toContain("thread_state.version = candidate.entity_version");
+    expect(sql).toContain("thread_state.retrieval_state = 'visible'");
+    expect(sql).toContain("thread_state.status = 'open'");
     expect(sql).toContain("action_state.group_id = candidate.group_id");
     expect(sql).toContain("action_state.version = candidate.entity_version");
+    expect(sql).toContain("action_state.retrieval_state = 'visible'");
+    expect(sql).toContain("action_state.status = 'open'");
+    expect(sql).toContain("dependency.retrieval_state = 'visible'");
     expect(sql).not.toContain("conversation_messages.text");
     expect(sql).not.toContain("message_body");
   });
@@ -652,9 +657,41 @@ describe("proactive signal persistence", () => {
     expect(sql).toContain("suppression.suppress_until > $3");
     expect(sql).toContain("delivery.lease_until > $3");
     expect(sql).toContain("for update of delivery");
+    expect(sql).toContain("thread_state.retrieval_state = 'visible'");
+    expect(sql).toContain("thread_state.status = 'open'");
+    expect(sql).toContain("action_state.retrieval_state = 'visible'");
+    expect(sql).toContain("action_state.status = 'open'");
+    expect(sql).toContain("dependency.retrieval_state = 'visible'");
+    expect(sql).toContain("dependency.status in ('open', 'resolved')");
     expect(sql).toContain("status = 'cancelled'");
-    expect(sql).toContain("failure_classification = 'feedback_suppressed'");
+    expect(sql).toContain("when bound.suppressed then 'feedback_suppressed'");
+    expect(sql).toContain("else 'stale_delivery'");
+    expect(sql).toContain("'stale_delivery'");
     expect(sql).toContain("'cancelled', 'cancelled'");
+  });
+
+  it("cancels preparation failures terminally instead of making them claimable again", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await repository.failProactiveSignalDeliveryPreparation({
+      deliveryId: "delivery-a",
+      workerId: "worker-a",
+      errorCode: "stale_delivery",
+      at: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    const sql = String(dataSource.query.mock.calls[0]?.[0]).toLowerCase();
+    expect(sql).toContain("set status = 'cancelled'");
+    expect(sql).toContain("lease_worker_id = null");
+    expect(sql).toContain("lease_until = null");
+    expect(sql).toContain("'cancelled', 'cancelled'");
+    expect(sql).not.toContain("set status = 'failed'");
   });
 
   it("completes a processing delivery with Feishu message id and append-only sent event", async () => {

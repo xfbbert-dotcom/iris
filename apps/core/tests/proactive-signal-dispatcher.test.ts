@@ -46,7 +46,7 @@ describe("ProactiveSignalDispatcher", () => {
       deliveryId: "delivery-a",
       code: "send_succeeded",
     }]);
-    expect(order).toEqual(["context", "gate", "begin", "gate", "send", "complete"]);
+    expect(order).toEqual(["context", "gate", "begin", "context", "gate", "send", "complete"]);
     expect(canDeliver).toHaveBeenNthCalledWith(1, "group-a");
     expect(canDeliver).toHaveBeenNthCalledWith(2, "group-a");
     expect(harness.repository.completeProactiveSignalDelivery).toHaveBeenCalledWith({
@@ -124,6 +124,33 @@ describe("ProactiveSignalDispatcher", () => {
       errorCode: "runtime_disabled",
     }));
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the exact subject after final authorization and cancels stale content", async () => {
+    let contextReadCount = 0;
+    const harness = createHarness({
+      getContext: async () => {
+        contextReadCount += 1;
+        if (contextReadCount === 1) return deliveryContext();
+        const staleContext = deliveryContext();
+        delete staleContext.subjectLabel;
+        return staleContext;
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      deliveryId: "delivery-a",
+      code: "stale_delivery",
+    }]);
+    expect(harness.repository.getProactiveSignalDeliveryContext).toHaveBeenCalledTimes(2);
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+    expect(harness.repository.failProactiveSignalDeliveryPreparation).toHaveBeenCalledWith({
+      deliveryId: "delivery-a",
+      workerId: "proactive-dispatcher-1",
+      errorCode: "stale_delivery",
+      at: now,
+    });
   });
 
   it("cancels a claimed delivery when feedback suppression wins before external send", async () => {
