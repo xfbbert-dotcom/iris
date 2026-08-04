@@ -311,7 +311,7 @@ export function renderAdminConsoleHtml(): string {
             <tr>
               <th>Candidate</th>
               <th>Priority</th>
-              <th>Entity</th>
+              <th>Work item</th>
               <th>Suggested mode</th>
               <th>Last relevant</th>
               <th>Actions</th>
@@ -1713,16 +1713,17 @@ function renderProactiveCandidates(candidates) {
     candidateCell.className = "source-title";
     const kind = document.createElement("strong");
     kind.textContent = text(candidate.kind);
-    const key = document.createElement("div");
-    key.className = "source-uri";
-    key.textContent = text(candidate.idempotencyKey);
-    candidateCell.append(kind, key);
+    candidateCell.append(kind);
 
     const priorityCell = document.createElement("td");
     priorityCell.textContent = text(candidate.priority);
 
     const entityCell = document.createElement("td");
-    entityCell.textContent = text(candidate.entityType) + " " + text(candidate.entityId) + " v" + text(candidate.entityVersion, "?");
+    const ready = candidate.approvalState === "ready" && typeof candidate.subjectLabel === "string" && candidate.subjectLabel.trim().length > 0;
+    const candidateLabel = ready
+      ? (candidate.entityType === "thread" ? "Discussion: " : "Action: ") + text(candidate.subjectLabel)
+      : "Stale (the work item changed, closed, or is no longer visible)";
+    entityCell.textContent = candidateLabel;
 
     const modeCell = document.createElement("td");
     modeCell.textContent = text(candidate.suggestedMode);
@@ -1738,22 +1739,29 @@ function renderProactiveCandidates(candidates) {
       [proactiveCandidateApproveSuffix, "Approve delivery", false],
     ]) {
       const button = document.createElement("button");
+      const staleApproval = suffix === proactiveCandidateApproveSuffix && !ready;
       button.type = "button";
       button.className = danger ? "danger" : "secondary";
       button.textContent = label;
-      button.addEventListener("click", async () => {
-        button.disabled = true;
-        try {
-          await transitionProactiveCandidate(candidate, suffix);
-          addEvent(label + " recorded for " + candidate.idempotencyKey);
-          await refreshProactiveCandidates();
-        } catch (error) {
-          addEvent(label + " failed: " + error.message);
-          setConnection("Request failed", "warn");
-        } finally {
-          button.disabled = false;
-        }
-      });
+      button.disabled = staleApproval;
+      if (staleApproval) {
+        button.title = "This stale candidate cannot be approved.";
+        button.setAttribute("aria-disabled", "true");
+      } else {
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            await transitionProactiveCandidate(candidate, suffix);
+            addEvent(label + " recorded for " + candidateLabel);
+            await refreshProactiveCandidates();
+          } catch (error) {
+            addEvent(label + " failed: " + error.message);
+            setConnection("Request failed", "warn");
+          } finally {
+            button.disabled = false;
+          }
+        });
+      }
       actions.append(button);
     }
     actionsCell.append(actions);

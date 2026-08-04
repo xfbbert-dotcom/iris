@@ -663,16 +663,22 @@ describe("admin console assets", () => {
     const secondRefresh = console.trigger("proactive-candidate-refresh", "click");
     expect(fetch).toHaveBeenCalledTimes(4);
 
-    secondCandidates.resolve(jsonResponse({ ok: true, candidates: [candidate("candidate-b")] }));
+    secondCandidates.resolve(jsonResponse({
+      ok: true,
+      candidates: [candidate("candidate-b", { subjectLabel: "Group B launch" })],
+    }));
     secondSummary.resolve(jsonResponse(feedbackSummary("group-b", 8)));
     await secondRefresh;
-    firstCandidates.resolve(jsonResponse({ ok: true, candidates: [candidate("candidate-a")] }));
+    firstCandidates.resolve(jsonResponse({
+      ok: true,
+      candidates: [candidate("candidate-a", { subjectLabel: "Group A launch" })],
+    }));
     firstSummary.resolve(jsonResponse(feedbackSummary("group-a", 1)));
     await firstRefresh;
 
     const rows = console.element("proactive-candidate-rows");
     expect(rows.children).toHaveLength(1);
-    expect(rows.children[0]!.children[0]!.children[1]!.textContent).toBe("candidate-b");
+    expect(rows.children[0]!.children[2]!.textContent).toBe("Discussion: Group B launch");
     expect(metricValues(console.element("proactive-feedback-summary"))).toContain("8");
   });
 
@@ -694,7 +700,10 @@ describe("admin console assets", () => {
     console.element("proactive-candidate-group").value = "group-b";
     const secondRefresh = console.trigger("proactive-candidate-refresh", "click");
 
-    secondCandidates.resolve(jsonResponse({ ok: true, candidates: [candidate("candidate-b")] }));
+    secondCandidates.resolve(jsonResponse({
+      ok: true,
+      candidates: [candidate("candidate-b", { subjectLabel: "Group B launch" })],
+    }));
     secondSummary.resolve(jsonResponse(feedbackSummary("group-b", 8)));
     await secondRefresh;
     firstSummary.resolve(jsonResponse(feedbackSummary("group-a", 1)));
@@ -703,7 +712,7 @@ describe("admin console assets", () => {
 
     const rows = console.element("proactive-candidate-rows");
     expect(rows.children).toHaveLength(1);
-    expect(rows.children[0]!.children[0]!.children[1]!.textContent).toBe("candidate-b");
+    expect(rows.children[0]!.children[2]!.textContent).toBe("Discussion: Group B launch");
     expect(console.element("connection-state").textContent).not.toBe("Request failed");
     expect(console.element("event-log").children.some((item) =>
       item.textContent.includes("stale_candidate_failure"),
@@ -742,6 +751,74 @@ describe("admin console assets", () => {
     ]);
     expect(console.element("event-log").children.some((item) => item.textContent.includes("Dismiss recorded"))).toBe(true);
     expect(console.element("event-log").children.some((item) => item.textContent.includes("Dismiss failed"))).toBe(false);
+    expect(console.element("event-log").children.some((item) => item.textContent.includes("candidate-a"))).toBe(false);
+    expect(console.element("event-log").children.some((item) => item.textContent.includes("thread-a"))).toBe(false);
+  });
+
+  it("renders a ready proactive candidate by human subject without internal identifiers", async () => {
+    const fetch = vi.fn((path: string) => {
+      if (path.includes("/candidates?")) {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          candidates: [candidate("candidate-internal-key", {
+            entityId: "thread-internal-id",
+            subjectLabel: "Launch feedback dashboard",
+          })],
+        }));
+      }
+      if (path.endsWith("/feedback-summary")) {
+        return Promise.resolve(jsonResponse(feedbackSummary("group-a", 0)));
+      }
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    console.element("proactive-candidate-group").value = "group-a";
+
+    await console.trigger("proactive-candidate-refresh", "click");
+
+    const visibleText = console.allElements().map((element) => element.textContent).join("\n");
+    expect(visibleText).toContain("Discussion: Launch feedback dashboard");
+    expect(visibleText).not.toContain("thread-internal-id");
+    expect(visibleText).not.toContain("candidate-internal-key");
+    const actions = console.element("proactive-candidate-rows").children[0]!.children[5]!.children[0]!;
+    expect(actions.children[0]!.textContent).toBe("Dismiss");
+    expect(actions.children[0]!.disabled).toBe(false);
+    expect(actions.children[1]!.textContent).toBe("Approve delivery");
+    expect(actions.children[1]!.disabled).toBe(false);
+  });
+
+  it("keeps a stale proactive candidate dismissible while disabling approval", async () => {
+    const fetch = vi.fn((path: string) => {
+      if (path.includes("/candidates?")) {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          candidates: [candidate("stale-candidate-internal-key", {
+            approvalState: "stale",
+            entityId: "stale-thread-internal-id",
+            subjectLabel: undefined,
+          })],
+        }));
+      }
+      if (path.endsWith("/feedback-summary")) {
+        return Promise.resolve(jsonResponse(feedbackSummary("group-a", 0)));
+      }
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    console.element("proactive-candidate-group").value = "group-a";
+
+    await console.trigger("proactive-candidate-refresh", "click");
+
+    const visibleText = console.allElements().map((element) => element.textContent).join("\n");
+    expect(visibleText).toContain("Stale (the work item changed, closed, or is no longer visible)");
+    expect(visibleText).not.toContain("stale-thread-internal-id");
+    expect(visibleText).not.toContain("stale-candidate-internal-key");
+    const actions = console.element("proactive-candidate-rows").children[0]!.children[5]!.children[0]!;
+    expect(actions.children[0]!.textContent).toBe("Dismiss");
+    expect(actions.children[0]!.disabled).toBe(false);
+    expect(actions.children[1]!.textContent).toBe("Approve delivery");
+    expect(actions.children[1]!.disabled).toBe(true);
+    expect(actions.children[1]!.title).toContain("stale");
   });
 
   it("uses wrapped, responsive metrics for the proactive feedback summary", () => {
@@ -923,7 +1000,7 @@ function runAdminConsole(fetch: (path: string, options?: unknown) => Promise<Res
   };
 }
 
-function candidate(idempotencyKey: string) {
+function candidate(idempotencyKey: string, overrides: Record<string, unknown> = {}) {
   return {
     idempotencyKey,
     kind: "quiet_open_thread",
@@ -933,6 +1010,9 @@ function candidate(idempotencyKey: string) {
     entityVersion: 1,
     suggestedMode: "ask_for_thread_update",
     lastRelevantAt: "2026-07-27T00:00:00.000Z",
+    approvalState: "ready",
+    subjectLabel: "Launch feedback dashboard",
+    ...overrides,
   };
 }
 
