@@ -229,3 +229,54 @@ TDD evidence on the working tree:
   passed before the full repository gate;
 - the complete root `npm run verify` gate passed in 305.3 seconds;
 - exact-SHA CI, deployment, and a fresh real Feishu answer remain pending at this checkpoint.
+
+## 2026-08-04 Source-Use Attribution Recovery
+
+The fresh current-topic answer on candidate `50bdb45a49787a1e0bb0b059e59ffc1a1f5ccc7d`
+returned the requested value but appended three unrelated Wiki sources. Database inspection proved
+that none of the retrieved fragments contained the answer value. The renderer had treated
+permission-approved retrieval as proof of source use, so the visible attribution was false and also
+violated the user's exact-output request.
+
+Candidate `c9c6d9cd269e9772b61196dcb0b623b540151f13` gives each authorized prompt fragment a
+bounded local `D1`-`D12` reference. The answer model may declare only materially used references in
+strict internal trailing metadata. Core validates the current prompt window, removes the metadata,
+and renders at most three unique declared sources. Unknown, malformed, or out-of-window references
+fail closed. All authorized prompt fragments remain in immutable traces even when none is visibly
+cited.
+
+Verification and rollout evidence:
+
+- focused citation/provider/orchestrator/context/responder suite: 172 tests passed;
+- complete root `npm run verify`: exit `0` in 420 seconds;
+- Core CI success for the exact candidate SHA:
+  <https://github.com/xfbbert-dotcom/iris/actions/runs/30880608679/job/91900994589>;
+- AI Worker CI success for the exact candidate SHA:
+  <https://github.com/xfbbert-dotcom/iris/actions/runs/30880608679/job/91900994669>;
+- encrypted pre-deploy backup: `iris-20260804T053139Z.bundle.tar.age` (48,826,184 bytes);
+- Core and AI Worker production images both use the exact candidate SHA;
+- public `/health=200` and public `/internal/status=404` through the VPS public address and correct
+  TLS SNI;
+- current-group answer delivery
+  `answer-reply-03d79537ee015a568320e1be79baeee1ccffa9fcdee99d20953874d1482b96b8`
+  reached `sent` in one attempt. Its eight authorized prompt traces all retained
+  `citation_rank=NULL`, and the visible reply contained neither a document footer nor the internal
+  citation protocol;
+- authorized-Wiki answer delivery
+  `answer-reply-6389b7db025660a9f844d77b53f7ebb0a42be75418c5c3b379db3f00a21a6162`
+  reached `sent` in one attempt. Only source
+  `4f4f04db-ae67-487b-9060-e03e2535ee7d` received visible rank `1`; three fragments from that one
+  document were traced and the footer rendered one unique canonical Wiki source;
+- both terminal receipts cleared `prepared_reply_text`; event/document/reindex/memory pending and
+  DLQ counts, plus unresolved/pending-safe-notice/reconciliation answer counts, were all zero;
+- final runtime restored the previously approved controlled daily pilot: global and desired global
+  enabled, only `oc_637a9aca45f01943477f4e17f1fc5b9a` enabled, the other 13 known groups disabled,
+  Caddy running, and proactive speech, knowledge generation/writes, and external tools disabled.
+
+One deployment-script diagnostic was also closed without weakening the gate. A container-local
+`docker compose exec --no-TTY` inherited and drained the piped SSH script's remaining stdin, so
+later Caddy/timer commands did not run. All such calls now use `</dev/null` or a separate SSH
+command, timer and service cancellation are independent, and every external state is re-read after
+mutation. The incident remained fail closed: Caddy was stopped until the public boundary passed.
+
+PR #23 remains open, draft, and unmerged pending explicit merge authorization.

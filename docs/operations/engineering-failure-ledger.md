@@ -451,6 +451,22 @@ delivery mistakes while implementing it.
   requested value and no document footer; a document-grounded answer still names only its declared
   source, and all permission and queue gates remain green.
 
+### Detach stdin from remote Compose exec inside piped scripts
+
+- **Failure:** A piped SSH deployment script completed its container-local Node check but silently
+  skipped later Caddy and timer-cleanup commands, even though the outer shell returned success.
+- **Root cause:** `docker compose exec --no-TTY` still inherited the SSH script's stdin. Compose
+  drained the remaining script bytes before the remote Bash process could parse them.
+- **Prevention rule:** Every non-interactive `docker compose exec` inside a script delivered through
+  stdin must use `</dev/null`, or the post-exec work must run in a separate SSH command. Never infer
+  that later commands ran from the exit status of an earlier container-local check.
+- **Guard:** Deployment gates independently inspect Caddy state, timer state, durable runtime state,
+  and public HTTP boundaries after each mutation. Rollback stops timer and service units in separate
+  commands because an unloaded companion unit must not mask timer cancellation.
+- **Exit condition:** The exact-SHA pilot shows Caddy running, the bounded timer is either active or
+  explicitly cancelled as intended, durable runtime matches the approved profile, and external
+  `/health` and private-route checks return their expected status codes.
+
 ## Test Architecture
 
 ### Verify every cross-CTE column dependency in migration SQL
