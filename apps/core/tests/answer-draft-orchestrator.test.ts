@@ -248,6 +248,44 @@ describe("AnswerDraftOrchestrator", () => {
     expect(queryText.length).toBeLessThanOrEqual(4000);
   });
 
+  it("keeps stale earlier chat out of document retrieval while preserving prompt context", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async (_input: {
+        queryText: string;
+        liveChatMessages: Array<{ speaker: string; text: string }>;
+      }) => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "One week early." })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+    const liveChatMessages = [
+      { speaker: "Alice", text: "Revoked document acceptance marker." },
+      { speaker: "Bob", text: "What should we discuss?" },
+      { speaker: "Carol", text: "Build a cycle reminder app." },
+      { speaker: "Alice", text: "It should warn one week early." },
+      { speaker: "Bob", text: "Interesting request." },
+      { speaker: "Carol", text: "Please answer from the current discussion." },
+    ];
+
+    await orchestrator.generateDraft({
+      question: "How early should it remind us?",
+      liveChatMessages,
+    });
+
+    const input = contextBuilder.buildContext.mock.calls[0]?.[0];
+    expect(input?.queryText).not.toContain("Revoked document acceptance marker.");
+    expect(input?.queryText).toContain("It should warn one week early.");
+    expect(input?.liveChatMessages).toEqual(liveChatMessages);
+  });
+
   it("caps stored live chat loading and context limits to 20 messages", async () => {
     const contextBuilder = {
       buildContext: vi.fn(async () => ({

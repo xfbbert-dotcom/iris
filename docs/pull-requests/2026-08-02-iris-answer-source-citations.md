@@ -206,3 +206,26 @@ capability switches, and started Caddy last. The final bounded profile is:
 
 No model probe or synthetic Feishu message was sent during this restoration. PR #22 and PR #23
 remain open and unmerged pending explicit merge authorization.
+
+## 2026-08-04 Current-Topic Retrieval Regression
+
+A controlled multi-user pilot question depended only on the immediately preceding group
+discussion. The full 20-message retrieval query also contained an older revoked acceptance topic,
+so the intentionally strict denied-source preflight produced `permission_blocked`, made zero
+ordinary answer attempts, sent one safe notice, and disclosed no revoked content. This was safe but
+not usable.
+
+The root cause is topic-window coupling, not the permission guard. The model prompt should keep its
+20-message live-chat anchor, while document retrieval should not let a stale sixth message redirect
+an unrelated current-topic search. The focused fix limits only retrieval-query chat augmentation to
+the latest five messages. It leaves prompt context, prompt-ranked denial propagation, send-time
+permission revalidation, and safe-notice behavior unchanged.
+
+TDD evidence on the working tree:
+
+- the new regression first failed because the stale sixth message remained in `queryText`;
+- the same test then passed after the bounded current-topic window was applied;
+- 185 orchestrator/runtime/delivery tests, 48 Feishu responder tests, and TypeScript typecheck
+  passed before the full repository gate;
+- the complete root `npm run verify` gate passed in 305.3 seconds;
+- exact-SHA CI, deployment, and a fresh real Feishu answer remain pending at this checkpoint.

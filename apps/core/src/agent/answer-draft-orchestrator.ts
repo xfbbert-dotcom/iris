@@ -68,6 +68,7 @@ const MAX_REQUEST_LIVE_CHAT_MESSAGES = 50;
 const MAX_LIVE_CHAT_SPEAKER_CHARS = 256;
 const MAX_LIVE_CHAT_TEXT_CHARS = 2000;
 const MAX_LIVE_CHAT_LIMIT = 20;
+const MAX_RETRIEVAL_QUERY_LIVE_CHAT_MESSAGES = 5;
 const MAX_EXECUTION_ID_CHARS = 512;
 const MAX_EXECUTION_OPERATION_KEY_CHARS = 512;
 const TRUNCATION_MARKER = " ... [truncated]";
@@ -371,7 +372,10 @@ function buildRetrievalQueryText(question: string, liveChatMessages: LiveChatMes
   }
 
   const liveChatBudget = MAX_ANSWER_DRAFT_QUESTION_CHARS - question.length - separator.length;
-  const liveChatQueryText = buildLiveChatRetrievalText(liveChatMessages, liveChatBudget);
+  const liveChatQueryText = buildLiveChatRetrievalText(
+    liveChatMessages.slice(-MAX_RETRIEVAL_QUERY_LIVE_CHAT_MESSAGES),
+    liveChatBudget,
+  );
   if (liveChatQueryText.length === 0) {
     return question;
   }

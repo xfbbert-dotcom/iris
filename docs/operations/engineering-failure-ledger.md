@@ -415,6 +415,24 @@ delivery mistakes while implementing it.
 - **Exit condition:** The next real gray run completes or safely returns its event to retry before
   shutdown, with no stale timer and all queues/DLQs at zero.
 
+### Keep stale chat topics out of document retrieval queries
+
+- **Failure:** A new question that depended only on the current group discussion was blocked by an
+  unrelated revoked acceptance fixture from an older topic. The live permission guard prevented
+  disclosure and sent only the safe notice, but Iris could not answer the valid current question.
+- **Root cause:** The answer prompt correctly retained the latest 20 chat messages, but the document
+  retrieval query also concatenated all 20. An older exact document title therefore ranked its
+  revoked source inside the prompt window and triggered the intentionally strict preflight block.
+- **Prevention rule:** Keep the 20-message live-chat anchor in the model prompt, but build document
+  retrieval queries from only the latest five messages that represent the current topic. Do not
+  fix this class of false block by weakening denied-source handling or the final permission guard.
+- **Guard:** An orchestrator regression proves the stale sixth message is absent from retrieval
+  query text, a relevant recent fact remains present, and the complete live-chat window still goes
+  to context assembly.
+- **Exit condition:** Focused answer, delivery, responder, and typecheck gates pass; an exact-SHA
+  pilot question using only recent multi-user context is sent normally while revoked-source tests
+  remain fail closed.
+
 ## Test Architecture
 
 ### Verify every cross-CTE column dependency in migration SQL
