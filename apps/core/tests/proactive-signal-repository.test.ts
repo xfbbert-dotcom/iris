@@ -416,7 +416,7 @@ describe("proactive signal persistence", () => {
     expect(sql).toContain("suppression.suppress_until > $");
   });
 
-  it("lists pending candidates for one group without selecting raw message content", async () => {
+  it("lists a ready thread candidate with its exact human subject", async () => {
     const dataSource = {
       query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [
         {
@@ -434,6 +434,8 @@ describe("proactive signal persistence", () => {
           created_at: new Date("2026-07-23T10:00:00.000Z"),
           updated_at: new Date("2026-07-23T10:00:00.000Z"),
           evidence_message_ids: ["message-a"],
+          subject_label: "Launch feedback dashboard",
+          approval_state: "ready",
         },
       ] })),
       connect: vi.fn(),
@@ -449,6 +451,8 @@ describe("proactive signal persistence", () => {
         idempotencyKey: "quiet_open_thread:thread-a:1",
         entityId: "thread-a",
         evidenceMessageIds: ["message-a"],
+        subjectLabel: "Launch feedback dashboard",
+        approvalState: "ready",
       }),
     ]);
     const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
@@ -457,7 +461,87 @@ describe("proactive signal persistence", () => {
     expect(sql).toContain("not exists");
     expect(sql).toContain("from proactive_signal_delivery_outbox delivery");
     expect(sql).toContain("delivery.delivery_channel = 'feishu_group_card'");
+    expect(sql).toContain("thread_state.version = candidate.entity_version");
+    expect(sql).toContain("thread_state.retrieval_state = 'visible'");
+    expect(sql).toContain("thread_state.status = 'open'");
     expect(sql).not.toContain("conversation_messages.text");
+  });
+
+  it("lists a ready action only when its exact parent dependency is usable", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [
+        {
+          idempotency_key: "overdue_action:action-a:3",
+          group_id: "group-a",
+          kind: "overdue_action",
+          priority: "high",
+          entity_type: "action",
+          entity_id: "action-a",
+          entity_version: "3",
+          reason_code: "action_due_at_elapsed",
+          suggested_mode: "ask_for_status",
+          status: "pending",
+          last_relevant_at: new Date("2026-07-23T08:00:00.000Z"),
+          created_at: new Date("2026-07-23T10:00:00.000Z"),
+          updated_at: new Date("2026-07-23T10:00:00.000Z"),
+          evidence_message_ids: ["message-b"],
+          subject_label: "Confirm launch owner",
+          approval_state: "ready",
+        },
+      ] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.listPendingCandidates({ groupId: "group-a", limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        entityType: "action",
+        subjectLabel: "Confirm launch owner",
+        approvalState: "ready",
+      }),
+    ]);
+    const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("action_state.version = candidate.entity_version");
+    expect(sql).toContain("action_state.retrieval_state = 'visible'");
+    expect(sql).toContain("action_state.status = 'open'");
+    expect(sql).toContain("dependency.id = action_state.thread_id");
+    expect(sql).toContain("dependency.status in ('open', 'resolved')");
+  });
+
+  it("keeps stale pending candidates visible without a subject label", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [
+        {
+          idempotency_key: "quiet_open_thread:thread-a:1",
+          group_id: "group-a",
+          kind: "quiet_open_thread",
+          priority: "medium",
+          entity_type: "thread",
+          entity_id: "thread-a",
+          entity_version: "1",
+          reason_code: "thread_quiet_threshold_elapsed",
+          suggested_mode: "ask_for_thread_update",
+          status: "pending",
+          last_relevant_at: new Date("2026-07-23T08:00:00.000Z"),
+          created_at: new Date("2026-07-23T10:00:00.000Z"),
+          updated_at: new Date("2026-07-23T10:00:00.000Z"),
+          evidence_message_ids: ["message-a"],
+          subject_label: null,
+          approval_state: "stale",
+        },
+      ] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    const [candidate] = await repository.listPendingCandidates({ groupId: "group-a", limit: 10 });
+
+    expect(candidate).toEqual(expect.objectContaining({ approvalState: "stale" }));
+    expect(candidate).not.toHaveProperty("subjectLabel");
   });
 
   it("dismisses a pending candidate with an append-only event and no content payload", async () => {

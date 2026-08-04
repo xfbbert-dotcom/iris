@@ -54,6 +54,11 @@ export type PersistedProactiveSignalCandidate = {
   evidenceMessageIds: string[];
 };
 
+export type PendingProactiveSignalCandidate = PersistedProactiveSignalCandidate & {
+  approvalState: "ready" | "stale";
+  subjectLabel?: string;
+};
+
 export type ProactiveSignalDeliveryStatus = "pending" | "processing" | "sent" | "failed" | "cancelled";
 
 export type ProactiveSignalDelivery = {
@@ -108,7 +113,7 @@ export type ProactiveSignalRepository = {
   listPendingCandidates(input: {
     groupId: string;
     limit: number;
-  }): Promise<PersistedProactiveSignalCandidate[]>;
+  }): Promise<PendingProactiveSignalCandidate[]>;
   dismissCandidate(input: {
     idempotencyKey: string;
     groupId: string;
@@ -179,6 +184,43 @@ export type TransactionClient = Queryable & { release(): void };
 export type ProactiveSignalDataSource = Queryable & {
   connect(): Promise<TransactionClient>;
 };
+
+const PROACTIVE_SIGNAL_TARGET_STATE_JOINS = `
+LEFT JOIN discussion_threads thread_state
+  ON candidate.entity_type = 'thread'
+ AND thread_state.id = candidate.entity_id
+ AND thread_state.group_id = candidate.group_id
+ AND thread_state.version = candidate.entity_version
+ AND thread_state.retrieval_state = 'visible'
+ AND thread_state.status = 'open'
+LEFT JOIN action_items action_state
+  ON candidate.entity_type = 'action'
+ AND action_state.id = candidate.entity_id
+ AND action_state.group_id = candidate.group_id
+ AND action_state.version = candidate.entity_version
+ AND action_state.retrieval_state = 'visible'
+ AND action_state.status = 'open'
+ AND (
+   action_state.thread_id IS NULL
+   OR EXISTS (
+     SELECT 1
+     FROM discussion_threads dependency
+     WHERE dependency.id = action_state.thread_id
+       AND dependency.group_id = action_state.group_id
+       AND dependency.status IN ('open', 'resolved')
+       AND dependency.retrieval_state = 'visible'
+   )
+ )`;
+
+const PROACTIVE_SIGNAL_TARGET_SUBJECT_SQL = `CASE candidate.entity_type
+  WHEN 'thread' THEN thread_state.title
+  WHEN 'action' THEN action_state.description
+END`;
+
+const PROACTIVE_SIGNAL_TARGET_READY_SQL = `(
+  (candidate.entity_type = 'thread' AND thread_state.id IS NOT NULL)
+  OR (candidate.entity_type = 'action' AND action_state.id IS NOT NULL)
+)`;
 
 const MAX_BATCH_SIZE = 50;
 const MAX_IDENTIFIER_CHARS = 512;
@@ -254,12 +296,17 @@ export function createProactiveSignalRuntime({
 async function listPendingCandidates(
   queryable: Queryable,
   input: { groupId: string; limit: number },
-): Promise<PersistedProactiveSignalCandidate[]> {
+): Promise<PendingProactiveSignalCandidate[]> {
   const groupId = requireBoundedString("groupId", input.groupId);
   const limit = requireLimit(input.limit);
   const result = await queryable.query<Record<string, unknown>>(
     `
     SELECT candidate.*,
+      ${PROACTIVE_SIGNAL_TARGET_SUBJECT_SQL} AS subject_label,
+      CASE
+        WHEN ${PROACTIVE_SIGNAL_TARGET_READY_SQL} THEN 'ready'
+        ELSE 'stale'
+      END AS approval_state,
       ARRAY(
         SELECT evidence.conversation_message_id
         FROM proactive_signal_candidate_evidence evidence
@@ -269,6 +316,7 @@ async function listPendingCandidates(
         LIMIT 20
       ) AS evidence_message_ids
     FROM proactive_signal_candidates candidate
+    ${PROACTIVE_SIGNAL_TARGET_STATE_JOINS}
     WHERE candidate.group_id = $1
       AND candidate.status = 'pending'
       AND NOT EXISTS (
@@ -283,7 +331,7 @@ async function listPendingCandidates(
     `,
     [groupId, limit],
   );
-  return result.rows.map(mapCandidateRow);
+  return result.rows.map(mapPendingCandidateRow);
 }
 
 async function recordFeedback(
@@ -575,39 +623,12 @@ async function getProactiveSignalDeliveryContext(
         ORDER BY evidence.created_at ASC, evidence.conversation_message_id ASC
         LIMIT 20
       ) AS evidence_message_ids,
-      CASE candidate.entity_type
-        WHEN 'thread' THEN thread_state.title
-        WHEN 'action' THEN action_state.description
-      END AS subject_label
+      ${PROACTIVE_SIGNAL_TARGET_SUBJECT_SQL} AS subject_label
     FROM proactive_signal_delivery_outbox delivery
     JOIN proactive_signal_candidates candidate
       ON candidate.idempotency_key = delivery.candidate_idempotency_key
      AND candidate.group_id = delivery.group_id
-    LEFT JOIN discussion_threads thread_state
-      ON candidate.entity_type = 'thread'
-     AND thread_state.id = candidate.entity_id
-     AND thread_state.group_id = candidate.group_id
-     AND thread_state.version = candidate.entity_version
-     AND thread_state.retrieval_state = 'visible'
-     AND thread_state.status = 'open'
-    LEFT JOIN action_items action_state
-      ON candidate.entity_type = 'action'
-     AND action_state.id = candidate.entity_id
-     AND action_state.group_id = candidate.group_id
-     AND action_state.version = candidate.entity_version
-     AND action_state.retrieval_state = 'visible'
-     AND action_state.status = 'open'
-     AND (
-       action_state.thread_id IS NULL
-       OR EXISTS (
-         SELECT 1
-         FROM discussion_threads dependency
-         WHERE dependency.id = action_state.thread_id
-           AND dependency.group_id = action_state.group_id
-           AND dependency.status IN ('open', 'resolved')
-           AND dependency.retrieval_state = 'visible'
-       )
-     )
+    ${PROACTIVE_SIGNAL_TARGET_STATE_JOINS}
     WHERE delivery.id = $1
     LIMIT 1
     `,
@@ -1301,6 +1322,20 @@ function mapCandidateRow(row: Record<string, unknown>): PersistedProactiveSignal
   };
 }
 
+function mapPendingCandidateRow(row: Record<string, unknown>): PendingProactiveSignalCandidate {
+  const candidate = mapCandidateRow(row);
+  const approvalState = requireApprovalState(row.approval_state);
+  const subjectLabel = optionalSubjectLabel(row.subject_label);
+  if (approvalState === "ready" && subjectLabel === undefined) {
+    throw new Error("ready proactive candidate subject is missing");
+  }
+  return {
+    ...candidate,
+    approvalState,
+    ...(approvalState === "ready" ? { subjectLabel } : {}),
+  };
+}
+
 function mapDeliveryRow(row: Record<string, unknown>): ProactiveSignalDelivery {
   return {
     id: requireBoundedString("deliveryId", row.id),
@@ -1475,6 +1510,11 @@ function requireSuggestedMode(value: unknown): ProactiveSignalCandidate["suggest
 function requireStatus(value: unknown): PersistedProactiveSignalCandidate["status"] {
   if (value === "pending" || value === "dismissed" || value === "superseded") return value;
   throw new Error("candidate status is invalid");
+}
+
+function requireApprovalState(value: unknown): PendingProactiveSignalCandidate["approvalState"] {
+  if (value === "ready" || value === "stale") return value;
+  throw new Error("candidate approval state is invalid");
 }
 
 function requireDeliveryStatus(value: unknown): ProactiveSignalDeliveryStatus {
