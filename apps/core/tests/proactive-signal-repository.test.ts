@@ -599,6 +599,7 @@ describe("proactive signal persistence", () => {
           created_at: new Date("2026-07-23T10:00:00.000Z"),
           updated_at: new Date("2026-07-23T10:00:00.000Z"),
           evidence_message_ids: ["message-a"],
+          subject_label: "Iris PR#22 acceptance discussion",
         },
       ] })),
       connect: vi.fn(),
@@ -612,8 +613,15 @@ describe("proactive signal persistence", () => {
     expect(context).toEqual(expect.objectContaining({
       delivery: expect.objectContaining({ id: "delivery-a", status: "processing" }),
       candidate: expect.objectContaining({ idempotencyKey: "quiet_open_thread:thread-a:1" }),
+      subjectLabel: "Iris PR#22 acceptance discussion",
     }));
     const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("left join discussion_threads");
+    expect(sql).toContain("left join action_items");
+    expect(sql).toContain("thread_state.group_id = candidate.group_id");
+    expect(sql).toContain("thread_state.version = candidate.entity_version");
+    expect(sql).toContain("action_state.group_id = candidate.group_id");
+    expect(sql).toContain("action_state.version = candidate.entity_version");
     expect(sql).not.toContain("conversation_messages.text");
     expect(sql).not.toContain("message_body");
   });

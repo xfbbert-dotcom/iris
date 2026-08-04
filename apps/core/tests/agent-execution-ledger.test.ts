@@ -205,6 +205,71 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     ]);
   });
 
+  it("loads version-bound proactive subjects from the exact group projection", async () => {
+    const groupId = `oc_subject_${suffix}`;
+    const threadId = `thread-subject-${suffix}`;
+    await pool.query(
+      `INSERT INTO discussion_threads (
+         id, group_id, title, summary, status, confidence, version,
+         first_evidence_at, last_activity_at, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'open', 0.95, 1, $5, $5, $5, $5)`,
+      [threadId, groupId, "Iris PR#22 acceptance discussion", "Bounded integration summary", at],
+    );
+    const threadCandidate = proactiveCandidate({ groupId, entityId: threadId });
+    const threadDeliveryId = await createQueuedProactiveDelivery({
+      repository: proactiveRepository,
+      candidate: threadCandidate,
+    });
+    const threadClaim = await proactiveRepository.claimProactiveSignalDelivery({
+      workerId: "subject-worker-thread",
+      at,
+      leaseUntil: new Date(at.getTime() + 30_000),
+    });
+
+    expect(threadClaim?.delivery.id).toBe(threadDeliveryId);
+    await expect(proactiveRepository.getProactiveSignalDeliveryContext(threadDeliveryId)).resolves.toMatchObject({
+      subjectLabel: "Iris PR#22 acceptance discussion",
+    });
+    await proactiveRepository.completeProactiveSignalDelivery({
+      deliveryId: threadDeliveryId,
+      workerId: "subject-worker-thread",
+      messageId: `om_thread_${suffix}`,
+      at,
+    });
+
+    const actionId = `action-subject-${suffix}`;
+    await pool.query(
+      `INSERT INTO action_items (
+         id, group_id, description, owner_ref_type, owner_ref, due_at,
+         status, confidence, version, created_at, updated_at
+       ) VALUES ($1, $2, $3, 'text_label', 'product owner', $4, 'open', 0.95, 1, $5, $5)`,
+      [actionId, groupId, "Complete customer feedback dashboard acceptance", at, at],
+    );
+    const actionCandidate = proactiveCandidate({
+      idempotencyKey: `overdue_action:${actionId}:1`,
+      kind: "overdue_action",
+      priority: "high",
+      groupId,
+      entityId: actionId,
+      reasonCode: "action_due_at_elapsed",
+      suggestedMode: "ask_for_status",
+    });
+    const actionDeliveryId = await createQueuedProactiveDelivery({
+      repository: proactiveRepository,
+      candidate: actionCandidate,
+    });
+    const actionClaim = await proactiveRepository.claimProactiveSignalDelivery({
+      workerId: "subject-worker-action",
+      at,
+      leaseUntil: new Date(at.getTime() + 30_000),
+    });
+
+    expect(actionClaim?.delivery.id).toBe(actionDeliveryId);
+    await expect(proactiveRepository.getProactiveSignalDeliveryContext(actionDeliveryId)).resolves.toMatchObject({
+      subjectLabel: "Complete customer feedback dashboard acceptance",
+    });
+  });
+
   it("records feedback only once for an exact sent delivery binding", async () => {
     const groupId = `oc_feedback_${suffix}`;
     const candidate = proactiveCandidate({ groupId, entityId: `thread-feedback-${suffix}`, entityVersion: 2 });

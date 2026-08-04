@@ -2,6 +2,7 @@ import type { ProactiveSignalDeliveryContext } from "./proactive-signal-reposito
 
 const MAX_CARD_JSON_BYTES = 24 * 1024;
 const MAX_COMPONENTS = 12;
+const MAX_VISIBLE_SUBJECT_CHARS = 160;
 
 export type ProactiveSignalCardRenderInput = {
   context: ProactiveSignalDeliveryContext;
@@ -22,12 +23,14 @@ export function renderProactiveSignalCard(
     componentCount += 1;
     return value;
   };
+  const subjectLabel = escapeFeishuMarkdown(normalizeSubjectLabel(input.context.subjectLabel));
+  const subjectKind = candidate.kind === "overdue_action" ? "行动项" : "讨论";
   const summary = candidate.kind === "overdue_action"
-    ? "Action appears overdue"
-    : "Thread has been quiet";
+    ? "这个行动项已超过截止时间"
+    : "这个讨论已有一段时间没有更新";
   const suggestedAction = candidate.suggestedMode === "ask_for_status"
-    ? "Please share the latest status when convenient."
-    : "Please share whether this thread still needs follow-up.";
+    ? "请在方便时补充最新状态。"
+    : "请告诉我：这件事还需要继续跟进吗？";
   const evidenceCount = candidate.evidenceMessageIds.length;
   const feedbackCallbackValue = (action: "helpful" | "irrelevant") => ({
     kind: "proactive_signal_feedback",
@@ -58,7 +61,7 @@ export function renderProactiveSignalCard(
     schema: "2.0",
     header: {
       template: candidate.priority === "high" ? "red" : "orange",
-      title: { tag: "plain_text", content: "Iris follow-up" },
+      title: { tag: "plain_text", content: "Iris 主动提醒" },
     },
     body: {
       elements: [
@@ -66,9 +69,8 @@ export function renderProactiveSignalCard(
           tag: "markdown",
           content: [
             `**${summary}**`,
-            `Type: ${candidate.entityType}`,
-            `Version: ${candidate.entityVersion}`,
-            `Context: ${evidenceCount} related ${evidenceCount === 1 ? "message" : "messages"}`,
+            `**${subjectKind}：** ${subjectLabel}`,
+            `依据：${evidenceCount} 条相关群消息`,
           ].join("\n"),
         }),
         component({
@@ -91,4 +93,17 @@ export function renderProactiveSignalCard(
     throw new Error("proactive signal card is too large");
   }
   return { card, json, componentCount };
+}
+
+function normalizeSubjectLabel(value: string | undefined): string {
+  if (typeof value !== "string") throw new Error("proactive signal subject is unavailable");
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  if (normalized.length === 0) throw new Error("proactive signal subject is unavailable");
+  const characters = Array.from(normalized);
+  if (characters.length <= MAX_VISIBLE_SUBJECT_CHARS) return normalized;
+  return `${characters.slice(0, MAX_VISIBLE_SUBJECT_CHARS - 3).join("")}...`;
+}
+
+function escapeFeishuMarkdown(value: string): string {
+  return value.replace(/([\\`*_{}\[\]()#+\-.!|>~])/gu, "\\$1");
 }

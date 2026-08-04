@@ -74,6 +74,7 @@ export type ProactiveSignalDeliveryClaim = {
 export type ProactiveSignalDeliveryContext = {
   delivery: ProactiveSignalDelivery;
   candidate: PersistedProactiveSignalCandidate;
+  subjectLabel?: string;
 };
 
 export type ProactiveSignalRepository = {
@@ -567,11 +568,25 @@ async function getProactiveSignalDeliveryContext(
           AND evidence.group_id = candidate.group_id
         ORDER BY evidence.created_at ASC, evidence.conversation_message_id ASC
         LIMIT 20
-      ) AS evidence_message_ids
+      ) AS evidence_message_ids,
+      CASE candidate.entity_type
+        WHEN 'thread' THEN thread_state.title
+        WHEN 'action' THEN action_state.description
+      END AS subject_label
     FROM proactive_signal_delivery_outbox delivery
     JOIN proactive_signal_candidates candidate
       ON candidate.idempotency_key = delivery.candidate_idempotency_key
      AND candidate.group_id = delivery.group_id
+    LEFT JOIN discussion_threads thread_state
+      ON candidate.entity_type = 'thread'
+     AND thread_state.id = candidate.entity_id
+     AND thread_state.group_id = candidate.group_id
+     AND thread_state.version = candidate.entity_version
+    LEFT JOIN action_items action_state
+      ON candidate.entity_type = 'action'
+     AND action_state.id = candidate.entity_id
+     AND action_state.group_id = candidate.group_id
+     AND action_state.version = candidate.entity_version
     WHERE delivery.id = $1
     LIMIT 1
     `,
@@ -579,6 +594,7 @@ async function getProactiveSignalDeliveryContext(
   );
   if (result.rows.length === 0) return undefined;
   const row = result.rows[0];
+  const subjectLabel = optionalSubjectLabel(row.subject_label);
   return {
     delivery: {
       id: requireBoundedString("deliveryId", row.id),
@@ -588,6 +604,7 @@ async function getProactiveSignalDeliveryContext(
       attemptCount: requireNonNegativeInteger(row.attempt_count, "attemptCount"),
     },
     candidate: mapCandidateRow(row),
+    ...(subjectLabel === undefined ? {} : { subjectLabel }),
   };
 }
 
@@ -1256,6 +1273,16 @@ function requireLimit(value: number): number {
 function requireStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => requireBoundedString("evidenceMessageId", item));
+}
+
+function optionalSubjectLabel(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error("subjectLabel is invalid");
+  const normalized = value.trim();
+  if (normalized.length < 1 || normalized.length > 4000) {
+    throw new Error("subjectLabel is invalid");
+  }
+  return normalized;
 }
 
 function requireSignalKind(value: unknown): ProactiveSignalCandidate["kind"] {

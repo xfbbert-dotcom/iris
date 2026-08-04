@@ -40,8 +40,19 @@ delivery stays disabled until a separate real-Feishu acceptance gate passes.
 
 ### 4.1 Card interaction
 
-The proactive card keeps its current reminder content and adds one compact form
-with two buttons:
+The proactive card uses Chinese product copy and must identify the exact work item
+without exposing raw evidence text. Immediately before rendering, Core resolves one
+bounded subject label from the current conversation-state projection using the exact
+candidate group ID, entity ID, entity type, and entity version. Thread reminders use
+the thread title; overdue-action reminders use the action description. Core does not
+copy this label into the proactive candidate or delivery tables.
+
+If that exact version-bound subject cannot be resolved, Iris treats the delivery as
+stale and sends no ambiguous reminder. The card includes the subject label and a
+bounded count of related group messages, but not raw messages, summaries, evidence
+IDs, owners, or hidden callback facts.
+
+The card also includes one compact form with two buttons:
 
 - `有帮助` records `helpful`.
 - `不相关` records `irrelevant`.
@@ -213,7 +224,9 @@ No actor IDs, message bodies, evidence text, or candidate content are exposed.
 ## 8. Acceptance Criteria
 
 1. Rendered proactive cards contain exactly the two bounded feedback actions and
-   stay within the card byte/component limits.
+   stay within the card byte/component limits. The visible Chinese card identifies
+   the exact version-bound thread or action and refuses to render when that subject
+   is unavailable.
 2. Signed callbacks normalize into a typed queued job; malformed callbacks are
    rejected and duplicate events remain idempotent.
 3. Current members can record feedback; bots, non-members, stale bindings, and

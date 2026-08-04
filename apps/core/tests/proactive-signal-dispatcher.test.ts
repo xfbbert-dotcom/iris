@@ -30,7 +30,8 @@ describe("ProactiveSignalDispatcher", () => {
       send: async (input) => {
         order.push("send");
         expect(input.chatId).toBe("group-a");
-        expect(input.cardJson).toContain("Iris follow-up");
+        expect(input.cardJson).toContain("Iris 主动提醒");
+        expect(input.cardJson).toContain("Iris PR\\\\#22 acceptance discussion");
         expect(input.cardJson).not.toContain("message-a");
         expect(input.uuid).toHaveLength(50);
         return { messageId: "om_proactive" };
@@ -284,5 +285,6 @@ function deliveryContext(): ProactiveSignalDeliveryContext {
       updatedAt: createdAt,
       evidenceMessageIds: ["message-a"],
     },
+    subjectLabel: "Iris PR#22 acceptance discussion",
   };
 }

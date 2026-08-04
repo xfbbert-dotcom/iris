@@ -11,10 +11,11 @@ describe("ProactiveSignalCardRenderer", () => {
 
     expect(result.card.header).toMatchObject({
       template: "orange",
-      title: { tag: "plain_text", content: "Iris follow-up" },
+      title: { tag: "plain_text", content: "Iris 主动提醒" },
     });
-    expect(result.json).toContain("Thread has been quiet");
-    expect(result.json).toContain("2 related messages");
+    expect(result.json).toContain("这个讨论已有一段时间没有更新");
+    expect(result.json).toContain("Iris PR\\\\#22 验收讨论");
+    expect(result.json).toContain("2 条相关群消息");
     expect(result.json).not.toContain("message-a");
     expect(result.json).not.toContain("private project detail");
     expect(Buffer.byteLength(result.json, "utf8")).toBeLessThanOrEqual(24 * 1024);
@@ -80,14 +81,37 @@ describe("ProactiveSignalCardRenderer", () => {
 
     expect(result.card.header).toMatchObject({
       template: "red",
-      title: { tag: "plain_text", content: "Iris follow-up" },
+      title: { tag: "plain_text", content: "Iris 主动提醒" },
     });
-    expect(result.json).toContain("Action appears overdue");
+    expect(result.json).toContain("这个行动项已超过截止时间");
+    expect(result.json).toContain("完成客户反馈看板验收");
+  });
+
+  it("refuses to render an ambiguous reminder without a current subject", () => {
+    expect(() => renderProactiveSignalCard({
+      context: deliveryContext({}, null),
+    })).toThrow("proactive signal subject is unavailable");
+  });
+
+  it("bounds and escapes the visible subject without exposing evidence text", () => {
+    const result = renderProactiveSignalCard({
+      context: deliveryContext({}, `**urgent** [open](https://example.com)\n${"x".repeat(300)}`),
+    });
+    const elements = (result.card.body as { elements: Array<Record<string, unknown>> }).elements;
+    const content = String(elements[0]?.content);
+
+    expect(content).not.toContain("**urgent**");
+    expect(content).not.toContain("[open](https://example.com)");
+    expect(Array.from(content).length).toBeLessThan(260);
+    expect(result.json).not.toContain("message-a");
   });
 });
 
 function deliveryContext(
   overrides: Partial<ProactiveSignalDeliveryContext["candidate"]> = {},
+  subjectLabel: string | null = overrides.kind === "overdue_action"
+    ? "完成客户反馈看板验收"
+    : "Iris PR#22 验收讨论",
 ): ProactiveSignalDeliveryContext {
   const now = new Date("2026-07-23T10:00:00.000Z");
   return {
@@ -115,5 +139,6 @@ function deliveryContext(
       evidenceMessageIds: ["message-a", "message-b"],
       ...overrides,
     },
+    ...(subjectLabel === null ? {} : { subjectLabel }),
   };
 }
