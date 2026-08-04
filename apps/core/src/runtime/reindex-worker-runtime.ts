@@ -31,6 +31,7 @@ import {
   assertSupportedRuntimeEmbeddingDimension,
   createEmbeddingProfileId,
 } from "../model/embedding-profile-id.js";
+import { createDocumentEmbeddingProvider } from "../model/embedding-input-format.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createDocumentReindexPlanner } from "../reindex/document-reindex-planner.js";
 import type {
@@ -167,7 +168,10 @@ export function createReindexWorkerRuntime({
   );
   const snapshots = createSnapshots({ queryable: pool });
   const fragments = createFragments({ queryable: pool, embeddingProfiles: profiles });
-  const embedder = createEmbedding(embeddingConfig);
+  const embedder = createDocumentEmbeddingProvider({
+    model: embeddingConfig.model,
+    delegate: createEmbedding(embeddingConfig),
+  });
   const indexer = {
     async indexSnapshot(snapshot: DocumentSnapshot) {
       const activeProfile = await activeProfilePromise;
@@ -176,6 +180,9 @@ export function createReindexWorkerRuntime({
         embedder,
         embeddingProfileId: activeProfile.id,
         fragments,
+        ...(embeddingConfig.batchSize === undefined
+          ? {}
+          : { embeddingBatchSize: embeddingConfig.batchSize }),
       }).indexSnapshot(snapshot);
     },
   };

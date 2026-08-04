@@ -18,11 +18,15 @@ export type FeishuDocumentPermissionCheckerDependencies = {
   tokenProvider: FeishuTenantAccessTokenProvider;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  minProbeIntervalMs?: number;
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
 };
 
 const DEFAULT_FEISHU_DOCUMENT_PERMISSION_TIMEOUT_MS = 5_000;
+const DEFAULT_FEISHU_PERMISSION_MIN_PROBE_INTERVAL_MS = 650;
 const MAX_FEISHU_PERMISSION_RESPONSE_BYTES = 65_536;
-const FEISHU_PERMISSION_DENIED_CODES = new Set([99991663]);
+const FEISHU_PERMISSION_DENIED_CODES = new Set([131006, 99991663]);
 const invalidFeishuDocumentTokenPattern = /,|%/u;
 
 export function createFeishuDocumentPermissionChecker({
@@ -30,39 +34,98 @@ export function createFeishuDocumentPermissionChecker({
   tokenProvider,
   fetch = globalThis.fetch,
   timeoutMs = DEFAULT_FEISHU_DOCUMENT_PERMISSION_TIMEOUT_MS,
+  minProbeIntervalMs = DEFAULT_FEISHU_PERMISSION_MIN_PROBE_INTERVAL_MS,
+  now = Date.now,
+  sleep = sleepWithTimer,
 }: FeishuDocumentPermissionCheckerDependencies): FeishuDocumentPermissionChecker {
   const safeTimeoutMs = readPositiveSafeInteger(
     timeoutMs,
     "Feishu document permission timeoutMs",
   );
+  const safeMinProbeIntervalMs = readPositiveSafeInteger(
+    minProbeIntervalMs,
+    "Feishu document permission minProbeIntervalMs",
+  );
+  const scheduleProbe = createSerialProbeScheduler({
+    minProbeIntervalMs: safeMinProbeIntervalMs,
+    now,
+    sleep,
+  });
+  const inFlightBySource = new Map<string, Promise<boolean>>();
 
   return {
-    async canReadSource(source) {
+    canReadSource(source) {
       const locator = parseDocumentLocator(source.sourceUri);
       if (locator === undefined) {
-        return false;
+        return Promise.resolve(false);
       }
 
-      const tenantAccessToken = await tokenProvider.getTenantAccessToken();
-      const documentId = await resolveDocumentId({
-        locator,
-        baseUrl,
-        tenantAccessToken,
-        fetch,
-        timeoutMs: safeTimeoutMs,
-      });
-      if (documentId === undefined) {
-        return false;
+      const sourceKey = `${source.id}\u0000${source.sourceUri}`;
+      const existingProbe = inFlightBySource.get(sourceKey);
+      if (existingProbe !== undefined) {
+        return existingProbe;
       }
 
-      return canReadDocumentMetadata({
-        documentId,
-        baseUrl,
-        tenantAccessToken,
-        fetch,
-        timeoutMs: safeTimeoutMs,
+      const probe = scheduleProbe(async () => {
+        const tenantAccessToken = await tokenProvider.getTenantAccessToken();
+        const documentId = await resolveDocumentId({
+          locator,
+          baseUrl,
+          tenantAccessToken,
+          fetch,
+          timeoutMs: safeTimeoutMs,
+        });
+        if (documentId === undefined) {
+          return false;
+        }
+
+        return canReadDocumentMetadata({
+          documentId,
+          baseUrl,
+          tenantAccessToken,
+          fetch,
+          timeoutMs: safeTimeoutMs,
+        });
       });
+      inFlightBySource.set(sourceKey, probe);
+
+      const clearProbe = () => {
+        if (inFlightBySource.get(sourceKey) === probe) {
+          inFlightBySource.delete(sourceKey);
+        }
+      };
+      void probe.then(clearProbe, clearProbe);
+      return probe;
     },
+  };
+}
+
+function createSerialProbeScheduler({
+  minProbeIntervalMs,
+  now,
+  sleep,
+}: {
+  minProbeIntervalMs: number;
+  now: () => number;
+  sleep: (milliseconds: number) => Promise<void>;
+}): <T>(operation: () => Promise<T>) => Promise<T> {
+  let previousProbe = Promise.resolve();
+  let nextProbeStartAt = 0;
+
+  return <T>(operation: () => Promise<T>): Promise<T> => {
+    const scheduled = previousProbe.then(async () => {
+      const waitMs = Math.max(0, nextProbeStartAt - now());
+      if (waitMs > 0) {
+        await sleep(waitMs);
+      }
+      nextProbeStartAt = Math.max(now(), nextProbeStartAt) + minProbeIntervalMs;
+      return operation();
+    });
+    previousProbe = scheduled.then(
+      () => undefined,
+      () => undefined,
+    );
+    return scheduled;
   };
 }
 
@@ -204,7 +267,12 @@ function isSuccessfulFeishuResponse(response: Response, responseBody: unknown): 
 }
 
 function throwIfTransientPermissionFailure(response: Response, responseBody: unknown): void {
-  if (response.ok || response.status === 403 || response.status === 404) {
+  if (
+    response.ok ||
+    response.status === 403 ||
+    response.status === 404 ||
+    (response.status === 400 && isKnownPermissionDeniedBody(responseBody))
+  ) {
     return;
   }
 
@@ -212,6 +280,14 @@ function throwIfTransientPermissionFailure(response: Response, responseBody: unk
     `Feishu document permission request failed with status ${response.status}: ${readExternalErrorMessage(
       responseBody,
     )}`,
+  );
+}
+
+function isKnownPermissionDeniedBody(responseBody: unknown): boolean {
+  return (
+    isRecord(responseBody) &&
+    typeof responseBody.code === "number" &&
+    FEISHU_PERMISSION_DENIED_CODES.has(responseBody.code)
   );
 }
 
@@ -244,6 +320,12 @@ function trimTrailingSlash(value: string): string {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function sleepWithTimer(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

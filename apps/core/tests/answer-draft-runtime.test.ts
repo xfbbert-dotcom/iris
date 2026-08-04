@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { InMemoryAuditLog } from "../src/audit/audit-log.js";
 import type { GenerateAnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
+import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import type { RetrievedDocumentFragment } from "../src/documents/document-fragment-repository.js";
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
+import type { GroupMemory, GroupMemoryRepository } from "../src/memory/group-memory-repository.js";
+import type { GroupMemoryService } from "../src/memory/group-memory-service.js";
 import { createAnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
 
 describe("createAnswerDraftRuntime", () => {
@@ -91,9 +94,190 @@ describe("createAnswerDraftRuntime", () => {
       model: "model-a",
       timeoutMs: 30000,
     });
+    expect(runtime?.chatKnowledgeDraftGenerator).toBeDefined();
 
     await runtime?.close();
     expect(pool.end).toHaveBeenCalled();
+  });
+
+  it("exposes a group memory service when the Postgres pool supports transactions", async () => {
+    const pool = {
+      query: vi.fn(),
+      connect: vi.fn(),
+      end: vi.fn(async () => undefined),
+    };
+    const repository = { repository: true };
+    const groupMemoryService = { service: true } as unknown as GroupMemoryService;
+    const createGroupMemoryRepository = vi.fn(() => repository as never);
+    const createGroupMemoryService = vi.fn(() => groupMemoryService);
+
+    const runtime = createAnswerDraftRuntime({
+      env: enabledEnv(),
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createGroupMemoryRepository,
+        createGroupMemoryService,
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    expect(createGroupMemoryRepository).toHaveBeenCalledWith({ dataSource: pool });
+    expect(createGroupMemoryService).toHaveBeenCalledWith({ repository });
+    expect(runtime?.groupMemoryService).toBe(groupMemoryService);
+
+    await runtime?.close();
+  });
+
+  it("retrieves long-term memory only for the current group", async () => {
+    const listActiveByGroup = vi.fn(async () => [groupMemory()]);
+    const model = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Thursday" })),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canReadGroupContext: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createMemoryEnabledRuntime({
+      listActiveByGroup,
+      model,
+      runtimeController,
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "When is launch?",
+      chatId: " chat-a ",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(listActiveByGroup).toHaveBeenCalledWith({ groupId: "chat-a", limit: 8 });
+    expect(runtimeController.canReadGroupContext).toHaveBeenCalledWith("chat-a");
+    expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-a");
+    expect(result?.usedGroupMemories.map((memory) => memory.id)).toEqual(["memory-1"]);
+    expect(model.generateAnswerDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ promptContext: expect.stringContaining("Launch Thursday.") }),
+    );
+  });
+
+  it("retrieves conversation state only from Postgres for groups allowed to read context", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn(),
+      end: vi.fn(async () => undefined),
+    };
+    const createConversationStateContextProvider = vi.fn(() => ({
+      loadRelevant: vi.fn(async () => ({ threads: [], actions: [] })),
+    }));
+    const runtime = createAnswerDraftRuntime({
+      env: enabledEnv(),
+      runtimeController: {
+        canReadDocuments: vi.fn(() => true),
+        canRetrieveKnowledgeBase: vi.fn(() => true),
+        canReadGroupContext: vi.fn((groupId: string) => groupId === "chat-a"),
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createConversationStateContextProvider,
+        createDocumentFragmentRepository: vi.fn(() => ({ searchSimilarFragments: vi.fn(async () => []) })),
+        createModelProvider: vi.fn(() => ({ generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })) })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What is open?",
+      chatId: "chat-a",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What is open?",
+      chatId: "chat-blocked",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What is open?",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(createConversationStateContextProvider).toHaveBeenCalledWith({ dataSource: pool });
+    const provider = createConversationStateContextProvider.mock.results[0]?.value;
+    expect(provider.loadRelevant).toHaveBeenCalledTimes(1);
+    expect(provider.loadRelevant).toHaveBeenCalledWith(expect.objectContaining({ groupId: "chat-a" }));
+  });
+
+  it.each([
+    ["group context reading", false, true],
+    ["group processing", true, false],
+  ])("does not retrieve memory when %s is disabled", async (_label, canRead, canProcess) => {
+    const listActiveByGroup = vi.fn(async () => [groupMemory()]);
+    const runtime = createMemoryEnabledRuntime({
+      listActiveByGroup,
+      runtimeController: {
+        canReadDocuments: vi.fn(() => true),
+        canRetrieveKnowledgeBase: vi.fn(() => true),
+        canReadGroupContext: vi.fn(() => canRead),
+        canProcessGroupMessage: vi.fn(() => canProcess),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "When is launch?",
+      chatId: "chat-a",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(listActiveByGroup).not.toHaveBeenCalled();
+    expect(result?.usedGroupMemories).toEqual([]);
+  });
+
+  it("does not retrieve memory without a valid chatId", async () => {
+    const listActiveByGroup = vi.fn(async () => [groupMemory()]);
+    const runtime = createMemoryEnabledRuntime({ listActiveByGroup });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "When is launch?",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(listActiveByGroup).not.toHaveBeenCalled();
+    expect(result?.usedGroupMemories).toEqual([]);
+  });
+
+  it("fails the answer closed when durable memory retrieval fails", async () => {
+    const model = { generateAnswerDraft: vi.fn() };
+    const runtime = createMemoryEnabledRuntime({
+      listActiveByGroup: vi.fn(async () => { throw new Error("memory unavailable"); }),
+      model,
+    });
+
+    await expect(runtime?.answerDraftOrchestrator.generateDraft({
+      question: "When is launch?",
+      chatId: "chat-a",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    })).rejects.toThrow("memory unavailable");
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
   it("creates a working orchestrator with allow-indexed development permissions", async () => {
@@ -113,6 +297,7 @@ describe("createAnswerDraftRuntime", () => {
           embedding: [1, 0, 0, 0, 0, 0],
           embeddingProfileId: "static-dev-6d",
           createdAt: new Date("2026-07-02T01:00:00.000Z"),
+          sourceType: "feishu_wiki" as const,
         },
       ]),
     };
@@ -236,13 +421,13 @@ describe("createAnswerDraftRuntime", () => {
       },
     });
 
-    await runtime?.answerDraftOrchestrator.generateDraft({
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
       question: "What should Iris say?",
       chatId: "chat-muted",
       liveChatMessages: [{ speaker: "Bob", text: "Current explicit request context." }],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(runtimeController.canReadGroupContext).toHaveBeenCalledWith("chat-muted");
     expect(liveChatContextProvider.loadRecentMessages).not.toHaveBeenCalled();
     expect(promptContext).not.toContain("Historical group context should stay hidden.");
@@ -323,15 +508,20 @@ describe("createAnswerDraftRuntime", () => {
       }),
     };
     const auditLog = new InMemoryAuditLog();
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
     const runtime = createAnswerDraftRuntime({
       env: {
         ...enabledEnv(),
         IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
       },
+      agentExecutionObserver: { observe },
       dependencies: {
         createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
         createDocumentFragmentRepository: vi.fn(() => fragments),
         createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createLiveChatContextProvider: vi.fn(() => ({
+          loadRecentMessages: vi.fn(async () => []),
+        })),
         createModelProvider: vi.fn(() => model),
         auditLog,
         createEmbeddingProfileRepository: vi.fn(() => ({
@@ -343,11 +533,14 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      executionId: "turn-source-policy-1",
       question: "What can Iris use?",
+      chatId: "chat-a",
+      askerId: "ou_alice",
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).toContain("Allowed text");
     expect(promptContext).not.toContain("Disabled text");
     expect(promptContext).not.toContain("Denied text");
@@ -395,6 +588,51 @@ describe("createAnswerDraftRuntime", () => {
         recordedAt: expect.any(Date),
       },
     ]);
+    expect(
+      observe.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.subjectType === "permission_decision"),
+    ).toEqual([
+      expect.objectContaining({
+        groupId: "chat-a",
+        actorOpenId: "ou_alice",
+        subjectId: "source-allowed",
+        eventType: "permission_allowed",
+        outcome: "success",
+        metadata: { turnId: "turn-source-policy-1" },
+      }),
+      expect.objectContaining({
+        subjectId: "source-disabled",
+        eventType: "permission_denied",
+        outcome: "denied",
+      }),
+      expect.objectContaining({
+        subjectId: "source-denied",
+        eventType: "permission_denied",
+        outcome: "denied",
+      }),
+      expect.objectContaining({
+        subjectId: "source-stale",
+        eventType: "permission_denied",
+        outcome: "denied",
+      }),
+      expect.objectContaining({
+        subjectId: "source-missing",
+        eventType: "permission_denied",
+        outcome: "denied",
+      }),
+      expect.objectContaining({
+        subjectId: "source-error",
+        eventType: "permission_error",
+        outcome: "error",
+      }),
+    ]);
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(
+      observe.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.subjectType === "provider_request"),
+    ).toEqual([]);
   });
 
   it("fails closed for Feishu document fragments when live permission checks are unavailable", async () => {
@@ -447,7 +685,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).not.toContain("Feishu cached text");
     expect(result?.allowedFragments).toEqual([]);
     expect(result?.deniedDocumentIds).toEqual(["source-feishu"]);
@@ -526,7 +764,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).not.toContain("Group visible document text");
     expect(promptContext).not.toContain("Knowledge base text");
     expect(promptContext).toContain("User submitted text");
@@ -630,7 +868,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).not.toContain("Other group document text");
     expect(promptContext).toContain("Current group document text");
     expect(promptContext).toContain("User submitted text");
@@ -769,7 +1007,7 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).not.toContain("Group document without source evidence");
     expect(promptContext).toContain("User submitted text");
     expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-user"]);
@@ -853,13 +1091,270 @@ describe("createAnswerDraftRuntime", () => {
       liveChatMessages: [],
     });
 
-    const promptContext = model.generateAnswerDraft.mock.calls[0]?.[0].promptContext ?? "";
+    const promptContext = result?.promptContext ?? "";
     expect(promptContext).toContain("Live allowed document text");
     expect(promptContext).not.toContain("Live denied document text");
     expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-live-allowed"]);
     expect(result?.deniedDocumentIds).toEqual(["source-live-denied"]);
     expect(livePermissionChecker.canReadSource).toHaveBeenCalledWith(sources["source-live-allowed"]);
     expect(livePermissionChecker.canReadSource).toHaveBeenCalledWith(sources["source-live-denied"]);
+  });
+
+  it("rechecks unique source permissions in first-seen order without throwing", async () => {
+    const sources: Record<string, DocumentSource | undefined> = {
+      "source-a": source({
+        id: "source-a",
+        sourceType: "authorized_wiki_document",
+        sourceUri: "https://example.feishu.cn/wiki/wikcnA",
+        permissionState: "readable",
+      }),
+      "source-b": source({
+        id: "source-b",
+        sourceType: "user_submitted_document",
+        permissionState: "readable",
+      }),
+      "source-disabled": source({
+        id: "source-disabled",
+        sourceType: "user_submitted_document",
+        permissionState: "readable",
+        canUseForAnswering: false,
+      }),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async (id: string) => {
+        if (id === "source-error") {
+          throw new Error("registry secret");
+        }
+        return sources[id];
+      }),
+    };
+    const livePermissionChecker = {
+      canReadSource: vi.fn(async (documentSource: DocumentSource) => {
+        if (documentSource.id === "source-a") {
+          throw new Error("checker secret");
+        }
+        return true;
+      }),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        FEISHU_OPEN_BASE_URL: "https://open.example.com/",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createFeishuDocumentPermissionChecker: vi.fn(() => livePermissionChecker),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime!.answerSourcePermissionVerifier.verify({
+      chatId: "oc_pilot",
+      documentSourceIds: [" source-a ", "source-a", "source-b", "source-missing", "source-disabled", "source-error"],
+    });
+
+    expect(result).toEqual([
+      { documentSourceId: "source-a", outcome: "error" },
+      { documentSourceId: "source-b", outcome: "allowed" },
+      { documentSourceId: "source-missing", outcome: "denied" },
+      { documentSourceId: "source-disabled", outcome: "denied" },
+      { documentSourceId: "source-error", outcome: "error" },
+    ]);
+    expect(sourceRegistry.findSourceById).toHaveBeenCalledTimes(5);
+    expect(livePermissionChecker.canReadSource).toHaveBeenCalledTimes(1);
+    expect(runtimeController.canRetrieveKnowledgeBase).toHaveBeenCalledTimes(1);
+
+    const overlongSourceA = `Bearer credential-a-${"a".repeat(520)}`;
+    const overlongSourceB = `Bearer credential-b-${"b".repeat(520)}`;
+    const malformedObject = { credential: "provider-secret" };
+    const malformedResult = await runtime!.answerSourcePermissionVerifier.verify({
+      chatId: "oc_pilot",
+      documentSourceIds: [
+        "",
+        "   ",
+        overlongSourceA,
+        overlongSourceA,
+        overlongSourceB,
+        malformedObject as never,
+        malformedObject as never,
+        42 as never,
+      ],
+    });
+    expect(malformedResult).toHaveLength(5);
+    expect(malformedResult.every((decision) => decision.outcome === "error")).toBe(true);
+    expect(new Set(malformedResult.map((decision) => decision.documentSourceId)).size).toBe(5);
+    expect(malformedResult.every((decision) => decision.documentSourceId.length <= 512)).toBe(true);
+    expect(JSON.stringify(malformedResult)).not.toContain("provider-secret");
+    expect(JSON.stringify(malformedResult)).not.toContain(overlongSourceA);
+    expect(JSON.stringify(malformedResult)).not.toContain(overlongSourceB);
+
+    await expect(
+      runtime!.answerSourcePermissionVerifier.verify({
+        chatId: "oc_pilot",
+        documentSourceIds: [overlongSourceA, overlongSourceB],
+      }),
+    ).resolves.toEqual(malformedResult.slice(1, 3));
+
+    await runtime?.close();
+  });
+
+  it("uses the chat scope for group-visible source rechecks", async () => {
+    const groupSource = source({
+      id: "source-group",
+      sourceType: "group_visible_document",
+      originGroupId: "oc_other",
+      permissionState: "readable",
+    });
+    const sourceRegistry = {
+      findSourceById: vi.fn(async () => groupSource),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(
+      runtime!.answerSourcePermissionVerifier.verify({
+        chatId: "oc_current",
+        documentSourceIds: ["source-group"],
+      }),
+    ).resolves.toEqual([{ documentSourceId: "source-group", outcome: "denied" }]);
+    expect(runtimeController.canProcessGroupMessage).not.toHaveBeenCalled();
+
+    await runtime?.close();
+  });
+
+  it("allows group-visible source rechecks for the matching chat scope", async () => {
+    const groupSource = source({
+      id: "source-group-current",
+      sourceType: "group_visible_document",
+      originGroupId: "oc_current",
+      permissionState: "readable",
+    });
+    const sourceRegistry = {
+      findSourceById: vi.fn(async () => groupSource),
+    };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn((chatId: string) => chatId === "oc_current"),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(
+      runtime!.answerSourcePermissionVerifier.verify({
+        chatId: "oc_current",
+        documentSourceIds: ["source-group-current"],
+      }),
+    ).resolves.toEqual([{ documentSourceId: "source-group-current", outcome: "allowed" }]);
+    expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("oc_current");
+
+    await runtime?.close();
+  });
+
+  it("exposes an unavailable verifier in allow-indexed mode without throwing", async () => {
+    const runtime = createAnswerDraftRuntime({
+      env: enabledEnv(),
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(
+      runtime!.answerSourcePermissionVerifier.verify({
+        chatId: "oc_pilot",
+        documentSourceIds: ["source-a", "source-a"],
+      }),
+    ).resolves.toEqual([{ documentSourceId: "source-a", outcome: "error" }]);
+
+    await runtime?.close();
   });
 
   it("uses configured OpenAI-compatible embedding provider when dimensions are 6", async () => {
@@ -1069,6 +1564,129 @@ describe("createAnswerDraftRuntime", () => {
     });
   });
 
+  it("uses configured Qwen embedding provider when dimensions are 1024", async () => {
+    const vector = Array.from({ length: 1024 }, (_, index) => index / 1024);
+    const embeddingProvider = { embedTexts: vi.fn(async () => [vector]) };
+    const embeddingProfiles = {
+      getStaticDevelopmentProfile: vi.fn(),
+      findOrCreateProfile: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:qwen3-embedding:0.6b:1024",
+          provider: "openai-compatible",
+          model: "qwen3-embedding:0.6b",
+          dimensions: 1024,
+          displayName: "OpenAI-compatible qwen3-embedding:0.6b (1024d)",
+        }),
+      ),
+      getProfileById: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:qwen3-embedding:0.6b:1024",
+          provider: "openai-compatible",
+          model: "qwen3-embedding:0.6b",
+          dimensions: 1024,
+          displayName: "OpenAI-compatible qwen3-embedding:0.6b (1024d)",
+        }),
+      ),
+    };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "embed-key",
+        IRIS_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+        IRIS_EMBEDDING_DIMENSIONS: "1024",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => embeddingProfiles),
+        createEmbeddingProvider: vi.fn(() => embeddingProvider),
+      },
+    });
+
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "Use local Qwen embedder?",
+      liveChatMessages: [],
+    });
+
+    expect(embeddingProfiles.findOrCreateProfile).toHaveBeenCalledWith({
+      provider: "openai-compatible",
+      model: "qwen3-embedding:0.6b",
+      dimensions: 1024,
+      displayName: "OpenAI-compatible qwen3-embedding:0.6b (1024d)",
+    });
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
+      embeddingProfileId: "openai-compatible:qwen3-embedding:0.6b:1024",
+      embedding: vector,
+      limit: 24,
+    });
+  });
+
+  it("uses configured EmbeddingGemma query prompts when dimensions are 768", async () => {
+    const vector = Array.from({ length: 768 }, (_, index) => index / 768);
+    const embeddingProvider = { embedTexts: vi.fn(async () => [vector]) };
+    const embeddingProfiles = {
+      getStaticDevelopmentProfile: vi.fn(),
+      findOrCreateProfile: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+          provider: "openai-compatible",
+          model: "embeddinggemma:300m-qat-q4_0",
+          dimensions: 768,
+          displayName: "OpenAI-compatible embeddinggemma:300m-qat-q4_0 (768d)",
+        }),
+      ),
+      getProfileById: vi.fn(async () =>
+        profile({
+          id: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+          provider: "openai-compatible",
+          model: "embeddinggemma:300m-qat-q4_0",
+          dimensions: 768,
+          displayName: "OpenAI-compatible embeddinggemma:300m-qat-q4_0 (768d)",
+        }),
+      ),
+    };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "embed-key",
+        IRIS_EMBEDDING_MODEL: "embeddinggemma:300m-qat-q4_0",
+        IRIS_EMBEDDING_DIMENSIONS: "768",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => embeddingProfiles),
+        createEmbeddingProvider: vi.fn(() => embeddingProvider),
+      },
+    });
+
+    await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "生命粒子引擎是什么？",
+      liveChatMessages: [],
+    });
+
+    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith([
+      "task: search result | query: 生命粒子引擎是什么？",
+    ]);
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
+      embeddingProfileId: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
+      embedding: vector,
+      limit: 24,
+    });
+  });
+
   it("rejects unsupported embedding dimensions when generating a draft", async () => {
     const runtime = createAnswerDraftRuntime({
       env: {
@@ -1116,6 +1734,7 @@ function fragment(
     embedding: [1, 0, 0, 0, 0, 0],
     embeddingProfileId: "static-dev-6d",
     createdAt: new Date("2026-07-02T01:00:00.000Z"),
+    sourceType: "feishu_wiki",
     ...overrides,
   };
 }
@@ -1145,6 +1764,74 @@ function source(overrides: Partial<DocumentSource> = {}): DocumentSource {
     createdAt: new Date("2026-07-01T01:00:00.000Z"),
     updatedAt: new Date("2026-07-01T01:00:00.000Z"),
     evidence: [],
+    ...overrides,
+  };
+}
+
+function createMemoryEnabledRuntime({
+  listActiveByGroup,
+  model = {
+    generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+  },
+  runtimeController,
+}: {
+  listActiveByGroup: GroupMemoryRepository["listActiveByGroup"];
+  model?: {
+    generateAnswerDraft: ReturnType<typeof vi.fn>;
+  };
+  runtimeController?: {
+    canReadDocuments(): boolean;
+    canRetrieveKnowledgeBase(): boolean;
+    canReadGroupContext?(groupId: string): boolean;
+    canProcessGroupMessage?(groupId: string): boolean;
+  };
+}) {
+  const repository = {
+    listActiveByGroup,
+  } as unknown as GroupMemoryRepository;
+  return createAnswerDraftRuntime({
+    env: enabledEnv(),
+    runtimeController,
+    dependencies: {
+      createPostgresPool: vi.fn(() => ({
+        query: vi.fn(async () => ({ rows: [] })),
+        connect: vi.fn(),
+        end: vi.fn(async () => undefined),
+      })),
+      createGroupMemoryRepository: vi.fn(() => repository),
+      createGroupMemoryService: vi.fn(() => ({ service: true } as unknown as GroupMemoryService)),
+      createDocumentFragmentRepository: vi.fn(() => ({
+        searchSimilarFragments: vi.fn(async () => []),
+      })),
+      createLiveChatContextProvider: vi.fn(() => ({
+        loadRecentMessages: vi.fn(async () => []),
+      })),
+      createModelProvider: vi.fn(() => model),
+      createEmbeddingProfileRepository: vi.fn(() => ({
+        getStaticDevelopmentProfile: vi.fn(async () => profile()),
+        findOrCreateProfile: vi.fn(),
+        getProfileById: vi.fn(),
+      })),
+    },
+  });
+}
+
+function groupMemory(overrides: Partial<GroupMemory> = {}): GroupMemory {
+  return {
+    id: "memory-1",
+    groupId: "chat-a",
+    scope: "group",
+    category: "decision",
+    content: "Launch Thursday.",
+    importance: 4,
+    confidence: 0.9,
+    status: "active",
+    idempotencyKey: "create-1",
+    origin: "operator",
+    createdBy: "alice",
+    evidenceMessageIds: ["msg-1"],
+    createdAt: new Date("2026-07-14T00:00:00.000Z"),
+    updatedAt: new Date("2026-07-14T00:00:00.000Z"),
     ...overrides,
   };
 }

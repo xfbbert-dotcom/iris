@@ -1,11 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { UpsertConversationMessageInput } from "../src/conversation/conversation-message-repository.js";
 import {
   createPostgresConversationMessageRepository,
   type Queryable,
 } from "../src/conversation/postgres-conversation-message-repository.js";
+import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 import { MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH } from "../src/events/raw-event-queue.js";
+
+const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
+const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("PostgresConversationMessageRepository", () => {
   it("upserts conversation messages", async () => {
@@ -48,6 +55,111 @@ describe("PostgresConversationMessageRepository", () => {
     );
   });
 
+  it("atomically replaces normalized Feishu mention identities on replay", async () => {
+    const queryable = fakeQueryable([
+      {
+        id: "feishu:message-1",
+        provider: "feishu",
+        provider_message_id: "message-1",
+        chat_id: "chat-1",
+        sender_id: "user-1",
+        message_type: "text",
+        text: "Hello",
+        sent_at: new Date("2026-07-02T01:00:00.000Z"),
+        raw_event_idempotency_key: "raw-event:feishu:event-1",
+        created_at: new Date("2026-07-02T01:00:01.000Z"),
+        mentions: [
+          { key: "@_user_1", openId: "ou_owner" },
+          { key: "@_user_2", openId: "ou_backup" },
+        ],
+      },
+    ]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(
+      repository.upsertMessage({
+        ...baseUpsertInput(),
+        mentions: [
+          { key: " @_user_2 ", openId: " ou_backup " },
+          { key: "@_user_1", openId: "ou_owner" },
+          { key: "@_user_2", openId: "ou_backup" },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      mentions: [
+        { key: "@_user_1", openId: "ou_owner" },
+        { key: "@_user_2", openId: "ou_backup" },
+      ],
+    });
+
+    expect(firstQueryText(queryable)).toContain("conversation_message_mentions");
+    expect(firstQueryText(queryable)).toContain("DELETE FROM conversation_message_mentions");
+    expect(firstQueryText(queryable)).toContain("unnest($13::text[], $14::text[])");
+    expect(firstQueryParams(queryable)).toEqual(
+      expect.arrayContaining([
+        ["@_user_1", "@_user_2"],
+        ["ou_owner", "ou_backup"],
+      ]),
+    );
+    expect(queryable.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the lexicographically first key for duplicate Feishu mention Open IDs", async () => {
+    const queryable = fakeQueryable([
+      {
+        id: "feishu:message-1",
+        provider: "feishu",
+        provider_message_id: "message-1",
+        chat_id: "chat-1",
+        sender_id: "user-1",
+        message_type: "text",
+        text: "Hello",
+        sent_at: new Date("2026-07-02T01:00:00.000Z"),
+        raw_event_idempotency_key: "raw-event:feishu:event-1",
+        created_at: new Date("2026-07-02T01:00:01.000Z"),
+      },
+    ]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await repository.upsertMessage({
+      ...baseUpsertInput(),
+      mentions: [
+        { key: "@_user_b", openId: "ou_owner" },
+        { key: " @_user_a ", openId: " ou_owner " },
+      ],
+    });
+
+    expect(firstQueryParams(queryable)[12]).toEqual(["@_user_a"]);
+    expect(firstQueryParams(queryable)[13]).toEqual(["ou_owner"]);
+  });
+
+  it.each([
+    {
+      mentions: [{ key: "   ", openId: "ou_owner" }],
+      message: "mention key must not be blank",
+    },
+    {
+      mentions: [{ key: "@_user", openId: "   " }],
+      message: "mention openId must not be blank",
+    },
+    {
+      mentions: [{ key: "@".repeat(513), openId: "ou_owner" }],
+      message: "mention key must be at most 512 characters",
+    },
+    {
+      mentions: [{ key: "@_user", openId: "o".repeat(513) }],
+      message: "mention openId must be at most 512 characters",
+    },
+  ])("rejects invalid mention identities before upsert", async ({ mentions, message }) => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(repository.upsertMessage({ ...baseUpsertInput(), mentions })).rejects.toThrow(
+      message,
+    );
+    expect(queryable.query).not.toHaveBeenCalled();
+  });
+
   it("bounds oversized message text before upsert", async () => {
     const queryable = fakeQueryable([
       {
@@ -75,7 +187,7 @@ describe("PostgresConversationMessageRepository", () => {
       rawEventIdempotencyKey: "raw-event:feishu:event-1",
     });
     const params = firstQueryParams(queryable);
-    const storedText = params[6];
+    const storedText = params[9];
 
     expect(typeof storedText).toBe("string");
     expect((storedText as string).length).toBeLessThanOrEqual(8000);
@@ -109,7 +221,7 @@ describe("PostgresConversationMessageRepository", () => {
     ).resolves.toMatchObject({ rawEventIdempotencyKey });
 
     expect(rawEventIdempotencyKey).toHaveLength(MAX_RAW_EVENT_IDEMPOTENCY_KEY_LENGTH);
-    expect(firstQueryParams(queryable)[8]).toBe(rawEventIdempotencyKey);
+    expect(firstQueryParams(queryable)[11]).toBe(rawEventIdempotencyKey);
   });
 
   it("rejects invalid sentAt values before upsert", async () => {
@@ -329,6 +441,114 @@ describe("PostgresConversationMessageRepository", () => {
   });
 });
 
+runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
+  let pool: pg.Pool | undefined;
+  const suffix = randomUUID();
+  const providerMessageId = `mention-replacement-${suffix}`;
+  const typedIdentityProviderMessageId = `typed-identity-${suffix}`;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    try {
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+    } finally {
+      client.release();
+    }
+  });
+
+  afterAll(async () => {
+    if (pool === undefined) {
+      return;
+    }
+    try {
+      await pool.query(
+        "DELETE FROM conversation_messages WHERE provider = 'feishu' AND provider_message_id = ANY($1::text[])",
+        [[providerMessageId, typedIdentityProviderMessageId]],
+      );
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("replaces one mention openId on a second write without duplicates", async () => {
+    const repository = createPostgresConversationMessageRepository({ queryable: pool! });
+    const input: UpsertConversationMessageInput = {
+      ...baseUpsertInput(),
+      providerMessageId,
+      chatId: `mention-chat-${suffix}`,
+      rawEventIdempotencyKey: `raw-event:mention-replacement-${suffix}`,
+    };
+
+    await repository.upsertMessage({
+      ...input,
+      mentions: [{ key: "@_owner", openId: "ou_original" }],
+    });
+    const replacement = await repository.upsertMessage({
+      ...input,
+      mentions: [{ key: "@_owner", openId: "ou_replacement" }],
+    });
+
+    expect(replacement.mentions).toEqual([{ key: "@_owner", openId: "ou_replacement" }]);
+    const persisted = await pool!.query<{
+      mention_key: string;
+      mentioned_open_id: string;
+    }>(
+      `
+      SELECT mention.mention_key, mention.mentioned_open_id
+      FROM conversation_message_mentions AS mention
+      JOIN conversation_messages AS message ON message.id = mention.conversation_message_id
+      WHERE message.provider = 'feishu' AND message.provider_message_id = $1
+      ORDER BY mention.mention_key, mention.mentioned_open_id
+      `,
+      [providerMessageId],
+    );
+    expect(persisted.rows).toEqual([
+      { mention_key: "@_owner", mentioned_open_id: "ou_replacement" },
+    ]);
+  });
+
+  it("persists Feishu open, union, and user sender identities in separate columns", async () => {
+    const repository = createPostgresConversationMessageRepository({ queryable: pool! });
+
+    const persisted = await repository.upsertMessage({
+      ...baseUpsertInput(),
+      providerMessageId: typedIdentityProviderMessageId,
+      chatId: `typed-identity-chat-${suffix}`,
+      senderId: "ou_sender",
+      senderOpenId: "ou_sender",
+      senderUnionId: "on_sender",
+      senderUserId: "user_sender",
+      rawEventIdempotencyKey: `raw-event:typed-identity-${suffix}`,
+    });
+
+    expect(persisted).toMatchObject({
+      senderId: "ou_sender",
+      senderOpenId: "ou_sender",
+      senderUnionId: "on_sender",
+      senderUserId: "user_sender",
+    });
+    await expect(pool!.query<{
+      sender_open_id: string;
+      sender_union_id: string;
+      sender_user_id: string;
+    }>(
+      `
+      SELECT sender_open_id, sender_union_id, sender_user_id
+      FROM conversation_messages
+      WHERE provider = 'feishu' AND provider_message_id = $1
+      `,
+      [typedIdentityProviderMessageId],
+    )).resolves.toMatchObject({
+      rows: [{
+        sender_open_id: "ou_sender",
+        sender_union_id: "on_sender",
+        sender_user_id: "user_sender",
+      }],
+    });
+  });
+});
+
 function baseUpsertInput(): UpsertConversationMessageInput {
   return {
     provider: "feishu",
@@ -358,4 +578,15 @@ function firstQueryParams(queryable: Queryable): unknown[] {
   }
 
   return params;
+}
+
+function firstQueryText(queryable: Queryable): string {
+  const calls = (queryable.query as unknown as { mock: { calls: Array<[string, unknown[]]> } }).mock
+    .calls;
+  const text = calls[0]?.[0];
+  if (text === undefined) {
+    throw new Error("expected query to be called");
+  }
+
+  return text;
 }

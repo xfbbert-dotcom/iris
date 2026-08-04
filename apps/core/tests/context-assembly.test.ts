@@ -19,6 +19,146 @@ describe("assemblePromptContext", () => {
     expect(context.trim().endsWith("</live_chat_context>")).toBe(true);
   });
 
+  it("anchors group memories between documents and live chat", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [{ source: "doc-a", text: "Document evidence" }],
+      groupMemories: [{
+        id: "memory-1",
+        scope: "group",
+        category: "decision",
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1", "msg-2"],
+      }],
+      liveChatMessages: [{ speaker: "Alice", text: "Did the date change?" }],
+    });
+
+    expect(context.indexOf("<background_documents>")).toBeLessThan(
+      context.indexOf("<group_memories>"),
+    );
+    expect(context.indexOf("<group_memories>")).toBeLessThan(
+      context.indexOf("<live_chat_context>"),
+    );
+    expect(context).toContain(
+      '<memory id="memory-1" scope="group" category="decision" evidence_message_ids="msg-1,msg-2">Launch Thursday.</memory>',
+    );
+    expect(context.trim().endsWith("</live_chat_context>")).toBe(true);
+  });
+
+  it("places bounded escaped discussions and actions before the fixed live-chat anchor", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [{ source: "doc-a", text: "Document evidence" }],
+      groupMemories: [{
+        id: "memory-1",
+        scope: "group",
+        category: "decision",
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1"],
+      }],
+      discussionThreads: Array.from({ length: 7 }, (_, index) => ({
+        id: `thread-${index + 1}`,
+        status: "open" as const,
+        summary: index === 0 ? `${"<&\"".repeat(700)} trailing thread` : `summary-${index + 1}`,
+        evidenceMessageIds: [`thread-message-${index + 1}`],
+      })),
+      actionItems: Array.from({ length: 7 }, (_, index) => ({
+        id: `action-${index + 1}`,
+        threadId: "thread-1",
+        status: "open" as const,
+        description: index === 0 ? `${"<&\"".repeat(700)} trailing action` : `description-${index + 1}`,
+        ownerRef: `owner-${index + 1}`,
+        dueAt: index === 0 ? new Date("2026-07-20T00:00:00.000Z") : undefined,
+        evidenceMessageIds: [`action-message-${index + 1}`],
+      })),
+      liveChatMessages: Array.from({ length: 24 }, (_, index) => ({
+        speaker: "Alice",
+        text: `message-${index + 1}`,
+      })),
+    });
+
+    expect(context.indexOf("<background_documents>")).toBeLessThan(
+      context.indexOf("<group_memories>"),
+    );
+    expect(context.indexOf("<group_memories>")).toBeLessThan(
+      context.indexOf("<discussion_threads>"),
+    );
+    expect(context.indexOf("<discussion_threads>")).toBeLessThan(
+      context.indexOf("<action_items>"),
+    );
+    expect(context.indexOf("<action_items>")).toBeLessThan(
+      context.indexOf("<live_chat_context>"),
+    );
+    expect(context.match(/<discussion_thread /g)).toHaveLength(6);
+    expect(context.match(/<action_item /g)).toHaveLength(6);
+    expect(context).toContain('due_at="2026-07-20T00:00:00.000Z"');
+    expect(context).toContain("&lt;");
+    expect(context).toContain("&amp;");
+    expect(context).not.toContain("trailing thread");
+    expect(context).not.toContain("trailing action");
+    expect(context).not.toContain("thread-7");
+    expect(context).not.toContain("action-7");
+    expect(context).not.toContain("message-1</message>");
+    expect(context).toContain("message-5</message>");
+    expect(context).toContain("message-24</message>");
+    expect(context.trim().endsWith("</live_chat_context>")).toBe(true);
+  });
+
+  it("filters blank memories and caps them at eight items", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      groupMemories: [
+        {
+          id: "blank",
+          scope: "group",
+          category: "summary",
+          content: "  ",
+          evidenceMessageIds: ["msg-blank"],
+        },
+        ...Array.from({ length: 10 }, (_, index) => ({
+          id: `memory-${index + 1}`,
+          scope: "group" as const,
+          category: "decision" as const,
+          content: `memory ${index + 1}`,
+          evidenceMessageIds: [`msg-${index + 1}`],
+        })),
+      ],
+      liveChatMessages: [],
+    });
+
+    expect(context).not.toContain('id="blank"');
+    expect(context).toContain('id="memory-1"');
+    expect(context).toContain('id="memory-8"');
+    expect(context).not.toContain('id="memory-9"');
+    expect(context.match(/<memory /g)).toHaveLength(8);
+  });
+
+  it("escapes and bounds group memory text and attributes", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [],
+      groupMemories: [{
+        id: `${'"<&'.repeat(300)} trailing-memory-id`,
+        scope: "thread",
+        category: "term",
+        content: `${"&".repeat(800)} trailing-memory-content`,
+        evidenceMessageIds: [`${'"<&'.repeat(500)} trailing-evidence`],
+      }],
+      liveChatMessages: [],
+    });
+    const formatted = context.match(
+      /<memory id="(?<id>.*?)" scope="thread" category="term" evidence_message_ids="(?<evidence>.*?)">(?<text>.*?)<\/memory>/s,
+    )?.groups;
+
+    expect(formatted).toBeDefined();
+    expect(formatted!.id.length).toBeLessThanOrEqual(512);
+    expect(formatted!.evidence.length).toBeLessThanOrEqual(1024);
+    expect(formatted!.text.length).toBeLessThanOrEqual(600);
+    expect(formatted!.id).toContain("[truncated]");
+    expect(formatted!.evidence).toContain("[truncated]");
+    expect(formatted!.text).toContain("[truncated]");
+    expect(context).not.toContain("trailing-memory-id");
+    expect(context).not.toContain("trailing-evidence");
+    expect(context).not.toContain("trailing-memory-content");
+  });
+
   it("limits live chat to the latest 20 messages", () => {
     const liveChatMessages = Array.from({ length: 25 }, (_, index) => ({
       speaker: "User",
@@ -181,6 +321,25 @@ describe("assemblePromptContext", () => {
     );
     expect(context).not.toContain(" feishu://doc/abc ");
     expect(context).not.toContain("  Useful document context.  ");
+  });
+
+  it("renders only bounded prompt-local document citation references", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [
+        { source: "doc-a", citationRef: " D12 ", text: "Useful document context." },
+      ],
+      liveChatMessages: [],
+    });
+
+    expect(context).toContain(
+      '<document source="doc-a" citation_ref="D12">Useful document context.</document>',
+    );
+    expect(() => assemblePromptContext({
+      backgroundDocuments: [
+        { source: "doc-a", citationRef: 'D1\" injected="true', text: "context" },
+      ],
+      liveChatMessages: [],
+    })).toThrow("background document citationRef is invalid");
   });
 
   it("truncates oversized background document text before formatting", () => {

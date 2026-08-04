@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
+import {
+  RuntimeControlInputError,
+  type RuntimeControlService,
+  type RuntimeControlStatus,
+} from "../src/admin/runtime-control-service.js";
+import {
+  RuntimeController,
+  type RuntimeControllerSnapshot,
+} from "../src/admin/runtime-controller.js";
 import { InMemoryAuditLog, type AuditEvent } from "../src/audit/audit-log.js";
+import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
 import { InMemoryEventQueue } from "../src/queues/in-memory-event-queue.js";
 import { isolateEnvVar } from "./test-env.js";
 
@@ -17,7 +27,7 @@ afterEach(() => {
 
 describe("runtime control API", () => {
   it("returns runtime control status", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -33,6 +43,8 @@ describe("runtime control API", () => {
     expect(response.json()).toEqual({
       ok: true,
       globalEnabled: true,
+      desiredGlobalEnabled: true,
+      activationRequired: false,
       disabledGroupIds: [],
       capabilities: {
         readGroupContext: true,
@@ -44,12 +56,276 @@ describe("runtime control API", () => {
         writeKnowledgeBase: false,
         callExternalTools: false,
       },
+      revision: 0,
+      updatedAt: expect.any(String),
+      persistence: {
+        storage: "in_memory",
+        ok: true,
+      },
     });
+  });
+
+  it("returns degraded durable status with the live gate over HTTP 200", async () => {
+    const getStatus = vi.fn(async () => runtimeControlStatus({
+      globalEnabled: false,
+      desiredGlobalEnabled: true,
+      activationRequired: true,
+      persistence: {
+        storage: "postgres",
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      },
+    }));
+    const app = await buildApp({
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ getStatus }),
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/runtime-control/status",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      globalEnabled: false,
+      desiredGlobalEnabled: true,
+      activationRequired: true,
+      persistence: {
+        storage: "postgres",
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      },
+    });
+    expect(getStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps disabled runtime control operationally enabled and degraded on persistence failure", async () => {
+    const status = runtimeControlStatus({
+      globalEnabled: false,
+      desiredGlobalEnabled: false,
+      activationRequired: false,
+      persistence: {
+        storage: "postgres",
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      },
+    });
+    const controller = runtimeControllerFromStatus(status);
+    const app = await buildApp({
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ getStatus: vi.fn(async () => status) }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({ method: "GET", url: "/internal/status" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().ok).toBe(false);
+    expect(response.json().components.runtimeControl).toEqual({
+      status: "degraded",
+      ok: false,
+      enabled: false,
+      globalEnabled: false,
+      desiredGlobalEnabled: false,
+      activationRequired: false,
+      disabledGroupIds: [],
+      disabledGroupCount: 0,
+      capabilities: status.capabilities,
+      revision: 7,
+      updatedAt: "2026-07-13T07:30:00.000Z",
+      persistence: {
+        storage: "postgres",
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      },
+      degradedReason: "runtime_control_persistence_failed",
+    });
+  });
+
+  it("uses one paired controller for Feishu and answer gates", async () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    controller.disableGlobal();
+    const queue = new InMemoryEventQueue();
+    const answerDraftOrchestrator = {
+      generateDraft: vi.fn(async () => ({
+        answerText: "must not run",
+        promptContext: "",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const app = await buildApp({
+      queue,
+      answerDraftOrchestrator,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub(),
+        controller,
+      ),
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const answer = await app.inject({
+      method: "POST",
+      url: "/internal/answer-drafts",
+      payload: { question: "Should this run?", liveChatMessages: [] },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/feishu/events",
+      payload: feishuMessagePayload("paired-disabled", "chat-a"),
+    });
+    await flushDeferredEnqueue();
+
+    expect(answer.statusCode).toBe(403);
+    expect(answer.json()).toEqual({ ok: false, error: "iris_runtime_disabled" });
+    expect(answerDraftOrchestrator.generateDraft).not.toHaveBeenCalled();
+    expect(queue.events).toEqual([]);
+  });
+
+  it("rejects ambiguous paired and legacy controller injection", async () => {
+    const pairedController = new RuntimeController(createDefaultRuntimeConfig());
+
+    await expect(buildApp({
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub(),
+        pairedController,
+      ),
+      runtimeController: new RuntimeController(createDefaultRuntimeConfig()),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    })).rejects.toThrow("runtimeControl cannot be combined with runtimeController");
+  });
+
+  it("sanitizes rejected status reads into safe dedicated and aggregate degradation", async () => {
+    const secret = "postgres://admin:super-secret@db.internal/iris";
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    controller.disableGlobal();
+    const getStatus = vi.fn(async () => {
+      throw new Error(`connection failed for ${secret}`);
+    });
+    const app = await buildApp({
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ getStatus }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const dedicated = await app.inject({
+      method: "GET",
+      url: "/internal/runtime-control/status",
+    });
+    const aggregate = await app.inject({ method: "GET", url: "/internal/status" });
+
+    expect(dedicated.statusCode).toBe(200);
+    expect(dedicated.json()).toMatchObject({
+      ok: true,
+      globalEnabled: false,
+      persistence: {
+        storage: "postgres",
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      },
+    });
+    expect(aggregate.statusCode).toBe(200);
+    expect(aggregate.json()).toMatchObject({
+      ok: false,
+      components: {
+        runtimeControl: {
+          status: "degraded",
+          enabled: false,
+          globalEnabled: false,
+          degradedReason: "runtime_control_persistence_failed",
+        },
+      },
+    });
+    expect(dedicated.body).not.toContain(secret);
+    expect(aggregate.body).not.toContain(secret);
+    expect(getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("sanitizes status storage mismatch using the service storage authority", async () => {
+    const secret = "postgres://reader:storage-secret@db.internal/iris";
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    controller.disableGlobal();
+    const getStatus = vi.fn(async () => runtimeControlStatus({
+      persistence: {
+        storage: secret as never,
+        ok: true,
+      },
+    }));
+    const app = await buildApp({
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ getStatus }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const dedicated = await app.inject({
+      method: "GET",
+      url: "/internal/runtime-control/status",
+    });
+    const aggregate = await app.inject({ method: "GET", url: "/internal/status" });
+
+    expect(dedicated.statusCode).toBe(200);
+    expect(dedicated.json()).toMatchObject({
+      ok: true,
+      globalEnabled: false,
+      persistence: {
+        storage: "postgres",
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      },
+    });
+    expect(aggregate.statusCode).toBe(200);
+    expect(aggregate.json()).toMatchObject({
+      ok: false,
+      components: {
+        runtimeControl: {
+          status: "degraded",
+          enabled: false,
+          globalEnabled: false,
+          persistence: {
+            storage: "postgres",
+            ok: false,
+            error: "runtime_control_persistence_failed",
+          },
+        },
+      },
+    });
+    expect(dedicated.body).not.toContain(secret);
+    expect(aggregate.body).not.toContain(secret);
+    expect(getStatus).toHaveBeenCalledTimes(2);
   });
 
   it("globally disables and re-enables Feishu event ingestion", async () => {
     const queue = new InMemoryEventQueue();
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -66,6 +342,7 @@ describe("runtime control API", () => {
     expect(disableResponse.statusCode).toBe(200);
     expect(disableResponse.json()).toMatchObject({
       ok: true,
+      durable: true,
       globalEnabled: false,
     });
 
@@ -88,6 +365,7 @@ describe("runtime control API", () => {
     expect(enableResponse.statusCode).toBe(200);
     expect(enableResponse.json()).toMatchObject({
       ok: true,
+      durable: true,
       globalEnabled: true,
     });
 
@@ -107,8 +385,569 @@ describe("runtime control API", () => {
     expect(queue.events[0]?.idempotencyKey).toBe("event-enabled");
   });
 
+  it("maps ordinary mutation conflicts to HTTP 409 without auditing success", async () => {
+    const auditLog = new InMemoryAuditLog();
+    const setGlobal = vi.fn(async () => ({ kind: "conflict" as const }));
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: true },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_conflict",
+    });
+    expect(auditLog.events).toEqual([]);
+  });
+
+  it("maps ordinary persistence failure to HTTP 503 without changing live state or auditing", async () => {
+    const runtimeController = new RuntimeController(createDefaultRuntimeConfig());
+    const auditLog = new InMemoryAuditLog();
+    const setGroup = vi.fn(async () => ({ kind: "persistence_failed" as const }));
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGroup }),
+        runtimeController,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/groups/chat-a",
+      payload: { enabled: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+    expect(runtimeController.getSnapshot().disabledGroupIds).toEqual([]);
+    expect(auditLog.events).toEqual([]);
+  });
+
+  it("keeps emergency disable closed and audits the actual stop when persistence fails", async () => {
+    const runtimeController = new RuntimeController(createDefaultRuntimeConfig());
+    const auditLog = new InMemoryAuditLog();
+    const previousSnapshot = runtimeController.getSnapshot();
+    const setGlobal = vi.fn(async () => {
+      runtimeController.disableGlobal();
+      return {
+        kind: "disable_not_persisted" as const,
+        previousSnapshot,
+        status: runtimeControlStatus({
+          globalEnabled: false,
+          desiredGlobalEnabled: true,
+          activationRequired: true,
+          persistence: {
+            storage: "postgres",
+            ok: false,
+            error: "runtime_control_persistence_failed",
+          },
+        }),
+      };
+    });
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+        runtimeController,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_disable_not_persisted",
+      globalEnabled: false,
+      durable: false,
+    });
+    expect(runtimeController.getSnapshot().globalEnabled).toBe(false);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+    });
+  });
+
+  it("maps service input errors to invalid_request instead of a persistence outage", async () => {
+    const auditLog = new InMemoryAuditLog();
+    const setCapabilities = vi.fn(async () => {
+      throw new RuntimeControlInputError("capabilities");
+    });
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setCapabilities }),
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      payload: { proactiveSpeech: false },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(auditLog.events).toEqual([]);
+  });
+
+  it("sanitizes unexpected mutation rejection as persistence failure", async () => {
+    const secret = "postgres://operator:bad-password@db.internal/iris";
+    const auditLog = new InMemoryAuditLog();
+    const setGroup = vi.fn(async () => {
+      throw new Error(`write failed for ${secret}`);
+    });
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGroup }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/groups/chat-a",
+      payload: { enabled: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+    expect(response.body).not.toContain(secret);
+    expect(auditLog.events).toEqual([]);
+  });
+
+  it("fails closed and audits only the emergency stop for global enable storage mismatch", async () => {
+    const secret = "postgres://writer:global-secret@db.internal/iris";
+    const auditLog = new InMemoryAuditLog();
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    controller.disableGlobal();
+    const previousSnapshot = controller.getSnapshot();
+    const setGlobal = vi.fn(async () => {
+      controller.enableGlobal();
+      return {
+        kind: "success" as const,
+        durable: true as const,
+        previousSnapshot,
+        status: runtimeControlStatus({
+          globalEnabled: true,
+          persistence: {
+            storage: secret as never,
+            ok: true,
+          },
+        }),
+      };
+    });
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      headers: { "x-iris-operator": " alice@example.com " },
+      payload: { enabled: true },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+    expect(response.body).not.toContain(secret);
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+      operatorHint: "alice@example.com",
+    });
+  });
+
+  it("fails closed and audits only the emergency stop for group storage mismatch", async () => {
+    const secret = "postgres://writer:storage-secret@db.internal/iris";
+    const auditLog = new InMemoryAuditLog();
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    controller.disableGlobal();
+    const previousSnapshot = controller.getSnapshot();
+    const setGroup = vi.fn(async () => {
+      controller.enableGlobal();
+      return {
+        kind: "success" as const,
+        durable: true as const,
+        previousSnapshot,
+        status: runtimeControlStatus({
+          globalEnabled: true,
+          disabledGroupIds: ["chat-a"],
+          persistence: {
+            storage: secret as never,
+            ok: true,
+          },
+        }),
+      };
+    });
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGroup }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/groups/chat-a",
+      headers: { "x-iris-operator": " bob@example.com " },
+      payload: { enabled: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+    expect(response.body).not.toContain(secret);
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+      operatorHint: "bob@example.com",
+    });
+  });
+
+  it("fails closed and audits only the emergency stop for capability storage mismatch", async () => {
+    const secret = "postgres://writer:capability-secret@db.internal/iris";
+    const auditLog = new InMemoryAuditLog();
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    controller.disableGlobal();
+    const previousSnapshot = controller.getSnapshot();
+    const setCapabilities = vi.fn(async () => {
+      controller.enableGlobal();
+      return {
+        kind: "success" as const,
+        durable: true as const,
+        previousSnapshot,
+        status: runtimeControlStatus({
+          globalEnabled: true,
+          capabilities: {
+            ...runtimeControlStatus().capabilities,
+            proactiveSpeech: false,
+          },
+          persistence: {
+            storage: secret as never,
+            ok: true,
+          },
+        }),
+      };
+    });
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setCapabilities }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      headers: { "x-iris-operator": " carol@example.com " },
+      payload: { proactiveSpeech: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+    expect(response.body).not.toContain(secret);
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: true,
+      operatorHint: "carol@example.com",
+    });
+  });
+
+  it("keeps emergency disable fail-closed when success storage mismatches", async () => {
+    const secret = "postgres://writer:disable-secret@db.internal/iris";
+    const auditLog = new InMemoryAuditLog();
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    const previousSnapshot = controller.getSnapshot();
+    const setGlobal = vi.fn(async () => {
+      controller.disableGlobal();
+      return {
+        kind: "success" as const,
+        durable: true as const,
+        previousSnapshot,
+        status: runtimeControlStatus({
+          globalEnabled: false,
+          desiredGlobalEnabled: false,
+          persistence: {
+            storage: secret as never,
+            ok: true,
+          },
+        }),
+      };
+    });
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: false },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "runtime_control_disable_not_persisted",
+      globalEnabled: false,
+      durable: false,
+    });
+    expect(response.body).not.toContain(secret);
+    expect(controller.getSnapshot().globalEnabled).toBe(false);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: false,
+      previousEnabled: false,
+    });
+  });
+
+  it("uses the mutation before-state and requested value for concurrent audit data", async () => {
+    const auditLog = new InMemoryAuditLog();
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    const previousSnapshot = runtimeControllerSnapshot({
+      globalEnabled: false,
+      desiredGlobalEnabled: true,
+      activationRequired: true,
+      revision: 6,
+    });
+    const setGlobal = vi.fn(async () => ({
+      kind: "success" as const,
+      durable: true as const,
+      previousSnapshot,
+      status: runtimeControlStatus({
+        globalEnabled: false,
+        desiredGlobalEnabled: true,
+        activationRequired: true,
+        revision: 8,
+      }),
+    }));
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(setGlobal).toHaveBeenCalledTimes(1);
+    expect(auditLog.events).toHaveLength(1);
+    expect(auditLog.events[0]).toMatchObject({
+      type: "runtime_control_updated",
+      runtimeControlScope: "global",
+      enabled: true,
+      previousEnabled: false,
+    });
+  });
+
+  it("does not let service status override reserved success response fields", async () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    const status = Object.assign(runtimeControlStatus(), {
+      ok: false,
+      durable: false,
+    }) as RuntimeControlStatus;
+    const setGlobal = vi.fn(async () => ({
+      kind: "success" as const,
+      durable: true as const,
+      previousSnapshot: runtimeControllerSnapshot(),
+      status,
+    }));
+    const app = await buildApp({
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      durable: true,
+      revision: 7,
+    });
+    expect(setGlobal).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "blank", value: "   " },
+    { label: "overlength", value: "x".repeat(121) },
+    { label: "newline", value: "alice\nbob" },
+    { label: "non-string", value: 42 },
+    { label: "array", value: ["alice", "bob"] },
+  ])("rejects $label operator header before service or audit", async ({ value }) => {
+    const auditLog = new InMemoryAuditLog();
+    const setGlobal = vi.fn(async () => ({ kind: "conflict" as const }));
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+    app.addHook("preValidation", async (request) => {
+      (request.headers as Record<string, unknown>)["x-iris-operator"] = value;
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      payload: { enabled: true },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(setGlobal).not.toHaveBeenCalled();
+    expect(auditLog.events).toEqual([]);
+  });
+
+  it("trims a valid bounded operator header before calling the service", async () => {
+    const controller = new RuntimeController(createDefaultRuntimeConfig());
+    const setGlobal = vi.fn(async () => ({ kind: "conflict" as const }));
+    const app = await buildApp({
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setGlobal }),
+        controller,
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-control/global",
+      headers: { "x-iris-operator": " alice@example.com " },
+      payload: { enabled: true },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(setGlobal).toHaveBeenCalledWith({
+      enabled: true,
+      updatedBy: "alice@example.com",
+    });
+  });
+
   it("surfaces global runtime disablement in consolidated status", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -132,6 +971,8 @@ describe("runtime control API", () => {
       ok: true,
       enabled: false,
       globalEnabled: false,
+      desiredGlobalEnabled: false,
+      activationRequired: false,
       disabledGroupIds: [],
       disabledGroupCount: 0,
       capabilities: {
@@ -144,6 +985,12 @@ describe("runtime control API", () => {
         writeKnowledgeBase: false,
         callExternalTools: false,
       },
+      revision: 1,
+      updatedAt: expect.any(String),
+      persistence: {
+        storage: "in_memory",
+        ok: true,
+      },
     });
     expect(status.json().summary.attentionComponents).toContainEqual({
       name: "runtimeControl",
@@ -153,7 +1000,7 @@ describe("runtime control API", () => {
 
   it("disables and re-enables Feishu event ingestion for one group", async () => {
     const queue = new InMemoryEventQueue();
-    const app = buildApp({
+    const app = await buildApp({
       queue,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -170,6 +1017,7 @@ describe("runtime control API", () => {
     expect(disableResponse.statusCode).toBe(200);
     expect(disableResponse.json()).toMatchObject({
       ok: true,
+      durable: true,
       disabledGroupIds: ["chat-a"],
     });
 
@@ -197,6 +1045,7 @@ describe("runtime control API", () => {
     expect(enableResponse.statusCode).toBe(200);
     expect(enableResponse.json()).toMatchObject({
       ok: true,
+      durable: true,
       disabledGroupIds: [],
     });
 
@@ -212,7 +1061,7 @@ describe("runtime control API", () => {
   });
 
   it("rejects invalid runtime control requests", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -244,9 +1093,10 @@ describe("runtime control API", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
-    const app = buildApp({
+    const app = await buildApp({
       answerDraftOrchestrator,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -281,9 +1131,10 @@ describe("runtime control API", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
-    const app = buildApp({
+    const app = await buildApp({
       answerDraftOrchestrator,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -328,7 +1179,7 @@ describe("runtime control API", () => {
   });
 
   it("updates runtime capabilities", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -347,6 +1198,7 @@ describe("runtime control API", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       ok: true,
+      durable: true,
       capabilities: {
         proactiveSpeech: false,
         writeKnowledgeBase: true,
@@ -366,10 +1218,113 @@ describe("runtime control API", () => {
     });
   });
 
+  it("persists capability updates once and audits only requested keys", async () => {
+    const auditLog = new InMemoryAuditLog();
+    const setCapabilities = vi.fn(async () => ({
+      kind: "success" as const,
+      durable: true as const,
+      previousSnapshot: runtimeControllerSnapshot(),
+      status: runtimeControlStatus({
+        capabilities: {
+          ...runtimeControlStatus().capabilities,
+          proactiveSpeech: false,
+          writeKnowledgeBase: true,
+          callExternalTools: true,
+        },
+      }),
+    }));
+    const app = await buildApp({
+      auditLog,
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ setCapabilities }),
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/internal/runtime-control/capabilities",
+      headers: { "x-iris-operator": "alice@example.com" },
+      payload: {
+        proactiveSpeech: false,
+        writeKnowledgeBase: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(setCapabilities).toHaveBeenCalledTimes(1);
+    expect(setCapabilities).toHaveBeenCalledWith({
+      updates: {
+        proactiveSpeech: false,
+        writeKnowledgeBase: true,
+      },
+      updatedBy: "alice@example.com",
+    });
+    expect(auditLog.events.map((event) =>
+      event.type === "runtime_control_updated" ? event.targetId : undefined,
+    )).toEqual([
+      "proactiveSpeech",
+      "writeKnowledgeBase",
+    ]);
+  });
+
+  it("degrades aggregate status after exactly one failed persistence read", async () => {
+    const getStatus = vi.fn(async () => runtimeControlStatus({
+      persistence: {
+        storage: "postgres",
+        ok: false,
+        error: "runtime_control_persistence_failed",
+      },
+    }));
+    const app = await buildApp({
+      runtimeControl: pairedRuntimeControl(
+        createRuntimeControlServiceStub({ getStatus }),
+      ),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      now: () => new Date("2026-07-13T08:00:00.000Z"),
+    });
+
+    const response = await app.inject({ method: "GET", url: "/internal/status" });
+
+    expect(response.statusCode).toBe(200);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      status: "degraded",
+      summary: {
+        degradedComponents: ["runtimeControl"],
+      },
+      components: {
+        runtimeControl: {
+          status: "degraded",
+          ok: false,
+          enabled: true,
+          globalEnabled: true,
+          desiredGlobalEnabled: true,
+          activationRequired: false,
+          revision: 7,
+          updatedAt: "2026-07-13T07:30:00.000Z",
+          persistence: {
+            storage: "postgres",
+            ok: false,
+            error: "runtime_control_persistence_failed",
+          },
+          degradedReason: "runtime_control_persistence_failed",
+        },
+      },
+    });
+  });
+
   it("records successful runtime control changes in the audit log", async () => {
     const recordedAt = new Date("2026-07-04T06:20:00.000Z");
     const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -452,7 +1407,7 @@ describe("runtime control API", () => {
       }
     }
 
-    const app = buildApp({
+    const app = await buildApp({
       auditLog: new FailingAuditLog(),
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -476,7 +1431,7 @@ describe("runtime control API", () => {
   it("records an optional operator hint on runtime control audit events", async () => {
     const recordedAt = new Date("2026-07-04T06:25:00.000Z");
     const auditLog = new InMemoryAuditLog({ now: () => recordedAt });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -515,7 +1470,7 @@ describe("runtime control API", () => {
 
   it("filters runtime control audit events by operator hint", async () => {
     const auditLog = new InMemoryAuditLog();
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -559,7 +1514,7 @@ describe("runtime control API", () => {
   });
 
   it("rejects invalid runtime capability updates", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -598,9 +1553,10 @@ describe("runtime control API", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
-    const app = buildApp({
+    const app = await buildApp({
       answerDraftOrchestrator,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -651,4 +1607,94 @@ async function flushDeferredEnqueue(): Promise<void> {
     setTimeout(resolve, 0);
   });
   await Promise.resolve();
+}
+
+function createRuntimeControlServiceStub(
+  overrides: Partial<RuntimeControlService> = {},
+): RuntimeControlService {
+  const status = runtimeControlStatus();
+  const previousSnapshot = runtimeControllerSnapshot();
+  return {
+    persistenceStorage: "postgres" as const,
+    getStatus: vi.fn(async () => status),
+    setGlobal: vi.fn(async () => ({
+      kind: "success" as const,
+      durable: true as const,
+      previousSnapshot,
+      status,
+    })),
+    setGroup: vi.fn(async () => ({
+      kind: "success" as const,
+      durable: true as const,
+      previousSnapshot,
+      status,
+    })),
+    setCapabilities: vi.fn(async () => ({
+      kind: "success" as const,
+      durable: true as const,
+      previousSnapshot,
+      status,
+    })),
+    ...overrides,
+  };
+}
+
+function runtimeControlStatus(
+  overrides: Partial<RuntimeControlStatus> = {},
+): RuntimeControlStatus {
+  return {
+    globalEnabled: true,
+    desiredGlobalEnabled: true,
+    activationRequired: false,
+    disabledGroupIds: [],
+    capabilities: {
+      readGroupContext: true,
+      replyWhenMentioned: true,
+      readGroupDocuments: true,
+      retrieveKnowledgeBase: true,
+      proactiveSpeech: true,
+      generateKnowledgeDrafts: true,
+      writeKnowledgeBase: false,
+      callExternalTools: false,
+    },
+    revision: 7,
+    updatedAt: new Date("2026-07-13T07:30:00.000Z"),
+    persistence: {
+      storage: "postgres",
+      ok: true,
+    },
+    ...overrides,
+  };
+}
+
+function runtimeControllerSnapshot(
+  overrides: Partial<RuntimeControllerSnapshot> = {},
+): RuntimeControllerSnapshot {
+  const { persistence: _persistence, ...snapshot } = runtimeControlStatus();
+  return { ...snapshot, ...overrides };
+}
+
+function runtimeControllerFromStatus(status: RuntimeControlStatus): RuntimeController {
+  const config = createDefaultRuntimeConfig();
+  config.globalEnabled = status.globalEnabled;
+  const controller = new RuntimeController(config);
+  controller.replaceDurablePolicy({
+    desiredGlobalEnabled: status.desiredGlobalEnabled,
+    disabledGroupIds: status.disabledGroupIds,
+    capabilities: status.capabilities,
+    revision: status.revision,
+    updatedAt: status.updatedAt,
+    ...(status.updatedBy === undefined ? {} : { updatedBy: status.updatedBy }),
+  });
+  return controller;
+}
+
+function pairedRuntimeControl(
+  service: RuntimeControlService,
+  controller = new RuntimeController(createDefaultRuntimeConfig()),
+) {
+  return {
+    controller,
+    service,
+  };
 }

@@ -107,6 +107,19 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("accepts the public query budget plus the longest approved model prefix", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({ data: [{ index: 0, embedding: [1, 0, 0] }] }),
+    );
+    const provider = createOpenAICompatibleEmbeddingProvider({
+      config: config(),
+      fetch,
+    });
+
+    await expect(provider.embedTexts(["x".repeat(4029)])).resolves.toEqual([[1, 0, 0]]);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("rejects oversized embedding input text before external requests", async () => {
     const fetch = vi.fn(async () =>
       jsonResponse({ data: [{ index: 0, embedding: [1, 0, 0] }] }),
@@ -116,8 +129,8 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
       fetch,
     });
 
-    await expect(provider.embedTexts(["x".repeat(4001)])).rejects.toThrow(
-      "embedding input text must be at most 4000 characters",
+    await expect(provider.embedTexts(["x".repeat(4030)])).rejects.toThrow(
+      "embedding input text must be at most 4029 characters",
     );
     expect(fetch).not.toHaveBeenCalled();
   });

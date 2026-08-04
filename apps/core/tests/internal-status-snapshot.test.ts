@@ -149,6 +149,43 @@ describe("buildInternalStatusSnapshot", () => {
     expect(snapshot.summary.attentionSeverity).toBe("warning");
   });
 
+  it("marks a disabled unhealthy component degraded before considering disabled state", () => {
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-03T08:07:30.000Z"),
+      components: {
+        runtimeControl: {
+          ok: false,
+          enabled: false,
+          globalEnabled: false,
+          degradedReason: "runtime_control_persistence_failed",
+        },
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      ok: false,
+      status: "degraded",
+      summary: {
+        degradedComponents: ["runtimeControl"],
+        disabledComponents: ["runtimeControl"],
+        primaryAttentionComponent: {
+          name: "runtimeControl",
+          status: "degraded",
+        },
+        attentionSeverity: "critical",
+      },
+      components: {
+        runtimeControl: {
+          status: "degraded",
+          ok: false,
+          enabled: false,
+          globalEnabled: false,
+          degradedReason: "runtime_control_persistence_failed",
+        },
+      },
+    });
+  });
+
   it("summarizes component health from derived component statuses", () => {
     const snapshot = buildInternalStatusSnapshot({
       generatedAt: new Date("2026-07-03T08:08:00.000Z"),
@@ -164,6 +201,55 @@ describe("buildInternalStatusSnapshot", () => {
     expect(snapshot.summary.healthyComponentCount).toBe(0);
     expect(snapshot.summary.degradedComponentCount).toBe(1);
     expect(snapshot.summary.degradedComponents).toEqual(["reindex"]);
+  });
+
+  it("degrades for an enabled memory extraction runtime with an unavailable AI worker", () => {
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-15T03:00:00.000Z"),
+      components: {
+        memoryExtraction: {
+          ok: false,
+          enabled: true,
+          running: true,
+          workerHealthy: false,
+          pendingJobCount: 3,
+          processingJobCount: 2,
+          delayedJobCount: 1,
+          deadLetterJobCount: 0,
+          providerCooldownUntil: new Date("2026-07-15T04:00:00.000Z"),
+          degradedReason: "ai_worker_unavailable",
+        },
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      ok: false,
+      status: "degraded",
+      componentOrder: ["memoryExtraction"],
+      summary: {
+        degradedComponents: ["memoryExtraction"],
+        stoppedEnabledRuntimeComponents: [],
+        primaryAttentionComponent: {
+          name: "memoryExtraction",
+          status: "degraded",
+        },
+      },
+      components: {
+        memoryExtraction: {
+          status: "degraded",
+          ok: false,
+          enabled: true,
+          running: true,
+          workerHealthy: false,
+          pendingJobCount: 3,
+          processingJobCount: 2,
+          delayedJobCount: 1,
+          deadLetterJobCount: 0,
+          providerCooldownUntil: new Date("2026-07-15T04:00:00.000Z"),
+          degradedReason: "ai_worker_unavailable",
+        },
+      },
+    });
   });
 
   it("does not share nested component values with the returned snapshot", () => {
@@ -214,5 +300,86 @@ describe("buildInternalStatusSnapshot", () => {
       failedCount: 0,
       failed: false,
     });
+  });
+
+  it("adds an immutable content-free knowledge-card snapshot without changing component order", () => {
+    const knowledgeCards = {
+      ok: true,
+      enabled: true,
+      running: true,
+      enabledGroupCount: 1,
+      dispatcher: {
+        running: true,
+        intervalMs: 1000,
+        batchLimit: 10,
+        latestBatch: {
+          status: "succeeded" as const,
+          startedAt: new Date("2026-07-19T08:00:00.000Z"),
+          finishedAt: new Date("2026-07-19T08:00:01.000Z"),
+          sentCount: 1,
+          updatedCount: 0,
+          retryingCount: 0,
+          permanentFailureCount: 0,
+          outcomeUnknownCount: 0,
+          failed: false as const,
+        },
+      },
+      worker: { running: true, intervalMs: 1000, batchLimit: 10 },
+      queue: { pending: 1, processing: 2, delayed: 3, deadLetter: 4 },
+      presentations: {
+        pending_send: 1,
+        active: 2,
+        superseded: 3,
+        closed: 4,
+        send_failed: 5,
+        pendingSend: 1,
+      },
+      outbox: {
+        pending: 5,
+        processing: 6,
+        external_attempting: 7,
+        sent: 8,
+        failed: 9,
+        outcome_unknown: 0,
+        terminalFailed: 0,
+      },
+    };
+    const snapshot = buildInternalStatusSnapshot({
+      generatedAt: new Date("2026-07-19T08:00:02.000Z"),
+      components: { audit: { ok: true, enabled: true } },
+      knowledgeCards,
+    });
+
+    expect(snapshot.componentOrder).toEqual(["audit"]);
+    const cardSnapshot = snapshot.knowledgeCards;
+    if (cardSnapshot === undefined) throw new Error("expected knowledge-card snapshot");
+    expect(cardSnapshot.queue).toEqual({
+      pending: 1,
+      processing: 2,
+      delayed: 3,
+      deadLetter: 4,
+    });
+    expect(Object.keys(cardSnapshot.queue)).toEqual([
+      "pending",
+      "processing",
+      "delayed",
+      "deadLetter",
+    ]);
+    expect(cardSnapshot.outbox).toEqual({
+      pending: 5,
+      processing: 6,
+      external_attempting: 7,
+      sent: 8,
+      failed: 9,
+      outcome_unknown: 0,
+      terminalFailed: 0,
+    });
+    cardSnapshot.dispatcher.latestBatch!.startedAt.setUTCFullYear(2030);
+    expect(knowledgeCards.dispatcher.latestBatch.startedAt).toEqual(
+      new Date("2026-07-19T08:00:00.000Z"),
+    );
+    expect(JSON.stringify(cardSnapshot)).not.toMatch(
+      /draft body|evidence|reason|actorOpenId|token-secret/u,
+    );
   });
 });

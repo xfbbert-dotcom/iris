@@ -458,10 +458,20 @@ describe("DocumentSnapshotRepository", () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       const normalized = normalizeSql(sql);
       expect(normalized).toContain("with latest_successful_snapshots as");
-      expect(normalized).toContain("select distinct on (document_source_id) *");
-      expect(normalized).toContain("fetch_status = 'succeeded'");
-      expect(normalized).toContain("order by document_source_id asc, fetched_at desc, id asc");
-      expect(normalized).toContain("from latest_successful_snapshots s");
+      expect(normalized).toContain("select distinct on (s.document_source_id) s.*");
+      expect(normalized).toContain("join document_sources ds on ds.id = s.document_source_id");
+      expect(normalized).toContain("s.fetch_status = 'succeeded'");
+      expect(normalized).toContain("s.body_text is not null");
+      expect(normalized).toContain("s.body_text !~ '^[[:space:]]*$'");
+      expect(normalized).toContain("ds.can_use_for_answering = true");
+      expect(normalized).toContain("ds.permission_state in ('unknown', 'readable')");
+      expect(normalized).toContain(
+        "order by s.document_source_id asc, s.fetched_at desc, s.id asc",
+      );
+      expect(normalized).toContain("select s.* from latest_successful_snapshots s");
+      expect(normalized.indexOf("s.body_text !~ '^[[:space:]]*$'")).toBeGreaterThan(
+        normalized.indexOf("select s.* from latest_successful_snapshots s"),
+      );
       expect(normalized).toContain("not exists");
       expect(normalized).toContain("embedding_profile_id = $1");
       expect(values).toEqual(["profile-1536", 25]);
@@ -633,5 +643,77 @@ values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       bodyText,
       errorMessage: undefined,
     });
+  });
+
+  it("does not plan whitespace-only latest snapshots or fall back to older content", async () => {
+    if (!pool) {
+      throw new Error("Expected Postgres pool to be initialized");
+    }
+
+    const repository = createDocumentSnapshotRepository({ queryable: pool });
+    const newlineSourceId = `snapshot-newline-${randomUUID()}`;
+    const spacesSourceId = `snapshot-spaces-${randomUUID()}`;
+    const sourceIds = [newlineSourceId, spacesSourceId];
+
+    try {
+      for (const id of sourceIds) {
+        await pool.query(
+          `
+insert into document_sources (
+  id,
+  source_type,
+  source_uri,
+  title,
+  origin_group_id,
+  permission_state,
+  sync_state,
+  can_use_for_answering,
+  can_use_for_knowledge_drafts,
+  created_at,
+  updated_at
+)
+values ($1, 'group_visible_document', $2, 'Whitespace snapshot source', 'group-1',
+        'readable', 'pending', true, true, now(), now())
+`,
+          [id, `https://example.com/postgres-snapshots/${id}`],
+        );
+      }
+
+      await repository.insertSucceededSnapshot({
+        documentSourceId: newlineSourceId,
+        sourceUri: `https://example.com/postgres-snapshots/${newlineSourceId}`,
+        bodyText: "Older newline source content",
+        fetchedAt: new Date("2000-01-01T00:00:00.000Z"),
+      });
+      await repository.insertSucceededSnapshot({
+        documentSourceId: newlineSourceId,
+        sourceUri: `https://example.com/postgres-snapshots/${newlineSourceId}`,
+        bodyText: "\n\t",
+        fetchedAt: new Date("2000-01-01T00:01:00.000Z"),
+      });
+      await repository.insertSucceededSnapshot({
+        documentSourceId: spacesSourceId,
+        sourceUri: `https://example.com/postgres-snapshots/${spacesSourceId}`,
+        bodyText: "Older spaces source content",
+        fetchedAt: new Date("2000-01-01T00:02:00.000Z"),
+      });
+      await repository.insertSucceededSnapshot({
+        documentSourceId: spacesSourceId,
+        sourceUri: `https://example.com/postgres-snapshots/${spacesSourceId}`,
+        bodyText: "   ",
+        fetchedAt: new Date("2000-01-01T00:03:00.000Z"),
+      });
+
+      const planned = await repository.listSuccessfulSnapshotsMissingProfile({
+        embeddingProfileId: `profile-whitespace-${randomUUID()}`,
+        limit: 100,
+      });
+
+      expect(planned.filter((snapshot) => sourceIds.includes(snapshot.documentSourceId))).toEqual(
+        [],
+      );
+    } finally {
+      await pool.query("delete from document_sources where id = any($1::text[])", [sourceIds]);
+    }
   });
 });

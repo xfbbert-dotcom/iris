@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  readAgentExecutionLedgerRuntimeConfig,
+  readActionApprovalRuntimeConfig,
+  readActionReviewRuntimeConfig,
   readAnswerDraftRuntimeConfig,
   readEmbeddingProviderConfig,
   readEventWorkerRuntimeConfig,
@@ -9,9 +12,333 @@ import {
   readOptionalFeishuOpenApiConfig,
   readDocumentSyncWorkerRuntimeConfig,
   readModelProviderConfig,
+  readMemoryExtractionRuntimeConfig,
+  readKnowledgeCardRuntimeConfig,
+  readProactiveFeedbackConfig,
+  readProactiveSignalDeliveryRuntimeConfig,
   readReindexWorkerRuntimeConfig,
   readServerPort,
 } from "../src/config/env.js";
+
+describe("readProactiveFeedbackConfig", () => {
+  it("uses the 30-day default and accepts a bounded override", () => {
+    expect(readProactiveFeedbackConfig({})).toEqual({ suppressionDays: 30 });
+    expect(readProactiveFeedbackConfig({
+      IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS: "45",
+    })).toEqual({ suppressionDays: 45 });
+  });
+
+  it.each(["0", "366", "1.5", "thirty"])(
+    "rejects invalid suppression days %s",
+    (value) => {
+      expect(() => readProactiveFeedbackConfig({
+        IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS: value,
+      })).toThrow("IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS");
+    },
+  );
+});
+
+describe("readAgentExecutionLedgerRuntimeConfig", () => {
+  it("is disabled unless explicitly enabled", () => {
+    expect(readAgentExecutionLedgerRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readAgentExecutionLedgerRuntimeConfig({
+        IRIS_AGENT_EXECUTION_LEDGER_ENABLED: value,
+      })).toEqual({ enabled: false });
+    }
+  });
+
+  it("requires and normalizes the database URL when enabled", () => {
+    expect(readAgentExecutionLedgerRuntimeConfig({
+      IRIS_AGENT_EXECUTION_LEDGER_ENABLED: "true",
+      DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
+    })).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@postgres:5432/iris",
+    });
+    expect(() => readAgentExecutionLedgerRuntimeConfig({
+      IRIS_AGENT_EXECUTION_LEDGER_ENABLED: "true",
+    })).toThrow("DATABASE_URL is required for database operations");
+  });
+});
+
+describe("readActionReviewRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_ACTION_REVIEW_ENABLED: "true",
+    IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+    IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+    FEISHU_APP_ID: "cli_review",
+    FEISHU_APP_SECRET: "review-secret",
+  };
+
+  it("is disabled by default without reading enabled-only secrets", () => {
+    expect(readActionReviewRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readActionReviewRuntimeConfig({ IRIS_ACTION_REVIEW_ENABLED: value })).toEqual({
+        enabled: false,
+      });
+    }
+  });
+
+  it("requires the exact HTTPS review OAuth configuration when enabled", () => {
+    expect(() => readActionReviewRuntimeConfig({ IRIS_ACTION_REVIEW_ENABLED: "true" })).toThrow(
+      "IRIS_REVIEW_PUBLIC_ORIGIN is required",
+    );
+    expect(() => readActionReviewRuntimeConfig({
+      ...enabledEnv,
+      IRIS_REVIEW_PUBLIC_ORIGIN: "http://iris.example.com",
+    })).toThrow("IRIS_REVIEW_PUBLIC_ORIGIN must be an exact HTTPS origin");
+    expect(() => readActionReviewRuntimeConfig({
+      ...enabledEnv,
+      IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com/review",
+    })).toThrow("IRIS_REVIEW_PUBLIC_ORIGIN must be an exact HTTPS origin");
+    expect(() => readActionReviewRuntimeConfig({
+      ...enabledEnv,
+      IRIS_REVIEW_SESSION_SECRET: "x".repeat(31),
+    })).toThrow("IRIS_REVIEW_SESSION_SECRET must be at least 32 UTF-8 bytes");
+    expect(() => readActionReviewRuntimeConfig({
+      ...enabledEnv,
+      IRIS_FEISHU_OAUTH_AUTHORIZE_URL: "https://accounts.feishu.cn/not-authorize",
+    })).toThrow("IRIS_FEISHU_OAUTH_AUTHORIZE_URL must be the official Feishu OAuth authorization endpoint");
+  });
+
+  it("normalizes the default official endpoints and enabled credentials", () => {
+    expect(readActionReviewRuntimeConfig(enabledEnv)).toMatchObject({
+      enabled: true,
+      publicOrigin: "https://iris.example.com",
+      sessionSecret: "s".repeat(32),
+      authorizeUrl: "https://accounts.feishu.cn/open-apis/authen/v1/authorize",
+      feishuOpenApi: {
+        appId: "cli_review",
+        appSecret: "review-secret",
+        baseUrl: "https://open.feishu.cn",
+      },
+    });
+  });
+});
+
+describe("readProactiveSignalDeliveryRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED: "true",
+    IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS: " oc_pilot ,oc_review ",
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot,oc_review",
+    DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
+    REDIS_URL: "redis://redis:6379",
+    FEISHU_VERIFICATION_TOKEN: "verification-token",
+    FEISHU_ENCRYPT_KEY: "encrypt-key",
+    FEISHU_APP_ID: " app-id ",
+    FEISHU_APP_SECRET: " app-secret ",
+    IRIS_FEISHU_BOT_OPEN_ID: "ou_irisbot",
+  };
+
+  it("is disabled unless explicitly enabled", () => {
+    expect(readProactiveSignalDeliveryRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readProactiveSignalDeliveryRuntimeConfig({
+        IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED: value,
+      })).toEqual({ enabled: false });
+    }
+  });
+
+  it("reads a bounded enabled config with explicit group allowlist", () => {
+    expect(readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_PROACTIVE_SIGNAL_DELIVERY_INTERVAL_MS: "2500",
+      IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT: "12",
+    })).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@postgres:5432/iris",
+      enabledGroupIds: ["oc_pilot", "oc_review"],
+      intervalMs: 2500,
+      batchLimit: 12,
+    });
+  });
+
+  it("requires an enabled group allowlist, database, and Feishu credentials only when enabled", () => {
+    for (const [name, message] of [
+      ["IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS", "IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS must contain at least one group"],
+      ["DATABASE_URL", "DATABASE_URL is required for database operations"],
+      ["FEISHU_APP_ID", "FEISHU_APP_ID is required"],
+      ["FEISHU_APP_SECRET", "FEISHU_APP_SECRET is required"],
+    ] as const) {
+      expect(() => readProactiveSignalDeliveryRuntimeConfig({
+        ...enabledEnv,
+        [name]: " ",
+      })).toThrow(message);
+    }
+  });
+
+  it("requires an actionable feedback runtime for every delivery group", () => {
+    expect(() => readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_ENABLED: "false",
+    })).toThrow("proactive signal delivery requires knowledge cards");
+    expect(() => readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS must include every proactive delivery group");
+  });
+
+  it("rejects duplicate groups and unsafe batch settings", () => {
+    expect(() => readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS: "oc_one,oc_one",
+    })).toThrow("IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS must contain unique group IDs");
+    expect(() => readProactiveSignalDeliveryRuntimeConfig({
+      ...enabledEnv,
+      IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT: "101",
+    })).toThrow("IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT must not exceed 100");
+  });
+});
+
+describe("readActionApprovalRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+    IRIS_APPROVAL_ACTION_GROUP_IDS: " oc_pilot ,oc_review ",
+    DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
+  };
+
+  it("is disabled unless explicitly enabled", () => {
+    expect(readActionApprovalRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readActionApprovalRuntimeConfig({ IRIS_APPROVAL_ACTIONS_ENABLED: value })).toEqual({
+        enabled: false,
+      });
+    }
+  });
+
+  it("reads bounded planner and dispatcher configuration", () => {
+    expect(readActionApprovalRuntimeConfig({
+      ...enabledEnv,
+      IRIS_ACTION_PROPOSAL_PLANNER_INTERVAL_MS: "2500",
+      IRIS_ACTION_PROPOSAL_PLANNER_BATCH_LIMIT: "12",
+      IRIS_ACTION_APPROVAL_DISPATCHER_INTERVAL_MS: "1500",
+      IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT: "8",
+      IRIS_KNOWLEDGE_PUBLICATION_EXECUTOR_INTERVAL_MS: "1750",
+      IRIS_KNOWLEDGE_PUBLICATION_EXECUTOR_BATCH_LIMIT: "6",
+      IRIS_REVIEW_PUBLIC_ORIGIN: " https://iris.example.com/review/ ",
+    })).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@postgres:5432/iris",
+      enabledGroupIds: ["oc_pilot", "oc_review"],
+      plannerIntervalMs: 2500,
+      plannerBatchLimit: 12,
+      dispatcherIntervalMs: 1500,
+      dispatcherBatchLimit: 8,
+      publicationExecutorIntervalMs: 1750,
+      publicationExecutorBatchLimit: 6,
+      reviewPublicOrigin: "https://iris.example.com/review",
+    });
+  });
+
+  it("requires an enabled group allowlist and database only when enabled", () => {
+    expect(() => readActionApprovalRuntimeConfig({
+      ...enabledEnv,
+      IRIS_APPROVAL_ACTION_GROUP_IDS: " ",
+    })).toThrow("IRIS_APPROVAL_ACTION_GROUP_IDS must contain at least one group");
+    expect(() => readActionApprovalRuntimeConfig({
+      ...enabledEnv,
+      DATABASE_URL: " ",
+    })).toThrow("DATABASE_URL is required for database operations");
+  });
+});
+
+describe("readKnowledgeCardRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: " oc_pilot ,oc_review ",
+    DATABASE_URL: " postgres://iris:secret@postgres:5432/iris ",
+    REDIS_URL: " redis://redis:6379 ",
+    FEISHU_VERIFICATION_TOKEN: " verification-token ",
+    FEISHU_ENCRYPT_KEY: " encrypt-key ",
+    FEISHU_APP_ID: " app-id ",
+    FEISHU_APP_SECRET: " app-secret ",
+    IRIS_FEISHU_BOT_OPEN_ID: "ou_irisbot",
+  };
+
+  it("is disabled unless the feature value is exactly true", () => {
+    expect(readKnowledgeCardRuntimeConfig({})).toEqual({ enabled: false });
+    for (const value of ["false", "TRUE", " true ", "1"]) {
+      expect(readKnowledgeCardRuntimeConfig({ IRIS_KNOWLEDGE_CARD_ENABLED: value })).toEqual({
+        enabled: false,
+      });
+    }
+  });
+
+  it("reads normalized enabled config with exact defaults", () => {
+    expect(readKnowledgeCardRuntimeConfig(enabledEnv)).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@postgres:5432/iris",
+      redisUrl: "redis://redis:6379",
+      enabledGroupIds: ["oc_pilot", "oc_review"],
+      intervalMs: 1000,
+      batchLimit: 10,
+      botOpenId: "ou_irisbot",
+    });
+  });
+
+  it("requires every enabled runtime authority and adapter input", () => {
+    const required = [
+      ["IRIS_KNOWLEDGE_CARD_GROUP_IDS", "IRIS_KNOWLEDGE_CARD_GROUP_IDS must contain at least one group"],
+      ["DATABASE_URL", "DATABASE_URL is required for database operations"],
+      ["REDIS_URL", "REDIS_URL is required"],
+      ["FEISHU_VERIFICATION_TOKEN", "FEISHU_VERIFICATION_TOKEN is required"],
+      ["FEISHU_ENCRYPT_KEY", "FEISHU_ENCRYPT_KEY is required when knowledge cards are enabled"],
+      ["FEISHU_APP_ID", "FEISHU_APP_ID is required"],
+      ["FEISHU_APP_SECRET", "FEISHU_APP_SECRET is required"],
+      ["IRIS_FEISHU_BOT_OPEN_ID", "IRIS_FEISHU_BOT_OPEN_ID is required when knowledge cards are enabled"],
+    ] as const;
+
+    for (const [name, message] of required) {
+      expect(() => readKnowledgeCardRuntimeConfig({ ...enabledEnv, [name]: " " })).toThrow(message);
+    }
+  });
+
+  it("rejects an oversized Feishu encrypt key when knowledge cards are enabled", () => {
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      FEISHU_ENCRYPT_KEY: "k".repeat(513),
+    })).toThrow("FEISHU_ENCRYPT_KEY must be at most 512 characters");
+  });
+
+  it("rejects blank, duplicate, overlong, and oversized group allowlists", () => {
+    for (const value of ["oc_one,,oc_two", "oc_one,  ,oc_two"]) {
+      expect(() => readKnowledgeCardRuntimeConfig({
+        ...enabledEnv,
+        IRIS_KNOWLEDGE_CARD_GROUP_IDS: value,
+      })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS must not contain blank group IDs");
+    }
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_one, oc_one",
+    })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS must contain unique group IDs");
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: `oc_${"a".repeat(510)}`,
+    })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS group IDs must be at most 512 characters");
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: Array.from({ length: 101 }, (_, index) => `oc_${index}`).join(","),
+    })).toThrow("IRIS_KNOWLEDGE_CARD_GROUP_IDS must contain at most 100 groups");
+  });
+
+  it("enforces timer and batch bounds", () => {
+    expect(readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS: "2500",
+      IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT: "100",
+    })).toMatchObject({ intervalMs: 2500, batchLimit: 100 });
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS: "2147483648",
+    })).toThrow("IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS must not exceed 2147483647");
+    expect(() => readKnowledgeCardRuntimeConfig({
+      ...enabledEnv,
+      IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT: "101",
+    })).toThrow("IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT must not exceed 100");
+  });
+});
 
 describe("readFeishuAuthConfig", () => {
   it("reads Feishu verification token and encrypt key from the environment", () => {
@@ -42,9 +369,9 @@ describe("readOptionalFeishuBotOpenId", () => {
     expect(readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: "   " })).toBeUndefined();
   });
 
-  it("reads and trims the Iris Feishu bot open ID", () => {
-    expect(readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: " ou_iris " })).toBe(
-      "ou_iris",
+  it("reads an exact ASCII Iris Feishu bot open ID", () => {
+    expect(readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: "ou_AbC123" })).toBe(
+      "ou_AbC123",
     );
   });
 
@@ -52,6 +379,30 @@ describe("readOptionalFeishuBotOpenId", () => {
     expect(() =>
       readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: "o".repeat(513) }),
     ).toThrow("IRIS_FEISHU_BOT_OPEN_ID must be at most 512 characters");
+  });
+
+  it.each([
+    " ou_iris ",
+    "ou_iris bot",
+    "ou_iris\u0000hidden",
+    "ou_iris\u007f",
+    "ou_caf\u00e9",
+    "on_iris",
+    "ou_",
+    "ou_iris-1",
+  ])("rejects an unsafe Iris Feishu bot open ID without echoing it: %j", (value) => {
+    let error: unknown;
+    try {
+      readOptionalFeishuBotOpenId({ IRIS_FEISHU_BOT_OPEN_ID: value });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "IRIS_FEISHU_BOT_OPEN_ID must match the Feishu open ID format",
+    );
+    expect((error as Error).message).not.toContain(value);
   });
 });
 
@@ -158,6 +509,125 @@ describe("readEventWorkerRuntimeConfig", () => {
         IRIS_EVENT_WORKER_INTERVAL_MS: "2147483648",
       }),
     ).toThrow("IRIS_EVENT_WORKER_INTERVAL_MS must not exceed 2147483647");
+  });
+});
+
+describe("readMemoryExtractionRuntimeConfig", () => {
+  const enabledEnv = {
+    IRIS_MEMORY_EXTRACTION_ENABLED: "true",
+    DATABASE_URL: "postgres://iris:secret@db.example.com:5432/iris",
+    REDIS_URL: "rediss://:secret@redis.example.com:6380/1",
+    IRIS_AI_WORKER_BASE_URL: "http://ai-worker:8000/",
+    IRIS_AI_WORKER_TOKEN: "worker-token",
+    IRIS_FEISHU_BOT_OPEN_ID: "ou_iris",
+  };
+
+  it("is disabled by default without reading enabled-only configuration", () => {
+    expect(readMemoryExtractionRuntimeConfig({})).toEqual({ enabled: false });
+    expect(
+      readMemoryExtractionRuntimeConfig({
+        IRIS_MEMORY_EXTRACTION_ENABLED: "false",
+        DATABASE_URL: "not-a-database-url",
+        REDIS_URL: "not-a-redis-url",
+        IRIS_AI_WORKER_BASE_URL: "file:///secret",
+        IRIS_AI_WORKER_TOKEN: "not safe",
+      }),
+    ).toEqual({ enabled: false });
+  });
+
+  it("reads exact enabled defaults and bounded overrides", () => {
+    expect(readMemoryExtractionRuntimeConfig(enabledEnv)).toEqual({
+      enabled: true,
+      databaseUrl: "postgres://iris:secret@db.example.com:5432/iris",
+      redisUrl: "rediss://:secret@redis.example.com:6380/1",
+      aiWorkerBaseUrl: "http://ai-worker:8000",
+      aiWorkerToken: "worker-token",
+      irisBotOpenId: "ou_iris",
+      intervalMs: 1000,
+      batchLimit: 20,
+      minConfidence: 0.85,
+      threadEnabledGroupIds: [],
+      actionEnabledGroupIds: [],
+      candidateConfidenceFloor: 0.65,
+      applyConfidence: 0.85,
+    });
+    expect(
+      readMemoryExtractionRuntimeConfig({
+        ...enabledEnv,
+        IRIS_MEMORY_EXTRACTION_INTERVAL_MS: " 2500 ",
+        IRIS_MEMORY_EXTRACTION_BATCH_LIMIT: " 100 ",
+        IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE: " 1 ",
+      }),
+    ).toMatchObject({
+      intervalMs: 2500,
+      batchLimit: 100,
+      minConfidence: 1,
+    });
+  });
+
+  it("requires strict database, Redis, worker, and bot identity configuration", () => {
+    for (const [name, message] of [
+      ["DATABASE_URL", "DATABASE_URL is required for database operations"],
+      ["REDIS_URL", "REDIS_URL is required"],
+      ["IRIS_AI_WORKER_BASE_URL", "IRIS_AI_WORKER_BASE_URL is required"],
+      ["IRIS_AI_WORKER_TOKEN", "IRIS_AI_WORKER_TOKEN is required"],
+      ["IRIS_FEISHU_BOT_OPEN_ID", "IRIS_FEISHU_BOT_OPEN_ID is required"],
+    ] as const) {
+      const env = { ...enabledEnv, [name]: undefined };
+      expect(() => readMemoryExtractionRuntimeConfig(env)).toThrow(message);
+    }
+
+    expect(() =>
+      readMemoryExtractionRuntimeConfig({ ...enabledEnv, DATABASE_URL: "https://db.example.com" }),
+    ).toThrow("DATABASE_URL must be a postgres URL");
+    expect(() =>
+      readMemoryExtractionRuntimeConfig({ ...enabledEnv, REDIS_URL: "https://redis.example.com" }),
+    ).toThrow("REDIS_URL must be a redis URL");
+  });
+
+  it.each([
+    ["ftp://ai-worker", "IRIS_AI_WORKER_BASE_URL must be an http(s) URL"],
+    ["https://user:secret@ai-worker", "IRIS_AI_WORKER_BASE_URL must not include embedded credentials"],
+    ["https://ai-worker/path?token=secret", "IRIS_AI_WORKER_BASE_URL must not include query or fragment"],
+    ["https://ai-worker/path#secret", "IRIS_AI_WORKER_BASE_URL must not include query or fragment"],
+    ["https://ai-worker/\npath", "IRIS_AI_WORKER_BASE_URL must not include control characters"],
+  ])("rejects unsafe AI Worker URL %s", (value, message) => {
+    expect(() =>
+      readMemoryExtractionRuntimeConfig({ ...enabledEnv, IRIS_AI_WORKER_BASE_URL: value }),
+    ).toThrow(message);
+  });
+
+  it.each(["", "worker token", "worker,token", "令牌", "worker\ntoken"])(
+    "rejects an unsafe AI Worker token without echoing it: %j",
+    (value) => {
+      let error: unknown;
+      try {
+        readMemoryExtractionRuntimeConfig({ ...enabledEnv, IRIS_AI_WORKER_TOKEN: value });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/^IRIS_AI_WORKER_TOKEN /);
+      if (value.length > 0) {
+        expect((error as Error).message).not.toContain(value);
+      }
+    },
+  );
+
+  it.each([
+    ["IRIS_MEMORY_EXTRACTION_INTERVAL_MS", "0", "must be a positive integer"],
+    ["IRIS_MEMORY_EXTRACTION_INTERVAL_MS", "2147483648", "must not exceed 2147483647"],
+    ["IRIS_MEMORY_EXTRACTION_BATCH_LIMIT", "10.0", "must be a positive integer"],
+    ["IRIS_MEMORY_EXTRACTION_BATCH_LIMIT", "101", "must not exceed 100"],
+    ["IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE", "-0.01", "must be between 0 and 1"],
+    ["IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE", "1.01", "must be between 0 and 1"],
+    ["IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE", "NaN", "must be between 0 and 1"],
+    ["IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE", "Infinity", "must be between 0 and 1"],
+  ])("rejects unsafe numeric config %s=%s", (name, value, message) => {
+    expect(() =>
+      readMemoryExtractionRuntimeConfig({ ...enabledEnv, [name]: value }),
+    ).toThrow(`${name} ${message}`);
   });
 });
 
@@ -287,6 +757,7 @@ describe("readEmbeddingProviderConfig", () => {
         IRIS_EMBEDDING_API_KEY: " key-a ",
         IRIS_EMBEDDING_MODEL: " embedding-model ",
         IRIS_EMBEDDING_DIMENSIONS: " 1536 ",
+        IRIS_EMBEDDING_BATCH_SIZE: " 4 ",
         IRIS_EMBEDDING_TIMEOUT_MS: " 2500 ",
       }),
     ).toEqual({
@@ -295,6 +766,7 @@ describe("readEmbeddingProviderConfig", () => {
       apiKey: "key-a",
       model: "embedding-model",
       dimensions: 1536,
+      batchSize: 4,
       timeoutMs: 2500,
     });
   });
@@ -354,6 +826,16 @@ describe("readEmbeddingProviderConfig", () => {
         IRIS_EMBEDDING_TIMEOUT_MS: "0",
       }),
     ).toThrow("IRIS_EMBEDDING_TIMEOUT_MS must be a positive integer");
+
+    expect(() =>
+      readEmbeddingProviderConfig({
+        IRIS_EMBEDDING_PROVIDER: "openai-compatible",
+        IRIS_EMBEDDING_BASE_URL: "https://api.example.com/v1",
+        IRIS_EMBEDDING_API_KEY: "key-a",
+        IRIS_EMBEDDING_MODEL: "embedding-model",
+        IRIS_EMBEDDING_BATCH_SIZE: "0",
+      }),
+    ).toThrow("IRIS_EMBEDDING_BATCH_SIZE must be a positive integer");
   });
 
   it("rejects unsafe integer dimensions", () => {

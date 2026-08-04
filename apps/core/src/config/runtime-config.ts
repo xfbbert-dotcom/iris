@@ -15,9 +15,15 @@ export type RuntimeConfig = {
   capabilities: IrisCapability;
 };
 
-export function createDefaultRuntimeConfig(): RuntimeConfig {
+type RuntimeConfigEnv = Record<string, string | undefined>;
+
+export function createDefaultRuntimeConfig(env: RuntimeConfigEnv = process.env): RuntimeConfig {
   return {
-    globalEnabled: true,
+    globalEnabled: readOptionalBoolean(
+      "IRIS_RUNTIME_GLOBAL_ENABLED",
+      env.IRIS_RUNTIME_GLOBAL_ENABLED,
+      true,
+    ),
     disabledGroupIds: new Set<string>(),
     capabilities: {
       readGroupContext: true,
@@ -30,4 +36,20 @@ export function createDefaultRuntimeConfig(): RuntimeConfig {
       callExternalTools: false
     }
   };
+}
+
+function readOptionalBoolean(name: string, value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") {
+    return true;
+  }
+  if (normalized === "false") {
+    return false;
+  }
+
+  throw new Error(`${name} must be true or false`);
 }

@@ -5,7 +5,7 @@
 {$IRIS_PUBLIC_HOSTNAME} {
   encode zstd gzip
 
-  @feishu path /feishu/events
+  @feishu path /feishu/events /feishu/card-actions
   handle @feishu {
     reverse_proxy core:3000 {
       health_uri /internal/ingress-readiness
@@ -20,6 +20,38 @@
 
   @health path /health
   handle @health {
+    reverse_proxy core:3000
+  }
+
+  @reviewProposal {
+    method GET
+    path_regexp review_proposal ^/review/action-proposals/[^/]+$
+  }
+  handle @reviewProposal {
+    reverse_proxy core:3000
+  }
+
+  @reviewOAuthCallback {
+    method GET
+    path /review/oauth/callback
+  }
+  handle @reviewOAuthCallback {
+    reverse_proxy core:3000
+  }
+
+  @reviewAttestation {
+    method POST
+    path_regexp review_attestation ^/review/action-proposals/[^/]+/attest$
+  }
+  handle @reviewAttestation {
+    reverse_proxy core:3000
+  }
+
+  @adminConsole {
+    method GET
+    path /admin /admin/console.css /admin/console.js
+  }
+  handle @adminConsole {
     reverse_proxy core:3000
   }
 

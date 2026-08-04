@@ -130,6 +130,13 @@ Document source types:
 - Authorized knowledge-base document: belongs to an authorized Feishu wiki or knowledge-base space.
 - User-submitted document: manually given to Iris by a user.
 
+An administrator may identify an authorized Feishu knowledge space by pasting any page URL from
+that space. The page token is only an anchor for resolving the authoritative space ID; it is not a
+content boundary. Iris must enumerate every visible top-level tree in the authorized space and
+recursively discover supported pages. If the anchor is readable but the application lacks
+space-member permission to enumerate the whole space, synchronization fails closed and must not
+report a partial page subtree as a successfully synchronized knowledge base.
+
 Document-source evidence timestamps must be valid before entering either the in-memory v1 registry
 or the Postgres fact layer. Invalid `observedAt` values are rejected before state mutation or
 transaction work so document provenance remains sortable and auditable.
@@ -299,6 +306,15 @@ recent Feishu traffic can include images, stickers, blank text, or document-only
 current v1 Core implementation scans up to three times the requested live-chat output window, capped
 at 100 raw messages, then filters to non-blank text and injects at most the latest 20 useful text
 messages. This backfill improves answer continuity without increasing the prompt's live-chat budget.
+
+Retrieval is not attribution. A document fragment entering the authorized prompt window does not
+by itself prove that the answer used that fragment. Each background fragment therefore carries a
+bounded prompt-local citation reference. The answer model may return those references only as
+internal metadata when the corresponding fragments materially support the visible answer. Core
+must validate every reference against the current permission-approved prompt window, strip the
+metadata before delivery, and render citations itself. Unknown or malformed references fail closed;
+no declared document use means no visible document citation. All permitted prompt fragments remain
+traceable even when they receive no visible citation rank.
 
 Constitutional principle:
 
@@ -514,6 +530,39 @@ require both the token and signature to match.
 When Iris is disabled, it should stop processing new messages, stop proactive speech, and stop executing tasks. Admins may still view logs and configuration.
 
 Feishu may still deliver events to the system while Iris is disabled. In that state, Iris should acknowledge or safely discard events according to Feishu platform requirements, but must not index message content, update semantic memory, generate replies, or execute actions unless an administrator explicitly re-enables the relevant scope.
+
+### 8.1 Durable Runtime Control
+
+Before Iris expands from the supervised single-group pilot to the first 20-30 users, runtime-control
+policy must be durable in Postgres. The v1 durable form is one versioned company snapshot containing
+the requested global state, disabled group IDs, and capability switches. The snapshot is an atomic
+policy document, not a replacement for the audit log.
+
+Persisted intent and live activation are deliberately separate:
+
+- disabled groups and capability switches are restored from the validated Postgres snapshot;
+- the requested global state is retained for operator visibility;
+- every unplanned Core startup begins with live `globalEnabled: false`, even when the persisted
+  requested state is enabled;
+- an operator may restore live activation only after readiness and worker health pass;
+- a missing, unavailable, malformed, or unsupported snapshot must never fall back to broader
+  permissions or an enabled runtime.
+
+Mutations that can increase Iris's authority must commit the next version to Postgres before they
+change the live controller. Concurrent mutations use optimistic revision checks so one operator
+cannot silently overwrite another. Emergency global disable is the exception: it must take effect in
+memory immediately even when persistence is unavailable, and the API must clearly report whether
+that disabled state was durably recorded. Other mutations remain unchanged when persistence fails.
+
+Migration defaults must be conservative: requested global activation is disabled, knowledge-base
+writing and external tool calls remain disabled, and no migration may infer permission from
+previously observed data. The single-company snapshot may later gain a tenant key during
+multi-company productization without changing the runtime-control domain boundary.
+
+Constitutional principle:
+
+> Durable configuration preserves operator intent, but it never grants permission to auto-resume
+> after an unplanned restart. Persistence failure may reduce Iris's authority; it must never expand it.
 
 Runtime-control mutations must be auditable. During the early internal rollout this can use the
 same bounded in-memory audit log as permission diagnostics, but emergency enable/disable paths must
@@ -732,10 +781,11 @@ Implementation status:
 
 - TypeScript Core App now requires a Feishu live permission checker before answer-time `source-policy` retrieval can inject Feishu docx/docs/wiki fragments into prompt context.
 - The checker avoids external calls for unsupported non-Feishu URLs, resolves wiki nodes before document checks, uses bounded request timeouts, and keeps transient Feishu failures distinct from explicit denied/not-found responses.
+- The process-local checker serializes external permission probes with a 650 ms minimum start interval and coalesces simultaneous checks for the same source. This stays below the current 100-calls-per-minute wiki-node boundary and the 5-calls-per-second docx metadata boundary without caching an authorization result.
 - The checker treats only known Feishu permission-denied response codes as ordinary denials. Unknown non-zero Feishu codes are permission guard errors, preserving fail-closed filtering while keeping upstream/auth failures observable.
 - Local source-registry lookup failures propagate through the permission guard as `permission_guard_error` audit events. Missing sources, disabled capabilities, denied sources, and stale sources remain ordinary denials.
 - Permission-filtered retrieval now binds allowed fragments to both fragment ID and document source ID, so duplicate or corrupted fragment IDs cannot leak denied document text into prompt context.
-- The current checker is process-local. If latency, rate limiting, or repeated checks become material, the next architecture step is a dedicated Permission Guard Service.
+- The current checker remains process-local for the 20-30-person internal rollout. If its queue latency or cross-instance rate coordination becomes material, the next architecture step is a dedicated Permission Guard Service.
 
 Evolution signal:
 

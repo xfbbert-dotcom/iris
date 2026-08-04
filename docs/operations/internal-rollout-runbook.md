@@ -3,6 +3,10 @@
 This runbook is for the first 20-30 person company rollout. The goal is to keep Iris usable and
 recoverable before a full admin UI exists.
 
+Use `docs/runbooks/iris-internal-mvp-gray-checklist.md` as the product-level real-Feishu gate before
+calling the internal MVP ready for daily use. This runbook remains the operational deployment and
+recovery guide.
+
 ## Pilot-First Rollout Gate
 
 Do not wait for exhaustive hardening before anyone uses Iris. Roll out in two stages:
@@ -32,14 +36,143 @@ The pilot gate is green only when all of the following are true:
 Once this gate passes, deploy the pilot. Do not start another general hardening audit unless the gate
 fails, the pilot exposes a P0/P1 issue, or the same user friction repeats.
 
-### Runtime-Control Limitation During The Pilot
+## Local Embedding Profile Migration
 
-The current runtime-control state is in memory. A Core restart restores default switches, including
-global enablement. For the 3-5 person pilot, treat stopping the Core service (and, if necessary,
-disabling the Feishu callback or bot) as the authoritative emergency stop; do not rely on an
-in-memory disabled state surviving a restart. Durable Postgres-backed runtime control is a P1 item
-before expanding to the full 20-30 person rollout, but it does not delay the supervised single-group
-pilot.
+Perform this one-time profile migration privately. Keep Caddy stopped and set global runtime to
+disabled before the first command. The Gemini `embed_content_free_tier_requests` quota is shared
+between the attempted Gemini embedding model names; it is the reason this procedure selects the
+private Ollama embedding path, not a reason to retry remote quota.
+
+The model boundary is strict: `embedding-model-init` alone receives model-download egress, starts a
+temporary Ollama server, and verifies the full stored model-manifest SHA256 plus every referenced
+config and layer blob. A missing or corrupt blob is repaired only by that seed job and the complete
+cache is then reverified. The private `embedding-model` service has no host or edge port and no
+model egress network. Its recurring health check locks the exact model tag and full stored manifest
+SHA256 without repeatedly hashing the 239 MB model layer. The backend-only
+one-shot `embedding-model-verify` service hashes the cache once, sends four document-prefixed
+inputs with `dimensions=768` to `/v1/embeddings`, and requires four ordered 768-dimensional finite
+vectors whose norms are within `0.001` of `1`.
+Both one-shot jobs must complete successfully before Core can start. A model name shown by
+`ollama list`, a short digest, a successful pull without blob verification, or endpoint availability
+without the embedding-shape check is a failed gate.
+
+Run the canonical migration entrypoint directly on the Ubuntu 24.04 VPS from the repository
+root. It is the only supported procedure for changing the production embedding profile. The host
+shell never reads the internal bearer token: authenticated calls execute as Node processes inside
+Core, where the token is already present.
+
+Set the five non-secret acceptance inputs first. The old profile must be the exact prior profile
+found in the existing reindex DLQ, must differ from the target profile, and must exactly match the
+active profile reported by the pre-migration Core. The marker must exist only in the authorized
+Life Engine page and must not be included in the question or live-chat input.
+
+```bash
+export IRIS_OPERATOR_EVIDENCE_PATH=/opt/iris/repository/evidence/local-embedding-migration.ndjson
+export IRIS_OLD_EMBEDDING_PROFILE_ID=replace-with-exact-prior-profile-id
+export IRIS_LIFE_ENGINE_CHAT_ID=replace-with-approved-pilot-chat-id
+export IRIS_LIFE_ENGINE_SOURCE_ID=4f4f04db-ae67-487b-9060-e03e2535ee7d
+export IRIS_LIFE_ENGINE_MARKER=replace-with-authorized-page-only-marker
+
+bash deploy/pilot/migrate-local-embedding.sh
+```
+
+The rendered configuration must resolve to all of these exact values before the script starts model
+or database work:
+
+```text
+IRIS_EMBEDDING_PROVIDER=openai-compatible
+IRIS_EMBEDDING_BASE_URL=http://embedding-model:11434/v1
+IRIS_EMBEDDING_API_KEY=ollama
+IRIS_EMBEDDING_MODEL=embeddinggemma:300m-qat-q4_0
+IRIS_EMBEDDING_DIMENSIONS=768
+IRIS_EMBEDDING_BATCH_SIZE=4
+IRIS_EMBEDDING_TIMEOUT_MS=60000
+IRIS_EMBEDDING_MODEL_MANIFEST_SHA256=101341d65c2ccbf23f16650b79d30b9fca94a45ffa09a9984c600157b81a58df
+```
+
+The script has one bounded, fail-closed path. It captures and durably disables runtime, stops and
+proves Caddy stopped, creates the paired encrypted Postgres/Redis backup, records the backup path,
+validates the rendered image and profile, runs migrations, verifies the complete model cache and a
+production-shaped four-item batch of 768-dimensional unit embeddings, and starts Core without
+public ingress. Its exit trap retries
+durable disable and always stops Caddy; if durable disable cannot be proven, it also stops and proves
+Core stopped.
+
+### Old-Profile DLQ Evidence
+
+Before deleting an old-profile dead letter, the script records an NDJSON evidence row with
+only the full DLQ ID, profile ID, snapshot ID, enqueue/failure timestamps, attempts, safe failure
+classification, and capture timestamp. It reads the row back byte-for-byte and deletes only that
+exact ID after the write succeeds. Document bodies, prompts, vectors, secrets, and raw provider error
+bodies are never written. Missing fields, unknown identity, unsafe IDs, write/readback failure, or an
+unexpected delete response aborts the migration.
+
+### Bounded Full Reindex
+
+The script plans latest successful snapshots in batches of at most 100 and stops after at most 1,000
+planning requests. Every batch must drain before the next request. Each gate checks event,
+document-sync, reindex, and memory pending/processing/delayed/DLQ counts. Memory processing is a
+Redis sorted set and is therefore inspected with `ZCARD`, including when extraction is disabled.
+A new DLQ aborts immediately; pending and processing work may drain for at most 30 minutes. Every
+count must then be exactly zero, and reindex status must name
+`openai-compatible:embeddinggemma:300m-qat-q4_0:768`.
+
+### Coverage And Private Retrieval
+
+Before any ingress is restored, the script requires every latest successful
+`authorized_wiki_document` snapshot to have fragments in
+`document_fragment_embeddings_768` under the exact EmbeddingGemma profile. Historical profile rows
+and fragments, including the additive 1024-dimensional Qwen table, are preserved. It then briefly
+enables runtime only on the private Core interface, asks one Life Engine marker question, and
+requires both the marker and the expected source ID in
+`allowedFragments`. This is the live Feishu permission guard gate; Feishu-native related-knowledge
+UI is not Iris evidence.
+
+A successful run still leaves global runtime durably disabled and Caddy stopped.
+Start Caddy only after confirming the approved pilot scope and all zero queue and DLQ counts. Any
+uncertainty requires rollback to the approved previous environment, image, and paired backup while
+operators preserve the prior-profile fragments.
+
+### Controlled Daily Pilot Profile
+
+After every product-level loop in
+`docs/runbooks/iris-internal-mvp-gray-checklist.md` has passed once, start daily use with exactly one
+Feishu group and 3-5 cooperative users. This is the minimum useful product profile:
+
+- enable group-context ingestion, mention replies, group-document reading, and authorized
+  knowledge-base retrieval;
+- enable memory/thread/action extraction only for the same pilot group by setting
+  `IRIS_MEMORY_EXTRACTION_ENABLED=true`,
+  `IRIS_THREAD_EXTRACTION_GROUP_IDS=<pilot-group-id>`, and
+  `IRIS_ACTION_EXTRACTION_GROUP_IDS=<pilot-group-id>`;
+- keep `proactiveSpeech=false`, proactive planner/delivery environment gates off, and all proactive
+  allowlists empty until a controller explicitly opens a separate observed delivery window;
+- keep `generateKnowledgeDrafts=false`, `writeKnowledgeBase=false`, and `callExternalTools=false`
+  during ordinary daily chat. Open the governed knowledge publication path only for an intentional
+  review/approval session;
+- keep every known non-pilot group durably disabled.
+
+Prepare this profile with Caddy stopped and live/durable global runtime disabled. Recreate Core only
+after the exact allowlists are written, then require memory extraction to report enabled/running,
+readiness to report `ready`, and every queue/DLQ count to be zero. Enable only the pilot group,
+durably enable global runtime, verify the fresh response, and start Caddy last.
+
+An unplanned Core restart intentionally returns live global runtime to disabled. Re-run readiness
+and queue checks before manual reactivation; never auto-resume from durable desired state. Expand
+from the pilot group only after observed work contains no unresolved P0/P1 issue.
+
+### Durable Runtime Control During The Pilot
+
+Runtime-control intent is persisted in Postgres as one versioned company snapshot containing the
+desired global state, disabled groups, and capability switches. Core still starts fail-closed:
+`IRIS_RUNTIME_GLOBAL_ENABLED=false` keeps live `globalEnabled=false` after every unplanned restart,
+even when durable `desiredGlobalEnabled=true`. An operator must re-check readiness and worker health
+before explicitly restoring live activation.
+
+For the 3-5 person pilot, emergency global disable takes effect in memory before persistence and
+reports whether the disabled state was durably recorded. If persistence is unavailable, stop Core
+and, if necessary, Caddy or the Feishu callback/bot. Never treat persisted desired state as
+permission to auto-resume.
 
 ## Security Boundary
 
@@ -60,7 +193,10 @@ Never expose these endpoints directly to the public internet:
 - `/internal/document-sync/*`
 - `/internal/events/*`
 - `/internal/reindex/*`
+- `/internal/memory-extraction/*`
+- `/internal/conversation-state/*`
 - `/internal/audit/*`
+- `/internal/agent-executions`
 - `/internal/answer-drafts`
 
 Every `/internal/*` request must include:
@@ -141,8 +277,11 @@ before starting Caddy.
 
 Deploy an explicit commit instead of a moving branch:
 
+Keep the release parent owned by the dedicated operator so commit-addressed candidate directories
+can be created without broadening permissions or requiring an interactive sudo step mid-deploy.
+
 ```bash
-sudo install -d -o "$USER" -g "$USER" /opt/iris
+sudo install -d -o "$USER" -g "$USER" /opt/iris /opt/iris/releases
 git clone https://github.com/xfbbert-dotcom/iris.git /opt/iris/repository
 cd /opt/iris/repository
 git fetch origin
@@ -207,13 +346,29 @@ docker compose \
 ```
 
 Do not continue unless readiness prints `"status":"ready"` with zero failed checks. Start the
-single-consumer stack:
+single-consumer data services and Core while keeping public Caddy stopped:
 
 ```bash
 docker compose \
   --env-file .env.pilot \
   --file deploy/pilot/docker-compose.yml \
-  up --detach --wait --wait-timeout 120
+  up --detach --wait --wait-timeout 120 postgres redis migrate core
+
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  exec --no-TTY core node --input-type=module --eval '
+    const response = await fetch("http://127.0.0.1:3000/internal/runtime-control/status", {
+      headers: { authorization: `Bearer ${process.env.IRIS_INTERNAL_API_TOKEN}` },
+    });
+    const body = await response.json();
+    if (!response.ok || body.globalEnabled !== false) process.exit(1);
+  '
+
+docker compose \
+  --env-file .env.pilot \
+  --file deploy/pilot/docker-compose.yml \
+  up --detach caddy
 
 docker compose \
   --env-file .env.pilot \
@@ -221,7 +376,12 @@ docker compose \
   ps
 ```
 
-Required state:
+Migration `0039_agent_execution_ledger.sql` creates the append-only execution ledger. The migration
+job must apply it successfully before `IRIS_AGENT_EXECUTION_LEDGER_ENABLED=true` is used. Shipping
+the migration does not enable collection: activation is a separate fail-closed rollout step that
+must begin with Caddy stopped, Iris globally disabled, and private health and queue checks passing.
+
+The runtime-control probe must exit `0` before Caddy starts. Required state after Caddy starts:
 
 - `postgres` and `redis` are healthy;
 - `migrate` exited with code `0`;
@@ -320,10 +480,22 @@ inviting pilot users:
 ```
 
 The script uses `set -Eeuo pipefail`, refuses concurrent runs with `flock`, and briefly stops Caddy
-and Core after graceful ingress drain. It captures PostgreSQL and Redis while both are quiescent,
-immediately restarts Iris, then encrypts the paired snapshot as one bundle. It writes to a unique
-owner-only temporary file and publishes it only after snapshot and encryption succeed. Files older
-than seven 24-hour periods are removed.
+and Core after graceful ingress drain. Before the stop it captures the live and durable global
+runtime state through the authenticated container-local API and records whether Caddy is running. It
+captures PostgreSQL and Redis while both are quiescent, starts Core alone in its configured
+fail-closed state, then encrypts the paired snapshot as one bundle. It writes to a unique owner-only
+temporary file and publishes it only after snapshot and encryption succeed. Only after atomic
+publication does a successful planned backup restore a previously enabled live global state after
+verifying the durable desired state, and restart Caddy when Caddy was running before maintenance.
+Files older than seven 24-hour periods are removed.
+
+If any maintenance step fails, cleanup keeps Caddy stopped and restarts only a verified disabled
+Core; it never re-enables Iris from the `EXIT` trap. Cleanup first attempts an explicit runtime API
+disable, retries Caddy shutdown, uses a forced container stop if needed, and independently verifies
+both final states. Treat `FAIL-CLOSED RECOVERY INCOMPLETE` as a page-level incident and immediately
+verify the runtime and Caddy from the VPS. Host restarts, crashes, and container recreation also
+remain fail-closed and still require an explicit operator activation; validated disabled-group and
+capability intent is restored from Postgres without expanding authority.
 
 Copy the encrypted file off the VPS, decrypt it on the operator-controlled machine, inspect the
 bundle, and validate both payloads. A bundle whose Postgres archive and Redis RDB have not both been
@@ -496,6 +668,11 @@ $env:IRIS_FEISHU_DOCUMENT_FETCH_TIMEOUT_MS="10000"
 $env:IRIS_FEISHU_DOCUMENT_MAX_CONTENT_CHARS="2000000"
 ```
 
+Answer-citation acceptance that inspects message history also requires the published Feishu app's
+application-identity `im:message:readonly` scope. Do not enable the user-identity scope for this
+purpose. This scope is an operator evidence prerequisite; it does not replace callback ingestion,
+source permission checks, or durable answer receipts.
+
 `IRIS_FEISHU_BOT_OPEN_ID` lets Iris identify explicit @mentions from Feishu message events. When
 this value, Feishu OpenAPI credentials, and internal answer drafting are configured, the event worker
 can draft an answer and reply to messages that mention the Iris bot. Missing this value keeps event
@@ -657,6 +834,65 @@ Important status rules:
 - `components.runtimeControl` mirrors the current global runtime gate. If its status is
   `"disabled"`, Iris is globally off even if worker processes are still reachable.
 
+## Agent Execution Ledger
+
+The execution ledger is disabled by default:
+
+```powershell
+$env:IRIS_AGENT_EXECUTION_LEDGER_ENABLED="false"
+```
+
+When enabled after migration `0039`, it records append-only lifecycle evidence for answer turns,
+provider calls, live permission decisions, approval actions, knowledge publication, and proactive
+delivery. Observer writes are best effort: a ledger outage must not change the authoritative
+answer, permission, approval, publication, or delivery result.
+
+Enable it only as a separate private rollout:
+
+1. Keep Caddy stopped and set global runtime control to disabled.
+2. Verify Core, Postgres, Redis, and enabled workers are healthy and all pending/DLQ counts are zero.
+3. Confirm `0039_agent_execution_ledger.sql` is present in `schema_migrations`.
+4. Set `IRIS_AGENT_EXECUTION_LEDGER_ENABLED=true`, recreate only Core, and re-check private status.
+5. Exercise one bounded internal case and inspect the ledger before restoring any public ingress.
+
+Do not enable Iris or Caddy merely because ledger startup succeeds. Restore ingress and runtime
+capabilities only through their existing acceptance gates.
+
+Query recent events for one group:
+
+```powershell
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/agent-executions?groupId=oc_group_id&limit=20"
+```
+
+Query the ordered lifecycle of one answer turn:
+
+```powershell
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/agent-executions?subjectType=turn&subjectId=om_message_id&limit=20"
+```
+
+Query one tool call:
+
+```powershell
+Invoke-RestMethod `
+  -Headers $irisHeaders `
+  -Uri "http://localhost:3000/internal/agent-executions?toolCallId=delivery_id&limit=20"
+```
+
+`subjectType` and `subjectId` must be supplied together. `limit` defaults to `50` and must be from
+`1` through `100`. When the ledger is disabled, the route returns `404` with
+`agent_execution_ledger_unavailable`.
+
+The ledger is deliberately content-free. It may contain bounded identifiers, event type, phase,
+tool/model/provider names, outcome, stable decision codes, duration, content fingerprints, and
+small allowlisted metadata. It must never contain chat text, prompts, model responses, document or
+memory bodies, approval/revision comments, Feishu card JSON, credentials, access tokens, or raw
+provider error bodies. Use the source systems and governed facts for content inspection; do not
+expand this ledger into a transcript store.
+
 ## Runtime Control
 
 Disable Iris globally:
@@ -770,6 +1006,37 @@ Invoke-RestMethod `
   -Body '{"sourceUri":"https://example.feishu.cn/docx/doc_token","title":"User Guide","submittedByUserId":"ou_1"}'
 ```
 
+Feishu in-chat user-submitted document acceptance:
+
+1. Confirm Iris is enabled for the pilot group and document reading is enabled.
+2. In the pilot group, send an explicit mention command such as:
+
+```text
+@Iris please register document https://example.feishu.cn/docx/doc_token
+```
+
+Chinese command variants such as `@Iris 请收录这个文档 https://...` and
+`@Iris 请同步这个文档 https://...` are also supported. Keep the command explicit; ordinary
+questions like `@Iris what does this document say? https://...` must remain on the answer path.
+
+Expected result:
+
+- Iris replies in-thread with a short confirmation that the document was received for sync.
+- The message does not invoke the model answer path.
+- `/internal/document-sync/sources?includeLatestSnapshot=true` shows a
+  `user_submitted_document` source for the canonical Feishu URL.
+- The document sync queue receives work through the existing sync planner.
+
+Fail-closed behavior:
+
+- If the explicit submission command has no readable Feishu document link, Iris replies with a
+  request for a readable Feishu document link and must not invoke the model answer path.
+- If document reading is disabled, Iris replies that document reading is disabled and must not
+  register the submitted document or invoke the model answer path.
+- If the URL is unsupported or contaminated, Iris must not add a source.
+- If registration or sync enqueue fails, the Feishu event remains retryable through the normal raw
+  event worker path; do not manually mark the submission accepted until the source appears.
+
 Use the clean Feishu document URL for manual registration. Iris strips query strings and fragments,
 but rejects obvious pasted-text contamination such as `https://example.feishu.cn/docx/doc_token,please`
 before it can enter the registry or sync queue.
@@ -864,6 +1131,89 @@ Recovery rule:
   longer be degraded for dead-letter reasons.
 - If a component is listed with `status: "stopped"`, treat it as an enabled worker that is not
   running. It appears in `degradedComponents` until the worker is started or intentionally disabled.
+
+## Semantic Thread And Action Daily Pilot
+
+Semantic thread/action extraction remains disabled by default, and its controlled real-Feishu gray
+gate has passed. Outside a reviewed single-group daily pilot, retain these defaults:
+
+```text
+IRIS_THREAD_EXTRACTION_GROUP_IDS=
+IRIS_ACTION_EXTRACTION_GROUP_IDS=
+IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR=0.65
+IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE=0.85
+```
+
+For the daily pilot, set both extraction group lists to the exact approved pilot group and set
+`IRIS_MEMORY_EXTRACTION_ENABLED=true` while global runtime and Caddy remain off. Recreate Core,
+verify the extraction worker is enabled/running with zero queue, DLQ, and projection-repair counts,
+then follow the Controlled Daily Pilot Profile above. Do not expose the AI Worker or any
+`/internal/*` operator route through Caddy. Proactive speech, reminders, and follow-up remain a
+separate gate.
+
+Use `docs/runbooks/iris-semantic-thread-action-memory-acceptance.md` for regression after a semantic
+incident or a change to extraction behavior. Do not repeat the full gray gate merely because the
+daily pilot starts.
+
+## Proactive Feedback-Card Gray Gate
+
+Migration `0040_proactive_signal_feedback.sql` adds the feedback event ledger and active
+suppression projection. Apply it through the normal reviewed migration job before any feedback
+card can be accepted. The feedback retention setting is independent of all proactive runtime
+gates:
+
+```text
+IRIS_PROACTIVE_IRRELEVANT_SUPPRESSION_DAYS=30
+```
+
+It accepts only whole-day values from `1` through `365`. This setting does not enable planning,
+delivery, proactive speech, Iris globally, or Caddy.
+
+Production remains disabled pending one real Feishu feedback-card gray pass. Until the controller
+approves that pass, keep global and desired-global runtime disabled, `proactiveSpeech=false`, all
+proactive planner and delivery environment gates disabled, and Caddy stopped. Do not treat a
+successful local build, a migration, or an Admin Console aggregate as rollout approval.
+
+For the controller-approved one-group pass:
+
+1. Confirm privately that Core, Postgres, Redis, and AI Worker are healthy; event, document,
+   reindex, memory, interaction, and proactive queues and DLQs must be clean before enabling the
+   minimum approved path.
+2. Use one explicitly allowlisted group and the minimum runtime capability needed to deliver a
+   single bounded proactive card. Do not expose `/internal/*` or the AI Worker through Caddy.
+3. Have a current member submit one feedback-card action. Confirm the callback is accepted only
+   for the exact sent delivery and its current group membership.
+4. Inspect the group-scoped feedback summary only: total feedback, helpful count, irrelevant
+   count, helpful rate, active suppression count, and last feedback time. It must not render actor
+   identifiers, message bodies, evidence text, prompts, or answers.
+5. For an `irrelevant` result, confirm one active suppression only for the matching group, signal
+   kind, and entity until the configured expiry. A `helpful` result must not create a suppression.
+6. Return the runtime to the disabled state and recheck service health plus all pending/DLQ counts.
+   Stop immediately and keep the loop disabled if binding, membership, queue, privacy, or runtime
+   gate evidence is not clean; do not replay queues or make extra model requests during triage.
+
+## Answer-Source Citation Gray Gate
+
+Migration `0045_answer_source_citations.sql` adds durable answer deliveries plus append-only source
+and event evidence. Apply it only through
+`docs/runbooks/iris-answer-source-citations-acceptance.md` after exact-SHA Core and AI Worker CI is
+successful and an encrypted PostgreSQL backup has completed.
+
+Keep `globalEnabled=false`, `desiredGlobalEnabled=false`, and Caddy stopped through migration and
+all private receipt gates. Public acceptance is bounded to `/health=200` and public
+`/internal/answer-replies/feishu/probe=404` while Iris remains disabled, followed by one authorized
+answer in only the existing pilot group and one source-permission revocation check. Do not spend
+Gemini quota on repeated probes.
+
+The visible answer must contain `Iris 参考资料：`, the correct title, and canonical Feishu URL.
+The private receipt may contain source/snapshot/fragment identifiers, chunk index, content hash,
+title, URI, fingerprints, and delivery metadata, but never answer text, fragment text, prompt
+context, tokens, or secrets. Final event, document-sync, and reindex pending/DLQ counts and all
+three answer-reply status counts must be zero.
+
+Any failed gate restores durable global disablement and stops Caddy until the failure is understood.
+Restore the previously approved pilot runtime state only after every citation and revocation gate
+passes.
 
 ## Verification Before Internal Use
 

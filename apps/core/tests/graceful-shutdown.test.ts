@@ -2,7 +2,10 @@ import { EventEmitter } from "node:events";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { buildApp } from "../src/app.js";
+import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 import { installGracefulShutdown } from "../src/runtime/graceful-shutdown.js";
+import type { MemoryExtractionRuntime } from "../src/runtime/memory-extraction-runtime.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -22,6 +25,36 @@ describe("installGracefulShutdown", () => {
     expect(processTarget.exit).not.toHaveBeenCalled();
     expect(processTarget.listenerCount("SIGTERM")).toBe(0);
     expect(processTarget.listenerCount("SIGINT")).toBe(0);
+  });
+
+  it("gracefully closes the event runtime before its extraction dependency", async () => {
+    const processTarget = new FakeProcessTarget();
+    const closeOrder: string[] = [];
+    const extractionRuntime = fakeMemoryExtractionRuntime({
+      close: vi.fn(async () => {
+        closeOrder.push("extraction");
+      }),
+    });
+    const eventRuntime = fakeEventRuntime({
+      close: vi.fn(async () => {
+        closeOrder.push("event");
+      }),
+    });
+    const app = await buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => extractionRuntime,
+      createEventWorkerRuntime: () => eventRuntime,
+      createDocumentSyncRuntime: () => undefined,
+    });
+
+    installGracefulShutdown(app, { processTarget });
+    processTarget.emit("SIGTERM");
+
+    await vi.waitFor(() => expect(extractionRuntime.close).toHaveBeenCalledOnce());
+    expect(closeOrder).toEqual(["event", "extraction"]);
+    expect(eventRuntime.close).toHaveBeenCalledOnce();
+    expect(processTarget.exit).not.toHaveBeenCalled();
   });
 
   it("forces exit before the Docker stop grace period when close stalls", async () => {
@@ -58,4 +91,77 @@ describe("installGracefulShutdown", () => {
 
 class FakeProcessTarget extends EventEmitter {
   readonly exit = vi.fn((_code: number) => undefined);
+}
+
+function fakeEventRuntime(overrides: Partial<EventWorkerRuntime> = {}): EventWorkerRuntime {
+  return {
+    deadLetters: {
+      list: vi.fn(async () => []),
+      replay: vi.fn(async () => "not_found" as const),
+      delete: vi.fn(async () => "not_found" as const),
+      replayBatch: vi.fn(async () => ({
+        replayedCount: 0,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      })),
+    },
+    getStatus: vi.fn(async () => ({
+      enabled: true as const,
+      running: true,
+      intervalMs: 1000,
+      batchLimit: 50,
+      mentionRepliesEnabled: false,
+      pendingEventCount: 0,
+      deadLetterEventCount: 0,
+      answerReplyUnresolvedCount: 0,
+      answerReplyPendingSafeNoticeCount: 0,
+      answerReplyReconciliationRequiredCount: 0,
+    })),
+    start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
+function fakeMemoryExtractionRuntime(
+  overrides: Partial<MemoryExtractionRuntime> = {},
+): MemoryExtractionRuntime {
+  return {
+    planner: { registerMessage: vi.fn(async () => undefined) },
+    deadLetters: {
+      list: vi.fn(async () => []),
+      replay: vi.fn(async () => "not_found" as const),
+      delete: vi.fn(async () => "not_found" as const),
+      replayBatch: vi.fn(async () => ({
+        replayedCount: 0,
+        notFoundIds: [],
+        unsupportedLegacyIds: [],
+      })),
+    },
+    getStatus: vi.fn(async () => ({
+      enabled: true as const,
+      running: true,
+      workerHealthy: true,
+      intervalMs: 1000,
+      batchLimit: 20,
+      minConfidence: 0.85,
+      pendingJobCount: 0,
+      processingJobCount: 0,
+      delayedJobCount: 0,
+      deadLetterJobCount: 0,
+      acceptedCandidateCount: 0,
+      rejectedCandidateCount: 0,
+      duplicateCandidateCount: 0,
+      conflictCandidateCount: 0,
+      acceptedThreadOperationCount: 0,
+      rejectedThreadOperationCount: 0,
+      acceptedActionOperationCount: 0,
+      rejectedActionOperationCount: 0,
+      skippedRequestCount: 0,
+      failedRunCount: 0,
+    })),
+    start: vi.fn(),
+    close: vi.fn(async () => undefined),
+    ...overrides,
+  };
 }

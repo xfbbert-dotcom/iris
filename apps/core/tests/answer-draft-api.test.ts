@@ -1,3 +1,5 @@
+import { createCipheriv, createHash } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnswerDraftInput } from "../src/agent/answer-draft-orchestrator.js";
@@ -42,14 +44,16 @@ describe("POST /internal/answer-drafts", () => {
             embedding: [1, 0, 0, 0, 0, 0],
             embeddingProfileId: "static-dev-6d",
             createdAt: new Date("2026-07-02T01:00:00.000Z"),
+            sourceType: "feishu_wiki" as const,
             distance: 0.12,
           },
         ],
         deniedDocumentIds: ["source-denied"],
         retrievedFragmentCount: 2,
+        usedGroupMemories: [],
       })),
     };
-    const app = buildApp({ answerDraftOrchestrator });
+    const app = await buildApp({ answerDraftOrchestrator });
 
     const response = await app.inject({
       method: "POST",
@@ -84,16 +88,18 @@ describe("POST /internal/answer-drafts", () => {
           embedding: [1, 0, 0, 0, 0, 0],
           embeddingProfileId: "static-dev-6d",
           createdAt: "2026-07-02T01:00:00.000Z",
+          sourceType: "feishu_wiki",
           distance: 0.12,
         },
       ],
       deniedDocumentIds: ["source-denied"],
       retrievedFragmentCount: 2,
+      usedGroupMemories: [],
     });
   });
 
   it("returns 503 when no orchestrator is configured", async () => {
-    const app = buildApp();
+    const app = await buildApp();
 
     const response = await app.inject({
       method: "POST",
@@ -119,9 +125,10 @@ describe("POST /internal/answer-drafts", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
-    const app = buildApp({ answerDraftOrchestrator });
+    const app = await buildApp({ answerDraftOrchestrator });
 
     const response = await app.inject({
       method: "POST",
@@ -142,7 +149,7 @@ describe("POST /internal/answer-drafts", () => {
   });
 
   it("returns 400 for invalid requests", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       answerDraftOrchestrator: { generateDraft: vi.fn() },
     });
 
@@ -161,7 +168,7 @@ describe("POST /internal/answer-drafts", () => {
 
   it("returns 400 when chatId is provided as blank", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
-    const app = buildApp({ answerDraftOrchestrator });
+    const app = await buildApp({ answerDraftOrchestrator });
 
     const response = await app.inject({
       method: "POST",
@@ -180,7 +187,7 @@ describe("POST /internal/answer-drafts", () => {
 
   it("returns 400 when chatId is oversized", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
-    const app = buildApp({ answerDraftOrchestrator });
+    const app = await buildApp({ answerDraftOrchestrator });
 
     const response = await app.inject({
       method: "POST",
@@ -199,7 +206,7 @@ describe("POST /internal/answer-drafts", () => {
 
   it("returns 400 when the question is oversized", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
-    const app = buildApp({ answerDraftOrchestrator });
+    const app = await buildApp({ answerDraftOrchestrator });
 
     const response = await app.inject({
       method: "POST",
@@ -217,7 +224,7 @@ describe("POST /internal/answer-drafts", () => {
 
   it("returns 400 when too many live chat messages are supplied", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
-    const app = buildApp({ answerDraftOrchestrator });
+    const app = await buildApp({ answerDraftOrchestrator });
 
     const response = await app.inject({
       method: "POST",
@@ -244,9 +251,10 @@ describe("POST /internal/answer-drafts", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
-    const app = buildApp({ answerDraftOrchestrator });
+    const app = await buildApp({ answerDraftOrchestrator });
 
     const response = await app.inject({
       method: "POST",
@@ -277,7 +285,7 @@ describe("POST /internal/answer-drafts", () => {
 
   it("returns 400 for unsafe context limits", async () => {
     const answerDraftOrchestrator = { generateDraft: vi.fn() };
-    const app = buildApp({ answerDraftOrchestrator });
+    const app = await buildApp({ answerDraftOrchestrator });
 
     const fragmentLimitResponse = await app.inject({
       method: "POST",
@@ -306,7 +314,7 @@ describe("POST /internal/answer-drafts", () => {
   });
 
   it("returns 500 when draft generation fails", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       answerDraftOrchestrator: {
         generateDraft: vi.fn(async () => {
           throw new Error("model unavailable");
@@ -333,7 +341,7 @@ describe("answer draft runtime wiring", () => {
     const createAnswerDraftRuntime = vi.fn(() => {
       throw new Error("should not compose runtime");
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime,
       answerDraftOrchestrator: {
         generateDraft: vi.fn(async () => ({
@@ -342,6 +350,7 @@ describe("answer draft runtime wiring", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
     });
@@ -358,7 +367,7 @@ describe("answer draft runtime wiring", () => {
 
   it("uses composed runtime when no orchestrator is injected", async () => {
     const close = vi.fn(async () => undefined);
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: vi.fn(() => ({
         answerDraftOrchestrator: {
           generateDraft: vi.fn(async () => ({
@@ -367,8 +376,10 @@ describe("answer draft runtime wiring", () => {
             allowedFragments: [],
             deniedDocumentIds: [],
             retrievedFragmentCount: 0,
+            usedGroupMemories: [],
           })),
         },
+        answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
         close,
       })),
     });
@@ -396,12 +407,14 @@ describe("answer draft runtime wiring", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
+      answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
       close: vi.fn(async () => undefined),
     }));
 
-    buildApp({ auditLog, createAnswerDraftRuntime });
+    await buildApp({ auditLog, createAnswerDraftRuntime });
 
     expect(createAnswerDraftRuntime).toHaveBeenCalledWith({
       dependencies: { auditLog },
@@ -417,6 +430,7 @@ describe("answer draft runtime wiring", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const createEventWorkerRuntimeMock = vi.fn();
@@ -428,7 +442,7 @@ describe("answer draft runtime wiring", () => {
       return undefined;
     };
 
-    buildApp({
+    await buildApp({
       answerDraftOrchestrator,
       createEventWorkerRuntime,
     });
@@ -441,7 +455,7 @@ describe("answer draft runtime wiring", () => {
 
   it("starts and closes an injected reindex worker runtime", async () => {
     const reindexWorkerRuntime = fakeReindexRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => reindexWorkerRuntime,
     });
@@ -453,7 +467,7 @@ describe("answer draft runtime wiring", () => {
 
   it("starts and closes an injected document sync runtime", async () => {
     const documentSyncRuntime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => documentSyncRuntime,
@@ -474,8 +488,10 @@ describe("answer draft runtime wiring", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
+      answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
       close: vi.fn(async () => undefined),
     };
     const eventWorkerRuntime = fakeEventRuntime();
@@ -485,7 +501,7 @@ describe("answer draft runtime wiring", () => {
         throw closeError;
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => answerDraftRuntime,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createReindexWorkerRuntime: () => reindexWorkerRuntime,
@@ -510,8 +526,10 @@ describe("answer draft runtime wiring", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
+      answerSourcePermissionVerifier: { verify: vi.fn(async () => []) },
       close: vi.fn(async () => undefined),
     };
     const eventWorkerRuntime = fakeEventRuntime({
@@ -521,14 +539,14 @@ describe("answer draft runtime wiring", () => {
     });
     const reindexWorkerRuntime = fakeReindexRuntime();
 
-    expect(() =>
+    await expect(
       buildApp({
         createAnswerDraftRuntime: () => answerDraftRuntime,
         createEventWorkerRuntime: () => eventWorkerRuntime,
         createReindexWorkerRuntime: () => reindexWorkerRuntime,
         createDocumentSyncRuntime: () => undefined,
       }),
-    ).toThrow("event worker start failed");
+    ).rejects.toThrow("event worker start failed");
 
     await flushDeferredEnqueue();
 
@@ -559,7 +577,7 @@ describe("internal API token guard", () => {
   });
 
   it("requires the configured bearer token for internal routes only", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -603,7 +621,7 @@ describe("internal API token guard", () => {
   });
 
   it("rejects unauthorized internal requests before parsing JSON bodies", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -626,7 +644,7 @@ describe("internal API token guard", () => {
   });
 
   it("guards internal root probes when a query string is present", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -647,7 +665,7 @@ describe("internal API token guard", () => {
   });
 
   it("guards percent-encoded internal route paths", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -686,7 +704,7 @@ describe("internal API token guard", () => {
   });
 
   it("accepts bearer authorization scheme case-insensitively", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -705,7 +723,7 @@ describe("internal API token guard", () => {
   });
 
   it("rejects malformed bearer credentials for internal routes", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       internalApiToken: "operator-secret",
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -736,11 +754,11 @@ describe("internal API token guard", () => {
     });
   });
 
-  it("rejects configured internal API tokens that cannot be sent as one bearer credential", () => {
+  it("rejects configured internal API tokens that cannot be sent as one bearer credential", async () => {
     const invalidTokens = ["operator secret", "operator\tsecret", "operator,secret"];
 
     for (const internalApiToken of invalidTokens) {
-      expect(() =>
+      await expect(
         buildApp({
           internalApiToken,
           createAnswerDraftRuntime: () => undefined,
@@ -748,17 +766,17 @@ describe("internal API token guard", () => {
           createDocumentSyncRuntime: () => undefined,
           createReindexWorkerRuntime: () => undefined,
         }),
-      ).toThrow("IRIS_INTERNAL_API_TOKEN must be a single bearer token");
+      ).rejects.toThrow("IRIS_INTERNAL_API_TOKEN must be a single bearer token");
     }
   });
 
-  it("rejects an invalid configured token before creating runtime resources", () => {
+  it("rejects an invalid configured token before creating runtime resources", async () => {
     const createAnswerDraftRuntime = vi.fn(() => undefined);
     const createEventWorkerRuntime = vi.fn(() => undefined);
     const createDocumentSyncRuntime = vi.fn(() => undefined);
     const createReindexWorkerRuntime = vi.fn(() => undefined);
 
-    expect(() =>
+    await expect(
       buildApp({
         internalApiToken: "operator secret",
         createAnswerDraftRuntime,
@@ -766,7 +784,7 @@ describe("internal API token guard", () => {
         createDocumentSyncRuntime,
         createReindexWorkerRuntime,
       }),
-    ).toThrow("IRIS_INTERNAL_API_TOKEN must be a single bearer token");
+    ).rejects.toThrow("IRIS_INTERNAL_API_TOKEN must be a single bearer token");
 
     expect(createAnswerDraftRuntime).not.toHaveBeenCalled();
     expect(createEventWorkerRuntime).not.toHaveBeenCalled();
@@ -793,7 +811,7 @@ describe("GET /internal/audit/status", () => {
       documentId: "source-3",
       fragmentIds: ["fragment-3"],
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -836,6 +854,9 @@ describe("GET /internal/status", () => {
         mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
         pendingEventCount: 3,
         deadLetterEventCount: 1,
+        answerReplyUnresolvedCount: 2,
+        answerReplyPendingSafeNoticeCount: 1,
+        answerReplyReconciliationRequiredCount: 1,
       })),
     });
     const documentSyncRuntime = fakeDocumentSyncRuntime({
@@ -859,7 +880,7 @@ describe("GET /internal/status", () => {
         deadLetterJobCount: 0,
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       now: () => generatedAt,
       createAnswerDraftRuntime: () => undefined,
@@ -883,26 +904,36 @@ describe("GET /internal/status", () => {
         "audit",
         "runtimeControl",
         "answerDraft",
+        "agentExecutionLedger",
         "feishuGateway",
+        "memoryExtraction",
         "eventWorker",
         "documentSync",
         "reindex",
+        "actionApprovals",
+        "proactiveSignals",
       ],
       summary: {
-        componentCount: 7,
+        componentCount: 11,
         healthyComponentCount: 3,
         degradedComponentCount: 3,
         degradedComponents: ["eventWorker", "documentSync", "reindex"],
         enabledComponentCount: 6,
-        disabledComponentCount: 1,
-        disabledComponents: ["answerDraft"],
+        disabledComponentCount: 5,
+        disabledComponents: [
+          "answerDraft",
+          "agentExecutionLedger",
+          "memoryExtraction",
+          "actionApprovals",
+          "proactiveSignals",
+        ],
         enabledRuntimeComponentCount: 3,
         runningEnabledRuntimeComponentCount: 2,
         stoppedEnabledRuntimeComponentCount: 1,
         stoppedEnabledRuntimeComponents: ["reindex"],
         componentStatusCounts: {
           healthy: 3,
-          disabled: 1,
+          disabled: 5,
           degraded: 2,
           stopped: 1,
         },
@@ -911,8 +942,12 @@ describe("GET /internal/status", () => {
           { name: "documentSync", status: "degraded" },
           { name: "reindex", status: "stopped" },
           { name: "answerDraft", status: "disabled" },
+          { name: "agentExecutionLedger", status: "disabled" },
+          { name: "memoryExtraction", status: "disabled" },
+          { name: "actionApprovals", status: "disabled" },
+          { name: "proactiveSignals", status: "disabled" },
         ],
-        attentionComponentCount: 4,
+        attentionComponentCount: 8,
         requiresOperatorAttention: true,
         primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
         attentionSeverity: "critical",
@@ -934,6 +969,8 @@ describe("GET /internal/status", () => {
           ok: true,
           enabled: true,
           globalEnabled: true,
+          desiredGlobalEnabled: true,
+          activationRequired: false,
           disabledGroupIds: [],
           disabledGroupCount: 0,
           capabilities: {
@@ -946,17 +983,35 @@ describe("GET /internal/status", () => {
             writeKnowledgeBase: false,
             callExternalTools: false,
           },
+          revision: 0,
+          updatedAt: expect.any(String),
+          persistence: {
+            storage: "in_memory",
+            ok: true,
+          },
         },
         answerDraft: {
           status: "disabled",
           ok: true,
           enabled: false,
         },
+        agentExecutionLedger: {
+          status: "disabled",
+          ok: true,
+          enabled: false,
+          writeFailureCount: 0,
+        },
         feishuGateway: {
           status: "healthy",
           ok: true,
           enabled: true,
           enqueueFailureCount: 0,
+        },
+        memoryExtraction: {
+          status: "disabled",
+          ok: true,
+          enabled: false,
+          running: false,
         },
         eventWorker: {
           status: "degraded",
@@ -969,6 +1024,9 @@ describe("GET /internal/status", () => {
           mentionRepliesUnavailableReason: "missing_bot_open_id",
           pendingEventCount: 3,
           deadLetterEventCount: 1,
+          answerReplyUnresolvedCount: 2,
+          answerReplyPendingSafeNoticeCount: 1,
+          answerReplyReconciliationRequiredCount: 1,
           degradedReason: "dead_letters_present",
         },
         documentSync: {
@@ -992,6 +1050,18 @@ describe("GET /internal/status", () => {
           batchLimit: 25,
           pendingJobCount: 5,
           deadLetterJobCount: 0,
+        },
+        actionApprovals: {
+          status: "disabled",
+          ok: true,
+          enabled: false,
+          running: false,
+        },
+        proactiveSignals: {
+          status: "disabled",
+          ok: true,
+          enabled: false,
+          running: false,
         },
       },
     });
@@ -1021,7 +1091,7 @@ describe("GET /internal/status", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
@@ -1076,6 +1146,9 @@ describe("GET /internal/status", () => {
         mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
         pendingEventCount: 2,
         deadLetterEventCount: 0,
+        answerReplyUnresolvedCount: 0,
+        answerReplyPendingSafeNoticeCount: 0,
+        answerReplyReconciliationRequiredCount: 0,
         latestBatch: {
           status: "failed" as const,
           startedAt,
@@ -1127,7 +1200,7 @@ describe("GET /internal/status", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => documentSyncRuntime,
@@ -1220,6 +1293,9 @@ describe("GET /internal/status", () => {
         mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
         pendingEventCount: 2,
         deadLetterEventCount: 0,
+        answerReplyUnresolvedCount: 0,
+        answerReplyPendingSafeNoticeCount: 0,
+        answerReplyReconciliationRequiredCount: 0,
         latestBatch: {
           status: "succeeded" as const,
           startedAt,
@@ -1268,7 +1344,7 @@ describe("GET /internal/status", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => documentSyncRuntime,
@@ -1343,6 +1419,9 @@ describe("GET /internal/status", () => {
           mentionRepliesEnabled: true,
           pendingEventCount: 0,
           deadLetterEventCount: statusReadCount === 1 ? 1 : 0,
+          answerReplyUnresolvedCount: 0,
+          answerReplyPendingSafeNoticeCount: 0,
+          answerReplyReconciliationRequiredCount: 0,
           latestBatch: {
             status: "succeeded" as const,
             startedAt,
@@ -1354,7 +1433,7 @@ describe("GET /internal/status", () => {
         };
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => undefined,
@@ -1406,6 +1485,9 @@ describe("GET /internal/status", () => {
           mentionRepliesEnabled: true,
           pendingEventCount: 0,
           deadLetterEventCount: 0,
+          answerReplyUnresolvedCount: 0,
+          answerReplyPendingSafeNoticeCount: 0,
+          answerReplyReconciliationRequiredCount: 0,
         };
         if (statusReadCount === 1) {
           return {
@@ -1438,7 +1520,7 @@ describe("GET /internal/status", () => {
         return status;
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => undefined,
@@ -1491,9 +1573,12 @@ describe("GET /internal/status", () => {
         mentionRepliesUnavailableReason: "missing_bot_open_id" as const,
         pendingEventCount: 0,
         deadLetterEventCount: 0,
+        answerReplyUnresolvedCount: 0,
+        answerReplyPendingSafeNoticeCount: 0,
+        answerReplyReconciliationRequiredCount: 0,
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => undefined,
@@ -1517,6 +1602,9 @@ describe("GET /internal/status", () => {
       mentionRepliesUnavailableReason: "missing_bot_open_id",
       pendingEventCount: 0,
       deadLetterEventCount: 0,
+      answerReplyUnresolvedCount: 0,
+      answerReplyPendingSafeNoticeCount: 0,
+      answerReplyReconciliationRequiredCount: 0,
       degradedReason: "mention_replies_unavailable",
     });
     expect(response.json().summary.degradedComponents).toContain("eventWorker");
@@ -1543,7 +1631,7 @@ describe("GET /internal/status", () => {
         deadLetterJobCount: 2,
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createEventWorkerRuntime: () => eventWorkerRuntime,
       createDocumentSyncRuntime: () => documentSyncRuntime,
@@ -1559,20 +1647,27 @@ describe("GET /internal/status", () => {
     expect(response.json().ok).toBe(false);
     expect(response.json().status).toBe("degraded");
     expect(response.json().summary).toEqual({
-      componentCount: 7,
+      componentCount: 11,
       healthyComponentCount: 3,
       degradedComponentCount: 2,
       degradedComponents: ["eventWorker", "documentSync"],
       enabledComponentCount: 5,
-      disabledComponentCount: 2,
-      disabledComponents: ["answerDraft", "reindex"],
+      disabledComponentCount: 6,
+      disabledComponents: [
+        "answerDraft",
+        "agentExecutionLedger",
+        "memoryExtraction",
+        "reindex",
+        "actionApprovals",
+        "proactiveSignals",
+      ],
       enabledRuntimeComponentCount: 2,
       runningEnabledRuntimeComponentCount: 1,
       stoppedEnabledRuntimeComponentCount: 1,
       stoppedEnabledRuntimeComponents: ["eventWorker"],
       componentStatusCounts: {
         healthy: 3,
-        disabled: 2,
+        disabled: 6,
         degraded: 2,
         stopped: 0,
       },
@@ -1580,9 +1675,13 @@ describe("GET /internal/status", () => {
         { name: "eventWorker", status: "degraded" },
         { name: "documentSync", status: "degraded" },
         { name: "answerDraft", status: "disabled" },
+        { name: "agentExecutionLedger", status: "disabled" },
+        { name: "memoryExtraction", status: "disabled" },
         { name: "reindex", status: "disabled" },
+        { name: "actionApprovals", status: "disabled" },
+        { name: "proactiveSignals", status: "disabled" },
       ],
-      attentionComponentCount: 4,
+      attentionComponentCount: 8,
       requiresOperatorAttention: true,
       primaryAttentionComponent: { name: "eventWorker", status: "degraded" },
       attentionSeverity: "critical",
@@ -1620,7 +1719,7 @@ describe("GET /internal/status", () => {
         throw new Error("redis unavailable");
       }),
     };
-    const app = buildApp({
+    const app = await buildApp({
       rawEventQueue,
       now: () => generatedAt,
       createAnswerDraftRuntime: () => undefined,
@@ -1667,6 +1766,73 @@ describe("GET /internal/status", () => {
     expect(statusResponse.json().summary.attentionSeverity).toBe("critical");
   });
 
+  it("decrypts signed Feishu event callbacks before enqueueing raw message events", async () => {
+    const restoreVerificationToken = isolateEnvVar("FEISHU_VERIFICATION_TOKEN");
+    const restoreEncryptKey = isolateEnvVar("FEISHU_ENCRYPT_KEY");
+    process.env.FEISHU_VERIFICATION_TOKEN = "event-verification-token";
+    process.env.FEISHU_ENCRYPT_KEY = "event-encrypt-key";
+    const rawEventQueue = {
+      enqueue: vi.fn(async () => undefined),
+    };
+    const app = await buildApp({
+      rawEventQueue,
+      now: () => new Date("2026-07-26T06:00:00.000Z"),
+      createAnswerDraftRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+    });
+    const payload = {
+      schema: "2.0",
+      token: "event-verification-token",
+      header: {
+        event_id: "event-encrypted-message",
+        event_type: "im.message.receive_v1",
+      },
+      event: {
+        message: {
+          message_id: "om_encrypted_real_message",
+          chat_id: "oc_637a9aca45f01943477f4e17f1fc5b9a",
+          message_type: "text",
+          content: "{\"text\":\"@Iris 客户反馈看板上线讨论现在是什么状态？\"}",
+        },
+      },
+    };
+    const body = { encrypt: encryptFeishuPayload(payload, "event-encrypt-key") };
+    const rawBody = JSON.stringify(body);
+    const timestamp = String(Math.floor(Date.now() / 1_000));
+    const nonce = "event-nonce";
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/feishu/events",
+        headers: {
+          "content-type": "application/json",
+          "x-lark-request-timestamp": timestamp,
+          "x-lark-request-nonce": nonce,
+          "x-lark-signature": signFeishuEvent(timestamp, nonce, "event-encrypt-key", rawBody),
+        },
+        payload: rawBody,
+      });
+      await flushDeferredEnqueue();
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true });
+      expect(rawEventQueue.enqueue).toHaveBeenCalledWith({
+        idempotencyKey: "raw-event:feishu:event-encrypted-message",
+        provider: "feishu",
+        eventType: "im.message.receive_v1",
+        rawBody: payload,
+        receivedAt: expect.any(Date),
+        attempts: 0,
+      });
+    } finally {
+      restoreVerificationToken();
+      restoreEncryptKey();
+    }
+  });
+
   it("bounds Feishu gateway enqueue failure messages in the consolidated status", async () => {
     const generatedAt = new Date("2026-07-03T09:05:00.000Z");
     const oversizedMessage = `${"E".repeat(1200)} trailing diagnostic detail`;
@@ -1675,7 +1841,7 @@ describe("GET /internal/status", () => {
         throw new Error(oversizedMessage);
       }),
     };
-    const app = buildApp({
+    const app = await buildApp({
       rawEventQueue,
       now: () => generatedAt,
       createAnswerDraftRuntime: () => undefined,
@@ -1736,7 +1902,7 @@ describe("GET /internal/audit/events", () => {
       fragmentIds: ["fragment-new"],
       message: "registry unavailable",
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -1777,7 +1943,7 @@ describe("GET /internal/audit/events", () => {
   });
 
   it("rejects invalid audit event limits", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
     });
 
@@ -1805,7 +1971,7 @@ describe("GET /internal/audit/events", () => {
       documentId: "source-1",
       fragmentIds: ["fragment-1"],
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -1848,7 +2014,7 @@ describe("GET /internal/audit/events", () => {
       documentId: "source-3",
       fragmentIds: ["fragment-3"],
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -1889,7 +2055,7 @@ describe("GET /internal/audit/events", () => {
       documentId: "source-2",
       fragmentIds: ["fragment-3"],
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -1954,7 +2120,7 @@ describe("GET /internal/audit/events", () => {
       enabled: false,
       previousEnabled: true,
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -1991,7 +2157,7 @@ describe("GET /internal/audit/events", () => {
   });
 
   it("rejects invalid audit event filters", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
     });
 
@@ -2038,7 +2204,7 @@ describe("GET /internal/audit/events/summary", () => {
       documentId: "source-1",
       fragmentIds: ["fragment-1", "fragment-3"],
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -2082,7 +2248,7 @@ describe("GET /internal/audit/events/summary", () => {
   });
 
   it("rejects invalid audit summary limits", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
     });
 
@@ -2102,7 +2268,7 @@ describe("GET /internal/audit/events/summary", () => {
       documentId: "source-1",
       fragmentIds: ["fragment-1"],
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -2147,7 +2313,7 @@ describe("GET /internal/audit/events/summary", () => {
       documentId: "source-2",
       fragmentIds: ["fragment-3"],
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -2214,7 +2380,7 @@ describe("GET /internal/audit/events/summary", () => {
       enabled: false,
       previousEnabled: true,
     });
-    const app = buildApp({
+    const app = await buildApp({
       auditLog,
       createAnswerDraftRuntime: () => undefined,
     });
@@ -2253,7 +2419,7 @@ describe("GET /internal/audit/events/summary", () => {
   });
 
   it("rejects invalid audit summary filters", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
     });
 
@@ -2269,7 +2435,7 @@ describe("GET /internal/audit/events/summary", () => {
 
 describe("POST /internal/reindex/document-profile", () => {
   it("returns 503 when reindex runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
     });
@@ -2288,7 +2454,7 @@ describe("POST /internal/reindex/document-profile", () => {
   });
 
   it("returns 400 for invalid reindex requests", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => fakeReindexRuntime(),
     });
@@ -2305,7 +2471,7 @@ describe("POST /internal/reindex/document-profile", () => {
 
   it("rejects unsafe integer reindex request limits", async () => {
     const runtime = fakeReindexRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2326,7 +2492,7 @@ describe("POST /internal/reindex/document-profile", () => {
 
   it("rejects oversized reindex request limits before planning jobs", async () => {
     const runtime = fakeReindexRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2346,7 +2512,7 @@ describe("POST /internal/reindex/document-profile", () => {
   });
 
   it("rejects profile ids that do not match the active runtime profile", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => fakeReindexRuntime(),
     });
@@ -2363,7 +2529,7 @@ describe("POST /internal/reindex/document-profile", () => {
 
   it("plans document profile reindex jobs", async () => {
     const runtime = fakeReindexRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2393,7 +2559,7 @@ describe("POST /internal/reindex/document-profile", () => {
         }),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2414,7 +2580,7 @@ describe("POST /internal/reindex/document-profile", () => {
 
 describe("GET /internal/reindex/status", () => {
   it("returns disabled status when reindex runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
     });
@@ -2449,7 +2615,7 @@ describe("GET /internal/reindex/status", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2487,7 +2653,7 @@ describe("GET /internal/reindex/status", () => {
         throw new Error("redis unavailable");
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2504,7 +2670,7 @@ describe("GET /internal/reindex/status", () => {
 
 describe("reindex dead-letter API", () => {
   it("returns 503 when reindex runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
     });
@@ -2542,7 +2708,7 @@ describe("reindex dead-letter API", () => {
         replayBatch: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2576,7 +2742,7 @@ describe("reindex dead-letter API", () => {
   });
 
   it("rejects invalid dead-letter list limits", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => fakeReindexRuntime(),
     });
@@ -2592,7 +2758,7 @@ describe("reindex dead-letter API", () => {
 
   it("rejects non-decimal dead-letter list limits", async () => {
     const runtime = fakeReindexRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2609,7 +2775,7 @@ describe("reindex dead-letter API", () => {
 
   it("rejects unsafe dead-letter list limits", async () => {
     const runtime = fakeReindexRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2633,7 +2799,7 @@ describe("reindex dead-letter API", () => {
         replayBatch: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2657,7 +2823,7 @@ describe("reindex dead-letter API", () => {
         replayBatch: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2685,7 +2851,7 @@ describe("reindex dead-letter API", () => {
         })),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2709,7 +2875,7 @@ describe("reindex dead-letter API", () => {
   });
 
   it("rejects invalid batch replay requests", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => fakeReindexRuntime(),
     });
@@ -2735,7 +2901,7 @@ describe("reindex dead-letter API", () => {
         replayBatch: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => runtime,
     });
@@ -2755,7 +2921,7 @@ describe("reindex dead-letter API", () => {
 
 describe("GET /internal/events/status", () => {
   it("returns disabled status when event runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -2780,6 +2946,9 @@ describe("GET /internal/events/status", () => {
         mentionRepliesEnabled: true,
         pendingEventCount: 7,
         deadLetterEventCount: 2,
+        answerReplyUnresolvedCount: 3,
+        answerReplyPendingSafeNoticeCount: 1,
+        answerReplyReconciliationRequiredCount: 1,
         latestBatch: {
           status: "succeeded" as const,
           startedAt: new Date("2026-07-02T01:00:00.000Z"),
@@ -2790,7 +2959,7 @@ describe("GET /internal/events/status", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => runtime,
@@ -2811,6 +2980,9 @@ describe("GET /internal/events/status", () => {
       mentionRepliesEnabled: true,
       pendingEventCount: 7,
       deadLetterEventCount: 2,
+      answerReplyUnresolvedCount: 3,
+      answerReplyPendingSafeNoticeCount: 1,
+      answerReplyReconciliationRequiredCount: 1,
       latestBatch: {
         status: "succeeded",
         startedAt: "2026-07-02T01:00:00.000Z",
@@ -2828,7 +3000,7 @@ describe("GET /internal/events/status", () => {
         throw new Error("redis unavailable");
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => runtime,
@@ -2846,7 +3018,7 @@ describe("GET /internal/events/status", () => {
 
 describe("event worker dead-letter API", () => {
   it("returns 503 when event runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -2882,7 +3054,7 @@ describe("event worker dead-letter API", () => {
         })),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => runtime,
@@ -2918,7 +3090,7 @@ describe("event worker dead-letter API", () => {
 
   it("rejects invalid event dead-letter list limits", async () => {
     const runtime = fakeEventRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => runtime,
@@ -2947,7 +3119,7 @@ describe("event worker dead-letter API", () => {
         })),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => runtime,
@@ -2983,7 +3155,7 @@ describe("event worker dead-letter API", () => {
         })),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => runtime,
@@ -3022,7 +3194,7 @@ describe("event worker dead-letter API", () => {
         })),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => runtime,
@@ -3043,7 +3215,7 @@ describe("event worker dead-letter API", () => {
 
 describe("GET /internal/document-sync/status", () => {
   it("returns disabled status when document sync runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -3078,7 +3250,7 @@ describe("GET /internal/document-sync/status", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -3116,7 +3288,7 @@ describe("GET /internal/document-sync/status", () => {
         throw new Error("redis unavailable");
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createReindexWorkerRuntime: () => undefined,
       createEventWorkerRuntime: () => undefined,
@@ -3135,7 +3307,7 @@ describe("GET /internal/document-sync/status", () => {
 
 describe("document sync source inventory API", () => {
   it("returns 503 when listing sources without document sync runtime", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
     });
@@ -3161,7 +3333,7 @@ describe("document sync source inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3236,7 +3408,7 @@ describe("document sync source inventory API", () => {
         ])),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3292,7 +3464,7 @@ describe("document sync source inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3323,7 +3495,7 @@ describe("document sync source inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3357,7 +3529,7 @@ describe("document sync source inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3377,7 +3549,7 @@ describe("document sync source inventory API", () => {
   });
 
   it("rejects source inventory requests with multiple filters", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -3393,7 +3565,7 @@ describe("document sync source inventory API", () => {
 
   it("rejects oversized source inventory filter IDs before runtime lookup", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3409,7 +3581,7 @@ describe("document sync source inventory API", () => {
   });
 
   it("rejects invalid source inventory list limits", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -3425,7 +3597,7 @@ describe("document sync source inventory API", () => {
 
   it("rejects unsafe source inventory list limits", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3442,7 +3614,7 @@ describe("document sync source inventory API", () => {
 
   it("rejects non-decimal source inventory list limits", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3458,7 +3630,7 @@ describe("document sync source inventory API", () => {
   });
 
   it("rejects blank source inventory list limits", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -3484,7 +3656,7 @@ describe("document sync source inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3501,7 +3673,7 @@ describe("document sync source inventory API", () => {
   });
 
   it("rejects invalid source inventory latest snapshot flags", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -3527,7 +3699,7 @@ describe("document sync source inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3581,7 +3753,7 @@ describe("document sync source inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3628,7 +3800,7 @@ describe("document sync source inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3645,7 +3817,7 @@ describe("document sync source inventory API", () => {
   });
 
   it("rejects invalid source detail latest snapshot flags", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -3660,7 +3832,7 @@ describe("document sync source inventory API", () => {
   });
 
   it("returns 404 for unknown document source ids", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -3688,7 +3860,7 @@ describe("document sync source inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3705,7 +3877,7 @@ describe("document sync source inventory API", () => {
 
 describe("document sync source policy API", () => {
   it("returns 503 when updating source policy without document sync runtime", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
     });
@@ -3737,7 +3909,7 @@ describe("document sync source policy API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3777,7 +3949,7 @@ describe("document sync source policy API", () => {
   });
 
   it("returns 404 when updating policy for an unknown source", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -3793,7 +3965,7 @@ describe("document sync source policy API", () => {
   });
 
   it("rejects invalid source policy update requests", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -3822,7 +3994,7 @@ describe("document sync source policy API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3840,7 +4012,7 @@ describe("document sync source policy API", () => {
 
 describe("document sync source snapshot inventory API", () => {
   it("returns 503 when listing source snapshots without document sync runtime", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
     });
@@ -3891,7 +4063,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -3954,7 +4126,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4010,7 +4182,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4052,7 +4224,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4093,7 +4265,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4146,7 +4318,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4166,7 +4338,7 @@ describe("document sync source snapshot inventory API", () => {
   });
 
   it("returns 404 when the latest source snapshot is missing", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4184,7 +4356,7 @@ describe("document sync source snapshot inventory API", () => {
   });
 
   it("rejects invalid latest source snapshot preview lengths", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4212,7 +4384,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4230,7 +4402,7 @@ describe("document sync source snapshot inventory API", () => {
   });
 
   it("returns 503 when reading a source snapshot without document sync runtime", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
     });
@@ -4245,7 +4417,7 @@ describe("document sync source snapshot inventory API", () => {
   });
 
   it("returns 404 when reading an unknown source snapshot", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4263,7 +4435,7 @@ describe("document sync source snapshot inventory API", () => {
   });
 
   it("rejects invalid source snapshot detail ids", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4278,7 +4450,7 @@ describe("document sync source snapshot inventory API", () => {
   });
 
   it("rejects invalid source snapshot preview lengths", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4306,7 +4478,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4324,7 +4496,7 @@ describe("document sync source snapshot inventory API", () => {
   });
 
   it("returns 404 when listing snapshots for an unknown source", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4339,7 +4511,7 @@ describe("document sync source snapshot inventory API", () => {
   });
 
   it("rejects invalid source snapshot list limits", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4367,7 +4539,7 @@ describe("document sync source snapshot inventory API", () => {
         getLatestSnapshots: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4387,7 +4559,7 @@ describe("document sync source snapshot inventory API", () => {
 
 describe("document sync dead-letter API", () => {
   it("returns 503 when document sync runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
     });
@@ -4424,7 +4596,7 @@ describe("document sync dead-letter API", () => {
         replayBatch: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4457,7 +4629,7 @@ describe("document sync dead-letter API", () => {
   });
 
   it("rejects invalid document sync dead-letter list limits", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4480,7 +4652,7 @@ describe("document sync dead-letter API", () => {
         replayBatch: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4504,7 +4676,7 @@ describe("document sync dead-letter API", () => {
         replayBatch: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4532,7 +4704,7 @@ describe("document sync dead-letter API", () => {
         })),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4556,7 +4728,7 @@ describe("document sync dead-letter API", () => {
   });
 
   it("rejects invalid document sync batch replay requests", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4582,7 +4754,7 @@ describe("document sync dead-letter API", () => {
         replayBatch: vi.fn(),
       },
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4602,7 +4774,7 @@ describe("document sync dead-letter API", () => {
 
 describe("document sync manual enqueue API", () => {
   it("returns 503 when document sync runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
     });
@@ -4623,7 +4795,7 @@ describe("document sync manual enqueue API", () => {
         documentSourceId: "source-1",
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4649,7 +4821,7 @@ describe("document sync manual enqueue API", () => {
         documentSourceId: "missing",
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4668,7 +4840,7 @@ describe("document sync manual enqueue API", () => {
   });
 
   it("rejects blank manual enqueue source ids", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4688,7 +4860,7 @@ describe("document sync manual enqueue API", () => {
         throw new Error("redis unavailable");
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4705,7 +4877,7 @@ describe("document sync manual enqueue API", () => {
 
 describe("authorized wiki document registration API", () => {
   it("returns 503 when document sync runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
     });
@@ -4734,7 +4906,7 @@ describe("authorized wiki document registration API", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
       now: () => observedAt,
@@ -4790,7 +4962,7 @@ describe("authorized wiki document registration API", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4822,7 +4994,7 @@ describe("authorized wiki document registration API", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4845,7 +5017,7 @@ describe("authorized wiki document registration API", () => {
   });
 
   it("rejects invalid authorized wiki document requests", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -4865,7 +5037,7 @@ describe("authorized wiki document registration API", () => {
 
   it("rejects oversized authorized wiki document titles before registration", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4887,7 +5059,7 @@ describe("authorized wiki document registration API", () => {
 
   it("rejects unsupported authorized wiki document URLs before registration", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4908,7 +5080,7 @@ describe("authorized wiki document registration API", () => {
 
   it("rejects authorized wiki document URLs with embedded credentials", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4929,7 +5101,7 @@ describe("authorized wiki document registration API", () => {
 
   it("rejects non-HTTPS authorized wiki document URLs before registration", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4950,7 +5122,7 @@ describe("authorized wiki document registration API", () => {
 
   it("rejects comma-contaminated authorized wiki document URLs before registration", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4971,7 +5143,7 @@ describe("authorized wiki document registration API", () => {
 
   it("rejects encoded-separator authorized wiki document URLs before registration", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -4996,7 +5168,7 @@ describe("authorized wiki document registration API", () => {
         throw new Error("database unavailable");
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -5020,7 +5192,7 @@ describe("authorized wiki document registration API", () => {
 
 describe("user submitted document registration API", () => {
   it("returns 503 when document sync runtime is unavailable", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => undefined,
     });
@@ -5049,7 +5221,7 @@ describe("user submitted document registration API", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
       now: () => observedAt,
@@ -5105,7 +5277,7 @@ describe("user submitted document registration API", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -5137,7 +5309,7 @@ describe("user submitted document registration API", () => {
         },
       })),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -5162,7 +5334,7 @@ describe("user submitted document registration API", () => {
   });
 
   it("rejects invalid user submitted document requests", async () => {
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => fakeDocumentSyncRuntime(),
     });
@@ -5182,7 +5354,7 @@ describe("user submitted document registration API", () => {
 
   it("rejects unsupported user submitted document URLs before registration", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -5203,7 +5375,7 @@ describe("user submitted document registration API", () => {
 
   it("rejects non-HTTPS user submitted document URLs before registration", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -5224,7 +5396,7 @@ describe("user submitted document registration API", () => {
 
   it("rejects comma-contaminated user submitted document URLs before registration", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -5245,7 +5417,7 @@ describe("user submitted document registration API", () => {
 
   it("rejects encoded-separator user submitted document URLs before registration", async () => {
     const runtime = fakeDocumentSyncRuntime();
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -5270,7 +5442,7 @@ describe("user submitted document registration API", () => {
         throw new Error("database unavailable");
       }),
     });
-    const app = buildApp({
+    const app = await buildApp({
       createAnswerDraftRuntime: () => undefined,
       createDocumentSyncRuntime: () => runtime,
     });
@@ -5346,6 +5518,9 @@ function fakeEventRuntime(overrides: Partial<EventWorkerRuntime> = {}): EventWor
       mentionRepliesEnabled: false,
       pendingEventCount: 0,
       deadLetterEventCount: 0,
+      answerReplyUnresolvedCount: 0,
+      answerReplyPendingSafeNoticeCount: 0,
+      answerReplyReconciliationRequiredCount: 0,
     })),
     start: vi.fn(),
     close: vi.fn(async () => undefined),
@@ -5414,6 +5589,29 @@ function fakeDocumentSyncRuntime(
         documentSourceId: "user-source-1",
       },
     })),
+    wikiSpaces: {
+      register: vi.fn(async ({ rootSourceUri, at }) => ({
+        authorization: {
+          id: "wiki-space-authorization-1",
+          rootSourceUri,
+          rootNodeToken: "root-node",
+          enabled: true,
+          scanState: "pending" as const,
+          attemptCount: 0,
+          nextScanAt: at,
+          discoveredNodeCount: 0,
+          registeredDocumentCount: 0,
+          skippedNodeCount: 0,
+          revision: 1,
+          createdAt: at,
+          updatedAt: at,
+        },
+        created: true,
+      })),
+      list: vi.fn(async () => []),
+      requestScan: vi.fn(async () => undefined),
+      setEnabled: vi.fn(async () => undefined),
+    },
     start: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,
@@ -5465,4 +5663,23 @@ async function flushDeferredEnqueue(): Promise<void> {
     setTimeout(resolve, 0);
   });
   await Promise.resolve();
+}
+
+function encryptFeishuPayload(payload: unknown, encryptKey: string): string {
+  const iv = Buffer.alloc(16, 1);
+  const cipher = createCipheriv("aes-256-cbc", createHash("sha256").update(encryptKey).digest(), iv);
+  return Buffer.concat([
+    iv,
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]).toString("base64");
+}
+
+function signFeishuEvent(
+  timestamp: string,
+  nonce: string,
+  encryptKey: string,
+  rawBody: string,
+): string {
+  return createHash("sha256").update(timestamp + nonce + encryptKey + rawBody).digest("hex");
 }

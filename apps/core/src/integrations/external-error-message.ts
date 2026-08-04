@@ -7,23 +7,57 @@ export function readExternalErrorMessage(responseBody: unknown): string {
     return "unknown error";
   }
 
-  return truncateExternalErrorMessage(message);
+  return truncateExternalErrorMessage(redactExternalErrorSecrets(message));
 }
 
 function readMessageCandidate(responseBody: unknown): string | undefined {
-  if (!isRecord(responseBody)) {
+  if (Array.isArray(responseBody)) {
+    for (const entry of responseBody) {
+      const message = readRecordMessageCandidate(entry)?.trim();
+      if (message !== undefined && message.length > 0) {
+        return message;
+      }
+    }
     return undefined;
   }
 
-  if (isRecord(responseBody.error) && typeof responseBody.error.message === "string") {
-    return responseBody.error.message;
+  return readRecordMessageCandidate(responseBody);
+}
+
+function readRecordMessageCandidate(responseBody: unknown): string | undefined {
+  if (!isRecord(responseBody) || Array.isArray(responseBody)) {
+    return undefined;
   }
 
-  if (typeof responseBody.msg === "string") {
-    return responseBody.msg;
+  if (isRecord(responseBody.error)) {
+    const nestedMessage = readNonBlankString(responseBody.error.message);
+    if (nestedMessage !== undefined) {
+      return nestedMessage;
+    }
   }
 
-  return typeof responseBody.message === "string" ? responseBody.message : undefined;
+  const feishuMessage = readNonBlankString(responseBody.msg);
+  if (feishuMessage !== undefined) {
+    return feishuMessage;
+  }
+
+  return readNonBlankString(responseBody.message);
+}
+
+function readNonBlankString(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+  return value;
+}
+
+function redactExternalErrorSecrets(message: string): string {
+  return message
+    .replace(/\b(Bearer)\s+[^\s,;]+/giu, "$1 [redacted]")
+    .replace(
+      /\b(api[-_ ]?key|access[-_ ]?token|secret)\s*([:=])\s*[^\s,;]+/giu,
+      "$1$2[redacted]",
+    );
 }
 
 function truncateExternalErrorMessage(message: string): string {

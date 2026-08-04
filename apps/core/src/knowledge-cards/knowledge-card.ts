@@ -1,0 +1,308 @@
+import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/knowledge-draft.js";
+
+export const KNOWLEDGE_CARD_ACTIONS = ["confirm", "request_revision", "reject"] as const;
+export const ACTION_PROPOSAL_CARD_ACTIONS = ["approve", "request_revision", "reject"] as const;
+export const PROACTIVE_SIGNAL_FEEDBACK_ACTIONS = ["helpful", "irrelevant"] as const;
+export const APPROVAL_INTERACTION_KINDS = [
+  "knowledge_draft_confirmation",
+  "action_proposal_approval",
+  "proactive_signal_feedback",
+] as const;
+export const KNOWLEDGE_CARD_PRESENTATION_STATES = [
+  "pending_send",
+  "active",
+  "superseded",
+  "closed",
+  "send_failed",
+] as const;
+export const KNOWLEDGE_CARD_REASON_MAX_CHARS = 2_000;
+export const KNOWLEDGE_CARD_BODY_MAX_CODE_POINTS = 8_000;
+export const KNOWLEDGE_CARD_JSON_MAX_BYTES = 24 * 1024;
+export const KNOWLEDGE_CARD_MAX_COMPONENTS = 100;
+
+export type KnowledgeCardAction = (typeof KNOWLEDGE_CARD_ACTIONS)[number];
+export type ActionProposalCardAction = (typeof ACTION_PROPOSAL_CARD_ACTIONS)[number];
+export type ProactiveSignalFeedbackAction = (typeof PROACTIVE_SIGNAL_FEEDBACK_ACTIONS)[number];
+export type ApprovalInteractionKind = (typeof APPROVAL_INTERACTION_KINDS)[number];
+export type KnowledgeCardPresentationState = (typeof KNOWLEDGE_CARD_PRESENTATION_STATES)[number];
+
+export type ApprovalInteractionJobCommon = {
+  idempotencyKey: string;
+  eventId: string;
+  appId: string;
+  actorOpenId: string;
+  chatId: string;
+  messageId?: string;
+  presentationId: string;
+  intentId?: string;
+  receivedAt: Date;
+  attempts: number;
+};
+
+export type KnowledgeDraftConfirmationInteractionJob = ApprovalInteractionJobCommon & {
+  kind: "knowledge_draft_confirmation";
+  draftId: string;
+  revisionNumber: number;
+  draftVersion: number;
+  action: KnowledgeCardAction;
+};
+
+export type ActionProposalApprovalInteractionJob = ApprovalInteractionJobCommon & {
+  kind: "action_proposal_approval";
+  proposalId: string;
+  requirementId: string;
+  proposalVersion: number;
+  subjectRevision: number;
+  subjectVersion: number;
+  targetPolicyVersion: number;
+  action: ActionProposalCardAction;
+};
+
+export type ProactiveSignalFeedbackInteractionJob = ApprovalInteractionJobCommon & {
+  kind: "proactive_signal_feedback";
+  deliveryId: string;
+  candidateIdempotencyKey: string;
+  entityVersion: number;
+  action: ProactiveSignalFeedbackAction;
+};
+
+export type ApprovalInteractionJob =
+  | KnowledgeDraftConfirmationInteractionJob
+  | ActionProposalApprovalInteractionJob
+  | ProactiveSignalFeedbackInteractionJob;
+
+export type ApprovalInteractionIntentIdentity =
+  | Omit<KnowledgeDraftConfirmationInteractionJob, "intentId" | "receivedAt" | "attempts">
+  | Omit<ActionProposalApprovalInteractionJob, "intentId" | "receivedAt" | "attempts">
+  | Omit<ProactiveSignalFeedbackInteractionJob, "intentId" | "receivedAt" | "attempts">;
+
+export class KnowledgeCardValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KnowledgeCardValidationError";
+  }
+}
+
+export function normalizeApprovalInteractionJob(input: unknown): ApprovalInteractionJob {
+  if (!isRecord(input)) throw validationError("approval interaction job must be an object");
+  const kind = requireKind(input.kind);
+  const commonFields = [
+    "kind",
+    "idempotencyKey",
+    "eventId",
+    "appId",
+    "actorOpenId",
+    "chatId",
+    "messageId",
+    "presentationId",
+    "action",
+    "receivedAt",
+    "attempts",
+  ];
+  const intentCapableCommonFields = [...commonFields, "intentId"];
+  assertKnownFields(input, kind === "knowledge_draft_confirmation"
+    ? [...intentCapableCommonFields, "draftId", "revisionNumber", "draftVersion"]
+    : kind === "action_proposal_approval"
+      ? [
+        ...intentCapableCommonFields,
+        "proposalId",
+        "requirementId",
+        "proposalVersion",
+        "subjectRevision",
+        "subjectVersion",
+        "targetPolicyVersion",
+      ]
+      : [...commonFields, "deliveryId", "candidateIdempotencyKey", "entityVersion"]);
+
+  const action = requireAction(input.action, kind);
+  const intentId = kind === "proactive_signal_feedback"
+    ? undefined
+    : normalizeIntentId(input.intentId, action);
+  const common = {
+    kind,
+    idempotencyKey: requireReference("idempotencyKey", input.idempotencyKey),
+    eventId: requireReference("eventId", input.eventId),
+    appId: requireReference("appId", input.appId),
+    actorOpenId: requireReference("actorOpenId", input.actorOpenId),
+    chatId: requireReference("chatId", input.chatId),
+    ...(input.messageId === undefined
+      ? {}
+      : { messageId: requireReference("messageId", input.messageId) }),
+    presentationId: requireReference("presentationId", input.presentationId),
+    ...(intentId === undefined ? {} : { intentId }),
+    receivedAt: requireDate("receivedAt", input.receivedAt),
+    attempts: requireNonnegativeInteger("attempts", input.attempts),
+  };
+  if (kind === "knowledge_draft_confirmation") {
+    return {
+      ...common,
+      kind,
+      draftId: requireReference("draftId", input.draftId),
+      revisionNumber: requirePositiveInteger("revisionNumber", input.revisionNumber),
+      draftVersion: requirePositiveInteger("draftVersion", input.draftVersion),
+      action: action as KnowledgeCardAction,
+    };
+  }
+  if (kind === "proactive_signal_feedback") {
+    return {
+      ...common,
+      kind,
+      deliveryId: requireReference("deliveryId", input.deliveryId),
+      candidateIdempotencyKey: requireReference("candidateIdempotencyKey", input.candidateIdempotencyKey),
+      entityVersion: requirePositiveInteger("entityVersion", input.entityVersion),
+      action: action as ProactiveSignalFeedbackAction,
+    };
+  }
+  return {
+    ...common,
+    kind,
+    proposalId: requireReference("proposalId", input.proposalId),
+    requirementId: requireReference("requirementId", input.requirementId),
+    proposalVersion: requirePositiveInteger("proposalVersion", input.proposalVersion),
+    subjectRevision: requirePositiveInteger("subjectRevision", input.subjectRevision),
+    subjectVersion: requirePositiveInteger("subjectVersion", input.subjectVersion),
+    targetPolicyVersion: requirePositiveInteger("targetPolicyVersion", input.targetPolicyVersion),
+    action: action as ActionProposalCardAction,
+  };
+}
+
+export function normalizeApprovalInteractionIntentIdentity(
+  input: unknown,
+): ApprovalInteractionIntentIdentity {
+  if (!isRecord(input)) throw validationError("approval interaction intent must be an object");
+  const action = input.action;
+  const requiresIntent = action === "request_revision" || action === "reject";
+  const normalized = normalizeApprovalInteractionJob({
+    ...input,
+    ...(requiresIntent ? { intentId: "intent-validation-reference" } : {}),
+    receivedAt: new Date(0),
+    attempts: 0,
+  });
+  return toApprovalInteractionIntentIdentity(normalized);
+}
+
+export function toApprovalInteractionIntentIdentity(
+  job: ApprovalInteractionJob,
+): ApprovalInteractionIntentIdentity {
+  const common = {
+    kind: job.kind,
+    idempotencyKey: job.idempotencyKey,
+    eventId: job.eventId,
+    appId: job.appId,
+    actorOpenId: job.actorOpenId,
+    chatId: job.chatId,
+    ...(job.messageId === undefined ? {} : { messageId: job.messageId }),
+    presentationId: job.presentationId,
+    action: job.action,
+  };
+  if (job.kind === "knowledge_draft_confirmation") {
+    return {
+      ...common,
+      kind: job.kind,
+      draftId: job.draftId,
+      revisionNumber: job.revisionNumber,
+      draftVersion: job.draftVersion,
+      action: job.action,
+    };
+  }
+  if (job.kind === "proactive_signal_feedback") {
+    return {
+      ...common,
+      kind: job.kind,
+      deliveryId: job.deliveryId,
+      candidateIdempotencyKey: job.candidateIdempotencyKey,
+      entityVersion: job.entityVersion,
+      action: job.action,
+    };
+  }
+  return {
+    ...common,
+    kind: job.kind,
+    proposalId: job.proposalId,
+    requirementId: job.requirementId,
+    proposalVersion: job.proposalVersion,
+    subjectRevision: job.subjectRevision,
+    subjectVersion: job.subjectVersion,
+    targetPolicyVersion: job.targetPolicyVersion,
+    action: job.action,
+  };
+}
+
+function assertKnownFields(value: Record<string, unknown>, allowedFields: string[]): void {
+  for (const field of Object.keys(value)) {
+    if (!allowedFields.includes(field)) throw validationError(`unknown approval interaction field: ${field}`);
+  }
+}
+
+function requireKind(value: unknown): ApprovalInteractionKind {
+  if (!APPROVAL_INTERACTION_KINDS.includes(value as ApprovalInteractionKind)) {
+    throw validationError("kind is invalid");
+  }
+  return value as ApprovalInteractionKind;
+}
+
+function requireAction(
+  value: unknown,
+  kind: ApprovalInteractionKind,
+): KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction {
+  const actions = kind === "knowledge_draft_confirmation"
+    ? KNOWLEDGE_CARD_ACTIONS
+    : kind === "action_proposal_approval"
+      ? ACTION_PROPOSAL_CARD_ACTIONS
+      : PROACTIVE_SIGNAL_FEEDBACK_ACTIONS;
+  if (!(actions as readonly unknown[]).includes(value)) {
+    throw validationError("action is invalid");
+  }
+  return value as KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction;
+}
+
+function normalizeIntentId(
+  value: unknown,
+  action: KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction,
+): string | undefined {
+  if (action === "confirm" || action === "approve") {
+    if (value !== undefined) throw validationError("intentId is not allowed for this action");
+    return undefined;
+  }
+  return requireReference("intentId", value);
+}
+
+function requireReference(name: string, value: unknown): string {
+  if (typeof value !== "string") throw validationError(`${name} must be a string`);
+  const normalized = value.trim();
+  if (normalized.length < 1 || normalized.length > KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS) {
+    throw validationError(`${name} length is invalid`);
+  }
+  return normalized;
+}
+
+function requirePositiveInteger(name: string, value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    throw validationError(`${name} must be a safe positive integer`);
+  }
+  return Number(value);
+}
+
+function requireNonnegativeInteger(name: string, value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw validationError(`${name} must be a safe nonnegative integer`);
+  }
+  return Number(value);
+}
+
+function requireDate(name: string, value: unknown): Date {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return new Date(value);
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    if (Number.isFinite(parsed.getTime()) && parsed.toISOString() === value) return parsed;
+  }
+  throw validationError(`${name} must be a valid Date`);
+}
+
+function validationError(message: string): KnowledgeCardValidationError {
+  return new KnowledgeCardValidationError(message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

@@ -1,4 +1,8 @@
-import Fastify from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { installGracefulShutdown } from "./runtime/graceful-shutdown.js";
@@ -18,13 +22,21 @@ import {
   RuntimeController,
   type RuntimeCapabilityName
 } from "./admin/runtime-controller.js";
+import {
+  createInMemoryRuntimeControlService,
+  RuntimeControlInputError,
+  type RuntimeControlMutationResult,
+  type RuntimeControlService,
+  type RuntimeControlStatus,
+} from "./admin/runtime-control-service.js";
 import { normalizeInternalStatusErrorMessage } from "./admin/internal-status-error-message.js";
 import { createDefaultRuntimeConfig } from "./config/runtime-config.js";
-import { createFeishuRequestVerifier } from "./feishu/feishu-auth.js";
+import { createFeishuRequestVerifier, decodeFeishuPayload } from "./feishu/feishu-auth.js";
 import type { EventQueue } from "./queues/event-queue.js";
 import { InMemoryEventQueue } from "./queues/in-memory-event-queue.js";
 import type { RawEventQueue } from "./events/raw-event-queue.js";
 import type { AnswerDraftOrchestrator } from "./agent/answer-draft-orchestrator.js";
+import type { AnswerSourcePermissionVerifier } from "./answer-replies/answer-source-permission-verifier.js";
 import type { LiveChatMessage } from "./memory/context-assembly.js";
 import {
   createAnswerDraftRuntime as createDefaultAnswerDraftRuntime,
@@ -43,19 +55,103 @@ import {
   type DocumentSyncRuntime
 } from "./runtime/document-sync-runtime.js";
 import {
+  createMemoryExtractionRuntime,
+  type MemoryExtractionRuntime,
+  type MemoryExtractionRuntimeStatus,
+} from "./runtime/memory-extraction-runtime.js";
+import type {
+  MemoryExtractionDeadLetter,
+} from "./memory-extraction/memory-extraction-queue.js";
+import {
+  createRuntimeControlRuntime as createDefaultRuntimeControlRuntime,
+  type RuntimeControlRuntime,
+} from "./runtime/runtime-control-runtime.js";
+import {
   DOCUMENT_SOURCE_URI_MAX_CHARS,
   type DocumentSourceType,
 } from "./documents/document-source-registry.js";
 import type { DocumentSnapshot } from "./documents/document-snapshot-repository.js";
 import {
   normalizeFeishuDocumentSourceUri,
+  parseFeishuWikiNodeToken,
 } from "./documents/feishu-document-body-fetcher.js";
 import { buildInternalStatusSnapshot } from "./admin/internal-status-snapshot.js";
 import { buildInternalRolloutReadinessReport } from "./admin/internal-rollout-readiness.js";
+import {
+  renderAdminConsoleCss,
+  renderAdminConsoleHtml,
+  renderAdminConsoleScript,
+} from "./admin-console/admin-console-assets.js";
+import { registerGroupMemoryApi } from "./memory/group-memory-api.js";
+import type { GroupMemoryService } from "./memory/group-memory-service.js";
+import {
+  createConversationStateInspectionRuntime,
+  registerConversationStateApi,
+  type ConversationStateInspectionRuntime,
+  type ConversationStateInspectionStore,
+} from "./conversation-state/conversation-state-api.js";
+import { registerProactiveSignalApi } from "./proactive-signals/proactive-signal-api.js";
+import {
+  createProactiveSignalRuntime,
+  type ProactiveSignalRepository,
+  type ProactiveSignalRuntime,
+} from "./proactive-signals/proactive-signal-repository.js";
+import { registerKnowledgeDraftApi } from "./knowledge-governance/knowledge-draft-api.js";
+import {
+  createChatKnowledgeDraftCommand,
+  type ChatKnowledgeDraftCommand,
+} from "./knowledge-governance/chat-knowledge-draft-command.js";
+import {
+  createKnowledgeDraftRuntime as createDefaultKnowledgeDraftRuntime,
+  type KnowledgeDraftRuntime,
+} from "./runtime/knowledge-draft-runtime.js";
+import {
+  createKnowledgeCardRuntime as createDefaultKnowledgeCardRuntime,
+  type KnowledgeCardRuntime,
+} from "./runtime/knowledge-card-runtime.js";
+import {
+  createActionApprovalRuntime as createDefaultActionApprovalRuntime,
+  type ActionApprovalRuntime,
+} from "./runtime/action-approval-runtime.js";
+import {
+  createActionReviewRuntime as createDefaultActionReviewRuntime,
+  type ActionReviewRuntime,
+} from "./runtime/action-review-runtime.js";
+import {
+  createProactiveSignalDeliveryRuntime as createDefaultProactiveSignalDeliveryRuntime,
+  type ProactiveSignalDeliveryRuntime,
+} from "./runtime/proactive-signal-delivery-runtime.js";
+import {
+  createProactiveSignalPlannerRuntime as createDefaultProactiveSignalPlannerRuntime,
+  type ProactiveSignalPlannerRuntime,
+} from "./runtime/proactive-signal-planner-runtime.js";
+import { registerKnowledgeCardApi } from "./knowledge-cards/knowledge-card-api.js";
+import { registerActionProposalApi } from "./action-approvals/action-proposal-api.js";
+import { registerActionReviewApi } from "./action-reviews/action-review-api.js";
+import { registerAgentExecutionLedgerApi } from "./agent-runtime/agent-execution-ledger-api.js";
+import { registerAnswerReplyApi } from "./answer-replies/answer-reply-api.js";
+import {
+  createAgentExecutionLedgerRuntime as createDefaultAgentExecutionLedgerRuntime,
+  type AgentExecutionLedgerRuntime,
+} from "./runtime/agent-execution-ledger-runtime.js";
+import { observeStartupPromise } from "./runtime/startup-promise.js";
 
 type EventWorkerRuntimeFactoryInput = {
   runtimeController?: RuntimeController;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
+  answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
+  memoryExtractionPlanner?: MemoryExtractionRuntime["planner"];
+  knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
+};
+
+type MemoryExtractionRuntimeFactoryInput = {
+  runtimeController: RuntimeController;
+  auditLog: InMemoryAuditLog;
+};
+
+export type RuntimeControlDependency = {
+  controller: RuntimeController;
+  service: RuntimeControlService;
 };
 
 export type BuildAppDependencies = {
@@ -70,17 +166,61 @@ export type BuildAppDependencies = {
   createAnswerDraftRuntime?: (
     input?: Parameters<typeof createDefaultAnswerDraftRuntime>[0],
   ) => AnswerDraftRuntime | undefined;
-  createEventWorkerRuntime?: (input?: EventWorkerRuntimeFactoryInput) => EventWorkerRuntime | undefined;
+  createAgentExecutionLedgerRuntime?: (
+    input?: Parameters<typeof createDefaultAgentExecutionLedgerRuntime>[0],
+  ) => AgentExecutionLedgerRuntime | undefined;
+  createEventWorkerRuntime?: (
+    input?: EventWorkerRuntimeFactoryInput,
+  ) => EventWorkerRuntime | undefined | Promise<EventWorkerRuntime | undefined>;
+  createMemoryExtractionRuntime?: (
+    input?: MemoryExtractionRuntimeFactoryInput,
+  ) => MemoryExtractionRuntime | undefined;
   createReindexWorkerRuntime?: () => ReindexWorkerRuntime | undefined;
   createDocumentSyncRuntime?: () => DocumentSyncRuntime | undefined;
   runtimeController?: RuntimeController;
+  runtimeControl?: RuntimeControlDependency;
+  closeRuntimeControl?: () => Promise<void>;
+  onRuntimeStartupCleanup?: (cleanup: Promise<void>) => void;
+  onBeforeRuntimeCloseOwnership?: (app: FastifyInstance) => void;
   internalApiToken?: string;
   ingressHealthToken?: string;
   readinessEnv?: EnvLike;
+  groupMemoryService?: GroupMemoryService;
+  conversationStateInspectionStore?: ConversationStateInspectionStore;
+  createConversationStateInspectionRuntime?: () => ConversationStateInspectionRuntime | undefined;
+  proactiveSignalRepository?: ProactiveSignalRepository;
+  createProactiveSignalRuntime?: () => ProactiveSignalRuntime | undefined;
+  createKnowledgeDraftRuntime?: (
+    input?: Parameters<typeof createDefaultKnowledgeDraftRuntime>[0],
+  ) => KnowledgeDraftRuntime | undefined;
+  createKnowledgeCardRuntime?: (
+    input?: Parameters<typeof createDefaultKnowledgeCardRuntime>[0],
+  ) => KnowledgeCardRuntime | undefined;
+  createActionApprovalRuntime?: (
+    input?: Parameters<typeof createDefaultActionApprovalRuntime>[0],
+  ) => ActionApprovalRuntime | undefined;
+  createActionReviewRuntime?: (
+    input?: Parameters<typeof createDefaultActionReviewRuntime>[0],
+  ) => ActionReviewRuntime | undefined;
+  createProactiveSignalDeliveryRuntime?: (
+    input?: Parameters<typeof createDefaultProactiveSignalDeliveryRuntime>[0],
+  ) => ProactiveSignalDeliveryRuntime | undefined;
+  createProactiveSignalPlannerRuntime?: (
+    input?: Parameters<typeof createDefaultProactiveSignalPlannerRuntime>[0],
+  ) => ProactiveSignalPlannerRuntime | undefined;
 };
 
 export type StartServerOptions = {
-  appDependencies?: Omit<BuildAppDependencies, "internalApiToken" | "readinessEnv">;
+  appDependencies?: Omit<
+    BuildAppDependencies,
+    | "internalApiToken"
+    | "readinessEnv"
+    | "runtimeController"
+    | "runtimeControl"
+    | "closeRuntimeControl"
+    | "onRuntimeStartupCleanup"
+  >;
+  createRuntimeControlRuntime?: () => Promise<RuntimeControlRuntime>;
 };
 
 type ParsedJsonBody = {
@@ -115,6 +255,14 @@ type RegisterUserSubmittedDocumentRequest = {
   sourceUri: string;
   title?: string;
   submittedByUserId: string;
+};
+
+type WikiSpaceRegistrationRequest = {
+  rootSourceUri: string;
+};
+
+type WikiSpaceEnabledRequest = {
+  enabled: boolean;
 };
 
 type DocumentSourceListQuery = {
@@ -156,6 +304,7 @@ const enqueueFailuresPresentReason = "enqueue_failures_present" as const;
 const latestBatchFailedReason = "latest_batch_failed" as const;
 const latestBatchItemsFailedReason = "latest_batch_items_failed" as const;
 const mentionRepliesUnavailableReason = "mention_replies_unavailable" as const;
+const aiWorkerUnavailableReason = "ai_worker_unavailable" as const;
 const maxInternalStringLength = 512;
 const maxInternalSourceUriLength = DOCUMENT_SOURCE_URI_MAX_CHARS;
 const maxInternalRawSourceUriLength = 8192;
@@ -166,8 +315,20 @@ const maxAnswerDraftLiveChatSpeakerLength = 256;
 const maxAnswerDraftLiveChatTextLength = 2000;
 const maxJsonBodyBytes = 256 * 1024;
 const internalTruncationMarker = " ... [truncated]";
+const memoryExtractionFailureClassifications = new Set([
+  "provider_timeout",
+  "provider_rate_limited",
+  "provider_unavailable",
+  "provider_unauthorized",
+  "invalid_model_response",
+  "invalid_queue_payload",
+  "corrupt_routing",
+  "invalid_dead_letter_payload",
+  "invalid_dead_letter_json",
+  "internal_error",
+]);
 
-export function buildApp(dependencies: BuildAppDependencies = {}) {
+export async function buildApp(dependencies: BuildAppDependencies = {}) {
   const internalApiToken =
     readInternalApiToken(dependencies.internalApiToken) ??
     readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
@@ -178,42 +339,185 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   const queue = dependencies.queue ?? new InMemoryEventQueue();
   const auditLog = dependencies.auditLog ?? new InMemoryAuditLog();
   const now = dependencies.now ?? (() => new Date());
+  if (
+    dependencies.runtimeControl !== undefined &&
+    dependencies.runtimeController !== undefined
+  ) {
+    throw new Error("runtimeControl cannot be combined with runtimeController");
+  }
   const runtimeController =
-    dependencies.runtimeController ?? new RuntimeController(createDefaultRuntimeConfig());
-  const answerDraftRuntime =
-    dependencies.answerDraftOrchestrator === undefined
-      ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
-          dependencies: { auditLog },
-          runtimeController,
-        })
-      : undefined;
-  const answerDraftOrchestrator =
-    dependencies.answerDraftOrchestrator ?? answerDraftRuntime?.answerDraftOrchestrator;
+    dependencies.runtimeControl?.controller ??
+    dependencies.runtimeController ??
+    new RuntimeController(createDefaultRuntimeConfig());
+  const runtimeControlService =
+    dependencies.runtimeControl?.service ??
+    createInMemoryRuntimeControlService(runtimeController, now);
+  let agentExecutionLedgerRuntime: AgentExecutionLedgerRuntime | undefined;
+  let answerDraftRuntime: AnswerDraftRuntime | undefined;
+  let answerDraftOrchestrator = dependencies.answerDraftOrchestrator;
   let reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
+  let memoryExtractionRuntime: MemoryExtractionRuntime | undefined;
   let eventWorkerRuntime: EventWorkerRuntime | undefined;
   let documentSyncRuntime: DocumentSyncRuntime | undefined;
+  let conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
+  let proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
+  let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
+  let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
+  let actionApprovalRuntime: ActionApprovalRuntime | undefined;
+  let actionReviewRuntime: ActionReviewRuntime | undefined;
+  let proactiveSignalPlannerRuntime: ProactiveSignalPlannerRuntime | undefined;
+  let proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
+  let knowledgeCardStartup: Promise<void> | undefined;
+  let actionApprovalStartup: Promise<void> | undefined;
+  let proactiveSignalPlannerStartup: Promise<void> | undefined;
+  let proactiveSignalDeliveryStartup: Promise<void> | undefined;
+  let eventWorkerStartup: Promise<void> | undefined;
+  let startupGateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
+  let startupApp: FastifyInstance | undefined;
+  let appOwnsRuntimeResources = false;
   try {
+    agentExecutionLedgerRuntime = (
+      dependencies.createAgentExecutionLedgerRuntime ??
+      createDefaultAgentExecutionLedgerRuntime
+    )({ now });
+    answerDraftRuntime =
+      answerDraftOrchestrator === undefined
+        ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
+            dependencies: { auditLog },
+            runtimeController,
+            ...(agentExecutionLedgerRuntime === undefined
+              ? {}
+              : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
+          })
+        : undefined;
+    answerDraftOrchestrator ??= answerDraftRuntime?.answerDraftOrchestrator;
+    const groupMemoryService =
+      dependencies.groupMemoryService ?? answerDraftRuntime?.groupMemoryService;
     reindexWorkerRuntime =
       (dependencies.createReindexWorkerRuntime ?? createReindexWorkerRuntime)();
     reindexWorkerRuntime?.start();
-    eventWorkerRuntime =
-      (dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime)({
+    memoryExtractionRuntime =
+      (dependencies.createMemoryExtractionRuntime ?? createMemoryExtractionRuntime)({
         runtimeController,
-        ...(answerDraftOrchestrator === undefined ? {} : { answerDraftOrchestrator }),
+        auditLog,
       });
-    eventWorkerRuntime?.start();
+    memoryExtractionRuntime?.start();
+    conversationStateInspectionRuntime = dependencies.conversationStateInspectionStore === undefined
+      ? (dependencies.createConversationStateInspectionRuntime ?? createConversationStateInspectionRuntime)()
+      : undefined;
+    proactiveSignalRuntime = dependencies.proactiveSignalRepository === undefined
+      ? (dependencies.createProactiveSignalRuntime ?? createProactiveSignalRuntime)()
+      : undefined;
+    knowledgeDraftRuntime = (
+      dependencies.createKnowledgeDraftRuntime ?? createDefaultKnowledgeDraftRuntime
+    )({ runtimeController });
+    knowledgeCardRuntime = (
+      dependencies.createKnowledgeCardRuntime ?? createDefaultKnowledgeCardRuntime
+    )({
+      runtimeController,
+      proactiveSignalRepository:
+        dependencies.proactiveSignalRepository ?? proactiveSignalRuntime?.repository,
+    });
+    actionApprovalRuntime = (
+      dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
+    )({
+      runtimeController,
+      knowledgeCardRuntime,
+      ...(agentExecutionLedgerRuntime === undefined
+        ? {}
+        : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
+    });
+    const chatKnowledgeDraftCommand =
+      answerDraftRuntime?.chatKnowledgeDraftGenerator !== undefined &&
+        knowledgeDraftRuntime !== undefined &&
+        knowledgeCardRuntime !== undefined &&
+        actionApprovalRuntime !== undefined
+        ? createChatKnowledgeDraftCommand({
+            generator: answerDraftRuntime.chatKnowledgeDraftGenerator,
+            canReadGroupContext: runtimeController.canReadGroupContext.bind(runtimeController),
+            draftRuntime: knowledgeDraftRuntime,
+            cardRuntime: knowledgeCardRuntime,
+            actionApprovalRuntime,
+          })
+        : undefined;
+    actionReviewRuntime = (
+      dependencies.createActionReviewRuntime ?? createDefaultActionReviewRuntime
+    )({ actionApprovalRuntime });
+    proactiveSignalPlannerRuntime = (
+      dependencies.createProactiveSignalPlannerRuntime ?? createDefaultProactiveSignalPlannerRuntime
+    )({
+      runtimeController,
+      store: dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
+      now,
+    });
+    proactiveSignalDeliveryRuntime = (
+      dependencies.createProactiveSignalDeliveryRuntime ?? createDefaultProactiveSignalDeliveryRuntime
+    )({
+      runtimeController,
+      ...(agentExecutionLedgerRuntime === undefined
+        ? {}
+        : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
+    });
+    if (proactiveSignalDeliveryRuntime !== undefined && knowledgeCardRuntime === undefined) {
+      throw new Error(
+        "proactive signal delivery requires the knowledge-card feedback runtime",
+      );
+    }
+    knowledgeCardStartup = knowledgeCardRuntime?.start();
+    actionApprovalStartup = actionApprovalRuntime === undefined
+      ? undefined
+      : observeStartupPromise(
+          (knowledgeCardStartup ?? Promise.resolve()).then(() => actionApprovalRuntime!.start()),
+        );
+    proactiveSignalPlannerStartup = proactiveSignalPlannerRuntime === undefined
+      ? undefined
+      : observeStartupPromise(
+          (actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
+            .then(() => proactiveSignalPlannerRuntime!.start()),
+        );
+    proactiveSignalDeliveryStartup = proactiveSignalDeliveryRuntime === undefined
+      ? undefined
+      : observeStartupPromise(
+          (proactiveSignalPlannerStartup ?? actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
+            .then(() => proactiveSignalDeliveryRuntime!.start()),
+        );
+    eventWorkerRuntime = await (
+      dependencies.createEventWorkerRuntime ?? createEventWorkerRuntime
+    )({
+      runtimeController,
+      ...(answerDraftOrchestrator === undefined
+        ? {}
+        : { answerDraftOrchestrator }),
+      ...(answerDraftRuntime?.answerSourcePermissionVerifier === undefined
+        ? {}
+        : {
+            answerSourcePermissionVerifier:
+              answerDraftRuntime.answerSourcePermissionVerifier,
+          }),
+      ...(memoryExtractionRuntime === undefined
+        ? {}
+        : { memoryExtractionPlanner: memoryExtractionRuntime.planner }),
+      ...(chatKnowledgeDraftCommand === undefined
+        ? {}
+        : { knowledgeDraftCommand: chatKnowledgeDraftCommand }),
+    });
+    const eventWorkerPrerequisite =
+      proactiveSignalDeliveryStartup ??
+      proactiveSignalPlannerStartup ??
+      actionApprovalStartup ??
+      knowledgeCardStartup;
+    if (eventWorkerPrerequisite === undefined) {
+      eventWorkerRuntime?.start();
+    } else {
+      eventWorkerStartup = observeStartupPromise(
+        eventWorkerPrerequisite.then(() => {
+          eventWorkerRuntime?.start();
+        }),
+      );
+    }
     documentSyncRuntime =
       (dependencies.createDocumentSyncRuntime ?? createDocumentSyncRuntime)();
     documentSyncRuntime?.start();
-  } catch (error) {
-    scheduleRuntimeStartupCleanup({
-      answerDraftRuntime,
-      reindexWorkerRuntime,
-      eventWorkerRuntime,
-      documentSyncRuntime,
-    });
-    throw error;
-  }
   const feishuAuthConfig = readFeishuAuthConfig();
   const verifyFeishuRequest =
     dependencies.verifyFeishuRequest ??
@@ -237,7 +541,28 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     },
     runtimeController,
   });
-  const app = Fastify({ logger: false, bodyLimit: maxJsonBodyBytes });
+  startupGateway = gateway;
+  const app = Fastify({
+    logger: false,
+    bodyLimit: maxJsonBodyBytes,
+  });
+  startupApp = app;
+
+  if (
+    knowledgeCardStartup !== undefined ||
+    actionApprovalStartup !== undefined ||
+    proactiveSignalPlannerStartup !== undefined ||
+    proactiveSignalDeliveryStartup !== undefined ||
+    eventWorkerStartup !== undefined
+  ) {
+    app.addHook("onReady", async () => {
+      await knowledgeCardStartup;
+      await actionApprovalStartup;
+      await proactiveSignalPlannerStartup;
+      await proactiveSignalDeliveryStartup;
+      await eventWorkerStartup;
+    });
+  }
 
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, payload, done) => {
     const rawBody = typeof payload === "string" ? payload : payload.toString("utf8");
@@ -275,12 +600,64 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     }
   });
 
+  if (eventWorkerRuntime?.answerReplies !== undefined) {
+    registerAnswerReplyApi(app, eventWorkerRuntime.answerReplies);
+  }
+  registerGroupMemoryApi(app, groupMemoryService, {
+    authenticationConfigured: internalApiToken !== undefined,
+  });
+  registerConversationStateApi(
+    app,
+    dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
+    { authenticationConfigured: internalApiToken !== undefined },
+  );
+  registerProactiveSignalApi(
+    app,
+    dependencies.conversationStateInspectionStore ?? conversationStateInspectionRuntime?.store,
+    dependencies.proactiveSignalRepository ?? proactiveSignalRuntime?.repository,
+    runtimeController,
+    { authenticationConfigured: internalApiToken !== undefined, now },
+  );
+  registerKnowledgeDraftApi(app, knowledgeDraftRuntime, {
+    authenticationConfigured: internalApiToken !== undefined,
+    now,
+  });
+  registerKnowledgeCardApi(app, knowledgeCardRuntime, { now });
+  registerActionProposalApi(app, actionApprovalRuntime, {
+    authenticationConfigured: internalApiToken !== undefined,
+    now,
+  });
+  registerActionReviewApi(app, actionReviewRuntime, { now });
+  registerAgentExecutionLedgerApi(app, agentExecutionLedgerRuntime);
+
+  app.get("/admin", async (_request, reply) => (
+    reply
+      .header("content-type", "text/html; charset=utf-8")
+      .header("cache-control", "no-store")
+      .send(renderAdminConsoleHtml())
+  ));
+
+  app.get("/admin/console.css", async (_request, reply) => (
+    reply
+      .header("content-type", "text/css; charset=utf-8")
+      .header("cache-control", "public, max-age=300")
+      .send(renderAdminConsoleCss())
+  ));
+
+  app.get("/admin/console.js", async (_request, reply) => (
+    reply
+      .header("content-type", "application/javascript; charset=utf-8")
+      .header("cache-control", "public, max-age=300")
+      .send(renderAdminConsoleScript())
+  ));
+
   app.post("/feishu/events", async (request, reply) => {
     const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
     const rawBody = isParsedJsonBody(request.body) ? request.body.rawBody : undefined;
+    const decodedBody = decodeFeishuPayload(body, feishuAuthConfig.encryptKey);
     const response = await gateway.handleCallback({
       headers: normalizeHeaders(request.headers),
-      body,
+      body: decodedBody,
       rawBody
     });
 
@@ -323,7 +700,16 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
   }));
 
   app.get("/internal/status", async () => {
-    const runtimeControlSnapshot = runtimeController.getSnapshot();
+    const runtimeControlStatus = await readRuntimeControlStatus({
+      controller: runtimeController,
+      service: runtimeControlService,
+    });
+    const knowledgeCards = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
+    const proactiveSignals = await getProactiveSignalsStatus({
+      planner: proactiveSignalPlannerRuntime,
+      delivery: proactiveSignalDeliveryRuntime,
+    });
     const components = {
       audit: {
         ok: true,
@@ -332,33 +718,60 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
         retention: auditLog.retention,
       },
       runtimeControl: {
-        ok: true,
-        enabled: runtimeControlSnapshot.globalEnabled,
-        globalEnabled: runtimeControlSnapshot.globalEnabled,
-        disabledGroupIds: runtimeControlSnapshot.disabledGroupIds,
-        disabledGroupCount: runtimeControlSnapshot.disabledGroupIds.length,
-        capabilities: runtimeControlSnapshot.capabilities,
+        ok: runtimeControlStatus.persistence.ok,
+        enabled: runtimeControlStatus.globalEnabled,
+        globalEnabled: runtimeControlStatus.globalEnabled,
+        desiredGlobalEnabled: runtimeControlStatus.desiredGlobalEnabled,
+        activationRequired: runtimeControlStatus.activationRequired,
+        disabledGroupIds: runtimeControlStatus.disabledGroupIds,
+        disabledGroupCount: runtimeControlStatus.disabledGroupIds.length,
+        capabilities: runtimeControlStatus.capabilities,
+        revision: runtimeControlStatus.revision,
+        updatedAt: runtimeControlStatus.updatedAt,
+        ...(runtimeControlStatus.updatedBy === undefined
+          ? {}
+          : { updatedBy: runtimeControlStatus.updatedBy }),
+        persistence: runtimeControlStatus.persistence,
+        ...(runtimeControlStatus.persistence.ok
+          ? {}
+          : { degradedReason: "runtime_control_persistence_failed" as const }),
       },
       answerDraft: {
         ok: true,
         enabled: answerDraftOrchestrator !== undefined,
       },
+      agentExecutionLedger: getAgentExecutionLedgerStatus(agentExecutionLedgerRuntime),
       feishuGateway: getFeishuGatewayStatus(feishuGatewayStatus),
+      memoryExtraction:
+        memoryExtractionRuntime === undefined
+          ? { ok: true, enabled: false, running: false }
+          : await getMemoryExtractionStatus(memoryExtractionRuntime),
       eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
+      actionApprovals: actionApprovals ?? { ok: true, enabled: false, running: false },
+      proactiveSignals,
     };
 
-    return buildInternalStatusSnapshot({ components, generatedAt: now() });
+    return buildInternalStatusSnapshot({ components, generatedAt: now(), knowledgeCards });
   });
 
-  app.get("/internal/readiness", async () =>
-    buildInternalRolloutReadinessReport(dependencies.readinessEnv ?? process.env),
-  );
+  app.get("/internal/readiness", async () => {
+    const knowledgeCardStatus = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const actionApprovalStatus = await getActionApprovalStatus(actionApprovalRuntime);
+    const actionReviewStatus = await getActionReviewStatus(actionReviewRuntime);
+    return buildInternalRolloutReadinessReport(
+      dependencies.readinessEnv ?? process.env,
+      { knowledgeCardStatus, actionApprovalStatus, actionReviewStatus },
+    );
+  });
 
   app.get("/internal/runtime-control/status", async () => ({
+    ...await readRuntimeControlStatus({
+      controller: runtimeController,
+      service: runtimeControlService,
+    }),
     ok: true,
-    ...runtimeController.getSnapshot(),
   }));
 
   app.post("/internal/runtime-control/global", async (request, reply) => {
@@ -368,25 +781,50 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
-    const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
-    const previousSnapshot = runtimeController.getSnapshot();
-    if (parsedRequest.enabled) {
-      runtimeController.enableGlobal();
-    } else {
-      runtimeController.disableGlobal();
+    const parsedOperatorHint = parseOperatorHint(request.headers["x-iris-operator"]);
+    if (!parsedOperatorHint.ok) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
-    await recordRuntimeControlAuditEvent({
-      auditLog,
-      scope: "global",
-      enabled: parsedRequest.enabled,
-      previousEnabled: previousSnapshot.globalEnabled,
-      operatorHint,
-    });
+    const operatorHint = parsedOperatorHint.value;
+    let result: RuntimeControlMutationResult;
+    try {
+      result = await runtimeControlService.setGlobal({
+        enabled: parsedRequest.enabled,
+        ...(operatorHint === undefined ? {} : { updatedBy: operatorHint }),
+      });
+    } catch (error) {
+      if (error instanceof RuntimeControlInputError) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      return sendRuntimeControlPersistenceFailure(reply);
+    }
 
-    return {
-      ok: true,
-      ...runtimeController.getSnapshot(),
-    };
+    if (
+      result.kind === "success" &&
+      result.status.persistence.storage !== runtimeControlService.persistenceStorage
+    ) {
+      return sendFailClosedRuntimeControlStorageMismatch({
+        auditLog,
+        controller: runtimeController,
+        operatorHint,
+        reply,
+        response: parsedRequest.enabled
+          ? "persistence_failed"
+          : "disable_not_persisted",
+      });
+    }
+
+    if (result.kind === "success" || result.kind === "disable_not_persisted") {
+      await recordRuntimeControlAuditEvent({
+        auditLog,
+        scope: "global",
+        enabled: parsedRequest.enabled,
+        previousEnabled: result.previousSnapshot.globalEnabled,
+        operatorHint,
+      });
+    }
+
+    return sendRuntimeControlMutationResult(reply, result);
   });
 
   app.post("/internal/runtime-control/groups/:groupId", async (request, reply) => {
@@ -397,26 +835,50 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
-    const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
-    const previousSnapshot = runtimeController.getSnapshot();
-    if (parsedRequest.enabled) {
-      runtimeController.enableGroup(groupId);
-    } else {
-      runtimeController.disableGroup(groupId);
+    const parsedOperatorHint = parseOperatorHint(request.headers["x-iris-operator"]);
+    if (!parsedOperatorHint.ok) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
-    await recordRuntimeControlAuditEvent({
-      auditLog,
-      scope: "group",
-      targetId: groupId,
-      enabled: parsedRequest.enabled,
-      previousEnabled: !previousSnapshot.disabledGroupIds.includes(groupId),
-      operatorHint,
-    });
+    const operatorHint = parsedOperatorHint.value;
+    let result: RuntimeControlMutationResult;
+    try {
+      result = await runtimeControlService.setGroup({
+        groupId,
+        enabled: parsedRequest.enabled,
+        ...(operatorHint === undefined ? {} : { updatedBy: operatorHint }),
+      });
+    } catch (error) {
+      if (error instanceof RuntimeControlInputError) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      return sendRuntimeControlPersistenceFailure(reply);
+    }
 
-    return {
-      ok: true,
-      ...runtimeController.getSnapshot(),
-    };
+    if (
+      result.kind === "success" &&
+      result.status.persistence.storage !== runtimeControlService.persistenceStorage
+    ) {
+      return sendFailClosedRuntimeControlStorageMismatch({
+        auditLog,
+        controller: runtimeController,
+        operatorHint,
+        reply,
+        response: "persistence_failed",
+      });
+    }
+
+    if (result.kind === "success") {
+      await recordRuntimeControlAuditEvent({
+        auditLog,
+        scope: "group",
+        targetId: groupId,
+        enabled: parsedRequest.enabled,
+        previousEnabled: !result.previousSnapshot.disabledGroupIds.includes(groupId),
+        operatorHint,
+      });
+    }
+
+    return sendRuntimeControlMutationResult(reply, result);
   });
 
   app.patch("/internal/runtime-control/capabilities", async (request, reply) => {
@@ -426,26 +888,55 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(400).send({ ok: false, error: "invalid_request" });
     }
 
-    const operatorHint = readOperatorHint(request.headers["x-iris-operator"]);
-    const previousSnapshot = runtimeController.getSnapshot();
-    for (const [capability, enabled] of Object.entries(parsedRequest) as Array<
-      [RuntimeCapabilityName, boolean]
-    >) {
-      runtimeController.setCapability(capability, enabled);
-      await recordRuntimeControlAuditEvent({
+    const parsedOperatorHint = parseOperatorHint(request.headers["x-iris-operator"]);
+    if (!parsedOperatorHint.ok) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+    const operatorHint = parsedOperatorHint.value;
+    let result: RuntimeControlMutationResult;
+    try {
+      result = await runtimeControlService.setCapabilities({
+        updates: parsedRequest,
+        ...(operatorHint === undefined ? {} : { updatedBy: operatorHint }),
+      });
+    } catch (error) {
+      if (error instanceof RuntimeControlInputError) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      return sendRuntimeControlPersistenceFailure(reply);
+    }
+
+    if (
+      result.kind === "success" &&
+      result.status.persistence.storage !== runtimeControlService.persistenceStorage
+    ) {
+      return sendFailClosedRuntimeControlStorageMismatch({
         auditLog,
-        scope: "capability",
-        targetId: capability,
-        enabled,
-        previousEnabled: previousSnapshot.capabilities[capability],
+        controller: runtimeController,
         operatorHint,
+        reply,
+        response: "persistence_failed",
       });
     }
 
-    return {
-      ok: true,
-      ...runtimeController.getSnapshot(),
-    };
+    if (result.kind === "success") {
+      for (const capability of Object.keys(parsedRequest) as RuntimeCapabilityName[]) {
+        const enabled = parsedRequest[capability];
+        if (enabled === undefined) {
+          continue;
+        }
+        await recordRuntimeControlAuditEvent({
+          auditLog,
+          scope: "capability",
+          targetId: capability,
+          enabled,
+          previousEnabled: result.previousSnapshot.capabilities[capability],
+          operatorHint,
+        });
+      }
+    }
+
+    return sendRuntimeControlMutationResult(reply, result);
   });
 
   app.get("/internal/audit/events", async (request, reply) => {
@@ -519,6 +1010,157 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return { ok: true, ...(await eventWorkerRuntime.getStatus()) };
     } catch {
       return reply.code(500).send({ ok: false, error: "event_worker_status_failed" });
+    }
+  });
+
+  app.get("/internal/memory-extraction/status", async (_request, reply) => {
+    if (memoryExtractionRuntime === undefined) {
+      return { ok: true, enabled: false, running: false };
+    }
+
+    try {
+      return {
+        ok: true,
+        ...toContentFreeMemoryExtractionStatus(await memoryExtractionRuntime.getStatus()),
+      };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_status_failed",
+      });
+    }
+  });
+
+  app.get("/internal/memory-extraction/dead-letters", async (request, reply) => {
+    const limit = parseMemoryExtractionDeadLetterLimit(request.query);
+    if (limit === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    if (memoryExtractionRuntime === undefined) {
+      return {
+        ok: true,
+        deadLetters: [],
+      };
+    }
+
+    try {
+      const deadLetters = await memoryExtractionRuntime.deadLetters.list({ limit });
+      return {
+        ok: true,
+        deadLetters: deadLetters.map(toMemoryExtractionDeadLetterResponse),
+      };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_dead_letter_operation_failed",
+      });
+    }
+  });
+
+  app.post("/internal/memory-extraction/dead-letters/replay", async (request, reply) => {
+    if (memoryExtractionRuntime === undefined) {
+      return reply.code(503).send({
+        ok: false,
+        error: "memory_extraction_runtime_unavailable",
+      });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseMemoryExtractionDeadLetterBatchReplayRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const result = {
+        replayedCount: 0,
+        notFoundIds: [] as string[],
+        unsupportedLegacyIds: [] as string[],
+      };
+      for (const id of parsedRequest.ids) {
+        const status = await memoryExtractionRuntime.deadLetters.replay(id);
+        if (status === "replayed") {
+          result.replayedCount += 1;
+          await recordMemoryExtractionRecoveryAuditEvent({
+            auditLog,
+            type: "memory_extraction_dlq_replayed",
+            id,
+          });
+        } else if (status === "not_found") {
+          result.notFoundIds.push(id);
+        } else {
+          result.unsupportedLegacyIds.push(id);
+        }
+      }
+      return { ok: true, ...result };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_dead_letter_operation_failed",
+      });
+    }
+  });
+
+  app.post("/internal/memory-extraction/dead-letters/:id/replay", async (request, reply) => {
+    if (memoryExtractionRuntime === undefined) {
+      return reply.code(503).send({
+        ok: false,
+        error: "memory_extraction_runtime_unavailable",
+      });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const status = await memoryExtractionRuntime.deadLetters.replay(id);
+      if (status === "replayed") {
+        await recordMemoryExtractionRecoveryAuditEvent({
+          auditLog,
+          type: "memory_extraction_dlq_replayed",
+          id,
+        });
+      }
+      return { ok: true, status };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_dead_letter_operation_failed",
+      });
+    }
+  });
+
+  app.delete("/internal/memory-extraction/dead-letters/:id", async (request, reply) => {
+    if (memoryExtractionRuntime === undefined) {
+      return reply.code(503).send({
+        ok: false,
+        error: "memory_extraction_runtime_unavailable",
+      });
+    }
+
+    const id = readNonBlankId((request.params as { id?: unknown }).id);
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      const status = await memoryExtractionRuntime.deadLetters.delete(id);
+      if (status === "deleted") {
+        await recordMemoryExtractionRecoveryAuditEvent({
+          auditLog,
+          type: "memory_extraction_dlq_deleted",
+          id,
+        });
+      }
+      return { ok: true, status };
+    } catch {
+      return reply.code(500).send({
+        ok: false,
+        error: "memory_extraction_dead_letter_operation_failed",
+      });
     }
   });
 
@@ -614,6 +1256,110 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
       return reply.code(500).send({ ok: false, error: "document_sync_status_failed" });
     }
   });
+
+  app.post("/internal/document-sync/wiki-spaces", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+    const parsedRequest = parseWikiSpaceRegistrationRequest(body);
+    if (parsedRequest === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return reply.code(202).send({
+        ok: true,
+        ...(await documentSyncRuntime.wikiSpaces.register({
+          rootSourceUri: parsedRequest.rootSourceUri,
+          at: now(),
+        })),
+      });
+    } catch {
+      return reply.code(500).send({ ok: false, error: "wiki_space_registration_failed" });
+    }
+  });
+
+  app.get("/internal/document-sync/wiki-spaces", async (request, reply) => {
+    if (documentSyncRuntime === undefined) {
+      return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+    }
+
+    const parsedQuery = parseWikiSpaceListQuery(request.query);
+    if (parsedQuery === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+
+    try {
+      return { ok: true, wikiSpaces: await documentSyncRuntime.wikiSpaces.list(parsedQuery) };
+    } catch {
+      return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
+    }
+  });
+
+  app.post(
+    "/internal/document-sync/wiki-spaces/*",
+    { onRequest: createWikiSpaceWildcardRouteGuard("/rescan") },
+    async (request, reply) => {
+      const id = parseWikiSpaceWildcardId(
+        (request.params as { "*"?: unknown })["*"],
+        "/rescan",
+      );
+      if (typeof id !== "string") {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      if (documentSyncRuntime === undefined) {
+        return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+      }
+
+      try {
+        const authorization = await documentSyncRuntime.wikiSpaces.requestScan({ id, at: now() });
+        if (authorization === undefined) {
+          return reply.code(404).send({ ok: false, error: "wiki_space_not_found" });
+        }
+
+        return { ok: true, authorization };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
+      }
+    },
+  );
+
+  app.patch(
+    "/internal/document-sync/wiki-spaces/*",
+    { onRequest: createWikiSpaceWildcardRouteGuard("") },
+    async (request, reply) => {
+      const id = parseWikiSpaceWildcardId((request.params as { "*"?: unknown })["*"], "");
+      if (typeof id !== "string") {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+      if (documentSyncRuntime === undefined) {
+        return reply.code(503).send({ ok: false, error: "document_sync_worker_unavailable" });
+      }
+
+      const body = isParsedJsonBody(request.body) ? request.body.parsedBody : request.body;
+      const parsedRequest = parseWikiSpaceEnabledRequest(body);
+      if (parsedRequest === undefined) {
+        return reply.code(400).send({ ok: false, error: "invalid_request" });
+      }
+
+      try {
+        const authorization = await documentSyncRuntime.wikiSpaces.setEnabled({
+          id,
+          enabled: parsedRequest.enabled,
+          at: now(),
+        });
+        if (authorization === undefined) {
+          return reply.code(404).send({ ok: false, error: "wiki_space_not_found" });
+        }
+
+        return { ok: true, authorization };
+      } catch {
+        return reply.code(500).send({ ok: false, error: "wiki_space_operation_failed" });
+      }
+    },
+  );
 
   app.get("/internal/document-sync/sources", async (request, reply) => {
     if (documentSyncRuntime === undefined) {
@@ -1084,17 +1830,55 @@ export function buildApp(dependencies: BuildAppDependencies = {}) {
     return { ok: true, status: "ready" };
   });
 
+  dependencies.onBeforeRuntimeCloseOwnership?.(app);
   app.addHook("onClose", async () => {
+    if (!appOwnsRuntimeResources) {
+      return;
+    }
     await closeRuntimeResources([
       () => gateway.close(),
       () => documentSyncRuntime?.close(),
       () => eventWorkerRuntime?.close(),
+      () => memoryExtractionRuntime?.close(),
       () => reindexWorkerRuntime?.close(),
       () => answerDraftRuntime?.close(),
+      () => conversationStateInspectionRuntime?.close(),
+      () => actionReviewRuntime?.close(),
+      () => proactiveSignalDeliveryRuntime?.close(),
+      () => proactiveSignalPlannerRuntime?.close(),
+      () => actionApprovalRuntime?.close(),
+      () => knowledgeCardRuntime?.close(),
+      () => proactiveSignalRuntime?.close(),
+      () => knowledgeDraftRuntime?.close(),
+      () => agentExecutionLedgerRuntime?.close(),
+      () => dependencies.closeRuntimeControl?.(),
     ]);
   });
+  appOwnsRuntimeResources = true;
 
   return app;
+  } catch (error) {
+    const cleanup = scheduleRuntimeStartupCleanup({
+      app: startupApp,
+      gateway: startupGateway,
+      agentExecutionLedgerRuntime,
+      answerDraftRuntime,
+      reindexWorkerRuntime,
+      memoryExtractionRuntime,
+      eventWorkerRuntime,
+      documentSyncRuntime,
+      conversationStateInspectionRuntime,
+      proactiveSignalRuntime,
+      proactiveSignalPlannerRuntime,
+      knowledgeCardRuntime,
+      actionApprovalRuntime,
+      actionReviewRuntime,
+      proactiveSignalDeliveryRuntime,
+      knowledgeDraftRuntime,
+    });
+    dependencies.onRuntimeStartupCleanup?.(cleanup);
+    throw error;
+  }
 }
 
 function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
@@ -1109,6 +1893,122 @@ function getFeishuGatewayStatus(state: FeishuGatewayStatusState) {
           latestEnqueueError: state.latestEnqueueError,
         }),
   };
+}
+
+function getAgentExecutionLedgerStatus(
+  runtime: AgentExecutionLedgerRuntime | undefined,
+) {
+  if (runtime === undefined) {
+    return {
+      ok: true,
+      enabled: false,
+      writeFailureCount: 0,
+    };
+  }
+
+  const status = runtime.getStatus();
+  return {
+    ...status,
+    ok: status.writeFailureCount === 0,
+    ...(status.writeFailureCount === 0
+      ? {}
+      : { degradedReason: "agent_execution_ledger_write_failed" as const }),
+  };
+}
+
+async function getKnowledgeCardStatus(runtime: KnowledgeCardRuntime | undefined) {
+  if (runtime === undefined) return undefined;
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "knowledge_card_status_unavailable" as const,
+    };
+  }
+}
+
+async function getActionApprovalStatus(runtime: ActionApprovalRuntime | undefined) {
+  if (runtime === undefined) return undefined;
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "action_approval_status_unavailable" as const,
+    };
+  }
+}
+
+async function getProactiveSignalsStatus({
+  planner,
+  delivery,
+}: {
+  planner: ProactiveSignalPlannerRuntime | undefined;
+  delivery: ProactiveSignalDeliveryRuntime | undefined;
+}) {
+  const plannerStatus = await getProactiveSignalPlannerStatus(planner);
+  const deliveryStatus = await getProactiveSignalDeliveryStatus(delivery);
+  const enabled = plannerStatus.enabled || deliveryStatus.enabled;
+  if (!enabled) {
+    return { ok: true, enabled: false, running: false };
+  }
+  const running = (!plannerStatus.enabled || plannerStatus.running) &&
+    (!deliveryStatus.enabled || deliveryStatus.running);
+  const ok = plannerStatus.ok && deliveryStatus.ok && (!enabled || running);
+  return {
+    ok,
+    enabled,
+    running,
+    planner: plannerStatus,
+    delivery: deliveryStatus,
+    ...(!ok ? { degradedReason: "proactive_signal_runtime_degraded" as const } : {}),
+  };
+}
+
+async function getProactiveSignalPlannerStatus(runtime: ProactiveSignalPlannerRuntime | undefined) {
+  if (runtime === undefined) return { ok: true, enabled: false, running: false };
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "proactive_signal_planner_status_unavailable" as const,
+    };
+  }
+}
+
+async function getProactiveSignalDeliveryStatus(runtime: ProactiveSignalDeliveryRuntime | undefined) {
+  if (runtime === undefined) return { ok: true, enabled: false, running: false };
+  try {
+    return { ok: true, ...(await runtime.getStatus()) };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "proactive_signal_delivery_status_unavailable" as const,
+    };
+  }
+}
+
+async function getActionReviewStatus(runtime: ActionReviewRuntime | undefined) {
+  if (runtime === undefined) return undefined;
+  try {
+    return await runtime.getStatus();
+  } catch {
+    return {
+      configured: true,
+      running: false,
+      migration0034Applied: false,
+    };
+  }
 }
 
 function readInternalApiToken(value: string | undefined): string | undefined {
@@ -1198,38 +2098,98 @@ function safeTokenEqual(presentedToken: string, configuredToken: string): boolea
 async function closeRuntimeResources(
   closeOperations: Array<() => Promise<void> | undefined>,
 ): Promise<void> {
-  let firstError: unknown;
+  const errors: unknown[] = [];
 
   for (const close of closeOperations) {
     try {
       await close();
     } catch (error) {
-      firstError ??= error;
+      errors.push(error);
     }
   }
 
-  if (firstError !== undefined) {
-    throw firstError;
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Iris runtime resource cleanup failed");
   }
 }
 
 function scheduleRuntimeStartupCleanup({
+  app,
+  gateway,
+  agentExecutionLedgerRuntime,
   answerDraftRuntime,
   reindexWorkerRuntime,
+  memoryExtractionRuntime,
   eventWorkerRuntime,
   documentSyncRuntime,
+  conversationStateInspectionRuntime,
+  proactiveSignalRuntime,
+  proactiveSignalPlannerRuntime,
+  knowledgeCardRuntime,
+  actionApprovalRuntime,
+  actionReviewRuntime,
+  proactiveSignalDeliveryRuntime,
+  knowledgeDraftRuntime,
 }: {
+  app: Pick<FastifyInstance, "close"> | undefined;
+  gateway: Pick<ReturnType<typeof createFeishuGateway>, "close"> | undefined;
+  agentExecutionLedgerRuntime: AgentExecutionLedgerRuntime | undefined;
   answerDraftRuntime: AnswerDraftRuntime | undefined;
   reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
+  memoryExtractionRuntime: MemoryExtractionRuntime | undefined;
   eventWorkerRuntime: EventWorkerRuntime | undefined;
   documentSyncRuntime: DocumentSyncRuntime | undefined;
-}): void {
-  void closeRuntimeResources([
+  conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
+  proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
+  proactiveSignalPlannerRuntime: ProactiveSignalPlannerRuntime | undefined;
+  knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
+  actionApprovalRuntime: ActionApprovalRuntime | undefined;
+  actionReviewRuntime: ActionReviewRuntime | undefined;
+  proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
+  knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
+}): Promise<void> {
+  const cleanup = closeRuntimeResources([
+    () => gateway?.close(),
     () => documentSyncRuntime?.close(),
     () => eventWorkerRuntime?.close(),
+    () => memoryExtractionRuntime?.close(),
     () => reindexWorkerRuntime?.close(),
     () => answerDraftRuntime?.close(),
-  ]).catch(() => undefined);
+    () => conversationStateInspectionRuntime?.close(),
+    () => actionReviewRuntime?.close(),
+    () => proactiveSignalDeliveryRuntime?.close(),
+    () => proactiveSignalPlannerRuntime?.close(),
+    () => actionApprovalRuntime?.close(),
+    () => knowledgeCardRuntime?.close(),
+    () => proactiveSignalRuntime?.close(),
+    () => knowledgeDraftRuntime?.close(),
+    () => agentExecutionLedgerRuntime?.close(),
+    () => app?.close(),
+  ]);
+  void cleanup.catch(() => undefined);
+  return cleanup;
+}
+
+function flattenAggregateErrors(error: unknown): unknown[] {
+  if (!(error instanceof AggregateError)) {
+    return [error];
+  }
+
+  return error.errors.flatMap((nestedError) => flattenAggregateErrors(nestedError));
+}
+
+function startupCleanupError(
+  startupError: unknown,
+  cleanupError: unknown,
+  message: string,
+): AggregateError {
+  return new AggregateError(
+    [startupError, ...flattenAggregateErrors(cleanupError)],
+    message,
+  );
 }
 
 function normalizeHeaders(headers: Record<string, unknown>): Record<string, string | undefined> {
@@ -1285,6 +2245,100 @@ function parseAnswerDraftRequest(value: unknown): AnswerDraftRequest | undefined
     liveChatMessages: liveChatMessages as LiveChatMessage[],
     ...(value.fragmentLimit === undefined ? {} : { fragmentLimit: value.fragmentLimit }),
     ...(value.liveChatLimit === undefined ? {} : { liveChatLimit: value.liveChatLimit })
+  };
+}
+
+async function getMemoryExtractionStatus(runtime: MemoryExtractionRuntime) {
+  try {
+    const status = toContentFreeMemoryExtractionStatus(await runtime.getStatus());
+    const workerHealth = withWorkerHealth(status, status.deadLetterJobCount);
+    if (!workerHealth.ok) {
+      return workerHealth;
+    }
+    if (!status.workerHealthy) {
+      return {
+        ok: false,
+        ...status,
+        degradedReason: aiWorkerUnavailableReason,
+      };
+    }
+
+    return workerHealth;
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      error: "memory_extraction_status_failed",
+    };
+  }
+}
+
+function toContentFreeMemoryExtractionStatus(
+  status: MemoryExtractionRuntimeStatus,
+): MemoryExtractionRuntimeStatus {
+  return {
+    enabled: true,
+    running: status.running,
+    workerHealthy: status.workerHealthy,
+    intervalMs: status.intervalMs,
+    batchLimit: status.batchLimit,
+    minConfidence: status.minConfidence,
+    candidateConfidenceFloor: status.candidateConfidenceFloor,
+    threadEnabledGroupCount: status.threadEnabledGroupCount,
+    actionEnabledGroupCount: status.actionEnabledGroupCount,
+    pendingProjectionRepairCount: status.pendingProjectionRepairCount,
+    failedProjectionRepairCount: status.failedProjectionRepairCount,
+    projectionRepairHealthy: status.projectionRepairHealthy,
+    pendingJobCount: status.pendingJobCount,
+    processingJobCount: status.processingJobCount,
+    delayedJobCount: status.delayedJobCount,
+    deadLetterJobCount: status.deadLetterJobCount,
+    acceptedCandidateCount: status.acceptedCandidateCount,
+    rejectedCandidateCount: status.rejectedCandidateCount,
+    duplicateCandidateCount: status.duplicateCandidateCount,
+    conflictCandidateCount: status.conflictCandidateCount,
+    acceptedThreadOperationCount: status.acceptedThreadOperationCount,
+    rejectedThreadOperationCount: status.rejectedThreadOperationCount,
+    acceptedActionOperationCount: status.acceptedActionOperationCount,
+    rejectedActionOperationCount: status.rejectedActionOperationCount,
+    skippedRequestCount: status.skippedRequestCount,
+    failedRunCount: status.failedRunCount,
+    ...(status.providerCooldownUntil === undefined
+      ? {}
+      : { providerCooldownUntil: new Date(status.providerCooldownUntil) }),
+    ...(status.latestBatch === undefined
+      ? {}
+      : { latestBatch: toContentFreeMemoryExtractionBatchSnapshot(status.latestBatch) }),
+  };
+}
+
+function toContentFreeMemoryExtractionBatchSnapshot(
+  snapshot: NonNullable<MemoryExtractionRuntimeStatus["latestBatch"]>,
+): NonNullable<MemoryExtractionRuntimeStatus["latestBatch"]> {
+  if (snapshot.status === "failed") {
+    return {
+      status: "failed" as const,
+      startedAt: new Date(snapshot.startedAt),
+      finishedAt: new Date(snapshot.finishedAt),
+      completedCount: 0,
+      skippedCount: 0,
+      deferredCount: 0,
+      failedCount: 0,
+      failed: true as const,
+      errorMessage: "memory_extraction_batch_failed",
+    };
+  }
+
+  return {
+    status: "succeeded" as const,
+    startedAt: new Date(snapshot.startedAt),
+    finishedAt: new Date(snapshot.finishedAt),
+    completedCount: snapshot.completedCount,
+    skippedCount: snapshot.skippedCount,
+    deferredCount: snapshot.deferredCount,
+    failedCount: snapshot.failedCount,
+    failed: false as const,
   };
 }
 
@@ -1431,6 +2485,13 @@ function parseReindexDocumentProfileRequest(
   return { embeddingProfileId, limit: value.limit };
 }
 
+function parseMemoryExtractionDeadLetterLimit(value: unknown): number | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "limit")) {
+    return undefined;
+  }
+  return parseDeadLetterLimit(value.limit);
+}
+
 function parseDeadLetterLimit(value: unknown): number | undefined {
   if (value === undefined) {
     return 20;
@@ -1468,13 +2529,12 @@ function parseAuditEventQuery(value: unknown): AuditEventSummaryQuery | undefine
   const limit = parseDeadLetterLimit(value.limit);
   const documentId = value.documentId === undefined ? undefined : readNonBlankId(value.documentId);
   const type = parseAuditEventType(value.type);
-  const operatorHint =
-    value.operatorHint === undefined ? undefined : readOperatorHint(value.operatorHint);
+  const operatorHint = parseOperatorHint(value.operatorHint);
   if (
     limit === undefined ||
     (documentId === undefined && value.documentId !== undefined) ||
     type === false ||
-    (operatorHint === undefined && value.operatorHint !== undefined)
+    !operatorHint.ok
   ) {
     return undefined;
   }
@@ -1483,7 +2543,7 @@ function parseAuditEventQuery(value: unknown): AuditEventSummaryQuery | undefine
     limit,
     ...(documentId === undefined ? {} : { documentId }),
     ...(type === undefined ? {} : { type }),
-    ...(operatorHint === undefined ? {} : { operatorHint }),
+    ...(operatorHint.value === undefined ? {} : { operatorHint: operatorHint.value }),
   };
 }
 
@@ -1551,9 +2611,103 @@ function parseAuditEventType(value: unknown): AuditEvent["type"] | false | undef
   const type = value.trim();
   return type === "permission_guard_denied" ||
     type === "permission_guard_error" ||
-    type === "runtime_control_updated"
+    type === "runtime_control_updated" ||
+    type === "group_memory_created" ||
+    type === "group_memory_corrected" ||
+    type === "group_memory_deleted" ||
+    type === "memory_extraction_completed" ||
+    type === "memory_extraction_skipped" ||
+    type === "memory_extraction_failed" ||
+    type === "memory_extraction_dlq_replayed" ||
+    type === "memory_extraction_dlq_deleted"
     ? type
     : false;
+}
+
+function sendRuntimeControlMutationResult(
+  reply: FastifyReply,
+  result: RuntimeControlMutationResult,
+) {
+  if (result.kind === "success") {
+    return reply.send({ ...result.status, ok: true, durable: true });
+  }
+  if (result.kind === "conflict") {
+    return reply.code(409).send({ ok: false, error: "runtime_control_conflict" });
+  }
+  if (result.kind === "persistence_failed") {
+    return reply.code(503).send({
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    });
+  }
+
+  return sendRuntimeControlDisableNotPersisted(reply);
+}
+
+function sendRuntimeControlDisableNotPersisted(reply: FastifyReply) {
+  return reply.code(503).send({
+    ok: false,
+    error: "runtime_control_disable_not_persisted",
+    globalEnabled: false,
+    durable: false,
+  });
+}
+
+function sendRuntimeControlPersistenceFailure(reply: FastifyReply) {
+  return reply.code(503).send({
+    ok: false,
+    error: "runtime_control_persistence_failed",
+  });
+}
+
+async function sendFailClosedRuntimeControlStorageMismatch(input: {
+  auditLog: InMemoryAuditLog;
+  controller: RuntimeController;
+  operatorHint?: string;
+  reply: FastifyReply;
+  response: "persistence_failed" | "disable_not_persisted";
+}) {
+  const previousEnabled = input.controller.getSnapshot().globalEnabled;
+  input.controller.disableGlobal();
+  await recordRuntimeControlAuditEvent({
+    auditLog: input.auditLog,
+    scope: "global",
+    enabled: false,
+    previousEnabled,
+    operatorHint: input.operatorHint,
+  });
+
+  return input.response === "disable_not_persisted"
+    ? sendRuntimeControlDisableNotPersisted(input.reply)
+    : sendRuntimeControlPersistenceFailure(input.reply);
+}
+
+async function readRuntimeControlStatus(input: {
+  controller: RuntimeController;
+  service: RuntimeControlService;
+}): Promise<RuntimeControlStatus> {
+  try {
+    const status = await input.service.getStatus();
+    return status.persistence.storage === input.service.persistenceStorage
+      ? status
+      : createDegradedRuntimeControlStatus(input.controller, input.service);
+  } catch {
+    return createDegradedRuntimeControlStatus(input.controller, input.service);
+  }
+}
+
+function createDegradedRuntimeControlStatus(
+  controller: RuntimeController,
+  service: RuntimeControlService,
+): RuntimeControlStatus {
+  return {
+    ...controller.getSnapshot(),
+    persistence: {
+      storage: service.persistenceStorage,
+      ok: false,
+      error: "runtime_control_persistence_failed",
+    },
+  };
 }
 
 async function recordRuntimeControlAuditEvent(input: {
@@ -1580,17 +2734,22 @@ async function recordRuntimeControlAuditEvent(input: {
   }
 }
 
-function readOperatorHint(value: unknown): string | undefined {
+function parseOperatorHint(value: unknown):
+  | { ok: true; value?: string }
+  | { ok: false } {
+  if (value === undefined) {
+    return { ok: true };
+  }
   if (typeof value !== "string") {
-    return undefined;
+    return { ok: false };
   }
 
   const trimmed = value.trim();
   if (trimmed.length === 0 || trimmed.length > 120 || /[\r\n]/.test(trimmed)) {
-    return undefined;
+    return { ok: false };
   }
 
-  return trimmed;
+  return { ok: true, value: trimmed };
 }
 
 function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery | undefined {
@@ -1643,6 +2802,88 @@ function parseDocumentSourceListQuery(value: unknown): DocumentSourceListQuery |
     ...(usableForAnswering === undefined ? {} : { usableForAnswering }),
     ...(includeLatestSnapshot === undefined ? {} : { includeLatestSnapshot }),
   };
+}
+
+function parseWikiSpaceRegistrationRequest(value: unknown): WikiSpaceRegistrationRequest | undefined {
+  if (!isRecord(value) || Object.keys(value).length !== 1 || !("rootSourceUri" in value)) {
+    return undefined;
+  }
+
+  const rootSourceUri = value.rootSourceUri;
+  if (
+    typeof rootSourceUri !== "string" ||
+    rootSourceUri.length === 0 ||
+    rootSourceUri.length > maxInternalRawSourceUriLength ||
+    rootSourceUri.trim() !== rootSourceUri ||
+    !isExactFeishuWikiRootSourceUri(rootSourceUri)
+  ) {
+    return undefined;
+  }
+
+  return { rootSourceUri };
+}
+
+function parseWikiSpaceListQuery(value: unknown): { limit: number } | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "limit")) {
+    return undefined;
+  }
+
+  const limit = parseDeadLetterLimit(value.limit);
+  return limit === undefined ? undefined : { limit };
+}
+
+function parseWikiSpaceEnabledRequest(value: unknown): WikiSpaceEnabledRequest | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 1 ||
+    !("enabled" in value) ||
+    typeof value.enabled !== "boolean"
+  ) {
+    return undefined;
+  }
+
+  return { enabled: value.enabled };
+}
+
+function createWikiSpaceWildcardRouteGuard(suffix: string) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const id = parseWikiSpaceWildcardId(
+      (request.params as { "*"?: unknown })["*"],
+      suffix,
+    );
+    if (id === false) {
+      return reply.callNotFound();
+    }
+    if (id === undefined) {
+      return reply.code(400).send({ ok: false, error: "invalid_request" });
+    }
+  };
+}
+
+function parseWikiSpaceWildcardId(value: unknown, suffix: string): string | false | undefined {
+  if (typeof value !== "string" || !value.endsWith(suffix)) {
+    return false;
+  }
+
+  const rawId = value.slice(0, value.length - suffix.length);
+  if (rawId.length === 0 || rawId.includes("/")) {
+    return false;
+  }
+
+  return readNonBlankId(rawId);
+}
+
+function isExactFeishuWikiRootSourceUri(sourceUri: string): boolean {
+  const nodeToken = parseFeishuWikiNodeToken(sourceUri);
+  if (nodeToken === undefined) {
+    return false;
+  }
+
+  try {
+    return new URL(sourceUri).pathname === `/wiki/${nodeToken}`;
+  } catch {
+    return false;
+  }
 }
 
 function parseDocumentSourceType(value: unknown): DocumentSourceType | false | undefined {
@@ -1745,6 +2986,55 @@ function toDocumentSourceSyncHealth(snapshot: DocumentSnapshot | undefined) {
   };
 }
 
+function toMemoryExtractionDeadLetterResponse(deadLetter: MemoryExtractionDeadLetter) {
+  const base = {
+    id: deadLetter.id,
+    errorMessage: normalizeMemoryExtractionFailureClassification(deadLetter.errorMessage),
+    failedAt: new Date(deadLetter.failedAt),
+    replayable: deadLetter.replayable,
+  };
+  if ("job" in deadLetter) {
+    return {
+      ...base,
+      job: {
+        schemaVersion: deadLetter.job.schemaVersion,
+        idempotencyKey: deadLetter.job.idempotencyKey,
+        requestId: deadLetter.job.requestId,
+        groupId: deadLetter.job.groupId,
+        enqueuedAt: new Date(deadLetter.job.enqueuedAt),
+        notBefore: new Date(deadLetter.job.notBefore),
+        attempts: deadLetter.job.attempts,
+      },
+    };
+  }
+
+  return {
+    ...base,
+    payloadDigest: deadLetter.payloadDigest,
+    payloadBytes: deadLetter.payloadBytes,
+  };
+}
+
+function normalizeMemoryExtractionFailureClassification(value: string): string {
+  return memoryExtractionFailureClassifications.has(value) ? value : "internal_error";
+}
+
+async function recordMemoryExtractionRecoveryAuditEvent(input: {
+  auditLog: InMemoryAuditLog;
+  type: "memory_extraction_dlq_replayed" | "memory_extraction_dlq_deleted";
+  id: string;
+}): Promise<void> {
+  try {
+    await input.auditLog.record({
+      type: input.type,
+      documentId: input.id,
+      fragmentIds: [],
+    });
+  } catch {
+    // Operator recovery succeeds independently of the bounded audit sink.
+  }
+}
+
 function toAuditEventResponse(event: RecordedAuditEvent) {
   return {
     ...event,
@@ -1840,6 +3130,15 @@ function parseDeadLetterBatchReplayRequest(
   }
 
   return { ids: Array.from(new Set(ids as string[])) };
+}
+
+function parseMemoryExtractionDeadLetterBatchReplayRequest(
+  value: unknown,
+): DeadLetterBatchReplayRequest | undefined {
+  if (!isRecord(value) || Object.keys(value).length !== 1 || !("ids" in value)) {
+    return undefined;
+  }
+  return parseDeadLetterBatchReplayRequest(value);
 }
 
 function parseRegisterAuthorizedWikiDocumentRequest(
@@ -1983,15 +3282,55 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export async function startServer({
   appDependencies = {},
+  createRuntimeControlRuntime = createDefaultRuntimeControlRuntime,
 }: StartServerOptions = {}) {
-  const internalApiToken = process.env.IRIS_INTERNAL_API_TOKEN;
+  const internalApiToken = readInternalApiToken(process.env.IRIS_INTERNAL_API_TOKEN);
   const feishuAuthConfig = readFeishuAuthConfig();
   const host = resolveServerListenHost(
     internalApiToken,
     feishuAuthConfig.verificationToken,
   );
   const port = readServerPort();
-  const app = buildApp({ ...appDependencies, internalApiToken });
+  readBearerToken(
+    appDependencies.ingressHealthToken ?? process.env.IRIS_INGRESS_HEALTH_TOKEN,
+    "IRIS_INGRESS_HEALTH_TOKEN",
+  );
+
+  const runtimeControlRuntime = await createRuntimeControlRuntime();
+  const {
+    runtimeController: _ignoredRuntimeController,
+    runtimeControl: _ignoredRuntimeControl,
+    closeRuntimeControl: _ignoredCloseRuntimeControl,
+    onRuntimeStartupCleanup: _ignoredRuntimeStartupCleanup,
+    ...productionAppDependencies
+  } = appDependencies as BuildAppDependencies;
+  let runtimeStartupCleanup: Promise<void> | undefined;
+  let app;
+  try {
+    app = await buildApp({
+      ...productionAppDependencies,
+      internalApiToken,
+      runtimeControl: runtimeControlRuntime.runtimeControl,
+      closeRuntimeControl: () => runtimeControlRuntime.close(),
+      onRuntimeStartupCleanup: (cleanup) => {
+        runtimeStartupCleanup = cleanup;
+      },
+    });
+  } catch (startupError) {
+    try {
+      await closeRuntimeResources([
+        () => runtimeStartupCleanup,
+        () => runtimeControlRuntime.close(),
+      ]);
+    } catch (cleanupError) {
+      throw startupCleanupError(
+        startupError,
+        cleanupError,
+        "Iris server composition failed and runtime-control cleanup failed",
+      );
+    }
+    throw startupError;
+  }
 
   try {
     await app.listen({ port, host });
@@ -1999,8 +3338,9 @@ export async function startServer({
     try {
       await app.close();
     } catch (cleanupError) {
-      throw new AggregateError(
-        [startupError, cleanupError],
+      throw startupCleanupError(
+        startupError,
+        cleanupError,
         "Iris server startup failed and runtime cleanup failed",
       );
     }

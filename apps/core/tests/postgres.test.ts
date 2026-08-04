@@ -16,6 +16,24 @@ describe("createPostgresPool", () => {
     expect(pool.options.connectionString).toBe(databaseUrl);
     void pool.end();
   });
+
+  it("passes bounded operation timeouts to node-postgres", () => {
+    const databaseUrl = "postgres://age:secret@localhost:5432/age";
+
+    const pool = createPostgresPool({
+      databaseUrl,
+      connectionTimeoutMillis: 10_000,
+      queryTimeoutMillis: 10_000,
+      statementTimeoutMillis: 10_000,
+      lockTimeoutMillis: 10_000,
+    });
+
+    expect(pool.options.connectionTimeoutMillis).toBe(10_000);
+    expect(pool.options.query_timeout).toBe(10_000);
+    expect(pool.options.statement_timeout).toBe(10_000);
+    expect(pool.options.lock_timeout).toBe(10_000);
+    void pool.end();
+  });
 });
 
 describe("closePostgresPool", () => {

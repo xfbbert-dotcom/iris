@@ -1,21 +1,49 @@
-import type { RuntimeConfig } from "../config/runtime-config.js";
+import type { DurableRuntimeControlSnapshot } from "./runtime-control-state-repository.js";
+import type { IrisCapability, RuntimeConfig } from "../config/runtime-config.js";
 
 export type RuntimeControllerSnapshot = {
   globalEnabled: boolean;
+  desiredGlobalEnabled: boolean;
+  activationRequired: boolean;
   disabledGroupIds: string[];
-  capabilities: RuntimeConfig["capabilities"];
+  capabilities: IrisCapability;
+  revision: number;
+  updatedAt: Date;
+  updatedBy?: string;
 };
 export type RuntimeCapabilityName = keyof RuntimeConfig["capabilities"];
 
 export class RuntimeController {
-  constructor(private readonly config: RuntimeConfig) {}
+  private desiredGlobalEnabled: boolean;
+  private revision = 0;
+  private updatedAt: Date;
+  private updatedBy: string | undefined;
+
+  constructor(private readonly config: RuntimeConfig) {
+    this.desiredGlobalEnabled = config.globalEnabled;
+    this.updatedAt = new Date();
+  }
 
   getSnapshot(): RuntimeControllerSnapshot {
     return {
       globalEnabled: this.config.globalEnabled,
+      desiredGlobalEnabled: this.desiredGlobalEnabled,
+      activationRequired: this.desiredGlobalEnabled && !this.config.globalEnabled,
       disabledGroupIds: [...this.config.disabledGroupIds].sort(),
       capabilities: { ...this.config.capabilities },
+      revision: this.revision,
+      updatedAt: new Date(this.updatedAt),
+      ...(this.updatedBy === undefined ? {} : { updatedBy: this.updatedBy }),
     };
+  }
+
+  replaceDurablePolicy(snapshot: DurableRuntimeControlSnapshot): void {
+    this.config.disabledGroupIds = new Set(snapshot.disabledGroupIds);
+    this.config.capabilities = { ...snapshot.capabilities };
+    this.desiredGlobalEnabled = snapshot.desiredGlobalEnabled;
+    this.revision = snapshot.revision;
+    this.updatedAt = new Date(snapshot.updatedAt);
+    this.updatedBy = snapshot.updatedBy;
   }
 
   disableGlobal(): void {
@@ -116,8 +144,15 @@ export class RuntimeController {
     return this.config.globalEnabled && this.config.capabilities.retrieveKnowledgeBase;
   }
 
-  canGenerateKnowledgeDrafts(): boolean {
-    return this.config.globalEnabled && this.config.capabilities.generateKnowledgeDrafts;
+  canGenerateKnowledgeDrafts(input: { sourceGroupId?: string } = {}): boolean {
+    if (!this.config.globalEnabled || !this.config.capabilities.generateKnowledgeDrafts) {
+      return false;
+    }
+    if (input.sourceGroupId === undefined) {
+      return true;
+    }
+
+    return this.canProcessGroupMessage(input.sourceGroupId);
   }
 
   canWriteKnowledgeBase(): boolean {

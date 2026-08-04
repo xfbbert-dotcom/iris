@@ -23,6 +23,7 @@ describe("DocumentRetrievalContextBuilder", () => {
           embedding: [1, 0, 0, 0, 0, 0],
           embeddingProfileId: "static-dev-6d",
           createdAt: new Date("2026-07-02T01:00:00.000Z"),
+          sourceType: "feishu_wiki" as const,
           distance: 0.1,
         },
         {
@@ -36,16 +37,22 @@ describe("DocumentRetrievalContextBuilder", () => {
           embedding: [0, 1, 0, 0, 0, 0],
           embeddingProfileId: "static-dev-6d",
           createdAt: new Date("2026-07-02T01:00:00.000Z"),
+          sourceType: "feishu_wiki" as const,
           distance: 0.2,
         },
       ]),
     };
     const canReadDocument = vi.fn(async (documentId: string) => documentId === "source-allowed");
+    const onPermissionDecision = vi.fn(async (_decision: {
+      documentId: string;
+      outcome: "allowed" | "denied" | "error";
+    }) => undefined);
     const builder = createDocumentRetrievalContextBuilder({
       embeddingProfileId: "static-dev-6d",
       embedder,
       fragments,
       canReadDocument,
+      onPermissionDecision,
     });
 
     const result = await builder.buildContext({
@@ -62,13 +69,17 @@ describe("DocumentRetrievalContextBuilder", () => {
     });
     expect(canReadDocument).toHaveBeenCalledWith("source-allowed");
     expect(canReadDocument).toHaveBeenCalledWith("source-denied");
+    expect(onPermissionDecision.mock.calls.map(([decision]) => decision)).toEqual([
+      { documentId: "source-allowed", outcome: "allowed" },
+      { documentId: "source-denied", outcome: "denied" },
+    ]);
     expect(result.allowedFragments).toEqual([
       expect.objectContaining({ id: "fragment-allowed", documentSourceId: "source-allowed" }),
     ]);
     expect(result.deniedDocumentIds).toEqual(["source-denied"]);
     expect(result.retrievedFragmentCount).toBe(2);
     expect(result.promptContext).toContain(
-      '<document source="https://example.com/doc-a#chunk-0">Allowed document text</document>',
+      '<document source="https://example.com/doc-a#chunk-0" citation_ref="D1">Allowed document text</document>',
     );
     expect(result.promptContext).not.toContain("Denied document text");
     expect(result.promptContext.indexOf("<background_documents>")).toBeLessThan(
@@ -112,6 +123,175 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith(
       expect.objectContaining({ groupId: "chat-current" }),
     );
+  });
+
+  it("loads current-group memories and exposes evidence metadata", async () => {
+    const groupMemoryContextProvider = {
+      loadActiveMemories: vi.fn(async () => [{
+        id: "memory-1",
+        scope: "group" as const,
+        category: "decision" as const,
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1"],
+      }]),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: { searchSimilarFragments: vi.fn(async () => []) },
+      memoryGroupId: "chat-current",
+      groupMemoryContextProvider,
+      canReadDocument: vi.fn(),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "When is launch?",
+      liveChatMessages: [{ speaker: "Alice", text: "Please use the current plan." }],
+    });
+
+    expect(groupMemoryContextProvider.loadActiveMemories).toHaveBeenCalledWith({
+      groupId: "chat-current",
+      limit: 8,
+    });
+    expect(result.usedGroupMemories).toEqual([{
+      id: "memory-1",
+      scope: "group",
+      category: "decision",
+      content: "Launch Thursday.",
+      evidenceMessageIds: ["msg-1"],
+    }]);
+    expect(result.promptContext).toContain('id="memory-1"');
+    expect(result.promptContext.trim().endsWith("</live_chat_context>")).toBe(true);
+  });
+
+  it("loads discussion state independently of document retrieval and keeps live chat last", async () => {
+    const conversationStateContextProvider = {
+      loadRelevant: vi.fn(async () => ({
+        threads: [{
+          id: "thread-1",
+          status: "open" as const,
+          summary: "Launch remains Thursday.",
+          evidenceMessageIds: ["thread-message-1"],
+        }],
+        actions: [{
+          id: "action-1",
+          threadId: "thread-1",
+          status: "open" as const,
+          description: "Publish the announcement.",
+          ownerRef: "user-1",
+          evidenceMessageIds: ["action-message-1"],
+        }],
+      })),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: { searchSimilarFragments: vi.fn(async () => []) },
+      conversationStateGroupId: "chat-current",
+      conversationStateContextProvider,
+      canReadDocument: vi.fn(),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "When is launch?",
+      askerId: "user-1",
+      fragmentLimit: 0,
+      liveChatMessages: Array.from({ length: 22 }, (_, index) => ({
+        speaker: "Alice",
+        text: `live-${index + 1}`,
+      })),
+    });
+
+    expect(conversationStateContextProvider.loadRelevant).toHaveBeenCalledWith({
+      groupId: "chat-current",
+      queryText: "When is launch?",
+      askerId: "user-1",
+      limit: 6,
+    });
+    expect((result.usedDiscussionThreads ?? []).map((thread) => thread.id)).toEqual(["thread-1"]);
+    expect((result.usedActionItems ?? []).map((action) => action.id)).toEqual(["action-1"]);
+    expect(result.promptContext.indexOf("<background_documents>")).toBeLessThan(
+      result.promptContext.indexOf("<group_memories>"),
+    );
+    expect(result.promptContext.indexOf("<group_memories>")).toBeLessThan(
+      result.promptContext.indexOf("<discussion_threads>"),
+    );
+    expect(result.promptContext.indexOf("<discussion_threads>")).toBeLessThan(
+      result.promptContext.indexOf("<action_items>"),
+    );
+    expect(result.promptContext.trim().endsWith("</live_chat_context>")).toBe(true);
+    expect(result.promptContext).not.toContain("live-1</message>");
+    expect(result.promptContext).toContain("live-3</message>");
+  });
+
+  it("loads group memories independently when document retrieval is disabled", async () => {
+    const groupMemoryContextProvider = {
+      loadActiveMemories: vi.fn(async () => [{
+        id: "memory-1",
+        scope: "group" as const,
+        category: "decision" as const,
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1"],
+      }]),
+    };
+    const embedder = { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) };
+    const fragments = { searchSimilarFragments: vi.fn(async () => []) };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder,
+      fragments,
+      memoryGroupId: "chat-current",
+      groupMemoryContextProvider,
+      canReadDocument: vi.fn(),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "Memory only",
+      fragmentLimit: 0,
+      liveChatMessages: [],
+    });
+
+    expect(groupMemoryContextProvider.loadActiveMemories).toHaveBeenCalledOnce();
+    expect(result.usedGroupMemories.map((memory) => memory.id)).toEqual(["memory-1"]);
+    expect(result.promptContext).toContain("Launch Thursday.");
+    expect(embedder.embedTexts).not.toHaveBeenCalled();
+    expect(fragments.searchSimilarFragments).not.toHaveBeenCalled();
+  });
+
+  it("does not load memories without a current group boundary", async () => {
+    const groupMemoryContextProvider = { loadActiveMemories: vi.fn(async () => []) };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: { searchSimilarFragments: vi.fn(async () => []) },
+      groupMemoryContextProvider,
+      canReadDocument: vi.fn(),
+    });
+
+    const result = await builder.buildContext({ queryText: "No group", liveChatMessages: [] });
+
+    expect(groupMemoryContextProvider.loadActiveMemories).not.toHaveBeenCalled();
+    expect(result.usedGroupMemories).toEqual([]);
+  });
+
+  it("fails closed when current-group memory retrieval fails", async () => {
+    const embedder = { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder,
+      fragments: { searchSimilarFragments: vi.fn(async () => []) },
+      memoryGroupId: "chat-current",
+      groupMemoryContextProvider: {
+        loadActiveMemories: vi.fn(async () => { throw new Error("memory unavailable"); }),
+      },
+      canReadDocument: vi.fn(),
+    });
+
+    await expect(builder.buildContext({
+      queryText: "Fail closed",
+      liveChatMessages: [],
+    })).rejects.toThrow("memory unavailable");
+    expect(embedder.embedTexts).not.toHaveBeenCalled();
   });
 
   it("skips embedding, search, and permission checks when fragmentLimit is 0", async () => {
@@ -315,6 +495,48 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.promptContext).not.toContain("Denied two");
   });
 
+  it("does not block for a denied overfetch candidate outside the prompt-ranked window", async () => {
+    const canReadDocument = vi.fn(async (documentId: string) => documentId !== "source-denied-3");
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments: {
+        searchSimilarFragments: vi.fn(async () => [
+          fragment({
+            id: "allowed-1",
+            documentSourceId: "source-allowed-1",
+            chunkIndex: 0,
+            text: "Allowed one",
+          }),
+          fragment({
+            id: "allowed-2",
+            documentSourceId: "source-allowed-2",
+            chunkIndex: 1,
+            text: "Allowed two",
+          }),
+          fragment({
+            id: "denied-3",
+            documentSourceId: "source-denied-3",
+            chunkIndex: 2,
+            text: "Denied only during overfetch",
+          }),
+        ]),
+      },
+      canReadDocument,
+    });
+
+    const result = await builder.buildContext({
+      queryText: "permission filtered docs",
+      fragmentLimit: 2,
+      liveChatMessages: [],
+    });
+
+    expect(canReadDocument).toHaveBeenCalledWith("source-denied-3");
+    expect(result.allowedFragments.map(({ id }) => id)).toEqual(["allowed-1", "allowed-2"]);
+    expect(result.deniedDocumentIds).toEqual([]);
+    expect(result.promptContext).not.toContain("Denied only during overfetch");
+  });
+
   it("does not allow duplicate fragment IDs to leak denied document text", async () => {
     const fragments = {
       searchSimilarFragments: vi.fn(async () => [
@@ -483,6 +705,7 @@ function fragment(overrides: {
     embedding: [1, 0, 0, 0, 0, 0],
     embeddingProfileId: "static-dev-6d",
     createdAt: new Date("2026-07-02T01:00:00.000Z"),
+    sourceType: "feishu_wiki" as const,
     ...overrides,
   };
 }

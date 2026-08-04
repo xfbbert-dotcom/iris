@@ -5,7 +5,8 @@ import { readBoundedJsonResponse } from "../integrations/bounded-json-response.j
 import { readExternalErrorMessage } from "../integrations/external-error-message.js";
 
 const MAX_EMBEDDING_INPUT_TEXTS = 64;
-const MAX_EMBEDDING_INPUT_TEXT_CHARS = 4000;
+// Preserve the 4,000-character query contract after the longest approved model prefix is applied.
+const MAX_EMBEDDING_INPUT_TEXT_CHARS = 4029;
 const MAX_EMBEDDING_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export type OpenAICompatibleEmbeddingProviderDependencies = {

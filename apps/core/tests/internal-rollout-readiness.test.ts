@@ -4,6 +4,166 @@ import { buildInternalRolloutReadinessReport } from "../src/admin/internal-rollo
 import type { EnvLike } from "../src/config/env.js";
 
 describe("buildInternalRolloutReadinessReport", () => {
+  it("treats action reviews as disabled without requiring review credentials", () => {
+    const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
+
+    expect(checksById(report).actionReviews).toMatchObject({
+      status: "pass",
+      detail: "Action reviews are safely disabled.",
+    });
+  });
+
+  it("fails closed when enabled action review prerequisites or runtime facts are incomplete", () => {
+    const env = readyRolloutEnv({
+      IRIS_ACTION_REVIEW_ENABLED: "true",
+      IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+      IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+      IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+      IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+      FEISHU_ENCRYPT_KEY: "knowledge-card-encrypt-key",
+    });
+
+    expect(checksById(buildInternalRolloutReadinessReport(env)).actionReviews).toMatchObject({
+      status: "fail",
+      detail: "Action-review runtime status is unavailable.",
+    });
+
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      actionReviewStatus: {
+        configured: true,
+        running: true,
+        migration0034Applied: false,
+      },
+    })).actionReviews).toMatchObject({
+      status: "fail",
+      detail: "Action-review migration 0034 is not applied.",
+    });
+
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      actionReviewStatus: {
+        configured: true,
+        running: true,
+        migration0034Applied: true,
+      },
+    })).actionReviews).toMatchObject({
+      status: "pass",
+      detail: "Action-review runtime is configured and running with migration 0034 applied.",
+    });
+  });
+
+  it("blocks enabled action reviews when their dependent approval or knowledge-card runtimes are disabled", () => {
+    const reviewEnv = {
+      IRIS_ACTION_REVIEW_ENABLED: "true",
+      IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+      IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+    };
+
+    expect(checksById(buildInternalRolloutReadinessReport(
+      readyRolloutEnv(reviewEnv),
+      { actionReviewStatus: actionReviewStatus() },
+    )).actionReviews).toMatchObject({
+      status: "fail",
+      detail: "IRIS_APPROVAL_ACTIONS_ENABLED=true is required for action reviews.",
+    });
+
+    expect(checksById(buildInternalRolloutReadinessReport(
+      readyRolloutEnv({
+        ...reviewEnv,
+        IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+        IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+      }),
+      { actionReviewStatus: actionReviewStatus() },
+    )).actionReviews).toMatchObject({
+      status: "fail",
+      detail: "IRIS_KNOWLEDGE_CARD_ENABLED=true is required for action reviews.",
+    });
+  });
+
+  it("treats action approvals as safely disabled by default", () => {
+    const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
+    expect(report.checks.find((check) => check.id === "actionApprovals")).toMatchObject({
+      status: "pass",
+      detail: "Action approvals are safely disabled.",
+    });
+  });
+
+  it("blocks enabled action approvals when loops or durable outbox facts are unsafe", () => {
+    const env = readyRolloutEnv({
+      IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+    });
+    const missing = buildInternalRolloutReadinessReport(env);
+    expect(missing.checks.find((check) => check.id === "actionApprovals")).toMatchObject({
+      status: "fail",
+      detail: "Action-approval runtime status is unavailable.",
+    });
+
+    const unsafe = buildInternalRolloutReadinessReport(env, {
+      actionApprovalStatus: {
+        ok: true,
+        enabled: true,
+        running: true,
+        planner: { running: true },
+        dispatcher: { running: true },
+        outbox: {
+          pending: 0,
+          processing: 0,
+          external_attempting: 0,
+          sent: 1,
+          failed: 0,
+          outcome_unknown: 1,
+          terminalFailed: 0,
+        },
+      },
+    });
+    expect(unsafe.checks.find((check) => check.id === "actionApprovals")).toMatchObject({
+      status: "fail",
+      detail: "Action-approval outbox has unresolved outcome-unknown rows.",
+    });
+  });
+
+  it("blocks failed action batches but ignores governed historical outbox rows", () => {
+    const env = readyRolloutEnv({
+      IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+    });
+    const baseStatus = {
+      ok: true,
+      enabled: true,
+      running: true,
+      planner: { running: true },
+      dispatcher: { running: true },
+      outbox: {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 1,
+        outcome_unknown: 0,
+        terminalFailed: 0,
+      },
+    };
+
+    expect(checksById(buildInternalRolloutReadinessReport(env, {
+      actionApprovalStatus: baseStatus,
+    })).actionApprovals).toMatchObject({ status: "pass" });
+
+    for (const [component, detail] of [
+      ["planner", "Action-proposal planner latest batch failed."],
+      ["dispatcher", "Action-approval dispatcher latest batch failed."],
+    ] as const) {
+      const status = {
+        ...baseStatus,
+        [component]: { running: true, latestBatch: { status: "failed" } },
+      };
+      expect(checksById(buildInternalRolloutReadinessReport(env, {
+        actionApprovalStatus: status,
+      })).actionApprovals).toMatchObject({ status: "fail", detail });
+    }
+  });
+
   it("marks the internal rollout profile ready when core chat, document, and answer dependencies are configured", () => {
     const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
 
@@ -233,7 +393,196 @@ describe("buildInternalRolloutReadinessReport", () => {
       },
     });
   });
+
+  it("reports the default-off knowledge-card state as safely disabled", () => {
+    const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
+
+    expect(checksById(report)).toMatchObject({
+      knowledgeCards: {
+        status: "pass",
+        detail: "Knowledge cards are safely disabled.",
+        envVars: [
+          "IRIS_KNOWLEDGE_CARD_ENABLED",
+          "IRIS_KNOWLEDGE_CARD_GROUP_IDS",
+          "IRIS_KNOWLEDGE_CARD_WORKER_INTERVAL_MS",
+          "IRIS_KNOWLEDGE_CARD_WORKER_BATCH_LIMIT",
+          "DATABASE_URL",
+          "REDIS_URL",
+          "FEISHU_VERIFICATION_TOKEN",
+          "FEISHU_ENCRYPT_KEY",
+          "FEISHU_APP_ID",
+          "FEISHU_APP_SECRET",
+          "IRIS_FEISHU_BOT_OPEN_ID",
+        ],
+      },
+    });
+  });
+
+  it("passes enabled knowledge cards only while both loops and status are healthy", () => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: knowledgeCardStatus() },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "pass",
+      detail: "Knowledge-card dispatcher and interaction worker are running.",
+    });
+  });
+
+  it("does not block enabled knowledge cards on ordinary in-flight or superseded outbox rows", () => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: knowledgeCardStatus({
+        outbox: {
+          pending: 3,
+          processing: 2,
+          external_attempting: 1,
+          sent: 8,
+          failed: 4,
+          outcome_unknown: 0,
+          terminalFailed: 0,
+        },
+      }) },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({ status: "pass" });
+  });
+
+  it.each([
+    [
+      "missing outbox status",
+      undefined,
+      "Knowledge-card outbox status is unavailable.",
+    ],
+    [
+      "unresolved outcome-unknown rows",
+      {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 0,
+        outcome_unknown: 1,
+        terminalFailed: 0,
+      },
+      "Knowledge-card outbox has unresolved outcome-unknown rows.",
+    ],
+    [
+      "terminal failed rows",
+      {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 2,
+        outcome_unknown: 0,
+        terminalFailed: 1,
+      },
+      "Knowledge-card outbox has terminal failed rows.",
+    ],
+  ])("fails closed for %s", (_case, outbox, detail) => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: knowledgeCardStatus({ outbox }) },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail,
+    });
+  });
+
+  it("fails closed for incomplete config, stopped loops, absent status, and unreadable status", () => {
+    const incomplete = buildInternalRolloutReadinessReport(readyRolloutEnv({
+      IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
+    }));
+    expect(checksById(incomplete).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "IRIS_KNOWLEDGE_CARD_GROUP_IDS must contain at least one group",
+    });
+
+    const stopped = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: knowledgeCardStatus({
+        running: false,
+        dispatcher: { running: false, intervalMs: 1000, batchLimit: 10 },
+      }) },
+    );
+    expect(checksById(stopped).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card dispatcher and interaction worker must both be running.",
+    });
+
+    const absent = buildInternalRolloutReadinessReport(knowledgeCardEnabledEnv());
+    expect(checksById(absent).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card runtime status is unavailable.",
+    });
+
+    const unreadable = buildInternalRolloutReadinessReport(
+      knowledgeCardEnabledEnv(),
+      { knowledgeCardStatus: {
+        ok: false,
+        enabled: true,
+        running: false,
+        degradedReason: "knowledge_card_status_unavailable",
+      } },
+    );
+    expect(checksById(unreadable).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card runtime status is unreadable.",
+    });
+  });
 });
+
+function knowledgeCardEnabledEnv(): EnvLike {
+  return readyRolloutEnv({
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    FEISHU_ENCRYPT_KEY: "knowledge-card-encrypt-key",
+  });
+}
+
+function knowledgeCardStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    ok: true as const,
+    enabled: true as const,
+    running: true,
+    enabledGroupCount: 1,
+    dispatcher: { running: true, intervalMs: 1000, batchLimit: 10 },
+    worker: { running: true, intervalMs: 1000, batchLimit: 10 },
+    queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
+    presentations: {
+      pending_send: 0,
+      active: 0,
+      superseded: 0,
+      closed: 0,
+      send_failed: 0,
+      pendingSend: 0,
+    },
+    outbox: {
+      pending: 0,
+      processing: 0,
+      external_attempting: 0,
+      sent: 0,
+      failed: 0,
+      outcome_unknown: 0,
+      terminalFailed: 0,
+    },
+    ...overrides,
+  };
+}
+
+function actionReviewStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    configured: true,
+    running: true,
+    migration0034Applied: true,
+    ...overrides,
+  };
+}
 
 function readyRolloutEnv(overrides: EnvLike = {}): EnvLike {
   return {

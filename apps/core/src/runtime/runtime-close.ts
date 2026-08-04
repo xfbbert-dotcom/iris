@@ -1,17 +1,20 @@
 export async function closeRuntimeResources(
   cleanupSteps: Array<() => Promise<unknown>>,
 ): Promise<void> {
-  let firstError: unknown;
+  const errors: unknown[] = [];
 
   for (const cleanupStep of cleanupSteps) {
     try {
       await cleanupStep();
     } catch (error) {
-      firstError ??= error;
+      errors.push(error);
     }
   }
 
-  if (firstError !== undefined) {
-    throw firstError;
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Iris runtime resource cleanup failed");
   }
 }

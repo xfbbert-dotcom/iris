@@ -10,10 +10,20 @@ import {
 } from "../config/env.js";
 import type { AnswerDraftOrchestrator } from "../agent/answer-draft-orchestrator.js";
 import {
+  createAnswerReplyDeliveryService,
+} from "../answer-replies/answer-reply-delivery-service.js";
+import type { AnswerReplyRepository } from "../answer-replies/answer-reply-repository.js";
+import { createPostgresAnswerReplyRepository } from "../answer-replies/postgres-answer-reply-repository.js";
+import {
+  createUnavailableAnswerSourcePermissionVerifier,
+  type AnswerSourcePermissionVerifier,
+} from "../answer-replies/answer-source-permission-verifier.js";
+import {
   createFeishuMentionAnswerResponder,
   type FeishuMentionAnswerResponder,
 } from "../conversation/feishu-mention-answer-responder.js";
 import { createFeishuMessageEventProcessor } from "../conversation/feishu-message-event-processor.js";
+import { createPostgresConversationMessageReplayGuard } from "../conversation/conversation-message-replay-guard.js";
 import {
   createPostgresConversationMessageRepository,
   type Queryable,
@@ -55,6 +65,8 @@ import {
   type RawEventWorkerBatchSnapshot,
   type RawEventWorkerLoop,
 } from "../events/raw-event-worker-loop.js";
+import type { MemoryExtractionPlanner } from "../memory-extraction/memory-extraction-planner.js";
+import type { ChatKnowledgeDraftCommand } from "../knowledge-governance/chat-knowledge-draft-command.js";
 import { closeRuntimeResources } from "./runtime-close.js";
 import { observeStartupPromise } from "./startup-promise.js";
 
@@ -67,6 +79,7 @@ export type EventWorkerRuntime = {
     delete(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
     replayBatch(input: { ids: string[] }): Promise<ReplayRawEventDeadLettersResult>;
   };
+  answerReplies?: Pick<AnswerReplyRepository, "findByIncomingMessage">;
   getStatus(): Promise<EventWorkerRuntimeStatus>;
   start(): void;
   close(): Promise<void>;
@@ -81,6 +94,9 @@ export type EventWorkerRuntimeStatus = {
   mentionRepliesUnavailableReason?: MentionReplyUnavailableReason;
   pendingEventCount: number;
   deadLetterEventCount: number;
+  answerReplyUnresolvedCount: number;
+  answerReplyPendingSafeNoticeCount: number;
+  answerReplyReconciliationRequiredCount: number;
   latestBatch?: RawEventWorkerBatchSnapshot;
 };
 export type MentionReplyUnavailableReason =
@@ -101,13 +117,16 @@ type RuntimeGate = {
 };
 type GroupVisibleDocumentRegistry = Pick<
   AsyncDocumentSourceRegistry,
-  "registerGroupVisibleDocument"
+  "registerGroupVisibleDocument" | "registerUserSubmittedDocument"
 >;
 
 export type EventWorkerRuntimeDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => PostgresPool;
   createRedisClient?: (url: string) => RedisClient;
+  createPostgresAnswerReplyRepository?: typeof createPostgresAnswerReplyRepository;
+  createAnswerReplyDeliveryService?: typeof createAnswerReplyDeliveryService;
   createConversationMessageRepository?: typeof createPostgresConversationMessageRepository;
+  createMessageReplayGuard?: typeof createPostgresConversationMessageReplayGuard;
   createDocumentSourceRegistry?: (pool: PostgresPool) => GroupVisibleDocumentRegistry;
   createDocumentLinkExtractor?: typeof createFeishuDocumentLinkExtractor;
   createDocumentSyncQueue?: (
@@ -122,17 +141,25 @@ export type EventWorkerRuntimeDependencies = {
   createWorkerLoop?: typeof createRawEventWorkerLoop;
 };
 
-export function createEventWorkerRuntime({
+export async function createEventWorkerRuntime({
   env = process.env,
   dependencies = {},
   runtimeController,
   answerDraftOrchestrator,
+  answerSourcePermissionVerifier,
+  memoryExtractionPlanner,
+  knowledgeDraftCommand,
+  now = () => new Date(),
 }: {
   env?: EnvLike;
   dependencies?: EventWorkerRuntimeDependencies;
   runtimeController?: RuntimeGate;
   answerDraftOrchestrator?: Pick<AnswerDraftOrchestrator, "generateDraft">;
-} = {}): EventWorkerRuntime | undefined {
+  answerSourcePermissionVerifier?: AnswerSourcePermissionVerifier;
+  memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
+  knowledgeDraftCommand?: Pick<ChatKnowledgeDraftCommand, "execute">;
+  now?: () => Date;
+} = {}): Promise<EventWorkerRuntime | undefined> {
   const runtimeConfig = readEventWorkerRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
     return undefined;
@@ -144,29 +171,48 @@ export function createEventWorkerRuntime({
     dependencies,
     runtimeController,
     answerDraftOrchestrator,
+    answerSourcePermissionVerifier,
+    memoryExtractionPlanner,
+    knowledgeDraftCommand,
+    now,
   });
 }
 
-function createEnabledEventWorkerRuntime({
+async function createEnabledEventWorkerRuntime({
   env,
   runtimeConfig,
   dependencies,
   runtimeController,
   answerDraftOrchestrator,
+  answerSourcePermissionVerifier,
+  memoryExtractionPlanner,
+  knowledgeDraftCommand,
+  now,
 }: {
   env: EnvLike;
   runtimeConfig: Extract<EventWorkerRuntimeConfig, { enabled: true }>;
   dependencies: EventWorkerRuntimeDependencies;
   runtimeController: RuntimeGate | undefined;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
-}): EventWorkerRuntime {
+  answerSourcePermissionVerifier: AnswerSourcePermissionVerifier | undefined;
+  memoryExtractionPlanner: Pick<MemoryExtractionPlanner, "registerMessage"> | undefined;
+  knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
+  now: () => Date;
+}): Promise<EventWorkerRuntime> {
+  preflightMentionAnswerConfiguration(env);
   const createRedis =
     dependencies.createRedisClient ??
     ((url: string) => createClient({ url }) as unknown as RedisClient);
   const createPool = dependencies.createPostgresPool ?? createPostgresPool;
+  const createAnswerReplies =
+    dependencies.createPostgresAnswerReplyRepository ?? createPostgresAnswerReplyRepository;
+  const createAnswerReplyService =
+    dependencies.createAnswerReplyDeliveryService ?? createAnswerReplyDeliveryService;
   const createMessages =
     dependencies.createConversationMessageRepository ??
     createPostgresConversationMessageRepository;
+  const createMessageReplayGuard =
+    dependencies.createMessageReplayGuard ?? createPostgresConversationMessageReplayGuard;
   const createDocumentSources =
     dependencies.createDocumentSourceRegistry ?? createDefaultDocumentSourceRegistry;
   const createDocumentLinkExtractor =
@@ -186,117 +232,185 @@ function createEnabledEventWorkerRuntime({
     dependencies.createMentionAnswerResponder ?? createFeishuMentionAnswerResponder;
   const createProcessor = dependencies.createProcessor ?? createFeishuMessageEventProcessor;
   const createLoop = dependencies.createWorkerLoop ?? createRawEventWorkerLoop;
-
-  const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
-    env,
-    answerDraftOrchestrator,
-    runtimeController,
-    createTokenProvider,
-    createMessageReplier,
-    createMentionResponder,
-  });
-  const mentionAnswerResponder = mentionAnswerReadiness.responder;
   const pool = createPool(readDatabaseConfig(env));
-  const redis = createRedis(runtimeConfig.redisUrl);
-  const redisConnection = observeStartupPromise(redis.connect().then(() => redis));
-  const messages = createMessages({ queryable: pool });
-  const documentSources = createDocumentSources(pool);
-  const documentLinkExtractor = createDocumentLinkExtractor();
-  const documentSyncQueue = createDocumentSyncQueue(
-    createLazyRedisDocumentSyncQueueClient(redisConnection),
-  );
-  const syncPlanner = createDiscoveredSyncPlanner({ queue: documentSyncQueue });
-  const groupVisibleDocumentRegistrar = createGroupVisibleRegistrar({
-    registry: documentSources,
-    syncPlanner,
-  });
-  const processor = createProcessor({
-    messages,
-    documentLinkExtractor,
-    groupVisibleDocumentRegistrar,
-    ...(mentionAnswerResponder === undefined ? {} : { mentionAnswerResponder }),
-    ...(runtimeController === undefined ? {} : { runtimeController }),
-  });
-  const queue = createRedisRawEventQueue({
-    client: createLazyRedisQueueClient(redisConnection),
-  });
-  const worker = createRawEventWorker({
-    queue,
-    processor,
-  });
-  const loop: RawEventWorkerLoop = createLoop({
-    worker,
-    intervalMs: runtimeConfig.intervalMs,
-    batchLimit: runtimeConfig.batchLimit,
-    onError: () => undefined,
-  });
+  let redis: RedisClient;
+  try {
+    redis = createRedis(runtimeConfig.redisUrl);
+  } catch (error) {
+    await cleanupFailedEventWorkerRuntimeConstruction({ pool });
+    throw error;
+  }
+  let resolveRedisConnection: (client: RedisClient) => void = () => undefined;
+  let rejectRedisConnection: (error: unknown) => void = () => undefined;
+  const redisConnection = observeStartupPromise(new Promise<RedisClient>((resolve, reject) => {
+    resolveRedisConnection = resolve;
+    rejectRedisConnection = reject;
+  }));
 
-  return {
-    rawEventQueue: queue,
-    deadLetters: {
-      list(input) {
-        return queue.listDeadLetters(input);
+  try {
+    const documentLinkExtractor = createDocumentLinkExtractor();
+    const messages = createMessages({ queryable: pool });
+    const messageReplayGuard = createMessageReplayGuard({ dataSource: pool as never });
+    const documentSources = createDocumentSources(pool);
+    const documentSyncQueue = createDocumentSyncQueue(
+      createLazyRedisDocumentSyncQueueClient(redisConnection),
+    );
+    const syncPlanner = createDiscoveredSyncPlanner({ queue: documentSyncQueue });
+    const userSubmittedDocumentRegistrar: Pick<
+      AsyncDocumentSourceRegistry,
+      "registerUserSubmittedDocument"
+    > = {
+      async registerUserSubmittedDocument(input) {
+        const source = await documentSources.registerUserSubmittedDocument(input);
+        await syncPlanner.planRegisteredSources([source]);
+        return source;
       },
-      replay(id) {
-        return queue.replayDeadLetter(id);
-      },
-      delete(id) {
-        return queue.deleteDeadLetter(id);
-      },
-      replayBatch(input) {
-        return queue.replayDeadLetters(input);
-      },
-    },
-    start() {
-      loop.start();
-    },
-    async getStatus() {
-      const loopSnapshot = loop.getSnapshot();
-      const pendingEventCount = await queue.getPendingCount();
-      const deadLetterEventCount = await queue.getDeadLetterCount();
+    };
+    const answerReplyRepository = createAnswerReplies({ dataSource: pool as never });
+    const mentionAnswerReadiness = createOptionalMentionAnswerResponder({
+      env,
+      answerDraftOrchestrator,
+      answerSourcePermissionVerifier:
+        answerSourcePermissionVerifier ?? createUnavailableAnswerSourcePermissionVerifier(),
+      knowledgeDraftCommand,
+      runtimeController,
+      documentLinkExtractor,
+      userSubmittedDocumentRegistrar,
+      answerReplyRepository,
+      now,
+      createTokenProvider,
+      createMessageReplier,
+      createAnswerReplyService,
+      createMentionResponder,
+    });
+    const mentionAnswerResponder = mentionAnswerReadiness.responder;
+    const groupVisibleDocumentRegistrar = createGroupVisibleRegistrar({
+      registry: documentSources,
+      syncPlanner,
+    });
+    const processor = createProcessor({
+      messages,
+      messageReplayGuard,
+      documentLinkExtractor,
+      groupVisibleDocumentRegistrar,
+      ...(mentionAnswerResponder === undefined ? {} : { mentionAnswerResponder }),
+      ...(memoryExtractionPlanner === undefined ? {} : { memoryExtractionPlanner }),
+      ...(runtimeController === undefined ? {} : { runtimeController }),
+    });
+    const queue = createRedisRawEventQueue({
+      client: createLazyRedisQueueClient(redisConnection),
+    });
+    const worker = createRawEventWorker({
+      queue,
+      processor,
+    });
+    const loop: RawEventWorkerLoop = createLoop({
+      worker,
+      intervalMs: runtimeConfig.intervalMs,
+      batchLimit: runtimeConfig.batchLimit,
+      onError: () => undefined,
+    });
+    const redisStartup = redis.connect();
+    void redisStartup.then(
+      () => resolveRedisConnection(redis),
+      (error) => rejectRedisConnection(error),
+    );
 
-      return {
-        enabled: true,
-        running: loopSnapshot.running,
-        intervalMs: loopSnapshot.intervalMs,
-        batchLimit: loopSnapshot.batchLimit,
-        mentionRepliesEnabled: mentionAnswerResponder !== undefined,
-        ...(mentionAnswerReadiness.unavailableReason === undefined
-          ? {}
-          : { mentionRepliesUnavailableReason: mentionAnswerReadiness.unavailableReason }),
-        pendingEventCount,
-        deadLetterEventCount,
-        ...(loopSnapshot.latestBatch === undefined
-          ? {}
-          : { latestBatch: loopSnapshot.latestBatch }),
-      };
-    },
-    async close() {
-      await closeRuntimeResources([
-        () => loop.stop(),
-        async () => {
-          const client = await redisConnection;
-          await client.quit();
+    return {
+      rawEventQueue: queue,
+      answerReplies: {
+        findByIncomingMessage(input) {
+          return answerReplyRepository.findByIncomingMessage(input);
         },
-        () => pool.end(),
-      ]);
-    },
-  };
+      },
+      deadLetters: {
+        list(input) {
+          return queue.listDeadLetters(input);
+        },
+        replay(id) {
+          return queue.replayDeadLetter(id);
+        },
+        delete(id) {
+          return queue.deleteDeadLetter(id);
+        },
+        replayBatch(input) {
+          return queue.replayDeadLetters(input);
+        },
+      },
+      start() {
+        loop.start();
+      },
+      async getStatus() {
+        const loopSnapshot = loop.getSnapshot();
+        const pendingEventCount = await queue.getPendingCount();
+        const deadLetterEventCount = await queue.getDeadLetterCount();
+        const answerReplyStatus = await answerReplyRepository.getStatus();
+
+        return {
+          enabled: true,
+          running: loopSnapshot.running,
+          intervalMs: loopSnapshot.intervalMs,
+          batchLimit: loopSnapshot.batchLimit,
+          mentionRepliesEnabled: mentionAnswerResponder !== undefined,
+          ...(mentionAnswerReadiness.unavailableReason === undefined
+            ? {}
+            : { mentionRepliesUnavailableReason: mentionAnswerReadiness.unavailableReason }),
+          pendingEventCount,
+          deadLetterEventCount,
+          answerReplyUnresolvedCount: answerReplyStatus.unresolvedCount,
+          answerReplyPendingSafeNoticeCount: answerReplyStatus.pendingSafeNoticeCount,
+          answerReplyReconciliationRequiredCount:
+            answerReplyStatus.reconciliationRequiredCount,
+          ...(loopSnapshot.latestBatch === undefined
+            ? {}
+            : { latestBatch: loopSnapshot.latestBatch }),
+        };
+      },
+      async close() {
+        await closeRuntimeResources([
+          () => loop.stop(),
+          async () => {
+            const client = await redisConnection;
+            await client.quit();
+          },
+          () => pool.end(),
+        ]);
+      },
+    };
+  } catch (error) {
+    rejectRedisConnection(error);
+    await cleanupFailedEventWorkerRuntimeConstruction({ redis, pool });
+    throw error;
+  }
 }
 
 function createOptionalMentionAnswerResponder({
   env,
   answerDraftOrchestrator,
+  answerSourcePermissionVerifier,
+  knowledgeDraftCommand,
   runtimeController,
+  documentLinkExtractor,
+  userSubmittedDocumentRegistrar,
+  answerReplyRepository,
+  now,
   createTokenProvider,
   createMessageReplier,
+  createAnswerReplyService,
   createMentionResponder,
 }: {
   env: EnvLike;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft"> | undefined;
+  answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
+  knowledgeDraftCommand: Pick<ChatKnowledgeDraftCommand, "execute"> | undefined;
   runtimeController: RuntimeGate | undefined;
+  documentLinkExtractor: ReturnType<typeof createFeishuDocumentLinkExtractor>;
+  userSubmittedDocumentRegistrar: Pick<AsyncDocumentSourceRegistry, "registerUserSubmittedDocument">;
+  answerReplyRepository: AnswerReplyRepository;
+  now: () => Date;
   createTokenProvider: typeof createFeishuTenantAccessTokenProvider;
   createMessageReplier: typeof createFeishuMessageReplier;
+  createAnswerReplyService: typeof createAnswerReplyDeliveryService;
   createMentionResponder: typeof createFeishuMentionAnswerResponder;
 }): {
   responder?: Pick<FeishuMentionAnswerResponder, "maybeRespond">;
@@ -326,17 +440,57 @@ function createOptionalMentionAnswerResponder({
     tokenProvider,
     timeoutMs: feishuConfig.documentFetchTimeoutMs,
   });
+  const answerReplyDeliveryService = createAnswerReplyService({
+    repository: answerReplyRepository,
+    verifier: answerSourcePermissionVerifier,
+    replier,
+    now,
+  });
 
   return {
     responder: createMentionResponder({
       botOpenId,
       answerDraftOrchestrator,
+      answerReplyDeliveryService,
+      ...(knowledgeDraftCommand === undefined ? {} : { knowledgeDraftCommand }),
       replier,
+      now,
+      documentLinkExtractor,
+      userSubmittedDocumentRegistrar,
       ...(runtimeController?.canReplyWhenMentioned === undefined
         ? {}
         : { canReplyWhenMentioned: runtimeController.canReplyWhenMentioned.bind(runtimeController) }),
+      ...(runtimeController?.canReadDocuments === undefined
+        ? {}
+        : {
+            canRegisterUserSubmittedDocuments:
+              runtimeController.canReadDocuments.bind(runtimeController),
+          }),
     }),
   };
+}
+
+function preflightMentionAnswerConfiguration(env: EnvLike): void {
+  if (readOptionalFeishuBotOpenId(env) !== undefined) {
+    readOptionalFeishuOpenApiConfig(env);
+  }
+}
+
+async function cleanupFailedEventWorkerRuntimeConstruction({
+  redis,
+  pool,
+}: {
+  redis?: RedisClient;
+  pool: PostgresPool;
+}): Promise<void> {
+  const cleanupSteps: Array<() => Promise<unknown>> = [];
+  if (redis !== undefined) {
+    cleanupSteps.push(() => redis.quit());
+  }
+  cleanupSteps.push(() => pool.end());
+  await Promise.allSettled(
+    cleanupSteps.map(async (cleanup) => cleanup()),
+  );
 }
 
 function createDefaultDocumentSourceRegistry(pool: PostgresPool): GroupVisibleDocumentRegistry {

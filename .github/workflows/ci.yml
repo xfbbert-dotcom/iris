@@ -28,10 +28,10 @@ jobs:
           --health-retries 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -54,10 +54,13 @@ jobs:
       - name: Test Postgres integrations
         env:
           DATABASE_URL: postgres://iris:iris@localhost:5432/iris
+          IRIS_TEST_DATABASE_URL: postgres://iris:iris@localhost:5432/iris
         run: |
           npm --workspace apps/core test -- postgres-document-source-registry.test.ts
           npm --workspace apps/core test -- document-snapshot-repository.test.ts
           npm --workspace apps/core test -- document-fragment-repository.test.ts
+          npm --workspace apps/core test -- postgres-group-memory-repository.test.ts
+          npm --workspace apps/core test -- agent-execution-ledger.test.ts
 
       - name: Validate Docker Compose
         run: docker compose config
@@ -82,6 +85,9 @@ jobs:
             PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
               --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
               --command "SELECT count(*) FROM document_sources" > /dev/null
+            PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
+              --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
+              --command "SELECT count(*) FROM group_memories" > /dev/null
             if PGPASSWORD="$IRIS_APP_PASSWORD" psql --host 127.0.0.1 --username "$IRIS_APP_USER" \
               --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=on \
               --command "CREATE TABLE iris_forbidden_app_ddl(id integer)" > /dev/null 2>&1; then
@@ -89,9 +95,6 @@ jobs:
               exit 1
             fi
           '
-
-      - name: Smoke pilot boundaries
-        run: npm run pilot:smoke
 
       - name: Drill paired pilot backup and restore
         run: |
@@ -110,7 +113,7 @@ jobs:
           test -n "$backup_file"
           age --decrypt --identity "$RUNNER_TEMP/iris-backup-key.txt" "$backup_file" \
             | ./deploy/pilot/restore-from-stdin.sh --confirm-replace-database
-          npm run pilot:smoke
+          npm run pilot:smoke -- --post-restore
 
       - name: Reject callbacks while Redis ingress is unavailable
         run: |
@@ -137,6 +140,29 @@ jobs:
             sleep 1
           done
           test "$callback_status" = 200
+          queues_drained=false
+          for _ in $(seq 1 75); do
+            if "${compose[@]}" exec -T core node --input-type=module --eval '
+              const response = await fetch("http://127.0.0.1:3000/internal/status", {
+                headers: { authorization: "Bearer " + process.env.IRIS_INTERNAL_API_TOKEN },
+              });
+              if (!response.ok) process.exit(1);
+              const body = await response.json();
+              const queues = [
+                [body.components?.eventWorker, ["pendingEventCount", "deadLetterEventCount"]],
+                [body.components?.documentSync, ["pendingJobCount", "deadLetterJobCount"]],
+                [body.components?.reindex, ["pendingJobCount", "deadLetterJobCount"]],
+              ];
+              if (queues.some(([component, countNames]) =>
+                component?.ok !== true || countNames.some((name) => component[name] !== 0)
+              )) process.exit(1);
+            '; then
+              queues_drained=true
+              break
+            fi
+            sleep 1
+          done
+          test "$queues_drained" = true
           npm run pilot:smoke
 
       - name: Show pilot logs on failure
@@ -153,10 +179,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 

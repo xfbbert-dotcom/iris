@@ -1,9 +1,13 @@
-import { createHash } from "node:crypto";
+import { createCipheriv, createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  createFeishuCardRequestVerifier,
   createFeishuRequestVerifier,
+  decodeFeishuPayload,
+  diagnoseFeishuCallbackAuthentication,
   isFeishuUrlVerificationPayload,
   verifyFeishuSignature,
+  verifyFreshFeishuCallbackPayload,
   verifyFeishuVerificationToken
 } from "../src/feishu/feishu-auth.js";
 
@@ -25,6 +29,29 @@ describe("Feishu auth primitives", () => {
         challenge: "challenge-value"
       })
     ).toBe(false);
+  });
+
+  it("decrypts the bounded encrypted envelope used by Feishu callbacks", () => {
+    const payload = {
+      type: "url_verification",
+      challenge: "encrypted-challenge",
+      token: verificationToken,
+    };
+
+    expect(decodeFeishuPayload({
+      encrypt: encryptPayload(payload),
+    }, encryptKey)).toEqual(payload);
+    expect(decodeFeishuPayload(payload, encryptKey)).toBe(payload);
+  });
+
+  it("fails closed for malformed or ambiguous encrypted callback envelopes", () => {
+    expect(decodeFeishuPayload({ encrypt: "not-base64" }, encryptKey)).toBeUndefined();
+    expect(decodeFeishuPayload({
+      encrypt: encryptPayload({ token: verificationToken }),
+      token: verificationToken,
+    }, encryptKey)).toBeUndefined();
+    expect(decodeFeishuPayload({ encrypt: encryptPayload({ token: verificationToken }) }, ""))
+      .toBeUndefined();
   });
 
   it("verifies tokens from body.header.token and body.token", () => {
@@ -93,6 +120,95 @@ describe("Feishu auth primitives", () => {
     ).toBe(true);
   });
 
+  it("classifies callback signature candidates without exposing request material", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = '{\n  "encrypt": "encrypted-callback-payload"\n}';
+    const timestamp = "1784419200";
+    const nonce = "nonce-1";
+
+    expect(diagnoseFeishuCallbackAuthentication({
+      request: {
+        headers: {
+          "x-lark-request-timestamp": timestamp,
+          "x-lark-request-nonce": nonce,
+          "x-lark-signature": sign(timestamp, nonce, JSON.stringify(body)),
+        },
+        body,
+        rawBody,
+      },
+      verificationToken,
+      encryptKey,
+      now: new Date("2026-07-19T00:00:00.000Z"),
+    })).toEqual({
+      timestamp: "fresh",
+      rawBodyPresent: true,
+      rawEqualsCanonical: false,
+      sha256EncryptKeyRaw: false,
+      sha256EncryptKeyCanonical: true,
+      sha1VerificationTokenRaw: false,
+      sha1VerificationTokenCanonical: false,
+    });
+  });
+
+  it("accepts card callback signatures over the raw body using the verification token", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = JSON.stringify(body);
+    const timestamp = "1782864000";
+    const nonce = "nonce-1";
+    const verifier = createFeishuCardRequestVerifier({ verificationToken }, {
+      now: () => new Date("2026-07-01T00:00:00.000Z"),
+      maxTimestampSkewSeconds: 300,
+    });
+
+    expect(verifier({
+      headers: {
+        "x-lark-request-timestamp": timestamp,
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": signCard(timestamp, nonce, rawBody),
+      },
+      body,
+      rawBody,
+    })).toBe(true);
+  });
+
+  it("fails closed for stale, missing-body, and wrong-key card signatures", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = JSON.stringify(body);
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const nonce = "nonce-1";
+    const verifier = createFeishuCardRequestVerifier({ verificationToken }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 300,
+    });
+    const headers = (timestamp: string, signature: string) => ({
+      "x-lark-request-timestamp": timestamp,
+      "x-lark-request-nonce": nonce,
+      "x-lark-signature": signature,
+    });
+
+    expect(verifier({
+      headers: headers(
+        String(nowSeconds - 301),
+        signCard(String(nowSeconds - 301), nonce, rawBody),
+      ),
+      body,
+      rawBody,
+    })).toBe(false);
+    expect(verifier({
+      headers: headers(
+        String(nowSeconds),
+        signCard(String(nowSeconds), nonce, rawBody),
+      ),
+      body,
+    })).toBe(false);
+    expect(verifier({
+      headers: headers(String(nowSeconds), sign(String(nowSeconds), nonce, rawBody)),
+      body,
+      rawBody,
+    })).toBe(false);
+  });
+
   it("rejects invalid signatures without throwing", () => {
     expect(
       verifyFeishuSignature({
@@ -135,6 +251,9 @@ describe("Feishu auth primitives", () => {
     const nonce = "nonce-1";
     const verifier = createFeishuRequestVerifier({
       encryptKey
+    }, {
+      now: () => new Date("2026-07-01T00:00:00.000Z"),
+      maxTimestampSkewSeconds: 300,
     });
 
     expect(
@@ -169,6 +288,9 @@ describe("Feishu auth primitives", () => {
     const verifier = createFeishuRequestVerifier({
       verificationToken,
       encryptKey
+    }, {
+      now: () => new Date("2026-07-01T00:00:00.000Z"),
+      maxTimestampSkewSeconds: 300,
     });
 
     expect(
@@ -215,8 +337,171 @@ describe("Feishu auth primitives", () => {
       })
     ).toBe(true);
   });
+
+  it("requires a current integer epoch timestamp before accepting a signature", () => {
+    const rawBody = JSON.stringify({ header: { token: verificationToken } });
+    const nonce = "nonce-1";
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const verifier = createFeishuRequestVerifier({
+      verificationToken,
+      encryptKey,
+    }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 300,
+    });
+
+    const requestForTimestamp = (timestamp: string) => ({
+      headers: {
+        "x-lark-request-timestamp": timestamp,
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(timestamp, nonce, rawBody),
+      },
+      body: { header: { token: verificationToken } },
+      rawBody,
+    });
+
+    expect(verifier(requestForTimestamp(String(nowSeconds - 300)))).toBe(true);
+    expect(verifier(requestForTimestamp(String(nowSeconds - 301)))).toBe(false);
+    expect(verifier(requestForTimestamp(String(nowSeconds + 301)))).toBe(false);
+    expect(verifier(requestForTimestamp("1784419200.5"))).toBe(false);
+    expect(verifier({
+      headers: {
+        "x-lark-request-timestamp": String(nowSeconds),
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(String(nowSeconds), nonce, rawBody),
+      },
+      body: { header: { token: verificationToken } },
+    })).toBe(false);
+  });
+
+  it("accepts fresh nanosecond callback timestamps without weakening the replay window", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = JSON.stringify(body);
+    const nonce = "nonce-1";
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 300,
+      requireSignature: true,
+    });
+    const requestAt = (at: Date) => {
+      const timestamp = String(BigInt(at.getTime()) * 1_000_000n);
+      return {
+        headers: {
+          "x-lark-request-timestamp": timestamp,
+          "x-lark-request-nonce": nonce,
+          "x-lark-signature": sign(timestamp, nonce, rawBody),
+        },
+        body,
+        rawBody,
+      };
+    };
+
+    expect(verifier(requestAt(now))).toBe(true);
+    expect(verifier(requestAt(new Date(now.getTime() - 301_000)))).toBe(false);
+  });
+
+  it("can defer v2 replay validation until after the signed payload is decrypted", () => {
+    const body = { encrypt: "encrypted-callback-payload" };
+    const rawBody = JSON.stringify(body);
+    const timestamp = "signed-v2-header-value";
+    const nonce = "nonce-1";
+    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+      requireSignature: true,
+      requireFreshTimestamp: false,
+    });
+
+    expect(verifier({
+      headers: {
+        "x-lark-request-timestamp": timestamp,
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(timestamp, nonce, rawBody),
+      },
+      body,
+      rawBody,
+    })).toBe(true);
+  });
+
+  it("validates the signed v2 callback create_time with a 300-second ceiling", () => {
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const payloadAt = (at: Date) => ({
+      schema: "2.0",
+      header: { create_time: String(BigInt(at.getTime()) * 1_000n) },
+    });
+
+    expect(verifyFreshFeishuCallbackPayload(payloadAt(now), now)).toBe(true);
+    expect(verifyFreshFeishuCallbackPayload(
+      payloadAt(new Date(now.getTime() - 301_000)),
+      now,
+    )).toBe(false);
+    expect(verifyFreshFeishuCallbackPayload({ header: { create_time: "invalid" } }, now))
+      .toBe(false);
+  });
+
+  it("caps configured timestamp skew at the 300-second anti-replay maximum", () => {
+    const rawBody = JSON.stringify({ event: { message: "hello" } });
+    const nonce = "nonce-1";
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 301,
+    });
+    const requestForTimestamp = (timestamp: number) => ({
+      headers: {
+        "x-lark-request-timestamp": String(timestamp),
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(String(timestamp), nonce, rawBody),
+      },
+      body: { event: { message: "hello" } },
+      rawBody,
+    });
+
+    expect(verifier(requestForTimestamp(nowSeconds - 300))).toBe(true);
+    expect(verifier(requestForTimestamp(nowSeconds - 301))).toBe(false);
+  });
+
+  it("honors a smaller positive safe timestamp skew", () => {
+    const rawBody = JSON.stringify({ event: { message: "hello" } });
+    const nonce = "nonce-1";
+    const now = new Date("2026-07-19T00:00:00.000Z");
+    const nowSeconds = Math.floor(now.getTime() / 1_000);
+    const verifier = createFeishuRequestVerifier({ encryptKey }, {
+      now: () => now,
+      maxTimestampSkewSeconds: 1,
+    });
+    const requestForTimestamp = (timestamp: number) => ({
+      headers: {
+        "x-lark-request-timestamp": String(timestamp),
+        "x-lark-request-nonce": nonce,
+        "x-lark-signature": sign(String(timestamp), nonce, rawBody),
+      },
+      body: { event: { message: "hello" } },
+      rawBody,
+    });
+
+    expect(verifier(requestForTimestamp(nowSeconds - 1))).toBe(true);
+    expect(verifier(requestForTimestamp(nowSeconds - 2))).toBe(false);
+  });
 });
 
 function sign(timestamp: string, nonce: string, rawBody: string): string {
   return createHash("sha256").update(timestamp + nonce + encryptKey + rawBody).digest("hex");
+}
+
+function signCard(timestamp: string, nonce: string, rawBody: string): string {
+  return createHash("sha1")
+    .update(timestamp + nonce + verificationToken + rawBody)
+    .digest("hex");
+}
+
+function encryptPayload(payload: unknown): string {
+  const iv = Buffer.from("0123456789abcdef", "utf8");
+  const cipher = createCipheriv("aes-256-cbc", createHash("sha256").update(encryptKey).digest(), iv);
+  return Buffer.concat([
+    iv,
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]).toString("base64");
 }

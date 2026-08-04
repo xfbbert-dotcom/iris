@@ -10,6 +10,18 @@ The internal rollout runbook lives at:
 
 `docs/operations/internal-rollout-runbook.md`
 
+Reusable engineering failures and prevention rules live at:
+
+`docs/operations/engineering-failure-ledger.md`
+
+The Phase 5B-1 knowledge-card confirmation acceptance contract lives at:
+
+`docs/runbooks/iris-knowledge-card-confirmation-acceptance.md`
+
+Phase 5B-1 is implemented with runtime gates defaulting off and has passed local verification. Real
+Feishu pilot acceptance is still pending. Phase 5B-2 proposal/owner-admin/OAuth workflows and Phase
+5B-3 Feishu knowledge-base writes are not included.
+
 The first implementation slice builds:
 
 - TypeScript Core App

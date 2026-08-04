@@ -1,0 +1,170 @@
+import {
+  WikiSpaceSyncError,
+  type FeishuWikiNode,
+  type FeishuWikiSpaceClient,
+  type WikiSpaceSyncErrorClassification,
+} from "./feishu-wiki-space-client.js";
+
+export type { FeishuWikiNode, FeishuWikiSpaceClient } from "./feishu-wiki-space-client.js";
+
+export type WikiSpaceScanResult = {
+  spaceId: string;
+  rootTitle?: string;
+  documents: Array<{ nodeToken: string; title?: string }>;
+  discoveredNodeCount: number;
+  skippedNodeCount: number;
+};
+
+export async function scanFeishuWikiSpace({
+  client,
+  rootNodeToken,
+  maxNodes = 500,
+  maxDepth = 20,
+  pageSize = 50,
+}: {
+  client: FeishuWikiSpaceClient;
+  rootNodeToken: string;
+  maxNodes?: number;
+  maxDepth?: number;
+  pageSize?: number;
+}): Promise<WikiSpaceScanResult> {
+  const safeMaxNodes = requireBoundedInteger(maxNodes, "maxNodes", 500);
+  const safeMaxDepth = requireBoundedInteger(maxDepth, "maxDepth", 20, true);
+  const safePageSize = requireBoundedInteger(pageSize, "pageSize", 50);
+  const root = await client.getNode(rootNodeToken);
+  const spaceId = root.spaceId;
+  const queue: Array<{ node: FeishuWikiNode; depth: number }> = [];
+  const visited = new Set<string>();
+  const documents: Array<{ nodeToken: string; title?: string }> = [];
+  let discoveredNodeCount = 0;
+  let skippedNodeCount = 0;
+
+  let rootPageToken: string | undefined;
+  const rootPageTokens = new Set<string>();
+  do {
+    const page = await client.listChildren({
+      spaceId,
+      ...(rootPageToken === undefined ? {} : { pageToken: rootPageToken }),
+      pageSize: safePageSize,
+    });
+    for (const topLevelNode of page.nodes) {
+      if (topLevelNode.spaceId !== spaceId) {
+        throw terminalScanError("cross_space_node");
+      }
+      if (visited.has(topLevelNode.nodeToken)) {
+        skippedNodeCount += 1;
+        continue;
+      }
+      if (discoveredNodeCount >= safeMaxNodes) {
+        throw terminalScanError("node_limit_exceeded");
+      }
+      visited.add(topLevelNode.nodeToken);
+      discoveredNodeCount += 1;
+      queue.push({ node: topLevelNode, depth: 0 });
+    }
+    rootPageToken = page.nextPageToken;
+    if (rootPageToken !== undefined && discoveredNodeCount >= safeMaxNodes) {
+      throw terminalScanError("node_limit_exceeded");
+    }
+    if (
+      rootPageToken !== undefined &&
+      (rootPageTokens.has(rootPageToken) || rootPageTokens.size >= safeMaxNodes)
+    ) {
+      throw new Error("Feishu wiki space pagination did not advance");
+    }
+    if (rootPageToken !== undefined) rootPageTokens.add(rootPageToken);
+  } while (rootPageToken !== undefined);
+
+  if (discoveredNodeCount === 0) {
+    throw new WikiSpaceSyncError("forbidden", false);
+  }
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const { node, depth } = queue[index];
+    if (node.spaceId !== spaceId) {
+      throw terminalScanError("cross_space_node");
+    }
+    if (isSupportedDocument(node.objectType)) {
+      documents.push({ nodeToken: node.nodeToken, ...(node.title === undefined ? {} : { title: node.title }) });
+    } else {
+      skippedNodeCount += 1;
+    }
+    if (!node.hasChild) continue;
+    if (depth >= safeMaxDepth) {
+      throw terminalScanError("depth_limit_exceeded");
+    }
+    if (discoveredNodeCount >= safeMaxNodes) {
+      throw terminalScanError("node_limit_exceeded");
+    }
+
+    let pageToken: string | undefined;
+    const pageTokens = new Set<string>();
+    do {
+      const page = await client.listChildren({
+        spaceId,
+        parentNodeToken: node.nodeToken,
+        ...(pageToken === undefined ? {} : { pageToken }),
+        pageSize: safePageSize,
+      });
+      for (const child of page.nodes) {
+        if (child.spaceId !== spaceId) {
+          throw terminalScanError("cross_space_node");
+        }
+        if (visited.has(child.nodeToken)) {
+          skippedNodeCount += 1;
+          continue;
+        }
+        if (discoveredNodeCount >= safeMaxNodes) {
+          throw terminalScanError("node_limit_exceeded");
+        }
+        visited.add(child.nodeToken);
+        discoveredNodeCount += 1;
+        queue.push({ node: child, depth: depth + 1 });
+      }
+      pageToken = page.nextPageToken;
+      if (pageToken !== undefined && discoveredNodeCount >= safeMaxNodes) {
+        throw terminalScanError("node_limit_exceeded");
+      }
+      if (pageToken !== undefined && (pageTokens.has(pageToken) || pageTokens.size >= safeMaxNodes)) {
+        throw new Error("Feishu wiki space pagination did not advance");
+      }
+      if (pageToken !== undefined) pageTokens.add(pageToken);
+    } while (pageToken !== undefined);
+  }
+
+  return {
+    spaceId,
+    ...(root.title === undefined ? {} : { rootTitle: root.title }),
+    documents,
+    discoveredNodeCount,
+    skippedNodeCount,
+  };
+}
+
+function isSupportedDocument(objectType: string): boolean {
+  return objectType === "docx" || objectType === "doc";
+}
+
+function terminalScanError(classification: Extract<
+  WikiSpaceSyncErrorClassification,
+  "cross_space_node" | "depth_limit_exceeded" | "node_limit_exceeded"
+>): WikiSpaceSyncError {
+  return new WikiSpaceSyncError(classification, false);
+}
+
+function requireBoundedInteger(
+  value: unknown,
+  name: string,
+  maximum: number,
+  allowZero = false,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value > maximum ||
+    value < (allowZero ? 0 : 1)
+  ) {
+    throw new Error(`${name} must be a ${allowZero ? "non-negative" : "positive"} integer no greater than ${maximum}`);
+  }
+  return value;
+}

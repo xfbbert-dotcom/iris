@@ -7,6 +7,7 @@ import {
   formatInternalRolloutReadinessReport,
   getInternalRolloutReadinessExitCode,
   parseEnvFileContents,
+  resolveInternalRolloutReadinessReport,
 } from "../src/admin/internal-rollout-readiness-cli.js";
 import { buildInternalRolloutReadinessReport } from "../src/admin/internal-rollout-readiness.js";
 import type { EnvLike } from "../src/config/env.js";
@@ -117,7 +118,106 @@ EMPTY_VALUE= # empty on purpose
       "Invalid env file line 2",
     );
   });
+
+  it("uses authenticated live readiness facts when an enabled action-review rollout opts in", async () => {
+    const liveReport = enabledActionReviewReport(true);
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+
+    const report = await resolveInternalRolloutReadinessReport({
+      args: ["--live-readiness-url", "http://127.0.0.1:3000/internal/readiness"],
+      env: enabledActionReviewEnv(),
+      fetchImpl: async (input, init) => {
+        const headers = new Headers(init?.headers);
+        requests.push({
+          url: String(input),
+          authorization: headers.get("authorization"),
+        });
+        return Response.json(liveReport);
+      },
+    });
+
+    expect(report).toEqual(liveReport);
+    expect(getInternalRolloutReadinessExitCode(report)).toBe(0);
+    expect(requests).toEqual([{
+      url: "http://127.0.0.1:3000/internal/readiness",
+      authorization: "Bearer operator_shared_secret-1",
+    }]);
+  });
+
+  it("keeps the live CLI blocked when migration 0034 is missing", async () => {
+    const report = await resolveInternalRolloutReadinessReport({
+      args: ["--live-readiness-url=http://localhost:3000/internal/readiness"],
+      env: enabledActionReviewEnv(),
+      fetchImpl: async () => Response.json(enabledActionReviewReport(false)),
+    });
+
+    expect(getInternalRolloutReadinessExitCode(report)).toBe(1);
+    expect(report.checks).toContainEqual(expect.objectContaining({
+      id: "actionReviews",
+      status: "fail",
+      detail: "Action-review migration 0034 is not applied.",
+    }));
+  });
+
+  it("does not send the internal token to an unsafe live readiness URL", async () => {
+    await expect(resolveInternalRolloutReadinessReport({
+      args: ["--live-readiness-url", "https://attacker.example/internal/readiness"],
+      env: enabledActionReviewEnv(),
+      fetchImpl: async () => {
+        throw new Error("must not fetch");
+      },
+    })).rejects.toThrow("Live readiness URL must use a loopback host");
+  });
 });
+
+function enabledActionReviewReport(migration0034Applied: boolean) {
+  const zeroOutbox = {
+    pending: 0,
+    processing: 0,
+    external_attempting: 0,
+    sent: 0,
+    failed: 0,
+    outcome_unknown: 0,
+    terminalFailed: 0,
+  };
+
+  return buildInternalRolloutReadinessReport(enabledActionReviewEnv(), {
+    knowledgeCardStatus: {
+      ok: true,
+      enabled: true,
+      running: true,
+      dispatcher: { running: true },
+      worker: { running: true },
+      outbox: zeroOutbox,
+    },
+    actionApprovalStatus: {
+      ok: true,
+      enabled: true,
+      running: true,
+      planner: { running: true },
+      dispatcher: { running: true },
+      outbox: zeroOutbox,
+    },
+    actionReviewStatus: {
+      configured: true,
+      running: true,
+      migration0034Applied,
+    },
+  });
+}
+
+function enabledActionReviewEnv(): EnvLike {
+  return readyRolloutEnv({
+    FEISHU_ENCRYPT_KEY: "encrypt-key",
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+    IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+    IRIS_ACTION_REVIEW_ENABLED: "true",
+    IRIS_REVIEW_PUBLIC_ORIGIN: "https://iris.example.com",
+    IRIS_REVIEW_SESSION_SECRET: "s".repeat(32),
+  });
+}
 
 function readyRolloutEnv(overrides: EnvLike = {}): EnvLike {
   return {

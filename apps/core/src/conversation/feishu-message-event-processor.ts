@@ -12,13 +12,15 @@ import type {
   FeishuDocumentLinkExtractor,
 } from "../documents/feishu-document-link-extractor.js";
 import type { GroupVisibleDocumentRegistrar } from "../documents/group-visible-document-registrar.js";
+import type { MemoryExtractionPlanner } from "../memory-extraction/memory-extraction-planner.js";
+import type { ConversationMessageReplayGuard } from "./conversation-message-replay-guard.js";
 
 type RuntimeGate = {
   canProcessIncomingEvent(input: { groupId?: string }): boolean;
   canReadGroupContext(groupId: string): boolean;
   canReadDocuments(): boolean;
 };
-type ParsedFeishuMessageEvent = UpsertConversationMessageInput & {
+type ParsedFeishuMessageEvent = Omit<UpsertConversationMessageInput, "mentions"> & {
   mentions: FeishuMessageMention[];
 };
 
@@ -32,13 +34,17 @@ export function createFeishuMessageEventProcessor({
   documentLinkExtractor,
   groupVisibleDocumentRegistrar,
   mentionAnswerResponder,
+  memoryExtractionPlanner,
   runtimeController,
+  messageReplayGuard,
 }: {
   messages: Pick<ConversationMessageRepository, "upsertMessage">;
   documentLinkExtractor?: Pick<FeishuDocumentLinkExtractor, "extractLinks">;
   groupVisibleDocumentRegistrar?: Pick<GroupVisibleDocumentRegistrar, "registerDiscoveredLinks">;
   mentionAnswerResponder?: Pick<FeishuMentionAnswerResponder, "maybeRespond">;
+  memoryExtractionPlanner?: Pick<MemoryExtractionPlanner, "registerMessage">;
   runtimeController?: RuntimeGate;
+  messageReplayGuard: ConversationMessageReplayGuard;
 }) {
   return {
     async process(event: RawEvent): Promise<void> {
@@ -56,33 +62,87 @@ export function createFeishuMessageEventProcessor({
         runtimeController !== undefined &&
         !runtimeController.canReadGroupContext(parsed.chatId)
       ) {
-        await maybeRespondToMention(parsed, mentionAnswerResponder);
+        await messageReplayGuard.runUnlessDeleted({
+          identity: parsed,
+          effect: () => maybeRespondToMention(parsed, mentionAnswerResponder),
+        });
         return;
       }
 
       let mentionResponseError: unknown;
       try {
-        await maybeRespondToMention(parsed, mentionAnswerResponder);
+        const mentionResult = await messageReplayGuard.runUnlessDeleted({
+          identity: parsed,
+          effect: () => maybeRespondToMention(parsed, mentionAnswerResponder),
+        });
+        if (mentionResult.status === "active") {
+          logMentionAnswerResult(parsed, mentionResult.value);
+        }
+        if (mentionResult.status === "deleted") return;
       } catch (error) {
         mentionResponseError = error;
+        logMentionAnswerFailure(parsed, error);
       }
 
-      const { mentions: _mentions, ...messageFact } = parsed;
-      await messages.upsertMessage(messageFact);
+      const { senderOpenId } = parsed;
+      const messageFact: UpsertConversationMessageInput = {
+        provider: parsed.provider,
+        providerMessageId: parsed.providerMessageId,
+        chatId: parsed.chatId,
+        ...(parsed.senderId === undefined ? {} : { senderId: parsed.senderId }),
+        ...(parsed.senderOpenId === undefined ? {} : { senderOpenId: parsed.senderOpenId }),
+        ...(parsed.senderUnionId === undefined ? {} : { senderUnionId: parsed.senderUnionId }),
+        ...(parsed.senderUserId === undefined ? {} : { senderUserId: parsed.senderUserId }),
+        messageType: parsed.messageType,
+        ...(parsed.text === undefined ? {} : { text: parsed.text }),
+        mentions: parsed.mentions.flatMap(({ key, openId }) =>
+          openId === undefined ? [] : [{ key, openId }],
+        ),
+        sentAt: parsed.sentAt,
+        rawEventIdempotencyKey: parsed.rawEventIdempotencyKey,
+      };
+      const persistenceResult = await messageReplayGuard.runUnlessDeleted({
+        identity: parsed,
+        effect: () => messages.upsertMessage(messageFact),
+      });
+      if (persistenceResult.status === "deleted") return;
+      const persistedMessage = persistenceResult.value;
+
+      let memoryExtractionPlannerError: unknown;
+      if (memoryExtractionPlanner !== undefined) {
+        try {
+          const plannerResult = await messageReplayGuard.runUnlessDeleted({
+            identity: parsed,
+            effect: () => memoryExtractionPlanner.registerMessage(
+              persistedMessage,
+              senderOpenId === undefined ? {} : { senderOpenId },
+            ),
+          });
+          if (plannerResult.status === "deleted") return;
+        } catch (error) {
+          memoryExtractionPlannerError = error;
+        }
+      }
 
       let documentDiscoveryError: unknown;
       if (runtimeController === undefined || runtimeController.canReadDocuments()) {
         try {
-          const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
-          if (links.length > 0 && groupVisibleDocumentRegistrar !== undefined) {
-            await groupVisibleDocumentRegistrar.registerDiscoveredLinks({
-              chatId: parsed.chatId,
-              messageId: parsed.providerMessageId,
-              senderId: parsed.senderId,
-              observedAt: parsed.sentAt,
-              links,
-            });
-          }
+          const documentResult = await messageReplayGuard.runUnlessDeleted({
+            identity: parsed,
+            effect: async () => {
+              const links = extractDocumentLinks(parsed.text, documentLinkExtractor);
+              if (links.length > 0 && groupVisibleDocumentRegistrar !== undefined) {
+                await groupVisibleDocumentRegistrar.registerDiscoveredLinks({
+                  chatId: parsed.chatId,
+                  messageId: parsed.providerMessageId,
+                  senderId: parsed.senderId,
+                  observedAt: parsed.sentAt,
+                  links,
+                });
+              }
+            },
+          });
+          if (documentResult.status === "deleted") return;
         } catch (error) {
           documentDiscoveryError = error;
         }
@@ -90,6 +150,9 @@ export function createFeishuMessageEventProcessor({
 
       if (mentionResponseError !== undefined) {
         throw mentionResponseError;
+      }
+      if (memoryExtractionPlannerError !== undefined) {
+        throw memoryExtractionPlannerError;
       }
       if (documentDiscoveryError !== undefined) {
         throw documentDiscoveryError;
@@ -106,9 +169,37 @@ function maybeRespondToMention(
     messageId: parsed.providerMessageId,
     chatId: parsed.chatId,
     senderId: parsed.senderId,
+    ...(parsed.senderOpenId === undefined ? {} : { senderOpenId: parsed.senderOpenId }),
     text: parsed.text,
     mentions: parsed.mentions,
+    observedAt: parsed.sentAt,
   }) ?? Promise.resolve(undefined);
+}
+
+function logMentionAnswerResult(parsed: ParsedFeishuMessageEvent, result: unknown): void {
+  if (!isRecord(result) || typeof result.status !== "string") return;
+  const payload: Record<string, unknown> = {
+    event: "iris_mention_answer_result",
+    messageId: parsed.providerMessageId,
+    chatId: parsed.chatId,
+    status: result.status,
+  };
+  if (typeof result.reason === "string") {
+    payload.reason = result.reason;
+  }
+  if (typeof result.replyMessageId === "string" && result.replyMessageId.trim().length > 0) {
+    payload.replyMessageId = result.replyMessageId.trim();
+  }
+  console.info(JSON.stringify(payload));
+}
+
+function logMentionAnswerFailure(parsed: ParsedFeishuMessageEvent, error: unknown): void {
+  console.warn(JSON.stringify({
+    event: "iris_mention_answer_failure",
+    messageId: parsed.providerMessageId,
+    chatId: parsed.chatId,
+    error: error instanceof Error ? error.message : String(error),
+  }));
 }
 
 function extractDocumentLinks(
@@ -146,12 +237,18 @@ function parseFeishuMessageEvent(event: RawEvent): ParsedFeishuMessageEvent | un
   if (providerMessageId.length === 0 || chatId.length === 0 || messageType.length === 0) {
     return undefined;
   }
+  const senderOpenId = readSenderOpenId(eventBody.sender);
+  const senderUnionId = readSenderTypedId(eventBody.sender, "union_id");
+  const senderUserId = readSenderTypedId(eventBody.sender, "user_id");
 
   return {
     provider: "feishu",
     providerMessageId,
     chatId,
     senderId: readSenderId(eventBody.sender),
+    ...(senderOpenId === undefined ? {} : { senderOpenId }),
+    ...(senderUnionId === undefined ? {} : { senderUnionId }),
+    ...(senderUserId === undefined ? {} : { senderUserId }),
     messageType,
     text: truncateMessageText(readText(messageType, message.content)),
     mentions: readMentions(message.mentions),
@@ -206,10 +303,25 @@ function readSenderId(sender: unknown): string | undefined {
   }
 
   return (
-    readOptionalIdentifier(sender.sender_id.open_id) ??
+    readSenderOpenId(sender) ??
     readOptionalIdentifier(sender.sender_id.union_id) ??
     readOptionalIdentifier(sender.sender_id.user_id)
   );
+}
+
+function readSenderOpenId(sender: unknown): string | undefined {
+  return readSenderTypedId(sender, "open_id");
+}
+
+function readSenderTypedId(
+  sender: unknown,
+  field: "open_id" | "union_id" | "user_id",
+): string | undefined {
+  if (!isRecord(sender) || !isRecord(sender.sender_id)) {
+    return undefined;
+  }
+
+  return readOptionalIdentifier(sender.sender_id[field]);
 }
 
 function readText(messageType: string, content: unknown): string | undefined {

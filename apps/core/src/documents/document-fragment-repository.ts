@@ -1,10 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { DocumentChunk } from "./document-chunker.js";
-import type { DocumentSourceType } from "./document-source-registry.js";
+import {
+  DOCUMENT_SOURCE_METADATA_MAX_CHARS,
+  type DocumentSourceType,
+} from "./document-source-registry.js";
 
 const MAX_FRAGMENT_SEARCH_LIMIT = 100;
 const MAX_GROUP_ID_CHARS = 512;
+const RETRIEVED_SOURCE_TYPE_BY_PERSISTED_SOURCE_TYPE: Record<
+  DocumentSourceType,
+  RetrievedDocumentSourceType
+> = {
+  group_visible_document: "feishu_group_document",
+  authorized_wiki_document: "feishu_wiki",
+  user_submitted_document: "manual_upload",
+};
 
 export type Queryable = {
   query: <T = unknown>(sql: string, values?: unknown[]) => Promise<{ rows: T[] }>;
@@ -22,7 +33,11 @@ export type EmbeddingProfileLookup = {
   getProfileById(id: string): Promise<{ id: string; dimensions: number }>;
 };
 
-type EmbeddingTable = "document_fragment_embeddings_6" | "document_fragment_embeddings_1536";
+type EmbeddingTable =
+  | "document_fragment_embeddings_6"
+  | "document_fragment_embeddings_768"
+  | "document_fragment_embeddings_1024"
+  | "document_fragment_embeddings_1536";
 
 export type DocumentFragment = {
   id: string;
@@ -37,7 +52,14 @@ export type DocumentFragment = {
   createdAt: Date;
 };
 
+export type RetrievedDocumentSourceType =
+  | "feishu_group_document"
+  | "feishu_wiki"
+  | "manual_upload";
+
 export type RetrievedDocumentFragment = DocumentFragment & {
+  sourceTitle?: string;
+  sourceType: RetrievedDocumentSourceType;
   distance?: number;
 };
 
@@ -90,6 +112,8 @@ type DocumentFragmentRow = {
 };
 
 type RetrievedDocumentFragmentRow = DocumentFragmentRow & {
+  source_title: string | null;
+  source_type: DocumentSourceType;
   distance?: number | string;
 };
 
@@ -226,6 +250,8 @@ with latest_snapshots as (
 )
 select
   f.*,
+  ds.title as source_title,
+  ds.source_type,
   e.embedding,
   e.embedding <=> $2::vector as distance
 from document_fragments f
@@ -424,10 +450,33 @@ do update set
 }
 
 function mapRetrievedFragmentRow(row: RetrievedDocumentFragmentRow): RetrievedDocumentFragment {
+  const sourceTitle = row.source_title?.trim();
+  if (sourceTitle !== undefined && sourceTitle.length > DOCUMENT_SOURCE_METADATA_MAX_CHARS) {
+    throw new Error(
+      `source title must be at most ${DOCUMENT_SOURCE_METADATA_MAX_CHARS} characters`,
+    );
+  }
+
   return {
     ...mapFragmentRow(row),
+    ...(sourceTitle === undefined || sourceTitle.length === 0 ? {} : { sourceTitle }),
+    sourceType: mapRetrievedSourceType(row.source_type),
     distance: row.distance === undefined ? undefined : Number(row.distance),
   };
+}
+
+function mapRetrievedSourceType(value: unknown): RetrievedDocumentSourceType {
+  if (!isDocumentSourceType(value)) {
+    throw new Error(`invalid document source type: ${String(value)}`);
+  }
+
+  return RETRIEVED_SOURCE_TYPE_BY_PERSISTED_SOURCE_TYPE[value];
+}
+
+function isDocumentSourceType(value: unknown): value is DocumentSourceType {
+  return value === "group_visible_document"
+    || value === "authorized_wiki_document"
+    || value === "user_submitted_document";
 }
 
 function mapFragmentRow(row: DocumentFragmentRow): DocumentFragment {
@@ -470,6 +519,12 @@ function hashText(text: string): string {
 function resolveEmbeddingTable(dimension: number): EmbeddingTable {
   if (dimension === 6) {
     return "document_fragment_embeddings_6";
+  }
+  if (dimension === 768) {
+    return "document_fragment_embeddings_768";
+  }
+  if (dimension === 1024) {
+    return "document_fragment_embeddings_1024";
   }
   if (dimension === 1536) {
     return "document_fragment_embeddings_1536";

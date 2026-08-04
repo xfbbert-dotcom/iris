@@ -385,6 +385,224 @@ describe("createDocumentSourceRegistry", () => {
     ]);
   });
 
+  it("keeps an explicit user submission canonical when the same message is discovered generically", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-28T11:30:00.000Z"),
+    });
+
+    registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/wiki/user-submitted-doc",
+      submittedByUserId: "user-1",
+      submissionGroupId: "group-1",
+      submissionMessageId: "message-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+    const discovered = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/wiki/user-submitted-doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedByUserId: "user-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+
+    expect(discovered.sourceType).toBe("user_submitted_document");
+    expect(discovered.canUseForKnowledgeDrafts).toBe(false);
+    expect(discovered.evidence).toEqual([
+      {
+        kind: "user_submission",
+        sourceUri: "https://example.com/wiki/user-submitted-doc",
+        groupId: "group-1",
+        messageId: "message-1",
+        userId: "user-1",
+        spaceId: undefined,
+        observedAt: new Date("2026-07-28T11:29:00.000Z"),
+      },
+      {
+        kind: "group_message",
+        sourceUri: "https://example.com/wiki/user-submitted-doc",
+        groupId: "group-1",
+        messageId: "message-1",
+        userId: "user-1",
+        spaceId: undefined,
+        observedAt: new Date("2026-07-28T11:29:00.000Z"),
+      },
+    ]);
+  });
+
+  it("keeps the same-message result canonical when generic discovery runs first", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-28T11:30:00.000Z"),
+    });
+
+    registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/wiki/reverse-order-doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedByUserId: "user-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+    const submitted = registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/wiki/reverse-order-doc",
+      submittedByUserId: "user-1",
+      submissionGroupId: "group-1",
+      submissionMessageId: "message-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+
+    expect(submitted.sourceType).toBe("user_submitted_document");
+    expect(submitted.canUseForKnowledgeDrafts).toBe(false);
+    expect(submitted.evidence.map((evidence) => evidence.kind)).toEqual([
+      "group_message",
+      "user_submission",
+    ]);
+  });
+
+  it("deduplicates retries of both same-message registration paths", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-28T11:30:00.000Z"),
+    });
+    const userSubmission = {
+      sourceUri: "https://example.com/wiki/retried-doc",
+      submittedByUserId: "user-1",
+      submissionGroupId: "group-1",
+      submissionMessageId: "message-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    };
+    const groupDiscovery = {
+      sourceUri: "https://example.com/wiki/retried-doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedByUserId: "user-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    };
+
+    registry.registerUserSubmittedDocument(userSubmission);
+    registry.registerGroupVisibleDocument(groupDiscovery);
+    registry.registerUserSubmittedDocument(userSubmission);
+    const retried = registry.registerGroupVisibleDocument(groupDiscovery);
+
+    expect(retried.sourceType).toBe("user_submitted_document");
+    expect(retried.evidence).toHaveLength(2);
+  });
+
+  it.each([
+    {
+      name: "message differs",
+      independentGroupId: "group-1",
+      independentMessageId: "message-2",
+    },
+    {
+      name: "group differs",
+      independentGroupId: "group-2",
+      independentMessageId: "message-1",
+    },
+  ])("uses normal group precedence when only the $name", ({
+    independentGroupId,
+    independentMessageId,
+  }) => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+      now: () => new Date("2026-07-28T11:30:00.000Z"),
+    });
+
+    registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/wiki/independent-group-doc",
+      submittedByUserId: "user-1",
+      submissionGroupId: "group-1",
+      submissionMessageId: "message-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+    registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/wiki/independent-group-doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedByUserId: "user-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+    const independent = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/wiki/independent-group-doc",
+      originGroupId: independentGroupId,
+      originMessageId: independentMessageId,
+      observedByUserId: "user-2",
+      observedAt: new Date("2026-07-28T11:35:00.000Z"),
+    });
+
+    expect(independent.sourceType).toBe("group_visible_document");
+    expect(independent.evidence).toHaveLength(3);
+  });
+
+  it("preserves an administrator-enabled knowledge-draft policy during same-message discovery", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+    });
+    const submitted = registry.registerUserSubmittedDocument({
+      sourceUri: "https://example.com/wiki/admin-enabled-doc",
+      submittedByUserId: "user-1",
+      submissionGroupId: "group-1",
+      submissionMessageId: "message-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+    registry.setKnowledgeDraftsEnabled(submitted.id, true);
+
+    const discovered = registry.registerGroupVisibleDocument({
+      sourceUri: submitted.sourceUri,
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+
+    expect(discovered.sourceType).toBe("user_submitted_document");
+    expect(discovered.canUseForKnowledgeDrafts).toBe(true);
+  });
+
+  it("preserves an administrator-disabled knowledge-draft policy when discovery runs first", () => {
+    const registry = createDocumentSourceRegistry({
+      createId: () => "doc-source-1",
+    });
+    const discovered = registry.registerGroupVisibleDocument({
+      sourceUri: "https://example.com/wiki/admin-disabled-doc",
+      originGroupId: "group-1",
+      originMessageId: "message-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+    registry.setKnowledgeDraftsEnabled(discovered.id, false);
+
+    const submitted = registry.registerUserSubmittedDocument({
+      sourceUri: discovered.sourceUri,
+      submittedByUserId: "user-1",
+      submissionGroupId: "group-1",
+      submissionMessageId: "message-1",
+      observedAt: new Date("2026-07-28T11:29:00.000Z"),
+    });
+
+    expect(submitted.sourceType).toBe("user_submitted_document");
+    expect(submitted.canUseForKnowledgeDrafts).toBe(false);
+  });
+
+  it("requires user-submission group and message provenance together", () => {
+    const registry = createDocumentSourceRegistry();
+
+    expect(() =>
+      registry.registerUserSubmittedDocument({
+        sourceUri: "https://example.com/wiki/incomplete-provenance",
+        submittedByUserId: "user-1",
+        submissionGroupId: "group-1",
+        observedAt: new Date("2026-07-28T11:29:00.000Z"),
+      }),
+    ).toThrow(DocumentSourceValidationError);
+    expect(() =>
+      registry.registerUserSubmittedDocument({
+        sourceUri: "https://example.com/wiki/incomplete-provenance",
+        submittedByUserId: "user-1",
+        submissionMessageId: "message-1",
+        observedAt: new Date("2026-07-28T11:29:00.000Z"),
+      }),
+    ).toThrow(DocumentSourceValidationError);
+  });
+
   it("marks denied permissionState and disables answering", () => {
     const updatedAt = new Date("2026-07-01T04:05:00.000Z");
     const registry = createDocumentSourceRegistry({

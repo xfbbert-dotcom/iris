@@ -4,6 +4,7 @@ import {
   createAnswerDraftOrchestrator,
   type ModelProvider,
 } from "../src/agent/answer-draft-orchestrator.js";
+import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 
 describe("AnswerDraftOrchestrator", () => {
   it("builds safe context, calls model provider, and returns draft metadata", async () => {
@@ -23,14 +24,25 @@ describe("AnswerDraftOrchestrator", () => {
             embedding: [1, 0, 0, 0, 0, 0],
             embeddingProfileId: "static-dev-6d",
             createdAt: new Date("2026-07-02T01:00:00.000Z"),
+            sourceType: "feishu_wiki" as const,
           },
         ],
-        deniedDocumentIds: ["source-denied"],
+        deniedDocumentIds: [],
         retrievedFragmentCount: 2,
+        usedGroupMemories: [{
+          id: "memory-1",
+          scope: "group" as const,
+          category: "decision" as const,
+          content: "Launch Thursday.",
+          evidenceMessageIds: ["msg-1"],
+        }],
       })),
     };
     const model: ModelProvider = {
-      generateAnswerDraft: vi.fn(async () => ({ answerText: "  Draft answer.  " })),
+      generateAnswerDraft: vi.fn(async () => ({
+        answerText: "  Draft answer.  ",
+        citedSourceRefs: ["D1"],
+      })),
     };
     const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
 
@@ -54,14 +66,110 @@ describe("AnswerDraftOrchestrator", () => {
     });
     expect(result).toEqual({
       answerText: "Draft answer.",
+      citedSourceRefs: ["D1"],
       promptContext:
         "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
       allowedFragments: [
         expect.objectContaining({ id: "fragment-1", documentSourceId: "source-1" }),
       ],
-      deniedDocumentIds: ["source-denied"],
+      deniedDocumentIds: [],
       retrievedFragmentCount: 2,
+      usedGroupMemories: [{
+        id: "memory-1",
+        scope: "group",
+        category: "decision",
+        content: "Launch Thursday.",
+        evidenceMessageIds: ["msg-1"],
+      }],
+      usedDiscussionThreads: [],
+      usedActionItems: [],
     });
+  });
+
+  it("rejects a model citation outside the current allowed fragment window", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({
+        answerText: "Draft answer.",
+        citedSourceRefs: ["D1"],
+      })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+
+    await expect(orchestrator.generateDraft({
+      question: "What changed?",
+      liveChatMessages: [],
+    })).rejects.toThrow("citation reference D1 is outside the allowed prompt window");
+  });
+
+  it("skips the model when a prompt-ranked source failed the live permission check", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: ["source-denied"],
+        retrievedFragmentCount: 1,
+        usedGroupMemories: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Must not be generated." })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+
+    const result = await orchestrator.generateDraft({
+      question: "What changed?",
+      liveChatMessages: [],
+    });
+
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      answerText: "Answer withheld by the live permission guard.",
+      deniedDocumentIds: ["source-denied"],
+    });
+  });
+
+  it("rechecks prompt permissions without calling the model provider", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: ["source-denied"],
+        retrievedFragmentCount: 1,
+        usedGroupMemories: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Must not be generated." })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model }) as ReturnType<
+      typeof createAnswerDraftOrchestrator
+    > & {
+      inspectPromptPermissions(input: {
+        question: string;
+        liveChatMessages: [];
+      }): Promise<{ blockedDocumentSourceIds: string[] }>;
+    };
+
+    const result = await orchestrator.inspectPromptPermissions({
+      question: "What changed?",
+      liveChatMessages: [],
+    });
+
+    expect(result).toEqual({ blockedDocumentSourceIds: ["source-denied"] });
+    expect(contextBuilder.buildContext).toHaveBeenCalledTimes(1);
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
   it("rejects blank questions before building context", async () => {
@@ -99,6 +207,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -145,6 +254,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -167,6 +277,44 @@ describe("AnswerDraftOrchestrator", () => {
     expect(queryText.length).toBeLessThanOrEqual(4000);
   });
 
+  it("keeps stale earlier chat out of document retrieval while preserving prompt context", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async (_input: {
+        queryText: string;
+        liveChatMessages: Array<{ speaker: string; text: string }>;
+      }) => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "One week early." })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+    const liveChatMessages = [
+      { speaker: "Alice", text: "Revoked document acceptance marker." },
+      { speaker: "Bob", text: "What should we discuss?" },
+      { speaker: "Carol", text: "Build a cycle reminder app." },
+      { speaker: "Alice", text: "It should warn one week early." },
+      { speaker: "Bob", text: "Interesting request." },
+      { speaker: "Carol", text: "Please answer from the current discussion." },
+    ];
+
+    await orchestrator.generateDraft({
+      question: "How early should it remind us?",
+      liveChatMessages,
+    });
+
+    const input = contextBuilder.buildContext.mock.calls[0]?.[0];
+    expect(input?.queryText).not.toContain("Revoked document acceptance marker.");
+    expect(input?.queryText).toContain("It should warn one week early.");
+    expect(input?.liveChatMessages).toEqual(liveChatMessages);
+  });
+
   it("caps stored live chat loading and context limits to 20 messages", async () => {
     const contextBuilder = {
       buildContext: vi.fn(async () => ({
@@ -175,6 +323,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -213,6 +362,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -406,6 +556,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -452,6 +603,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -496,6 +648,7 @@ describe("AnswerDraftOrchestrator", () => {
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
+        usedGroupMemories: [],
       })),
     };
     const model: ModelProvider = {
@@ -547,6 +700,7 @@ describe("AnswerDraftOrchestrator", () => {
             allowedFragments: [],
             deniedDocumentIds: [],
             retrievedFragmentCount: 0,
+            usedGroupMemories: [],
           };
         },
       ),
@@ -585,6 +739,7 @@ describe("AnswerDraftOrchestrator", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
       model: { generateAnswerDraft: vi.fn(async () => ({ answerText: " \n " })) },
@@ -603,6 +758,7 @@ describe("AnswerDraftOrchestrator", () => {
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          usedGroupMemories: [],
         })),
       },
       model: {
@@ -620,5 +776,200 @@ describe("AnswerDraftOrchestrator", () => {
     expect(result.answerText.length).toBeLessThanOrEqual(8000);
     expect(result.answerText).toContain("[truncated]");
     expect(result.answerText).not.toContain("trailing model output");
+  });
+
+  it("records a content-free answer and provider lifecycle with a stable execution ID", async () => {
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder: {
+        buildContext: vi.fn(async () => ({
+          promptContext: "SECRET_PROMPT_CONTEXT",
+          allowedFragments: [
+            {
+              id: "fragment-1",
+              documentSourceId: "source-1",
+              documentSnapshotId: "snapshot-1",
+              sourceUri: "https://example.com/doc",
+              chunkIndex: 0,
+              text: "SECRET_DOCUMENT_BODY",
+              contentHash: "hash",
+              embedding: [1, 0, 0, 0, 0, 0],
+              embeddingProfileId: "static-dev-6d",
+              createdAt: new Date("2026-07-27T00:00:00.000Z"),
+              sourceType: "feishu_wiki" as const,
+            },
+          ],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 2,
+          usedGroupMemories: [{
+            id: "memory-1",
+            scope: "group" as const,
+            category: "decision" as const,
+            content: "SECRET_MEMORY_BODY",
+            evidenceMessageIds: ["message-1"],
+          }],
+          usedDiscussionThreads: [{
+            id: "thread-1",
+            summary: "SECRET_THREAD_BODY",
+            status: "open" as const,
+            evidenceMessageIds: ["message-2"],
+          }],
+          usedActionItems: [{
+            id: "action-1",
+            description: "SECRET_ACTION_BODY",
+            ownerRef: "ou_alice",
+            status: "open" as const,
+            evidenceMessageIds: ["message-3"],
+          }],
+        })),
+      },
+      model: {
+        generateAnswerDraft: vi.fn(async () => ({
+          answerText: "SECRET_MODEL_ANSWER",
+        })),
+      },
+      agentExecutionObserver: { observe },
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+    });
+
+    await orchestrator.generateDraft({
+      executionId: "om_message_1",
+      question: "SECRET_QUESTION",
+      chatId: "oc_group_1",
+      askerId: "ou_alice",
+      liveChatMessages: [],
+    });
+
+    expect(observe.mock.calls.map(([event]) => event)).toEqual([
+      {
+        groupId: "oc_group_1",
+        actorOpenId: "ou_alice",
+        subjectType: "turn",
+        subjectId: "om_message_1",
+        eventType: "turn_started",
+        phase: "context_assembly",
+        operationKey: "turn:om_message_1:started",
+        metadata: {},
+      },
+      {
+        groupId: "oc_group_1",
+        actorOpenId: "ou_alice",
+        subjectType: "provider_request",
+        subjectId: "om_message_1",
+        eventType: "provider_request_started",
+        phase: "sampling",
+        provider: "google",
+        modelId: "gemini-2.5-flash",
+        operationKey: "turn:om_message_1:provider:started",
+        metadata: {},
+      },
+      {
+        groupId: "oc_group_1",
+        actorOpenId: "ou_alice",
+        subjectType: "provider_request",
+        subjectId: "om_message_1",
+        eventType: "provider_request_completed",
+        phase: "sampling",
+        provider: "google",
+        modelId: "gemini-2.5-flash",
+        outcome: "success",
+        operationKey: "turn:om_message_1:provider:completed",
+        metadata: {},
+      },
+      {
+        groupId: "oc_group_1",
+        actorOpenId: "ou_alice",
+        subjectType: "turn",
+        subjectId: "om_message_1",
+        eventType: "turn_completed",
+        phase: "completed",
+        outcome: "success",
+        operationKey: "turn:om_message_1:completed",
+        metadata: {
+          retrievedFragmentCount: 2,
+          allowedFragmentCount: 1,
+          deniedDocumentCount: 0,
+          groupMemoryCount: 1,
+          discussionThreadCount: 1,
+          actionItemCount: 1,
+        },
+      },
+    ]);
+    expect(JSON.stringify(observe.mock.calls)).not.toContain("SECRET_");
+  });
+
+  it("records provider and turn failures without logging upstream error content", async () => {
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
+    const upstreamError = new Error("SECRET_UPSTREAM_ERROR");
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder: {
+        buildContext: vi.fn(async () => ({
+          promptContext: "<background_documents></background_documents>",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+          usedGroupMemories: [],
+        })),
+      },
+      model: {
+        generateAnswerDraft: vi.fn(async () => {
+          throw upstreamError;
+        }),
+      },
+      agentExecutionObserver: { observe },
+    });
+
+    await expect(orchestrator.generateDraft({
+      executionId: "turn-failed-1",
+      question: "What changed?",
+      liveChatMessages: [],
+    })).rejects.toBe(upstreamError);
+
+    expect(observe.mock.calls.map(([event]) => event.eventType)).toEqual([
+      "turn_started",
+      "provider_request_started",
+      "provider_request_failed",
+      "turn_failed",
+    ]);
+    expect(observe.mock.calls[2]?.[0]).toEqual(expect.objectContaining({
+      outcome: "error",
+      decisionReason: "model_provider_failed",
+      metadata: {},
+    }));
+    expect(observe.mock.calls[3]?.[0]).toEqual(expect.objectContaining({
+      outcome: "error",
+      decisionReason: "answer_draft_failed",
+      metadata: {},
+    }));
+    expect(JSON.stringify(observe.mock.calls)).not.toContain("SECRET_UPSTREAM_ERROR");
+  });
+
+  it("keeps answer generation successful when execution observation fails", async () => {
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder: {
+        buildContext: vi.fn(async () => ({
+          promptContext: "<background_documents></background_documents>",
+          allowedFragments: [],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 0,
+          usedGroupMemories: [],
+        })),
+      },
+      model: {
+        generateAnswerDraft: vi.fn(async () => ({ answerText: "Answer." })),
+      },
+      agentExecutionObserver: {
+        observe: vi.fn(async () => {
+          throw new Error("ledger unavailable");
+        }),
+      },
+      createExecutionId: () => "generated-turn-1",
+    });
+
+    await expect(orchestrator.generateDraft({
+      question: "What changed?",
+      liveChatMessages: [],
+    })).resolves.toEqual(expect.objectContaining({ answerText: "Answer." }));
   });
 });

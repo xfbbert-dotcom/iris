@@ -3,7 +3,22 @@ export type InternalAttentionSeverity = "none" | "info" | "warning" | "critical"
 
 export function buildInternalStatusSnapshot<
   ComponentMap extends Record<string, { ok: boolean; enabled: boolean; running?: unknown }>,
->(input: { components: ComponentMap; generatedAt: Date }) {
+  KnowledgeCardSnapshot extends {
+    ok: boolean;
+    enabled: boolean;
+    running: boolean;
+    queue?: {
+      pending: number;
+      processing: number;
+      delayed: number;
+      deadLetter: number;
+    };
+  } | undefined = undefined,
+>(input: {
+  components: ComponentMap;
+  generatedAt: Date;
+  knowledgeCards?: KnowledgeCardSnapshot;
+}) {
   const components = addComponentStatuses(input.components);
   const componentEntries = Object.entries(components);
   const componentStatuses = Object.values(components);
@@ -57,6 +72,9 @@ export function buildInternalStatusSnapshot<
       attentionSeverity,
     },
     components,
+    ...(input.knowledgeCards === undefined
+      ? {}
+      : { knowledgeCards: cloneSnapshotValue(input.knowledgeCards) }),
   };
 }
 
@@ -106,11 +124,11 @@ function getInternalComponentStatus(component: {
   enabled: boolean;
   running?: unknown;
 }): InternalComponentStatus {
-  if (!component.enabled) {
-    return "disabled";
-  }
   if (!component.ok) {
     return "degraded";
+  }
+  if (!component.enabled) {
+    return "disabled";
   }
   if (hasRunningStatus(component) && !component.running) {
     return "stopped";

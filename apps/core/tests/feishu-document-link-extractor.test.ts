@@ -120,6 +120,20 @@ describe("FeishuDocumentLinkExtractor", () => {
     ).toEqual([{ sourceUri: "https://docs.feishu.cn/docx/token" }]);
   });
 
+  it("normalizes tenant wiki links copied from the Feishu space overview", () => {
+    const extractor = createFeishuDocumentLinkExtractor();
+
+    expect(
+      extractor.extractLinks(
+        "wiki https://tcnmvzw006k7.feishu.cn/wiki/N2cswiBleiiyOokzJotcnDTunxe?fromScene=spaceOverview",
+      ),
+    ).toEqual([
+      {
+        sourceUri: "https://tcnmvzw006k7.feishu.cn/wiki/N2cswiBleiiyOokzJotcnDTunxe",
+      },
+    ]);
+  });
+
   it("bounds distinct document links extracted from a single message", () => {
     const extractor = createFeishuDocumentLinkExtractor();
     const text = Array.from(

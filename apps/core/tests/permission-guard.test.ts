@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryAuditLog, type AuditEvent } from "../src/audit/audit-log.js";
-import { filterFragmentsByLivePermission } from "../src/permissions/permission-guard.js";
+import {
+  filterFragmentsByLivePermission,
+  type PermissionGuardDecision,
+} from "../src/permissions/permission-guard.js";
 
 describe("filterFragmentsByLivePermission", () => {
   it("keeps only fragments whose document IDs pass live permission checks", async () => {
@@ -230,6 +233,60 @@ describe("filterFragmentsByLivePermission", () => {
       type: "permission_guard_denied",
       documentId: "doc-denied",
       fragmentIds: ["frag-1"]
+    });
+  });
+
+  it("reports one bounded permission decision per unique document", async () => {
+    const onPermissionDecision = vi.fn(
+      async (_decision: PermissionGuardDecision) => undefined,
+    );
+    const fragments = [
+      { id: "frag-1", documentId: "doc-allowed", text: "Allowed content A" },
+      { id: "frag-2", documentId: "doc-allowed", text: "Allowed content B" },
+      { id: "frag-3", documentId: "doc-denied", text: "Denied content" },
+      { id: "frag-4", documentId: "doc-error", text: "Uncertain content" },
+    ];
+
+    const result = await filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async (documentId) => {
+        if (documentId === "doc-error") {
+          throw new Error("SECRET_PERMISSION_PROVIDER_DETAIL");
+        }
+        return documentId === "doc-allowed";
+      },
+      onPermissionDecision,
+    });
+
+    expect(result).toEqual({
+      allowedFragments: [fragments[0], fragments[1]],
+      deniedDocumentIds: ["doc-denied", "doc-error"],
+    });
+    expect(onPermissionDecision.mock.calls.map(([decision]) => decision)).toEqual([
+      { documentId: "doc-allowed", outcome: "allowed" },
+      { documentId: "doc-denied", outcome: "denied" },
+      { documentId: "doc-error", outcome: "error" },
+    ]);
+    expect(JSON.stringify(onPermissionDecision.mock.calls)).not.toContain(
+      "SECRET_PERMISSION_PROVIDER_DETAIL",
+    );
+  });
+
+  it("keeps filtering results unchanged when permission decision observation fails", async () => {
+    const fragments = [
+      { id: "frag-1", documentId: "doc-denied", text: "Denied content" },
+      { id: "frag-2", documentId: "doc-allowed", text: "Allowed content" },
+    ];
+
+    await expect(filterFragmentsByLivePermission({
+      fragments,
+      canReadDocument: async (documentId) => documentId === "doc-allowed",
+      onPermissionDecision: vi.fn(async () => {
+        throw new Error("ledger unavailable");
+      }),
+    })).resolves.toEqual({
+      allowedFragments: [fragments[1]],
+      deniedDocumentIds: ["doc-denied"],
     });
   });
 });

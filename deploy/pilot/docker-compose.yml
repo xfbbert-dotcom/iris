@@ -7,12 +7,41 @@ x-core-image: &core-image
     dockerfile: deploy/pilot/Dockerfile
     target: runtime
 
+x-ai-worker-image: &ai-worker-image
+  image: iris-ai-worker:${IRIS_IMAGE_TAG:?IRIS_IMAGE_TAG is required}
+  build:
+    context: ../../workers/ai
+    dockerfile: ../../deploy/pilot/ai-worker.Dockerfile
+    target: runtime
+
 x-core-environment: &core-environment
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
   REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
   PORT: "3000"
   IRIS_INTERNAL_API_TOKEN: ${IRIS_INTERNAL_API_TOKEN:?IRIS_INTERNAL_API_TOKEN is required}
   IRIS_INGRESS_HEALTH_TOKEN: ${IRIS_INGRESS_HEALTH_TOKEN:?IRIS_INGRESS_HEALTH_TOKEN is required}
+  IRIS_RUNTIME_GLOBAL_ENABLED: ${IRIS_RUNTIME_GLOBAL_ENABLED:-false}
+  IRIS_KNOWLEDGE_CARD_ENABLED: ${IRIS_KNOWLEDGE_CARD_ENABLED:-false}
+  IRIS_KNOWLEDGE_CARD_GROUP_IDS: ${IRIS_KNOWLEDGE_CARD_GROUP_IDS:-}
+  IRIS_APPROVAL_ACTIONS_ENABLED: ${IRIS_APPROVAL_ACTIONS_ENABLED:-false}
+  IRIS_APPROVAL_ACTION_GROUP_IDS: ${IRIS_APPROVAL_ACTION_GROUP_IDS:-}
+  IRIS_ACTION_PROPOSAL_PLANNER_INTERVAL_MS: ${IRIS_ACTION_PROPOSAL_PLANNER_INTERVAL_MS:-1000}
+  IRIS_ACTION_PROPOSAL_PLANNER_BATCH_LIMIT: ${IRIS_ACTION_PROPOSAL_PLANNER_BATCH_LIMIT:-10}
+  IRIS_ACTION_APPROVAL_DISPATCHER_INTERVAL_MS: ${IRIS_ACTION_APPROVAL_DISPATCHER_INTERVAL_MS:-1000}
+  IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT: ${IRIS_ACTION_APPROVAL_DISPATCHER_BATCH_LIMIT:-10}
+  IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED: ${IRIS_PROACTIVE_SIGNAL_PLANNER_ENABLED:-false}
+  IRIS_PROACTIVE_SIGNAL_PLANNER_GROUP_IDS: ${IRIS_PROACTIVE_SIGNAL_PLANNER_GROUP_IDS:-}
+  IRIS_PROACTIVE_SIGNAL_PLANNER_INTERVAL_MS: ${IRIS_PROACTIVE_SIGNAL_PLANNER_INTERVAL_MS:-60000}
+  IRIS_PROACTIVE_SIGNAL_PLANNER_BATCH_LIMIT: ${IRIS_PROACTIVE_SIGNAL_PLANNER_BATCH_LIMIT:-10}
+  IRIS_PROACTIVE_SIGNAL_PLANNER_QUIET_THREAD_MINUTES: ${IRIS_PROACTIVE_SIGNAL_PLANNER_QUIET_THREAD_MINUTES:-1440}
+  IRIS_PROACTIVE_SIGNAL_PLANNER_OVERDUE_ACTION_GRACE_MINUTES: ${IRIS_PROACTIVE_SIGNAL_PLANNER_OVERDUE_ACTION_GRACE_MINUTES:-15}
+  IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED: ${IRIS_PROACTIVE_SIGNAL_DELIVERY_ENABLED:-false}
+  IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS: ${IRIS_PROACTIVE_SIGNAL_DELIVERY_GROUP_IDS:-}
+  IRIS_PROACTIVE_SIGNAL_DELIVERY_INTERVAL_MS: ${IRIS_PROACTIVE_SIGNAL_DELIVERY_INTERVAL_MS:-1000}
+  IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT: ${IRIS_PROACTIVE_SIGNAL_DELIVERY_BATCH_LIMIT:-10}
+  IRIS_ACTION_REVIEW_ENABLED: ${IRIS_ACTION_REVIEW_ENABLED:-false}
+  IRIS_REVIEW_PUBLIC_ORIGIN: ${IRIS_REVIEW_PUBLIC_ORIGIN:-}
+  IRIS_REVIEW_SESSION_SECRET: ${IRIS_REVIEW_SESSION_SECRET:-}
   FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:?FEISHU_VERIFICATION_TOKEN is required}
   FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
   FEISHU_APP_ID: ${FEISHU_APP_ID:?FEISHU_APP_ID is required}
@@ -27,6 +56,12 @@ x-core-environment: &core-environment
   IRIS_DOCUMENT_SYNC_WORKER_ENABLED: ${IRIS_DOCUMENT_SYNC_WORKER_ENABLED:-true}
   IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS: ${IRIS_DOCUMENT_SYNC_WORKER_INTERVAL_MS:-1000}
   IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT: ${IRIS_DOCUMENT_SYNC_WORKER_BATCH_LIMIT:-10}
+  IRIS_WIKI_SPACE_SYNC_ENABLED: ${IRIS_WIKI_SPACE_SYNC_ENABLED:-false}
+  IRIS_WIKI_SPACE_SYNC_INTERVAL_MS: ${IRIS_WIKI_SPACE_SYNC_INTERVAL_MS:-1000}
+  IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS: ${IRIS_WIKI_SPACE_SYNC_REFRESH_INTERVAL_MS:-21600000}
+  IRIS_WIKI_SPACE_SYNC_LEASE_MS: ${IRIS_WIKI_SPACE_SYNC_LEASE_MS:-600000}
+  IRIS_WIKI_SPACE_SYNC_MAX_DEPTH: ${IRIS_WIKI_SPACE_SYNC_MAX_DEPTH:-20}
+  IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS: ${IRIS_WIKI_SPACE_SYNC_MAX_ATTEMPTS:-5}
   IRIS_REINDEX_WORKER_ENABLED: ${IRIS_REINDEX_WORKER_ENABLED:-true}
   IRIS_REINDEX_WORKER_INTERVAL_MS: ${IRIS_REINDEX_WORKER_INTERVAL_MS:-1000}
   IRIS_REINDEX_WORKER_BATCH_LIMIT: ${IRIS_REINDEX_WORKER_BATCH_LIMIT:-25}
@@ -40,9 +75,19 @@ x-core-environment: &core-environment
   IRIS_EMBEDDING_API_KEY: ${IRIS_EMBEDDING_API_KEY:?IRIS_EMBEDDING_API_KEY is required}
   IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
   IRIS_EMBEDDING_DIMENSIONS: ${IRIS_EMBEDDING_DIMENSIONS:?IRIS_EMBEDDING_DIMENSIONS is required}
+  IRIS_EMBEDDING_BATCH_SIZE: ${IRIS_EMBEDDING_BATCH_SIZE:-64}
   IRIS_EMBEDDING_TIMEOUT_MS: ${IRIS_EMBEDDING_TIMEOUT_MS:-30000}
   IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS: ${IRIS_ENABLE_INTERNAL_ANSWER_DRAFTS:-true}
   IRIS_INTERNAL_DRAFT_PERMISSION_MODE: ${IRIS_INTERNAL_DRAFT_PERMISSION_MODE:-source-policy}
+  IRIS_AI_WORKER_BASE_URL: http://ai-worker:8000
+  IRIS_AI_WORKER_TOKEN: ${IRIS_AI_WORKER_TOKEN:?IRIS_AI_WORKER_TOKEN is required}
+  IRIS_MEMORY_EXTRACTION_ENABLED: ${IRIS_MEMORY_EXTRACTION_ENABLED:-false}
+  IRIS_MEMORY_EXTRACTION_INTERVAL_MS: ${IRIS_MEMORY_EXTRACTION_INTERVAL_MS:-1000}
+  IRIS_MEMORY_EXTRACTION_BATCH_LIMIT: ${IRIS_MEMORY_EXTRACTION_BATCH_LIMIT:-20}
+  IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE: ${IRIS_MEMORY_EXTRACTION_MIN_CONFIDENCE:-0.85}
+  IRIS_THREAD_EXTRACTION_GROUP_IDS: ${IRIS_THREAD_EXTRACTION_GROUP_IDS:-}
+  IRIS_ACTION_EXTRACTION_GROUP_IDS: ${IRIS_ACTION_EXTRACTION_GROUP_IDS:-}
+  IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR: ${IRIS_THREAD_CANDIDATE_CONFIDENCE_FLOOR:-0.65}
 
 x-migrate-environment: &migrate-environment
   DATABASE_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL is required}
@@ -108,6 +153,156 @@ services:
     networks:
       - backend
 
+  ai-worker:
+    <<: *ai-worker-image
+    user: "10001:10001"
+    environment:
+      IRIS_AI_WORKER_PORT: "8000"
+      IRIS_AI_WORKER_TOKEN: ${IRIS_AI_WORKER_TOKEN:?IRIS_AI_WORKER_TOKEN is required}
+      IRIS_MODEL_BASE_URL: ${IRIS_MEMORY_EXTRACTION_MODEL_BASE_URL:?IRIS_MEMORY_EXTRACTION_MODEL_BASE_URL is required}
+      IRIS_MODEL_API_KEY: ${IRIS_MEMORY_EXTRACTION_MODEL_API_KEY:?IRIS_MEMORY_EXTRACTION_MODEL_API_KEY is required}
+      IRIS_MODEL_NAME: ${IRIS_MEMORY_EXTRACTION_MODEL_NAME:?IRIS_MEMORY_EXTRACTION_MODEL_NAME is required}
+      IRIS_MODEL_TIMEOUT_MS: ${IRIS_MEMORY_EXTRACTION_MODEL_TIMEOUT_MS:-30000}
+      IRIS_MODEL_MAX_RESPONSE_BYTES: ${IRIS_MEMORY_EXTRACTION_MODEL_MAX_RESPONSE_BYTES:-65536}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json, urllib.request;
+          response = urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3);
+          body = json.load(response);
+          response.close();
+          assert body == {'ok': True, 'service': 'iris-ai-worker', 'schemaVersion': 1}
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    logging: *bounded-logging
+    networks:
+      - backend
+      - model-egress
+
+  embedding-model-init:
+    image: ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a
+    environment:
+      OLLAMA_HOST: 127.0.0.1:11434
+      IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
+      IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        ollama_log=/tmp/ollama-server.log
+        ollama serve >"$$ollama_log" 2>&1 &
+        server_pid=$$!
+        cleanup() {
+          if kill -0 "$$server_pid" 2>/dev/null; then kill "$$server_pid" || true; fi
+          wait "$$server_pid" 2>/dev/null || true
+        }
+        trap cleanup EXIT
+        ready=false
+        for attempt in $$(seq 1 60); do
+          if ollama list >/dev/null 2>&1; then ready=true; break; fi
+          sleep 1
+        done
+        if [ "$$ready" != true ]; then cat "$$ollama_log" >&2 || true; exit 1; fi
+        model_name=$${IRIS_EMBEDDING_MODEL%:*}
+        model_tag=$${IRIS_EMBEDDING_MODEL#*:}
+        manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}"
+        verify_model_cache() {
+          test -f "$$manifest" || return 1
+          printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" | sha256sum -c - || return 1
+          digests=$$(grep -o '"digest"[[:space:]]*:[[:space:]]*"sha256:[a-f0-9]\{64\}"' "$$manifest" |
+            sed -n 's/.*"\(sha256:[a-f0-9]\{64\}\)"/\1/p') || return 1
+          digest_count=$$(printf '%s\n' "$$digests" | awk 'NF { count += 1 } END { print count + 0 }')
+          test "$$digest_count" -ge 2 || return 1
+          for digest in $$digests; do
+            digest_path=$$(printf '%s' "$$digest" | sed 's/:/-/')
+            blob="/root/.ollama/models/blobs/$${digest_path}"
+            test -f "$$blob" || return 1
+            printf '%s  %s\n' "$${digest#sha256:}" "$$blob" | sha256sum -c - || return 1
+          done
+        }
+        if verify_model_cache; then
+          :
+        else
+          ollama pull "$$IRIS_EMBEDDING_MODEL"
+          verify_model_cache
+        fi
+    volumes:
+      - iris_embedding_models:/root/.ollama
+    restart: "no"
+    logging: *bounded-logging
+    networks:
+      - model-egress
+
+  embedding-model:
+    image: ollama/ollama:0.32.0@sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_KEEP_ALIVE: 30m
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
+      IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
+    depends_on:
+      embedding-model-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          model_name=$${IRIS_EMBEDDING_MODEL%:*} &&
+          model_tag=$${IRIS_EMBEDDING_MODEL#*:} &&
+          manifest="/root/.ollama/models/manifests/registry.ollama.ai/library/$${model_name}/$${model_tag}" &&
+          OLLAMA_HOST=127.0.0.1:11434 ollama list >/dev/null 2>&1 &&
+          OLLAMA_HOST=127.0.0.1:11434 ollama list |
+            awk -v expected="$${IRIS_EMBEDDING_MODEL}" 'NR > 1 && $$1 == expected { found = 1 } END { exit(found ? 0 : 1) }' &&
+          test -f "$$manifest" &&
+          printf '%s  %s\n' "$$IRIS_EMBEDDING_MODEL_MANIFEST_SHA256" "$$manifest" |
+            sha256sum -c - >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - iris_embedding_models:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 768m
+    restart: unless-stopped
+    logging: *bounded-logging
+    networks:
+      - backend
+
+  embedding-model-verify:
+    <<: *core-image
+    command: ["node", "/opt/iris/verify-local-embedding.mjs"]
+    environment:
+      IRIS_EMBEDDING_BASE_URL: http://embedding-model:11434/v1
+      IRIS_EMBEDDING_MODEL: ${IRIS_EMBEDDING_MODEL:?IRIS_EMBEDDING_MODEL is required}
+      IRIS_EMBEDDING_DIMENSIONS: ${IRIS_EMBEDDING_DIMENSIONS:?IRIS_EMBEDDING_DIMENSIONS is required}
+      IRIS_EMBEDDING_MODEL_MANIFEST_SHA256: ${IRIS_EMBEDDING_MODEL_MANIFEST_SHA256:?IRIS_EMBEDDING_MODEL_MANIFEST_SHA256 is required}
+      IRIS_EMBEDDING_MODEL_ROOT: /var/lib/iris-ollama/models
+      IRIS_EMBEDDING_NORM_TOLERANCE: "0.001"
+      IRIS_EMBEDDING_VERIFIER_TIMEOUT_MS: ${IRIS_EMBEDDING_TIMEOUT_MS:-30000}
+    depends_on:
+      embedding-model:
+        condition: service_healthy
+    volumes:
+      - type: volume
+        source: iris_embedding_models
+        target: /var/lib/iris-ollama
+        read_only: true
+    restart: "no"
+    logging: *bounded-logging
+    networks:
+      - backend
+
   core:
     <<: *core-image
     environment: *core-environment
@@ -117,6 +312,12 @@ services:
       redis:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      ai-worker:
+        condition: service_started
+      embedding-model:
+        condition: service_healthy
+      embedding-model-verify:
         condition: service_completed_successfully
     ports:
       - "127.0.0.1:${IRIS_CORE_LOOPBACK_PORT:-3000}:3000"
@@ -172,10 +373,13 @@ services:
 networks:
   backend:
     internal: true
+  model-egress:
+    driver: bridge
   edge:
 
 volumes:
   iris_postgres_data:
   iris_redis_data:
+  iris_embedding_models:
   iris_caddy_data:
   iris_caddy_config:
