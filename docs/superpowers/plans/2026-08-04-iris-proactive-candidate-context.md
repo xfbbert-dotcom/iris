@@ -312,7 +312,7 @@ git status --short
 
 Expected: no whitespace errors and no unintended files. Review specifically for SQL target-predicate drift, stale approval races, internal-ID leakage, and disabled-button regressions. Fix only release-blocking findings and rerun the affected gates.
 
-- [ ] **Step 4: Push and open a stacked draft pull request**
+- [x] **Step 4: Push and open a stacked draft pull request**
 
 Push `codex/iris-proactive-approval-context` and open a draft PR against `codex/iris-proactive-card-context`. Do not merge it. Wait for Core and AI Worker checks to succeed on the exact head SHA.
 
