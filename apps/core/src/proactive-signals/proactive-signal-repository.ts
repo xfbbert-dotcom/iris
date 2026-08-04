@@ -128,6 +128,7 @@ export type ProactiveSignalRepository = {
   }): Promise<
     | { status: "queued"; deliveryId: string }
     | { status: "already_queued"; deliveryId: string }
+    | { status: "stale" }
     | { status: "not_found" }
   >;
   claimProactiveSignalDelivery(input: {
@@ -1014,6 +1015,7 @@ async function approveCandidateForDelivery(
 ): Promise<
   | { status: "queued"; deliveryId: string }
   | { status: "already_queued"; deliveryId: string }
+  | { status: "stale" }
   | { status: "not_found" }
 > {
   const idempotencyKey = requireBoundedString("idempotencyKey", input.idempotencyKey);
@@ -1033,9 +1035,11 @@ async function approveCandidateForDelivery(
       SELECT $3, candidate.idempotency_key, candidate.group_id, 'feishu_group_card',
         'pending', 0, $4, $4, $4
       FROM proactive_signal_candidates candidate
+      ${PROACTIVE_SIGNAL_TARGET_STATE_JOINS}
       WHERE candidate.idempotency_key = $1
         AND candidate.group_id = $2
         AND candidate.status = 'pending'
+        AND ${PROACTIVE_SIGNAL_TARGET_READY_SQL}
         AND NOT EXISTS (
           SELECT 1
           FROM proactive_signal_suppressions suppression
@@ -1072,6 +1076,7 @@ async function approveCandidateForDelivery(
       FROM proactive_signal_delivery_outbox delivery
       JOIN proactive_signal_candidates candidate
         ON candidate.idempotency_key = delivery.candidate_idempotency_key
+       AND candidate.group_id = delivery.group_id
       WHERE delivery.candidate_idempotency_key = $1
         AND delivery.group_id = $2
         AND delivery.delivery_channel = 'feishu_group_card'
@@ -1088,12 +1093,39 @@ async function approveCandidateForDelivery(
       `,
       [idempotencyKey, groupId, now],
     );
+    if (existing.rows.length > 0) {
+      await client.query("commit");
+      return {
+        status: "already_queued",
+        deliveryId: requireBoundedString("delivery id", existing.rows[0]?.id),
+      };
+    }
+
+    const candidateState = await client.query<{ approval_ready: unknown }>(
+      `
+      SELECT ${PROACTIVE_SIGNAL_TARGET_READY_SQL} AS approval_ready
+      FROM proactive_signal_candidates candidate
+      ${PROACTIVE_SIGNAL_TARGET_STATE_JOINS}
+      WHERE candidate.idempotency_key = $1
+        AND candidate.group_id = $2
+        AND candidate.status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM proactive_signal_suppressions suppression
+          WHERE suppression.group_id = candidate.group_id
+            AND suppression.kind = candidate.kind
+            AND suppression.entity_id = candidate.entity_id
+            AND suppression.suppress_until > $3
+        )
+      LIMIT 1
+      `,
+      [idempotencyKey, groupId, now],
+    );
     await client.query("commit");
-    if (existing.rows.length === 0) return { status: "not_found" };
-    return {
-      status: "already_queued",
-      deliveryId: requireBoundedString("delivery id", existing.rows[0]?.id),
-    };
+    if (candidateState.rows.length === 0) return { status: "not_found" };
+    return requireBoolean("approvalReady", candidateState.rows[0]?.approval_ready)
+      ? { status: "not_found" }
+      : { status: "stale" };
   } catch (error) {
     try {
       await client.query("rollback");
@@ -1422,6 +1454,11 @@ function requireVersion(value: unknown): number {
   const parsed = typeof value === "string" ? Number(value) : value;
   if (!Number.isSafeInteger(parsed) || Number(parsed) < 1) throw new Error("entity version is invalid");
   return Number(parsed);
+}
+
+function requireBoolean(label: string, value: unknown): boolean {
+  if (typeof value !== "boolean") throw new Error(`${label} is invalid`);
+  return value;
 }
 
 function requireActorFingerprint(value: unknown): string {

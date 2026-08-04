@@ -594,6 +594,54 @@ describe("proactive signal persistence", () => {
     expect(sql).not.toContain("operator-a");
   });
 
+  it("rejects a stale pending candidate before it enters the delivery outbox", async () => {
+    const client = createClient([
+      { rows: [] },
+      { rows: [] },
+      { rows: [{ approval_ready: false }] },
+    ]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    const result = await repository.approveCandidateForDelivery({
+      idempotencyKey: "quiet_open_thread:thread-a:1",
+      groupId: "group-a",
+      operatorHint: "operator-a",
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    });
+
+    expect(result).toEqual({ status: "stale" });
+    const sql = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("thread_state.version = candidate.entity_version");
+    expect(sql).toContain("action_state.version = candidate.entity_version");
+    expect(sql).toContain("dependency.status in ('open', 'resolved')");
+    expect(sql).not.toContain("'queued', 'pending'");
+  });
+
+  it("keeps an existing proactive delivery approval idempotent", async () => {
+    const client = createClient([
+      { rows: [] },
+      { rows: [{ id: "delivery-a" }] },
+    ]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.approveCandidateForDelivery({
+      idempotencyKey: "quiet_open_thread:thread-a:1",
+      groupId: "group-a",
+      operatorHint: "operator-a",
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    })).resolves.toEqual({ status: "already_queued", deliveryId: "delivery-a" });
+  });
+
   it("derives bounded delivery ids from long candidate keys", async () => {
     const longKey = "quiet_open_thread:" + "x".repeat(480) + ":1";
     const client = createClient([{ rows: [{ id: "proactive-delivery-expected" }] }, { rows: [] }]);

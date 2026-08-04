@@ -226,6 +226,9 @@ export function registerProactiveSignalApi(
         if (result.status === "not_found") {
           return reply.code(404).send({ ok: false, error: "proactive_signal_candidate_not_found" });
         }
+        if (result.status === "stale") {
+          return reply.code(409).send({ ok: false, error: "proactive_signal_candidate_stale" });
+        }
         return { ok: true, ...result };
       } catch {
         return reply.code(500).send({ ok: false, error: "proactive_signal_delivery_approval_failed" });
