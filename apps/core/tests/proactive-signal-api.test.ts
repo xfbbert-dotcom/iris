@@ -179,6 +179,8 @@ describe("proactive signal API", () => {
           createdAt: new Date("2026-07-23T10:00:00.000Z"),
           updatedAt: new Date("2026-07-23T10:00:00.000Z"),
           evidenceMessageIds: ["message-a"],
+          approvalState: "ready",
+          subjectLabel: "Launch feedback dashboard",
         },
       ]),
       dismissCandidate: vi.fn<ProactiveSignalRepository["dismissCandidate"]>().mockResolvedValue({
