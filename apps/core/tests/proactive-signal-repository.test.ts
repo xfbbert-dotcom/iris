@@ -677,9 +677,9 @@ describe("proactive signal persistence", () => {
     expect(lockSql).toContain("delivery.attempt_count = $4");
     expect(lockSql).not.toContain("proactive_signal_suppressions");
     expect(authorizationSql).toContain("from proactive_signal_suppressions");
-    expect(authorizationSql).toContain("suppression.suppress_until > $3");
-    expect(authorizationSql).toContain("delivery.lease_until > $3");
-    expect(authorizationSql).toContain("delivery.attempt_count = $4");
+    expect(authorizationSql).toContain("suppression.suppress_until > $6");
+    expect(authorizationSql).toContain("delivery.lease_until > $6");
+    expect(authorizationSql).toContain("delivery.attempt_count = $3");
     expect(authorizationSql).not.toContain("for update of delivery");
     expect(authorizationSql).toContain("thread_state.retrieval_state = 'visible'");
     expect(authorizationSql).toContain("thread_state.status = 'open'");
@@ -694,6 +694,55 @@ describe("proactive signal persistence", () => {
     expect(authorizationSql).toContain("'cancelled', 'cancelled'");
     expect(dataSource.query).not.toHaveBeenCalled();
     expect(client.release).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "authorization query",
+    "commit",
+  ] as const)("rolls back and releases when final delivery authorization fails during %s", async (failurePoint) => {
+    const client = {
+      query: vi.fn(async (statement: string, _values?: unknown[]) => {
+        const sql = statement.toLowerCase();
+        if (sql === "begin" || sql === "rollback") return { rows: [] };
+        if (sql === "commit") {
+          if (failurePoint === "commit") throw new Error("commit failed");
+          return { rows: [] };
+        }
+        if (sql.includes("select delivery.id") && sql.includes("for update of delivery")) {
+          return { rows: [{ id: "delivery-a" }] };
+        }
+        if (sql.includes("authorization_status")) {
+          if (failurePoint === "authorization query") throw new Error("authorization failed");
+          return { rows: [{ authorization_status: "authorized" }] };
+        }
+        throw new Error(`unexpected query: ${statement}`);
+      }),
+      release: vi.fn(),
+    };
+    const dataSource = {
+      query: vi.fn(async () => {
+        throw new Error("authorization must use one transaction client");
+      }),
+      connect: vi.fn(async () => client),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.beginProactiveSignalDeliveryAttempt({
+      deliveryId: "delivery-a",
+      workerId: "worker-a",
+      attemptCount: 1,
+      at: new Date("2026-07-23T10:00:00.000Z"),
+    })).rejects.toThrow(failurePoint === "commit" ? "commit failed" : "authorization failed");
+
+    const statements = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase());
+    expect(statements).toContain("rollback");
+    expect(statements.filter((statement) => statement === "commit")).toHaveLength(
+      failurePoint === "commit" ? 1 : 0,
+    );
+    expect(client.release).toHaveBeenCalledOnce();
+    expect(dataSource.query).not.toHaveBeenCalled();
   });
 
   it("cancels preparation failures terminally instead of making them claimable again", async () => {

@@ -186,8 +186,10 @@ const MAX_IRRELEVANT_SUPPRESSION_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 
 export function createPostgresProactiveSignalRepository({
   dataSource,
+  now = () => new Date(),
 }: {
   dataSource: ProactiveSignalDataSource;
+  now?: () => Date;
 }): ProactiveSignalRepository {
   return {
     recordCandidates(input) {
@@ -218,7 +220,7 @@ export function createPostgresProactiveSignalRepository({
       return getProactiveSignalDeliveryContext(dataSource, input);
     },
     beginProactiveSignalDeliveryAttempt(input) {
-      return beginProactiveSignalDeliveryAttempt(dataSource, input);
+      return beginProactiveSignalDeliveryAttempt(dataSource, input, now);
     },
     failProactiveSignalDeliveryPreparation(input) {
       return failProactiveSignalDeliveryPreparation(dataSource, input);
@@ -630,6 +632,7 @@ async function getProactiveSignalDeliveryContext(
 async function beginProactiveSignalDeliveryAttempt(
   dataSource: ProactiveSignalDataSource,
   input: { deliveryId: string; workerId: string; attemptCount: number; at: Date },
+  now: () => Date,
 ): Promise<ProactiveSignalDeliveryAuthorizationResult> {
   const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
   const workerId = requireBoundedString("workerId", input.workerId);
@@ -656,6 +659,8 @@ async function beginProactiveSignalDeliveryAttempt(
       await client.query("commit");
       return { status: "stale" };
     }
+    const observedAt = requireDate(now(), "authorizationAt");
+    const authorizationAt = new Date(Math.max(at.getTime(), observedAt.getTime()));
 
     const result = await client.query<{ authorization_status: unknown }>(
       `
@@ -667,7 +672,7 @@ async function beginProactiveSignalDeliveryAttempt(
             WHERE suppression.group_id = candidate.group_id
               AND suppression.kind = candidate.kind
               AND suppression.entity_id = candidate.entity_id
-              AND suppression.suppress_until > $3
+              AND suppression.suppress_until > $6
           ) AS suppressed,
           CASE candidate.entity_type
             WHEN 'thread' THEN EXISTS (
@@ -709,8 +714,8 @@ async function beginProactiveSignalDeliveryAttempt(
           AND delivery.status = 'processing'
           AND delivery.lease_worker_id = $2
           AND delivery.lease_until IS NOT NULL
-          AND delivery.lease_until > $3
-          AND delivery.attempt_count = $4
+          AND delivery.lease_until > $6
+          AND delivery.attempt_count = $3
           AND candidate.status = 'pending'
       ),
       cancelled AS (
@@ -722,14 +727,14 @@ async function beginProactiveSignalDeliveryAttempt(
               WHEN bound.suppressed THEN 'feedback_suppressed'
               ELSE 'stale_delivery'
             END,
-            updated_at = $3
+            updated_at = $6
         FROM bound
         WHERE delivery.id = bound.id
           AND (bound.suppressed OR NOT bound.subject_visible)
           AND delivery.status = 'processing'
           AND delivery.lease_worker_id = $2
           AND delivery.lease_until IS NOT NULL
-          AND delivery.lease_until > $3
+          AND delivery.lease_until > $6
         RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id
       ),
       processing_event AS (
@@ -737,8 +742,8 @@ async function beginProactiveSignalDeliveryAttempt(
           id, delivery_id, candidate_idempotency_key, group_id, event_type,
           delivery_status, created_at
         )
-        SELECT $5, bound.id, bound.candidate_idempotency_key, bound.group_id,
-          'processing', 'processing', $3
+        SELECT $4, bound.id, bound.candidate_idempotency_key, bound.group_id,
+          'processing', 'processing', $6
         FROM bound
         WHERE NOT bound.suppressed
           AND bound.subject_visible
@@ -750,8 +755,8 @@ async function beginProactiveSignalDeliveryAttempt(
           id, delivery_id, candidate_idempotency_key, group_id, event_type,
           delivery_status, created_at
         )
-        SELECT $6, cancelled.id, cancelled.candidate_idempotency_key, cancelled.group_id,
-          'cancelled', 'cancelled', $3
+        SELECT $5, cancelled.id, cancelled.candidate_idempotency_key, cancelled.group_id,
+          'cancelled', 'cancelled', $6
         FROM cancelled
         ON CONFLICT (id) DO NOTHING
         RETURNING id
@@ -771,10 +776,10 @@ async function beginProactiveSignalDeliveryAttempt(
       [
         deliveryId,
         workerId,
-        at,
         attemptCount,
-        deliveryEventId(deliveryId, "processing", workerId, at),
-        deliveryEventId(deliveryId, "cancelled", workerId, at),
+        deliveryEventId(deliveryId, "processing", workerId, authorizationAt),
+        deliveryEventId(deliveryId, "cancelled", workerId, authorizationAt),
+        authorizationAt,
       ],
     );
     const status = result.rows[0]?.authorization_status;

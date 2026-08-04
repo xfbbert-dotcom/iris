@@ -136,6 +136,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     });
     proactiveRepository = createPostgresProactiveSignalRepository({
       dataSource: pool as unknown as ProactiveSignalDataSource,
+      now: () => at,
     });
   });
 
@@ -796,6 +797,78 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     });
   }, 15_000);
 
+  it("rejects final authorization when a delivery lease expires while waiting on its row lock", async () => {
+    const groupId = `oc_authorization_lease_race_${suffix}`;
+    const entityId = `thread-authorization-lease-race-${suffix}`;
+    const observedAt = new Date();
+    await pool.query(
+      `INSERT INTO discussion_threads (
+         id, group_id, title, summary, status, confidence, version,
+         first_evidence_at, last_activity_at, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'open', 0.95, 1, $5, $5, $5, $5)`,
+      [entityId, groupId, "Lease expiry race", "Lease expiry race summary", observedAt],
+    );
+    const candidate = proactiveCandidate({ groupId, entityId, entityVersion: 1 });
+    const deliveryId = await createQueuedProactiveDelivery({
+      repository: proactiveRepository,
+      candidate,
+    });
+    const workerId = `worker-authorization-lease-race-${suffix}`;
+    const leaseUntil = new Date(observedAt.getTime() + 500);
+    const claimed = await pool.query(
+      `UPDATE proactive_signal_delivery_outbox
+       SET status = 'processing',
+           lease_worker_id = $2,
+           lease_until = $3,
+           attempt_count = attempt_count + 1,
+           updated_at = $4
+       WHERE id = $1
+         AND status = 'pending'
+       RETURNING id, attempt_count`,
+      [deliveryId, workerId, leaseUntil, observedAt],
+    );
+    expect(claimed.rows).toEqual([{ id: deliveryId, attempt_count: 1 }]);
+
+    const repositoryOptions = {
+      dataSource: pool as unknown as ProactiveSignalDataSource,
+      now: () => new Date(),
+    };
+    const leaseAwareRepository = createPostgresProactiveSignalRepository(repositoryOptions);
+    const blocker = await pool.connect();
+    await blocker.query("BEGIN");
+    const blockerPidResult = await blocker.query<{ pid: number }>(
+      "SELECT pg_backend_pid()::integer AS pid",
+    );
+    const blockerPid = blockerPidResult.rows[0]?.pid;
+    if (blockerPid === undefined) throw new Error("expected blocker backend pid");
+    let authorizationPromise: ReturnType<ProactiveSignalRepository["beginProactiveSignalDeliveryAttempt"]>;
+    try {
+      await blocker.query(
+        `SELECT id
+         FROM proactive_signal_delivery_outbox
+         WHERE id = $1
+         FOR UPDATE`,
+        [deliveryId],
+      );
+      authorizationPromise = leaseAwareRepository.beginProactiveSignalDeliveryAttempt({
+        deliveryId,
+        workerId,
+        attemptCount: 1,
+        at: observedAt,
+      });
+      await waitForDatabaseBlocker(pool, blockerPid);
+      await waitUntilAfter(leaseUntil);
+    } finally {
+      await blocker.query("COMMIT");
+      blocker.release();
+    }
+
+    await expect(authorizationPromise!).resolves.toEqual({ status: "stale" });
+    await expect(leaseAwareRepository.getProactiveSignalDeliveryContext(deliveryId)).resolves.toMatchObject({
+      delivery: { status: "processing", attemptCount: 1 },
+    });
+  }, 15_000);
+
   it("rejects final delivery authorization after the worker lease expires", async () => {
     const groupId = `oc_expired_lease_${suffix}`;
     const candidate = proactiveCandidate({
@@ -1013,6 +1086,11 @@ async function waitForDatabaseBlocker(pool: pg.Pool, blockerPid: number): Promis
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`timed out waiting for blocker pid ${blockerPid}`);
+}
+
+async function waitUntilAfter(deadline: Date): Promise<void> {
+  const waitMs = Math.max(0, deadline.getTime() - Date.now() + 100);
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
 }
 
 async function waitForAdvisoryLockOrSettlement(
