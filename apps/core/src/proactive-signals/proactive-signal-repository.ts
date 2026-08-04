@@ -628,139 +628,171 @@ async function getProactiveSignalDeliveryContext(
 }
 
 async function beginProactiveSignalDeliveryAttempt(
-  queryable: Queryable,
+  dataSource: ProactiveSignalDataSource,
   input: { deliveryId: string; workerId: string; attemptCount: number; at: Date },
 ): Promise<ProactiveSignalDeliveryAuthorizationResult> {
   const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
   const workerId = requireBoundedString("workerId", input.workerId);
   const attemptCount = requireAttemptCount(input.attemptCount);
   const at = requireDate(input.at, "at");
-  const result = await queryable.query<{ authorization_status: unknown }>(
-    `
-    WITH bound AS MATERIALIZED (
-      SELECT delivery.id, delivery.candidate_idempotency_key, delivery.group_id,
-        EXISTS (
-          SELECT 1
-          FROM proactive_signal_suppressions suppression
-          WHERE suppression.group_id = candidate.group_id
-            AND suppression.kind = candidate.kind
-            AND suppression.entity_id = candidate.entity_id
-            AND suppression.suppress_until > $3
-        ) AS suppressed,
-        CASE candidate.entity_type
-          WHEN 'thread' THEN EXISTS (
-            SELECT 1
-            FROM discussion_threads thread_state
-            WHERE thread_state.id = candidate.entity_id
-              AND thread_state.group_id = candidate.group_id
-              AND thread_state.version = candidate.entity_version
-              AND thread_state.retrieval_state = 'visible'
-              AND thread_state.status = 'open'
-          )
-          WHEN 'action' THEN EXISTS (
-            SELECT 1
-            FROM action_items action_state
-            WHERE action_state.id = candidate.entity_id
-              AND action_state.group_id = candidate.group_id
-              AND action_state.version = candidate.entity_version
-              AND action_state.retrieval_state = 'visible'
-              AND action_state.status = 'open'
-              AND (
-                action_state.thread_id IS NULL
-                OR EXISTS (
-                  SELECT 1
-                  FROM discussion_threads dependency
-                  WHERE dependency.id = action_state.thread_id
-                    AND dependency.group_id = action_state.group_id
-                    AND dependency.status IN ('open', 'resolved')
-                    AND dependency.retrieval_state = 'visible'
-                )
-              )
-          )
-          ELSE FALSE
-        END AS subject_visible
+  const client = await dataSource.connect();
+  try {
+    await client.query("begin");
+    const locked = await client.query<{ id: unknown }>(
+      `
+      SELECT delivery.id
       FROM proactive_signal_delivery_outbox delivery
-      JOIN proactive_signal_candidates candidate
-        ON candidate.idempotency_key = delivery.candidate_idempotency_key
-       AND candidate.group_id = delivery.group_id
       WHERE delivery.id = $1
         AND delivery.status = 'processing'
         AND delivery.lease_worker_id = $2
         AND delivery.lease_until IS NOT NULL
         AND delivery.lease_until > $3
         AND delivery.attempt_count = $4
-        AND candidate.status = 'pending'
       FOR UPDATE OF delivery
-    ),
-    cancelled AS (
-      UPDATE proactive_signal_delivery_outbox delivery
-      SET status = 'cancelled',
-          lease_worker_id = NULL,
-          lease_until = NULL,
-          failure_classification = CASE
-            WHEN bound.suppressed THEN 'feedback_suppressed'
-            ELSE 'stale_delivery'
-          END,
-          updated_at = $3
-      FROM bound
-      WHERE delivery.id = bound.id
-        AND (bound.suppressed OR NOT bound.subject_visible)
-        AND delivery.status = 'processing'
-        AND delivery.lease_worker_id = $2
-        AND delivery.lease_until IS NOT NULL
-        AND delivery.lease_until > $3
-      RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id
-    ),
-    processing_event AS (
-      INSERT INTO proactive_signal_delivery_events (
-        id, delivery_id, candidate_idempotency_key, group_id, event_type,
-        delivery_status, created_at
+      `,
+      [deliveryId, workerId, at, attemptCount],
+    );
+    if (locked.rows.length === 0) {
+      await client.query("commit");
+      return { status: "stale" };
+    }
+
+    const result = await client.query<{ authorization_status: unknown }>(
+      `
+      WITH bound AS MATERIALIZED (
+        SELECT delivery.id, delivery.candidate_idempotency_key, delivery.group_id,
+          EXISTS (
+            SELECT 1
+            FROM proactive_signal_suppressions suppression
+            WHERE suppression.group_id = candidate.group_id
+              AND suppression.kind = candidate.kind
+              AND suppression.entity_id = candidate.entity_id
+              AND suppression.suppress_until > $3
+          ) AS suppressed,
+          CASE candidate.entity_type
+            WHEN 'thread' THEN EXISTS (
+              SELECT 1
+              FROM discussion_threads thread_state
+              WHERE thread_state.id = candidate.entity_id
+                AND thread_state.group_id = candidate.group_id
+                AND thread_state.version = candidate.entity_version
+                AND thread_state.retrieval_state = 'visible'
+                AND thread_state.status = 'open'
+            )
+            WHEN 'action' THEN EXISTS (
+              SELECT 1
+              FROM action_items action_state
+              WHERE action_state.id = candidate.entity_id
+                AND action_state.group_id = candidate.group_id
+                AND action_state.version = candidate.entity_version
+                AND action_state.retrieval_state = 'visible'
+                AND action_state.status = 'open'
+                AND (
+                  action_state.thread_id IS NULL
+                  OR EXISTS (
+                    SELECT 1
+                    FROM discussion_threads dependency
+                    WHERE dependency.id = action_state.thread_id
+                      AND dependency.group_id = action_state.group_id
+                      AND dependency.status IN ('open', 'resolved')
+                      AND dependency.retrieval_state = 'visible'
+                  )
+                )
+            )
+            ELSE FALSE
+          END AS subject_visible
+        FROM proactive_signal_delivery_outbox delivery
+        JOIN proactive_signal_candidates candidate
+          ON candidate.idempotency_key = delivery.candidate_idempotency_key
+         AND candidate.group_id = delivery.group_id
+        WHERE delivery.id = $1
+          AND delivery.status = 'processing'
+          AND delivery.lease_worker_id = $2
+          AND delivery.lease_until IS NOT NULL
+          AND delivery.lease_until > $3
+          AND delivery.attempt_count = $4
+          AND candidate.status = 'pending'
+      ),
+      cancelled AS (
+        UPDATE proactive_signal_delivery_outbox delivery
+        SET status = 'cancelled',
+            lease_worker_id = NULL,
+            lease_until = NULL,
+            failure_classification = CASE
+              WHEN bound.suppressed THEN 'feedback_suppressed'
+              ELSE 'stale_delivery'
+            END,
+            updated_at = $3
+        FROM bound
+        WHERE delivery.id = bound.id
+          AND (bound.suppressed OR NOT bound.subject_visible)
+          AND delivery.status = 'processing'
+          AND delivery.lease_worker_id = $2
+          AND delivery.lease_until IS NOT NULL
+          AND delivery.lease_until > $3
+        RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id
+      ),
+      processing_event AS (
+        INSERT INTO proactive_signal_delivery_events (
+          id, delivery_id, candidate_idempotency_key, group_id, event_type,
+          delivery_status, created_at
+        )
+        SELECT $5, bound.id, bound.candidate_idempotency_key, bound.group_id,
+          'processing', 'processing', $3
+        FROM bound
+        WHERE NOT bound.suppressed
+          AND bound.subject_visible
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id
+      ),
+      cancelled_event AS (
+        INSERT INTO proactive_signal_delivery_events (
+          id, delivery_id, candidate_idempotency_key, group_id, event_type,
+          delivery_status, created_at
+        )
+        SELECT $6, cancelled.id, cancelled.candidate_idempotency_key, cancelled.group_id,
+          'cancelled', 'cancelled', $3
+        FROM cancelled
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id
       )
-      SELECT $5, bound.id, bound.candidate_idempotency_key, bound.group_id,
-        'processing', 'processing', $3
-      FROM bound
-      WHERE NOT bound.suppressed
-        AND bound.subject_visible
-      ON CONFLICT (id) DO NOTHING
-      RETURNING id
-    ),
-    cancelled_event AS (
-      INSERT INTO proactive_signal_delivery_events (
-        id, delivery_id, candidate_idempotency_key, group_id, event_type,
-        delivery_status, created_at
-      )
-      SELECT $6, cancelled.id, cancelled.candidate_idempotency_key, cancelled.group_id,
-        'cancelled', 'cancelled', $3
-      FROM cancelled
-      ON CONFLICT (id) DO NOTHING
-      RETURNING id
-    )
-    SELECT CASE
-      WHEN EXISTS (SELECT 1 FROM cancelled)
-        AND EXISTS (SELECT 1 FROM bound WHERE bound.suppressed) THEN 'suppressed'
-      WHEN EXISTS (
-        SELECT 1 FROM bound
-        WHERE NOT bound.suppressed AND bound.subject_visible
-      ) THEN 'authorized'
-      ELSE 'stale'
-    END AS authorization_status,
-    (SELECT COUNT(*) FROM processing_event) AS processing_event_count,
-    (SELECT COUNT(*) FROM cancelled_event) AS cancelled_event_count
-    `,
-    [
-      deliveryId,
-      workerId,
-      at,
-      attemptCount,
-      deliveryEventId(deliveryId, "processing", workerId, at),
-      deliveryEventId(deliveryId, "cancelled", workerId, at),
-    ],
-  );
-  const status = result.rows[0]?.authorization_status;
-  if (status === "authorized" || status === "suppressed" || status === "stale") {
+      SELECT CASE
+        WHEN EXISTS (SELECT 1 FROM cancelled)
+          AND EXISTS (SELECT 1 FROM bound WHERE bound.suppressed) THEN 'suppressed'
+        WHEN EXISTS (
+          SELECT 1 FROM bound
+          WHERE NOT bound.suppressed AND bound.subject_visible
+        ) THEN 'authorized'
+        ELSE 'stale'
+      END AS authorization_status,
+      (SELECT COUNT(*) FROM processing_event) AS processing_event_count,
+      (SELECT COUNT(*) FROM cancelled_event) AS cancelled_event_count
+      `,
+      [
+        deliveryId,
+        workerId,
+        at,
+        attemptCount,
+        deliveryEventId(deliveryId, "processing", workerId, at),
+        deliveryEventId(deliveryId, "cancelled", workerId, at),
+      ],
+    );
+    const status = result.rows[0]?.authorization_status;
+    if (status !== "authorized" && status !== "suppressed" && status !== "stale") {
+      throw new Error("proactive signal delivery authorization is invalid");
+    }
+    await client.query("commit");
     return { status };
+  } catch (error) {
+    try {
+      await client.query("rollback");
+    } catch {
+      // Preserve the original authorization failure.
+    }
+    throw error;
+  } finally {
+    client.release();
   }
-  throw new Error("proactive signal delivery authorization is invalid");
 }
 
 async function failProactiveSignalDeliveryPreparation(

@@ -636,11 +636,25 @@ describe("proactive signal persistence", () => {
     "suppressed",
     "stale",
   ] as const)("atomically returns %s from the final delivery authorization", async (status) => {
+    const client = {
+      query: vi.fn(async (statement: string, _values?: unknown[]) => {
+        const sql = statement.toLowerCase();
+        if (sql === "begin" || sql === "commit" || sql === "rollback") return { rows: [] };
+        if (sql.includes("select delivery.id") && sql.includes("for update of delivery")) {
+          return { rows: [{ id: "delivery-a" }] };
+        }
+        if (sql.includes("authorization_status")) {
+          return { rows: [{ authorization_status: status }] };
+        }
+        throw new Error(`unexpected query: ${statement}`);
+      }),
+      release: vi.fn(),
+    };
     const dataSource = {
-      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({
-        rows: [{ authorization_status: status }],
-      })),
-      connect: vi.fn(),
+      query: vi.fn(async () => {
+        throw new Error("authorization must use one transaction client");
+      }),
+      connect: vi.fn(async () => client),
     };
     const repository = createPostgresProactiveSignalRepository({
       dataSource: dataSource as unknown as ProactiveSignalDataSource,
@@ -653,23 +667,33 @@ describe("proactive signal persistence", () => {
       at: new Date("2026-07-23T10:00:00.000Z"),
     })).resolves.toEqual({ status });
 
-    const sql = String(dataSource.query.mock.calls[0]?.[0]).toLowerCase();
-    expect(sql).toContain("from proactive_signal_suppressions");
-    expect(sql).toContain("suppression.suppress_until > $3");
-    expect(sql).toContain("delivery.lease_until > $3");
-    expect(sql).toContain("delivery.attempt_count = $4");
-    expect(sql).toContain("for update of delivery");
-    expect(sql).toContain("thread_state.retrieval_state = 'visible'");
-    expect(sql).toContain("thread_state.status = 'open'");
-    expect(sql).toContain("action_state.retrieval_state = 'visible'");
-    expect(sql).toContain("action_state.status = 'open'");
-    expect(sql).toContain("dependency.retrieval_state = 'visible'");
-    expect(sql).toContain("dependency.status in ('open', 'resolved')");
-    expect(sql).toContain("status = 'cancelled'");
-    expect(sql).toContain("when bound.suppressed then 'feedback_suppressed'");
-    expect(sql).toContain("else 'stale_delivery'");
-    expect(sql).toContain("'stale_delivery'");
-    expect(sql).toContain("'cancelled', 'cancelled'");
+    const statements = client.query.mock.calls.map(([statement]) => String(statement).toLowerCase());
+    expect(statements[0]).toBe("begin");
+    expect(statements.at(-1)).toBe("commit");
+    const lockSql = statements.find((sql) => sql.includes("for update of delivery"));
+    const authorizationSql = statements.find((sql) => sql.includes("authorization_status"));
+    expect(lockSql).toContain("select delivery.id");
+    expect(lockSql).toContain("delivery.lease_until > $3");
+    expect(lockSql).toContain("delivery.attempt_count = $4");
+    expect(lockSql).not.toContain("proactive_signal_suppressions");
+    expect(authorizationSql).toContain("from proactive_signal_suppressions");
+    expect(authorizationSql).toContain("suppression.suppress_until > $3");
+    expect(authorizationSql).toContain("delivery.lease_until > $3");
+    expect(authorizationSql).toContain("delivery.attempt_count = $4");
+    expect(authorizationSql).not.toContain("for update of delivery");
+    expect(authorizationSql).toContain("thread_state.retrieval_state = 'visible'");
+    expect(authorizationSql).toContain("thread_state.status = 'open'");
+    expect(authorizationSql).toContain("action_state.retrieval_state = 'visible'");
+    expect(authorizationSql).toContain("action_state.status = 'open'");
+    expect(authorizationSql).toContain("dependency.retrieval_state = 'visible'");
+    expect(authorizationSql).toContain("dependency.status in ('open', 'resolved')");
+    expect(authorizationSql).toContain("status = 'cancelled'");
+    expect(authorizationSql).toContain("when bound.suppressed then 'feedback_suppressed'");
+    expect(authorizationSql).toContain("else 'stale_delivery'");
+    expect(authorizationSql).toContain("'stale_delivery'");
+    expect(authorizationSql).toContain("'cancelled', 'cancelled'");
+    expect(dataSource.query).not.toHaveBeenCalled();
+    expect(client.release).toHaveBeenCalledOnce();
   });
 
   it("cancels preparation failures terminally instead of making them claimable again", async () => {

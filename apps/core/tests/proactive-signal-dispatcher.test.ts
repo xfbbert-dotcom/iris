@@ -11,7 +11,7 @@ import type {
 const now = new Date("2026-07-23T10:00:00.000Z");
 
 describe("ProactiveSignalDispatcher", () => {
-  it("sends one approved candidate to the exact group only after the runtime gate passes twice", async () => {
+  it("sends one approved candidate to the exact group only after the runtime gate passes three times", async () => {
     const order: string[] = [];
     const canDeliver = vi.fn(() => {
       order.push("gate");
@@ -46,9 +46,10 @@ describe("ProactiveSignalDispatcher", () => {
       deliveryId: "delivery-a",
       code: "send_succeeded",
     }]);
-    expect(order).toEqual(["context", "gate", "context", "gate", "begin", "send", "complete"]);
+    expect(order).toEqual(["context", "gate", "context", "gate", "begin", "gate", "send", "complete"]);
     expect(canDeliver).toHaveBeenNthCalledWith(1, "group-a");
     expect(canDeliver).toHaveBeenNthCalledWith(2, "group-a");
+    expect(canDeliver).toHaveBeenNthCalledWith(3, "group-a");
     expect(harness.repository.beginProactiveSignalDeliveryAttempt).toHaveBeenCalledWith({
       deliveryId: "delivery-a",
       workerId: "proactive-dispatcher-1",
@@ -133,6 +134,32 @@ describe("ProactiveSignalDispatcher", () => {
       at: now,
     });
     expect(harness.repository.failProactiveSignalDelivery).not.toHaveBeenCalled();
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+  });
+
+  it("cancels after final database authorization if the runtime gate changes while authorization waits", async () => {
+    let enabled = true;
+    const harness = createHarness({
+      canDeliver: () => enabled,
+      begin: async () => {
+        enabled = false;
+        return { status: "authorized" as const };
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      deliveryId: "delivery-a",
+      code: "runtime_disabled",
+    }]);
+    expect(harness.repository.beginProactiveSignalDeliveryAttempt).toHaveBeenCalledOnce();
+    expect(harness.repository.failProactiveSignalDeliveryPreparation).toHaveBeenCalledWith({
+      deliveryId: "delivery-a",
+      workerId: "proactive-dispatcher-1",
+      attemptCount: 1,
+      errorCode: "runtime_disabled",
+      at: now,
+    });
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
   });
 

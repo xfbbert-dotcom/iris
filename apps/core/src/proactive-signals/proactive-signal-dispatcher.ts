@@ -165,6 +165,9 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<ProactiveSignal
   if (authorization.status === "stale") {
     return failPreparation(contextualInput, "stale_delivery");
   }
+  if (!readRuntimeGate(input, context.delivery.groupId)) {
+    return failPreparation(contextualInput, "runtime_disabled");
+  }
 
   let sent: { messageId: string };
   try {

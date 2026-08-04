@@ -392,6 +392,15 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       messageId: "om_stale_attempt",
       at: secondClaimAt,
     })).rejects.toThrow("delivery attempt is stale");
+    await expect(proactiveRepository.failProactiveSignalDelivery({
+      deliveryId,
+      workerId,
+      attemptCount: 1,
+      classification: "retryable",
+      errorCode: "retryable_remote_failure",
+      retryAt: new Date(secondClaimAt.getTime() + 60_000),
+      at: secondClaimAt,
+    })).rejects.toThrow("delivery attempt is stale");
     await expect(proactiveRepository.getProactiveSignalDeliveryContext(deliveryId)).resolves.toMatchObject({
       delivery: { status: "processing", attemptCount: 2 },
       subjectLabel: "Fenced proactive delivery",
@@ -705,6 +714,88 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     })).resolves.toEqual({ status: "stale" });
   });
 
+  it("sees irrelevant feedback committed while final authorization waits on the delivery lock", async () => {
+    const groupId = `oc_authorization_suppression_race_${suffix}`;
+    const entityId = `thread-authorization-suppression-race-${suffix}`;
+    await pool.query(
+      `INSERT INTO discussion_threads (
+         id, group_id, title, summary, status, confidence, version,
+         first_evidence_at, last_activity_at, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'open', 0.95, 2, $5, $5, $5, $5)`,
+      [entityId, groupId, "Suppression race", "Suppression race summary", at],
+    );
+    const sentCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 1 });
+    const sentDeliveryId = await createSentProactiveDelivery({
+      repository: proactiveRepository,
+      pool,
+      candidate: sentCandidate,
+    });
+    const claimedCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 2 });
+    const claimedDeliveryId = await createQueuedProactiveDelivery({
+      repository: proactiveRepository,
+      candidate: claimedCandidate,
+    });
+    const workerId = `worker-authorization-race-${suffix}`;
+    const authorizationAt = new Date(at.getTime() + 100_000);
+    const claimed = await pool.query(
+      `UPDATE proactive_signal_delivery_outbox
+       SET status = 'processing',
+           lease_worker_id = $2,
+           lease_until = $3,
+           attempt_count = attempt_count + 1,
+           updated_at = $4
+       WHERE id = $1
+         AND status = 'pending'
+       RETURNING id, attempt_count`,
+      [claimedDeliveryId, workerId, new Date(at.getTime() + 160_000), new Date(at.getTime() + 60_000)],
+    );
+    expect(claimed.rows).toEqual([{ id: claimedDeliveryId, attempt_count: 1 }]);
+
+    const blocker = await pool.connect();
+    await blocker.query("BEGIN");
+    const blockerPidResult = await blocker.query<{ pid: number }>(
+      "SELECT pg_backend_pid()::integer AS pid",
+    );
+    const blockerPid = blockerPidResult.rows[0]?.pid;
+    if (blockerPid === undefined) throw new Error("expected blocker backend pid");
+    let authorizationPromise: ReturnType<ProactiveSignalRepository["beginProactiveSignalDeliveryAttempt"]>;
+    try {
+      await blocker.query(
+        `SELECT id
+         FROM proactive_signal_delivery_outbox
+         WHERE id = $1
+         FOR UPDATE`,
+        [claimedDeliveryId],
+      );
+      authorizationPromise = proactiveRepository.beginProactiveSignalDeliveryAttempt({
+        deliveryId: claimedDeliveryId,
+        workerId,
+        attemptCount: 1,
+        at: authorizationAt,
+      });
+      await waitForDatabaseBlocker(pool, blockerPid);
+
+      const feedbackAt = new Date(at.getTime() + 90_000);
+      await expect(proactiveRepository.recordFeedback(proactiveFeedback({
+        idempotencyKey: `feishu-card:${suffix}:authorization-suppression-race`,
+        groupId,
+        deliveryId: sentDeliveryId,
+        candidateIdempotencyKey: sentCandidate.idempotencyKey,
+        entityVersion: sentCandidate.entityVersion,
+        suppressUntil: new Date(feedbackAt.getTime() + 30 * 24 * 60 * 60 * 1000),
+        at: feedbackAt,
+      }))).resolves.toEqual({ status: "applied" });
+    } finally {
+      await blocker.query("COMMIT");
+      blocker.release();
+    }
+
+    await expect(authorizationPromise!).resolves.toEqual({ status: "suppressed" });
+    await expect(proactiveRepository.getProactiveSignalDeliveryContext(claimedDeliveryId)).resolves.toMatchObject({
+      delivery: { status: "cancelled", attemptCount: 1 },
+    });
+  }, 15_000);
+
   it("rejects final delivery authorization after the worker lease expires", async () => {
     const groupId = `oc_expired_lease_${suffix}`;
     const candidate = proactiveCandidate({
@@ -905,6 +996,23 @@ async function waitForBlockedDatabaseQuery(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`timed out waiting for blocked query ${queryPattern}`);
+}
+
+async function waitForDatabaseBlocker(pool: pg.Pool, blockerPid: number): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const result = await pool.query(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM pg_stat_activity activity
+         WHERE $1 = ANY(pg_blocking_pids(activity.pid))
+       ) AS waiting`,
+      [blockerPid],
+    );
+    if (result.rows[0]?.waiting === true) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for blocker pid ${blockerPid}`);
 }
 
 async function waitForAdvisoryLockOrSettlement(
