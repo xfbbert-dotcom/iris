@@ -12,9 +12,11 @@
 
 - Preserve the modular-monolith boundaries in `docs/superpowers/specs/2026-06-30-iris-architecture-whitepaper.md`.
 - Follow the approved design in `docs/superpowers/specs/2026-08-02-iris-answer-source-citations-design.md`.
-- The model writes only the answer body; it never writes or numbers the citation footer.
+- The model writes the visible answer body and optional internal `D1`-`D12` source-use refs; it
+  never writes or numbers the visible citation footer.
 - The visible footer label is exactly `Iris 参考资料：`, never Feishu's native `相关知识` label.
-- Show at most three unique documents in first-permitted-fragment order, while tracing every permitted fragment.
+- Show at most three unique model-declared documents in prompt order, while tracing every
+  permitted fragment. Retrieval alone never creates a visible citation.
 - Source labels are exactly `知识库`, `群文档`, and `用户文档`.
 - The complete Feishu text reply must be at most 8,000 characters and must never cut a citation footer in half.
 - Only canonical HTTPS Feishu wiki/docx URLs may enter a visible citation or durable source trace.

@@ -142,8 +142,9 @@ export function createDocumentRetrievalContextBuilder({
 
       return {
         promptContext: assemblePromptContext({
-          backgroundDocuments: allowedFragments.map((fragment) => ({
+          backgroundDocuments: allowedFragments.map((fragment, index) => ({
             source: `${fragment.sourceUri}#chunk-${fragment.chunkIndex}`,
+            citationRef: `D${index + 1}`,
             text: fragment.text,
           })),
           groupMemories: usedGroupMemories,

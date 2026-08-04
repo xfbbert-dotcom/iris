@@ -47,6 +47,7 @@ type NormalizedDocumentMetadata = {
 
 export function renderAnswerWithSourceCitations(input: {
   answerText: string;
+  citedSourceRefs: readonly string[];
   allowedFragments: readonly RetrievedDocumentFragment[];
   initialPermissionCheckedAt: Date;
 }): {
@@ -55,6 +56,10 @@ export function renderAnswerWithSourceCitations(input: {
 } {
   const documents = new Map<string, NormalizedDocumentMetadata>();
   const sourceTraces: AnswerReplySourceTraceInput[] = [];
+  const citedDocumentRanks = resolveCitedDocumentRanks(
+    input.citedSourceRefs,
+    input.allowedFragments,
+  );
 
   input.allowedFragments.forEach((fragment, index) => {
     const sourceUri = normalizeFeishuDocumentSourceUri(fragment.sourceUri);
@@ -86,9 +91,9 @@ export function renderAnswerWithSourceCitations(input: {
         sourceType: fragment.sourceType,
         sourceUri,
         ...(sourceTitle === undefined ? {} : { sourceTitle }),
-        ...(documents.size < MAX_VISIBLE_SOURCES
-          ? { citationRank: documents.size + 1 }
-          : {}),
+        ...(citedDocumentRanks.get(fragment.documentSourceId) === undefined
+          ? {}
+          : { citationRank: citedDocumentRanks.get(fragment.documentSourceId) }),
       });
     }
 
@@ -115,7 +120,7 @@ export function renderAnswerWithSourceCitations(input: {
     });
   });
 
-  if (documents.size === 0) {
+  if (citedDocumentRanks.size === 0) {
     return {
       renderedText: truncateWithMarker(input.answerText, MAX_REPLY_CHARS),
       sourceTraces,
@@ -142,6 +147,42 @@ export function renderAnswerWithSourceCitations(input: {
   };
 }
 
+function resolveCitedDocumentRanks(
+  citedSourceRefs: readonly string[],
+  allowedFragments: readonly RetrievedDocumentFragment[],
+): Map<string, number> {
+  if (!Array.isArray(citedSourceRefs) || citedSourceRefs.length > 12) {
+    throw new Error("citation references are invalid");
+  }
+
+  const promptRanks = new Set<number>();
+  for (const citationRef of citedSourceRefs) {
+    if (typeof citationRef !== "string" || !/^D(?:[1-9]|1[0-2])$/u.test(citationRef)) {
+      throw new Error("citation references are invalid");
+    }
+    const promptRank = Number(citationRef.slice(1));
+    if (promptRank > allowedFragments.length) {
+      throw new Error(
+        `citation reference ${citationRef} is outside the allowed prompt window`,
+      );
+    }
+    promptRanks.add(promptRank);
+  }
+
+  const citedDocumentRanks = new Map<string, number>();
+  for (const promptRank of [...promptRanks].sort((left, right) => left - right)) {
+    const fragment = allowedFragments[promptRank - 1];
+    if (
+      fragment !== undefined &&
+      !citedDocumentRanks.has(fragment.documentSourceId) &&
+      citedDocumentRanks.size < MAX_VISIBLE_SOURCES
+    ) {
+      citedDocumentRanks.set(fragment.documentSourceId, citedDocumentRanks.size + 1);
+    }
+  }
+  return citedDocumentRanks;
+}
+
 function normalizeSourceTitle(sourceTitle: string | undefined): string | undefined {
   if (sourceTitle === undefined) {
     return undefined;
@@ -160,7 +201,9 @@ function normalizeSourceTitle(sourceTitle: string | undefined): string | undefin
 function buildFooter(documents: Map<string, NormalizedDocumentMetadata>): string {
   const visibleSources = [...documents.values()].filter(
     (document) => document.citationRank !== undefined,
-  );
+  ).sort((left, right) =>
+    (left.citationRank ?? Number.MAX_SAFE_INTEGER) -
+    (right.citationRank ?? Number.MAX_SAFE_INTEGER));
   const lines = visibleSources.map((document) => {
     const title = truncateWithMarker(
       document.sourceTitle ?? "飞书文档",

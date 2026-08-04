@@ -307,6 +307,15 @@ current v1 Core implementation scans up to three times the requested live-chat o
 at 100 raw messages, then filters to non-blank text and injects at most the latest 20 useful text
 messages. This backfill improves answer continuity without increasing the prompt's live-chat budget.
 
+Retrieval is not attribution. A document fragment entering the authorized prompt window does not
+by itself prove that the answer used that fragment. Each background fragment therefore carries a
+bounded prompt-local citation reference. The answer model may return those references only as
+internal metadata when the corresponding fragments materially support the visible answer. Core
+must validate every reference against the current permission-approved prompt window, strip the
+metadata before delivery, and render citations itself. Unknown or malformed references fail closed;
+no declared document use means no visible document citation. All permitted prompt fragments remain
+traceable even when they receive no visible citation rank.
+
 Constitutional principle:
 
 > Iris may use semantic memory for recall, but must use fact-layer sources for important claims. Long-term memory must be traceable, deletable, correctable, and permission-bounded.

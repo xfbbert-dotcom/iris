@@ -422,6 +422,7 @@ describe("FeishuMentionAnswerResponder", () => {
     const answerDraftOrchestrator = {
       generateDraft: vi.fn(async () => ({
         answerText: "Grounded answer.",
+        citedSourceRefs: ["D1"],
         promptContext: "<document_context></document_context>",
         allowedFragments: [allowedFragment],
         deniedDocumentIds: ["source-revoked"],

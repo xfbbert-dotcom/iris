@@ -79,7 +79,7 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.deniedDocumentIds).toEqual(["source-denied"]);
     expect(result.retrievedFragmentCount).toBe(2);
     expect(result.promptContext).toContain(
-      '<document source="https://example.com/doc-a#chunk-0">Allowed document text</document>',
+      '<document source="https://example.com/doc-a#chunk-0" citation_ref="D1">Allowed document text</document>',
     );
     expect(result.promptContext).not.toContain("Denied document text");
     expect(result.promptContext.indexOf("<background_documents>")).toBeLessThan(

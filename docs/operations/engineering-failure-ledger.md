@@ -433,6 +433,24 @@ delivery mistakes while implementing it.
   pilot question using only recent multi-user context is sent normally while revoked-source tests
   remain fail closed.
 
+### Do not equate prompt retrieval with visible source attribution
+
+- **Failure:** A correct answer grounded in the current group discussion included three unrelated
+  Wiki links and violated the user's exact-output request.
+- **Root cause:** The citation renderer assigned visible ranks to the first three
+  permission-approved prompt documents. Permission approval proved that the model could read them,
+  not that the answer relied on them.
+- **Prevention rule:** Give background fragments bounded prompt-local references. The model may
+  return only materially used references as internal trailing metadata; Core validates and removes
+  the metadata and renders the footer itself. All prompt fragments remain in immutable traces, but
+  only declared sources receive visible citation ranks.
+- **Guard:** Provider-parser, orchestrator-window, renderer, responder, and real-Feishu regressions
+  must separately prove uncited traces, valid declared citations, unknown-reference rejection, and
+  absence of the internal protocol from visible output.
+- **Exit condition:** An exact-SHA pilot answer based only on current group context contains the
+  requested value and no document footer; a document-grounded answer still names only its declared
+  source, and all permission and queue gates remain green.
+
 ## Test Architecture
 
 ### Verify every cross-CTE column dependency in migration SQL

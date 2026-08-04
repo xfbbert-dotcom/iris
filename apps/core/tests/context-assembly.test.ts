@@ -323,6 +323,25 @@ describe("assemblePromptContext", () => {
     expect(context).not.toContain("  Useful document context.  ");
   });
 
+  it("renders only bounded prompt-local document citation references", () => {
+    const context = assemblePromptContext({
+      backgroundDocuments: [
+        { source: "doc-a", citationRef: " D12 ", text: "Useful document context." },
+      ],
+      liveChatMessages: [],
+    });
+
+    expect(context).toContain(
+      '<document source="doc-a" citation_ref="D12">Useful document context.</document>',
+    );
+    expect(() => assemblePromptContext({
+      backgroundDocuments: [
+        { source: "doc-a", citationRef: 'D1\" injected="true', text: "context" },
+      ],
+      liveChatMessages: [],
+    })).toThrow("background document citationRef is invalid");
+  });
+
   it("truncates oversized background document text before formatting", () => {
     const context = assemblePromptContext({
       backgroundDocuments: [

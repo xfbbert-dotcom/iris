@@ -12,6 +12,7 @@ describe("answer source citation renderer", () => {
   it("preserves first fragment order, deduplicates visible documents, and traces every fragment", () => {
     const result = renderAnswerWithSourceCitations({
       answerText: "Answer body",
+      citedSourceRefs: ["D1", "D2", "D4", "D5"],
       allowedFragments: [
         fragment({
           documentSourceId: "source-wiki-a",
@@ -98,6 +99,7 @@ describe("answer source citation renderer", () => {
   it("omits the footer and traces when no document fragments were allowed", () => {
     const result = renderAnswerWithSourceCitations({
       answerText: "Answer body",
+      citedSourceRefs: [],
       allowedFragments: [],
       initialPermissionCheckedAt: checkedAt,
     });
@@ -105,9 +107,56 @@ describe("answer source citation renderer", () => {
     expect(result).toEqual({ renderedText: "Answer body", sourceTraces: [] });
   });
 
+  it("orders visible sources by model citation order when an uncited document appeared first", () => {
+    const result = renderAnswerWithSourceCitations({
+      answerText: "Answer body",
+      citedSourceRefs: ["D2", "D3"],
+      allowedFragments: [
+        fragment({ documentSourceId: "source-a", sourceTitle: "Source A" }),
+        fragment({ documentSourceId: "source-b", sourceTitle: "Source B" }),
+        fragment({ documentSourceId: "source-a", sourceTitle: "Source A" }),
+      ],
+      initialPermissionCheckedAt: checkedAt,
+    });
+
+    expect(result.renderedText.indexOf("[1]")).toBeLessThan(
+      result.renderedText.indexOf("[2]"),
+    );
+    expect(result.renderedText.indexOf("Source B")).toBeLessThan(
+      result.renderedText.indexOf("Source A"),
+    );
+  });
+
+  it("traces retrieved fragments without citing sources the model did not use", () => {
+    const result = renderAnswerWithSourceCitations({
+      answerText: "7 days",
+      citedSourceRefs: [],
+      allowedFragments: [fragment({ sourceTitle: "Unrelated wiki" })],
+      initialPermissionCheckedAt: checkedAt,
+    });
+
+    expect(result.renderedText).toBe("7 days");
+    expect(result.sourceTraces).toEqual([
+      expect.objectContaining({ promptRank: 1, documentSourceId: "source-1" }),
+    ]);
+    expect(result.sourceTraces[0]).not.toHaveProperty("citationRank");
+  });
+
+  it("rejects a model citation reference outside the allowed prompt window", () => {
+    expect(() =>
+      renderAnswerWithSourceCitations({
+        answerText: "Answer body",
+        citedSourceRefs: ["D2"],
+        allowedFragments: [fragment()],
+        initialPermissionCheckedAt: checkedAt,
+      }),
+    ).toThrow("citation reference D2 is outside the allowed prompt window");
+  });
+
   it("normalizes query and fragment parts out of canonical Feishu URLs", () => {
     const result = renderAnswerWithSourceCitations({
       answerText: "Answer body",
+      citedSourceRefs: ["D1"],
       allowedFragments: [
         fragment({
           sourceUri: "https://tenant.feishu.cn/wiki/wikiA/?from=chat#section",
@@ -132,6 +181,7 @@ describe("answer source citation renderer", () => {
       expect(() =>
         renderAnswerWithSourceCitations({
           answerText: "Answer body",
+          citedSourceRefs: ["D1"],
           allowedFragments: [fragment({ sourceUri })],
           initialPermissionCheckedAt: checkedAt,
         }),
@@ -150,6 +200,7 @@ describe("answer source citation renderer", () => {
       expect(() =>
         renderAnswerWithSourceCitations({
           answerText: "Answer body",
+          citedSourceRefs: ["D1"],
           allowedFragments: [
             fragment({ documentSourceId: "same-source", ...conflict }),
             fragment({ documentSourceId: "same-source" }),
@@ -165,6 +216,7 @@ describe("answer source citation renderer", () => {
       expect(() =>
         renderAnswerWithSourceCitations({
           answerText: "Answer body",
+          citedSourceRefs: ["D1"],
           allowedFragments: [
             fragment({ sourceType: sourceType as RetrievedDocumentSourceType }),
           ],
@@ -177,6 +229,7 @@ describe("answer source citation renderer", () => {
   it("uses 飞书文档 when the registered title is blank", () => {
     const result = renderAnswerWithSourceCitations({
       answerText: "Answer body",
+      citedSourceRefs: ["D1"],
       allowedFragments: [fragment({ sourceTitle: "   " })],
       initialPermissionCheckedAt: checkedAt,
     });
@@ -189,6 +242,7 @@ describe("answer source citation renderer", () => {
     const longTitle = "T".repeat(121);
     const result = renderAnswerWithSourceCitations({
       answerText: "Answer body",
+      citedSourceRefs: ["D1"],
       allowedFragments: [fragment({ sourceTitle: longTitle })],
       initialPermissionCheckedAt: checkedAt,
     });
@@ -200,6 +254,7 @@ describe("answer source citation renderer", () => {
   it("reserves the footer before truncating an 8000-character answer body", () => {
     const result = renderAnswerWithSourceCitations({
       answerText: "A".repeat(8000),
+      citedSourceRefs: ["D1"],
       allowedFragments: [fragment({ sourceTitle: "Wiki A" })],
       initialPermissionCheckedAt: checkedAt,
     });
@@ -235,6 +290,7 @@ describe("answer source citation renderer", () => {
 
     const result = renderAnswerWithSourceCitations({
       answerText: "A".repeat(8000),
+      citedSourceRefs: ["D1", "D2", "D3"],
       allowedFragments,
       initialPermissionCheckedAt: checkedAt,
     });

@@ -5,6 +5,7 @@ import type {
 
 export type BackgroundDocument = {
   source: string;
+  citationRef?: string;
   text: string;
 };
 
@@ -152,10 +153,21 @@ function formatGroupMemory(memory: PromptGroupMemory): string {
 }
 
 function formatBackgroundDocument(document: BackgroundDocument): string {
+  const citationRef = document.citationRef === undefined
+    ? ""
+    : ` citation_ref="${formatDocumentCitationRef(document.citationRef)}"`;
   return `<document source="${formatXmlAttribute(
     document.source,
     MAX_BACKGROUND_DOCUMENT_SOURCE_ATTRIBUTE_CHARS,
-  )}">${formatXmlText(document.text, MAX_BACKGROUND_DOCUMENT_TEXT_CHARS)}</document>`;
+  )}"${citationRef}>${formatXmlText(document.text, MAX_BACKGROUND_DOCUMENT_TEXT_CHARS)}</document>`;
+}
+
+function formatDocumentCitationRef(value: string): string {
+  const normalized = value.trim();
+  if (!/^D(?:[1-9]|1[0-2])$/u.test(normalized)) {
+    throw new Error("background document citationRef is invalid");
+  }
+  return normalized;
 }
 
 function formatLiveChatMessage(message: LiveChatMessage): string {

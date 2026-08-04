@@ -2,7 +2,8 @@
 
 Date: 2026-08-02
 
-Status: Approved direction for the internal 20-30 person MVP
+Status: Approved direction for the internal 20-30 person MVP; amended after the
+2026-08-04 current-topic pilot
 
 ## Goal
 
@@ -22,8 +23,9 @@ The approved whitepaper keeps product behavior, permissions, and durable facts i
 TypeScript Core. This feature follows that boundary:
 
 - retrieval and the real-time permission guard remain authoritative;
-- the model writes only the answer body and never invents citation markers;
-- Core deterministically selects, renders, persists, and delivers citations;
+- the model writes the visible answer body plus optional internal source-use metadata;
+- Core validates and removes that metadata, then deterministically renders, persists,
+  and delivers citations;
 - Feishu remains a presentation and messaging adapter;
 - PostgreSQL stores the answer delivery fact and bounded source provenance;
 - the existing Redis raw-event worker and deterministic Feishu reply UUID continue to
@@ -35,13 +37,15 @@ No service split, generic event bus, or architecture-whitepaper amendment is req
 
 ### A. Deterministic citations plus a durable answer receipt
 
-Core appends citations from live-permission-approved fragments and persists the final
-reply plus its fragment provenance before calling Feishu.
+Core appends citations only for live-permission-approved fragments that the model
+declares as materially used, and persists the final reply plus all prompt fragment
+provenance before calling Feishu.
 
 Advantages:
 
-- users can see which sources Iris actually supplied to the model;
-- the model cannot fabricate or misnumber citations;
+- users can see which supplied sources Iris actually used for the visible answer;
+- the model cannot fabricate or misnumber visible citations because Core validates
+  every internal reference against the current prompt window;
 - retries reuse the exact prepared reply instead of sampling a different answer;
 - operators can inspect source, snapshot, fragment, hash, and delivery state;
 - permission changes remain fail-closed.
@@ -87,8 +91,8 @@ deterministic source receipt has proven reliable in pilot usage.
 
 ## User Experience
 
-When one or more document fragments entered the model context, Iris appends a plain-text
-footer after the answer body:
+When one or more document fragments materially supported the answer, Iris appends a
+plain-text footer after the answer body:
 
 ```text
 Iris 参考资料：
@@ -102,7 +106,7 @@ Rules:
 
 1. The label is always `Iris 参考资料` so it cannot be confused with Feishu's native
    `相关知识` presentation.
-2. Sources are ordered by the first permitted fragment's retrieval rank.
+2. Sources are ordered by the first model-declared fragment's prompt rank.
 3. Multiple fragments from the same document produce one visible citation.
 4. At most three unique documents are displayed.
 5. The source-kind labels are `知识库`, `群文档`, and `用户文档` for authorized wiki,
@@ -111,15 +115,17 @@ Rules:
    `飞书文档`.
 7. Only canonical HTTPS Feishu source URLs are rendered. An invalid stored URI fails
    the sourced delivery instead of being echoed to the group.
-8. Answers with no allowed document fragments have no citation footer. Group memory,
+8. Answers with no declared document source have no citation footer, even when
+   unrelated documents were retrieved and retained in the source trace. Group memory,
    discussion-thread, action-item, and live-chat evidence are not presented as document
    citations in this slice.
 9. The entire Feishu text reply remains within 8,000 characters. Citation text is
    reserved first; the answer body is truncated with the existing truncation marker if
    needed. A footer is never silently cut in half.
 
-The footer means "these sources were supplied to this answer", not "every sentence is
-fully entailed by these sources". The UI must not claim stronger evidence semantics.
+The footer means "the answer model declared that these supplied sources materially
+supported the visible answer", not "every sentence is fully entailed by these sources".
+The UI must not claim stronger evidence semantics.
 
 ## Retrieved Source Metadata
 
@@ -138,16 +144,24 @@ The search query already joins `document_sources` for policy filtering, so this 
 not add another read. Fragment list and indexing APIs remain unchanged.
 
 The model prompt continues to receive the exact current fragment text and source URI.
-The model does not receive citation numbering instructions in this slice.
+Each background document also receives a bounded prompt-local reference (`D1` through
+`D12`). The model may append one internal trailing `iris_citations` JSON array containing
+only references that materially support the visible answer. It must omit the block when
+the answer relies only on live chat, memory, current task text, or general knowledge.
+
+Core parses and removes the block before answer truncation or delivery. Malformed or
+out-of-window references fail the answer instead of becoming visible or being silently
+attributed. Absence of a block is valid and produces no visible document citation.
 
 ## Deterministic Citation Renderer
 
-A focused, pure citation module receives the answer body and `allowedFragments`. It:
+A focused, pure citation module receives the answer body, validated prompt-local source
+references, and `allowedFragments`. It:
 
 - validates and normalizes source metadata;
 - groups fragments by `documentSourceId`;
-- preserves first-seen retrieval order;
-- assigns visible citation ranks to the first three unique documents;
+- preserves complete prompt order in the immutable trace;
+- assigns visible citation ranks to at most the first three unique declared documents;
 - returns the bounded rendered reply;
 - returns an immutable trace for every allowed fragment, including fragments whose
   document did not fit in the three-item visible footer.
@@ -238,8 +252,10 @@ For an ordinary @Iris answer:
    permission guard before any fragment enters the model context.
 2. If the prompt-ranked window contains any denied source, the orchestrator skips the model/provider
    call entirely and returns only the bounded blocked-delivery placeholder plus denied source IDs.
-   Otherwise, the model produces only the answer body.
-3. Core deterministically renders the citation footer and complete trace.
+   Otherwise, the model produces the visible answer body and optional internal source-use refs.
+3. Core validates and removes the internal refs, deterministically renders the citation footer,
+   and constructs a complete trace for every allowed prompt fragment. Retrieval alone never
+   assigns a visible citation rank.
 4. In one PostgreSQL transaction, Core prepares the delivery, immutable source traces,
    and `prepared` event. If the guard denied a document in the original prompt-ranked window, the
    same transaction immediately records `permission_blocked`, clears the prepared text, and makes

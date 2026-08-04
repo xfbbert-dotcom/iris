@@ -20,6 +20,7 @@ export type GenerateAnswerDraftInput = {
 
 export type GenerateAnswerDraftResult = {
   answerText: string;
+  citedSourceRefs?: string[];
 };
 
 export interface ModelProvider {
@@ -38,6 +39,7 @@ export type AnswerDraftInput = {
 
 export type AnswerDraftResult = {
   answerText: string;
+  citedSourceRefs?: string[];
   promptContext: string;
   allowedFragments: RetrievedDocumentFragment[];
   deniedDocumentIds: string[];
@@ -168,6 +170,7 @@ export function createAnswerDraftOrchestrator({
         const context = await buildContext(input, normalized);
 
         let answerText: string;
+        let citedSourceRefs: string[] = [];
         if (context.deniedDocumentIds.length > 0) {
           answerText = PERMISSION_BLOCKED_ANSWER_DRAFT;
         } else {
@@ -193,6 +196,10 @@ export function createAnswerDraftOrchestrator({
             if (answerText.length === 0) {
               throw new Error("model answer draft must not be blank");
             }
+            citedSourceRefs = normalizeCitedSourceRefs(
+              modelResult.citedSourceRefs,
+              context.allowedFragments.length,
+            );
             await safelyObserve(agentExecutionObserver, {
               ...providerObservation,
               eventType: "provider_request_completed",
@@ -215,7 +222,7 @@ export function createAnswerDraftOrchestrator({
           }
         }
 
-        const result = toAnswerDraftResult(answerText, context);
+        const result = toAnswerDraftResult(answerText, context, citedSourceRefs);
         await safelyObserve(agentExecutionObserver, {
           ...commonObservation,
           subjectType: "turn",
@@ -414,9 +421,11 @@ function buildLiveChatRetrievalText(
 function toAnswerDraftResult(
   answerText: string,
   context: DocumentRetrievalContextResult,
+  citedSourceRefs: string[],
 ): AnswerDraftResult {
   return {
     answerText,
+    ...(citedSourceRefs.length === 0 ? {} : { citedSourceRefs: [...citedSourceRefs] }),
     promptContext: context.promptContext,
     allowedFragments: context.allowedFragments,
     deniedDocumentIds: context.deniedDocumentIds,
@@ -435,4 +444,31 @@ function toAnswerDraftResult(
       evidenceMessageIds: [...action.evidenceMessageIds],
     })),
   };
+}
+
+function normalizeCitedSourceRefs(value: unknown, allowedFragmentCount: number): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > 12) {
+    throw new Error("model citation references are invalid");
+  }
+
+  const ranks = new Set<number>();
+  for (const candidate of value) {
+    if (typeof candidate !== "string" || !/^D(?:[1-9]|1[0-2])$/u.test(candidate)) {
+      throw new Error("model citation references are invalid");
+    }
+    const rank = Number(candidate.slice(1));
+    if (rank > allowedFragmentCount) {
+      throw new Error(
+        `citation reference ${candidate} is outside the allowed prompt window`,
+      );
+    }
+    ranks.add(rank);
+  }
+
+  return [...ranks]
+    .sort((left, right) => left - right)
+    .map((rank) => `D${rank}`);
 }

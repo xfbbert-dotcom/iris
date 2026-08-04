@@ -354,6 +354,7 @@ export function createFeishuMentionAnswerResponder({
                 return {
                   ...renderAnswerWithSourceCitations({
                     answerText: answer.answerText,
+                    citedSourceRefs: answer.citedSourceRefs ?? [],
                     allowedFragments: answer.allowedFragments,
                     initialPermissionCheckedAt: preparedAt,
                   }),

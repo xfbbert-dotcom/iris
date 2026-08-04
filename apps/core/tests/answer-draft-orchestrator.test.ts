@@ -39,7 +39,10 @@ describe("AnswerDraftOrchestrator", () => {
       })),
     };
     const model: ModelProvider = {
-      generateAnswerDraft: vi.fn(async () => ({ answerText: "  Draft answer.  " })),
+      generateAnswerDraft: vi.fn(async () => ({
+        answerText: "  Draft answer.  ",
+        citedSourceRefs: ["D1"],
+      })),
     };
     const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
 
@@ -63,6 +66,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
     expect(result).toEqual({
       answerText: "Draft answer.",
+      citedSourceRefs: ["D1"],
       promptContext:
         "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
       allowedFragments: [
@@ -80,6 +84,31 @@ describe("AnswerDraftOrchestrator", () => {
       usedDiscussionThreads: [],
       usedActionItems: [],
     });
+  });
+
+  it("rejects a model citation outside the current allowed fragment window", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext:
+          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        usedGroupMemories: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({
+        answerText: "Draft answer.",
+        citedSourceRefs: ["D1"],
+      })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+
+    await expect(orchestrator.generateDraft({
+      question: "What changed?",
+      liveChatMessages: [],
+    })).rejects.toThrow("citation reference D1 is outside the allowed prompt window");
   });
 
   it("skips the model when a prompt-ranked source failed the live permission check", async () => {
