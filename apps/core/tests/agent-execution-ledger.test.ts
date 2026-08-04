@@ -219,6 +219,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     const threadCandidate = proactiveCandidate({ groupId, entityId: threadId });
     const threadDeliveryId = await createQueuedProactiveDelivery({
       repository: proactiveRepository,
+      pool,
       candidate: threadCandidate,
     });
     const threadClaim = await proactiveRepository.claimProactiveSignalDelivery({
@@ -258,6 +259,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     });
     const actionDeliveryId = await createQueuedProactiveDelivery({
       repository: proactiveRepository,
+      pool,
       candidate: actionCandidate,
     });
     const actionClaim = await proactiveRepository.claimProactiveSignalDelivery({
@@ -315,32 +317,120 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       reasonCode: "action_due_at_elapsed",
       suggestedMode: "ask_for_status",
     });
-    const dependentDeliveryId = await createQueuedProactiveDelivery({
-      repository: proactiveRepository,
-      candidate: dependentCandidate,
-    });
-    const dependentClaim = await proactiveRepository.claimProactiveSignalDelivery({
-      workerId: "subject-worker-dependent",
-      at,
-      leaseUntil: new Date(at.getTime() + 30_000),
-    });
-
-    expect(dependentClaim?.delivery.id).toBe(dependentDeliveryId);
-    await expect(proactiveRepository.getProactiveSignalDeliveryContext(dependentDeliveryId)).resolves.not.toHaveProperty(
-      "subjectLabel",
+    await proactiveRepository.recordCandidates({ signals: [dependentCandidate], now: at });
+    await expect(proactiveRepository.approveCandidateForDelivery({
+      idempotencyKey: dependentCandidate.idempotencyKey,
+      groupId,
+      operatorHint: "integration-test",
+      now: at,
+    })).resolves.toEqual({ status: "stale" });
+    const dependentDeliveries = await pool.query(
+      `SELECT COUNT(*)::integer AS count
+       FROM proactive_signal_delivery_outbox
+       WHERE candidate_idempotency_key = $1`,
+      [dependentCandidate.idempotencyKey],
     );
-    await proactiveRepository.failProactiveSignalDeliveryPreparation({
-      deliveryId: dependentDeliveryId,
-      workerId: "subject-worker-dependent",
-      attemptCount: dependentClaim!.attempts,
-      errorCode: "stale_delivery",
-      at,
+    expect(dependentDeliveries.rows).toEqual([{ count: 0 }]);
+  });
+
+  it("serializes approval behind conversation-state changes and keeps a newly stale target out of the outbox", async () => {
+    const groupId = `oc_approval_state_race_${suffix}`;
+    const entityId = `thread-approval-state-race-${suffix}`;
+    const candidate = proactiveCandidate({ groupId, entityId, entityVersion: 1 });
+    await ensureProactiveCandidateTarget({ pool, candidate });
+    await proactiveRepository.recordCandidates({ signals: [candidate], now: at });
+
+    const blocker = await pool.connect();
+    await blocker.query("BEGIN");
+    await blocker.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [`conversation-state:${groupId}`],
+    );
+
+    let approvalSettled = false;
+    const approvalPromise = proactiveRepository.approveCandidateForDelivery({
+      idempotencyKey: candidate.idempotencyKey,
+      groupId,
+      operatorHint: "integration-test",
+      now: at,
+    }).finally(() => {
+      approvalSettled = true;
     });
-    await expect(proactiveRepository.claimProactiveSignalDelivery({
-      workerId: "subject-worker-dependent-retry",
-      at: new Date(at.getTime() + 1),
-      leaseUntil: new Date(at.getTime() + 30_001),
-    })).resolves.toBeUndefined();
+    let waitedForConversationStateLock: boolean;
+    try {
+      waitedForConversationStateLock = await waitForAdvisoryLockOrSettlement(
+        pool,
+        () => approvalSettled,
+      );
+      await blocker.query(
+        "UPDATE discussion_threads SET retrieval_state = 'invalidated' WHERE id = $1 AND group_id = $2",
+        [entityId, groupId],
+      );
+    } finally {
+      await blocker.query("COMMIT");
+      blocker.release();
+    }
+
+    await expect(approvalPromise).resolves.toEqual({ status: "stale" });
+    expect(waitedForConversationStateLock!).toBe(true);
+    const deliveries = await pool.query(
+      `SELECT COUNT(*)::integer AS count
+       FROM proactive_signal_delivery_outbox
+       WHERE candidate_idempotency_key = $1`,
+      [candidate.idempotencyKey],
+    );
+    expect(deliveries.rows).toEqual([{ count: 0 }]);
+  }, 15_000);
+
+  it("does not let an existing delivery mask a target that became stale", async () => {
+    const groupId = `oc_existing_delivery_stale_${suffix}`;
+    const entityId = `thread-existing-delivery-stale-${suffix}`;
+    const candidate = proactiveCandidate({ groupId, entityId, entityVersion: 1 });
+    await ensureProactiveCandidateTarget({ pool, candidate });
+    await proactiveRepository.recordCandidates({ signals: [candidate], now: at });
+
+    await expect(proactiveRepository.approveCandidateForDelivery({
+      idempotencyKey: candidate.idempotencyKey,
+      groupId,
+      operatorHint: "integration-test",
+      now: at,
+    })).resolves.toEqual(expect.objectContaining({ status: "queued" }));
+    await pool.query(
+      "UPDATE discussion_threads SET version = 2, updated_at = $3 WHERE id = $1 AND group_id = $2",
+      [entityId, groupId, new Date(at.getTime() + 1_000)],
+    );
+
+    const repeatedApproval = await proactiveRepository.approveCandidateForDelivery({
+      idempotencyKey: candidate.idempotencyKey,
+      groupId,
+      operatorHint: "integration-test",
+      now: new Date(at.getTime() + 2_000),
+    });
+    const deliveryFacts = await pool.query(
+      `SELECT
+         COUNT(*)::integer AS delivery_count,
+         COUNT(*) FILTER (WHERE status = 'pending')::integer AS pending_count
+       FROM proactive_signal_delivery_outbox
+       WHERE candidate_idempotency_key = $1`,
+      [candidate.idempotencyKey],
+    );
+    expect(deliveryFacts.rows).toEqual([{ delivery_count: 1, pending_count: 1 }]);
+    const queuedEvents = await pool.query(
+      `SELECT COUNT(*)::integer AS count
+       FROM proactive_signal_delivery_events
+       WHERE candidate_idempotency_key = $1
+         AND event_type = 'queued'`,
+      [candidate.idempotencyKey],
+    );
+    await pool.query(
+      `UPDATE proactive_signal_delivery_outbox
+       SET status = 'cancelled', updated_at = $2
+       WHERE candidate_idempotency_key = $1`,
+      [candidate.idempotencyKey, new Date(at.getTime() + 3_000)],
+    );
+
+    expect(repeatedApproval).toEqual({ status: "stale" });
+    expect(queuedEvents.rows).toEqual([{ count: 1 }]);
   });
 
   it("fences stale delivery attempts when a fixed worker id reclaims an expired lease", async () => {
@@ -355,6 +445,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     );
     const deliveryId = await createQueuedProactiveDelivery({
       repository: proactiveRepository,
+      pool,
       candidate: proactiveCandidate({ groupId, entityId: threadId }),
     });
     const workerId = "shared-proactive-worker";
@@ -461,6 +552,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     });
     const unsentDeliveryId = await createQueuedProactiveDelivery({
       repository: proactiveRepository,
+      pool,
       candidate: unsentCandidate,
     });
     await expect(proactiveRepository.recordFeedback(proactiveFeedback({
@@ -493,6 +585,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     const queuedBeforeSuppression = proactiveCandidate({ groupId, entityId, entityVersion: 3 });
     await createQueuedProactiveDelivery({
       repository: proactiveRepository,
+      pool,
       candidate: queuedBeforeSuppression,
     });
     const pendingBeforeSuppression = proactiveCandidate({ groupId, entityId, entityVersion: 4 });
@@ -564,7 +657,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       groupId,
       operatorHint: "integration-test",
       now: new Date("2026-07-27T01:00:00.000Z"),
-    })).resolves.toEqual({ status: "not_found" });
+    })).resolves.toEqual({ status: "suppressed" });
 
     const helpfulCandidate = proactiveCandidate({
       groupId,
@@ -657,6 +750,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     const claimedCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 2 });
     const claimedDeliveryId = await createQueuedProactiveDelivery({
       repository: proactiveRepository,
+      pool,
       candidate: claimedCandidate,
     });
     const workerId = `worker-claimed-${suffix}`;
@@ -734,6 +828,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     const claimedCandidate = proactiveCandidate({ groupId, entityId, entityVersion: 2 });
     const claimedDeliveryId = await createQueuedProactiveDelivery({
       repository: proactiveRepository,
+      pool,
       candidate: claimedCandidate,
     });
     const workerId = `worker-authorization-race-${suffix}`;
@@ -811,6 +906,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     const candidate = proactiveCandidate({ groupId, entityId, entityVersion: 1 });
     const deliveryId = await createQueuedProactiveDelivery({
       repository: proactiveRepository,
+      pool,
       candidate,
     });
     const workerId = `worker-authorization-lease-race-${suffix}`;
@@ -878,6 +974,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     });
     const deliveryId = await createQueuedProactiveDelivery({
       repository: proactiveRepository,
+      pool,
       candidate,
     });
     const workerId = `worker-expired-${suffix}`;
@@ -1015,11 +1112,14 @@ function proactiveFeedback(
 
 async function createQueuedProactiveDelivery({
   repository,
+  pool,
   candidate,
 }: {
   repository: ProactiveSignalRepository;
+  pool: pg.Pool;
   candidate: ProactiveSignalCandidate;
 }): Promise<string> {
+  await ensureProactiveCandidateTarget({ pool, candidate });
   await repository.recordCandidates({ signals: [candidate], now: at });
   const result = await repository.approveCandidateForDelivery({
     idempotencyKey: candidate.idempotencyKey,
@@ -1040,12 +1140,53 @@ async function createSentProactiveDelivery({
   pool: pg.Pool;
   candidate: ProactiveSignalCandidate;
 }): Promise<string> {
-  const deliveryId = await createQueuedProactiveDelivery({ repository, candidate });
+  const deliveryId = await createQueuedProactiveDelivery({ repository, pool, candidate });
   await pool.query(
     "UPDATE proactive_signal_delivery_outbox SET status = 'sent', sent_message_id = $2 WHERE id = $1",
     [deliveryId, "om_card"],
   );
   return deliveryId;
+}
+
+async function ensureProactiveCandidateTarget({
+  pool,
+  candidate,
+}: {
+  pool: pg.Pool;
+  candidate: ProactiveSignalCandidate;
+}): Promise<void> {
+  if (candidate.kind === "quiet_open_thread") {
+    await pool.query(
+      `INSERT INTO discussion_threads (
+         id, group_id, title, summary, status, confidence, version,
+         first_evidence_at, last_activity_at, retrieval_state, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'open', 0.95, $5, $6, $6, 'visible', $6, $6)
+       ON CONFLICT (id) DO UPDATE
+       SET status = 'open',
+           merged_into_thread_id = NULL,
+           resolved_at = NULL,
+           version = EXCLUDED.version,
+           retrieval_state = 'visible',
+           updated_at = EXCLUDED.updated_at`,
+      [candidate.entityId, candidate.groupId, "Proactive integration thread", "Integration summary", candidate.entityVersion, at],
+    );
+    return;
+  }
+  await pool.query(
+    `INSERT INTO action_items (
+       id, group_id, description, owner_ref_type, owner_ref, due_at,
+       status, confidence, version, retrieval_state, created_at, updated_at
+     ) VALUES ($1, $2, $3, 'text_label', 'integration owner', $4,
+       'open', 0.95, $5, 'visible', $6, $6)
+     ON CONFLICT (id) DO UPDATE
+     SET status = 'open',
+         completed_at = NULL,
+         cancelled_at = NULL,
+         version = EXCLUDED.version,
+         retrieval_state = 'visible',
+         updated_at = EXCLUDED.updated_at`,
+    [candidate.entityId, candidate.groupId, "Proactive integration action", at, candidate.entityVersion, at],
+  );
 }
 
 async function waitForBlockedDatabaseQuery(

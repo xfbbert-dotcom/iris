@@ -1719,10 +1719,14 @@ function renderProactiveCandidates(candidates) {
     priorityCell.textContent = text(candidate.priority);
 
     const entityCell = document.createElement("td");
-    const ready = candidate.approvalState === "ready" && typeof candidate.subjectLabel === "string" && candidate.subjectLabel.trim().length > 0;
+    const hasSubject = typeof candidate.subjectLabel === "string" && candidate.subjectLabel.trim().length > 0;
+    const ready = candidate.approvalState === "ready" && hasSubject;
+    const suppressed = candidate.approvalState === "suppressed";
     const candidateLabel = ready
       ? (candidate.entityType === "thread" ? "Discussion: " : "Action: ") + text(candidate.subjectLabel)
-      : "Stale (the work item changed, closed, or is no longer visible)";
+      : suppressed
+        ? "Suppressed by group feedback" + (hasSubject ? ": " + text(candidate.subjectLabel) : "")
+        : "Stale (the work item changed, closed, or is no longer visible)";
     entityCell.textContent = candidateLabel;
 
     const modeCell = document.createElement("td");
@@ -1745,11 +1749,14 @@ function renderProactiveCandidates(candidates) {
       button.textContent = label;
       button.disabled = staleApproval;
       if (staleApproval) {
-        button.title = "This stale candidate cannot be approved.";
+        button.title = suppressed
+          ? "This suppressed candidate cannot be approved."
+          : "This stale candidate cannot be approved.";
         button.setAttribute("aria-disabled", "true");
       } else {
         button.addEventListener("click", async () => {
           button.disabled = true;
+          let keepDisabled = false;
           try {
             await transitionProactiveCandidate(candidate, suffix);
             addEvent(label + " recorded for " + candidateLabel);
@@ -1757,8 +1764,20 @@ function renderProactiveCandidates(candidates) {
           } catch (error) {
             addEvent(label + " failed: " + error.message);
             setConnection("Request failed", "warn");
+            const terminalApprovalConflict = suffix === proactiveCandidateApproveSuffix
+              && error.status === 409
+              && (error.message === "proactive_signal_candidate_stale"
+                || error.message === "proactive_signal_candidate_suppressed");
+            if (terminalApprovalConflict) {
+              keepDisabled = true;
+              try {
+                await refreshProactiveCandidates();
+              } catch (refreshError) {
+                addEvent("Proactive candidate refresh failed: " + refreshError.message);
+              }
+            }
           } finally {
-            button.disabled = false;
+            button.disabled = keepDisabled;
           }
         });
       }

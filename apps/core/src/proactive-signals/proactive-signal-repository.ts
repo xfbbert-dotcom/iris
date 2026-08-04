@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { ProactiveSignalCandidate } from "./proactive-signal-planner.js";
+import { lockConversationStateWriteScope } from "../conversation-state/postgres-conversation-state-repository.js";
 import { readDatabaseConfig, type DatabaseEnv } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
 
@@ -55,7 +56,7 @@ export type PersistedProactiveSignalCandidate = {
 };
 
 export type PendingProactiveSignalCandidate = PersistedProactiveSignalCandidate & {
-  approvalState: "ready" | "stale";
+  approvalState: "ready" | "stale" | "suppressed";
   subjectLabel?: string;
 };
 
@@ -128,6 +129,7 @@ export type ProactiveSignalRepository = {
   }): Promise<
     | { status: "queued"; deliveryId: string }
     | { status: "already_queued"; deliveryId: string }
+    | { status: "suppressed" }
     | { status: "stale" }
     | { status: "not_found" }
   >;
@@ -305,6 +307,14 @@ async function listPendingCandidates(
     SELECT candidate.*,
       ${PROACTIVE_SIGNAL_TARGET_SUBJECT_SQL} AS subject_label,
       CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM proactive_signal_suppressions suppression
+          WHERE suppression.group_id = candidate.group_id
+            AND suppression.kind = candidate.kind
+            AND suppression.entity_id = candidate.entity_id
+            AND suppression.suppress_until > CURRENT_TIMESTAMP
+        ) THEN 'suppressed'
         WHEN ${PROACTIVE_SIGNAL_TARGET_READY_SQL} THEN 'ready'
         ELSE 'stale'
       END AS approval_state,
@@ -1015,6 +1025,7 @@ async function approveCandidateForDelivery(
 ): Promise<
   | { status: "queued"; deliveryId: string }
   | { status: "already_queued"; deliveryId: string }
+  | { status: "suppressed" }
   | { status: "stale" }
   | { status: "not_found" }
 > {
@@ -1026,6 +1037,22 @@ async function approveCandidateForDelivery(
   const client = await dataSource.connect();
   try {
     await client.query("begin");
+    await lockConversationStateWriteScope({ queryable: client, groupId });
+    await lockProactiveSignalGroups(client, [groupId]);
+    const lockedCandidate = await client.query<{ idempotency_key: unknown }>(
+      `
+      SELECT candidate.idempotency_key
+      FROM proactive_signal_candidates candidate
+      WHERE candidate.idempotency_key = $1
+        AND candidate.group_id = $2
+      FOR UPDATE OF candidate
+      `,
+      [idempotencyKey, groupId],
+    );
+    if (lockedCandidate.rows.length === 0) {
+      await client.query("commit");
+      return { status: "not_found" };
+    }
     const inserted = await client.query<{ id: unknown }>(
       `
       INSERT INTO proactive_signal_delivery_outbox (
@@ -1077,10 +1104,12 @@ async function approveCandidateForDelivery(
       JOIN proactive_signal_candidates candidate
         ON candidate.idempotency_key = delivery.candidate_idempotency_key
        AND candidate.group_id = delivery.group_id
+      ${PROACTIVE_SIGNAL_TARGET_STATE_JOINS}
       WHERE delivery.candidate_idempotency_key = $1
         AND delivery.group_id = $2
         AND delivery.delivery_channel = 'feishu_group_card'
         AND candidate.status = 'pending'
+        AND ${PROACTIVE_SIGNAL_TARGET_READY_SQL}
         AND NOT EXISTS (
           SELECT 1
           FROM proactive_signal_suppressions suppression
@@ -1101,28 +1130,31 @@ async function approveCandidateForDelivery(
       };
     }
 
-    const candidateState = await client.query<{ approval_ready: unknown }>(
+    const candidateState = await client.query<{ approval_ready: unknown; suppressed: unknown }>(
       `
-      SELECT ${PROACTIVE_SIGNAL_TARGET_READY_SQL} AS approval_ready
-      FROM proactive_signal_candidates candidate
-      ${PROACTIVE_SIGNAL_TARGET_STATE_JOINS}
-      WHERE candidate.idempotency_key = $1
-        AND candidate.group_id = $2
-        AND candidate.status = 'pending'
-        AND NOT EXISTS (
+      SELECT ${PROACTIVE_SIGNAL_TARGET_READY_SQL} AS approval_ready,
+        EXISTS (
           SELECT 1
           FROM proactive_signal_suppressions suppression
           WHERE suppression.group_id = candidate.group_id
             AND suppression.kind = candidate.kind
             AND suppression.entity_id = candidate.entity_id
             AND suppression.suppress_until > $3
-        )
+        ) AS suppressed
+      FROM proactive_signal_candidates candidate
+      ${PROACTIVE_SIGNAL_TARGET_STATE_JOINS}
+      WHERE candidate.idempotency_key = $1
+        AND candidate.group_id = $2
+        AND candidate.status = 'pending'
       LIMIT 1
       `,
       [idempotencyKey, groupId, now],
     );
     await client.query("commit");
     if (candidateState.rows.length === 0) return { status: "not_found" };
+    if (requireBoolean("suppressed", candidateState.rows[0]?.suppressed)) {
+      return { status: "suppressed" };
+    }
     return requireBoolean("approvalReady", candidateState.rows[0]?.approval_ready)
       ? { status: "not_found" }
       : { status: "stale" };
@@ -1364,7 +1396,7 @@ function mapPendingCandidateRow(row: Record<string, unknown>): PendingProactiveS
   return {
     ...candidate,
     approvalState,
-    ...(approvalState === "ready" ? { subjectLabel } : {}),
+    ...(approvalState !== "stale" && subjectLabel !== undefined ? { subjectLabel } : {}),
   };
 }
 
@@ -1550,7 +1582,7 @@ function requireStatus(value: unknown): PersistedProactiveSignalCandidate["statu
 }
 
 function requireApprovalState(value: unknown): PendingProactiveSignalCandidate["approvalState"] {
-  if (value === "ready" || value === "stale") return value;
+  if (value === "ready" || value === "stale" || value === "suppressed") return value;
   throw new Error("candidate approval state is invalid");
 }
 

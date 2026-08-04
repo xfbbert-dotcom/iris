@@ -288,6 +288,35 @@ describe("proactive signal API", () => {
     await app.close();
   });
 
+  it("returns conflict when direct approval targets a suppressed candidate", async () => {
+    const store = createStore();
+    const repository = {
+      recordCandidates: vi.fn<ProactiveSignalRepository["recordCandidates"]>(),
+      listPendingCandidates: vi.fn<ProactiveSignalRepository["listPendingCandidates"]>().mockResolvedValue([]),
+      dismissCandidate: vi.fn<ProactiveSignalRepository["dismissCandidate"]>().mockResolvedValue({
+        status: "not_found",
+      }),
+      approveCandidateForDelivery: vi.fn<ProactiveSignalRepository["approveCandidateForDelivery"]>().mockResolvedValue({
+        status: "suppressed",
+      }),
+    } as unknown as ProactiveSignalRepository;
+    const app = await createApp({ store, proactiveSignalRepository: repository });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/proactive-signals/groups/group-a/candidates/quiet_open_thread%3Athread-a%3A1/approve-delivery",
+      headers: { ...authorization, "x-iris-operator": "operator-a" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "proactive_signal_candidate_suppressed",
+    });
+    await app.close();
+  });
+
   it("returns aggregate feedback effectiveness for an authenticated bounded group", async () => {
     const repository = createRepository();
     repository.getFeedbackSummary.mockResolvedValue({

@@ -544,6 +544,45 @@ describe("proactive signal persistence", () => {
     expect(candidate).not.toHaveProperty("subjectLabel");
   });
 
+  it("marks an actively suppressed candidate without hiding its human subject", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [
+        {
+          idempotency_key: "quiet_open_thread:thread-a:1",
+          group_id: "group-a",
+          kind: "quiet_open_thread",
+          priority: "medium",
+          entity_type: "thread",
+          entity_id: "thread-a",
+          entity_version: "1",
+          reason_code: "thread_quiet_threshold_elapsed",
+          suggested_mode: "ask_for_thread_update",
+          status: "pending",
+          last_relevant_at: new Date("2026-07-23T08:00:00.000Z"),
+          created_at: new Date("2026-07-23T10:00:00.000Z"),
+          updated_at: new Date("2026-07-23T10:00:00.000Z"),
+          evidence_message_ids: ["message-a"],
+          subject_label: "Launch feedback dashboard",
+          approval_state: "suppressed",
+        },
+      ] })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.listPendingCandidates({ groupId: "group-a", limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        approvalState: "suppressed",
+        subjectLabel: "Launch feedback dashboard",
+      }),
+    ]);
+    const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
+    expect(sql).toContain("from proactive_signal_suppressions suppression");
+    expect(sql).toContain("suppression.suppress_until > current_timestamp");
+  });
+
   it("dismisses a pending candidate with an append-only event and no content payload", async () => {
     const client = createClient([{ rows: [{ idempotency_key: "quiet_open_thread:thread-a:1" }] }, { rows: [] }]);
     const repository = createPostgresProactiveSignalRepository({
@@ -598,7 +637,7 @@ describe("proactive signal persistence", () => {
     const client = createClient([
       { rows: [] },
       { rows: [] },
-      { rows: [{ approval_ready: false }] },
+      { rows: [{ approval_ready: false, suppressed: false }] },
     ]);
     const repository = createPostgresProactiveSignalRepository({
       dataSource: {
@@ -622,6 +661,27 @@ describe("proactive signal persistence", () => {
     expect(sql).not.toContain("'queued', 'pending'");
   });
 
+  it("reports an actively suppressed candidate instead of disguising it as missing", async () => {
+    const client = createClient([
+      { rows: [] },
+      { rows: [] },
+      { rows: [{ approval_ready: true, suppressed: true }] },
+    ]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.approveCandidateForDelivery({
+      idempotencyKey: "quiet_open_thread:thread-a:1",
+      groupId: "group-a",
+      operatorHint: "operator-a",
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    })).resolves.toEqual({ status: "suppressed" });
+  });
+
   it("keeps an existing proactive delivery approval idempotent", async () => {
     const client = createClient([
       { rows: [] },
@@ -640,6 +700,34 @@ describe("proactive signal persistence", () => {
       operatorHint: "operator-a",
       now: new Date("2026-07-23T10:00:00.000Z"),
     })).resolves.toEqual({ status: "already_queued", deliveryId: "delivery-a" });
+  });
+
+  it("does not let an existing delivery mask a now-stale candidate", async () => {
+    const client = createClient([
+      { rows: [] },
+      { rows: [] },
+      { rows: [{ approval_ready: false, suppressed: false }] },
+    ]);
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: {
+        connect: vi.fn(async () => client),
+        query: vi.fn(),
+      } as unknown as ProactiveSignalDataSource,
+    });
+
+    await expect(repository.approveCandidateForDelivery({
+      idempotencyKey: "quiet_open_thread:thread-a:1",
+      groupId: "group-a",
+      operatorHint: "operator-a",
+      now: new Date("2026-07-23T10:00:00.000Z"),
+    })).resolves.toEqual({ status: "stale" });
+
+    const existingQuery = client.query.mock.calls
+      .map(([statement]) => String(statement).toLowerCase())
+      .find((statement) => statement.includes("select delivery.id"));
+    expect(existingQuery).toContain("left join discussion_threads thread_state");
+    expect(existingQuery).toContain("thread_state.id is not null");
+    expect(existingQuery).toContain("action_state.id is not null");
   });
 
   it("derives bounded delivery ids from long candidate keys", async () => {
@@ -1047,6 +1135,9 @@ function createClient(results: Array<{ rows: Array<Record<string, unknown>> }>) 
       }
       if (statement.toLowerCase().includes("pg_advisory_xact_lock")) {
         return { rows: [] };
+      }
+      if (statement.toLowerCase().includes("for update of candidate")) {
+        return { rows: [{ idempotency_key: "test-candidate" }] };
       }
       return results[index++] ?? { rows: [] };
     }),

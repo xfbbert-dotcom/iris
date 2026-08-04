@@ -821,6 +821,68 @@ describe("admin console assets", () => {
     expect(actions.children[1]!.title).toContain("stale");
   });
 
+  it("shows group-feedback suppression as distinct from a stale work item", async () => {
+    const fetch = vi.fn((path: string) => {
+      if (path.includes("/candidates?")) {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          candidates: [candidate("suppressed-candidate-key", {
+            approvalState: "suppressed",
+            subjectLabel: "Launch feedback dashboard",
+          })],
+        }));
+      }
+      if (path.endsWith("/feedback-summary")) {
+        return Promise.resolve(jsonResponse(feedbackSummary("group-a", 0)));
+      }
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    console.element("proactive-candidate-group").value = "group-a";
+
+    await console.trigger("proactive-candidate-refresh", "click");
+
+    const visibleText = console.allElements().map((element) => element.textContent).join("\n");
+    expect(visibleText).toContain("Suppressed by group feedback: Launch feedback dashboard");
+    const actions = console.element("proactive-candidate-rows").children[0]!.children[5]!.children[0]!;
+    expect(actions.children[0]!.disabled).toBe(false);
+    expect(actions.children[1]!.disabled).toBe(true);
+    expect(actions.children[1]!.title).toContain("suppressed");
+  });
+
+  it("refreshes and keeps approval disabled after a ready candidate becomes stale", async () => {
+    let candidateRefreshCount = 0;
+    const fetch = vi.fn((path: string) => {
+      if (path.endsWith("/approve-delivery")) {
+        return Promise.resolve(errorResponse(409, "proactive_signal_candidate_stale"));
+      }
+      if (path.includes("/candidates?")) {
+        candidateRefreshCount += 1;
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          candidates: [candidate("candidate-race-key", candidateRefreshCount === 1
+            ? { subjectLabel: "Launch feedback dashboard" }
+            : { approvalState: "stale", subjectLabel: undefined })],
+        }));
+      }
+      if (path.endsWith("/feedback-summary")) {
+        return Promise.resolve(jsonResponse(feedbackSummary("group-a", 0)));
+      }
+      throw new Error("unexpected_request");
+    });
+    const console = runAdminConsole(fetch);
+    console.element("proactive-candidate-group").value = "group-a";
+
+    await console.trigger("proactive-candidate-refresh", "click");
+    const firstActions = console.element("proactive-candidate-rows").children[0]!.children[5]!.children[0]!;
+    await firstActions.children[1]!.trigger("click");
+
+    expect(candidateRefreshCount).toBe(2);
+    const currentRow = console.element("proactive-candidate-rows").children[0]!;
+    expect(currentRow.children[2]!.textContent).toContain("Stale");
+    expect(currentRow.children[5]!.children[0]!.children[1]!.disabled).toBe(true);
+  });
+
   it("uses wrapped, responsive metrics for the proactive feedback summary", () => {
     const css = renderAdminConsoleCss();
     const script = renderAdminConsoleScript();

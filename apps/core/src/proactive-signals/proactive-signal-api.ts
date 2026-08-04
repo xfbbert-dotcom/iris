@@ -229,6 +229,9 @@ export function registerProactiveSignalApi(
         if (result.status === "stale") {
           return reply.code(409).send({ ok: false, error: "proactive_signal_candidate_stale" });
         }
+        if (result.status === "suppressed") {
+          return reply.code(409).send({ ok: false, error: "proactive_signal_candidate_suppressed" });
+        }
         return { ok: true, ...result };
       } catch {
         return reply.code(500).send({ ok: false, error: "proactive_signal_delivery_approval_failed" });

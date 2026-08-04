@@ -22,8 +22,9 @@ speech, alter rollout scope, or change the architecture whitepaper.
 
 Every candidate returned by the pending-candidate API includes:
 
-- `approvalState`: `ready` or `stale`;
-- `subjectLabel` only when the exact candidate target is currently valid.
+- `approvalState`: `ready`, `stale`, or `suppressed`;
+- `subjectLabel` when the exact candidate target is currently valid, including
+  when group feedback currently suppresses delivery.
 
 For a discussion thread, the subject is its current title. For an action item,
 the subject is its current description. Resolution is bound to the candidate's
@@ -39,6 +40,9 @@ delivery renderer hold:
 
 All other pending candidates are `stale`. Stale rows remain visible so operators
 can understand and dismiss accumulated work; they are not silently hidden.
+An otherwise pending candidate covered by an active group-feedback suppression
+is `suppressed`, not `ready` or missing. Suppression takes precedence in the
+operator projection and still blocks delivery.
 
 ### 2.2 Admin Console
 
@@ -46,14 +50,17 @@ The candidate table renders a human subject:
 
 - `Discussion: <title>` for a ready thread;
 - `Action: <description>` for a ready action;
+- `Suppressed by group feedback: <subject>` for a suppressed current target;
 - `Stale (the work item changed, closed, or is no longer visible)` otherwise.
 
 The UI never displays the raw entity ID or candidate idempotency key. Labels are
 inserted with `textContent`; no evidence or message body is returned or rendered.
 
 Ready candidates retain both **Dismiss** and **Approve delivery** actions. Stale
-candidates retain **Dismiss**, while **Approve delivery** is disabled and explains
-why through accessible text/title metadata.
+and suppressed candidates retain **Dismiss**, while **Approve delivery** is
+disabled and explains why through accessible text/title metadata. If a direct
+approval races with a state change, the console refreshes the row and keeps the
+approval control disabled after the conflict.
 
 ### 2.3 Atomic approval
 
@@ -62,25 +69,37 @@ the approval transaction. A stale candidate cannot be inserted into the delivery
 outbox even when a client calls the API directly or the entity changes after the
 list was loaded.
 
-The repository approval result adds `stale`. The HTTP API maps it to:
+The repository approval result adds `stale` and `suppressed`. The HTTP API maps
+them to:
 
 ```text
 409 { "ok": false, "error": "proactive_signal_candidate_stale" }
+409 { "ok": false, "error": "proactive_signal_candidate_suppressed" }
 ```
 
 Existing `queued`, `already_queued`, and `not_found` behavior remains unchanged.
 Approval, runtime, suppression, and final-send gates continue to apply.
+`already_queued` is returned only while the existing delivery's exact target is
+still ready; an older outbox row cannot mask a target that has since become
+stale.
+
+The approval transaction serializes against target mutation and feedback state
+before it evaluates readiness: it acquires the conversation-state advisory lock,
+then the proactive-signal group advisory lock, then the candidate row lock. This
+prevents a target or suppression write from committing between the approval
+check and outbox insertion.
 
 ## 3. Data Flow
 
 1. The repository selects pending, undelivered candidates.
 2. A bounded left join resolves the exact current thread or action projection.
 3. The repository returns a subject label and readiness classification.
-4. The Admin Console presents the human label or stale state.
+4. The Admin Console presents the human label, suppression, or stale state.
 5. On approval, one transactional `INSERT ... SELECT` repeats the readiness
    predicates and inserts only a currently valid candidate.
 6. If no insert occurs, the repository distinguishes an existing delivery,
-   a stale candidate, and a missing candidate without weakening authorization.
+   a suppressed candidate, a stale candidate, and a missing candidate without
+   weakening authorization.
 
 No schema migration is required.
 
@@ -117,9 +136,17 @@ time-of-check/time-of-use gap at the repository boundary.
 - Changed, closed, hidden, missing, or version-mismatched targets return `stale`
   without a subject label.
 - Atomic approval of a stale candidate returns `stale` and inserts no outbox row.
-- The API returns the enriched projection and maps stale approval to HTTP 409.
+- Re-approving an already-queued candidate after its exact target becomes stale
+  returns `stale`, without adding an outbox row or queued event.
+- Active group feedback returns `suppressed`, preserves a safe human subject when
+  available, and inserts no outbox row.
+- The API returns the enriched projection and maps stale or suppressed approval
+  to HTTP 409.
 - The Admin Console renders human subjects, hides raw identifiers, disables stale
-  approval, and keeps stale dismissal available.
+  or suppressed approval, refreshes after approval conflicts, and keeps dismissal
+  available.
+- A concurrent target-state writer completes before approval classification; a
+  newly stale target never enters the outbox.
 - Existing candidate, suppression, approval, and delivery tests remain green.
 
 ## 7. Rollout
@@ -128,3 +155,12 @@ The change is delivered through a draft pull request and exact-SHA CI. Deploymen
 uses the existing bounded pilot runbook. Runtime scope and proactive enablement
 must remain unchanged, queues must drain to zero, and public internal endpoints
 must remain unavailable.
+
+## 8. Deferred Non-Blocking Hardening
+
+Final pre-send authorization intentionally remains a separate defense-in-depth
+query. Its target and suppression predicates currently match the shared
+projection/approval rules and are covered by integration tests, but the SQL is
+not mechanically generated from the same fragment. Extracting that larger query
+is deferred until final authorization is otherwise changed; predicate drift is a
+review checkpoint, not a reason to extend this bounded product slice.
