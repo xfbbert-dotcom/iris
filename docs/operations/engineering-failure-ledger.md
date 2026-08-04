@@ -22,6 +22,25 @@ delivery mistakes while implementing it.
 - **Exit condition:** The agreed tests and one bounded real pilot workflow pass with no unresolved
   P0/P1 finding.
 
+### Consolidate a validated frontier before stacked PRs hide the release state
+
+- **Failure:** Iris production ran a reviewed descendant more than 400 commits ahead of `master`
+  while over twenty stacked Draft PRs remained open. Individual checks were green, but a new
+  developer could not determine the authoritative base without reconstructing the entire branch
+  graph.
+- **Root cause:** Each completed phase opened the next stacked PR, but no release gate required the
+  exact deployed tree to return to the default branch after the product loops passed.
+- **Prevention rule:** Once a descendant has full CI, exact-SHA production evidence, and no
+  unresolved P0/P1 finding, open one consolidation PR from that exact tree to `master`. Preserve
+  history with a merge commit, then close only old PRs whose exact heads are contained in the new
+  default branch. Review independent sibling branches separately; never merge them just to empty
+  the queue.
+- **Guard:** Compare tree hashes between the deployed commit and the consolidation head, rerun CI
+  against `master`, and prove every superseded PR head is an ancestor of the merged default branch.
+  Keep conflicting alternate migrations closed with their still-useful gaps recorded as backlog.
+- **Exit condition:** `master` contains the validated product tree, the production tree comparison
+  is exact, no obsolete stacked PR remains open, and new work can branch directly from `master`.
+
 ### Activate coupled runtimes as one rollout unit
 
 - **Failure:** A daily-pilot rollout enabled proactive planning and delivery without enabling the
