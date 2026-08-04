@@ -649,6 +649,7 @@ describe("proactive signal persistence", () => {
     await expect(repository.beginProactiveSignalDeliveryAttempt({
       deliveryId: "delivery-a",
       workerId: "worker-a",
+      attemptCount: 2,
       at: new Date("2026-07-23T10:00:00.000Z"),
     })).resolves.toEqual({ status });
 
@@ -656,6 +657,7 @@ describe("proactive signal persistence", () => {
     expect(sql).toContain("from proactive_signal_suppressions");
     expect(sql).toContain("suppression.suppress_until > $3");
     expect(sql).toContain("delivery.lease_until > $3");
+    expect(sql).toContain("delivery.attempt_count = $4");
     expect(sql).toContain("for update of delivery");
     expect(sql).toContain("thread_state.retrieval_state = 'visible'");
     expect(sql).toContain("thread_state.status = 'open'");
@@ -672,7 +674,9 @@ describe("proactive signal persistence", () => {
 
   it("cancels preparation failures terminally instead of making them claimable again", async () => {
     const dataSource = {
-      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [] })),
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({
+        rows: [{ updated_count: 1 }],
+      })),
       connect: vi.fn(),
     };
     const repository = createPostgresProactiveSignalRepository({
@@ -682,6 +686,7 @@ describe("proactive signal persistence", () => {
     await repository.failProactiveSignalDeliveryPreparation({
       deliveryId: "delivery-a",
       workerId: "worker-a",
+      attemptCount: 2,
       errorCode: "stale_delivery",
       at: new Date("2026-07-23T10:00:00.000Z"),
     });
@@ -690,13 +695,16 @@ describe("proactive signal persistence", () => {
     expect(sql).toContain("set status = 'cancelled'");
     expect(sql).toContain("lease_worker_id = null");
     expect(sql).toContain("lease_until = null");
+    expect(sql).toContain("delivery.attempt_count = $3");
     expect(sql).toContain("'cancelled', 'cancelled'");
     expect(sql).not.toContain("set status = 'failed'");
   });
 
   it("completes a processing delivery with Feishu message id and append-only sent event", async () => {
     const dataSource = {
-      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [] })),
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({
+        rows: [{ updated_count: 1 }],
+      })),
       connect: vi.fn(),
     };
     const repository = createPostgresProactiveSignalRepository({
@@ -706,20 +714,24 @@ describe("proactive signal persistence", () => {
     await repository.completeProactiveSignalDelivery({
       deliveryId: "delivery-a",
       workerId: "worker-a",
+      attemptCount: 2,
       messageId: "om_proactive",
       at: new Date("2026-07-23T10:00:00.000Z"),
     });
 
     const sql = dataSource.query.mock.calls.map(([statement]) => String(statement).toLowerCase()).join("\n");
     expect(sql).toContain("status = 'sent'");
-    expect(sql).toContain("sent_message_id = $3");
+    expect(sql).toContain("delivery.attempt_count = $3");
+    expect(sql).toContain("sent_message_id = $4");
     expect(sql).toContain("'sent', 'sent'");
     expect(sql).not.toContain("card_json");
   });
 
   it("returns retryable failures to pending and permanent failures to failed", async () => {
     const dataSource = {
-      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({ rows: [] })),
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({
+        rows: [{ updated_count: 1 }],
+      })),
       connect: vi.fn(),
     };
     const repository = createPostgresProactiveSignalRepository({
@@ -729,6 +741,7 @@ describe("proactive signal persistence", () => {
     await repository.failProactiveSignalDelivery({
       deliveryId: "delivery-a",
       workerId: "worker-a",
+      attemptCount: 2,
       classification: "retryable",
       errorCode: "retryable_remote_failure",
       retryAt: new Date("2026-07-23T10:01:00.000Z"),
@@ -737,6 +750,7 @@ describe("proactive signal persistence", () => {
     await repository.failProactiveSignalDelivery({
       deliveryId: "delivery-b",
       workerId: "worker-a",
+      attemptCount: 3,
       classification: "permanent",
       errorCode: "remote_rejected",
       at: new Date("2026-07-23T10:00:00.000Z"),
@@ -746,8 +760,42 @@ describe("proactive signal persistence", () => {
     const permanentValues = dataSource.query.mock.calls[1]?.[1] as unknown[] | undefined;
     expect(retryValues).toBeDefined();
     expect(permanentValues).toBeDefined();
-    expect(retryValues![2]).toBe("pending");
-    expect(permanentValues![2]).toBe("failed");
+    expect(retryValues![2]).toBe(2);
+    expect(permanentValues![2]).toBe(3);
+    expect(retryValues![3]).toBe("pending");
+    expect(permanentValues![3]).toBe("failed");
+  });
+
+  it("rejects stale mutation fences when no claimed attempt row is updated", async () => {
+    const dataSource = {
+      query: vi.fn(async (_statement: string, _values?: unknown[]) => ({
+        rows: [{ updated_count: 0 }],
+      })),
+      connect: vi.fn(),
+    };
+    const repository = createPostgresProactiveSignalRepository({
+      dataSource: dataSource as unknown as ProactiveSignalDataSource,
+    });
+    const mutationBase = {
+      deliveryId: "delivery-a",
+      workerId: "worker-a",
+      attemptCount: 1,
+      at: new Date("2026-07-23T10:00:00.000Z"),
+    };
+
+    await expect(repository.failProactiveSignalDeliveryPreparation({
+      ...mutationBase,
+      errorCode: "stale_delivery",
+    })).rejects.toThrow("delivery attempt is stale");
+    await expect(repository.completeProactiveSignalDelivery({
+      ...mutationBase,
+      messageId: "om_proactive",
+    })).rejects.toThrow("delivery attempt is stale");
+    await expect(repository.failProactiveSignalDelivery({
+      ...mutationBase,
+      classification: "permanent",
+      errorCode: "remote_rejected",
+    })).rejects.toThrow("delivery attempt is stale");
   });
 });
 

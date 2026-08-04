@@ -12,6 +12,7 @@ import {
   type ProactiveSignalCardRenderResult,
 } from "./proactive-signal-card-renderer.js";
 import type {
+  ProactiveSignalDeliveryAuthorizationResult,
   ProactiveSignalDeliveryClaim,
   ProactiveSignalDeliveryContext,
   ProactiveSignalRepository,
@@ -112,7 +113,7 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<ProactiveSignal
   try {
     context = await input.repository.getProactiveSignalDeliveryContext(input.claim.delivery.id);
   } catch {
-    throw new Error("proactive signal delivery context unavailable");
+    return failPreparation(input, "stale_delivery");
   }
   if (!isExactClaimContext(input.claim, context)) return failPreparation(input, "stale_delivery");
   let contextualInput = { ...input, context };
@@ -120,26 +121,6 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<ProactiveSignal
     return failPreparation(contextualInput, "runtime_disabled");
   }
   await observeDeliveryAttempt(contextualInput, "tool_call_started");
-  const authorization = await input.repository.beginProactiveSignalDeliveryAttempt({
-    deliveryId: context.delivery.id,
-    workerId: input.claim.workerId,
-    at: requireDate(input.now()),
-  });
-  if (authorization.status === "suppressed") {
-    await observeDeliveryAttempt(
-      contextualInput,
-      "tool_call_cancelled",
-      "feedback_suppressed",
-    );
-    return {
-      status: "permanent_failure",
-      deliveryId: context.delivery.id,
-      code: "feedback_suppressed",
-    };
-  }
-  if (authorization.status === "stale") {
-    return failPreparation(contextualInput, "stale_delivery");
-  }
   try {
     context = await input.repository.getProactiveSignalDeliveryContext(input.claim.delivery.id);
   } catch {
@@ -156,7 +137,33 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<ProactiveSignal
     return failPreparation(contextualInput, "stale_delivery");
   }
   if (!readRuntimeGate(input, context.delivery.groupId)) {
-    return failExternalAttempt(contextualInput, "permanent", "runtime_disabled");
+    return failPreparation(contextualInput, "runtime_disabled");
+  }
+  let authorization: ProactiveSignalDeliveryAuthorizationResult;
+  try {
+    authorization = await input.repository.beginProactiveSignalDeliveryAttempt({
+      deliveryId: context.delivery.id,
+      workerId: input.claim.workerId,
+      attemptCount: input.claim.attempts,
+      at: requireDate(input.now()),
+    });
+  } catch {
+    return failPreparation(contextualInput, "stale_delivery");
+  }
+  if (authorization.status === "suppressed") {
+    await observeDeliveryAttempt(
+      contextualInput,
+      "tool_call_cancelled",
+      "feedback_suppressed",
+    );
+    return {
+      status: "permanent_failure",
+      deliveryId: context.delivery.id,
+      code: "feedback_suppressed",
+    };
+  }
+  if (authorization.status === "stale") {
+    return failPreparation(contextualInput, "stale_delivery");
   }
 
   let sent: { messageId: string };
@@ -173,6 +180,7 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<ProactiveSignal
     await input.repository.completeProactiveSignalDelivery({
       deliveryId: context.delivery.id,
       workerId: input.claim.workerId,
+      attemptCount: input.claim.attempts,
       messageId: sent.messageId,
       at: requireDate(input.now()),
     });
@@ -210,12 +218,17 @@ async function failPreparation(
   input: DispatchClaimInput,
   code: ProactiveSignalDispatcherCode,
 ): Promise<ProactiveSignalDispatcherResult> {
-  await input.repository.failProactiveSignalDeliveryPreparation({
-    deliveryId: input.claim.delivery.id,
-    workerId: input.claim.workerId,
-    errorCode: code,
-    at: requireDate(input.now()),
-  });
+  try {
+    await input.repository.failProactiveSignalDeliveryPreparation({
+      deliveryId: input.claim.delivery.id,
+      workerId: input.claim.workerId,
+      attemptCount: input.claim.attempts,
+      errorCode: code,
+      at: requireDate(input.now()),
+    });
+  } catch {
+    // A newer fenced attempt may already own the row; this attempt must not mutate it.
+  }
   await observeDeliveryAttempt(input, "tool_call_cancelled", code);
   return {
     status: "permanent_failure",
@@ -230,16 +243,26 @@ async function failExternalAttempt(
   code: ProactiveSignalDispatcherCode,
 ): Promise<ProactiveSignalDispatcherResult> {
   const failedAt = requireDate(input.now());
-  await input.repository.failProactiveSignalDelivery({
-    deliveryId: input.claim.delivery.id,
-    workerId: input.claim.workerId,
-    classification,
-    errorCode: code,
-    ...(classification === "retryable"
-      ? { retryAt: new Date(failedAt.getTime() + input.retryDelayMs) }
-      : {}),
-    at: failedAt,
-  });
+  try {
+    await input.repository.failProactiveSignalDelivery({
+      deliveryId: input.claim.delivery.id,
+      workerId: input.claim.workerId,
+      attemptCount: input.claim.attempts,
+      classification,
+      errorCode: code,
+      ...(classification === "retryable"
+        ? { retryAt: new Date(failedAt.getTime() + input.retryDelayMs) }
+        : {}),
+      at: failedAt,
+    });
+  } catch {
+    await observeDeliveryAttempt(input, "tool_call_failed", "outcome_unknown", "outcome_unknown");
+    return {
+      status: "outcome_unknown",
+      deliveryId: input.claim.delivery.id,
+      code: "outcome_unknown",
+    };
+  }
   await observeDeliveryAttempt(input, "tool_call_failed", code, classification);
   return {
     status: classification === "retryable"

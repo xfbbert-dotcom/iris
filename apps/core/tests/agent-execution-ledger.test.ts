@@ -233,6 +233,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     await proactiveRepository.completeProactiveSignalDelivery({
       deliveryId: threadDeliveryId,
       workerId: "subject-worker-thread",
+      attemptCount: threadClaim!.attempts,
       messageId: `om_thread_${suffix}`,
       at,
     });
@@ -276,6 +277,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
       deliveryId: actionDeliveryId,
       workerId: "subject-worker-action",
+      attemptCount: actionClaim!.attempts,
       at,
     })).resolves.toEqual({ status: "stale" });
     await expect(proactiveRepository.getProactiveSignalDeliveryContext(actionDeliveryId)).resolves.not.toHaveProperty(
@@ -329,6 +331,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     await proactiveRepository.failProactiveSignalDeliveryPreparation({
       deliveryId: dependentDeliveryId,
       workerId: "subject-worker-dependent",
+      attemptCount: dependentClaim!.attempts,
       errorCode: "stale_delivery",
       at,
     });
@@ -337,6 +340,73 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
       at: new Date(at.getTime() + 1),
       leaseUntil: new Date(at.getTime() + 30_001),
     })).resolves.toBeUndefined();
+  });
+
+  it("fences stale delivery attempts when a fixed worker id reclaims an expired lease", async () => {
+    const groupId = `oc_delivery_fence_${suffix}`;
+    const threadId = `thread-delivery-fence-${suffix}`;
+    await pool.query(
+      `INSERT INTO discussion_threads (
+         id, group_id, title, summary, status, confidence, version,
+         first_evidence_at, last_activity_at, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'open', 0.95, 1, $5, $5, $5, $5)`,
+      [threadId, groupId, "Fenced proactive delivery", "Fencing integration summary", at],
+    );
+    const deliveryId = await createQueuedProactiveDelivery({
+      repository: proactiveRepository,
+      candidate: proactiveCandidate({ groupId, entityId: threadId }),
+    });
+    const workerId = "shared-proactive-worker";
+    const firstClaimAt = new Date(at.getTime() + 1_000);
+    const firstClaim = await proactiveRepository.claimProactiveSignalDelivery({
+      workerId,
+      at: firstClaimAt,
+      leaseUntil: new Date(firstClaimAt.getTime() + 10),
+    });
+    const secondClaimAt = new Date(firstClaimAt.getTime() + 20);
+    const secondClaim = await proactiveRepository.claimProactiveSignalDelivery({
+      workerId,
+      at: secondClaimAt,
+      leaseUntil: new Date(secondClaimAt.getTime() + 30_000),
+    });
+
+    expect(firstClaim).toMatchObject({ delivery: { id: deliveryId, attemptCount: 1 }, attempts: 1 });
+    expect(secondClaim).toMatchObject({ delivery: { id: deliveryId, attemptCount: 2 }, attempts: 2 });
+    await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
+      deliveryId,
+      workerId,
+      attemptCount: 1,
+      at: secondClaimAt,
+    })).resolves.toEqual({ status: "stale" });
+    await expect(proactiveRepository.failProactiveSignalDeliveryPreparation({
+      deliveryId,
+      workerId,
+      attemptCount: 1,
+      errorCode: "stale_delivery",
+      at: secondClaimAt,
+    })).rejects.toThrow("delivery attempt is stale");
+    await expect(proactiveRepository.completeProactiveSignalDelivery({
+      deliveryId,
+      workerId,
+      attemptCount: 1,
+      messageId: "om_stale_attempt",
+      at: secondClaimAt,
+    })).rejects.toThrow("delivery attempt is stale");
+    await expect(proactiveRepository.getProactiveSignalDeliveryContext(deliveryId)).resolves.toMatchObject({
+      delivery: { status: "processing", attemptCount: 2 },
+      subjectLabel: "Fenced proactive delivery",
+    });
+
+    await expect(proactiveRepository.failProactiveSignalDeliveryPreparation({
+      deliveryId,
+      workerId,
+      attemptCount: 2,
+      errorCode: "runtime_disabled",
+      at: secondClaimAt,
+    })).resolves.toBeUndefined();
+    await expect(proactiveRepository.getProactiveSignalDeliveryContext(deliveryId)).resolves.toMatchObject({
+      delivery: { status: "cancelled", attemptCount: 2 },
+    });
   });
 
   it("records feedback only once for an exact sent delivery binding", async () => {
@@ -611,6 +681,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
       deliveryId: claimedDeliveryId,
       workerId,
+      attemptCount: 1,
       at: authorizationAt,
     })).resolves.toEqual({ status: "suppressed" });
 
@@ -629,6 +700,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
       deliveryId: claimedDeliveryId,
       workerId,
+      attemptCount: 1,
       at: new Date(authorizationAt.getTime() + 60_000),
     })).resolves.toEqual({ status: "stale" });
   });
@@ -660,6 +732,7 @@ runIfDatabase("PostgresAgentExecutionLedgerRepository with Postgres", () => {
     await expect(proactiveRepository.beginProactiveSignalDeliveryAttempt({
       deliveryId,
       workerId,
+      attemptCount: 1,
       at: new Date(leaseUntil.getTime() + 1),
     })).resolves.toEqual({ status: "stale" });
 

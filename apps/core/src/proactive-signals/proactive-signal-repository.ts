@@ -134,23 +134,27 @@ export type ProactiveSignalRepository = {
   beginProactiveSignalDeliveryAttempt(input: {
     deliveryId: string;
     workerId: string;
+    attemptCount: number;
     at: Date;
   }): Promise<ProactiveSignalDeliveryAuthorizationResult>;
   failProactiveSignalDeliveryPreparation(input: {
     deliveryId: string;
     workerId: string;
+    attemptCount: number;
     errorCode: string;
     at: Date;
   }): Promise<void>;
   completeProactiveSignalDelivery(input: {
     deliveryId: string;
     workerId: string;
+    attemptCount: number;
     messageId: string;
     at: Date;
   }): Promise<void>;
   failProactiveSignalDelivery(input: {
     deliveryId: string;
     workerId: string;
+    attemptCount: number;
     classification: "retryable" | "permanent" | "outcome_unknown";
     errorCode: string;
     retryAt?: Date;
@@ -625,10 +629,11 @@ async function getProactiveSignalDeliveryContext(
 
 async function beginProactiveSignalDeliveryAttempt(
   queryable: Queryable,
-  input: { deliveryId: string; workerId: string; at: Date },
+  input: { deliveryId: string; workerId: string; attemptCount: number; at: Date },
 ): Promise<ProactiveSignalDeliveryAuthorizationResult> {
   const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
   const workerId = requireBoundedString("workerId", input.workerId);
+  const attemptCount = requireAttemptCount(input.attemptCount);
   const at = requireDate(input.at, "at");
   const result = await queryable.query<{ authorization_status: unknown }>(
     `
@@ -683,6 +688,7 @@ async function beginProactiveSignalDeliveryAttempt(
         AND delivery.lease_worker_id = $2
         AND delivery.lease_until IS NOT NULL
         AND delivery.lease_until > $3
+        AND delivery.attempt_count = $4
         AND candidate.status = 'pending'
       FOR UPDATE OF delivery
     ),
@@ -710,7 +716,7 @@ async function beginProactiveSignalDeliveryAttempt(
         id, delivery_id, candidate_idempotency_key, group_id, event_type,
         delivery_status, created_at
       )
-      SELECT $4, bound.id, bound.candidate_idempotency_key, bound.group_id,
+      SELECT $5, bound.id, bound.candidate_idempotency_key, bound.group_id,
         'processing', 'processing', $3
       FROM bound
       WHERE NOT bound.suppressed
@@ -723,7 +729,7 @@ async function beginProactiveSignalDeliveryAttempt(
         id, delivery_id, candidate_idempotency_key, group_id, event_type,
         delivery_status, created_at
       )
-      SELECT $5, cancelled.id, cancelled.candidate_idempotency_key, cancelled.group_id,
+      SELECT $6, cancelled.id, cancelled.candidate_idempotency_key, cancelled.group_id,
         'cancelled', 'cancelled', $3
       FROM cancelled
       ON CONFLICT (id) DO NOTHING
@@ -745,6 +751,7 @@ async function beginProactiveSignalDeliveryAttempt(
       deliveryId,
       workerId,
       at,
+      attemptCount,
       deliveryEventId(deliveryId, "processing", workerId, at),
       deliveryEventId(deliveryId, "cancelled", workerId, at),
     ],
@@ -758,77 +765,101 @@ async function beginProactiveSignalDeliveryAttempt(
 
 async function failProactiveSignalDeliveryPreparation(
   queryable: Queryable,
-  input: { deliveryId: string; workerId: string; errorCode: string; at: Date },
+  input: { deliveryId: string; workerId: string; attemptCount: number; errorCode: string; at: Date },
 ): Promise<void> {
   const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
   const workerId = requireBoundedString("workerId", input.workerId);
+  const attemptCount = requireAttemptCount(input.attemptCount);
   const failureClassification = boundedFailureClassification(input.errorCode);
   const at = requireDate(input.at, "at");
-  await queryable.query(
+  const result = await queryable.query<{ updated_count: unknown }>(
     `
     WITH updated AS (
       UPDATE proactive_signal_delivery_outbox delivery
       SET status = 'cancelled',
           lease_worker_id = NULL,
           lease_until = NULL,
-          failure_classification = $3,
-          updated_at = $4
+          failure_classification = $4,
+          updated_at = $5
       WHERE delivery.id = $1
         AND delivery.status = 'processing'
         AND delivery.lease_worker_id = $2
+        AND delivery.attempt_count = $3
       RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id
+    ), cancelled_event AS (
+      INSERT INTO proactive_signal_delivery_events (
+        id, delivery_id, candidate_idempotency_key, group_id, event_type,
+        delivery_status, created_at
+      )
+      SELECT $6, updated.id, updated.candidate_idempotency_key, updated.group_id,
+        'cancelled', 'cancelled', $5
+      FROM updated
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id
     )
-    INSERT INTO proactive_signal_delivery_events (
-      id, delivery_id, candidate_idempotency_key, group_id, event_type,
-      delivery_status, created_at
-    )
-    SELECT $5, updated.id, updated.candidate_idempotency_key, updated.group_id,
-      'cancelled', 'cancelled', $4
+    SELECT COUNT(*)::integer AS updated_count,
+      (SELECT COUNT(*)::integer FROM cancelled_event) AS event_count
     FROM updated
-    ON CONFLICT (id) DO NOTHING
     `,
     [
       deliveryId,
       workerId,
+      attemptCount,
       failureClassification,
       at,
       deliveryEventId(deliveryId, "cancelled", workerId, at),
     ],
   );
+  requireAppliedDeliveryAttempt(result.rows);
 }
 
 async function completeProactiveSignalDelivery(
   queryable: Queryable,
-  input: { deliveryId: string; workerId: string; messageId: string; at: Date },
+  input: { deliveryId: string; workerId: string; attemptCount: number; messageId: string; at: Date },
 ): Promise<void> {
   const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
   const workerId = requireBoundedString("workerId", input.workerId);
+  const attemptCount = requireAttemptCount(input.attemptCount);
   const messageId = requireBoundedString("messageId", input.messageId);
   const at = requireDate(input.at, "at");
-  await queryable.query(
+  const result = await queryable.query<{ updated_count: unknown }>(
     `
     WITH updated AS (
       UPDATE proactive_signal_delivery_outbox delivery
       SET status = 'sent',
-          sent_message_id = $3,
+          sent_message_id = $4,
           failure_classification = NULL,
-          updated_at = $4
+          updated_at = $5
       WHERE delivery.id = $1
         AND delivery.status = 'processing'
         AND delivery.lease_worker_id = $2
+        AND delivery.attempt_count = $3
       RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id
+    ), sent_event AS (
+      INSERT INTO proactive_signal_delivery_events (
+        id, delivery_id, candidate_idempotency_key, group_id, event_type,
+        delivery_status, created_at
+      )
+      SELECT $6, updated.id, updated.candidate_idempotency_key, updated.group_id,
+        'sent', 'sent', $5
+      FROM updated
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id
     )
-    INSERT INTO proactive_signal_delivery_events (
-      id, delivery_id, candidate_idempotency_key, group_id, event_type,
-      delivery_status, created_at
-    )
-    SELECT $5, updated.id, updated.candidate_idempotency_key, updated.group_id,
-      'sent', 'sent', $4
+    SELECT COUNT(*)::integer AS updated_count,
+      (SELECT COUNT(*)::integer FROM sent_event) AS event_count
     FROM updated
-    ON CONFLICT (id) DO NOTHING
     `,
-    [deliveryId, workerId, messageId, at, deliveryEventId(deliveryId, "sent", workerId, at)],
+    [
+      deliveryId,
+      workerId,
+      attemptCount,
+      messageId,
+      at,
+      deliveryEventId(deliveryId, "sent", workerId, at),
+    ],
   );
+  requireAppliedDeliveryAttempt(result.rows);
 }
 
 async function failProactiveSignalDelivery(
@@ -836,6 +867,7 @@ async function failProactiveSignalDelivery(
   input: {
     deliveryId: string;
     workerId: string;
+    attemptCount: number;
     classification: "retryable" | "permanent" | "outcome_unknown";
     errorCode: string;
     retryAt?: Date;
@@ -849,6 +881,7 @@ async function failProactiveSignalDelivery(
   await markProactiveSignalDeliveryFailed(queryable, {
     deliveryId: input.deliveryId,
     workerId: input.workerId,
+    attemptCount: input.attemptCount,
     failureClassification: boundedFailureClassification(input.errorCode),
     status: input.classification === "retryable" ? "pending" : "failed",
     nextAttemptAt: retryAt,
@@ -1246,6 +1279,7 @@ async function markProactiveSignalDeliveryFailed(
   input: {
     deliveryId: string;
     workerId: string;
+    attemptCount: number;
     failureClassification: string;
     status: Extract<ProactiveSignalDeliveryStatus, "pending" | "failed">;
     nextAttemptAt: Date;
@@ -1254,33 +1288,41 @@ async function markProactiveSignalDeliveryFailed(
 ): Promise<void> {
   const deliveryId = requireBoundedString("deliveryId", input.deliveryId);
   const workerId = requireBoundedString("workerId", input.workerId);
+  const attemptCount = requireAttemptCount(input.attemptCount);
   const at = requireDate(input.at, "at");
   const nextAttemptAt = requireDate(input.nextAttemptAt, "nextAttemptAt");
-  await queryable.query(
+  const result = await queryable.query<{ updated_count: unknown }>(
     `
     WITH updated AS (
       UPDATE proactive_signal_delivery_outbox delivery
-      SET status = $3,
-          next_attempt_at = $4,
-          failure_classification = $5,
-          updated_at = $6
+      SET status = $4,
+          next_attempt_at = $5,
+          failure_classification = $6,
+          updated_at = $7
       WHERE delivery.id = $1
         AND delivery.status = 'processing'
         AND delivery.lease_worker_id = $2
+        AND delivery.attempt_count = $3
       RETURNING delivery.id, delivery.candidate_idempotency_key, delivery.group_id, delivery.status
+    ), failed_event AS (
+      INSERT INTO proactive_signal_delivery_events (
+        id, delivery_id, candidate_idempotency_key, group_id, event_type,
+        delivery_status, created_at
+      )
+      SELECT $8, updated.id, updated.candidate_idempotency_key, updated.group_id,
+        'failed', updated.status, $7
+      FROM updated
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id
     )
-    INSERT INTO proactive_signal_delivery_events (
-      id, delivery_id, candidate_idempotency_key, group_id, event_type,
-      delivery_status, created_at
-    )
-    SELECT $7, updated.id, updated.candidate_idempotency_key, updated.group_id,
-      'failed', updated.status, $6
+    SELECT COUNT(*)::integer AS updated_count,
+      (SELECT COUNT(*)::integer FROM failed_event) AS event_count
     FROM updated
-    ON CONFLICT (id) DO NOTHING
     `,
     [
       deliveryId,
       workerId,
+      attemptCount,
       input.status,
       nextAttemptAt,
       input.failureClassification,
@@ -1288,6 +1330,7 @@ async function markProactiveSignalDeliveryFailed(
       deliveryEventId(deliveryId, `failed:${input.status}`, workerId, at),
     ],
   );
+  requireAppliedDeliveryAttempt(result.rows);
 }
 
 function entityTypeFor(kind: ProactiveSignalCandidate["kind"]): "thread" | "action" {
@@ -1414,6 +1457,17 @@ function requireNonNegativeInteger(value: unknown, label: string): number {
   const parsed = typeof value === "string" ? Number(value) : value;
   if (!Number.isSafeInteger(parsed) || Number(parsed) < 0) throw new Error(`${label} is invalid`);
   return Number(parsed);
+}
+
+function requireAttemptCount(value: unknown): number {
+  const attemptCount = requireNonNegativeInteger(value, "attemptCount");
+  if (attemptCount < 1) throw new Error("attemptCount is invalid");
+  return attemptCount;
+}
+
+function requireAppliedDeliveryAttempt(rows: Array<{ updated_count: unknown }>): void {
+  const updatedCount = requireNonNegativeInteger(rows[0]?.updated_count ?? 0, "updatedCount");
+  if (updatedCount !== 1) throw new Error("proactive signal delivery attempt is stale");
 }
 
 function requireCandidateRecordOutcome(value: unknown): "recorded" | "existing" | "suppressed" {

@@ -46,12 +46,19 @@ describe("ProactiveSignalDispatcher", () => {
       deliveryId: "delivery-a",
       code: "send_succeeded",
     }]);
-    expect(order).toEqual(["context", "gate", "begin", "context", "gate", "send", "complete"]);
+    expect(order).toEqual(["context", "gate", "context", "gate", "begin", "send", "complete"]);
     expect(canDeliver).toHaveBeenNthCalledWith(1, "group-a");
     expect(canDeliver).toHaveBeenNthCalledWith(2, "group-a");
+    expect(harness.repository.beginProactiveSignalDeliveryAttempt).toHaveBeenCalledWith({
+      deliveryId: "delivery-a",
+      workerId: "proactive-dispatcher-1",
+      attemptCount: 1,
+      at: now,
+    });
     expect(harness.repository.completeProactiveSignalDelivery).toHaveBeenCalledWith({
       deliveryId: "delivery-a",
       workerId: "proactive-dispatcher-1",
+      attemptCount: 1,
       messageId: "om_proactive",
       at: now,
     });
@@ -95,6 +102,7 @@ describe("ProactiveSignalDispatcher", () => {
     expect(harness.repository.failProactiveSignalDeliveryPreparation).toHaveBeenCalledWith({
       deliveryId: "delivery-a",
       workerId: "proactive-dispatcher-1",
+      attemptCount: 1,
       errorCode: "runtime_disabled",
       at: now,
     });
@@ -105,7 +113,7 @@ describe("ProactiveSignalDispatcher", () => {
     }));
   });
 
-  it("fails closed if the runtime gate changes after final database authorization", async () => {
+  it("cancels before final database authorization if the runtime gate changes", async () => {
     let reads = 0;
     const harness = createHarness({
       canDeliver: () => ++reads === 1,
@@ -116,17 +124,19 @@ describe("ProactiveSignalDispatcher", () => {
       deliveryId: "delivery-a",
       code: "runtime_disabled",
     }]);
-    expect(harness.repository.beginProactiveSignalDeliveryAttempt).toHaveBeenCalledOnce();
-    expect(harness.repository.failProactiveSignalDeliveryPreparation).not.toHaveBeenCalled();
-    expect(harness.repository.failProactiveSignalDelivery).toHaveBeenCalledWith(expect.objectContaining({
+    expect(harness.repository.beginProactiveSignalDeliveryAttempt).not.toHaveBeenCalled();
+    expect(harness.repository.failProactiveSignalDeliveryPreparation).toHaveBeenCalledWith({
       deliveryId: "delivery-a",
-      classification: "permanent",
+      workerId: "proactive-dispatcher-1",
+      attemptCount: 1,
       errorCode: "runtime_disabled",
-    }));
+      at: now,
+    });
+    expect(harness.repository.failProactiveSignalDelivery).not.toHaveBeenCalled();
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
   });
 
-  it("rechecks the exact subject after final authorization and cancels stale content", async () => {
+  it("rechecks the exact subject before final authorization and cancels stale content", async () => {
     let contextReadCount = 0;
     const harness = createHarness({
       getContext: async () => {
@@ -144,13 +154,60 @@ describe("ProactiveSignalDispatcher", () => {
       code: "stale_delivery",
     }]);
     expect(harness.repository.getProactiveSignalDeliveryContext).toHaveBeenCalledTimes(2);
+    expect(harness.repository.beginProactiveSignalDeliveryAttempt).not.toHaveBeenCalled();
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
     expect(harness.repository.failProactiveSignalDeliveryPreparation).toHaveBeenCalledWith({
       deliveryId: "delivery-a",
       workerId: "proactive-dispatcher-1",
+      attemptCount: 1,
       errorCode: "stale_delivery",
       at: now,
     });
+  });
+
+  it("terminally cancels when the initial context read fails", async () => {
+    const harness = createHarness({
+      getContext: async () => {
+        throw new Error("database read unavailable");
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      deliveryId: "delivery-a",
+      code: "stale_delivery",
+    }]);
+    expect(harness.repository.failProactiveSignalDeliveryPreparation).toHaveBeenCalledWith({
+      deliveryId: "delivery-a",
+      workerId: "proactive-dispatcher-1",
+      attemptCount: 1,
+      errorCode: "stale_delivery",
+      at: now,
+    });
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+  });
+
+  it("terminally cancels when final database authorization fails", async () => {
+    const harness = createHarness({
+      begin: async () => {
+        throw new Error("authorization unavailable");
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      deliveryId: "delivery-a",
+      code: "stale_delivery",
+    }]);
+    expect(harness.repository.getProactiveSignalDeliveryContext).toHaveBeenCalledTimes(2);
+    expect(harness.repository.failProactiveSignalDeliveryPreparation).toHaveBeenCalledWith({
+      deliveryId: "delivery-a",
+      workerId: "proactive-dispatcher-1",
+      attemptCount: 1,
+      errorCode: "stale_delivery",
+      at: now,
+    });
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
   });
 
   it("cancels a claimed delivery when feedback suppression wins before external send", async () => {
@@ -190,6 +247,7 @@ describe("ProactiveSignalDispatcher", () => {
     expect(JSON.stringify(result)).not.toContain("private_feishu_code");
     expect(harness.repository.failProactiveSignalDelivery).toHaveBeenCalledWith(expect.objectContaining({
       deliveryId: "delivery-a",
+      attemptCount: 1,
       classification: status === "retrying"
         ? "retryable"
         : status === "permanent_failure" ? "permanent" : "outcome_unknown",
@@ -214,6 +272,25 @@ describe("ProactiveSignalDispatcher", () => {
       deliveryId: "delivery-a",
       code: "send_succeeded",
     }]);
+  });
+
+  it("reports outcome unknown when the completion fence no longer owns the delivery", async () => {
+    const harness = createHarness({
+      complete: async () => {
+        throw new Error("proactive signal delivery attempt is stale");
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "outcome_unknown",
+      deliveryId: "delivery-a",
+      code: "outcome_unknown",
+    }]);
+    expect(harness.repository.failProactiveSignalDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      deliveryId: "delivery-a",
+      attemptCount: 1,
+      classification: "outcome_unknown",
+    }));
   });
 
   it("stops when no delivery is ready and bounds the batch limit", async () => {
