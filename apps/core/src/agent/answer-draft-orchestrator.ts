@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
-import { citedRefsForEvidencePlan } from "./evidence-plan.js";
+import { citedRefsForEvidencePlan, type EvidencePlan } from "./evidence-plan.js";
 import type { RetrievedDocumentFragment } from "../documents/document-fragment-repository.js";
 import type {
   DocumentRetrievalContextBuilder,
@@ -183,6 +183,11 @@ export function createAnswerDraftOrchestrator({
 
         let answerText: string;
         let citedSourceRefs: string[] = [];
+        let reasoningMetadata: {
+          taskMode: EvidencePlan["taskMode"];
+          evidenceState?: NonNullable<EvidencePlan["evidenceState"]>;
+          confidence?: NonNullable<EvidencePlan["confidence"]>;
+        } | undefined;
         if (context.deniedDocumentIds.length > 0) {
           answerText = PERMISSION_BLOCKED_ANSWER_DRAFT;
         } else {
@@ -209,6 +214,11 @@ export function createAnswerDraftOrchestrator({
               liveChatMessages: context.liveChatMessages ?? [],
             }),
           });
+          reasoningMetadata = {
+            taskMode: plan.taskMode,
+            ...(plan.evidenceState === null ? {} : { evidenceState: plan.evidenceState }),
+            ...(plan.confidence === null ? {} : { confidence: plan.confidence }),
+          };
           if (plan.taskMode === "direct_task") {
             const modelResult = await runObservedProviderRequest({
               observer: agentExecutionObserver,
@@ -268,6 +278,7 @@ export function createAnswerDraftOrchestrator({
             groupMemoryCount: result.usedGroupMemories.length,
             discussionThreadCount: result.usedDiscussionThreads?.length ?? 0,
             actionItemCount: result.usedActionItems?.length ?? 0,
+            ...(reasoningMetadata ?? {}),
           },
         });
         return result;

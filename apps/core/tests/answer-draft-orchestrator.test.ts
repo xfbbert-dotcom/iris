@@ -1064,6 +1064,7 @@ describe("AnswerDraftOrchestrator", () => {
           groupMemoryCount: 1,
           discussionThreadCount: 1,
           actionItemCount: 1,
+          taskMode: "direct_task",
         },
       },
     ]);
@@ -1140,6 +1141,14 @@ describe("AnswerDraftOrchestrator", () => {
           metadata: { stage: "answer_rendering" },
         },
       ]);
+    expect(observe.mock.calls
+      .map(([event]) => event)
+      .find(({ eventType }) => eventType === "turn_completed")?.metadata)
+      .toEqual(expect.objectContaining({
+        taskMode: "company_fact",
+        evidenceState: "explicit",
+        confidence: "high",
+      }));
     expect(JSON.stringify(observe.mock.calls)).not.toContain("SECRET_");
   });
 
