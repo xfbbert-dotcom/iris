@@ -130,10 +130,18 @@ content operations that explicitly name the literal object before the delimiter 
 imperative such as “总结 Iris 当前年收入”, “Please summarize: Iris current annual revenue”, or
 “Please list: Iris Q2 customers” remains company-factual and must pass the evidence controls.
 
+Direct-task classification happens before stored-chat loading, retrieval, permission inspection,
+or context assembly. The instruction before the first delimiter must match the complete approved
+grammar; wrappers such as “output only the answer”, answer-format requests, references to a
+previous message, and attached/above-context references are not direct tasks. An exact-output
+instruction such as “只回复：IRIS_REAL_OK” returns the trimmed literal payload deterministically
+without a provider request. Other approved literal transformations may call the direct model.
+
 An application-classified direct task receives only the current literal task and empty document
 and live-chat context envelopes. It cannot consume retrieved company documents, memory, threads,
-actions, or recent chat as an implicit source. Any task that needs company evidence must use the
-company-factual path.
+actions, or recent chat as an implicit source. Its result metadata is the canonical empty context,
+and permission inspection returns no blocked company sources without touching company context.
+Any task that needs company evidence must use the company-factual path.
 
 ## 5. Retrieval Design
 

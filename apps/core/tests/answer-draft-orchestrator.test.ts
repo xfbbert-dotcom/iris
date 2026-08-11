@@ -7,53 +7,32 @@ import {
 import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
 import type { EvidencePlanner } from "../src/model/openai-compatible-evidence-planner.js";
 import type { GroundedAnswerRenderer } from "../src/model/openai-compatible-grounded-answer-renderer.js";
-import { createDirectTaskReasoningDoubles } from "./answer-reasoning-test-doubles.js";
+import {
+  createCompanyFactReasoningDoubles,
+  createDirectTaskReasoningDoubles,
+} from "./answer-reasoning-test-doubles.js";
 
 type OrchestratorDependencies = Parameters<typeof createProductionAnswerDraftOrchestrator>[0];
 
 const DIRECT_SUMMARY_QUESTION = "Please summarize this text: The launch moved to Friday.";
+const COMPANY_CONTEXT_QUESTION = "What company context supports the launch schedule?";
 
 function createAnswerDraftOrchestrator(
   input: Omit<OrchestratorDependencies, "planner" | "renderer"> &
     Partial<Pick<OrchestratorDependencies, "planner" | "renderer">>,
 ) {
   return createProductionAnswerDraftOrchestrator({
-    ...createDirectTaskReasoningDoubles(),
+    ...createCompanyFactReasoningDoubles(),
     ...input,
   });
 }
 
 describe("AnswerDraftOrchestrator", () => {
-  it("builds safe context, calls model provider, and returns draft metadata", async () => {
+  it("keeps a direct task isolated from retrieved company context", async () => {
     const contextBuilder = {
-      buildContext: vi.fn(async () => ({
-        promptContext:
-          "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
-        allowedFragments: [
-          {
-            id: "fragment-1",
-            documentSourceId: "source-1",
-            documentSnapshotId: "snapshot-1",
-            sourceUri: "https://example.com/doc",
-            chunkIndex: 0,
-            text: "Allowed text",
-            contentHash: "hash",
-            embedding: [1, 0, 0, 0, 0, 0],
-            embeddingProfileId: "static-dev-6d",
-            createdAt: new Date("2026-07-02T01:00:00.000Z"),
-            sourceType: "feishu_wiki" as const,
-          },
-        ],
-        deniedDocumentIds: [],
-        retrievedFragmentCount: 2,
-        usedGroupMemories: [{
-          id: "memory-1",
-          scope: "group" as const,
-          category: "decision" as const,
-          content: "Launch Thursday.",
-          evidenceMessageIds: ["msg-1"],
-        }],
-      })),
+      buildContext: vi.fn(async () => {
+        throw new Error("direct tasks must not build company context");
+      }),
     };
     const model: ModelProvider = {
       generateAnswerDraft: vi.fn(async () => ({
@@ -70,13 +49,7 @@ describe("AnswerDraftOrchestrator", () => {
       liveChatLimit: 10,
     });
 
-    expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: DIRECT_SUMMARY_QUESTION,
-      supplementalQueryText: expect.stringContaining("Recent live chat:"),
-      liveChatMessages: [{ speaker: "Alice", text: "Please answer." }],
-      fragmentLimit: 4,
-      liveChatLimit: 10,
-    });
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
     expect(model.generateAnswerDraft).toHaveBeenCalledWith({
       question: DIRECT_SUMMARY_QUESTION,
       promptContext:
@@ -86,18 +59,10 @@ describe("AnswerDraftOrchestrator", () => {
       answerText: "Draft answer.",
       promptContext:
         "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
-      allowedFragments: [
-        expect.objectContaining({ id: "fragment-1", documentSourceId: "source-1" }),
-      ],
+      allowedFragments: [],
       deniedDocumentIds: [],
-      retrievedFragmentCount: 2,
-      usedGroupMemories: [{
-        id: "memory-1",
-        scope: "group",
-        category: "decision",
-        content: "Launch Thursday.",
-        evidenceMessageIds: ["msg-1"],
-      }],
+      retrievedFragmentCount: 0,
+      usedGroupMemories: [],
       usedDiscussionThreads: [],
       usedActionItems: [],
     });
@@ -153,7 +118,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     const result = await orchestrator.generateDraft({
-      question: DIRECT_SUMMARY_QUESTION,
+      question: "What is Iris's current annual revenue?",
       liveChatMessages: [],
     });
 
@@ -190,12 +155,32 @@ describe("AnswerDraftOrchestrator", () => {
     };
 
     const result = await orchestrator.inspectPromptPermissions({
-      question: DIRECT_SUMMARY_QUESTION,
+      question: "What is Iris's current annual revenue?",
       liveChatMessages: [],
     });
 
     expect(result).toEqual({ blockedDocumentSourceIds: ["source-denied"] });
     expect(contextBuilder.buildContext).toHaveBeenCalledTimes(1);
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+  });
+
+  it("skips permission context inspection for a direct task", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => {
+        throw new Error("direct tasks must not inspect company context");
+      }),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Must not be generated." })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+
+    await expect(orchestrator.inspectPromptPermissions({
+      question: DIRECT_SUMMARY_QUESTION,
+      liveChatMessages: [],
+    })).resolves.toEqual({ blockedDocumentSourceIds: [] });
+
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
     expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
@@ -252,7 +237,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     await orchestrator.generateDraft({
-      question: DIRECT_SUMMARY_QUESTION,
+      question: COMPANY_CONTEXT_QUESTION,
       chatId: "oc_1",
       liveChatMessages: [{ speaker: "ou_b", text: "Current question context" }],
       liveChatLimit: 8,
@@ -263,7 +248,7 @@ describe("AnswerDraftOrchestrator", () => {
       limit: 8,
     });
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: DIRECT_SUMMARY_QUESTION,
+      queryText: COMPANY_CONTEXT_QUESTION,
       supplementalQueryText: expect.stringContaining("Recent live chat:"),
       liveChatMessages: [
         { speaker: "ou_a", text: "Stored context" },
@@ -293,19 +278,20 @@ describe("AnswerDraftOrchestrator", () => {
     };
     const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
 
+    const question = "Quello 的电子宠物为什么会自己产生目标？";
     await orchestrator.generateDraft({
-      question: "请总结以下文本：Quello 的电子宠物会自己产生目标。",
+      question,
       liveChatMessages: [
         { speaker: "Alice", text: "我希望它可以自己推理" },
-        { speaker: "Alice", text: "请总结以下文本：Quello 的电子宠物会自己产生目标。" },
+        { speaker: "Alice", text: question },
       ],
     });
 
     const input = contextBuilder.buildContext.mock.calls[0]?.[0];
-    expect(input?.queryText).toBe("请总结以下文本：Quello 的电子宠物会自己产生目标。");
+    expect(input?.queryText).toBe(question);
     expect(input?.supplementalQueryText).toContain("Alice: 我希望它可以自己推理");
     const supplementalQueryText = String(input?.supplementalQueryText);
-    expect(supplementalQueryText.match(/Quello 的电子宠物会自己产生目标。/gu))
+    expect(supplementalQueryText.match(/Quello 的电子宠物为什么会自己产生目标？/gu))
       .toHaveLength(1);
     expect(supplementalQueryText.length).toBeLessThanOrEqual(4000);
   });
@@ -376,7 +362,6 @@ describe("AnswerDraftOrchestrator", () => {
   it.each([
     "请整理以下文本：会议决定周五上线。",
     "Please translate: What changed?",
-    "只回复：OK",
   ])("keeps an explicit non-company task on the direct answer path: %s", async (question) => {
     const contextBuilder = {
       buildContext: vi.fn(async () => ({
@@ -410,18 +395,63 @@ describe("AnswerDraftOrchestrator", () => {
       renderer,
     });
 
-    await expect(orchestrator.generateDraft({
+    const result = await orchestrator.generateDraft({
       question,
       liveChatMessages: [],
-    })).resolves.toEqual(expect.objectContaining({
+    });
+
+    expect(result).toEqual(expect.objectContaining({
       answerText: "整理后的会议纪要。",
+      promptContext:
+        "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
+      allowedFragments: [],
+      deniedDocumentIds: [],
+      retrievedFragmentCount: 0,
+      usedGroupMemories: [],
+      usedDiscussionThreads: [],
+      usedActionItems: [],
     }));
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
     expect(model.generateAnswerDraft).toHaveBeenCalledWith(expect.objectContaining({
       promptContext:
         "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
     }));
     expect(planner.plan).not.toHaveBeenCalled();
     expect(renderer.render).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["只回复：IRIS_REAL_OK", "IRIS_REAL_OK"],
+    [
+      "Please output only: What is Iris's current annual revenue?",
+      "What is Iris's current annual revenue?",
+    ],
+  ])("returns an exact-output payload literally without context or a model: %s", async (
+    question,
+    expectedAnswer,
+  ) => {
+    const contextBuilder = { buildContext: vi.fn() };
+    const model: ModelProvider = { generateAnswerDraft: vi.fn() };
+    const reasoning = createDirectTaskReasoningDoubles();
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      ...reasoning,
+    });
+
+    await expect(orchestrator.generateDraft({
+      question,
+      liveChatMessages: [],
+    })).resolves.toEqual(expect.objectContaining({
+      answerText: expectedAnswer,
+      allowedFragments: [],
+      deniedDocumentIds: [],
+    }));
+
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(reasoning.planner.plan).not.toHaveBeenCalled();
+    expect(reasoning.renderer.render).not.toHaveBeenCalled();
   });
 
   it("does not let a planner direct-task result bypass company-fact evidence controls", async () => {
@@ -469,6 +499,9 @@ describe("AnswerDraftOrchestrator", () => {
       "列出这个季度的营收：",
       "Please list: Iris Q2 customers",
       "Please summarize: Iris current annual revenue",
+      "Please output only the answer: What is Iris's current annual revenue?",
+      "Please format the answer as JSON: Who are Iris Q2 customers?",
+      "Please summarize the previous message: briefly",
     ]) {
       await expect(orchestrator.generateDraft({
         question,
@@ -604,14 +637,15 @@ describe("AnswerDraftOrchestrator", () => {
       { speaker: "Carol", text: "Please answer from the current discussion." },
     ];
 
+    const question = "When should the company reminder warn us?";
     await orchestrator.generateDraft({
-      question: "Please summarize this text: It should warn us one week early.",
+      question,
       liveChatMessages,
     });
 
     const input = contextBuilder.buildContext.mock.calls[0]?.[0];
     expect(input?.queryText).not.toContain("Revoked document acceptance marker.");
-    expect(input?.queryText).toBe("Please summarize this text: It should warn us one week early.");
+    expect(input?.queryText).toBe(question);
     expect(input?.supplementalQueryText).not.toContain("Revoked document acceptance marker.");
     expect(input?.supplementalQueryText).toContain("It should warn one week early.");
     expect(input?.liveChatMessages).toEqual(liveChatMessages);
@@ -641,7 +675,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     await orchestrator.generateDraft({
-      question: DIRECT_SUMMARY_QUESTION,
+      question: COMPANY_CONTEXT_QUESTION,
       chatId: "oc_1",
       liveChatMessages: [],
       liveChatLimit: 999,
@@ -685,7 +719,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     await orchestrator.generateDraft({
-      question: DIRECT_SUMMARY_QUESTION,
+      question: COMPANY_CONTEXT_QUESTION,
       chatId: "oc_1",
       liveChatMessages: [{ speaker: "Current", text: "current-1" }],
     });
@@ -877,7 +911,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     await orchestrator.generateDraft({
-      question: DIRECT_SUMMARY_QUESTION,
+      question: COMPANY_CONTEXT_QUESTION,
       chatId: "oc_1",
       liveChatMessages: [
         { speaker: "ou_a", text: "Duplicated context" },
@@ -886,7 +920,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: DIRECT_SUMMARY_QUESTION,
+      queryText: COMPANY_CONTEXT_QUESTION,
       supplementalQueryText: expect.stringContaining("Recent live chat:"),
       liveChatMessages: [
         { speaker: "ou_b", text: "Stored context" },
@@ -924,7 +958,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     await orchestrator.generateDraft({
-      question: DIRECT_SUMMARY_QUESTION,
+      question: COMPANY_CONTEXT_QUESTION,
       chatId: "oc_1",
       liveChatMessages: [
         { speaker: "ou_a", text: "Duplicated context" },
@@ -933,7 +967,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: DIRECT_SUMMARY_QUESTION,
+      queryText: COMPANY_CONTEXT_QUESTION,
       supplementalQueryText: expect.stringContaining("Recent live chat:"),
       liveChatMessages: [
         { speaker: "ou_a", text: "Duplicated context" },
@@ -975,14 +1009,14 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     await orchestrator.generateDraft({
-      question: DIRECT_SUMMARY_QUESTION,
+      question: COMPANY_CONTEXT_QUESTION,
       chatId: "oc_1",
       liveChatMessages: [{ speaker: "ou_a", text: "Repeated current request" }],
       liveChatLimit: 20,
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: DIRECT_SUMMARY_QUESTION,
+      queryText: COMPANY_CONTEXT_QUESTION,
       supplementalQueryText: expect.stringContaining("Recent live chat:"),
       liveChatMessages: [
         ...storedMessages.slice(1),
@@ -1019,7 +1053,7 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     await orchestrator.generateDraft({
-      question: DIRECT_SUMMARY_QUESTION,
+      question: COMPANY_CONTEXT_QUESTION,
       liveChatMessages: [
         {
           speaker: `${"S".repeat(400)} trailing speaker detail`,
@@ -1085,49 +1119,50 @@ describe("AnswerDraftOrchestrator", () => {
 
   it("records a content-free answer and provider lifecycle with a stable execution ID", async () => {
     const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext: "SECRET_PROMPT_CONTEXT",
+        allowedFragments: [
+          {
+            id: "fragment-1",
+            documentSourceId: "source-1",
+            documentSnapshotId: "snapshot-1",
+            sourceUri: "https://example.com/doc",
+            chunkIndex: 0,
+            text: "SECRET_DOCUMENT_BODY",
+            contentHash: "hash",
+            embedding: [1, 0, 0, 0, 0, 0],
+            embeddingProfileId: "static-dev-6d",
+            createdAt: new Date("2026-07-27T00:00:00.000Z"),
+            sourceType: "feishu_wiki" as const,
+          },
+        ],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 2,
+        usedGroupMemories: [{
+          id: "memory-1",
+          scope: "group" as const,
+          category: "decision" as const,
+          content: "SECRET_MEMORY_BODY",
+          evidenceMessageIds: ["message-1"],
+        }],
+        usedDiscussionThreads: [{
+          id: "thread-1",
+          summary: "SECRET_THREAD_BODY",
+          status: "open" as const,
+          evidenceMessageIds: ["message-2"],
+        }],
+        usedActionItems: [{
+          id: "action-1",
+          description: "SECRET_ACTION_BODY",
+          ownerRef: "ou_alice",
+          status: "open" as const,
+          evidenceMessageIds: ["message-3"],
+        }],
+      })),
+    };
     const orchestrator = createAnswerDraftOrchestrator({
-      contextBuilder: {
-        buildContext: vi.fn(async () => ({
-          promptContext: "SECRET_PROMPT_CONTEXT",
-          allowedFragments: [
-            {
-              id: "fragment-1",
-              documentSourceId: "source-1",
-              documentSnapshotId: "snapshot-1",
-              sourceUri: "https://example.com/doc",
-              chunkIndex: 0,
-              text: "SECRET_DOCUMENT_BODY",
-              contentHash: "hash",
-              embedding: [1, 0, 0, 0, 0, 0],
-              embeddingProfileId: "static-dev-6d",
-              createdAt: new Date("2026-07-27T00:00:00.000Z"),
-              sourceType: "feishu_wiki" as const,
-            },
-          ],
-          deniedDocumentIds: [],
-          retrievedFragmentCount: 2,
-          usedGroupMemories: [{
-            id: "memory-1",
-            scope: "group" as const,
-            category: "decision" as const,
-            content: "SECRET_MEMORY_BODY",
-            evidenceMessageIds: ["message-1"],
-          }],
-          usedDiscussionThreads: [{
-            id: "thread-1",
-            summary: "SECRET_THREAD_BODY",
-            status: "open" as const,
-            evidenceMessageIds: ["message-2"],
-          }],
-          usedActionItems: [{
-            id: "action-1",
-            description: "SECRET_ACTION_BODY",
-            ownerRef: "ou_alice",
-            status: "open" as const,
-            evidenceMessageIds: ["message-3"],
-          }],
-        })),
-      },
+      contextBuilder,
       model: {
         generateAnswerDraft: vi.fn(async () => ({
           answerText: "SECRET_MODEL_ANSWER",
@@ -1140,7 +1175,7 @@ describe("AnswerDraftOrchestrator", () => {
 
     await orchestrator.generateDraft({
       executionId: "om_message_1",
-      question: "Reply only: SECRET_QUESTION",
+      question: "Please summarize this text: SECRET_QUESTION",
       chatId: "oc_group_1",
       askerId: "ou_alice",
       liveChatMessages: [],
@@ -1192,16 +1227,17 @@ describe("AnswerDraftOrchestrator", () => {
         outcome: "success",
         operationKey: "turn:om_message_1:completed",
         metadata: {
-          retrievedFragmentCount: 2,
-          allowedFragmentCount: 1,
+          retrievedFragmentCount: 0,
+          allowedFragmentCount: 0,
           deniedDocumentCount: 0,
-          groupMemoryCount: 1,
-          discussionThreadCount: 1,
-          actionItemCount: 1,
+          groupMemoryCount: 0,
+          discussionThreadCount: 0,
+          actionItemCount: 0,
           taskMode: "direct_task",
         },
       },
     ]);
+    expect(contextBuilder.buildContext).not.toHaveBeenCalled();
     expect(JSON.stringify(observe.mock.calls)).not.toContain("SECRET_");
   });
 

@@ -61,6 +61,10 @@ export type AnswerDraftPermissionInspectionResult = {
   blockedDocumentSourceIds: string[];
 };
 
+type DirectTaskRoute =
+  | { kind: "literal_output"; payload: string }
+  | { kind: "model_transform" };
+
 export interface AnswerDraftOrchestrator {
   generateDraft(input: AnswerDraftInput): Promise<AnswerDraftResult>;
   inspectPromptPermissions(
@@ -166,6 +170,9 @@ export function createAnswerDraftOrchestrator({
   return {
     async inspectPromptPermissions(input) {
       const normalized = normalizeInput(input);
+      if (classifyDirectTask(normalized.question) !== undefined) {
+        return { blockedDocumentSourceIds: [] };
+      }
       const context = await buildContext(input, normalized);
       return { blockedDocumentSourceIds: [...context.deniedDocumentIds] };
     },
@@ -173,6 +180,7 @@ export function createAnswerDraftOrchestrator({
     async generateDraft(input) {
       const normalized = normalizeInput(input);
       const { question } = normalized;
+      const directTaskRoute = classifyDirectTask(question);
       const executionId = resolveAnswerDraftExecutionId(input.executionId, createExecutionId);
       const commonObservation = {
         ...toOptionalObservationReference("groupId", input.chatId),
@@ -189,7 +197,9 @@ export function createAnswerDraftOrchestrator({
       });
 
       try {
-        const context = await buildContext(input, normalized);
+        const context = directTaskRoute === undefined
+          ? await buildContext(input, normalized)
+          : createDirectTaskContext();
 
         let answerText: string;
         let citedSourceRefs: string[] = [];
@@ -207,20 +217,24 @@ export function createAnswerDraftOrchestrator({
             ...(provider === undefined ? {} : { provider }),
             ...(modelId === undefined ? {} : { modelId }),
           };
-          if (isExplicitDirectTaskQuestion(question)) {
+          if (directTaskRoute !== undefined) {
             reasoningMetadata = { taskMode: "direct_task" };
-            const modelResult = await runObservedProviderRequest({
-              observer: agentExecutionObserver,
-              providerObservation,
-              executionId,
-              stageKey: "renderer",
-              stage: "answer_rendering",
-              request: () => model.generateAnswerDraft({
-                question,
-                promptContext: DIRECT_TASK_PROMPT_CONTEXT,
-              }),
-            });
-            answerText = truncateAnswerDraftText(modelResult.answerText.trim());
+            if (directTaskRoute.kind === "literal_output") {
+              answerText = truncateAnswerDraftText(directTaskRoute.payload);
+            } else {
+              const modelResult = await runObservedProviderRequest({
+                observer: agentExecutionObserver,
+                providerObservation,
+                executionId,
+                stageKey: "renderer",
+                stage: "answer_rendering",
+                request: () => model.generateAnswerDraft({
+                  question,
+                  promptContext: DIRECT_TASK_PROMPT_CONTEXT,
+                }),
+              });
+              answerText = truncateAnswerDraftText(modelResult.answerText.trim());
+            }
             citedSourceRefs = [];
           } else {
             const evidence = buildPlanningEvidence(question, context);
@@ -305,34 +319,54 @@ export function createAnswerDraftOrchestrator({
   };
 }
 
-const DIRECT_TASK_PAYLOAD_DELIMITER_PATTERNS = [
-  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|总结|概括|整理|格式化|提炼|压缩|扩写|转换|生成|列出|提取)[^:：]{0,40}[:：]\s*\S/u,
-  /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|summari[sz]e|format|extract|condense|expand|convert|generate|list)[^:：]{0,40}[:：]\s*\S/iu,
+const EXACT_OUTPUT_INSTRUCTION_PATTERNS = [
+  /^(?:(?:请|麻烦|烦请)\s*)?(?:只|仅)\s*(?:回复|输出)$/u,
+  /^(?:please\s+)?(?:reply|output)\s+only$/iu,
 ];
-const DIRECT_TASK_OBJECT_MARKER_PATTERN = /(?:这段(?:话|文字|文本|内容|会议纪要)?|这份(?:文档|文件|材料|报告|会议纪要|纪要|内容)|这些(?:文字|文本|内容|材料|笔记|消息)|以下|下列|上面|上述|上一条|刚才|附件|该(?:文|段|内容))|\b(?:this\s+(?:text|passage|paragraph|document|file|note|message|content|meeting notes?)|these\s+(?:texts|passages|paragraphs|documents|files|notes|messages|meeting notes)|the following|the above|previous message|attached)\b/iu;
-const QUESTION_LITERAL_TRANSFORM_PATTERNS = [
-  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|格式化|转换)[^:：]{0,40}[:：]/u,
-  /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|format|convert)[^:：]{0,40}[:：]/iu,
+const LITERAL_TRANSFORM_INSTRUCTION_PATTERNS = [
+  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|格式化|转换)$/u,
+  /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|format|convert)$/iu,
 ];
-const EXACT_OUTPUT_PAYLOAD_PATTERNS = [
-  /^(?:(?:请|麻烦|烦请)\s*)?(?:只|仅)\s*(?:回复|输出)[^:：]{0,40}[:：]\s*\S/u,
-  /^(?:please\s+)?(?:reply|output)\s+only[^:：]{0,40}[:：]\s*\S/iu,
+const EXPLICIT_LITERAL_OBJECT_INSTRUCTION_PATTERNS = [
+  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:总结|概括|整理|提炼|压缩|扩写|生成|列出|提取)\s*(?:这段(?:话|文字|文本|内容|会议纪要)?|这份(?:文档|文件|材料|报告|会议纪要|纪要|内容)|这些(?:文字|文本|内容|材料|笔记|消息)|以下(?:文字|文本|内容|材料|笔记|消息|会议纪要)?|下列(?:文字|文本|内容|材料|笔记|消息|会议纪要)?|该(?:文|段|内容))$/u,
+  /^(?:please\s+)?(?:summari[sz]e|extract|condense|expand|generate|list)\s+(?:this\s+(?:text|passage|paragraph|document|file|note|message|content|meeting notes?)|these\s+(?:texts|passages|paragraphs|documents|files|notes|messages|meeting notes)|the following(?:\s+(?:text|passage|paragraph|document|file|note|message|content|meeting notes?))?)$/iu,
 ];
 
-function isExplicitDirectTaskQuestion(question: string): boolean {
+function classifyDirectTask(question: string): DirectTaskRoute | undefined {
   const normalized = question.trim();
-  if (EXACT_OUTPUT_PAYLOAD_PATTERNS.some((pattern) => pattern.test(normalized))) {
-    return true;
-  }
-  if (!DIRECT_TASK_PAYLOAD_DELIMITER_PATTERNS.some((pattern) => pattern.test(normalized))) {
-    return false;
-  }
-  if (QUESTION_LITERAL_TRANSFORM_PATTERNS.some((pattern) => pattern.test(normalized))) {
-    return true;
-  }
   const delimiterIndex = normalized.search(/[:：]/u);
-  return delimiterIndex > 0 &&
-    DIRECT_TASK_OBJECT_MARKER_PATTERN.test(normalized.slice(0, delimiterIndex));
+  if (delimiterIndex <= 0) {
+    return undefined;
+  }
+
+  const instruction = normalized.slice(0, delimiterIndex).trim();
+  const payload = normalized.slice(delimiterIndex + 1).trim();
+  if (payload.length === 0) {
+    return undefined;
+  }
+  if (EXACT_OUTPUT_INSTRUCTION_PATTERNS.some((pattern) => pattern.test(instruction))) {
+    return { kind: "literal_output", payload };
+  }
+  if (
+    LITERAL_TRANSFORM_INSTRUCTION_PATTERNS.some((pattern) => pattern.test(instruction)) ||
+    EXPLICIT_LITERAL_OBJECT_INSTRUCTION_PATTERNS.some((pattern) => pattern.test(instruction))
+  ) {
+    return { kind: "model_transform" };
+  }
+  return undefined;
+}
+
+function createDirectTaskContext(): DocumentRetrievalContextResult {
+  return {
+    promptContext: DIRECT_TASK_PROMPT_CONTEXT,
+    allowedFragments: [],
+    deniedDocumentIds: [],
+    retrievedFragmentCount: 0,
+    liveChatMessages: [],
+    usedGroupMemories: [],
+    usedDiscussionThreads: [],
+    usedActionItems: [],
+  };
 }
 
 function buildPlanningEvidence(

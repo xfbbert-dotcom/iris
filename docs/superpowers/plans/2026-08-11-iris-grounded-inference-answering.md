@@ -1023,10 +1023,15 @@ Expected: new company-state tests fail because the orchestrator still invokes on
 - [ ] **Step 4: Implement the two-stage branch**
 
 ```ts
-if (isExplicitDirectTaskQuestion(question)) {
-  return runDirectModel(question, context.promptContext);
+const directTask = classifyDirectTask(question);
+if (directTask?.kind === "literal_output") {
+  return literalAnswer(directTask.payload, createDirectTaskContext());
+}
+if (directTask?.kind === "model_transform") {
+  return runDirectModel(question, createDirectTaskContext());
 }
 
+const context = await buildCompanyContext(question);
 const evidence = buildPlanningEvidence(question, context);
 const plan = await planner.plan({ question, evidence, liveChatMessages: context.liveChatMessages });
 if (plan.taskMode !== "company_fact") {
@@ -1043,6 +1048,12 @@ const rendered = await renderer.render({
 });
 return { answerText: rendered.answerText, citedSourceRefs };
 ```
+
+Classification must run before stored-chat loading, retrieval, permission inspection, or context
+assembly. Match the full instruction before the first delimiter against a strict grammar; do not
+use permissive suffix regexes. Exact-output payloads are returned literally without a provider
+request. All direct-task results expose canonical empty context metadata, while meta-answer format
+wrappers and references to previous/attached/above context remain company-factual.
 
 Expose the bounded selected live-chat messages in `DocumentRetrievalContextResult` so planner and renderer receive exactly the already-sanitized prompt window, not raw request data.
 

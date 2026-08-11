@@ -505,6 +505,25 @@ delivery mistakes while implementing it.
   explicitly cancelled as intended, durable runtime matches the approved profile, and external
   `/health` and private-route checks return their expected status codes.
 
+### Classify literal tasks before touching company context
+
+- **Failure:** A permissive direct-task regex accepted meta instructions such as “output only the
+  answer” and references to a previous message. Even genuine literal transformations loaded
+  company retrieval and permission state before the model received an empty prompt.
+- **Root cause:** Route classification happened after context assembly, and the instruction regex
+  allowed arbitrary words between the verb and delimiter. Empty model context therefore did not
+  guarantee an empty retrieval path or empty response metadata.
+- **Prevention rule:** Parse the first delimiter, match the complete instruction against a strict
+  allowlist, and classify before chat loading, retrieval, permission inspection, or context
+  assembly. Return exact-output payloads literally without a model request. Treat meta-format and
+  previous/attached/above-context requests as company-factual.
+- **Guard:** Orchestrator regressions make context builders throw for direct tasks, prove canonical
+  empty metadata and zero citations, prove exact-output uses no provider, and send adversarial
+  wrappers through the company-factual planner. Runtime retrieval tests use company-factual
+  questions rather than direct transformations.
+- **Exit condition:** Focused orchestration/runtime suites, full verification, independent review,
+  and PR CI pass on the same commit before merge.
+
 ## Test Architecture
 
 ### Verify every cross-CTE column dependency in migration SQL
