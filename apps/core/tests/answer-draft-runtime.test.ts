@@ -181,7 +181,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "When is launch?",
+      question: "Please summarize: When is launch?",
       chatId: " chat-a ",
       fragmentLimit: 0,
       liveChatMessages: [],
@@ -226,19 +226,19 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What is open?",
+      question: "Please summarize: What is open?",
       chatId: "chat-a",
       fragmentLimit: 0,
       liveChatMessages: [],
     });
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What is open?",
+      question: "Please summarize: What is open?",
       chatId: "chat-blocked",
       fragmentLimit: 0,
       liveChatMessages: [],
     });
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What is open?",
+      question: "Please summarize: What is open?",
       fragmentLimit: 0,
       liveChatMessages: [],
     });
@@ -265,7 +265,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "When is launch?",
+      question: "Please summarize: When is launch?",
       chatId: "chat-a",
       fragmentLimit: 0,
       liveChatMessages: [],
@@ -280,7 +280,7 @@ describe("createAnswerDraftRuntime", () => {
     const runtime = createMemoryEnabledRuntime({ listActiveByGroup });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "When is launch?",
+      question: "Please summarize: When is launch?",
       fragmentLimit: 0,
       liveChatMessages: [],
     });
@@ -341,7 +341,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What changed?",
+      question: "Please summarize: What changed?",
       liveChatMessages: [{ speaker: "Alice", text: "Please answer." }],
     });
 
@@ -353,7 +353,7 @@ describe("createAnswerDraftRuntime", () => {
     });
     expect(model.generateAnswerDraft).toHaveBeenCalledWith(
       expect.objectContaining({
-        question: "What changed?",
+        question: "Please summarize: What changed?",
       }),
     );
   });
@@ -503,7 +503,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What can Iris use?",
+      question: "Please summarize: What can Iris use?",
       chatId: "chat-current",
       liveChatMessages: [],
     });
@@ -556,7 +556,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What should Iris say?",
+      question: "Please summarize: What should Iris say?",
       chatId: "chat-muted",
       liveChatMessages: [{ speaker: "Bob", text: "Current explicit request context." }],
     });
@@ -1055,7 +1055,7 @@ describe("createAnswerDraftRuntime", () => {
       });
 
       await runtime?.answerDraftOrchestrator.generateDraft({
-        question: "What can Iris use?",
+        question: "Please summarize: What can Iris use?",
         ...(chatId === undefined ? {} : { chatId }),
         liveChatMessages: [],
       });
@@ -1528,7 +1528,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "Use real embedder?",
+      question: "Please summarize: Use real embedder?",
       liveChatMessages: [],
     });
 
@@ -1538,7 +1538,9 @@ describe("createAnswerDraftRuntime", () => {
       dimensions: 6,
       displayName: "OpenAI-compatible text-embedding-small (6d)",
     });
-    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith(["Use real embedder?"]);
+    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith([
+      "Please summarize: Use real embedder?",
+    ]);
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
       embeddingProfileId: "openai-compatible:text-embedding-small:6",
       embedding: [0, 1, 0, 0, 0, 0],
@@ -1627,12 +1629,14 @@ describe("createAnswerDraftRuntime", () => {
 
     await expect(
       runtime?.answerDraftOrchestrator.generateDraft({
-        question: "Second attempt",
+        question: "Please summarize: Second attempt",
         liveChatMessages: [],
       }),
     ).resolves.toMatchObject({ answerText: "Draft" });
     expect(embeddingProfiles.findOrCreateProfile).toHaveBeenCalledTimes(2);
-    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith(["Second attempt"]);
+    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith([
+      "Please summarize: Second attempt",
+    ]);
   });
 
   it("uses configured OpenAI-compatible embedding provider when dimensions are 1536", async () => {
@@ -1681,7 +1685,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "Use production embedder?",
+      question: "Please summarize: Use production embedder?",
       liveChatMessages: [],
     });
 
@@ -1744,7 +1748,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "Use local Qwen embedder?",
+      question: "Please summarize: Use local Qwen embedder?",
       liveChatMessages: [],
     });
 
@@ -1807,12 +1811,12 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "生命粒子引擎是什么？",
+      question: "请总结：生命粒子引擎是什么？",
       liveChatMessages: [],
     });
 
     expect(embeddingProvider.embedTexts).toHaveBeenCalledWith([
-      "task: search result | query: 生命粒子引擎是什么？",
+      "task: search result | query: 请总结：生命粒子引擎是什么？",
     ]);
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
       embeddingProfileId: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",
