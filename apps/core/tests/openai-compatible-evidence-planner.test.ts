@@ -33,6 +33,42 @@ describe("OpenAICompatibleEvidencePlanner", () => {
     expect(messages[0]?.content).toContain("partial");
     expect(messages[0]?.content).toContain("Do not reveal chain-of-thought");
     expect(JSON.parse(messages[1]?.content ?? "{}")).toEqual(planningInput(["D1", "D2"]));
+    expect(client.complete).toHaveBeenCalledWith(
+      messages,
+      expect.objectContaining({
+        responseFormat: expect.objectContaining({
+          type: "json_schema",
+          json_schema: expect.objectContaining({
+            name: "iris_evidence_plan",
+            strict: true,
+            schema: expect.objectContaining({
+              additionalProperties: false,
+              required: [
+                "taskMode",
+                "evidenceState",
+                "premises",
+                "proposedAnswer",
+                "missingInformation",
+                "confidence",
+              ],
+              properties: expect.objectContaining({
+                taskMode: expect.objectContaining({
+                  enum: ["direct_task", "company_fact"],
+                }),
+                premises: expect.objectContaining({
+                  type: "array",
+                  items: expect.objectContaining({
+                    properties: expect.objectContaining({
+                      citationRef: expect.objectContaining({ enum: ["D1", "D2"] }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("retries one structurally invalid result and then succeeds", async () => {

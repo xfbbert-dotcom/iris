@@ -5,7 +5,11 @@ import {
   type EvidencePlanningDocument,
 } from "../agent/evidence-plan.js";
 import type { LiveChatMessage } from "../memory/context-assembly.js";
-import type { OpenAICompatibleChatCompletionsClient } from "./openai-compatible-chat-completions-client.js";
+import type {
+  OpenAICompatibleChatCompletionsClient,
+  OpenAICompatibleChatMessage,
+  OpenAICompatibleJsonSchemaResponseFormat,
+} from "./openai-compatible-chat-completions-client.js";
 
 const MAX_PLANNER_QUESTION_CHARS = 4000;
 const MAX_PLANNER_DOCUMENTS = 12;
@@ -30,6 +34,7 @@ const EVIDENCE_PLANNER_SYSTEM_PROMPT = [
   "Do not use general world knowledge to fill a missing company-specific premise.",
   "Do not substitute evidence about a different project, person, date, attribute, source, or similarly named subject.",
   "Every premise must have exactly one citationRef from the supplied evidence and a concise supported statement.",
+  "Use at most one premise per citationRef; combine statements supported by the same document into that single premise.",
   "Do not reveal chain-of-thought. Return only concise premises, the bounded proposed answer, missing information, and confidence.",
 ].join(" ");
 
@@ -52,13 +57,14 @@ export function createOpenAICompatibleEvidencePlanner({
     async plan(input) {
       const normalized = normalizePlanningInput(input);
       const allowedCitationRefs = normalized.evidence.map(({ citationRef }) => citationRef);
-      const messages = [
+      const responseFormat = createEvidencePlanResponseFormat(allowedCitationRefs);
+      let messages: OpenAICompatibleChatMessage[] = [
         { role: "system" as const, content: EVIDENCE_PLANNER_SYSTEM_PROMPT },
         { role: "user" as const, content: JSON.stringify(normalized) },
       ];
 
       for (let attempt = 0; attempt < MAX_INVALID_PLAN_ATTEMPTS; attempt += 1) {
-        const content = await client.complete(messages);
+        const content = await client.complete(messages, { responseFormat });
         try {
           return parseEvidencePlanContent(content, allowedCitationRefs);
         } catch (error) {
@@ -68,12 +74,89 @@ export function createOpenAICompatibleEvidencePlanner({
           if (attempt + 1 >= MAX_INVALID_PLAN_ATTEMPTS) {
             throw new Error("evidence planner response was invalid");
           }
+          messages = correctedPlanMessages(normalized, error.message);
         }
       }
 
       throw new Error("evidence planner response was invalid");
     },
   };
+}
+
+function createEvidencePlanResponseFormat(
+  allowedCitationRefs: readonly string[],
+): OpenAICompatibleJsonSchemaResponseFormat {
+  const citationRefEnum = allowedCitationRefs.length === 0 ? ["D1"] : [...allowedCitationRefs];
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: "iris_evidence_plan",
+      strict: true,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "taskMode",
+          "evidenceState",
+          "premises",
+          "proposedAnswer",
+          "missingInformation",
+          "confidence",
+        ],
+        properties: {
+          taskMode: {
+            type: "string",
+            enum: ["direct_task", "company_fact"],
+            description: "Use direct_task only for non-company transformations or generation.",
+          },
+          evidenceState: {
+            type: ["string", "null"],
+            enum: ["explicit", "complete_inference", "partial", "none", null],
+          },
+          premises: {
+            type: "array",
+            maxItems: MAX_PLANNER_DOCUMENTS,
+            description: "At most one premise per citationRef.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["citationRef", "statement"],
+              properties: {
+                citationRef: { type: "string", enum: citationRefEnum },
+                statement: { type: "string" },
+              },
+            },
+          },
+          proposedAnswer: { type: ["string", "null"] },
+          missingInformation: {
+            type: "array",
+            maxItems: MAX_PLANNER_DOCUMENTS,
+            items: { type: "string" },
+          },
+          confidence: {
+            type: ["string", "null"],
+            enum: ["high", "medium", "low", null],
+          },
+        },
+      },
+    },
+  };
+}
+
+function correctedPlanMessages(
+  input: EvidencePlanningInput,
+  validationError: string,
+): OpenAICompatibleChatMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        `${EVIDENCE_PLANNER_SYSTEM_PROMPT} ` +
+        `The previous response failed local validation: ${validationError}. ` +
+        "Return a corrected object that satisfies the schema and all state rules.",
+    },
+    { role: "user", content: JSON.stringify(input) },
+  ];
 }
 
 function normalizePlanningInput(input: EvidencePlanningInput): EvidencePlanningInput {

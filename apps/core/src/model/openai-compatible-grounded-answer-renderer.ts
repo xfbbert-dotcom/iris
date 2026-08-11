@@ -6,7 +6,11 @@ import {
   type EvidenceState,
 } from "../agent/evidence-plan.js";
 import type { LiveChatMessage } from "../memory/context-assembly.js";
-import type { OpenAICompatibleChatCompletionsClient } from "./openai-compatible-chat-completions-client.js";
+import type {
+  OpenAICompatibleChatCompletionsClient,
+  OpenAICompatibleChatMessage,
+  OpenAICompatibleJsonSchemaResponseFormat,
+} from "./openai-compatible-chat-completions-client.js";
 
 const MAX_RENDERER_QUESTION_CHARS = 4000;
 const MAX_RENDERER_DOCUMENTS = 12;
@@ -58,13 +62,41 @@ export function createOpenAICompatibleGroundedAnswerRenderer({
   return {
     async render(input) {
       const normalized = normalizeRenderInput(input);
+      const messages: OpenAICompatibleChatMessage[] = [
+        { role: "system", content: GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT },
+        { role: "user", content: JSON.stringify(normalized) },
+      ];
       return parseRenderResult(
-        await client.complete([
-          { role: "system", content: GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT },
-          { role: "user", content: JSON.stringify(normalized) },
-        ]),
+        await client.complete(messages, {
+          responseFormat: createGroundedAnswerResponseFormat(normalized.plan),
+        }),
         normalized.plan,
       );
+    },
+  };
+}
+
+function createGroundedAnswerResponseFormat(
+  plan: EvidencePlan,
+): OpenAICompatibleJsonSchemaResponseFormat {
+  if (plan.evidenceState === null || plan.confidence === null) {
+    throw new Error("grounded answer requires a company-fact evidence plan");
+  }
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: "iris_grounded_answer",
+      strict: true,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["answerText", "evidenceState", "confidence"],
+        properties: {
+          answerText: { type: "string" },
+          evidenceState: { type: "string", enum: [plan.evidenceState] },
+          confidence: { type: "string", enum: [plan.confidence] },
+        },
+      },
     },
   };
 }

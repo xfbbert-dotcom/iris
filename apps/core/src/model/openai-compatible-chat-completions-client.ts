@@ -5,6 +5,7 @@ import { readExternalErrorMessage } from "../integrations/external-error-message
 import { ModelProviderHttpError } from "./model-provider-error.js";
 
 const MAX_MODEL_RESPONSE_BYTES = 262_144;
+const MAX_MODEL_RESPONSE_FORMAT_BYTES = 32_768;
 const MAX_MODEL_REQUEST_ATTEMPTS = 2;
 const MODEL_RETRY_BASE_DELAY_MS = 750;
 const MODEL_RETRY_JITTER_MS = 250;
@@ -15,8 +16,24 @@ export type OpenAICompatibleChatMessage = {
   content: string;
 };
 
+export type OpenAICompatibleJsonSchemaResponseFormat = {
+  type: "json_schema";
+  json_schema: {
+    name: string;
+    strict: true;
+    schema: Record<string, unknown>;
+  };
+};
+
+export type OpenAICompatibleChatCompletionOptions = {
+  responseFormat?: OpenAICompatibleJsonSchemaResponseFormat;
+};
+
 export interface OpenAICompatibleChatCompletionsClient {
-  complete(messages: readonly OpenAICompatibleChatMessage[]): Promise<string>;
+  complete(
+    messages: readonly OpenAICompatibleChatMessage[],
+    options?: OpenAICompatibleChatCompletionOptions,
+  ): Promise<string>;
 }
 
 export type OpenAICompatibleChatCompletionsClientDependencies = {
@@ -44,8 +61,9 @@ export function createOpenAICompatibleChatCompletionsClient({
   const timeoutMs = readPositiveSafeInteger(config.timeoutMs, "model provider timeoutMs");
 
   return {
-    async complete(messages) {
+    async complete(messages, options) {
       const deadlineAt = now() + timeoutMs;
+      const responseFormat = normalizeResponseFormat(options?.responseFormat);
       for (let attempt = 0; attempt < MAX_MODEL_REQUEST_ATTEMPTS; attempt += 1) {
         const remainingMs = deadlineAt - now();
         if (remainingMs <= 0) {
@@ -60,7 +78,11 @@ export function createOpenAICompatibleChatCompletionsClient({
               authorization: `Bearer ${config.apiKey}`,
               "content-type": "application/json",
             },
-            body: JSON.stringify({ model: config.model, messages }),
+            body: JSON.stringify({
+              model: config.model,
+              messages,
+              ...(responseFormat === undefined ? {} : { response_format: responseFormat }),
+            }),
             timeoutMs: remainingMs,
             scheduleTimeout,
             cancelTimeout,
@@ -90,6 +112,34 @@ export function createOpenAICompatibleChatCompletionsClient({
       throw new Error("model provider request attempts exhausted");
     },
   };
+}
+
+function normalizeResponseFormat(
+  value: OpenAICompatibleJsonSchemaResponseFormat | undefined,
+): OpenAICompatibleJsonSchemaResponseFormat | undefined {
+  if (value === undefined) return undefined;
+  if (
+    value.type !== "json_schema" ||
+    value.json_schema.strict !== true ||
+    !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(value.json_schema.name) ||
+    !isRecord(value.json_schema.schema) ||
+    Array.isArray(value.json_schema.schema)
+  ) {
+    throw new Error("model provider response format is invalid");
+  }
+
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error("model provider response format is invalid");
+  }
+  if (Buffer.byteLength(serialized, "utf8") > MAX_MODEL_RESPONSE_FORMAT_BYTES) {
+    throw new Error(
+      `model provider response format exceeds ${MAX_MODEL_RESPONSE_FORMAT_BYTES} bytes`,
+    );
+  }
+  return JSON.parse(serialized) as OpenAICompatibleJsonSchemaResponseFormat;
 }
 
 class OpenAICompatibleChatHttpError extends ModelProviderHttpError {
