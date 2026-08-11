@@ -2,387 +2,1185 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let Iris answer company questions through transparent, bounded inference when authorized same-subject evidence contains every material premise, while preserving exact-subject, permission, injection, and citation safeguards.
+**Goal:** Make Iris retrieve coherent same-source knowledge, classify evidence explicitly, and answer with either a supported conclusion or a clearly warned, knowledge-base-grounded conjecture.
 
-**Architecture:** Refine only `ANSWER_DRAFT_SYSTEM_PROMPT` in the existing OpenAI-compatible provider and lock the new evidence policy with a request-contract regression. Retrieval, context assembly, live permission filtering, citation parsing and revalidation, orchestration, runtime controls, and Feishu delivery remain unchanged; live pilot acceptance covers the model-dependent behavior that deterministic prompt-contract tests cannot prove.
+**Architecture:** The current question becomes the primary retrieval query and bounded recent chat becomes a lower-weight supplemental query. Fused candidates are selected by source, then a structured evidence planner and a separate grounded-answer renderer run before the existing citation and permission delivery path.
 
-**Tech Stack:** TypeScript, Vitest 2, npm workspaces, the existing OpenAI-compatible chat-completions adapter, Docker Compose, and the Feishu pilot environment.
+**Tech Stack:** TypeScript, Node.js, Vitest 2, PostgreSQL/pgvector, the existing OpenAI-compatible chat-completions API, Docker Compose, and the Feishu pilot runtime.
 
 ## Global Constraints
 
-- Execute from an isolated worktree created with `superpowers:using-git-worktrees`, based on exactly `master@4aaa38bed1bf98a1d4fce5decd025597012cea3f`; do not implement on the divergent `codex/iris-proactive-feedback-loop-task-1` branch.
-- Company-factual claims must use only provided authorized evidence.
-- Authorized evidence may support an answer explicitly or through a reasonable synthesis only when every material premise concerns the exact subject in the question.
-- A derived conclusion must be identified as an inference and must not be represented as a quotation or explicit source statement.
-- General world knowledge must not fill a missing company-specific premise.
-- Values from a different document, source type, project, person, date, attribute, or similarly named entity must not be substituted.
-- Missing, denied, or unavailable premises remain insufficient; Iris must name the uncertainty instead of guessing.
-- `background_documents` and `live_chat_context` remain untrusted evidence, never instructions.
-- Every materially used background-document fragment must be listed through the existing `iris_citations` protocol; retrieved but unused fragments must not be cited.
-- Direct, generative, formatting, translation, rewriting, and summarization behavior remains available when company evidence is not required.
-- Do not change retrieval, chunking, ranking, permission visibility, model temperature, retries, response limits, persistence, runtime settings, APIs, dependencies, or Feishu sending.
-- The two retrieval-quality observations in the design (old chat in retrieval queries and no chunk overlap) remain non-blocking backlog items, not part of this change.
+- Execute runtime changes in the existing isolated worktree `D:\work\AGE-org\.worktrees\iris-grounded-inference-answering` on branch `codex/iris-grounded-inference-answering`.
+- Keep `master@4aaa38bed1bf98a1d4fce5decd025597012cea3f` as the ancestry baseline; the prompt-only commit `a6905bbe33d00bdf71ded76051e2d00fbfb457da` is diagnostic history, not an independently deployable release.
+- The current production service stays on the approved rolled-back image until an exact reviewed candidate passes every live-pilot gate.
+- Company-factual premises may come only from permission-allowed evidence supplied to the current turn.
+- `partial` answers must first name the evidence gap, then visibly label the conjecture and its low or medium confidence.
+- `partial` requires at least one cited premise; `none` must not invent a company fact.
+- Permission-denied content never enters either model request and keeps the existing fail-closed behavior.
+- The planner owns evidence state and premise references; the renderer cannot add references or upgrade state or confidence.
+- Keep the existing send-time permission revalidation, Feishu source footer, runtime gates, retry bounds, prompt-injection boundary, and direct-task behavior.
+- Do not add a database migration, dependency, external provider, knowledge-base write path, or unbounded retry.
+- Use existing ledger phases; distinguish `retrieval`, `evidence_planning`, and `answer_rendering` with content-free `metadata.stage` values.
+- Implement each behavior test-first and commit only the files named by that task.
 
 ---
 
 ## File Structure
 
-- `apps/core/src/model/openai-compatible-model-provider.ts`: owns the outbound model system policy; replace the two overly strict grounding sentences with the explicit/derived/insufficient contract while leaving transport and citation parsing intact.
-- `apps/core/tests/openai-compatible-model-provider.test.ts`: owns the captured outbound request contract; add the Quello grounded-inference regression beside the existing exact-subject and injection-policy cases.
-- No production file is created. No orchestrator, retrieval, permission, citation-rendering, reply-delivery, database, worker, or deployment file is modified.
+- `apps/core/src/agent/answer-draft-orchestrator.ts`: builds primary/supplemental queries and coordinates planner, renderer, citations, and observations.
+- `apps/core/src/agent/evidence-plan.ts`: owns evidence-plan types, strict parsing, structural validation, and citation extraction.
+- `apps/core/src/memory/document-retrieval-context.ts`: embeds both query channels, fuses candidates, applies permissions, and assembles the final evidence window.
+- `apps/core/src/memory/retrieval-candidate-fusion.ts`: owns deterministic weighted reciprocal-rank fusion.
+- `apps/core/src/memory/source-aware-fragment-selector.ts`: owns title-aware source grouping, per-source caps, and bounded same-snapshot neighbor completion.
+- `apps/core/src/model/openai-compatible-chat-completions-client.ts`: owns shared bounded chat-completions transport, retry, timeout, and response extraction.
+- `apps/core/src/model/openai-compatible-model-provider.ts`: keeps direct-task answer rendering and composes the shared client.
+- `apps/core/src/model/openai-compatible-evidence-planner.ts`: owns the planner system contract and one invalid-output retry.
+- `apps/core/src/model/openai-compatible-grounded-answer-renderer.ts`: owns grounded-answer rendering and echoed-state validation.
+- `apps/core/src/runtime/answer-draft-runtime.ts`: creates and injects the three model roles from the existing model configuration.
+- Matching `apps/core/tests/*.test.ts` files own focused regressions; `apps/core/tests/answer-reasoning-test-doubles.ts` centralizes typed default doubles.
 
-### Task 1: Implement the grounded-inference provider contract
+### Task 1: Separate primary and supplemental retrieval queries
 
 **Files:**
-- Modify: `apps/core/tests/openai-compatible-model-provider.test.ts:206`
-- Modify: `apps/core/src/model/openai-compatible-model-provider.ts:25-26`
+- Modify: `apps/core/src/agent/answer-draft-orchestrator.ts:28-160,360-420`
+- Modify: `apps/core/src/memory/document-retrieval-context.ts:30-38`
+- Test: `apps/core/tests/answer-draft-orchestrator.test.ts:202-317`
 
 **Interfaces:**
-- Consumes: `ModelProvider.generateAnswerDraft(input: { question: string; promptContext: string }): Promise<GenerateAnswerDraftResult>` from `apps/core/src/agent/answer-draft-orchestrator.ts`.
-- Produces: the unchanged `{ answerText: string; citedSourceRefs?: string[] }` result and a refined system message sent through the existing `/chat/completions` request.
+- Consumes: `AnswerDraftInput.question` and the existing deduplicated `LiveChatMessage[]`.
+- Produces: `DocumentRetrievalContextInput` with `queryText: string` and optional `supplementalQueryText?: string`.
 
-- [ ] **Step 1: Write the failing Quello prompt-contract regression**
-
-Add this test immediately before `requires exact-subject grounding instead of related-subject substitution`:
+- [ ] **Step 1: Replace the polluted-query regression with failing primary/supplemental assertions**
 
 ```ts
-it("allows transparent grounded inference from complete same-subject premises", async () => {
-  const fetch = vi.fn(async () =>
-    jsonResponse({
-      choices: [{
-        message: {
-          content:
-            '根据文档中的机制，可以推断目标会随状态和经验涌现。\n' +
-            '<iris_citations>["D1","D2"]</iris_citations>',
-        },
-      }],
-    }),
-  );
-  const provider = createOpenAICompatibleModelProvider({ config: config(), fetch });
-
-  await provider.generateAnswerDraft({
-    question: "Quello 的电子宠物是如何自己产生目标的？",
-    promptContext:
-      '<background_documents>' +
-      '<document source="quello-overview" citation_ref="D1">' +
-      "Life Engine 根据性格、情绪共振、能力边界和当前状态决定行为优先级。" +
-      "</document>" +
-      '<document source="quello-daily-tick" citation_ref="D2">' +
-      "每次 Tick 会让认知摩擦和重复经验积累，并逐渐形成偏好与下一步行动。" +
-      "</document>" +
-      "</background_documents>",
+it("keeps the current question clean and sends recent chat as a supplemental query", async () => {
+  const contextBuilder = { buildContext: vi.fn(async () => ({
+    promptContext: "<background_documents></background_documents>",
+    allowedFragments: [],
+    deniedDocumentIds: [],
+    retrievedFragmentCount: 0,
+    usedGroupMemories: [],
+    usedDiscussionThreads: [],
+    usedActionItems: [],
+  })) };
+  const orchestrator = createAnswerDraftOrchestrator({
+    contextBuilder,
+    model: { generateAnswerDraft: vi.fn(async () => ({ answerText: "Answer" })) },
   });
 
-  const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
-  const body = JSON.parse(String(init.body)) as {
-    messages: Array<{ role: string; content: string }>;
-  };
-  const systemMessage =
-    body.messages.find((message) => message.role === "system")?.content ?? "";
+  await orchestrator.generateDraft({
+    question: "Quello 的电子宠物是如何自己产生目标的？",
+    liveChatMessages: [
+      { speaker: "Alice", text: "我希望它可以自己推理" },
+      { speaker: "Alice", text: "Quello 的电子宠物是如何自己产生目标的？" },
+    ],
+  });
 
-  expect(systemMessage).toContain(
-    "either by stating it explicitly or by providing every material premise",
-  );
-  expect(systemMessage).toContain("reasonable conclusion about the exact subject");
-  expect(systemMessage).toContain("identify it as an inference");
-  expect(systemMessage).toContain(
-    "never present the conclusion as a quotation or an explicit source statement",
-  );
-  expect(systemMessage).toContain(
-    "Do not use general world knowledge to fill a missing company-specific premise",
-  );
-  expect(systemMessage).toContain("If any material premise is missing");
-  expect(systemMessage).toContain("Do not substitute a fact about a different");
-  expect(systemMessage).toContain("materially support the visible answer");
+  expect(contextBuilder.buildContext).toHaveBeenCalledWith(expect.objectContaining({
+    queryText: "Quello 的电子宠物是如何自己产生目标的？",
+    supplementalQueryText: expect.stringContaining("我希望它可以自己推理"),
+  }));
+  const input = contextBuilder.buildContext.mock.calls[0]![0];
+  const supplementalQueryText = String(input.supplementalQueryText);
+  expect(supplementalQueryText.match(/Quello 的电子宠物是如何自己产生目标的？/gu))
+    .toHaveLength(1);
 });
 ```
 
-- [ ] **Step 2: Run the new test and verify RED**
+- [ ] **Step 2: Run the focused test and verify RED**
 
 Run:
 
 ```powershell
-npm --workspace apps/core test -- openai-compatible-model-provider.test.ts -t "allows transparent grounded inference from complete same-subject premises"
+npm --workspace apps/core test -- answer-draft-orchestrator.test.ts -t "keeps the current question clean"
 ```
 
-Expected: FAIL on the first new policy expectation because the baseline prompt allows only direct exact-attribute support and does not define grounded inference.
+Expected: FAIL because `queryText` still contains `Recent live chat` and no supplemental field exists.
 
-- [ ] **Step 3: Replace the overly strict grounding lines with the three-state policy**
-
-In `ANSWER_DRAFT_SYSTEM_PROMPT`, replace the current `Ground claims...` and `Match company facts...` entries with these five entries, in this order:
+- [ ] **Step 3: Add the optional input and build a deduplicated supplemental query**
 
 ```ts
-"Ground claims about company facts only in the provided authorized evidence.",
-"Authorized evidence may support a company-factual answer either by stating it explicitly or by providing every material premise needed for a reasonable conclusion about the exact subject.",
-"When the answer is derived rather than explicit, identify it as an inference and never present the conclusion as a quotation or an explicit source statement.",
-"Do not use general world knowledge to fill a missing company-specific premise. If any material premise is missing, say what is uncertain or unavailable instead of guessing.",
-"Match company facts to the exact subject and exact attribute named in the current Question. The requested attribute may be derived by synthesizing authorized evidence about that exact subject only when every material premise is present. Do not substitute a fact about a different document, source type, project, person, date, attribute, or similarly named entity; when evidence only supports a related but different subject or attribute, state that the requested fact is unavailable and do not return the related value.",
+export type DocumentRetrievalContextInput = {
+  queryText: string;
+  supplementalQueryText?: string;
+  liveChatMessages: LiveChatMessage[];
+  fragmentLimit?: number;
+  liveChatLimit?: number;
+  askerId?: string;
+};
+
+function buildSupplementalRetrievalQueryText(
+  question: string,
+  liveChatMessages: LiveChatMessage[],
+): string | undefined {
+  const normalizedQuestion = question.trim();
+  const priorMessages = liveChatMessages.filter(
+    ({ text }) => text.trim() !== normalizedQuestion,
+  );
+  const liveChatText = buildLiveChatRetrievalText(
+    priorMessages.slice(-MAX_RETRIEVAL_QUERY_LIVE_CHAT_MESSAGES),
+    MAX_ANSWER_DRAFT_QUESTION_CHARS - normalizedQuestion.length - 2,
+  );
+  return liveChatText.length === 0
+    ? undefined
+    : `${normalizedQuestion}\n\n${liveChatText}`;
+}
 ```
 
-Leave the citation, denied-content, current-question safety, untrusted-context, language, direct-task, timeout, retry, and response-parsing entries byte-for-byte unchanged.
+Pass `queryText: normalized.question` and conditionally spread `supplementalQueryText` in `buildContext`.
 
-- [ ] **Step 4: Run the new test and verify GREEN**
-
-Run:
+- [ ] **Step 4: Run orchestrator tests and verify GREEN**
 
 ```powershell
-npm --workspace apps/core test -- openai-compatible-model-provider.test.ts -t "allows transparent grounded inference from complete same-subject premises"
+npm --workspace apps/core test -- answer-draft-orchestrator.test.ts
 ```
 
-Expected: PASS with one test selected and zero failures.
+Expected: all orchestrator tests pass after updating old expectations to treat chat as supplemental rather than primary.
 
-- [ ] **Step 5: Run the focused provider and boundary regressions**
-
-Run:
+- [ ] **Step 5: Commit**
 
 ```powershell
-npm --workspace apps/core test -- openai-compatible-model-provider.test.ts answer-draft-orchestrator.test.ts answer-reply-delivery-service.test.ts answer-source-citation-renderer.test.ts feishu-document-permission-checker.test.ts feishu-mention-answer-responder.test.ts
+git add apps/core/src/agent/answer-draft-orchestrator.ts apps/core/src/memory/document-retrieval-context.ts apps/core/tests/answer-draft-orchestrator.test.ts
+git commit -m "fix: separate answer retrieval queries"
 ```
 
-Expected: all selected suites pass. In particular, the existing exact-subject test still finds the unavailable/related-value safeguards, the injection test still finds the untrusted-evidence rules, citation parsing still separates internal metadata, permission denial still fails closed, and mention replies still use revalidated citations.
-
-- [ ] **Step 6: Commit the focused implementation**
-
-Run:
-
-```powershell
-git diff --check
-git add apps/core/tests/openai-compatible-model-provider.test.ts apps/core/src/model/openai-compatible-model-provider.ts
-git commit -m "fix: allow grounded knowledge inference"
-```
-
-Expected: one commit containing only the provider policy and its regression test.
-
-### Task 2: Verify the complete candidate and review its scope
+### Task 2: Fuse primary and contextual semantic candidates
 
 **Files:**
-- Verify: `apps/core/src/model/openai-compatible-model-provider.ts`
-- Verify: `apps/core/tests/openai-compatible-model-provider.test.ts`
-- Verify unchanged boundaries: `apps/core/src/agent/answer-draft-orchestrator.ts`, `apps/core/src/answer-replies/answer-reply-delivery-service.ts`, and the repository verification targets.
+- Create: `apps/core/src/memory/retrieval-candidate-fusion.ts`
+- Create: `apps/core/tests/retrieval-candidate-fusion.test.ts`
+- Modify: `apps/core/src/memory/document-retrieval-context.ts:75-145,247-270`
+- Modify: `apps/core/tests/document-retrieval-context.test.ts`
 
 **Interfaces:**
-- Consumes: the committed provider change from Task 1.
-- Produces: one clean candidate SHA derived from `4aaa38bed1bf98a1d4fce5decd025597012cea3f`, with all repository gates passing and no unrelated runtime diff.
+- Consumes: two ranked `RetrievedDocumentFragment[]` result sets.
+- Produces: `fuseRetrievedDocumentFragments(input): RetrievedDocumentFragment[]`, unique by fragment/source and ordered by weighted reciprocal rank.
 
-- [ ] **Step 1: Prove the candidate ancestry and exact runtime scope**
+- [ ] **Step 1: Write failing fusion tests**
 
-Run:
+```ts
+it("lets a strong primary result resist contextual noise", () => {
+  expect(fuseRetrievedDocumentFragments({
+    primary: [fragment("quello"), fragment("watch")],
+    supplemental: [fragment("diary"), fragment("watch"), fragment("quello")],
+  }).map(({ id }) => id)).toEqual(["quello", "watch", "diary"]);
+});
+
+it("deduplicates the same fragment across query channels", () => {
+  const fused = fuseRetrievedDocumentFragments({
+    primary: [fragment("shared")],
+    supplemental: [fragment("shared")],
+  });
+  expect(fused).toHaveLength(1);
+});
+
+function fragment(id: string): RetrievedDocumentFragment {
+  return {
+    id,
+    documentSourceId: `source-${id}`,
+    documentSnapshotId: `snapshot-${id}`,
+    sourceUri: `https://example.com/${id}`,
+    chunkIndex: 0,
+    text: id,
+    contentHash: `hash-${id}`,
+    embedding: [],
+    embeddingProfileId: "static-dev-6d",
+    createdAt: new Date("2026-08-11T00:00:00.000Z"),
+    sourceType: "feishu_wiki",
+  };
+}
+```
+
+- [ ] **Step 2: Run the new suite and verify RED**
+
+```powershell
+npm --workspace apps/core test -- retrieval-candidate-fusion.test.ts
+```
+
+Expected: FAIL because the module does not exist.
+
+- [ ] **Step 3: Implement deterministic 2:1 reciprocal-rank fusion**
+
+```ts
+const RRF_OFFSET = 60;
+const PRIMARY_WEIGHT = 2;
+const SUPPLEMENTAL_WEIGHT = 1;
+
+export function fuseRetrievedDocumentFragments(input: {
+  primary: readonly RetrievedDocumentFragment[];
+  supplemental?: readonly RetrievedDocumentFragment[];
+}): RetrievedDocumentFragment[] {
+  const candidates = new Map<string, {
+    fragment: RetrievedDocumentFragment;
+    score: number;
+    firstSeen: number;
+  }>();
+  let firstSeen = 0;
+  addRanks(input.primary, PRIMARY_WEIGHT);
+  addRanks(input.supplemental ?? [], SUPPLEMENTAL_WEIGHT);
+  return [...candidates.values()]
+    .sort((left, right) => right.score - left.score || left.firstSeen - right.firstSeen)
+    .map(({ fragment }) => fragment);
+
+  function addRanks(fragments: readonly RetrievedDocumentFragment[], weight: number): void {
+    fragments.forEach((fragment, index) => {
+      const key = `${fragment.documentSourceId}\u0000${fragment.id}`;
+      const score = weight / (RRF_OFFSET + index + 1);
+      const existing = candidates.get(key);
+      if (existing === undefined) {
+        candidates.set(key, { fragment, score, firstSeen: firstSeen++ });
+      } else {
+        existing.score += score;
+      }
+    });
+  }
+}
+```
+
+- [ ] **Step 4: Make context retrieval embed and search both queries**
+
+```ts
+const queryTexts = input.supplementalQueryText === undefined
+  ? [queryText]
+  : [queryText, sanitizeQueryText(input.supplementalQueryText)];
+const queryEmbeddings = await embedQueries(queryTexts, embedder);
+const resultSets = await Promise.all(queryEmbeddings.map((embedding) =>
+  fragments.searchSimilarFragments({
+    embeddingProfileId,
+    embedding,
+    limit: candidateFragmentLimit,
+    ...(sourceTypes === undefined ? {} : { sourceTypes }),
+    ...(groupId === undefined ? {} : { groupId }),
+  })));
+const retrievedFragments = fuseRetrievedDocumentFragments({
+  primary: resultSets[0] ?? [],
+  supplemental: resultSets[1],
+});
+```
+
+Replace `embedQuery` with `embedQueries`, require exactly one vector per query, and retain every existing finite-vector check.
+
+- [ ] **Step 5: Verify fusion, permission, and context tests**
+
+```powershell
+npm --workspace apps/core test -- retrieval-candidate-fusion.test.ts document-retrieval-context.test.ts
+```
+
+Expected: both suites pass; single-query cases still make one embedding/search and dual-query cases make two searches with one batched embedding call.
+
+- [ ] **Step 6: Commit**
+
+```powershell
+git add apps/core/src/memory/retrieval-candidate-fusion.ts apps/core/src/memory/document-retrieval-context.ts apps/core/tests/retrieval-candidate-fusion.test.ts apps/core/tests/document-retrieval-context.test.ts
+git commit -m "feat: fuse answer retrieval candidates"
+```
+
+### Task 3: Select a coherent source-aware evidence window
+
+**Files:**
+- Create: `apps/core/src/memory/source-aware-fragment-selector.ts`
+- Create: `apps/core/tests/source-aware-fragment-selector.test.ts`
+- Modify: `apps/core/src/memory/document-retrieval-context.ts:45-160`
+- Modify: `apps/core/src/runtime/answer-draft-runtime.ts:100-115`
+- Modify: `apps/core/tests/document-retrieval-context.test.ts`
+
+**Interfaces:**
+- Consumes: the fused ranked candidates, primary query, final fragment limit, and optional `listFragmentsForSnapshot(snapshotId)`.
+- Produces: `selectSourceAwareFragments(input): Promise<RetrievedDocumentFragment[]>` with at most three fragments per source and at most the requested total.
+
+- [ ] **Step 1: Write a production-shaped failing Quello selector test**
+
+```ts
+it("keeps overview and evolution evidence from the named Quello source", async () => {
+  const selected = await selectSourceAwareFragments({
+    queryText: "Quello 的电子宠物是如何自己产生目标的？",
+    fragmentLimit: 8,
+    rankedFragments: [
+      fragment("watch-1", "watch", 0, "Apple Watch"),
+      fragment("diary-1", "diary", 0, "Diary"),
+      fragment("watch-2", "watch", 1, "Apple Watch"),
+      fragment("diary-2", "diary", 1, "Diary"),
+      fragment("quello-overview", "quello", 0, "Quello Life Engine（生命粒子引擎）副本"),
+      fragment("notes-1", "notes", 0, "Notes"),
+      fragment("watch-3", "watch", 2, "Apple Watch"),
+      fragment("diary-3", "diary", 2, "Diary"),
+      fragment("notes-2", "notes", 1, "Notes"),
+      fragment("quello-evolution", "quello", 3, "Quello Life Engine（生命粒子引擎）副本"),
+    ],
+  });
+  expect(selected.map(({ id }) => id)).toEqual(expect.arrayContaining([
+    "quello-overview",
+    "quello-evolution",
+  ]));
+  expect(selected.filter(({ documentSourceId }) => documentSourceId === "watch").length)
+    .toBeLessThanOrEqual(3);
+});
+
+function fragment(
+  id: string,
+  documentSourceId: string,
+  chunkIndex: number,
+  sourceTitle: string,
+): RetrievedDocumentFragment {
+  return {
+    id,
+    documentSourceId,
+    documentSnapshotId: `snapshot-${documentSourceId}`,
+    sourceUri: `https://example.com/${documentSourceId}`,
+    chunkIndex,
+    text: id,
+    contentHash: `hash-${id}`,
+    embedding: [],
+    embeddingProfileId: "static-dev-6d",
+    createdAt: new Date("2026-08-11T00:00:00.000Z"),
+    sourceType: "feishu_wiki",
+    sourceTitle,
+  };
+}
+```
+
+- [ ] **Step 2: Run the selector suite and verify RED**
+
+```powershell
+npm --workspace apps/core test -- source-aware-fragment-selector.test.ts
+```
+
+Expected: FAIL because the selector module does not exist.
+
+- [ ] **Step 3: Implement title-aware round-robin selection**
+
+```ts
+const MAX_FRAGMENTS_PER_SOURCE = 3;
+
+export type SourceAwareSelectionInput = {
+  queryText: string;
+  rankedFragments: readonly RetrievedDocumentFragment[];
+  fragmentLimit: number;
+  listFragmentsForSnapshot?: (snapshotId: string) => Promise<DocumentFragment[]>;
+};
+
+type SourceGroup = {
+  bestRank: number;
+  titleMatched: boolean;
+  fragments: RetrievedDocumentFragment[];
+};
+
+export async function selectSourceAwareFragments(
+  input: SourceAwareSelectionInput,
+): Promise<RetrievedDocumentFragment[]> {
+  const groups = groupRankedFragments(input.rankedFragments, input.queryText)
+    .sort((left, right) =>
+      Number(right.titleMatched) - Number(left.titleMatched) ||
+      left.bestRank - right.bestRank);
+  const selected: RetrievedDocumentFragment[] = [];
+  const selectedKeys = new Set<string>();
+  const selectedBySource = new Map<string, number>();
+  for (let round = 0; round < MAX_FRAGMENTS_PER_SOURCE; round += 1) {
+    for (const group of groups) {
+      const fragment = group.fragments[round];
+      if (fragment !== undefined) {
+        pushUnique(selected, selectedKeys, selectedBySource, fragment, input.fragmentLimit);
+      }
+      if (selected.length >= input.fragmentLimit) return selected;
+    }
+  }
+  return appendBoundedNeighbors(selected, selectedKeys, selectedBySource, input);
+}
+
+function groupRankedFragments(
+  rankedFragments: readonly RetrievedDocumentFragment[],
+  queryText: string,
+): SourceGroup[] {
+  const groups = new Map<string, SourceGroup>();
+  rankedFragments.forEach((fragment, rank) => {
+    const existing = groups.get(fragment.documentSourceId);
+    const titleMatched = sourceTitleMatchesQuestion(fragment.sourceTitle, queryText);
+    if (existing === undefined) {
+      groups.set(fragment.documentSourceId, {
+        bestRank: rank,
+        titleMatched,
+        fragments: [fragment],
+      });
+    } else {
+      existing.titleMatched ||= titleMatched;
+      existing.fragments.push(fragment);
+    }
+  });
+  return [...groups.values()];
+}
+
+function sourceTitleMatchesQuestion(title: string | undefined, question: string): boolean {
+  if (title === undefined) return false;
+  const normalizedQuestion = question.normalize("NFKC").toLocaleLowerCase();
+  return title.normalize("NFKC").toLocaleLowerCase()
+    .split(/[^\p{L}\p{N}]+/gu)
+    .filter((token) => [...token].length >= 3)
+    .some((token) => normalizedQuestion.includes(token));
+}
+
+function pushUnique(
+  selected: RetrievedDocumentFragment[],
+  selectedKeys: Set<string>,
+  selectedBySource: Map<string, number>,
+  fragment: RetrievedDocumentFragment,
+  limit: number,
+): void {
+  const key = `${fragment.documentSourceId}\u0000${fragment.id}`;
+  const sourceCount = selectedBySource.get(fragment.documentSourceId) ?? 0;
+  if (
+    selected.length >= limit ||
+    selectedKeys.has(key) ||
+    sourceCount >= MAX_FRAGMENTS_PER_SOURCE
+  ) return;
+  selected.push(fragment);
+  selectedKeys.add(key);
+  selectedBySource.set(fragment.documentSourceId, sourceCount + 1);
+}
+```
+
+Implement title matching by splitting the normalized title into Unicode letter/number tokens, keeping tokens of at least three code points, and treating a token contained in the normalized question as a bounded ranking boost.
+
+- [ ] **Step 4: Add same-snapshot neighbor completion without crossing source boundaries**
+
+```ts
+async function appendBoundedNeighbors(
+  selected: RetrievedDocumentFragment[],
+  selectedKeys: Set<string>,
+  selectedBySource: Map<string, number>,
+  input: SourceAwareSelectionInput,
+): Promise<RetrievedDocumentFragment[]> {
+  if (input.listFragmentsForSnapshot === undefined) return selected;
+  for (const seed of [...selected]) {
+    if (selected.length >= input.fragmentLimit) break;
+    const snapshotFragments = await input.listFragmentsForSnapshot(seed.documentSnapshotId);
+    for (const neighbor of snapshotFragments.filter(({ chunkIndex }) =>
+      Math.abs(chunkIndex - seed.chunkIndex) === 1)) {
+      if (neighbor.documentSourceId !== seed.documentSourceId) continue;
+      pushUnique(selected, selectedKeys, selectedBySource, {
+        ...neighbor,
+        sourceTitle: seed.sourceTitle,
+        sourceType: seed.sourceType,
+      }, input.fragmentLimit);
+    }
+  }
+  return selected;
+}
+```
+
+Only run neighbor completion for a source already allowed by the source-level permission guard, and never exceed three fragments for that source or the global limit.
+
+- [ ] **Step 5: Wire selection before and after live permission filtering**
+
+Use pre-permission selection only to identify denied source IDs. Run final selection on allowed fused candidates, then fetch neighbors only for allowed sources. Extend the context-builder repository dependency to:
+
+```ts
+Pick<DocumentFragmentRepository, "searchSimilarFragments">
+  & Partial<Pick<DocumentFragmentRepository, "listFragmentsForSnapshot">>
+```
+
+Production runtime passes both repository methods; existing narrow test doubles may omit neighbor lookup.
+
+- [ ] **Step 6: Run retrieval, selector, runtime, and permission regressions**
+
+```powershell
+npm --workspace apps/core test -- source-aware-fragment-selector.test.ts document-retrieval-context.test.ts answer-draft-runtime.test.ts feishu-document-permission-checker.test.ts
+```
+
+Expected: all selected suites pass; the Quello fixture retains both required fragments and denied text never appears in prompt context.
+
+- [ ] **Step 7: Commit**
+
+```powershell
+git add apps/core/src/memory/source-aware-fragment-selector.ts apps/core/src/memory/document-retrieval-context.ts apps/core/src/runtime/answer-draft-runtime.ts apps/core/tests/source-aware-fragment-selector.test.ts apps/core/tests/document-retrieval-context.test.ts apps/core/tests/answer-draft-runtime.test.ts
+git commit -m "feat: assemble source-aware answer evidence"
+```
+
+### Task 4: Define and validate the evidence-plan contract
+
+**Files:**
+- Create: `apps/core/src/agent/evidence-plan.ts`
+- Create: `apps/core/tests/evidence-plan.test.ts`
+
+**Interfaces:**
+- Produces: `EvidencePlan`, `EvidencePlanningDocument`, `EvidencePlanValidationError`, `parseEvidencePlanContent(content, allowedRefs)`, and `citedRefsForEvidencePlan(plan)`.
+- Later tasks consume these exact exported names.
+
+- [ ] **Step 1: Write failing state-matrix and invalid-reference tests**
+
+```ts
+it.each([
+  ["explicit", "high"],
+  ["complete_inference", "medium"],
+  ["partial", "low"],
+] as const)("accepts a valid %s company-fact plan", (evidenceState, confidence) => {
+  const plan = parseEvidencePlanContent(JSON.stringify({
+    taskMode: "company_fact",
+    evidenceState,
+    premises: [{ citationRef: "D1", statement: "Supported premise" }],
+    proposedAnswer: "Bounded answer",
+    missingInformation: evidenceState === "partial" ? ["Missing mechanism detail"] : [],
+    confidence,
+  }), ["D1"]);
+  expect(plan.evidenceState).toBe(evidenceState);
+});
+
+it("rejects partial conjecture without a real allowed premise", () => {
+  expect(() => parseEvidencePlanContent(JSON.stringify({
+    taskMode: "company_fact",
+    evidenceState: "partial",
+    premises: [{ citationRef: "D9", statement: "Invented" }],
+    proposedAnswer: "Guess",
+    missingInformation: ["Evidence"],
+    confidence: "low",
+  }), ["D1"])).toThrow("evidence plan citation reference is not allowed");
+});
+```
+
+- [ ] **Step 2: Run the new suite and verify RED**
+
+```powershell
+npm --workspace apps/core test -- evidence-plan.test.ts
+```
+
+Expected: FAIL because the contract module does not exist.
+
+- [ ] **Step 3: Add discriminated plan types**
+
+```ts
+export type EvidencePlanningDocument = {
+  citationRef: string;
+  source: string;
+  text: string;
+};
+
+export type EvidenceState = "explicit" | "complete_inference" | "partial" | "none";
+export type EvidenceConfidence = "high" | "medium" | "low";
+export type EvidencePremise = { citationRef: string; statement: string };
+
+export type EvidencePlan = {
+  taskMode: "direct_task" | "company_fact";
+  evidenceState: EvidenceState | null;
+  premises: EvidencePremise[];
+  proposedAnswer: string | null;
+  missingInformation: string[];
+  confidence: EvidenceConfidence | null;
+};
+
+export class EvidencePlanValidationError extends Error {}
+```
+
+- [ ] **Step 4: Implement strict JSON shape and state validation**
+
+Reject unknown keys. Enforce the design matrix with these conditions:
+
+```ts
+if (taskMode === "direct_task") {
+  requirePlanCondition(
+    evidenceState === null &&
+      premises.length === 0 &&
+      proposedAnswer === null &&
+      missingInformation.length === 0 &&
+      confidence === null,
+    "direct task evidence fields are invalid",
+  );
+}
+if (evidenceState === "explicit" || evidenceState === "complete_inference") {
+  requirePlanCondition(premises.length > 0, "evidence plan requires a premise");
+  requirePlanCondition(proposedAnswer !== null, "evidence plan requires an answer");
+  requirePlanCondition(missingInformation.length === 0, "complete evidence cannot be missing");
+  requirePlanCondition(
+    confidence === "high" || confidence === "medium",
+    "complete evidence confidence is invalid",
+  );
+}
+if (evidenceState === "partial") {
+  requirePlanCondition(
+    premises.length > 0 && proposedAnswer !== null,
+    "partial evidence requires a premise and answer",
+  );
+  requirePlanCondition(missingInformation.length > 0, "partial evidence requires a gap");
+  requirePlanCondition(
+    confidence === "low" || confidence === "medium",
+    "partial evidence confidence is invalid",
+  );
+}
+if (evidenceState === "none") {
+  requirePlanCondition(
+    premises.length === 0 && proposedAnswer === null,
+    "no-evidence plan cannot contain a factual answer",
+  );
+  requirePlanCondition(
+    missingInformation.length > 0 && confidence === "low",
+    "no-evidence plan requires a low-confidence gap",
+  );
+}
+
+function requirePlanCondition(condition: boolean, message: string): asserts condition {
+  if (!condition) throw new EvidencePlanValidationError(message);
+}
+```
+
+Bound plans to twelve premises, twelve missing items, 1,200 characters per premise/missing item, and 8,000 proposed-answer characters. Deduplicate and return citation refs in prompt order.
+
+- [ ] **Step 5: Run the plan suite and verify GREEN**
+
+```powershell
+npm --workspace apps/core test -- evidence-plan.test.ts
+```
+
+Expected: valid states pass; malformed JSON, unknown fields, blank strings, duplicates, excess lengths, and out-of-window refs fail.
+
+- [ ] **Step 6: Commit**
+
+```powershell
+git add apps/core/src/agent/evidence-plan.ts apps/core/tests/evidence-plan.test.ts
+git commit -m "feat: validate structured evidence plans"
+```
+
+### Task 5: Extract the bounded OpenAI-compatible chat client
+
+**Files:**
+- Create: `apps/core/src/model/openai-compatible-chat-completions-client.ts`
+- Modify: `apps/core/src/model/openai-compatible-model-provider.ts`
+- Test: `apps/core/tests/openai-compatible-model-provider.test.ts`
+
+**Interfaces:**
+- Produces: `OpenAICompatibleChatCompletionsClient.complete(messages): Promise<string>` and `createOpenAICompatibleChatCompletionsClient(dependencies)`.
+- Preserves: every existing direct-answer transport, timeout, retry, error, size, finish-reason, and citation behavior.
+
+- [ ] **Step 1: Add a failing request-delegation regression**
+
+Inject a client double into the direct provider and assert the existing system and user messages are passed to `complete` while citation parsing remains local:
+
+```ts
+const client = { complete: vi.fn(async () =>
+  'Answer\n<iris_citations>["D1"]</iris_citations>') };
+const provider = createOpenAICompatibleModelProvider({ config: config(), client });
+await expect(provider.generateAnswerDraft({
+  question: "Question",
+  promptContext: '<document citation_ref="D1">Fact</document>',
+})).resolves.toEqual({ answerText: "Answer", citedSourceRefs: ["D1"] });
+expect(client.complete).toHaveBeenCalledOnce();
+```
+
+- [ ] **Step 2: Run the delegation test and verify RED**
+
+```powershell
+npm --workspace apps/core test -- openai-compatible-model-provider.test.ts -t "delegates bounded chat completion"
+```
+
+Expected: FAIL because the provider has no `client` dependency.
+
+- [ ] **Step 3: Move transport into the shared client**
+
+```ts
+export type OpenAICompatibleChatMessage = {
+  role: "system" | "user";
+  content: string;
+};
+
+export interface OpenAICompatibleChatCompletionsClient {
+  complete(messages: readonly OpenAICompatibleChatMessage[]): Promise<string>;
+}
+```
+
+Move the existing URL normalization, request body, bounded JSON read, finish-reason validation, timeout, retry/backoff, abort handling, and provider error preservation into the client without changing their constants or messages. Keep answer/citation parsing in `openai-compatible-model-provider.ts`.
+
+- [ ] **Step 4: Run the full provider suite**
+
+```powershell
+npm --workspace apps/core test -- openai-compatible-model-provider.test.ts
+```
+
+Expected: all existing and new tests pass, including deadline, retry, quota-detail, malformed-response, response-size, and citation cases.
+
+- [ ] **Step 5: Commit**
+
+```powershell
+git add apps/core/src/model/openai-compatible-chat-completions-client.ts apps/core/src/model/openai-compatible-model-provider.ts apps/core/tests/openai-compatible-model-provider.test.ts
+git commit -m "refactor: share bounded model chat transport"
+```
+
+### Task 6: Add the structured evidence planner provider
+
+**Files:**
+- Create: `apps/core/src/model/openai-compatible-evidence-planner.ts`
+- Create: `apps/core/tests/openai-compatible-evidence-planner.test.ts`
+
+**Interfaces:**
+- Produces: `EvidencePlanner.plan(input): Promise<EvidencePlan>` and `createOpenAICompatibleEvidencePlanner({ client })`.
+- Consumes: `EvidencePlanningDocument[]`, the current question, and bounded `LiveChatMessage[]`.
+
+- [ ] **Step 1: Write failing success, injection, and retry tests**
+
+```ts
+it("returns a validated partial plan using only allowed references", async () => {
+  const client = { complete: vi.fn(async () => JSON.stringify({
+    taskMode: "company_fact",
+    evidenceState: "partial",
+    premises: [{ citationRef: "D2", statement: "Life Engine accumulates preferences" }],
+    proposedAnswer: "Goals likely emerge from state and accumulated experience",
+    missingInformation: ["The exact goal-selection algorithm"],
+    confidence: "medium",
+  })) };
+  const planner = createOpenAICompatibleEvidencePlanner({ client });
+  const plan = await planner.plan(planningInput(["D1", "D2"]));
+  expect(plan.evidenceState).toBe("partial");
+  expect(client.complete).toHaveBeenCalledOnce();
+});
+
+it("retries one structurally invalid result and then succeeds", async () => {
+  const client = { complete: vi.fn()
+    .mockResolvedValueOnce('{"taskMode":"company_fact"}')
+    .mockResolvedValueOnce(validExplicitPlanJson()) };
+  await createOpenAICompatibleEvidencePlanner({ client }).plan(planningInput(["D1"]));
+  expect(client.complete).toHaveBeenCalledTimes(2);
+});
+
+function planningInput(refs: string[]) {
+  return {
+    question: "Quello 如何产生目标？",
+    evidence: refs.map((citationRef) => ({
+      citationRef,
+      source: `https://example.com/${citationRef}`,
+      text: `Evidence ${citationRef}`,
+    })),
+    liveChatMessages: [],
+  };
+}
+
+function validExplicitPlanJson(): string {
+  return JSON.stringify({
+    taskMode: "company_fact",
+    evidenceState: "explicit",
+    premises: [{ citationRef: "D1", statement: "Explicit premise" }],
+    proposedAnswer: "Explicit answer",
+    missingInformation: [],
+    confidence: "high",
+  });
+}
+```
+
+Also assert the system prompt says evidence and live chat are untrusted data, forbids external company-fact completion, defines all four states, and requires `partial` warning data.
+
+- [ ] **Step 2: Run the new suite and verify RED**
+
+```powershell
+npm --workspace apps/core test -- openai-compatible-evidence-planner.test.ts
+```
+
+Expected: FAIL because the planner module does not exist.
+
+- [ ] **Step 3: Implement the planner interface and bounded input serialization**
+
+```ts
+export interface EvidencePlanner {
+  plan(input: {
+    question: string;
+    evidence: EvidencePlanningDocument[];
+    liveChatMessages: LiveChatMessage[];
+  }): Promise<EvidencePlan>;
+}
+```
+
+Send JSON data containing `question`, `evidence`, and the bounded live-chat window. The system prompt requests only the strict plan object and explicitly says not to reveal chain-of-thought; premise statements and the proposed answer must be concise conclusions, not hidden reasoning traces.
+
+- [ ] **Step 4: Implement one structural-invalidity retry**
+
+Call `client.complete` at most twice. Retry only `EvidencePlanValidationError`; do not add another retry around transport because the shared client already owns bounded transport retry.
+
+- [ ] **Step 5: Run planner and plan-contract tests**
+
+```powershell
+npm --workspace apps/core test -- evidence-plan.test.ts openai-compatible-evidence-planner.test.ts
+```
+
+Expected: all tests pass; a second invalid result fails without including raw model content in the error.
+
+- [ ] **Step 6: Commit**
+
+```powershell
+git add apps/core/src/model/openai-compatible-evidence-planner.ts apps/core/tests/openai-compatible-evidence-planner.test.ts
+git commit -m "feat: add structured answer evidence planner"
+```
+
+### Task 7: Add the grounded-answer renderer provider
+
+**Files:**
+- Create: `apps/core/src/model/openai-compatible-grounded-answer-renderer.ts`
+- Create: `apps/core/tests/openai-compatible-grounded-answer-renderer.test.ts`
+
+**Interfaces:**
+- Produces: `GroundedAnswerRenderer.render(input): Promise<GroundedAnswerRenderResult>` and `createOpenAICompatibleGroundedAnswerRenderer({ client })`.
+- Consumes: a validated company-fact `EvidencePlan`, only its cited evidence documents, the current question, and bounded live chat.
+
+- [ ] **Step 1: Write failing renderer contract tests**
+
+```ts
+it("accepts a partial answer only when state and confidence echo the plan", async () => {
+  const client = { complete: vi.fn(async () => JSON.stringify({
+    answerText: "现有资料没有写出完整算法。基于现有证据，我的推测是目标会随状态和经验逐步形成（中等置信度）。",
+    evidenceState: "partial",
+    confidence: "medium",
+  })) };
+  const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render(
+    groundedRenderInput(partialPlan()),
+  );
+  expect(result.answerText).toContain("基于现有证据，我的推测是");
+});
+
+it("rejects a renderer that upgrades partial evidence", async () => {
+  const client = { complete: vi.fn(async () => JSON.stringify({
+    answerText: "This is certain.", evidenceState: "explicit", confidence: "high",
+  })) };
+  await expect(createOpenAICompatibleGroundedAnswerRenderer({ client }).render(
+    groundedRenderInput(partialPlan()),
+  )).rejects.toThrow("grounded answer state does not match evidence plan");
+});
+
+function partialPlan(): EvidencePlan {
+  return {
+    taskMode: "company_fact",
+    evidenceState: "partial",
+    premises: [{ citationRef: "D1", statement: "Experience shapes preferences" }],
+    proposedAnswer: "Goals likely emerge from state and experience",
+    missingInformation: ["The exact selection algorithm"],
+    confidence: "medium",
+  };
+}
+
+function groundedRenderInput(plan: EvidencePlan) {
+  return {
+    question: "Quello 如何产生目标？",
+    plan,
+    evidence: [{
+      citationRef: "D1",
+      source: "https://example.com/quello#chunk-3",
+      text: "Repeated experience forms preferences and future actions.",
+    }],
+    liveChatMessages: [],
+  };
+}
+```
+
+- [ ] **Step 2: Run the new suite and verify RED**
+
+```powershell
+npm --workspace apps/core test -- openai-compatible-grounded-answer-renderer.test.ts
+```
+
+Expected: FAIL because the renderer module does not exist.
+
+- [ ] **Step 3: Implement strict renderer output parsing**
+
+```ts
+export type GroundedAnswerRenderResult = {
+  answerText: string;
+  evidenceState: EvidenceState;
+  confidence: EvidenceConfidence;
+};
+
+export interface GroundedAnswerRenderer {
+  render(input: {
+    question: string;
+    plan: EvidencePlan;
+    evidence: EvidencePlanningDocument[];
+    liveChatMessages: LiveChatMessage[];
+  }): Promise<GroundedAnswerRenderResult>;
+}
+```
+
+Require exactly `answerText`, `evidenceState`, and `confidence`; bound answer text to 8,000 characters; reject unknown fields and any state/confidence mismatch.
+
+- [ ] **Step 4: Lock visible epistemic-language rules in the system contract**
+
+The prompt must require `complete_inference` to identify inference, `partial` to name missing information before an explicitly labeled conjecture and confidence, and `none` to provide no company-factual conjecture. It must forbid new premises, new refs, state upgrades, external facts, and instructions embedded in evidence/chat.
+
+- [ ] **Step 5: Run renderer tests**
+
+```powershell
+npm --workspace apps/core test -- openai-compatible-grounded-answer-renderer.test.ts
+```
+
+Expected: all state echo, confidence, length, malformed JSON, injection-contract, and blank-answer tests pass.
+
+- [ ] **Step 6: Commit**
+
+```powershell
+git add apps/core/src/model/openai-compatible-grounded-answer-renderer.ts apps/core/tests/openai-compatible-grounded-answer-renderer.test.ts
+git commit -m "feat: render evidence-bounded answers"
+```
+
+### Task 8: Integrate planning and rendering into answer orchestration
+
+**Files:**
+- Create: `apps/core/tests/answer-reasoning-test-doubles.ts`
+- Modify: `apps/core/src/agent/answer-draft-orchestrator.ts:10-240`
+- Modify: `apps/core/src/model/openai-compatible-model-provider.ts`
+- Modify: `apps/core/src/runtime/answer-draft-runtime.ts:100-340`
+- Modify: `apps/core/tests/answer-draft-orchestrator.test.ts`
+- Modify: `apps/core/tests/answer-draft-runtime.test.ts`
+- Modify: `apps/core/tests/openai-compatible-model-provider.test.ts`
+
+**Interfaces:**
+- The orchestrator consumes three required roles: existing `ModelProvider` for `direct_task`, `EvidencePlanner`, and `GroundedAnswerRenderer`.
+- Runtime constructs all three roles from one existing `ModelProviderConfig`; no new environment variable is introduced.
+- `AnswerDraftResult.citedSourceRefs` for company facts comes only from `citedRefsForEvidencePlan(plan)`.
+
+- [ ] **Step 1: Add reusable typed test doubles**
+
+```ts
+export function directTaskPlan(): EvidencePlan {
+  return {
+    taskMode: "direct_task",
+    evidenceState: null,
+    premises: [],
+    proposedAnswer: null,
+    missingInformation: [],
+    confidence: null,
+  };
+}
+
+export function createReasoningDoubles(plan = directTaskPlan()) {
+  return {
+    planner: { plan: vi.fn(async () => plan) },
+    renderer: { render: vi.fn(async () => {
+      throw new Error("renderer must not run for direct tasks");
+    }) },
+  };
+}
+```
+
+Use this helper to update every direct `createAnswerDraftOrchestrator` and runtime model stub, keeping old tests on the explicit `direct_task` path unless the test is about company evidence.
+
+- [ ] **Step 2: Write failing orchestration tests for all company evidence states**
+
+Add focused tests that prove:
+
+```ts
+expect(planner.plan).toHaveBeenCalledWith({
+  question,
+  evidence: [
+    expect.objectContaining({ citationRef: "D1", text: "Quello overview" }),
+    expect.objectContaining({ citationRef: "D2", text: "Quello evolution" }),
+  ],
+  liveChatMessages,
+});
+expect(renderer.render).toHaveBeenCalledWith(expect.objectContaining({
+  evidence: [expect.objectContaining({ citationRef: "D2" })],
+}));
+expect(result.citedSourceRefs).toEqual(["D2"]);
+```
+
+For `partial`, assert the renderer is called and only cited premise evidence is passed. For `none`, assert no citations. For permission denial, assert planner, renderer, and direct model are all skipped. For `direct_task`, assert only the existing direct model runs after planning.
+
+- [ ] **Step 3: Run focused orchestrator tests and verify RED**
+
+```powershell
+npm --workspace apps/core test -- answer-draft-orchestrator.test.ts -t "evidence plan|partial|direct task|permission"
+```
+
+Expected: new company-state tests fail because the orchestrator still invokes only the direct model.
+
+- [ ] **Step 4: Implement the two-stage branch**
+
+```ts
+const evidence = context.allowedFragments.map((fragment, index) => ({
+  citationRef: `D${index + 1}`,
+  source: `${fragment.sourceUri}#chunk-${fragment.chunkIndex}`,
+  text: fragment.text,
+}));
+const plan = await planner.plan({ question, evidence, liveChatMessages: context.liveChatMessages });
+
+if (plan.taskMode === "direct_task") {
+  return runDirectModel(question, context.promptContext);
+}
+const citedSourceRefs = citedRefsForEvidencePlan(plan);
+const citedEvidence = evidence.filter(({ citationRef }) => citedSourceRefs.includes(citationRef));
+const rendered = await renderer.render({
+  question,
+  plan,
+  evidence: citedEvidence,
+  liveChatMessages: context.liveChatMessages,
+});
+return { answerText: rendered.answerText, citedSourceRefs };
+```
+
+Expose the bounded selected live-chat messages in `DocumentRetrievalContextResult` so planner and renderer receive exactly the already-sanitized prompt window, not raw request data.
+
+```ts
+export type DocumentRetrievalContextResult = {
+  promptContext: string;
+  allowedFragments: RetrievedDocumentFragment[];
+  deniedDocumentIds: string[];
+  retrievedFragmentCount: number;
+  liveChatMessages: LiveChatMessage[];
+  usedGroupMemories: PromptGroupMemory[];
+  usedDiscussionThreads?: PromptDiscussionThread[];
+  usedActionItems?: PromptActionItem[];
+};
+```
+
+- [ ] **Step 5: Add separate content-free provider observations**
+
+Keep ledger `phase: "sampling"`; use operation keys `provider:planner:*` and `provider:renderer:*` with metadata `{ stage: "evidence_planning" }` and `{ stage: "answer_rendering" }`. Turn completion metadata may include task mode, evidence state, confidence, candidate count, source count, and selected fragment count, but no question, evidence, answer, or model error text.
+
+- [ ] **Step 6: Compose providers in runtime**
+
+Create a shared chat client from the existing `ModelProviderConfig`, then construct:
+
+```ts
+const chatClient = createOpenAICompatibleChatCompletionsClient({ config: modelConfig });
+const model = createOpenAICompatibleModelProvider({ config: modelConfig, client: chatClient });
+const planner = createOpenAICompatibleEvidencePlanner({ client: chatClient });
+const renderer = createOpenAICompatibleGroundedAnswerRenderer({ client: chatClient });
+```
+
+Preserve dependency injection with `createEvidencePlanner` and `createGroundedAnswerRenderer` factories so runtime tests never make network requests. Do not change environment configuration.
+
+- [ ] **Step 7: Run orchestration/runtime/provider regressions**
+
+```powershell
+npm --workspace apps/core test -- answer-draft-orchestrator.test.ts answer-draft-runtime.test.ts openai-compatible-model-provider.test.ts openai-compatible-evidence-planner.test.ts openai-compatible-grounded-answer-renderer.test.ts
+```
+
+Expected: all suites pass; observations have distinct stage metadata, and existing direct output/citation behavior remains unchanged.
+
+- [ ] **Step 8: Commit**
+
+```powershell
+git add apps/core/src/agent/answer-draft-orchestrator.ts apps/core/src/model/openai-compatible-model-provider.ts apps/core/src/runtime/answer-draft-runtime.ts apps/core/tests/answer-reasoning-test-doubles.ts apps/core/tests/answer-draft-orchestrator.test.ts apps/core/tests/answer-draft-runtime.test.ts apps/core/tests/openai-compatible-model-provider.test.ts
+git commit -m "feat: plan evidence before answering"
+```
+
+### Task 9: Prove citation, permission, and production-shaped behavior
+
+**Files:**
+- Modify: `apps/core/tests/answer-draft-runtime.test.ts`
+- Modify: `apps/core/tests/answer-source-citation-renderer.test.ts`
+- Modify: `apps/core/tests/feishu-mention-answer-responder.test.ts`
+- Modify: `apps/core/tests/answer-reply-delivery-service.test.ts`
+
+**Interfaces:**
+- Consumes: the integrated two-stage `AnswerDraftResult`.
+- Produces: end-to-end proof that planner refs become existing source traces and are revalidated before Feishu delivery.
+
+- [ ] **Step 1: Add a failing production-shaped Quello runtime test**
+
+Seed fused retrieval results in the same rank pattern observed in production: Quello overview at primary rank five, evolution at rank ten, with diary/watch noise around them. Assert:
+
+```ts
+expect(result.allowedFragments.map(({ id }) => id)).toEqual(expect.arrayContaining([
+  "quello-overview",
+  "quello-evolution",
+]));
+expect(planner.plan).toHaveBeenCalledWith(expect.objectContaining({
+  evidence: expect.arrayContaining([
+    expect.objectContaining({ text: expect.stringContaining("Life Engine") }),
+    expect.objectContaining({ text: expect.stringContaining("Tick") }),
+  ]),
+}));
+expect(result.citedSourceRefs).toEqual([quelloOverviewRef, quelloEvolutionRef]);
+```
+
+- [ ] **Step 2: Run the production-shaped test and verify RED if any integration is missing**
+
+```powershell
+npm --workspace apps/core test -- answer-draft-runtime.test.ts -t "Quello"
+```
+
+Expected: PASS only after query fusion, source selection, planner, renderer, and citation mapping all work together.
+
+- [ ] **Step 3: Add citation and permission boundary cases**
+
+Verify a planner-selected Quello ref creates a Quello source trace and visible footer, a related-source ref cannot appear unless selected by the plan, and revoking the Quello source between preparation and send produces `ANSWER_PERMISSION_CHANGED_NOTICE` without sending the prepared conclusion.
+
+- [ ] **Step 4: Run the complete boundary set**
+
+```powershell
+npm --workspace apps/core test -- answer-draft-runtime.test.ts answer-source-citation-renderer.test.ts feishu-mention-answer-responder.test.ts answer-reply-delivery-service.test.ts feishu-document-permission-checker.test.ts
+```
+
+Expected: all suites pass; no denied text, hidden prompt, invalid ref, or unverified source reaches a reply.
+
+- [ ] **Step 5: Commit**
+
+```powershell
+git add apps/core/tests/answer-draft-runtime.test.ts apps/core/tests/answer-source-citation-renderer.test.ts apps/core/tests/feishu-mention-answer-responder.test.ts apps/core/tests/answer-reply-delivery-service.test.ts
+git commit -m "test: cover grounded inference delivery"
+```
+
+### Task 10: Verify, review, publish, and run the allowlisted pilot
+
+**Files:**
+- Verify all files changed by Tasks 1-9.
+- Update ignored operational evidence: `.superpowers/sdd/2026-08-11-iris-grounded-inference-answering/task-3-report.md`.
+- Do not modify production data or rollout scope.
+
+**Interfaces:**
+- Produces: one reviewed exact candidate SHA on PR #30, verified locally and in CI, then accepted or rolled back in the existing pilot group.
+
+- [ ] **Step 1: Prove ancestry, diff scope, and clean tracked state**
 
 ```powershell
 $ErrorActionPreference = "Stop"
-$baselineSha = "4aaa38bed1bf98a1d4fce5decd025597012cea3f"
-$candidateSha = (git rev-parse HEAD).Trim()
-if ($candidateSha -notmatch "^[0-9a-f]{40}$") { throw "Invalid candidate SHA" }
-git merge-base --is-ancestor $baselineSha $candidateSha
-if ($LASTEXITCODE -ne 0) { throw "Candidate is not based on the approved master baseline" }
-$runtimePaths = @(git diff --name-only "$baselineSha...$candidateSha" -- apps/core/src apps/core/tests)
-$expectedPaths = @(
-  "apps/core/src/model/openai-compatible-model-provider.ts",
-  "apps/core/tests/openai-compatible-model-provider.test.ts"
-)
-if ((Compare-Object $expectedPaths $runtimePaths).Length -ne 0) {
-  throw "Unexpected runtime scope: $($runtimePaths -join ', ')"
-}
-git diff --check "$baselineSha...$candidateSha"
-git diff "$baselineSha...$candidateSha" -- @expectedPaths
+$baseline = "4aaa38bed1bf98a1d4fce5decd025597012cea3f"
+$candidate = (git rev-parse HEAD).Trim()
+git merge-base --is-ancestor $baseline $candidate
+if ($LASTEXITCODE -ne 0) { throw "Candidate lost the approved master ancestry" }
+git diff --check "$baseline...$candidate"
+git status --short
 ```
 
-Expected: ancestry succeeds, the runtime/test path set is exactly the two expected files, `git diff --check` is silent, and the displayed diff matches Task 1.
+Expected: ancestry succeeds, `git diff --check` is silent, and the isolated implementation worktree has no uncommitted tracked change.
 
-- [ ] **Step 2: Run the complete repository verification**
+- [ ] **Step 2: Run focused reasoning and security suites**
 
-Run:
+```powershell
+npm --workspace apps/core test -- retrieval-candidate-fusion.test.ts source-aware-fragment-selector.test.ts evidence-plan.test.ts openai-compatible-model-provider.test.ts openai-compatible-evidence-planner.test.ts openai-compatible-grounded-answer-renderer.test.ts document-retrieval-context.test.ts answer-draft-orchestrator.test.ts answer-draft-runtime.test.ts answer-source-citation-renderer.test.ts answer-reply-delivery-service.test.ts feishu-document-permission-checker.test.ts feishu-mention-answer-responder.test.ts
+```
+
+Expected: every selected suite passes with zero skipped release gate.
+
+- [ ] **Step 3: Run the complete repository verification**
 
 ```powershell
 npm run verify
 ```
 
-Expected: `git diff --check`, Core typecheck and build, all Core tests, the Python suite, pilot tests, Compose configuration, rollout readiness, and pilot configuration all exit `0`.
+Expected: Core typecheck/build/tests, Python tests, pilot/readiness checks, Compose validation, and formatting/diff checks all exit zero.
 
-- [ ] **Step 3: Publish the candidate branch and require exact-SHA CI**
+- [ ] **Step 4: Perform a fresh-eyes code review and resolve only release blockers**
 
-Run:
+Review the exact baseline diff for permission expansion, evidence leakage, citation mismapping, unbounded retries, direct-task regressions, and hidden data in observations. Fix blockers and rerun affected gates. Record non-blocking hardening findings in the backlog rather than expanding this feature indefinitely.
 
-```powershell
-$ErrorActionPreference = "Stop"
-$candidateSha = (git rev-parse HEAD).Trim()
-git push --set-upstream origin HEAD:codex/iris-grounded-inference-answering
-gh pr create --draft --base master --head codex/iris-grounded-inference-answering --title "fix: allow grounded knowledge inference" --body "Allows transparent same-subject inference from complete authorized premises while preserving exact-subject, permission, injection, and citation safeguards."
-if ($LASTEXITCODE -ne 0) {
-  gh pr view codex/iris-grounded-inference-answering --json number,headRefOid,state,url
-}
-gh pr checks codex/iris-grounded-inference-answering --watch
-$remoteHead = (git ls-remote origin refs/heads/codex/iris-grounded-inference-answering).Split()[0]
-if ($remoteHead -ne $candidateSha) { throw "Remote branch does not equal reviewed candidate" }
-```
-
-Expected: the draft PR targets `master`, its head OID and remote branch both equal `candidateSha`, and the `Core` and `AI Worker` checks succeed for that exact SHA. Do not deploy a failed or pending check.
-
-- [ ] **Step 4: Confirm a clean, immutable deployment candidate**
-
-Run:
+- [ ] **Step 5: Push the exact candidate and require exact-SHA CI**
 
 ```powershell
 $ErrorActionPreference = "Stop"
-$candidateSha = (git rev-parse HEAD).Trim()
-if (@(git status --porcelain).Length -ne 0) { throw "Candidate worktree is not clean" }
-git show --stat --oneline --decorate --no-renames $candidateSha
-git show --format=fuller --no-ext-diff -- apps/core/src/model/openai-compatible-model-provider.ts apps/core/tests/openai-compatible-model-provider.test.ts
+$candidate = (git rev-parse HEAD).Trim()
+git push origin HEAD:codex/iris-grounded-inference-answering
+gh pr checks 30 --watch
+$remote = (git ls-remote origin refs/heads/codex/iris-grounded-inference-answering).Split()[0]
+if ($remote -ne $candidate) { throw "Remote branch differs from reviewed candidate" }
 ```
 
-Expected: the worktree is clean and the reviewed candidate SHA names the focused implementation commit. Record this full SHA for Task 3; do not deploy a moving branch name or mutable tag.
+Expected: Core and AI Worker checks pass for exactly `$candidate`.
 
-### Task 3: Deploy fail-closed and run the live Feishu acceptance
+- [ ] **Step 6: Deploy only to the existing allowlisted pilot and run live acceptance**
 
-**Files:**
-- Operate from: `/opt/iris/repository`
-- Follow: `docs/operations/internal-rollout-runbook.md` sections `Single-VPS Pilot Deployment`, `Planned Restart And Reactivation`, and `Emergency Stop And Rollback`.
-- Follow for citations and permission checks: `docs/runbooks/iris-answer-source-citations-acceptance.md` sections 1-7, using a dedicated revocable fixture for the permission-negative case.
-- Record privately: `/etc/iris/deployment`
-
-**Interfaces:**
-- Consumes: the exact clean candidate SHA from Task 2, the currently approved pilot group `oc_637a9aca45f01943477f4e17f1fc5b9a`, the authorized `Quello Life Engine（生命粒子引擎）副本` source, and the existing runtime-control/operator credentials.
-- Produces: one healthy commit-pinned Core/AI Worker deployment, a grounded Quello reply with revalidated supporting references, negative-control evidence, zero queue/DLQ counts, and a recorded rollback target.
-
-- [ ] **Step 1: Capture the pre-deploy state without changing production**
-
-On the operator machine, validate the local candidate, then inspect the VPS:
-
-```powershell
-$ErrorActionPreference = "Stop"
-$candidateSha = (git rev-parse HEAD).Trim()
-if ($candidateSha -notmatch "^[0-9a-f]{40}$") { throw "Invalid candidate SHA" }
-ssh iris-vps "cd /opt/iris/repository && git rev-parse HEAD && git status --porcelain && docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml ps"
-```
-
-Expected: the command records the previous approved SHA and healthy service state. The known operations state is a detached checkout with only the intentional `deploy/pilot/Caddyfile` `quello.cn` redirect plus `.iris-*-commit`, `backups/`, and `evidence/` as local state. Stop if any other tracked path is modified, the redirect differs from the preflight evidence, any service is unhealthy, or the current approved image/checkout cannot be identified. Preserve all known local state.
-
-- [ ] **Step 2: Execute the fail-closed preflight and encrypted backup**
-
-On the VPS, set `CANDIDATE_SHA` to the full reviewed SHA and use the existing Compose project:
-
-```bash
-set -Eeuo pipefail
-cd /opt/iris/repository
-: "${CANDIDATE_SHA:?set the reviewed 40-character candidate SHA}"
-[[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-compose=(docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml)
-"${compose[@]}" stop caddy
-"${compose[@]}" exec --no-TTY core node --input-type=module --eval '
-  const headers = {
-    authorization: `Bearer ${process.env.IRIS_INTERNAL_API_TOKEN}`,
-    "content-type": "application/json",
-    "x-iris-operator": "grounded-inference-acceptance",
-  };
-  const disabled = await fetch("http://127.0.0.1:3000/internal/runtime-control/global", {
-    method: "POST", headers, body: JSON.stringify({ enabled: false }),
-  });
-  if (!disabled.ok) process.exit(1);
-  const response = await fetch("http://127.0.0.1:3000/internal/status", { headers });
-  const body = await response.json();
-  const runtime = body?.components?.runtimeControl;
-  const event = body?.components?.eventWorker;
-  const document = body?.components?.documentSync;
-  const reindex = body?.components?.reindex;
-  const counts = [
-    event?.pendingEventCount, event?.deadLetterEventCount,
-    document?.pendingJobCount, document?.deadLetterJobCount,
-    reindex?.pendingJobCount, reindex?.deadLetterJobCount,
-  ];
-  if (!response.ok || runtime?.globalEnabled !== false
-    || runtime?.desiredGlobalEnabled !== false
-    || event?.running !== true || document?.running !== true || reindex?.running !== true
-    || counts.some((count) => count !== 0)) process.exit(1);
-'
-test -z "$("${compose[@]}" ps --status running --services | grep -Fx caddy || true)"
-backup_path="$(/usr/local/sbin/iris-backup | tail -n 1)"
-test -n "$backup_path" && test -f "$backup_path"
-printf 'rollback_backup=%s\n' "$backup_path"
-```
-
-Expected: global and desired-global runtime are false, Caddy is stopped, enabled workers are running, all event/document/reindex pending and DLQ counts are zero, and a verified encrypted backup path is recorded. Any failed assertion ends the rollout with Iris disabled and Caddy stopped.
-
-- [ ] **Step 3: Fetch, build, and activate only the exact candidate**
-
-Fetch the published candidate branch, prove its OID, preserve the intentional Caddy override, and activate the detached commit:
-
-```bash
-set -Eeuo pipefail
-cd /opt/iris/repository
-: "${CANDIDATE_SHA:?set the reviewed 40-character candidate SHA}"
-previous_sha="$(cat .iris-approved-commit)"
-[[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]]
-git fetch origin codex/iris-grounded-inference-answering
-test "$(git rev-parse FETCH_HEAD)" = "$CANDIDATE_SHA"
-git diff --quiet HEAD FETCH_HEAD -- deploy/pilot/Caddyfile
-git checkout --detach "$CANDIDATE_SHA"
-test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-sed -i -E "s/^IRIS_IMAGE_TAG=.*/IRIS_IMAGE_TAG=$CANDIDATE_SHA/" .env.pilot
-grep -Fx "IRIS_IMAGE_TAG=$CANDIDATE_SHA" .env.pilot >/dev/null
-compose=(docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml)
-"${compose[@]}" config --quiet
-"${compose[@]}" build core ai-worker
-"${compose[@]}" up --detach --wait --wait-timeout 120 postgres redis migrate ai-worker core
-test "$(docker inspect --format '{{.Config.Image}}' "$("${compose[@]}" ps -q core)")" = "iris-core:$CANDIDATE_SHA"
-test "$(docker inspect --format '{{.Config.Image}}' "$("${compose[@]}" ps -q ai-worker)")" = "iris-ai-worker:$CANDIDATE_SHA"
-```
-
-Expected: the checkout and both images equal the same full candidate SHA, the pre-existing Caddy redirect and private evidence/backup state remain present, private services are healthy, and Caddy remains stopped. Re-run the complete fail-closed status assertion from Step 2 before enabling any reply.
-
-- [ ] **Step 4: Enable only the approved pilot group and ask the positive Quello question once**
-
-Follow the runbook's controlled daily pilot profile: retain the existing capability inventory, disable all non-pilot groups, durably enable global runtime, verify the fresh state, arm the automatic fail-closed timer, and start Caddy last. In Feishu group `oc_637a9aca45f01943477f4e17f1fc5b9a`, send exactly:
+Before deploying, capture the currently running image SHA and verify the pilot allowlist. Deploy the exact reviewed SHA, then ask:
 
 ```text
 @Iris Quello 的电子宠物是如何自己产生目标的？
 ```
 
-Expected visible behavior:
+Accept only if the reply uses the relevant Quello source, explains inference or partial evidence visibly, gives a bounded conjecture when partial, invents no undocumented algorithm/score/threshold, and displays only currently readable supporting sources. Run paired related-subject, zero-evidence, and permission-revocation checks.
 
-- the reply says the conclusion is inferred from documented mechanisms rather than quoted directly;
-- it connects current state, personality/emotional priority, capability boundaries, accumulated experience, cognitive friction, and Tick evolution to emerging goals or next actions;
-- it does not say the LLM freely invents goals and does not invent a score, threshold, formula, or undocumented component;
-- `Iris 参考资料：` contains only currently readable, materially supporting Quello references.
+- [ ] **Step 7: Verify operational health or roll back immediately**
 
-Record the new incoming Feishu message ID and inspect its content-free receipt with the existing command in `iris-answer-source-citations-acceptance.md` section 5. The receipt must list the supporting source/fragment facts and must not expose `preparedReplyText`, `fragmentText`, or `promptContext`.
+Confirm public health, readiness, Caddy, runtime controller state, queue drain, all DLQs, unresolved answer deliveries, and nonpilot disablement. If any security, citation, core behavior, or health gate fails, restore the captured image SHA and repeat the same health checks. Leave production in the approved pilot state with no failsafe timer.
 
-- [ ] **Step 5: Run the exact-subject and related-subject fixture controls**
+- [ ] **Step 8: Record acceptance evidence and final candidate SHA**
 
-Create one bounded, non-sensitive Wiki fixture shared with the Iris app, sync and index it, and confirm live permission is allowed. Use this exact content:
-
-```text
-Title: Iris Grounded Inference Subject Fixture
-Body: 群文档验收编号：IRIS_GROUP_FACT_3907
-```
-
-Send these as two fresh messages in the pilot group, in order:
-
-```text
-@Iris 群文档验收编号是什么？只回答编号。
-@Iris 知识库验收编号是什么？只回答编号。
-```
-
-Expected: the first answer contains `IRIS_GROUP_FACT_3907` and its currently readable fixture reference. The second states that the requested knowledge-base number is unavailable and does not contain `IRIS_GROUP_FACT_3907`; it must not substitute the related group-document value.
-
-- [ ] **Step 6: Prove permission revocation still fails closed**
-
-Use the dedicated fixture from Step 5, not the production Quello source. Revoke only the Iris app's access and send `@Iris 群文档验收编号是什么？只回答编号。` with a fresh message ID.
-
-Expected: the revoked marker and content are absent, the model/provider is not called for the revoked turn, only the safe permission-changed notice may be sent, and the content-free receipt transitions to `permission_blocked` with zero answer-send attempts. If a human must change Feishu sharing or send the message, request exactly that one action and wait; do not fabricate evidence.
-
-- [ ] **Step 7: Close the pilot gate or roll back**
-
-Stop Caddy and durably disable Iris before the final private inspection. Require:
-
-```text
-event pending=0, DLQ=0
-document-sync pending=0, DLQ=0
-reindex pending=0, DLQ=0
-answerReplyUnresolvedCount=0
-answerReplyPendingSafeNoticeCount=0
-answerReplyReconciliationRequiredCount=0
-```
-
-If Steps 4-6 pass, restore only the previously approved pilot runtime state, start Caddy last, and append the candidate SHA, UTC activation time, previous SHA, encrypted backup identifier, four message IDs, receipt results, and final zero counts to `/etc/iris/deployment`.
-
-If Iris makes an unsupported company claim, weakens permission/injection behavior, cites unrelated material, or any health/queue gate fails, keep global and desired-global runtime false, stop Caddy, follow `Emergency Stop And Rollback`, restore the previous approved image SHA, and re-run the authenticated private health and zero-queue gates. This prompt-only change has no schema or data migration, so application-image rollback is sufficient unless an independent data failure is discovered.
+Update `.superpowers/sdd/2026-08-11-iris-grounded-inference-answering/task-3-report.md` with incoming/reply message IDs, planner evidence state, selected source IDs, displayed references, exact image SHA, CI results, queue/DLQ state, and rollback outcome if used. Do not store document bodies, secrets, or hidden model reasoning.

@@ -274,10 +274,10 @@ unless the task actually uses a company document as source material.
 
 ## 9. Errors and Observability
 
-The orchestrator records content-free phase metadata for `retrieval`, `evidence_planning`, and
-`answer_rendering`, including evidence state, confidence, candidate count, selected source count,
-selected fragment count, and outcome. It must not log document bodies, model reasoning, credentials,
-or denied content.
+The orchestrator keeps the existing ledger phase enum and records content-free stage metadata named
+`retrieval`, `evidence_planning`, and `answer_rendering`, including evidence state, confidence,
+candidate count, selected source count, selected fragment count, and outcome. This avoids a schema
+migration. It must not log document bodies, model reasoning, credentials, or denied content.
 
 Failure behavior is:
 
