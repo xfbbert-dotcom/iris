@@ -2,6 +2,7 @@
 
 Date: 2026-08-11
 Status: Approved architecture A in conversation on 2026-08-11
+Review amendment: 2026-08-12 pre-merge safety review
 Product: Iris
 Original implementation baseline: `master@4aaa38bed1bf98a1d4fce5decd025597012cea3f`
 Supersedes: the prompt-only design and implementation plan committed on 2026-08-11
@@ -97,6 +98,11 @@ rewrite stage requires separate pilot evidence before adoption.
 
 ## 4. End-to-End Architecture
 
+The application owns route classification before any planner call. Only an explicit transformation
+with a supplied payload or an explicit exact-output payload uses the existing direct-task path.
+Ambiguous requests and company-factual turns always use the evidence-bounded path; a model cannot
+authorize its own bypass.
+
 The company-factual flow is:
 
 ```text
@@ -117,9 +123,10 @@ current question
 The existing runtime gates, source scoping, Feishu permission checker, prompt-injection boundary,
 answer-reply delivery service, and pilot controls remain in force.
 
-The planner also classifies direct tasks such as translation, rewriting, summarization, and exact
-formatting as `direct_task`. Those tasks proceed to the renderer without pretending that retrieved
-company evidence is required.
+The planner never classifies direct tasks. The direct-task route is a narrow, deterministic
+application decision for requests such as translating the supplied text, summarizing this meeting
+note, or replying with the literal payload after a delimiter. A bare imperative such as
+“总结 Iris 当前年收入” remains company-factual and must pass the evidence controls.
 
 ## 5. Retrieval Design
 
@@ -176,9 +183,16 @@ implies current read permission.
 The planner receives:
 
 - the current question;
-- bounded, permission-allowed evidence with stable `D1` through `D12` references;
+- bounded, permission-allowed evidence from prior live chat (`C1`-`C10`), group memory
+  (`M1`-`M8`), discussion threads (`T1`-`T6`), documents (`D1`-`D12`), and action records
+  (`A1`-`A6`);
 - only the minimum conversational context needed to resolve the subject;
 - system rules that treat every evidence and chat field as untrusted data, never instructions.
+
+At most 42 evidence items enter planning and at most 12 unique premises enter a plan. A stable
+citation reference, not the display label, is the identity boundary. Long valid Feishu source URIs
+are therefore accepted and their model-visible labels are deterministically truncated to 512
+characters instead of rejecting the answer turn.
 
 It returns strict JSON equivalent to:
 
@@ -200,7 +214,7 @@ It returns strict JSON equivalent to:
 
 Allowed values are:
 
-- `taskMode`: `company_fact` or `direct_task`;
+- `taskMode`: `company_fact` only in planner output;
 - `evidenceState`: `explicit`, `complete_inference`, `partial`, or `none` for company facts;
 - `confidence`: `high`, `medium`, or `low`.
 
@@ -231,7 +245,7 @@ For company-factual answers, the renderer receives only:
 
 - the current question;
 - the validated plan;
-- the evidence fragments cited by the plan;
+- the evidence items cited by the plan;
 - bounded live-chat context needed for language and conversational continuity.
 
 It does not receive unrelated retrieved fragments. It may improve clarity and tone, but it may not
@@ -252,12 +266,14 @@ Required visible behavior is:
 | `partial` | First name the evidence gap, then say “基于现有证据，我的推测是……” or an equivalent phrase, give the conjecture and confidence, and cite its actual premises. |
 | `none` | State that the knowledge base provides no basis for a conjecture and say what evidence would be needed. |
 
-Planner premise references are authoritative. The renderer does not independently select citations.
-The orchestrator maps validated references to the existing `allowedFragments`, and the existing
-delivery layer performs the final live permission check and reference rendering.
+Planner premise references are authoritative. The renderer does not independently select evidence.
+The orchestrator maps `D*` references to the existing `allowedFragments`; chat, memory, thread, and
+action references remain bounded provenance and never become fake document links. The existing
+delivery layer performs the final live permission check and document-reference rendering.
 
-Direct tasks retain the existing behavior and output-format contract. They do not acquire citations
-unless the task actually uses a company document as source material.
+Direct tasks retain the existing behavior and output-format contract, but bypass the planner only
+after deterministic application classification. They do not acquire citations unless the task
+actually uses a company document as source material.
 
 ## 8. Safety and Trust Boundaries
 
@@ -312,9 +328,12 @@ Implementation uses test-driven development.
 
 ### 10.2 Planner contract tests
 
-- accept valid `explicit`, `complete_inference`, `partial`, `none`, and `direct_task` plans;
+- accept valid `explicit`, `complete_inference`, `partial`, and `none` plans;
+- reject `direct_task` planner output even if a provider or test double returns it;
 - reject unknown references, malformed JSON, blank premises, invalid state combinations, excess
   fields, excess lengths, and `partial` plans with no actual premise;
+- accept mixed `C*`, `M*`, `T*`, `D*`, and `A*` references in canonical order and valid long
+  Feishu source URIs through bounded label normalization;
 - reject a related-subject substitution;
 - retry one malformed result, then fail closed;
 - ignore prompt-injection text inside documents and chat.
@@ -325,7 +344,8 @@ Implementation uses test-driven development.
 - `partial` visibly warns, labels the conjecture, and preserves low or medium confidence;
 - renderer cannot add citation references or upgrade evidence state;
 - authoritative planner references map to the correct fragments;
-- direct transformation and exact-output tasks remain functional;
+- deterministic direct transformation and exact-output routing remains functional while imperative
+  company-fact requests cannot bypass planning;
 - permission denial bypasses both planner and renderer;
 - provider and renderer failures use bounded safe responses;
 - execution observations distinguish both model phases without content leakage.

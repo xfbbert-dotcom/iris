@@ -4,9 +4,28 @@
 
 **Goal:** Make Iris retrieve coherent same-source knowledge, classify evidence explicitly, and answer with either a supported conclusion or a clearly warned, knowledge-base-grounded conjecture.
 
-**Architecture:** The current question becomes the primary retrieval query and bounded recent chat becomes a lower-weight supplemental query. Fused candidates are selected by source, then a structured evidence planner and a separate grounded-answer renderer run before the existing citation and permission delivery path.
+**Architecture:** The current question becomes the primary retrieval query and bounded recent chat becomes a lower-weight supplemental query. The application deterministically selects only explicit payload transformations for the direct path. All other turns use a structured company-fact planner over bounded chat, memory, thread, document, and action evidence, followed by a separate grounded-answer renderer and the existing citation and permission delivery path.
 
 **Tech Stack:** TypeScript, Node.js, Vitest 2, PostgreSQL/pgvector, the existing OpenAI-compatible chat-completions API, Docker Compose, and the Feishu pilot runtime.
+
+## 2026-08-12 Review Amendments (Authoritative)
+
+These amendments were added after independent pre-merge review. They supersede any older task
+snippet below that conflicts with them:
+
+- Route ownership belongs to the application. Only an explicit transformation with a supplied
+  payload or explicit exact-output payload skips planning. The evidence planner schema accepts
+  `company_fact` only, and any provider result containing `direct_task` fails closed.
+- Planning evidence follows the whitepaper order and uses stable references for prior live chat
+  (`C1`-`C10`), group memory (`M1`-`M8`), discussion threads (`T1`-`T6`), documents
+  (`D1`-`D12`), and action records (`A1`-`A6`). A plan selects at most 12 premises.
+- Only `D*` references become document citations and enter send-time document permission
+  revalidation. Other references remain bounded provenance and never create fake source links.
+- Valid long Feishu source URIs are not answer failures. Model-visible source labels are
+  deterministically truncated to 512 characters while the stable evidence reference retains
+  identity.
+- The original task checklist remains useful implementation history; this amendment and the
+  approved design are normative where details differ.
 
 ## Global Constraints
 
@@ -18,6 +37,7 @@
 - `partial` requires at least one cited premise; `none` must not invent a company fact.
 - Permission-denied content never enters either model request and keeps the existing fail-closed behavior.
 - The planner owns evidence state and premise references; the renderer cannot add references or upgrade state or confidence.
+- The application owns direct-task classification; the planner cannot authorize a bypass.
 - Keep the existing send-time permission revalidation, Feishu source footer, runtime gates, retry bounds, prompt-injection boundary, and direct-task behavior.
 - Do not add a database migration, dependency, external provider, knowledge-base write path, or unbounded retry.
 - Use existing ledger phases; distinguish `retrieval`, `evidence_planning`, and `answer_rendering` with content-free `metadata.stage` values.
@@ -546,6 +566,10 @@ Expected: FAIL because the contract module does not exist.
 
 - [ ] **Step 3: Add discriminated plan types**
 
+The shared `EvidencePlan` union below remains useful for direct-task execution metadata and legacy
+test doubles. It does not widen the provider contract: under the authoritative review amendment,
+the actual evidence-planner response schema and provider accept `company_fact` only.
+
 ```ts
 export type EvidencePlanningDocument = {
   citationRef: string;
@@ -923,9 +947,9 @@ git commit -m "feat: render evidence-bounded answers"
 - Modify: `apps/core/tests/openai-compatible-model-provider.test.ts`
 
 **Interfaces:**
-- The orchestrator consumes three required roles: existing `ModelProvider` for `direct_task`, `EvidencePlanner`, and `GroundedAnswerRenderer`.
+- The orchestrator consumes three required roles: existing `ModelProvider` for application-classified direct tasks, a company-fact-only `EvidencePlanner`, and `GroundedAnswerRenderer`.
 - Runtime constructs all three roles from one existing `ModelProviderConfig`; no new environment variable is introduced.
-- `AnswerDraftResult.citedSourceRefs` for company facts comes only from `citedRefsForEvidencePlan(plan)`.
+- `AnswerDraftResult.citedSourceRefs` for company facts comes only from `documentCitationRefsForEvidencePlan(plan)`.
 
 - [ ] **Step 1: Add reusable typed test doubles**
 
@@ -951,7 +975,10 @@ export function createReasoningDoubles(plan = directTaskPlan()) {
 }
 ```
 
-Use this helper to update every direct `createAnswerDraftOrchestrator` and runtime model stub, keeping old tests on the explicit `direct_task` path unless the test is about company evidence.
+This was the original test-double shape. Under the review amendment, a `directTaskPlan` double is
+never a permitted planner result: direct-task tests use an explicit application-classified request
+and assert that the planner is not called; company-fact tests use a planner that can return only
+`company_fact`.
 
 - [ ] **Step 2: Write failing orchestration tests for all company evidence states**
 
@@ -972,7 +999,7 @@ expect(renderer.render).toHaveBeenCalledWith(expect.objectContaining({
 expect(result.citedSourceRefs).toEqual(["D2"]);
 ```
 
-For `partial`, assert the renderer is called and only cited premise evidence is passed. For `none`, assert no citations. For permission denial, assert planner, renderer, and direct model are all skipped. For `direct_task`, assert only the existing direct model runs after planning.
+For `partial`, assert the renderer is called and only cited premise evidence is passed. For `none`, assert no citations. For permission denial, assert planner, renderer, and direct model are all skipped. For an application-classified direct task, assert only the existing direct model runs and planning is skipped.
 
 - [ ] **Step 3: Run focused orchestrator tests and verify RED**
 
@@ -985,18 +1012,18 @@ Expected: new company-state tests fail because the orchestrator still invokes on
 - [ ] **Step 4: Implement the two-stage branch**
 
 ```ts
-const evidence = context.allowedFragments.map((fragment, index) => ({
-  citationRef: `D${index + 1}`,
-  source: `${fragment.sourceUri}#chunk-${fragment.chunkIndex}`,
-  text: fragment.text,
-}));
-const plan = await planner.plan({ question, evidence, liveChatMessages: context.liveChatMessages });
-
-if (plan.taskMode === "direct_task") {
+if (isExplicitDirectTaskQuestion(question)) {
   return runDirectModel(question, context.promptContext);
 }
-const citedSourceRefs = citedRefsForEvidencePlan(plan);
-const citedEvidence = evidence.filter(({ citationRef }) => citedSourceRefs.includes(citationRef));
+
+const evidence = buildPlanningEvidence(question, context);
+const plan = await planner.plan({ question, evidence, liveChatMessages: context.liveChatMessages });
+if (plan.taskMode !== "company_fact") {
+  throw new Error("company-fact evidence planner returned an invalid task mode");
+}
+const selectedRefs = citedRefsForEvidencePlan(plan);
+const citedSourceRefs = documentCitationRefsForEvidencePlan(plan);
+const citedEvidence = evidence.filter(({ citationRef }) => selectedRefs.includes(citationRef));
 const rendered = await renderer.render({
   question,
   plan,
