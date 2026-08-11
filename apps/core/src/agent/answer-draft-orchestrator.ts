@@ -132,8 +132,13 @@ export function createAnswerDraftOrchestrator({
       normalized.liveChatLimit,
     );
 
+    const supplementalQueryText = buildSupplementalRetrievalQueryText(
+      normalized.question,
+      liveChatMessages,
+    );
     return contextBuilder.buildContext({
-      queryText: buildRetrievalQueryText(normalized.question, liveChatMessages),
+      queryText: normalized.question,
+      ...(supplementalQueryText === undefined ? {} : { supplementalQueryText }),
       liveChatMessages,
       fragmentLimit: input.fragmentLimit,
       liveChatLimit: normalized.liveChatLimit,
@@ -369,22 +374,28 @@ function selectLiveChatWindow(
   return messages.slice(-limit);
 }
 
-function buildRetrievalQueryText(question: string, liveChatMessages: LiveChatMessage[]): string {
+function buildSupplementalRetrievalQueryText(
+  question: string,
+  liveChatMessages: LiveChatMessage[],
+): string | undefined {
   const separator = "\n\nRecent live chat:\n";
   if (
     liveChatMessages.length === 0 ||
     question.length + separator.length >= MAX_ANSWER_DRAFT_QUESTION_CHARS
   ) {
-    return question;
+    return undefined;
   }
 
+  const priorMessages = liveChatMessages.filter(
+    ({ text }) => text.trim() !== question,
+  );
   const liveChatBudget = MAX_ANSWER_DRAFT_QUESTION_CHARS - question.length - separator.length;
   const liveChatQueryText = buildLiveChatRetrievalText(
-    liveChatMessages.slice(-MAX_RETRIEVAL_QUERY_LIVE_CHAT_MESSAGES),
+    priorMessages.slice(-MAX_RETRIEVAL_QUERY_LIVE_CHAT_MESSAGES),
     liveChatBudget,
   );
   if (liveChatQueryText.length === 0) {
-    return question;
+    return undefined;
   }
 
   return `${question}${separator}${liveChatQueryText}`;

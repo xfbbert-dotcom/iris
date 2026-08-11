@@ -30,6 +30,7 @@ export type QueryEmbeddingProvider = Pick<EmbeddingProvider, "embedTexts">;
 
 export type DocumentRetrievalContextInput = {
   queryText: string;
+  supplementalQueryText?: string;
   liveChatMessages: LiveChatMessage[];
   fragmentLimit?: number;
   liveChatLimit?: number;

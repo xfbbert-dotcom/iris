@@ -54,7 +54,8 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: expect.stringContaining("What changed?"),
+      queryText: "What changed?",
+      supplementalQueryText: expect.stringContaining("Recent live chat:"),
       liveChatMessages: [{ speaker: "Alice", text: "Please answer." }],
       fragmentLimit: 4,
       liveChatLimit: 10,
@@ -236,7 +237,8 @@ describe("AnswerDraftOrchestrator", () => {
       limit: 8,
     });
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: expect.stringContaining("What changed?"),
+      queryText: "What changed?",
+      supplementalQueryText: expect.stringContaining("Recent live chat:"),
       liveChatMessages: [
         { speaker: "ou_a", text: "Stored context" },
         { speaker: "ou_b", text: "Current question context" },
@@ -246,9 +248,12 @@ describe("AnswerDraftOrchestrator", () => {
     });
   });
 
-  it("includes live chat context in retrieval query text for follow-up questions", async () => {
+  it("keeps the current question clean and sends recent chat as a supplemental query", async () => {
     const contextBuilder = {
-      buildContext: vi.fn(async (_input: { queryText: string }) => ({
+      buildContext: vi.fn(async (_input: {
+        queryText: string;
+        supplementalQueryText?: string;
+      }) => ({
         promptContext:
           "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>",
         allowedFragments: [],
@@ -263,24 +268,27 @@ describe("AnswerDraftOrchestrator", () => {
     const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
 
     await orchestrator.generateDraft({
-      question: "What about this?",
+      question: "Quello 的电子宠物是如何自己产生目标的？",
       liveChatMessages: [
-        { speaker: "Alice", text: "Project Alpha launch moved to next Wednesday." },
-        { speaker: "Bob", text: "The risk is that design acceptance is not done." },
+        { speaker: "Alice", text: "我希望它可以自己推理" },
+        { speaker: "Alice", text: "Quello 的电子宠物是如何自己产生目标的？" },
       ],
     });
 
-    const queryText = contextBuilder.buildContext.mock.calls[0]?.[0].queryText ?? "";
-    expect(queryText).toContain("What about this?");
-    expect(queryText).toContain("Alice: Project Alpha launch moved to next Wednesday.");
-    expect(queryText).toContain("Bob: The risk is that design acceptance is not done.");
-    expect(queryText.length).toBeLessThanOrEqual(4000);
+    const input = contextBuilder.buildContext.mock.calls[0]?.[0];
+    expect(input?.queryText).toBe("Quello 的电子宠物是如何自己产生目标的？");
+    expect(input?.supplementalQueryText).toContain("Alice: 我希望它可以自己推理");
+    const supplementalQueryText = String(input?.supplementalQueryText);
+    expect(supplementalQueryText.match(/Quello 的电子宠物是如何自己产生目标的？/gu))
+      .toHaveLength(1);
+    expect(supplementalQueryText.length).toBeLessThanOrEqual(4000);
   });
 
   it("keeps stale earlier chat out of document retrieval while preserving prompt context", async () => {
     const contextBuilder = {
       buildContext: vi.fn(async (_input: {
         queryText: string;
+        supplementalQueryText?: string;
         liveChatMessages: Array<{ speaker: string; text: string }>;
       }) => ({
         promptContext:
@@ -311,7 +319,9 @@ describe("AnswerDraftOrchestrator", () => {
 
     const input = contextBuilder.buildContext.mock.calls[0]?.[0];
     expect(input?.queryText).not.toContain("Revoked document acceptance marker.");
-    expect(input?.queryText).toContain("It should warn one week early.");
+    expect(input?.queryText).toBe("How early should it remind us?");
+    expect(input?.supplementalQueryText).not.toContain("Revoked document acceptance marker.");
+    expect(input?.supplementalQueryText).toContain("It should warn one week early.");
     expect(input?.liveChatMessages).toEqual(liveChatMessages);
   });
 
@@ -584,7 +594,8 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: expect.stringContaining("What changed?"),
+      queryText: "What changed?",
+      supplementalQueryText: expect.stringContaining("Recent live chat:"),
       liveChatMessages: [
         { speaker: "ou_b", text: "Stored context" },
         { speaker: "ou_a", text: "Duplicated context" },
@@ -630,7 +641,8 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: expect.stringContaining("What changed?"),
+      queryText: "What changed?",
+      supplementalQueryText: expect.stringContaining("Recent live chat:"),
       liveChatMessages: [
         { speaker: "ou_a", text: "Duplicated context" },
         { speaker: "ou_c", text: "Current context" },
@@ -678,7 +690,8 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(contextBuilder.buildContext).toHaveBeenCalledWith({
-      queryText: expect.stringContaining("What changed?"),
+      queryText: "What changed?",
+      supplementalQueryText: expect.stringContaining("Recent live chat:"),
       liveChatMessages: [
         ...storedMessages.slice(1),
         { speaker: "ou_a", text: "Repeated current request" },
