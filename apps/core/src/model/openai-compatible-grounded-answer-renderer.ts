@@ -1,5 +1,6 @@
 import {
   citedRefsForEvidencePlan,
+  normalizeEvidenceSourceLabel,
   type EvidenceConfidence,
   type EvidencePlan,
   type EvidencePlanningDocument,
@@ -14,7 +15,6 @@ import type {
 
 const MAX_RENDERER_QUESTION_CHARS = 4000;
 const MAX_RENDERER_DOCUMENTS = 12;
-const MAX_RENDERER_SOURCE_CHARS = 512;
 const MAX_RENDERER_DOCUMENT_TEXT_CHARS = 1200;
 const MAX_RENDERER_LIVE_CHAT_MESSAGES = 20;
 const MAX_RENDERER_SPEAKER_CHARS = 256;
@@ -127,9 +127,8 @@ function normalizeRenderInput(input: GroundedAnswerRenderInput): GroundedAnswerR
   }
   const evidence = input.evidence.map((document) => ({
     citationRef: document.citationRef,
-    source: requireBoundedText(
+    source: normalizeEvidenceSourceLabel(
       document.source,
-      MAX_RENDERER_SOURCE_CHARS,
       "grounded answer document source",
     ),
     text: requireBoundedText(

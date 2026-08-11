@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
-import { citedRefsForEvidencePlan, type EvidencePlan } from "./evidence-plan.js";
+import {
+  citedRefsForEvidencePlan,
+  documentCitationRefsForEvidencePlan,
+  type EvidencePlan,
+  type EvidencePlanningDocument,
+} from "./evidence-plan.js";
 import type { RetrievedDocumentFragment } from "../documents/document-fragment-repository.js";
 import type {
   DocumentRetrievalContextBuilder,
@@ -74,6 +79,9 @@ const MAX_LIVE_CHAT_SPEAKER_CHARS = 256;
 const MAX_LIVE_CHAT_TEXT_CHARS = 2000;
 const MAX_LIVE_CHAT_LIMIT = 20;
 const MAX_RETRIEVAL_QUERY_LIVE_CHAT_MESSAGES = 5;
+const MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES = 10;
+const MAX_PLANNING_GROUP_MEMORY_TEXT_CHARS = 600;
+const MAX_PLANNING_EVIDENCE_TEXT_CHARS = 1200;
 const MAX_EXECUTION_ID_CHARS = 512;
 const MAX_EXECUTION_OPERATION_KEY_CHARS = 512;
 const TRUNCATION_MARKER = " ... [truncated]";
@@ -197,29 +205,8 @@ export function createAnswerDraftOrchestrator({
             ...(provider === undefined ? {} : { provider }),
             ...(modelId === undefined ? {} : { modelId }),
           };
-          const evidence = context.allowedFragments.map((fragment, index) => ({
-            citationRef: `D${index + 1}`,
-            source: `${fragment.sourceUri}#chunk-${fragment.chunkIndex}`,
-            text: fragment.text,
-          }));
-          const plan = await runObservedProviderRequest({
-            observer: agentExecutionObserver,
-            providerObservation,
-            executionId,
-            stageKey: "planner",
-            stage: "evidence_planning",
-            request: () => planner.plan({
-              question,
-              evidence,
-              liveChatMessages: context.liveChatMessages ?? [],
-            }),
-          });
-          reasoningMetadata = {
-            taskMode: plan.taskMode,
-            ...(plan.evidenceState === null ? {} : { evidenceState: plan.evidenceState }),
-            ...(plan.confidence === null ? {} : { confidence: plan.confidence }),
-          };
-          if (plan.taskMode === "direct_task") {
+          if (isExplicitDirectTaskQuestion(question)) {
+            reasoningMetadata = { taskMode: "direct_task" };
             const modelResult = await runObservedProviderRequest({
               observer: agentExecutionObserver,
               providerObservation,
@@ -237,11 +224,32 @@ export function createAnswerDraftOrchestrator({
               context.allowedFragments.length,
             );
           } else {
+            const evidence = buildPlanningEvidence(question, context);
+            const plan = await runObservedProviderRequest({
+              observer: agentExecutionObserver,
+              providerObservation,
+              executionId,
+              stageKey: "planner",
+              stage: "evidence_planning",
+              request: () => planner.plan({
+                question,
+                evidence,
+                liveChatMessages: context.liveChatMessages ?? [],
+              }),
+            });
+            if (plan.taskMode !== "company_fact") {
+              throw new Error("company-fact evidence planner returned an invalid task mode");
+            }
+            reasoningMetadata = {
+              taskMode: plan.taskMode,
+              ...(plan.evidenceState === null ? {} : { evidenceState: plan.evidenceState }),
+              ...(plan.confidence === null ? {} : { confidence: plan.confidence }),
+            };
+            const selectedEvidence = selectEvidenceForPlan(evidence, plan);
             citedSourceRefs = normalizeCitedSourceRefs(
-              citedRefsForEvidencePlan(plan),
+              documentCitationRefsForEvidencePlan(plan),
               context.allowedFragments.length,
             );
-            const citedRefSet = new Set(citedSourceRefs);
             const rendered = await runObservedProviderRequest({
               observer: agentExecutionObserver,
               providerObservation,
@@ -251,8 +259,7 @@ export function createAnswerDraftOrchestrator({
               request: () => renderer.render({
                 question,
                 plan,
-                evidence: evidence.filter(({ citationRef }) =>
-                  citedRefSet.has(citationRef)),
+                evidence: selectedEvidence,
                 liveChatMessages: context.liveChatMessages ?? [],
               }),
             });
@@ -297,6 +304,99 @@ export function createAnswerDraftOrchestrator({
       }
     },
   };
+}
+
+const DIRECT_TASK_COMMAND_PATTERNS = [
+  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|总结|概括|整理|格式化|提炼|压缩|扩写|转换|生成|列出|提取)/u,
+  /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|summari[sz]e|format|extract|condense|expand|convert|generate|list)\b/iu,
+];
+const DIRECT_TASK_OBJECT_MARKER_PATTERN = /(?:这(?:段|份|个|些)|以下|下列|上面|上述|上一条|刚才|附件|该(?:文|段|内容))|\b(?:this|these|the following|the above|previous message|attached)\b/iu;
+const COMPANY_FACT_QUESTION_MARKER_PATTERN = /[?？]|(?:什么|为什么|为何|如何|怎么|多少|是否|谁|哪里|哪(?:个|些)|何时)|\b(?:what|why|how|who|when|where|which|whether)\b/iu;
+const DIRECT_TASK_PAYLOAD_DELIMITER_PATTERNS = [
+  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:(?:翻译|改写|重写|润色|校对|总结|概括|整理|格式化|提炼|压缩|扩写|转换|生成|列出|提取)|(?:只|仅)\s*(?:回复|回答|输出))[^:：]{0,40}[:：]/u,
+  /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|summari[sz]e|format|extract|condense|expand|convert|generate|list|reply only|respond only|output only)[^:：]{0,40}[:：]/iu,
+];
+
+function isExplicitDirectTaskQuestion(question: string): boolean {
+  const normalized = question.trim();
+  if (DIRECT_TASK_PAYLOAD_DELIMITER_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+  if (COMPANY_FACT_QUESTION_MARKER_PATTERN.test(normalized)) {
+    return false;
+  }
+  return DIRECT_TASK_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized)) &&
+    DIRECT_TASK_OBJECT_MARKER_PATTERN.test(normalized);
+}
+
+function buildPlanningEvidence(
+  question: string,
+  context: DocumentRetrievalContextResult,
+): EvidencePlanningDocument[] {
+  const normalizedQuestion = question.trim();
+  const liveChatEvidence = (context.liveChatMessages ?? [])
+    .filter(({ text }) => {
+      const normalizedText = text.trim();
+      return normalizedText !== normalizedQuestion && !normalizedText.endsWith(normalizedQuestion);
+    })
+    .slice(-MAX_PLANNING_LIVE_CHAT_EVIDENCE_MESSAGES)
+    .map((message, index) => ({
+      citationRef: `C${index + 1}`,
+      source: `live_chat:${index + 1}`,
+      text: truncateWithMarker(
+        `${message.speaker.trim()}: ${message.text.trim()}`,
+        MAX_PLANNING_EVIDENCE_TEXT_CHARS,
+      ),
+    }));
+  const groupMemoryEvidence = context.usedGroupMemories.slice(0, 8).map((memory, index) => ({
+    citationRef: `M${index + 1}`,
+    source: `group_memory:${memory.id}`,
+    text: truncateWithMarker(memory.content, MAX_PLANNING_GROUP_MEMORY_TEXT_CHARS),
+  }));
+  const discussionThreadEvidence = (context.usedDiscussionThreads ?? [])
+    .slice(0, 6)
+    .map((thread, index) => ({
+      citationRef: `T${index + 1}`,
+      source: `discussion_thread:${thread.id}:${thread.status}`,
+      text: truncateWithMarker(thread.summary, MAX_PLANNING_EVIDENCE_TEXT_CHARS),
+    }));
+  const documentEvidence = context.allowedFragments.map((fragment, index) => ({
+    citationRef: `D${index + 1}`,
+    source: `${fragment.sourceUri}#chunk-${fragment.chunkIndex}`,
+    text: truncateWithMarker(fragment.text, MAX_PLANNING_EVIDENCE_TEXT_CHARS),
+  }));
+  const actionEvidence = (context.usedActionItems ?? []).slice(0, 6).map((action, index) => ({
+    citationRef: `A${index + 1}`,
+    source: `action_item:${action.id}:${action.status}`,
+    text: truncateWithMarker(
+      `${action.description.trim()} Owner: ${action.ownerRef.trim()}${
+        action.dueAt === undefined ? "" : ` Due: ${action.dueAt.toISOString()}`
+      }`,
+      MAX_PLANNING_EVIDENCE_TEXT_CHARS,
+    ),
+  }));
+
+  return [
+    ...liveChatEvidence,
+    ...groupMemoryEvidence,
+    ...discussionThreadEvidence,
+    ...documentEvidence,
+    ...actionEvidence,
+  ];
+}
+
+function selectEvidenceForPlan(
+  evidence: EvidencePlanningDocument[],
+  plan: EvidencePlan,
+): EvidencePlanningDocument[] {
+  const evidenceByRef = new Map(evidence.map((item) => [item.citationRef, item]));
+  return citedRefsForEvidencePlan(plan).map((citationRef) => {
+    const item = evidenceByRef.get(citationRef);
+    if (item === undefined) {
+      throw new Error(`evidence plan reference ${citationRef} is outside the allowed evidence`);
+    }
+    return item;
+  });
 }
 
 type ProviderObservationBase = {

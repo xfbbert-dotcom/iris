@@ -131,6 +131,26 @@ describe("parseEvidencePlanContent", () => {
 
     expect(citedRefsForEvidencePlan(plan)).toEqual(["D1", "D3"]);
   });
+
+  it("accepts group-local evidence references and returns them in retrieval order", () => {
+    const allowedRefs = ["C1", "M1", "T1", "D1", "A1"];
+    const plan = parseEvidencePlanContent(JSON.stringify({
+      taskMode: "company_fact",
+      evidenceState: "complete_inference",
+      premises: [
+        { citationRef: "A1", statement: "Action premise" },
+        { citationRef: "D1", statement: "Document premise" },
+        { citationRef: "T1", statement: "Thread premise" },
+        { citationRef: "M1", statement: "Memory premise" },
+        { citationRef: "C1", statement: "Chat premise" },
+      ],
+      proposedAnswer: "Bounded synthesis",
+      missingInformation: [],
+      confidence: "medium",
+    }), allowedRefs);
+
+    expect(citedRefsForEvidencePlan(plan)).toEqual(allowedRefs);
+  });
 });
 
 function validPlan(overrides: Record<string, unknown> = {}): string {

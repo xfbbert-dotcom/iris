@@ -1,6 +1,16 @@
 const MAX_EVIDENCE_PLAN_ITEMS = 12;
 const MAX_EVIDENCE_PLAN_ITEM_CHARS = 1200;
 const MAX_EVIDENCE_PLAN_ANSWER_CHARS = 8000;
+const MAX_EVIDENCE_SOURCE_LABEL_CHARS = 512;
+const EVIDENCE_SOURCE_TRUNCATION_MARKER = " ... [truncated]";
+const EVIDENCE_CITATION_REF_PATTERN = /^(?:C(?:[1-9]|10)|M[1-8]|T[1-6]|D(?:[1-9]|1[0-2])|A[1-6])$/u;
+const EVIDENCE_REF_CLASS_ORDER = new Map([
+  ["C", 0],
+  ["M", 1],
+  ["T", 2],
+  ["D", 3],
+  ["A", 4],
+]);
 const PLAN_FIELDS = new Set([
   "taskMode",
   "evidenceState",
@@ -89,7 +99,27 @@ export function parseEvidencePlanContent(
 export function citedRefsForEvidencePlan(plan: EvidencePlan): string[] {
   return plan.premises
     .map(({ citationRef }) => citationRef)
-    .sort((left, right) => Number(left.slice(1)) - Number(right.slice(1)));
+    .sort(compareEvidenceCitationRefs);
+}
+
+export function documentCitationRefsForEvidencePlan(plan: EvidencePlan): string[] {
+  return citedRefsForEvidencePlan(plan).filter((citationRef) => citationRef.startsWith("D"));
+}
+
+export function normalizeEvidenceSourceLabel(value: unknown, fieldName: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`${fieldName} must be a string`);
+  }
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new Error(`${fieldName} must not be blank`);
+  }
+  if (normalized.length <= MAX_EVIDENCE_SOURCE_LABEL_CHARS) {
+    return normalized;
+  }
+
+  const prefixChars = MAX_EVIDENCE_SOURCE_LABEL_CHARS - EVIDENCE_SOURCE_TRUNCATION_MARKER.length;
+  return `${normalized.slice(0, prefixChars).trimEnd()}${EVIDENCE_SOURCE_TRUNCATION_MARKER}`;
 }
 
 function validateState(plan: EvidencePlan): void {
@@ -160,7 +190,7 @@ function readPremises(value: unknown, allowedCitationRefs: ReadonlySet<string>):
       3,
       "evidence plan citation reference",
     );
-    if (!/^D(?:[1-9]|1[0-2])$/u.test(citationRef)) {
+    if (!EVIDENCE_CITATION_REF_PATTERN.test(citationRef)) {
       throw new EvidencePlanValidationError("evidence plan citation reference is invalid");
     }
     if (!allowedCitationRefs.has(citationRef)) {
@@ -181,6 +211,19 @@ function readPremises(value: unknown, allowedCitationRefs: ReadonlySet<string>):
       ),
     };
   });
+}
+
+export function isEvidenceCitationRef(value: string): boolean {
+  return EVIDENCE_CITATION_REF_PATTERN.test(value);
+}
+
+function compareEvidenceCitationRefs(left: string, right: string): number {
+  const classDifference =
+    (EVIDENCE_REF_CLASS_ORDER.get(left[0] ?? "") ?? Number.MAX_SAFE_INTEGER) -
+    (EVIDENCE_REF_CLASS_ORDER.get(right[0] ?? "") ?? Number.MAX_SAFE_INTEGER);
+  return classDifference === 0
+    ? Number(left.slice(1)) - Number(right.slice(1))
+    : classDifference;
 }
 
 function readBoundedStringArray(value: unknown, fieldName: string): string[] {
