@@ -605,6 +605,39 @@ describe("AnswerReplyDeliveryService", () => {
     },
   );
 
+  it("replaces a prepared Quello inference with the safe notice when access is revoked", async () => {
+    const quelloConclusion = "SENSITIVE inferred Quello conclusion";
+    const harness = createHarness({
+      verifierResults: [[{ documentSourceId: "source-quello", outcome: "denied" }]],
+      replyResults: [{ replyMessageId: "safe-quello-notice" }],
+    });
+
+    await expect(harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      renderedText: quelloConclusion,
+      sourceTraces: [sourceTrace({
+        documentSourceId: "source-quello",
+        documentSnapshotId: "snapshot-quello",
+        fragmentId: "quello-evolution",
+        sourceTitle: "Quello Evolution",
+        sourceUri: "https://tenant.feishu.cn/wiki/quello",
+      })],
+    }))))).resolves.toEqual({ replyMessageId: "safe-quello-notice" });
+
+    expect(harness.verifier.verify).toHaveBeenCalledWith({
+      chatId: "oc_1",
+      documentSourceIds: ["source-quello"],
+    });
+    expect(harness.repository.beginAnswerSend).not.toHaveBeenCalled();
+    expect(harness.replier.replyText).toHaveBeenCalledOnce();
+    expect(harness.replier.replyText).toHaveBeenCalledWith({
+      messageId: "om_1",
+      text: ANSWER_PERMISSION_CHANGED_NOTICE,
+      replyInThread: true,
+      uuid: safeNoticeUuid,
+    });
+    expect(JSON.stringify(harness.replier.replyText.mock.calls)).not.toContain(quelloConclusion);
+  });
+
   it.each([
     ["missing", [{ documentSourceId: "source-a", outcome: "allowed" }]],
     ["duplicated", [
