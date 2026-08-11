@@ -57,6 +57,16 @@ describe("selectSourceAwareFragments", () => {
     expect(selected).toHaveLength(8);
   });
 
+  it("returns no fragments when the caller budget is zero", async () => {
+    const selected = await selectSourceAwareFragments({
+      queryText: "Quello",
+      fragmentLimit: 0,
+      rankedFragments: [fragment("quello", "quello", 0, "Quello")],
+    });
+
+    expect(selected).toEqual([]);
+  });
+
   it("completes immediate chunk boundaries only within the selected snapshot and source", async () => {
     const seed = fragment(
       "quello-middle",
@@ -69,8 +79,16 @@ describe("selectSourceAwareFragments", () => {
       fragmentLimit: 3,
       rankedFragments: [seed],
       listFragmentsForSnapshot: async () => [
+        {
+          ...fragment("legacy-before", "quello", 0, seed.sourceTitle!),
+          embeddingProfileId: "legacy-profile",
+        },
         fragment("quello-before", "quello", 0, seed.sourceTitle!),
         seed,
+        {
+          ...fragment("legacy-after", "quello", 2, seed.sourceTitle!),
+          embeddingProfileId: "legacy-profile",
+        },
         fragment("quello-after", "quello", 2, seed.sourceTitle!),
         fragment("other-source", "other", 2, "Other"),
       ],

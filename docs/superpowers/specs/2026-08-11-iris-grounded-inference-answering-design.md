@@ -124,9 +124,16 @@ The existing runtime gates, source scoping, Feishu permission checker, prompt-in
 answer-reply delivery service, and pilot controls remain in force.
 
 The planner never classifies direct tasks. The direct-task route is a narrow, deterministic
-application decision for requests such as translating the supplied text, summarizing this meeting
-note, or replying with the literal payload after a delimiter. A bare imperative such as
-“总结 Iris 当前年收入” remains company-factual and must pass the evidence controls.
+application decision for safe literal transformations with a supplied delimiter payload,
+content operations that explicitly name the literal object before the delimiter (for example,
+“Please summarize this text: ...” or “请整理以下文本：...”), and exact-output requests. A bare
+imperative such as “总结 Iris 当前年收入”, “Please summarize: Iris current annual revenue”, or
+“Please list: Iris Q2 customers” remains company-factual and must pass the evidence controls.
+
+An application-classified direct task receives only the current literal task and empty document
+and live-chat context envelopes. It cannot consume retrieved company documents, memory, threads,
+actions, or recent chat as an implicit source. Any task that needs company evidence must use the
+company-factual path.
 
 ## 5. Retrieval Design
 
@@ -160,8 +167,8 @@ Selection follows these rules:
   whole window;
 - then take additional semantically strong fragments from the leading sources, up to three per
   source and within the existing maximum of twelve prompt documents;
-- include an immediate same-snapshot neighbor when needed to complete text split by a chunk
-  boundary;
+- include an immediate same-source, same-snapshot, same-embedding-profile neighbor when needed to
+  complete text split by a chunk boundary;
 - never include a blank, stale-snapshot, non-answerable, out-of-group, or permission-denied
   fragment.
 
@@ -186,8 +193,11 @@ The planner receives:
 - bounded, permission-allowed evidence from prior live chat (`C1`-`C10`), group memory
   (`M1`-`M8`), discussion threads (`T1`-`T6`), documents (`D1`-`D12`), and action records
   (`A1`-`A6`);
-- only the minimum conversational context needed to resolve the subject;
-- system rules that treat every evidence and chat field as untrusted data, never instructions.
+- system rules that treat every evidence field as untrusted data, never instructions.
+
+Prior live chat has exactly one model-visible route: the bounded `C*` evidence records. The
+planner's separate raw `liveChatMessages` input is empty, so an unselected message cannot influence
+the plan through a second channel.
 
 At most 42 evidence items enter planning and at most 12 unique premises enter a plan. A stable
 citation reference, not the display label, is the identity boundary. Long valid Feishu source URIs
@@ -245,8 +255,11 @@ For company-factual answers, the renderer receives only:
 
 - the current question;
 - the validated plan;
-- the evidence items cited by the plan;
-- bounded live-chat context needed for language and conversational continuity.
+- the evidence items cited by the plan.
+
+The renderer's separate raw `liveChatMessages` input is empty. If conversational continuity is
+material, the planner must select the relevant `C*` premise and the renderer receives that premise
+through the same bounded evidence channel as every other fact.
 
 It does not receive unrelated retrieved fragments. It may improve clarity and tone, but it may not
 change `evidenceState`, add premises, increase confidence, remove the insufficiency warning from a
@@ -271,9 +284,9 @@ The orchestrator maps `D*` references to the existing `allowedFragments`; chat, 
 action references remain bounded provenance and never become fake document links. The existing
 delivery layer performs the final live permission check and document-reference rendering.
 
-Direct tasks retain the existing behavior and output-format contract, but bypass the planner only
-after deterministic application classification. They do not acquire citations unless the task
-actually uses a company document as source material.
+Direct tasks retain the existing output-format contract, but bypass the planner only after
+deterministic application classification. In this version they receive no company context and do
+not acquire company-document citations.
 
 ## 8. Safety and Trust Boundaries
 
@@ -400,6 +413,9 @@ Non-blocking follow-up work requires separate evidence:
 - general chunk overlap or a rechunk/reindex migration;
 - a dedicated stronger planner model or different planner model configuration;
 - deterministic multilingual renderer fallback;
+- version-aware send-time revalidation for selected `C*`, `M*`, `T*`, and `A*` provenance; these
+  records are already group-scoped and bounded, but only document `D*` sources currently pass the
+  dedicated delivery-time permission recheck;
 - offline retrieval-quality evaluation beyond the production-shaped regression set.
 
 These items must not extend the current fix after its agreed end-to-end acceptance gates pass.

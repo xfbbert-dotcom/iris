@@ -91,6 +91,7 @@ async function appendBoundedNeighbors(
     for (const neighbor of snapshotFragments) {
       if (
         neighbor.documentSourceId !== seed.documentSourceId ||
+        neighbor.embeddingProfileId !== seed.embeddingProfileId ||
         Math.abs(neighbor.chunkIndex - seed.chunkIndex) !== 1 ||
         neighbor.text.trim().length === 0
       ) {

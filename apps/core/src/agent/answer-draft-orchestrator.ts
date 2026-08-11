@@ -86,6 +86,8 @@ const MAX_EXECUTION_ID_CHARS = 512;
 const MAX_EXECUTION_OPERATION_KEY_CHARS = 512;
 const TRUNCATION_MARKER = " ... [truncated]";
 const PERMISSION_BLOCKED_ANSWER_DRAFT = "Answer withheld by the live permission guard.";
+const DIRECT_TASK_PROMPT_CONTEXT =
+  "<background_documents></background_documents>\n\n<live_chat_context></live_chat_context>";
 
 export function createAnswerDraftOrchestrator({
   contextBuilder,
@@ -215,14 +217,11 @@ export function createAnswerDraftOrchestrator({
               stage: "answer_rendering",
               request: () => model.generateAnswerDraft({
                 question,
-                promptContext: context.promptContext,
+                promptContext: DIRECT_TASK_PROMPT_CONTEXT,
               }),
             });
             answerText = truncateAnswerDraftText(modelResult.answerText.trim());
-            citedSourceRefs = normalizeCitedSourceRefs(
-              modelResult.citedSourceRefs,
-              context.allowedFragments.length,
-            );
+            citedSourceRefs = [];
           } else {
             const evidence = buildPlanningEvidence(question, context);
             const plan = await runObservedProviderRequest({
@@ -234,7 +233,7 @@ export function createAnswerDraftOrchestrator({
               request: () => planner.plan({
                 question,
                 evidence,
-                liveChatMessages: context.liveChatMessages ?? [],
+                liveChatMessages: [],
               }),
             });
             if (plan.taskMode !== "company_fact") {
@@ -260,7 +259,7 @@ export function createAnswerDraftOrchestrator({
                 question,
                 plan,
                 evidence: selectedEvidence,
-                liveChatMessages: context.liveChatMessages ?? [],
+                liveChatMessages: [],
               }),
             });
             answerText = truncateAnswerDraftText(rendered.answerText.trim());
@@ -306,16 +305,11 @@ export function createAnswerDraftOrchestrator({
   };
 }
 
-const COMPANY_FACT_QUESTION_MARKER_PATTERN = /[?？]|(?:什么|为什么|为何|如何|怎么|多少|是否|谁|哪里|哪(?:个|些)|何时)|\b(?:what|why|how|who|when|where|which|whether)\b/iu;
-const DIRECT_TASK_COMMAND_PATTERNS = [
-  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|总结|概括|整理|格式化|提炼|压缩|扩写|转换|生成|列出|提取)/u,
-  /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|summari[sz]e|format|extract|condense|expand|convert|generate|list)\b/iu,
-];
-const DIRECT_TASK_OBJECT_MARKER_PATTERN = /(?:这段(?:话|文字|文本|内容|会议纪要)?|这份(?:文档|文件|材料|报告|会议纪要|纪要|内容)|这些(?:文字|文本|内容|材料|笔记|消息)|以下|下列|上面|上述|上一条|刚才|附件|该(?:文|段|内容))|\b(?:this\s+(?:text|passage|paragraph|document|file|note|message|content|meeting notes?)|these\s+(?:texts|passages|paragraphs|documents|files|notes|messages|meeting notes)|the following|the above|previous message|attached)\b/iu;
 const DIRECT_TASK_PAYLOAD_DELIMITER_PATTERNS = [
   /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|总结|概括|整理|格式化|提炼|压缩|扩写|转换|生成|列出|提取)[^:：]{0,40}[:：]\s*\S/u,
   /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|summari[sz]e|format|extract|condense|expand|convert|generate|list)[^:：]{0,40}[:：]\s*\S/iu,
 ];
+const DIRECT_TASK_OBJECT_MARKER_PATTERN = /(?:这段(?:话|文字|文本|内容|会议纪要)?|这份(?:文档|文件|材料|报告|会议纪要|纪要|内容)|这些(?:文字|文本|内容|材料|笔记|消息)|以下|下列|上面|上述|上一条|刚才|附件|该(?:文|段|内容))|\b(?:this\s+(?:text|passage|paragraph|document|file|note|message|content|meeting notes?)|these\s+(?:texts|passages|paragraphs|documents|files|notes|messages|meeting notes)|the following|the above|previous message|attached)\b/iu;
 const QUESTION_LITERAL_TRANSFORM_PATTERNS = [
   /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|格式化|转换)[^:：]{0,40}[:：]/u,
   /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|format|convert)[^:：]{0,40}[:：]/iu,
@@ -331,12 +325,14 @@ function isExplicitDirectTaskQuestion(question: string): boolean {
     return true;
   }
   if (!DIRECT_TASK_PAYLOAD_DELIMITER_PATTERNS.some((pattern) => pattern.test(normalized))) {
-    return !COMPANY_FACT_QUESTION_MARKER_PATTERN.test(normalized) &&
-      DIRECT_TASK_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized)) &&
-      DIRECT_TASK_OBJECT_MARKER_PATTERN.test(normalized);
+    return false;
   }
-  return !COMPANY_FACT_QUESTION_MARKER_PATTERN.test(normalized) ||
-    QUESTION_LITERAL_TRANSFORM_PATTERNS.some((pattern) => pattern.test(normalized));
+  if (QUESTION_LITERAL_TRANSFORM_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+  const delimiterIndex = normalized.search(/[:：]/u);
+  return delimiterIndex > 0 &&
+    DIRECT_TASK_OBJECT_MARKER_PATTERN.test(normalized.slice(0, delimiterIndex));
 }
 
 function buildPlanningEvidence(

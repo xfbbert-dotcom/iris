@@ -13,17 +13,28 @@
 These amendments were added after independent pre-merge review. They supersede any older task
 snippet below that conflicts with them:
 
-- Route ownership belongs to the application. Only an explicit transformation with a supplied
-  payload or explicit exact-output payload skips planning. The evidence planner schema accepts
-  `company_fact` only, and any provider result containing `direct_task` fails closed.
+- Route ownership belongs to the application. Safe literal transformations with a supplied
+  delimiter payload, content operations that name an explicit literal object before the delimiter,
+  or an explicit exact-output payload may skip planning. Bare requests such as `Please summarize:
+  Iris current annual revenue` and `Please list: Iris Q2 customers` remain company-factual. The
+  evidence planner schema accepts `company_fact` only, and any provider result containing
+  `direct_task` fails closed.
 - Planning evidence follows the whitepaper order and uses stable references for prior live chat
   (`C1`-`C10`), group memory (`M1`-`M8`), discussion threads (`T1`-`T6`), documents
   (`D1`-`D12`), and action records (`A1`-`A6`). A plan selects at most 12 premises.
+- Prior live chat reaches the planner and renderer only through selected `C*` evidence. Their
+  separate `liveChatMessages` inputs are empty, so raw or unselected messages cannot bypass the
+  evidence plan.
+- Direct tasks receive only the explicit literal task with empty document and live-chat context
+  envelopes. A task that requires company context must use the company-fact route.
 - Only `D*` references become document citations and enter send-time document permission
   revalidation. Other references remain bounded provenance and never create fake source links.
 - Valid long Feishu source URIs are not answer failures. Model-visible source labels are
   deterministically truncated to 512 characters while the stable evidence reference retains
   identity.
+- Source-aware selection reserves a bounded leading-source budget before diversity backfill, so
+  one-fragment noise sources cannot evict all coherent follow-up fragments from a matched source.
+  Immediate neighbors must share the seed fragment's source, snapshot, and embedding profile.
 - The original task checklist remains useful implementation history; this amendment and the
   approved design are normative where details differ.
 
