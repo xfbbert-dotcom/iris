@@ -20,6 +20,7 @@ import {
 import type { GroupMemoryContextProvider } from "./group-memory-context-provider.js";
 import type { ConversationStateContextProvider } from "../conversation-state/conversation-state-context-provider.js";
 import { fuseRetrievedDocumentFragments } from "./retrieval-candidate-fusion.js";
+import { selectSourceAwareFragments } from "./source-aware-fragment-selector.js";
 
 const DEFAULT_FRAGMENT_LIMIT = 8;
 const MAX_FRAGMENT_LIMIT = 12;
@@ -68,7 +69,8 @@ export function createDocumentRetrievalContextBuilder({
 }: {
   embeddingProfileId: string;
   embedder: QueryEmbeddingProvider;
-  fragments: Pick<DocumentFragmentRepository, "searchSimilarFragments">;
+  fragments: Pick<DocumentFragmentRepository, "searchSimilarFragments">
+    & Partial<Pick<DocumentFragmentRepository, "listFragmentsForSnapshot">>;
   sourceTypes?: DocumentSourceType[];
   groupId?: string;
   memoryGroupId?: string;
@@ -132,9 +134,12 @@ export function createDocumentRetrievalContextBuilder({
       const meaningfulFragments = retrievedFragments.filter((fragment) =>
         fragment.text.trim().length > 0,
       );
-      const promptRankedDocumentIds = uniqueDocumentSourceIds(
-        meaningfulFragments.slice(0, fragmentLimit),
-      );
+      const promptRankedFragments = await selectSourceAwareFragments({
+        queryText,
+        rankedFragments: meaningfulFragments,
+        fragmentLimit,
+      });
+      const promptRankedDocumentIds = uniqueDocumentSourceIds(promptRankedFragments);
 
       const permissionGuardResult = await filterFragmentsByLivePermission({
         fragments: meaningfulFragments.map(toPermissionGuardFragment),
@@ -145,9 +150,20 @@ export function createDocumentRetrievalContextBuilder({
       const allowedFragmentKeys = new Set(
         permissionGuardResult.allowedFragments.map(createPermissionGuardFragmentKey),
       );
-      const allowedFragments = meaningfulFragments.filter((fragment) =>
+      const allowedRankedFragments = meaningfulFragments.filter((fragment) =>
         allowedFragmentKeys.has(createRetrievedFragmentKey(fragment)),
-      ).slice(0, fragmentLimit);
+      );
+      const allowedFragments = await selectSourceAwareFragments({
+        queryText,
+        rankedFragments: allowedRankedFragments,
+        fragmentLimit,
+        ...(fragments.listFragmentsForSnapshot === undefined
+          ? {}
+          : {
+              listFragmentsForSnapshot: (snapshotId: string) =>
+                fragments.listFragmentsForSnapshot!(snapshotId),
+            }),
+      });
       const deniedDocumentIdSet = new Set(permissionGuardResult.deniedDocumentIds);
 
       return {

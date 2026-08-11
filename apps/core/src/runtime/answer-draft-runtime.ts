@@ -107,7 +107,8 @@ export type AnswerDraftRuntimeDependencies = {
   createDocumentFragmentRepository?: (dependencies: {
     queryable: Queryable;
     embeddingProfiles: Pick<EmbeddingProfileRepository, "getProfileById">;
-  }) => Pick<DocumentFragmentRepository, "searchSimilarFragments">;
+  }) => Pick<DocumentFragmentRepository, "searchSimilarFragments">
+    & Partial<Pick<DocumentFragmentRepository, "listFragmentsForSnapshot">>;
   createDocumentSourceRegistry?: (dependencies: {
     queryable: Queryable;
   }) => Pick<AsyncDocumentSourceRegistry, "findSourceById">;
