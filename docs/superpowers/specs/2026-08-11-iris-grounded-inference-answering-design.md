@@ -1,237 +1,385 @@
 # Iris Grounded-Inference Answering Design
 
 Date: 2026-08-11
-Status: Approved in conversation on 2026-08-11
+Status: Approved architecture A in conversation on 2026-08-11
 Product: Iris
-Implementation baseline: `master@4aaa38bed1bf98a1d4fce5decd025597012cea3f`
+Original implementation baseline: `master@4aaa38bed1bf98a1d4fce5decd025597012cea3f`
+Supersedes: the prompt-only design and implementation plan committed on 2026-08-11
 
-## 1. Problem
+## 1. Problem and Production Evidence
 
-Iris refuses some questions whose answer is not written verbatim in the knowledge base even when
-the authorized evidence contains enough premises to derive a useful answer.
+Iris refuses some questions whose answer is not written verbatim in the knowledge base, even when
+authorized material contains useful premises from which Iris should reason.
 
-The production example was:
+The production example is:
 
 > Quello 的电子宠物是如何自己产生目标的？
 
-Iris replied that the available materials did not contain relevant information. A read-only
-reproduction against the deployed pilot at
-`73dfa51fd980a5bc5426dd684f7ad032012c44f5` showed that retrieval was successful:
+The source `Quello Life Engine（生命粒子引擎）副本` is synced, enabled for answering, and readable
+in the pilot group. Its fragments describe personality-driven behavior, emotional priority,
+capability limits, state evolution, a cognitive-friction buffer, daily ticks, and preferences that
+emerge after repeated experiences.
 
-- the `Quello Life Engine（生命粒子引擎）副本` source was synced and enabled for answering;
-- its overview fragment ranked first for the original retrieval query;
-- its daily-tick and cognitive-evolution fragment ranked sixth;
-- the retrieved evidence described personality-driven behavior, emotional priority, capability
-  limits, state evolution, a cognitive-friction buffer, daily ticks, and preferences that emerge
-  after repeated experiences.
+The first design treated the refusal as a prompt-policy defect and deliberately left retrieval and
+orchestration unchanged. The resulting candidate was deployed to the allowlisted production pilot,
+passed repository and CI checks, but failed the live acceptance question. It was rolled back to the
+previous approved production image.
 
-Those premises support a bounded inference: goals are selected or emerge from the engine's rules,
-current state, priorities, and accumulated experience rather than being freely invented by the
-rendering model.
+Read-only diagnosis of that failed turn established all of the following:
 
-The refusal therefore did not originate in document synchronization, embedding generation,
-semantic retrieval, or live permission filtering. It originated in the answer policy. The current
-system prompt requires an exact subject and exact attribute and instructs the model to report an
-unavailable fact when the exact requested attribute is not directly supported. This correctly
-prevents related-subject substitution, but it does not distinguish a missing premise from a
-conclusion that can be derived from authorized premises about the same subject.
+- the deployed image contained the intended prompt change;
+- the semantic retrieval query concatenated the current question with five recent chat messages,
+  including meta-discussion about Iris failing to reason, and duplicated the current question;
+- eight authorized fragments reached the model, but most were unrelated diary or watch sources;
+- the Quello overview fragment ranked fifth and was included;
+- the Quello daily-tick and cognitive-evolution fragment ranked tenth and was omitted by the
+  eight-fragment prompt limit;
+- all retrieved fragments passed live permission checks;
+- adding the omitted Quello fragment to the exact failed prompt still resulted in a refusal;
+- weakening another exact-attribute prompt sentence in an otherwise identical controlled request
+  still resulted in a refusal and caused the model to cite an unrelated fragment.
 
-## 2. Decision
+The proven defect is therefore architectural rather than a single prompt sentence: noisy retrieval,
+fragment-level truncation that loses same-source premises, and one model call that must both judge
+evidence and render an answer.
 
-Keep the existing retrieval, permission, citation, runtime-control, and Feishu reply architecture.
-Refine the answer-draft system policy so Iris supports three evidence states:
+## 2. Product Decision
 
-1. **Explicit fact:** the authorized evidence directly states the answer.
-2. **Grounded inference:** the exact wording is absent, but authorized evidence about the same
-   subject contains every material premise needed for a reasonable conclusion.
-3. **Insufficient evidence:** one or more material premises are absent, denied, unavailable, or
-   only available for a related but different subject.
+Adopt architecture A:
 
-For grounded inference, Iris must synthesize the evidence and make the epistemic status visible
-with natural wording such as `根据文档中的这些机制，可以推断……`. It must not claim that the
-derived conclusion appears verbatim in the source.
+1. clean, question-led retrieval with low-weight conversational supplementation;
+2. source-aware evidence selection and bounded same-source completion;
+3. a structured evidence planner;
+4. a separate answer renderer;
+5. authoritative programmatic citation validation and the existing send-time permission check.
 
-The exact-subject safeguard remains. It is narrowed so that an exact attribute may be answered by a
-grounded inference about the exact subject, but a value from another document, project, person,
-date, source type, or similarly named entity may not be substituted.
+For a company-factual question, Iris supports four evidence states:
 
-## 3. Alternatives
+1. **Explicit:** authorized evidence states the answer directly.
+2. **Complete inference:** the answer is not verbatim, but authorized same-subject evidence contains
+   every material premise needed for a reasonable conclusion.
+3. **Partial:** at least one relevant authorized premise exists, but material information is
+   missing. Iris first names the insufficiency, then gives a clearly labeled, confidence-bounded
+   conjecture derived only from the available authorized evidence.
+4. **None:** there is no relevant authorized premise from which to extrapolate. Iris states that no
+   knowledge-base-grounded conjecture is possible and identifies the information needed.
 
-### 3.1 Recommended: single-pass grounded-inference policy
+The user explicitly approved the `partial` behavior: an insufficiency warning must not automatically
+end the answer. Iris should still provide its best clearly labeled conjecture, but may not use
+general world knowledge to invent a missing company-specific premise.
 
-Add the explicit/derived/insufficient distinction to the existing model system policy. Preserve the
-current answer pipeline and citation protocol.
+Permission-denied evidence is not ordinary partial evidence. It remains unavailable and cannot be
+summarized, inferred, or acknowledged beyond the existing safe permission response.
 
-Benefits:
+## 3. Alternatives Considered
 
-- fixes the observed failure at its source;
-- adds no provider call, latency, new runtime, or persistence path;
-- preserves existing permission and exact-subject protections;
-- is small enough for a focused regression and live pilot.
+### 3.1 Selected: two-model evidence planning and rendering
 
-Risk:
+Question-led retrieval and source-aware completion feed a structured evidence planner. A second
+model call renders the validated plan.
 
-- prompt-following remains model-dependent, so live model acceptance is required in addition to
-  deterministic provider contract tests.
+This adds one model call but creates a deterministic inspection seam, prevents unrelated retrieved
+documents from reaching the renderer, and lets the application own evidence-state and citation
+validation.
 
-### 3.2 Two-pass evidence planner and answer renderer
+### 3.2 Retrieval improvements with the existing single answer call
 
-First classify evidence as explicit, derivable, or insufficient, then render the answer in a second
-model call.
+This is cheaper and faster, but it leaves evidence judgment and presentation coupled. The failed
+candidate and two controlled follow-up requests show that another one-pass prompt adjustment is not
+an adequate release strategy.
 
-This provides a stronger inspection seam, but doubles model-call cost and latency and creates a new
-failure boundary. The current pilot has not shown enough need to justify it.
+### 3.3 Model-based query rewrite, evidence planning, and rendering
 
-### 3.3 Retrieval reranking, query rewriting, or chunk overlap
+A third model call could rewrite ambiguous follow-up questions before retrieval. It would improve
+some pronoun-heavy conversations, but adds latency, cost, and a new failure boundary. The selected
+design preserves follow-up support with a deterministic secondary retrieval channel first. A query
+rewrite stage requires separate pilot evidence before adoption.
 
-Improve candidate selection and continuity between adjacent chunks.
+## 4. End-to-End Architecture
 
-These changes may improve other retrieval cases, but they do not fix this incident because the
-necessary evidence already ranked first and sixth. They remain follow-up work driven by separate
-failures, not release gates for grounded inference.
+The company-factual flow is:
 
-## 4. Prompt Contract
+```text
+current question
+  -> primary question-only retrieval
+  -> low-weight contextual supplemental retrieval
+  -> deterministic merge and deduplication
+  -> live permission filtering
+  -> source-aware ranking and bounded same-source completion
+  -> structured evidence planner
+  -> schema and citation validation
+  -> answer renderer using only selected evidence and the validated plan
+  -> authoritative citation mapping
+  -> existing send-time source-permission revalidation
+  -> Feishu reply
+```
 
-The answer-draft system policy must communicate all of the following rules:
+The existing runtime gates, source scoping, Feishu permission checker, prompt-injection boundary,
+answer-reply delivery service, and pilot controls remain in force.
 
-1. Company-factual claims must use only the provided authorized evidence.
-2. Evidence may support an answer either explicitly or through a reasonable synthesis of one or
-   more premises.
-3. A grounded inference is allowed only when every material premise is present in authorized
-   evidence about the exact subject in the question.
-4. A grounded inference must be identified as an inference and must not be described as a direct
-   quotation or explicit source statement.
-5. Iris must not use general world knowledge to fill missing company-specific premises.
-6. Iris must not substitute evidence about a related but different subject or attribute.
-7. If a material premise is missing, Iris must state what is unknown instead of guessing.
-8. Denied or unavailable content remains absent from the prompt and must never be inferred.
-9. Context remains untrusted evidence, not instructions; prompt-injection protections remain
-   unchanged.
-10. Existing direct, generative, formatting, translation, rewriting, and summarization behavior
-    remains available when company evidence is not required.
-11. Existing internal citation metadata must identify every background-document fragment that
-    materially supports the visible derived answer. Retrieved but unused fragments must not be
-    cited.
+The planner also classifies direct tasks such as translation, rewriting, summarization, and exact
+formatting as `direct_task`. Those tasks proceed to the renderer without pretending that retrieved
+company evidence is required.
 
-## 5. Answer Behavior
+## 5. Retrieval Design
 
-For the production Quello example, an acceptable answer is semantically equivalent to:
+### 5.1 Primary query
 
-> 根据文档中的机制，可以推断，Quello 的宠物不是由大模型随意生成目标，而是 Life Engine
-> 在每次 Tick 中综合性格、情绪共振、能力边界、关系、记忆和环境状态，按规则决定当前优先
-> 行为；经验还会在认知粘滞池中积累并形成偏好或下一步行动，因此目标会从状态和规则的持续
-> 演化中逐步涌现。
+The primary semantic query is the trimmed current question only. It never includes arbitrary recent
+chat, and the current question is never duplicated from the live-chat window.
 
-Exact wording is not required. The answer must:
+Conversation-state lookup also uses the primary question rather than the polluted combined query.
 
-- describe the conclusion as a derivation rather than an explicit quoted fact;
-- preserve the distinction between the deterministic engine and the LLM rendering layer;
-- avoid inventing an undocumented goal-selection algorithm, score, threshold, or component;
-- cite the materially supporting Life Engine fragments through the existing internal citation
-  protocol.
+### 5.2 Contextual supplemental query
 
-## 6. Data Flow and Boundaries
+A second, lower-weight query may include a bounded recent-chat window to preserve support for
+follow-ups such as “它为什么这样？”. Exact duplicates of the current question are removed before
+the supplemental query is built.
 
-The runtime flow remains unchanged:
+Primary and supplemental results are searched independently and merged deterministically. Weighted
+reciprocal-rank fusion gives the primary query twice the weight of the supplemental query. The
+precise constant is implementation-owned and must be locked by a production-shaped regression;
+changing it later requires retrieval acceptance evidence, not prompt intuition.
 
-1. The Feishu mention responder extracts the current question.
-2. The answer orchestrator loads the bounded recent group context.
-3. The retrieval context builder embeds the query and selects candidate fragments.
-4. Live permission checks remove denied or unavailable Feishu sources.
-5. Context assembly places allowed fragments, memory, conversation state, and recent chat in separate
-   untrusted-evidence containers.
-6. The model provider applies the refined evidence policy and returns visible answer text plus
-   internal citation metadata.
-7. The responder revalidates cited-source permission through the existing citation path before
-   posting the answer.
+### 5.3 Source-aware evidence selection
 
-This change does not:
+The merged candidate pool is grouped by `documentSourceId` before the final prompt window is built.
+Selection follows these rules:
 
-- expand document or group visibility;
-- infer permission from retrieval success;
-- include denied fragments in model context;
-- add a classifier, second model call, tool call, external action, or knowledge-base write;
-- change model temperature, retry behavior, citation parsing, response limits, or Feishu sending;
-- redesign Iris as a generic RAG platform.
+- rank a source by its strongest fused fragment score;
+- use a normalized exact-title or title-containment match to the named subject only as a bounded
+  boost, never as permission or factual proof;
+- take one strong fragment from each leading source before allowing a noisy source to consume the
+  whole window;
+- then take additional semantically strong fragments from the leading sources, up to three per
+  source and within the existing maximum of twelve prompt documents;
+- include an immediate same-snapshot neighbor when needed to complete text split by a chunk
+  boundary;
+- never include a blank, stale-snapshot, non-answerable, out-of-group, or permission-denied
+  fragment.
 
-## 7. Error Handling
+This makes the evidence window both diverse across sources and sufficiently complete within a
+strongly matched source. In the production-shaped Quello fixture, both the overview and the
+daily-tick/cognitive-evolution fragments must survive selection.
 
-- Missing material premise: answer with bounded uncertainty and name the missing information when
-  safe to do so.
-- Related-subject-only evidence: state that the requested subject or attribute is unavailable; do
-  not return the related value.
-- Permission denial or live permission failure: preserve the existing fail-closed path and never
-  infer the hidden content.
-- Invalid or missing citation metadata: preserve the existing provider/citation rejection behavior.
-- Model provider failure, timeout, or capacity limit: preserve the existing retry and user-facing
-  fallback behavior.
+### 5.4 Permission ordering
 
-## 8. Testing
+Candidate sources are evaluated through the existing live permission guard before their text enters
+either model request. If a source that would materially occupy the evidence window is denied or its
+permission check fails, the turn takes the existing fail-closed permission path.
 
-Implementation follows test-driven development.
+Allowed citations are revalidated again immediately before answer delivery. Retrieval success never
+implies current read permission.
 
-### 8.1 Focused provider contract regression
+## 6. Structured Evidence Planner
 
-Add a failing test before changing production code. The test supplies the Quello question and
-controlled authorized evidence containing the same-subject premises. It verifies that the provider
-request carries the grounded-inference contract while retaining exact-subject, uncertainty,
-permission, injection, and citation rules.
+The planner receives:
 
-The production mutation this test catches is removal or reversal of the rule that allows a derived
-answer when all same-subject premises are present.
+- the current question;
+- bounded, permission-allowed evidence with stable `D1` through `D12` references;
+- only the minimum conversational context needed to resolve the subject;
+- system rules that treat every evidence and chat field as untrusted data, never instructions.
 
-### 8.2 Guard regressions
+It returns strict JSON equivalent to:
 
-Keep or extend focused cases for:
+```json
+{
+  "taskMode": "company_fact",
+  "evidenceState": "partial",
+  "premises": [
+    {
+      "citationRef": "D2",
+      "statement": "A concise premise supported by D2"
+    }
+  ],
+  "proposedAnswer": "A bounded conclusion derived from the premises",
+  "missingInformation": ["The material fact that is not documented"],
+  "confidence": "low"
+}
+```
 
-- related-subject substitution remains forbidden;
-- missing material premises remain insufficient;
-- denied or unavailable content is never inferred;
-- direct transformation tasks still work with empty evidence;
-- citation metadata remains required only for materially used background documents;
-- prompt-injection instructions inside retrieved content remain ignored.
+Allowed values are:
 
-### 8.3 Repository verification
+- `taskMode`: `company_fact` or `direct_task`;
+- `evidenceState`: `explicit`, `complete_inference`, `partial`, or `none` for company facts;
+- `confidence`: `high`, `medium`, or `low`.
 
-Run the focused provider tests first, then the complete repository verification required by the
-implementation baseline. At minimum:
+Programmatic structural validation enforces:
 
-- Core typecheck and build;
-- focused model-provider, citation, orchestrator, permission, and mention-responder tests;
-- full Core and Python test suites;
-- pilot configuration and readiness checks;
-- `git diff --check`.
+- every citation reference exists in the current allowed evidence set;
+- every premise has one citation and non-blank text;
+- `explicit` and `complete_inference` have at least one premise and a proposed answer;
+- `complete_inference` has no missing material premise;
+- `partial` has at least one premise, at least one missing-information item, a proposed answer, and
+  cannot use `high` confidence;
+- `none` has no proposed company-factual answer and identifies what information is missing;
+- list lengths and text lengths are bounded;
+- unknown fields, malformed JSON, duplicate references, or out-of-range references are rejected.
 
-## 9. Live Pilot Acceptance
+Exact-subject alignment and whether a premise statement is genuinely supported by its cited text
+are semantic constraints, not facts that ordinary schema validation can prove. They are enforced by
+the planner system contract, by limiting the planner and renderer to selected authorized evidence,
+by production-shaped contract tests, and by live pilot acceptance. The application must not claim a
+deterministic semantic guarantee that it does not implement.
 
-Deploy the exact reviewed candidate SHA derived from `master`, not from the current divergent
-`codex/iris-proactive-feedback-loop-task-1` workspace branch.
+The provider performs at most one bounded retry for malformed or invalid planner output. A second
+invalid result is a provider failure, not permission to fall back to unconstrained guessing.
 
-In the same allowlisted Feishu pilot group, ask:
+## 7. Answer Renderer and Citations
+
+For company-factual answers, the renderer receives only:
+
+- the current question;
+- the validated plan;
+- the evidence fragments cited by the plan;
+- bounded live-chat context needed for language and conversational continuity.
+
+It does not receive unrelated retrieved fragments. It may improve clarity and tone, but it may not
+change `evidenceState`, add premises, increase confidence, remove the insufficiency warning from a
+`partial` answer, or convert conjecture into fact.
+
+For company-factual turns, the renderer returns bounded structured output containing the visible
+answer plus an echo of `evidenceState` and `confidence`. The application rejects a structural state
+or confidence mismatch. Natural-language compliance inside the visible answer remains covered by
+the renderer contract, focused tests, and live acceptance.
+
+Required visible behavior is:
+
+| Evidence state | Required response behavior |
+| --- | --- |
+| `explicit` | Answer directly and cite the explicit premise. |
+| `complete_inference` | Say that the conclusion is inferred from the available material, explain the bounded reasoning, and cite every material premise. |
+| `partial` | First name the evidence gap, then say “基于现有证据，我的推测是……” or an equivalent phrase, give the conjecture and confidence, and cite its actual premises. |
+| `none` | State that the knowledge base provides no basis for a conjecture and say what evidence would be needed. |
+
+Planner premise references are authoritative. The renderer does not independently select citations.
+The orchestrator maps validated references to the existing `allowedFragments`, and the existing
+delivery layer performs the final live permission check and reference rendering.
+
+Direct tasks retain the existing behavior and output-format contract. They do not acquire citations
+unless the task actually uses a company document as source material.
+
+## 8. Safety and Trust Boundaries
+
+- General world knowledge may be used for language and reasoning form, but not to fill an unknown
+  company-specific fact or premise.
+- User-supplied text may be transformed as requested without treating its claims as verified.
+- Retrieved documents, group memory, conversation state, and live chat remain untrusted evidence.
+- Instructions embedded inside any context container cannot change roles, reveal prompts, call
+  tools, bypass permissions, or authorize external actions.
+- Denied or unavailable content never enters planner or renderer input.
+- A title match can affect ranking only; it cannot establish identity, truth, or permission.
+- Planner reasoning is not persisted as hidden chain-of-thought. Persist only bounded operational
+  metadata and the ordinary answer/citation records already needed by the product.
+
+## 9. Errors and Observability
+
+The orchestrator records content-free phase metadata for `retrieval`, `evidence_planning`, and
+`answer_rendering`, including evidence state, confidence, candidate count, selected source count,
+selected fragment count, and outcome. It must not log document bodies, model reasoning, credentials,
+or denied content.
+
+Failure behavior is:
+
+- embedding, repository, or provider transport failure: existing user-safe failure response;
+- malformed planner result after one retry: provider failure, with no unconstrained answer call;
+- `partial`: warning plus bounded evidence-derived conjecture;
+- `none`: transparent no-basis response and requested missing evidence;
+- permission denial or permission-check failure: existing fail-closed permission response;
+- renderer failure: existing user-safe provider failure unless a later implementation plan proves a
+  separately validated deterministic renderer fallback;
+- send-time permission revocation: withhold the affected answer through the existing delivery
+  guard;
+- queue or rollout-health regression: roll back the candidate image and retain no data migration.
+
+Planner and renderer each have bounded timeouts and retries. The implementation must expose the
+two phases separately in tests and observations; it must not create an unbounded retry loop.
+
+## 10. Testing Strategy
+
+Implementation uses test-driven development.
+
+### 10.1 Retrieval regressions
+
+- the primary query equals the current question and excludes recent meta-chat;
+- the current question is removed from the supplemental chat query when duplicated;
+- primary results dominate conflicting contextual noise;
+- a contextual follow-up can still recover a subject from recent chat;
+- source-aware selection prevents one unrelated source from consuming the window;
+- the production-shaped Quello fixture includes both the overview and daily-tick/evolution
+  fragments;
+- denied fragments never enter either model input.
+
+### 10.2 Planner contract tests
+
+- accept valid `explicit`, `complete_inference`, `partial`, `none`, and `direct_task` plans;
+- reject unknown references, malformed JSON, blank premises, invalid state combinations, excess
+  fields, excess lengths, and `partial` plans with no actual premise;
+- reject a related-subject substitution;
+- retry one malformed result, then fail closed;
+- ignore prompt-injection text inside documents and chat.
+
+### 10.3 Orchestrator and renderer tests
+
+- renderer input contains only planner-selected evidence;
+- `partial` visibly warns, labels the conjecture, and preserves low or medium confidence;
+- renderer cannot add citation references or upgrade evidence state;
+- authoritative planner references map to the correct fragments;
+- direct transformation and exact-output tasks remain functional;
+- permission denial bypasses both planner and renderer;
+- provider and renderer failures use bounded safe responses;
+- execution observations distinguish both model phases without content leakage.
+
+### 10.4 Repository verification
+
+Run focused Core tests first and then the complete repository verification. At minimum this includes
+Core typecheck/build, all Core and Python tests, pilot/readiness checks, Compose validation, and
+`git diff --check`.
+
+## 11. Live Pilot Acceptance
+
+Deploy only an exact reviewed SHA whose Core and AI Worker checks passed. Keep production limited to
+the existing allowlisted pilot group.
+
+Ask the original question:
 
 > @Iris Quello 的电子宠物是如何自己产生目标的？
 
 Acceptance requires:
 
-1. The answer explains the goal-emergence mechanism using only authorized Quello evidence.
-2. The answer visibly distinguishes inference from an explicit source statement.
-3. The answer does not claim that the LLM itself freely invents goals.
-4. The displayed references resolve only to materially supporting, currently readable sources.
-5. A paired related-subject question still returns unavailable rather than substituting a value.
-6. A paired permission-revocation check reveals neither revoked content nor its acceptance marker.
-7. Event, document, reindex, and semantic queues drain normally with no new DLQ item.
+1. Retrieval uses the current question as its primary query without duplicated meta-chat.
+2. The selected evidence includes the materially relevant Quello overview and daily-tick/evolution
+   fragments.
+3. The planner selects only Quello premises and returns `complete_inference` or a justified
+   `partial` state.
+4. The visible answer explains goal emergence from Life Engine rules, state, priorities, and
+   accumulated experience without inventing an undocumented algorithm, score, or threshold.
+5. A `complete_inference` answer is visibly labeled as inference; a `partial` answer first explains
+   the evidence gap and then visibly labels its conjecture and confidence.
+6. Displayed references resolve only to materially supporting, currently readable sources.
+7. A paired related-subject question does not substitute another project's facts.
+8. A paired zero-evidence question does not invent a company fact.
+9. A paired permission-revocation check reveals neither revoked content nor an inferred acceptance
+   marker.
+10. Event, document, reindex, semantic, memory, and answer-reply queues drain normally with no new
+    DLQ item.
 
-After acceptance, leave runtime controls in their approved pilot state. Roll back the prompt-only
-candidate if it produces unsupported company claims or weakens permission or injection behavior;
-no data rollback is required.
+If any security, citation, or core behavior gate fails, roll back to the currently approved image.
+The previous prompt-only candidate remains diagnostic evidence and is not independently deployable.
 
-## 10. Follow-up Backlog
+## 12. Scope and Follow-up Backlog
 
-The reproduction exposed two non-blocking quality findings:
+This design changes retrieval query composition, evidence selection, model orchestration, planner
+validation, renderer input, citations, observations, and their tests. It does not add a database
+migration, new external provider, generic tool-use agent, knowledge-base write path, permission
+expansion, or broad RAG-platform redesign.
 
-- retrieval query text included many old, unrelated group messages;
-- one source sentence was split across adjacent chunks without overlap.
+Non-blocking follow-up work requires separate evidence:
 
-Neither prevented the required evidence from ranking within the allowed fragment window, so neither
-is part of this fix. Record separate pilot examples before changing live-chat query composition or
-chunk overlap. This keeps the current work focused on the proven answer-policy defect.
+- model-based rewrite for highly ambiguous follow-up questions;
+- general chunk overlap or a rechunk/reindex migration;
+- a dedicated stronger planner model or different planner model configuration;
+- deterministic multilingual renderer fallback;
+- offline retrieval-quality evaluation beyond the production-shaped regression set.
+
+These items must not extend the current fix after its agreed end-to-end acceptance gates pass.
