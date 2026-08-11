@@ -52,6 +52,33 @@ describe("OpenAICompatibleModelProvider", () => {
     });
   });
 
+  it("delegates bounded chat completion and parses citations locally", async () => {
+    const client = {
+      complete: vi.fn(async () =>
+        'Answer\n<iris_citations>["D1"]</iris_citations>'),
+    };
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      client,
+      fetch: vi.fn(async () => {
+        throw new Error("shared client was not used");
+      }),
+    } as Parameters<typeof createOpenAICompatibleModelProvider>[0] & { client: typeof client });
+
+    await expect(provider.generateAnswerDraft({
+      question: "Question",
+      promptContext: '<document citation_ref="D1">Fact</document>',
+    })).resolves.toEqual({ answerText: "Answer", citedSourceRefs: ["D1"] });
+    expect(client.complete).toHaveBeenCalledWith([
+      expect.objectContaining({ role: "system" }),
+      {
+        role: "user",
+        content:
+          'Question:\nQuestion\n\nContext:\n<document citation_ref="D1">Fact</document>',
+      },
+    ]);
+  });
+
   it("separates model-declared document citations from the visible answer", async () => {
     const fetch = vi.fn(async () =>
       jsonResponse({
