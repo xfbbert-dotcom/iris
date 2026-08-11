@@ -14,8 +14,8 @@ import {
   createAnswerDraftRuntime as createProductionAnswerDraftRuntime,
 } from "../src/runtime/answer-draft-runtime.js";
 import {
+  createCompanyFactReasoningRuntimeDependencies,
   createDirectTaskReasoningDoubles,
-  createDirectTaskReasoningRuntimeDependencies,
 } from "./answer-reasoning-test-doubles.js";
 
 type RuntimeInput = NonNullable<Parameters<typeof createProductionAnswerDraftRuntime>[0]>;
@@ -24,7 +24,7 @@ function createAnswerDraftRuntime(input: RuntimeInput = {}) {
   return createProductionAnswerDraftRuntime({
     ...input,
     dependencies: {
-      ...createDirectTaskReasoningRuntimeDependencies(),
+      ...createCompanyFactReasoningRuntimeDependencies(),
       ...input.dependencies,
     },
   });
@@ -181,7 +181,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "When is launch?",
+      question: "What does company memory say about the launch date?",
       chatId: " chat-a ",
       fragmentLimit: 0,
       liveChatMessages: [],
@@ -191,9 +191,7 @@ describe("createAnswerDraftRuntime", () => {
     expect(runtimeController.canReadGroupContext).toHaveBeenCalledWith("chat-a");
     expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-a");
     expect(result?.usedGroupMemories.map((memory) => memory.id)).toEqual(["memory-1"]);
-    expect(model.generateAnswerDraft).toHaveBeenCalledWith(
-      expect.objectContaining({ promptContext: expect.stringContaining("Launch Thursday.") }),
-    );
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
   it("retrieves conversation state only from Postgres for groups allowed to read context", async () => {
@@ -226,19 +224,19 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What is open?",
+      question: "What open company work remains?",
       chatId: "chat-a",
       fragmentLimit: 0,
       liveChatMessages: [],
     });
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What is open?",
+      question: "What open company work remains?",
       chatId: "chat-blocked",
       fragmentLimit: 0,
       liveChatMessages: [],
     });
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What is open?",
+      question: "What open company work remains?",
       fragmentLimit: 0,
       liveChatMessages: [],
     });
@@ -265,7 +263,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "When is launch?",
+      question: "What does company memory say about the launch date?",
       chatId: "chat-a",
       fragmentLimit: 0,
       liveChatMessages: [],
@@ -280,7 +278,7 @@ describe("createAnswerDraftRuntime", () => {
     const runtime = createMemoryEnabledRuntime({ listActiveByGroup });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "When is launch?",
+      question: "What does company memory say about the launch date?",
       fragmentLimit: 0,
       liveChatMessages: [],
     });
@@ -341,21 +339,17 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What changed?",
+      question: "When is the company launch scheduled?",
       liveChatMessages: [{ speaker: "Alice", text: "Please answer." }],
     });
 
-    expect(result?.answerText).toBe("Runtime draft");
+    expect(result?.answerText).toBe("The available company evidence is insufficient.");
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
       embeddingProfileId: "static-dev-6d",
       embedding: [1, 0, 0, 0, 0, 0],
       limit: 24,
     });
-    expect(model.generateAnswerDraft).toHaveBeenCalledWith(
-      expect.objectContaining({
-        question: "What changed?",
-      }),
-    );
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
   });
 
   it("recovers production-ranked Quello evidence and returns planner-owned citations", async () => {
@@ -503,7 +497,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What can Iris use?",
+      question: "Which authorized company sources can Iris use?",
       chatId: "chat-current",
       liveChatMessages: [],
     });
@@ -556,7 +550,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     const result = await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "What should Iris say?",
+      question: "What company context should Iris use for this answer?",
       chatId: "chat-muted",
       liveChatMessages: [{ speaker: "Bob", text: "Current explicit request context." }],
     });
@@ -1055,7 +1049,7 @@ describe("createAnswerDraftRuntime", () => {
       });
 
       await runtime?.answerDraftOrchestrator.generateDraft({
-        question: "What can Iris use?",
+        question: "Which authorized company sources can Iris use?",
         ...(chatId === undefined ? {} : { chatId }),
         liveChatMessages: [],
       });
@@ -1528,7 +1522,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "Use real embedder?",
+      question: "What company evidence should the real embedder retrieve?",
       liveChatMessages: [],
     });
 
@@ -1538,7 +1532,9 @@ describe("createAnswerDraftRuntime", () => {
       dimensions: 6,
       displayName: "OpenAI-compatible text-embedding-small (6d)",
     });
-    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith(["Use real embedder?"]);
+    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith([
+      "What company evidence should the real embedder retrieve?",
+    ]);
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
       embeddingProfileId: "openai-compatible:text-embedding-small:6",
       embedding: [0, 1, 0, 0, 0, 0],
@@ -1627,12 +1623,16 @@ describe("createAnswerDraftRuntime", () => {
 
     await expect(
       runtime?.answerDraftOrchestrator.generateDraft({
-        question: "Second attempt",
+        question: "What company evidence is available on the second attempt?",
         liveChatMessages: [],
       }),
-    ).resolves.toMatchObject({ answerText: "Draft" });
+    ).resolves.toMatchObject({
+      answerText: "The available company evidence is insufficient.",
+    });
     expect(embeddingProfiles.findOrCreateProfile).toHaveBeenCalledTimes(2);
-    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith(["Second attempt"]);
+    expect(embeddingProvider.embedTexts).toHaveBeenCalledWith([
+      "What company evidence is available on the second attempt?",
+    ]);
   });
 
   it("uses configured OpenAI-compatible embedding provider when dimensions are 1536", async () => {
@@ -1681,7 +1681,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "Use production embedder?",
+      question: "What company evidence should the production embedder retrieve?",
       liveChatMessages: [],
     });
 
@@ -1744,7 +1744,7 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "Use local Qwen embedder?",
+      question: "What company evidence should the local Qwen embedder retrieve?",
       liveChatMessages: [],
     });
 
@@ -1807,12 +1807,12 @@ describe("createAnswerDraftRuntime", () => {
     });
 
     await runtime?.answerDraftOrchestrator.generateDraft({
-      question: "生命粒子引擎是什么？",
+      question: "生命粒子引擎采用了什么底层规则？",
       liveChatMessages: [],
     });
 
     expect(embeddingProvider.embedTexts).toHaveBeenCalledWith([
-      "task: search result | query: 生命粒子引擎是什么？",
+      "task: search result | query: 生命粒子引擎采用了什么底层规则？",
     ]);
     expect(fragments.searchSimilarFragments).toHaveBeenCalledWith({
       embeddingProfileId: "openai-compatible:embeddinggemma:300m-qat-q4_0:768",

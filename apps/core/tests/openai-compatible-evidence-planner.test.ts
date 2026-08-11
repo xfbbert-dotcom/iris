@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createOpenAICompatibleEvidencePlanner,
 } from "../src/model/openai-compatible-evidence-planner.js";
-import type { OpenAICompatibleChatMessage } from "../src/model/openai-compatible-chat-completions-client.js";
+import type {
+  OpenAICompatibleChatCompletionOptions,
+  OpenAICompatibleChatMessage,
+} from "../src/model/openai-compatible-chat-completions-client.js";
 
 describe("OpenAICompatibleEvidencePlanner", () => {
   it("returns a validated partial plan using only allowed references", async () => {
@@ -53,7 +56,7 @@ describe("OpenAICompatibleEvidencePlanner", () => {
               ],
               properties: expect.objectContaining({
                 taskMode: expect.objectContaining({
-                  enum: ["direct_task", "company_fact"],
+                  enum: ["company_fact"],
                 }),
                 premises: expect.objectContaining({
                   type: "array",
@@ -85,6 +88,59 @@ describe("OpenAICompatibleEvidencePlanner", () => {
     expect(client.complete).toHaveBeenCalledTimes(2);
   });
 
+  it("bounds an accepted long source label before sending evidence to the model", async () => {
+    const client = { complete: vi.fn(async (
+      _messages: readonly OpenAICompatibleChatMessage[],
+      _options?: OpenAICompatibleChatCompletionOptions,
+    ) => validExplicitPlanJson()) };
+    const planner = createOpenAICompatibleEvidencePlanner({ client });
+
+    await planner.plan({
+      ...planningInput(["D1"]),
+      evidence: [{
+        citationRef: "D1",
+        source: `https://example.com/${"segment/".repeat(90)}document`,
+        text: "Explicit premise",
+      }],
+    });
+
+    const messages = client.complete.mock.calls[0]?.[0] ?? [];
+    const request = JSON.parse(messages[1]?.content ?? "{}") as {
+      evidence: Array<{ source: string }>;
+    };
+    expect(request.evidence[0]?.source.length).toBeLessThanOrEqual(512);
+    expect(request.evidence[0]?.source).toContain("[truncated]");
+  });
+
+  it("accepts bounded group-local evidence references in the strict response schema", async () => {
+    const refs = ["C1", "M1", "T1", "D1", "A1"];
+    const client = { complete: vi.fn(async (
+      _messages: readonly OpenAICompatibleChatMessage[],
+      _options?: OpenAICompatibleChatCompletionOptions,
+    ) => JSON.stringify({
+      taskMode: "company_fact",
+      evidenceState: "complete_inference",
+      premises: refs.map((citationRef) => ({ citationRef, statement: citationRef })),
+      proposedAnswer: "Bounded synthesis",
+      missingInformation: [],
+      confidence: "medium",
+    })) };
+
+    await createOpenAICompatibleEvidencePlanner({ client }).plan(planningInput(refs));
+
+    const options = client.complete.mock.calls[0]?.[1];
+    expect(options?.responseFormat?.json_schema.schema.properties)
+      .toEqual(expect.objectContaining({
+        premises: expect.objectContaining({
+          items: expect.objectContaining({
+            properties: expect.objectContaining({
+              citationRef: expect.objectContaining({ enum: refs }),
+            }),
+          }),
+        }),
+      }));
+  });
+
   it("stops after two invalid results without exposing raw model content", async () => {
     const client = { complete: vi.fn(async () => "private invalid model output") };
 
@@ -104,8 +160,10 @@ describe("OpenAICompatibleEvidencePlanner", () => {
       ...planningInput(["D1"]),
       question: "q".repeat(4001),
     })).rejects.toThrow("evidence planner question must be at most 4000 characters");
-    await expect(planner.plan(planningInput(Array.from({ length: 13 }, (_, index) =>
-      `D${index + 1}`)))).rejects.toThrow("evidence planner accepts at most 12 documents");
+    await expect(planner.plan(planningInput(Array.from({ length: 43 }, (_, index) =>
+      `D${index + 1}`)))).rejects.toThrow(
+      "evidence planner accepts at most 42 evidence items",
+    );
     expect(client.complete).not.toHaveBeenCalled();
   });
 });

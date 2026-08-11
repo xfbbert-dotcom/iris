@@ -32,6 +32,41 @@ describe("selectSourceAwareFragments", () => {
     expect(selected).toHaveLength(8);
   });
 
+  it("reserves room for coherent evidence when many one-fragment sources compete", async () => {
+    const selected = await selectSourceAwareFragments({
+      queryText: "Quello 的电子宠物是如何自己产生目标的？",
+      fragmentLimit: 8,
+      rankedFragments: [
+        fragment("noise-1", "noise-1", 0, "Noise 1"),
+        fragment("noise-2", "noise-2", 0, "Noise 2"),
+        fragment("noise-3", "noise-3", 0, "Noise 3"),
+        fragment("noise-4", "noise-4", 0, "Noise 4"),
+        fragment("quello-overview", "quello", 0, "Quello Life Engine（生命粒子引擎）副本"),
+        fragment("noise-5", "noise-5", 0, "Noise 5"),
+        fragment("noise-6", "noise-6", 0, "Noise 6"),
+        fragment("noise-7", "noise-7", 0, "Noise 7"),
+        fragment("noise-8", "noise-8", 0, "Noise 8"),
+        fragment("quello-evolution", "quello", 3, "Quello Life Engine（生命粒子引擎）副本"),
+      ],
+    });
+
+    expect(selected.map(({ id }) => id)).toEqual(expect.arrayContaining([
+      "quello-overview",
+      "quello-evolution",
+    ]));
+    expect(selected).toHaveLength(8);
+  });
+
+  it("returns no fragments when the caller budget is zero", async () => {
+    const selected = await selectSourceAwareFragments({
+      queryText: "Quello",
+      fragmentLimit: 0,
+      rankedFragments: [fragment("quello", "quello", 0, "Quello")],
+    });
+
+    expect(selected).toEqual([]);
+  });
+
   it("completes immediate chunk boundaries only within the selected snapshot and source", async () => {
     const seed = fragment(
       "quello-middle",
@@ -44,8 +79,16 @@ describe("selectSourceAwareFragments", () => {
       fragmentLimit: 3,
       rankedFragments: [seed],
       listFragmentsForSnapshot: async () => [
+        {
+          ...fragment("legacy-before", "quello", 0, seed.sourceTitle!),
+          embeddingProfileId: "legacy-profile",
+        },
         fragment("quello-before", "quello", 0, seed.sourceTitle!),
         seed,
+        {
+          ...fragment("legacy-after", "quello", 2, seed.sourceTitle!),
+          embeddingProfileId: "legacy-profile",
+        },
         fragment("quello-after", "quello", 2, seed.sourceTitle!),
         fragment("other-source", "other", 2, "Other"),
       ],

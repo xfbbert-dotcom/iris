@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { EvidencePlan } from "../src/agent/evidence-plan.js";
-import type { OpenAICompatibleChatMessage } from "../src/model/openai-compatible-chat-completions-client.js";
+import type {
+  OpenAICompatibleChatCompletionOptions,
+  OpenAICompatibleChatMessage,
+} from "../src/model/openai-compatible-chat-completions-client.js";
 import {
   createOpenAICompatibleGroundedAnswerRenderer,
 } from "../src/model/openai-compatible-grounded-answer-renderer.js";
@@ -48,7 +51,10 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
   });
 
   it("rejects a renderer that upgrades partial evidence", async () => {
-    const client = { complete: vi.fn(async () => JSON.stringify({
+    const client = { complete: vi.fn(async (
+      _messages: readonly OpenAICompatibleChatMessage[],
+      _options?: OpenAICompatibleChatCompletionOptions,
+    ) => JSON.stringify({
       answerText: "This is certain.",
       evidenceState: "explicit",
       confidence: "high",
@@ -84,6 +90,34 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
       }],
     })).rejects.toThrow("grounded answer evidence does not match the evidence plan");
     expect(client.complete).not.toHaveBeenCalled();
+  });
+
+  it("bounds an accepted long source label before rendering selected evidence", async () => {
+    const client = { complete: vi.fn(async (
+      _messages: readonly OpenAICompatibleChatMessage[],
+      _options?: OpenAICompatibleChatCompletionOptions,
+    ) => JSON.stringify({
+      answerText: "Bounded answer.",
+      evidenceState: "partial",
+      confidence: "medium",
+    })) };
+    const renderer = createOpenAICompatibleGroundedAnswerRenderer({ client });
+
+    await renderer.render({
+      ...groundedRenderInput(partialPlan()),
+      evidence: [{
+        citationRef: "D1",
+        source: `https://example.com/${"segment/".repeat(90)}document`,
+        text: "Repeated experience forms preferences and future actions.",
+      }],
+    });
+
+    const messages = client.complete.mock.calls[0]?.[0] ?? [];
+    const request = JSON.parse(messages[1]?.content ?? "{}") as {
+      evidence: Array<{ source: string }>;
+    };
+    expect(request.evidence[0]?.source.length).toBeLessThanOrEqual(512);
+    expect(request.evidence[0]?.source).toContain("[truncated]");
   });
 
   it("rejects malformed, extra-field, blank, and oversized renderer output", async () => {
