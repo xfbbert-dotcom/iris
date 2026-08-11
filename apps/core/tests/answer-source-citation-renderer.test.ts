@@ -127,6 +127,58 @@ describe("answer source citation renderer", () => {
     );
   });
 
+  it("shows only the planner-selected Quello source while retaining uncited retrieval traces", () => {
+    const result = renderAnswerWithSourceCitations({
+      answerText: "根据现有材料推断，Quello 的目标来自状态、经验和偏好的持续变化。",
+      citedSourceRefs: ["D2"],
+      allowedFragments: [
+        fragment({
+          id: "diary-noise",
+          documentSourceId: "source-diary",
+          documentSnapshotId: "snapshot-diary",
+          sourceTitle: "Daily diary",
+          sourceUri: "https://tenant.feishu.cn/wiki/diary",
+        }),
+        fragment({
+          id: "quello-evolution",
+          documentSourceId: "source-quello",
+          documentSnapshotId: "snapshot-quello",
+          sourceTitle: "Quello Evolution",
+          sourceUri: "https://tenant.feishu.cn/wiki/quello",
+        }),
+        fragment({
+          id: "related-engine",
+          documentSourceId: "source-related",
+          documentSnapshotId: "snapshot-related",
+          sourceTitle: "Related Engine Notes",
+          sourceUri: "https://tenant.feishu.cn/wiki/related",
+        }),
+      ],
+      initialPermissionCheckedAt: checkedAt,
+    });
+
+    expect(result.renderedText).toContain("[知识库] Quello Evolution");
+    expect(result.renderedText).not.toContain("Daily diary");
+    expect(result.renderedText).not.toContain("Related Engine Notes");
+    expect(result.sourceTraces).toEqual([
+      expect.objectContaining({
+        promptRank: 1,
+        documentSourceId: "source-diary",
+      }),
+      expect.objectContaining({
+        promptRank: 2,
+        documentSourceId: "source-quello",
+        citationRank: 1,
+      }),
+      expect.objectContaining({
+        promptRank: 3,
+        documentSourceId: "source-related",
+      }),
+    ]);
+    expect(result.sourceTraces[0]).not.toHaveProperty("citationRank");
+    expect(result.sourceTraces[2]).not.toHaveProperty("citationRank");
+  });
+
   it("traces retrieved fragments without citing sources the model did not use", () => {
     const result = renderAnswerWithSourceCitations({
       answerText: "7 days",

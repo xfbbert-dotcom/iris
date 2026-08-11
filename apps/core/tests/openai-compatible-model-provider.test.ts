@@ -52,6 +52,33 @@ describe("OpenAICompatibleModelProvider", () => {
     });
   });
 
+  it("delegates bounded chat completion and parses citations locally", async () => {
+    const client = {
+      complete: vi.fn(async () =>
+        'Answer\n<iris_citations>["D1"]</iris_citations>'),
+    };
+    const provider = createOpenAICompatibleModelProvider({
+      config: config(),
+      client,
+      fetch: vi.fn(async () => {
+        throw new Error("shared client was not used");
+      }),
+    } as Parameters<typeof createOpenAICompatibleModelProvider>[0] & { client: typeof client });
+
+    await expect(provider.generateAnswerDraft({
+      question: "Question",
+      promptContext: '<document citation_ref="D1">Fact</document>',
+    })).resolves.toEqual({ answerText: "Answer", citedSourceRefs: ["D1"] });
+    expect(client.complete).toHaveBeenCalledWith([
+      expect.objectContaining({ role: "system" }),
+      {
+        role: "user",
+        content:
+          'Question:\nQuestion\n\nContext:\n<document citation_ref="D1">Fact</document>',
+      },
+    ]);
+  });
+
   it("separates model-declared document citations from the visible answer", async () => {
     const fetch = vi.fn(async () =>
       jsonResponse({
@@ -201,6 +228,56 @@ describe("OpenAICompatibleModelProvider", () => {
     expect(systemMessage).toContain(
       "no label, explanation, quotation marks, Markdown, or code fence",
     );
+  });
+
+  it("allows transparent grounded inference from complete same-subject premises", async () => {
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        choices: [{
+          message: {
+            content:
+              "Based on the documented mechanism, the target can be inferred to emerge from state and accumulated experience.\n" +
+              '<iris_citations>["D1","D2"]</iris_citations>',
+          },
+        }],
+      }),
+    );
+    const provider = createOpenAICompatibleModelProvider({ config: config(), fetch });
+
+    await provider.generateAnswerDraft({
+      question: "How do Quello's virtual pets generate their own goals?",
+      promptContext:
+        '<background_documents>' +
+        '<document source="quello-overview" citation_ref="D1">' +
+        "The Life Engine determines behavioral priorities based on personality, emotional resonance, capability boundaries, and current state." +
+        "</document>" +
+        '<document source="quello-daily-tick" citation_ref="D2">' +
+        "Each tick accumulates cognitive friction and repeated experience, gradually forming preferences and next-step actions." +
+        "</document>" +
+        "</background_documents>",
+    });
+
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemMessage =
+      body.messages.find((message) => message.role === "system")?.content ?? "";
+
+    expect(systemMessage).toContain(
+      "either by stating it explicitly or by providing every material premise",
+    );
+    expect(systemMessage).toContain("reasonable conclusion about the exact subject");
+    expect(systemMessage).toContain("identify it as an inference");
+    expect(systemMessage).toContain(
+      "never present the conclusion as a quotation or an explicit source statement",
+    );
+    expect(systemMessage).toContain(
+      "Do not use general world knowledge to fill a missing company-specific premise",
+    );
+    expect(systemMessage).toContain("If any material premise is missing");
+    expect(systemMessage).toContain("Do not substitute a fact about a different");
+    expect(systemMessage).toContain("materially support the visible answer");
   });
 
   it("requires exact-subject grounding instead of related-subject substitution", async () => {

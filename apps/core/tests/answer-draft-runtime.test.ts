@@ -8,7 +8,27 @@ import type { DocumentSource } from "../src/documents/document-source-registry.j
 import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
 import type { GroupMemory, GroupMemoryRepository } from "../src/memory/group-memory-repository.js";
 import type { GroupMemoryService } from "../src/memory/group-memory-service.js";
-import { createAnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
+import type { EvidencePlanner } from "../src/model/openai-compatible-evidence-planner.js";
+import type { GroundedAnswerRenderer } from "../src/model/openai-compatible-grounded-answer-renderer.js";
+import {
+  createAnswerDraftRuntime as createProductionAnswerDraftRuntime,
+} from "../src/runtime/answer-draft-runtime.js";
+import {
+  createDirectTaskReasoningDoubles,
+  createDirectTaskReasoningRuntimeDependencies,
+} from "./answer-reasoning-test-doubles.js";
+
+type RuntimeInput = NonNullable<Parameters<typeof createProductionAnswerDraftRuntime>[0]>;
+
+function createAnswerDraftRuntime(input: RuntimeInput = {}) {
+  return createProductionAnswerDraftRuntime({
+    ...input,
+    dependencies: {
+      ...createDirectTaskReasoningRuntimeDependencies(),
+      ...input.dependencies,
+    },
+  });
+}
 
 describe("createAnswerDraftRuntime", () => {
   it("returns undefined when runtime is disabled", () => {
@@ -41,6 +61,7 @@ describe("createAnswerDraftRuntime", () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const conversationMessages = { listRecentByChat: vi.fn(async () => []) };
     const liveChatContextProvider = { loadRecentMessages: vi.fn(async () => []) };
+    const { planner, renderer } = createDirectTaskReasoningDoubles();
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),
       createDocumentFragmentRepository: vi.fn(() => ({
@@ -51,6 +72,8 @@ describe("createAnswerDraftRuntime", () => {
       createModelProvider: vi.fn(() => ({
         generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
       })),
+      createEvidencePlanner: vi.fn(() => planner),
+      createGroundedAnswerRenderer: vi.fn(() => renderer),
       createEmbeddingProfileRepository: vi.fn(() => ({
         getStaticDevelopmentProfile: vi.fn(async () => profile()),
         findOrCreateProfile: vi.fn(),
@@ -94,6 +117,8 @@ describe("createAnswerDraftRuntime", () => {
       model: "model-a",
       timeoutMs: 30000,
     });
+    expect(dependencies.createEvidencePlanner).toHaveBeenCalledOnce();
+    expect(dependencies.createGroundedAnswerRenderer).toHaveBeenCalledOnce();
     expect(runtime?.chatKnowledgeDraftGenerator).toBeDefined();
 
     await runtime?.close();
@@ -331,6 +356,115 @@ describe("createAnswerDraftRuntime", () => {
         question: "What changed?",
       }),
     );
+  });
+
+  it("recovers production-ranked Quello evidence and returns planner-owned citations", async () => {
+    const quelloOverview = fragment({
+      id: "quello-overview",
+      documentSourceId: "source-quello-overview",
+      documentSnapshotId: "snapshot-quello-overview",
+      sourceUri: "https://example.com/quello-overview",
+      sourceTitle: "Quello Overview",
+      chunkIndex: 0,
+      text: "Quello is a Life Engine that maintains evolving internal state.",
+    });
+    const quelloEvolution = fragment({
+      id: "quello-evolution",
+      documentSourceId: "source-quello-evolution",
+      documentSnapshotId: "snapshot-quello-evolution",
+      sourceUri: "https://example.com/quello-evolution",
+      sourceTitle: "Quello Evolution",
+      chunkIndex: 3,
+      text: "Each Tick combines current state and accumulated experience to shape preferences.",
+    });
+    const noise = Array.from({ length: 8 }, (_, index) => fragment({
+      id: `noise-${index + 1}`,
+      documentSourceId: `source-noise-${index + 1}`,
+      documentSnapshotId: `snapshot-noise-${index + 1}`,
+      sourceUri: `https://example.com/noise-${index + 1}`,
+      sourceTitle: index % 2 === 0 ? "Daily diary" : "Watch notes",
+      text: `Unrelated diary or watch material ${index + 1}`,
+    }));
+    const primary = [
+      ...noise.slice(0, 4),
+      quelloOverview,
+      ...noise.slice(4),
+      quelloEvolution,
+    ];
+    const fragments = {
+      searchSimilarFragments: vi.fn()
+        .mockResolvedValueOnce(primary)
+        .mockResolvedValueOnce([quelloEvolution, quelloOverview, ...noise]),
+    };
+    let quelloOverviewRef: string | undefined;
+    let quelloEvolutionRef: string | undefined;
+    const plan = vi.fn<EvidencePlanner["plan"]>(async ({ evidence }) => {
+      quelloOverviewRef = evidence.find(({ text }) => text.includes("Life Engine"))?.citationRef;
+      quelloEvolutionRef = evidence.find(({ text }) => text.includes("Tick"))?.citationRef;
+      if (quelloOverviewRef === undefined || quelloEvolutionRef === undefined) {
+        throw new Error("Quello evidence was not assembled");
+      }
+      return {
+        taskMode: "company_fact",
+        evidenceState: "complete_inference",
+        premises: [
+          { citationRef: quelloOverviewRef, statement: "Quello maintains evolving state" },
+          { citationRef: quelloEvolutionRef, statement: "Ticks apply state and experience" },
+        ],
+        proposedAnswer: "Goals can be inferred from evolving state, experience, and preferences.",
+        missingInformation: [],
+        confidence: "medium",
+      };
+    });
+    const render = vi.fn<GroundedAnswerRenderer["render"]>(async () => ({
+      answerText: "根据现有材料推断，Quello 的目标会从持续变化的状态、经验和偏好中形成。",
+      evidenceState: "complete_inference",
+      confidence: "medium",
+    }));
+    const directModel = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "must not run" })),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: enabledEnv(),
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createModelProvider: vi.fn(() => directModel),
+        createEvidencePlanner: vi.fn(() => ({ plan })),
+        createGroundedAnswerRenderer: vi.fn(() => ({ render })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "Quello 如何产生目标？",
+      liveChatMessages: [{ speaker: "Alice", text: "请结合 Quello 的已有资料回答" }],
+    });
+
+    expect(result?.allowedFragments.map(({ id }) => id)).toEqual(expect.arrayContaining([
+      "quello-overview",
+      "quello-evolution",
+    ]));
+    expect(plan).toHaveBeenCalledWith(expect.objectContaining({
+      evidence: expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("Life Engine") }),
+        expect.objectContaining({ text: expect.stringContaining("Tick") }),
+      ]),
+    }));
+    expect(result?.answerText).toContain("根据现有材料推断");
+    expect(result?.citedSourceRefs).toEqual([quelloOverviewRef, quelloEvolutionRef]);
+    expect(render).toHaveBeenCalledWith(expect.objectContaining({
+      evidence: expect.arrayContaining([
+        expect.objectContaining({ citationRef: quelloOverviewRef }),
+        expect.objectContaining({ citationRef: quelloEvolutionRef }),
+      ]),
+    }));
+    expect(directModel.generateAnswerDraft).not.toHaveBeenCalled();
+    await runtime?.close();
   });
 
   it("preserves unrestricted indexed documents with runtime controls in allow-indexed mode", async () => {

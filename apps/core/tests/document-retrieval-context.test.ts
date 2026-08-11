@@ -88,6 +88,97 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.promptContext.trim().endsWith("</live_chat_context>")).toBe(true);
   });
 
+  it("fuses primary and supplemental searches without letting chat noise lead", async () => {
+    const embedder: QueryEmbeddingProvider = {
+      embedTexts: vi.fn(async () => [
+        [1, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0],
+      ]),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async ({ embedding }: { embedding: number[] }) =>
+        embedding[0] === 1
+          ? [
+              fragment({ id: "quello", documentSourceId: "source-quello", chunkIndex: 0 }),
+              fragment({ id: "watch", documentSourceId: "source-watch", chunkIndex: 0 }),
+            ]
+          : [
+              fragment({ id: "diary", documentSourceId: "source-diary", chunkIndex: 0 }),
+              fragment({ id: "watch", documentSourceId: "source-watch", chunkIndex: 0 }),
+              fragment({ id: "quello", documentSourceId: "source-quello", chunkIndex: 0 }),
+            ],
+      ),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder,
+      fragments,
+      canReadDocument: vi.fn(async () => true),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "Quello goals",
+      supplementalQueryText: "Quello goals with noisy recent chat",
+      fragmentLimit: 3,
+      liveChatMessages: [],
+    });
+
+    expect(embedder.embedTexts).toHaveBeenCalledWith([
+      "Quello goals",
+      "Quello goals with noisy recent chat",
+    ]);
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledTimes(2);
+    expect(result.allowedFragments.map(({ id }) => id)).toEqual([
+      "quello",
+      "watch",
+      "diary",
+    ]);
+    expect(result.retrievedFragmentCount).toBe(3);
+  });
+
+  it("selects complete evidence from a named source instead of slicing global ranks", async () => {
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({ id: "watch-1", documentSourceId: "watch", chunkIndex: 0, sourceTitle: "Watch" }),
+        fragment({ id: "diary-1", documentSourceId: "diary", chunkIndex: 0, sourceTitle: "Diary" }),
+        fragment({ id: "watch-2", documentSourceId: "watch", chunkIndex: 1, sourceTitle: "Watch" }),
+        fragment({ id: "diary-2", documentSourceId: "diary", chunkIndex: 1, sourceTitle: "Diary" }),
+        fragment({
+          id: "quello-overview",
+          documentSourceId: "quello",
+          chunkIndex: 0,
+          sourceTitle: "Quello Life Engine（生命粒子引擎）副本",
+        }),
+        fragment({ id: "notes-1", documentSourceId: "notes", chunkIndex: 0, sourceTitle: "Notes" }),
+        fragment({ id: "watch-3", documentSourceId: "watch", chunkIndex: 2, sourceTitle: "Watch" }),
+        fragment({ id: "diary-3", documentSourceId: "diary", chunkIndex: 2, sourceTitle: "Diary" }),
+        fragment({ id: "notes-2", documentSourceId: "notes", chunkIndex: 1, sourceTitle: "Notes" }),
+        fragment({
+          id: "quello-evolution",
+          documentSourceId: "quello",
+          chunkIndex: 3,
+          sourceTitle: "Quello Life Engine（生命粒子引擎）副本",
+        }),
+      ]),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
+      fragments,
+      canReadDocument: vi.fn(async () => true),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "Quello 的电子宠物是如何自己产生目标的？",
+      fragmentLimit: 8,
+      liveChatMessages: [],
+    });
+
+    expect(result.allowedFragments[0]?.id).toBe("quello-overview");
+    expect(result.allowedFragments.map(({ id }) => id)).toContain("quello-evolution");
+    expect(result.allowedFragments).toHaveLength(8);
+  });
+
   it("returns live chat context when no fragments are retrieved", async () => {
     const builder = createDocumentRetrievalContextBuilder({
       embeddingProfileId: "static-dev-6d",
@@ -696,6 +787,7 @@ function fragment(overrides: {
   documentSourceId: string;
   chunkIndex: number;
   text?: string;
+  sourceTitle?: string;
 }) {
   return {
     documentSnapshotId: "snapshot-1",
