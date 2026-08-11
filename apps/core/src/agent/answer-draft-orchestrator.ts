@@ -306,27 +306,37 @@ export function createAnswerDraftOrchestrator({
   };
 }
 
+const COMPANY_FACT_QUESTION_MARKER_PATTERN = /[?？]|(?:什么|为什么|为何|如何|怎么|多少|是否|谁|哪里|哪(?:个|些)|何时)|\b(?:what|why|how|who|when|where|which|whether)\b/iu;
 const DIRECT_TASK_COMMAND_PATTERNS = [
   /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|总结|概括|整理|格式化|提炼|压缩|扩写|转换|生成|列出|提取)/u,
   /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|summari[sz]e|format|extract|condense|expand|convert|generate|list)\b/iu,
 ];
-const DIRECT_TASK_OBJECT_MARKER_PATTERN = /(?:这(?:段|份|个|些)|以下|下列|上面|上述|上一条|刚才|附件|该(?:文|段|内容))|\b(?:this|these|the following|the above|previous message|attached)\b/iu;
-const COMPANY_FACT_QUESTION_MARKER_PATTERN = /[?？]|(?:什么|为什么|为何|如何|怎么|多少|是否|谁|哪里|哪(?:个|些)|何时)|\b(?:what|why|how|who|when|where|which|whether)\b/iu;
+const DIRECT_TASK_OBJECT_MARKER_PATTERN = /(?:这段(?:话|文字|文本|内容|会议纪要)?|这份(?:文档|文件|材料|报告|会议纪要|纪要|内容)|这些(?:文字|文本|内容|材料|笔记|消息)|以下|下列|上面|上述|上一条|刚才|附件|该(?:文|段|内容))|\b(?:this\s+(?:text|passage|paragraph|document|file|note|message|content|meeting notes?)|these\s+(?:texts|passages|paragraphs|documents|files|notes|messages|meeting notes)|the following|the above|previous message|attached)\b/iu;
 const DIRECT_TASK_PAYLOAD_DELIMITER_PATTERNS = [
-  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:(?:翻译|改写|重写|润色|校对|总结|概括|整理|格式化|提炼|压缩|扩写|转换|生成|列出|提取)|(?:只|仅)\s*(?:回复|回答|输出))[^:：]{0,40}[:：]/u,
-  /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|summari[sz]e|format|extract|condense|expand|convert|generate|list|reply only|respond only|output only)[^:：]{0,40}[:：]/iu,
+  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|总结|概括|整理|格式化|提炼|压缩|扩写|转换|生成|列出|提取)[^:：]{0,40}[:：]\s*\S/u,
+  /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|summari[sz]e|format|extract|condense|expand|convert|generate|list)[^:：]{0,40}[:：]\s*\S/iu,
+];
+const QUESTION_LITERAL_TRANSFORM_PATTERNS = [
+  /^(?:(?:请|麻烦|烦请)\s*)?(?:(?:帮我|替我)\s*)?(?:(?:把|将)\s*)?(?:翻译|改写|重写|润色|校对|格式化|转换)[^:：]{0,40}[:：]/u,
+  /^(?:please\s+)?(?:translate|rewrite|rephrase|paraphrase|polish|proofread|format|convert)[^:：]{0,40}[:：]/iu,
+];
+const EXACT_OUTPUT_PAYLOAD_PATTERNS = [
+  /^(?:(?:请|麻烦|烦请)\s*)?(?:只|仅)\s*(?:回复|输出)[^:：]{0,40}[:：]\s*\S/u,
+  /^(?:please\s+)?(?:reply|output)\s+only[^:：]{0,40}[:：]\s*\S/iu,
 ];
 
 function isExplicitDirectTaskQuestion(question: string): boolean {
   const normalized = question.trim();
-  if (DIRECT_TASK_PAYLOAD_DELIMITER_PATTERNS.some((pattern) => pattern.test(normalized))) {
+  if (EXACT_OUTPUT_PAYLOAD_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return true;
   }
-  if (COMPANY_FACT_QUESTION_MARKER_PATTERN.test(normalized)) {
-    return false;
+  if (!DIRECT_TASK_PAYLOAD_DELIMITER_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return !COMPANY_FACT_QUESTION_MARKER_PATTERN.test(normalized) &&
+      DIRECT_TASK_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized)) &&
+      DIRECT_TASK_OBJECT_MARKER_PATTERN.test(normalized);
   }
-  return DIRECT_TASK_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized)) &&
-    DIRECT_TASK_OBJECT_MARKER_PATTERN.test(normalized);
+  return !COMPANY_FACT_QUESTION_MARKER_PATTERN.test(normalized) ||
+    QUESTION_LITERAL_TRANSFORM_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 function buildPlanningEvidence(

@@ -21,14 +21,32 @@ type SourceGroup = {
 export async function selectSourceAwareFragments(
   input: SourceAwareSelectionInput,
 ): Promise<RetrievedDocumentFragment[]> {
+  if (input.fragmentLimit <= 0) {
+    return [];
+  }
   const groups = groupRankedFragments(input.rankedFragments, input.queryText)
     .sort((left, right) =>
       Number(right.titleMatched) - Number(left.titleMatched) ||
       left.bestRank - right.bestRank);
   const selected: RetrievedDocumentFragment[] = [];
+  const leadingGroupCount = Math.max(1, Math.ceil(input.fragmentLimit / 2));
+  const leadingGroups = groups.slice(0, leadingGroupCount);
+  const overflowGroups = groups.slice(leadingGroupCount);
 
   for (let round = 0; round < MAX_FRAGMENTS_PER_SOURCE; round += 1) {
-    for (const group of groups) {
+    for (const group of leadingGroups) {
+      const fragment = group.fragments[round];
+      if (fragment !== undefined) {
+        selected.push(fragment);
+      }
+      if (selected.length >= input.fragmentLimit) {
+        return selected;
+      }
+    }
+  }
+
+  for (let round = 0; round < MAX_FRAGMENTS_PER_SOURCE; round += 1) {
+    for (const group of overflowGroups) {
       const fragment = group.fragments[round];
       if (fragment !== undefined) {
         selected.push(fragment);

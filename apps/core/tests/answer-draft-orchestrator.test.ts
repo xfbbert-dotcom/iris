@@ -11,7 +11,7 @@ import { createDirectTaskReasoningDoubles } from "./answer-reasoning-test-double
 
 type OrchestratorDependencies = Parameters<typeof createProductionAnswerDraftOrchestrator>[0];
 
-const DIRECT_SUMMARY_QUESTION = "Please summarize: What changed.";
+const DIRECT_SUMMARY_QUESTION = "Please summarize: The launch moved to Friday.";
 
 function createAnswerDraftOrchestrator(
   input: Omit<OrchestratorDependencies, "planner" | "renderer"> &
@@ -292,18 +292,18 @@ describe("AnswerDraftOrchestrator", () => {
     const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
 
     await orchestrator.generateDraft({
-      question: "请总结：Quello 的电子宠物是如何自己产生目标的？",
+      question: "请总结：Quello 的电子宠物会自己产生目标。",
       liveChatMessages: [
         { speaker: "Alice", text: "我希望它可以自己推理" },
-        { speaker: "Alice", text: "请总结：Quello 的电子宠物是如何自己产生目标的？" },
+        { speaker: "Alice", text: "请总结：Quello 的电子宠物会自己产生目标。" },
       ],
     });
 
     const input = contextBuilder.buildContext.mock.calls[0]?.[0];
-    expect(input?.queryText).toBe("请总结：Quello 的电子宠物是如何自己产生目标的？");
+    expect(input?.queryText).toBe("请总结：Quello 的电子宠物会自己产生目标。");
     expect(input?.supplementalQueryText).toContain("Alice: 我希望它可以自己推理");
     const supplementalQueryText = String(input?.supplementalQueryText);
-    expect(supplementalQueryText.match(/Quello 的电子宠物是如何自己产生目标的？/gu))
+    expect(supplementalQueryText.match(/Quello 的电子宠物会自己产生目标。/gu))
       .toHaveLength(1);
     expect(supplementalQueryText.length).toBeLessThanOrEqual(4000);
   });
@@ -371,10 +371,15 @@ describe("AnswerDraftOrchestrator", () => {
     }));
   });
 
-  it("keeps ordinary non-company tasks on the direct answer path", async () => {
+  it.each([
+    "请整理：会议决定周五上线。",
+    "Please translate: What changed?",
+    "只回复：OK",
+    "帮我整理一下这段会议纪要",
+  ])("keeps an explicit non-company task on the direct answer path: %s", async (question) => {
     const contextBuilder = {
       buildContext: vi.fn(async () => ({
-        promptContext: "<background_documents></background_documents>",
+        promptContext: "<background_documents>DIRECT_TASK_CONTEXT</background_documents>",
         allowedFragments: [],
         deniedDocumentIds: [],
         retrievedFragmentCount: 0,
@@ -405,12 +410,14 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     await expect(orchestrator.generateDraft({
-      question: "帮我整理一下这段会议纪要",
+      question,
       liveChatMessages: [],
     })).resolves.toEqual(expect.objectContaining({
       answerText: "整理后的会议纪要。",
     }));
-    expect(model.generateAnswerDraft).toHaveBeenCalledOnce();
+    expect(model.generateAnswerDraft).toHaveBeenCalledWith(expect.objectContaining({
+      promptContext: "<background_documents>DIRECT_TASK_CONTEXT</background_documents>",
+    }));
     expect(planner.plan).not.toHaveBeenCalled();
     expect(renderer.render).not.toHaveBeenCalled();
   });
@@ -455,6 +462,9 @@ describe("AnswerDraftOrchestrator", () => {
     for (const question of [
       "What is Iris's current annual revenue?",
       "总结 Iris 当前年收入",
+      "列出这个季度的营收",
+      "请总结：Iris 当前年收入是多少？",
+      "列出这个季度的营收：",
     ]) {
       await expect(orchestrator.generateDraft({
         question,
@@ -531,7 +541,10 @@ describe("AnswerDraftOrchestrator", () => {
 
     const result = await orchestrator.generateDraft({
       question,
-      liveChatMessages: [],
+      liveChatMessages: [
+        { speaker: "Alice", text: "目标是验证 Quello 的演进路径。" },
+        { speaker: "Bob", text: question },
+      ],
     });
 
     expect(planner.plan).toHaveBeenCalledWith(expect.objectContaining({
@@ -541,6 +554,10 @@ describe("AnswerDraftOrchestrator", () => {
         expect.objectContaining({ citationRef: "T1", text: expect.stringContaining("目标形成") }),
         expect.objectContaining({ citationRef: "D1", text: "Document premise" }),
         expect.objectContaining({ citationRef: "A1", text: expect.stringContaining("验证目标") }),
+      ],
+      liveChatMessages: [
+        { speaker: "Alice", text: expect.any(String) },
+        { speaker: "Bob", text: question },
       ],
     }));
     expect(JSON.stringify(vi.mocked(planner.plan).mock.calls[0]?.[0].evidence))
@@ -552,6 +569,10 @@ describe("AnswerDraftOrchestrator", () => {
         expect.objectContaining({ citationRef: "T1" }),
         expect.objectContaining({ citationRef: "D1" }),
         expect.objectContaining({ citationRef: "A1" }),
+      ],
+      liveChatMessages: [
+        { speaker: "Alice", text: expect.any(String) },
+        { speaker: "Bob", text: question },
       ],
     }));
     expect(result.citedSourceRefs).toEqual(["D1"]);
@@ -586,13 +607,13 @@ describe("AnswerDraftOrchestrator", () => {
     ];
 
     await orchestrator.generateDraft({
-      question: "Please summarize: How early should it remind us?",
+      question: "Please summarize: It should warn us one week early.",
       liveChatMessages,
     });
 
     const input = contextBuilder.buildContext.mock.calls[0]?.[0];
     expect(input?.queryText).not.toContain("Revoked document acceptance marker.");
-    expect(input?.queryText).toBe("Please summarize: How early should it remind us?");
+    expect(input?.queryText).toBe("Please summarize: It should warn us one week early.");
     expect(input?.supplementalQueryText).not.toContain("Revoked document acceptance marker.");
     expect(input?.supplementalQueryText).toContain("It should warn one week early.");
     expect(input?.liveChatMessages).toEqual(liveChatMessages);
