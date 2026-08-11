@@ -88,6 +88,54 @@ describe("DocumentRetrievalContextBuilder", () => {
     expect(result.promptContext.trim().endsWith("</live_chat_context>")).toBe(true);
   });
 
+  it("fuses primary and supplemental searches without letting chat noise lead", async () => {
+    const embedder: QueryEmbeddingProvider = {
+      embedTexts: vi.fn(async () => [
+        [1, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0],
+      ]),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async ({ embedding }: { embedding: number[] }) =>
+        embedding[0] === 1
+          ? [
+              fragment({ id: "quello", documentSourceId: "source-quello", chunkIndex: 0 }),
+              fragment({ id: "watch", documentSourceId: "source-watch", chunkIndex: 0 }),
+            ]
+          : [
+              fragment({ id: "diary", documentSourceId: "source-diary", chunkIndex: 0 }),
+              fragment({ id: "watch", documentSourceId: "source-watch", chunkIndex: 0 }),
+              fragment({ id: "quello", documentSourceId: "source-quello", chunkIndex: 0 }),
+            ],
+      ),
+    };
+    const builder = createDocumentRetrievalContextBuilder({
+      embeddingProfileId: "static-dev-6d",
+      embedder,
+      fragments,
+      canReadDocument: vi.fn(async () => true),
+    });
+
+    const result = await builder.buildContext({
+      queryText: "Quello goals",
+      supplementalQueryText: "Quello goals with noisy recent chat",
+      fragmentLimit: 3,
+      liveChatMessages: [],
+    });
+
+    expect(embedder.embedTexts).toHaveBeenCalledWith([
+      "Quello goals",
+      "Quello goals with noisy recent chat",
+    ]);
+    expect(fragments.searchSimilarFragments).toHaveBeenCalledTimes(2);
+    expect(result.allowedFragments.map(({ id }) => id)).toEqual([
+      "quello",
+      "watch",
+      "diary",
+    ]);
+    expect(result.retrievedFragmentCount).toBe(3);
+  });
+
   it("returns live chat context when no fragments are retrieved", async () => {
     const builder = createDocumentRetrievalContextBuilder({
       embeddingProfileId: "static-dev-6d",

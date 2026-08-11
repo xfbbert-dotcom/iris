@@ -19,6 +19,7 @@ import {
 } from "./context-assembly.js";
 import type { GroupMemoryContextProvider } from "./group-memory-context-provider.js";
 import type { ConversationStateContextProvider } from "../conversation-state/conversation-state-context-provider.js";
+import { fuseRetrievedDocumentFragments } from "./retrieval-candidate-fusion.js";
 
 const DEFAULT_FRAGMENT_LIMIT = 8;
 const MAX_FRAGMENT_LIMIT = 12;
@@ -81,6 +82,9 @@ export function createDocumentRetrievalContextBuilder({
   return {
     async buildContext(input) {
       const queryText = sanitizeQueryText(input.queryText);
+      const queryTexts = input.supplementalQueryText === undefined
+        ? [queryText]
+        : [queryText, sanitizeQueryText(input.supplementalQueryText)];
       const fragmentLimit = sanitizeFragmentLimit(input.fragmentLimit);
       const usedGroupMemories = await loadGroupMemories({
         groupId: memoryGroupId,
@@ -111,14 +115,19 @@ export function createDocumentRetrievalContextBuilder({
         };
       }
 
-      const queryEmbedding = await embedQuery(queryText, embedder);
+      const queryEmbeddings = await embedQueries(queryTexts, embedder);
       const candidateFragmentLimit = computeCandidateFragmentLimit(fragmentLimit);
-      const retrievedFragments = await fragments.searchSimilarFragments({
-        embeddingProfileId,
-        embedding: queryEmbedding,
-        limit: candidateFragmentLimit,
-        ...(sourceTypes === undefined ? {} : { sourceTypes }),
-        ...(groupId === undefined ? {} : { groupId }),
+      const resultSets = await Promise.all(queryEmbeddings.map((embedding) =>
+        fragments.searchSimilarFragments({
+          embeddingProfileId,
+          embedding,
+          limit: candidateFragmentLimit,
+          ...(sourceTypes === undefined ? {} : { sourceTypes }),
+          ...(groupId === undefined ? {} : { groupId }),
+        })));
+      const retrievedFragments = fuseRetrievedDocumentFragments({
+        primary: resultSets[0] ?? [],
+        ...(resultSets[1] === undefined ? {} : { supplemental: resultSets[1] }),
       });
       const meaningfulFragments = retrievedFragments.filter((fragment) =>
         fragment.text.trim().length > 0,
@@ -245,28 +254,31 @@ function sanitizeQueryText(value: string): string {
   return value;
 }
 
-async function embedQuery(queryText: string, embedder: QueryEmbeddingProvider): Promise<number[]> {
-  const embeddings = await embedder.embedTexts([queryText]);
+async function embedQueries(
+  queryTexts: string[],
+  embedder: QueryEmbeddingProvider,
+): Promise<number[][]> {
+  const embeddings = await embedder.embedTexts(queryTexts);
 
-  if (embeddings.length !== 1) {
-    throw new Error("query embedding provider must return exactly one vector");
+  if (embeddings.length !== queryTexts.length) {
+    throw new Error(queryTexts.length === 1
+      ? "query embedding provider must return exactly one vector"
+      : `query embedding provider must return exactly ${queryTexts.length} vectors`);
   }
 
-  const embedding = embeddings[0];
-  if (embedding === undefined) {
-    throw new Error("query embedding provider must return exactly one vector");
-  }
-  if (embedding.length === 0) {
-    throw new Error("query embedding must not be empty");
-  }
+  for (const embedding of embeddings) {
+    if (embedding.length === 0) {
+      throw new Error("query embedding must not be empty");
+    }
 
-  for (const value of embedding) {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      throw new Error("query embedding contains invalid value");
+    for (const value of embedding) {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new Error("query embedding contains invalid value");
+      }
     }
   }
 
-  return embedding;
+  return embeddings;
 }
 
 function sanitizeFragmentLimit(value: number | undefined): number {
