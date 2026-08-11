@@ -44,6 +44,7 @@ export type DocumentRetrievalContextResult = {
   allowedFragments: RetrievedDocumentFragment[];
   deniedDocumentIds: string[];
   retrievedFragmentCount: number;
+  liveChatMessages?: LiveChatMessage[];
   usedGroupMemories: PromptGroupMemory[];
   usedDiscussionThreads?: PromptDiscussionThread[];
   usedActionItems?: PromptActionItem[];
@@ -111,6 +112,7 @@ export function createDocumentRetrievalContextBuilder({
           allowedFragments: [],
           deniedDocumentIds: [],
           retrievedFragmentCount: 0,
+          liveChatMessages: cloneLiveChatMessages(input.liveChatMessages),
           usedGroupMemories: clonePromptGroupMemories(usedGroupMemories),
           usedDiscussionThreads: clonePromptDiscussionThreads(conversationState.threads),
           usedActionItems: clonePromptActionItems(conversationState.actions),
@@ -184,6 +186,7 @@ export function createDocumentRetrievalContextBuilder({
           deniedDocumentIdSet.has(documentSourceId),
         ),
         retrievedFragmentCount: retrievedFragments.length,
+        liveChatMessages: cloneLiveChatMessages(input.liveChatMessages),
         usedGroupMemories: clonePromptGroupMemories(usedGroupMemories),
         usedDiscussionThreads: clonePromptDiscussionThreads(conversationState.threads),
         usedActionItems: clonePromptActionItems(conversationState.actions),
@@ -295,6 +298,10 @@ async function embedQueries(
   }
 
   return embeddings;
+}
+
+function cloneLiveChatMessages(messages: LiveChatMessage[]): LiveChatMessage[] {
+  return messages.map((message) => ({ ...message }));
 }
 
 function sanitizeFragmentLimit(value: number | undefined): number {

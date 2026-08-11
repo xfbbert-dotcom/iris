@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { AgentExecutionObserver } from "../agent-runtime/agent-execution-observer.js";
+import { citedRefsForEvidencePlan } from "./evidence-plan.js";
 import type { RetrievedDocumentFragment } from "../documents/document-fragment-repository.js";
 import type {
   DocumentRetrievalContextBuilder,
@@ -12,6 +13,8 @@ import type {
   PromptDiscussionThread,
   PromptGroupMemory,
 } from "../memory/context-assembly.js";
+import type { EvidencePlanner } from "../model/openai-compatible-evidence-planner.js";
+import type { GroundedAnswerRenderer } from "../model/openai-compatible-grounded-answer-renderer.js";
 
 export type GenerateAnswerDraftInput = {
   question: string;
@@ -79,6 +82,8 @@ const PERMISSION_BLOCKED_ANSWER_DRAFT = "Answer withheld by the live permission 
 export function createAnswerDraftOrchestrator({
   contextBuilder,
   model,
+  planner,
+  renderer,
   liveChatContextProvider,
   agentExecutionObserver,
   provider,
@@ -87,6 +92,8 @@ export function createAnswerDraftOrchestrator({
 }: {
   contextBuilder: Pick<DocumentRetrievalContextBuilder, "buildContext">;
   model: ModelProvider;
+  planner: EvidencePlanner;
+  renderer: GroundedAnswerRenderer;
   liveChatContextProvider?: LiveChatContextProvider;
   agentExecutionObserver?: AgentExecutionObserver;
   provider?: string;
@@ -185,45 +192,64 @@ export function createAnswerDraftOrchestrator({
             ...(provider === undefined ? {} : { provider }),
             ...(modelId === undefined ? {} : { modelId }),
           };
-          await safelyObserve(agentExecutionObserver, {
-            ...providerObservation,
-            eventType: "provider_request_started",
-            phase: "sampling",
-            operationKey: createTurnOperationKey(executionId, "provider:started"),
-            metadata: {},
-          });
-          try {
-            const modelResult = await model.generateAnswerDraft({
+          const evidence = context.allowedFragments.map((fragment, index) => ({
+            citationRef: `D${index + 1}`,
+            source: `${fragment.sourceUri}#chunk-${fragment.chunkIndex}`,
+            text: fragment.text,
+          }));
+          const plan = await runObservedProviderRequest({
+            observer: agentExecutionObserver,
+            providerObservation,
+            executionId,
+            stageKey: "planner",
+            stage: "evidence_planning",
+            request: () => planner.plan({
               question,
-              promptContext: context.promptContext,
+              evidence,
+              liveChatMessages: context.liveChatMessages ?? [],
+            }),
+          });
+          if (plan.taskMode === "direct_task") {
+            const modelResult = await runObservedProviderRequest({
+              observer: agentExecutionObserver,
+              providerObservation,
+              executionId,
+              stageKey: "renderer",
+              stage: "answer_rendering",
+              request: () => model.generateAnswerDraft({
+                question,
+                promptContext: context.promptContext,
+              }),
             });
             answerText = truncateAnswerDraftText(modelResult.answerText.trim());
-            if (answerText.length === 0) {
-              throw new Error("model answer draft must not be blank");
-            }
             citedSourceRefs = normalizeCitedSourceRefs(
               modelResult.citedSourceRefs,
               context.allowedFragments.length,
             );
-            await safelyObserve(agentExecutionObserver, {
-              ...providerObservation,
-              eventType: "provider_request_completed",
-              phase: "sampling",
-              outcome: "success",
-              operationKey: createTurnOperationKey(executionId, "provider:completed"),
-              metadata: {},
+          } else {
+            citedSourceRefs = normalizeCitedSourceRefs(
+              citedRefsForEvidencePlan(plan),
+              context.allowedFragments.length,
+            );
+            const citedRefSet = new Set(citedSourceRefs);
+            const rendered = await runObservedProviderRequest({
+              observer: agentExecutionObserver,
+              providerObservation,
+              executionId,
+              stageKey: "renderer",
+              stage: "answer_rendering",
+              request: () => renderer.render({
+                question,
+                plan,
+                evidence: evidence.filter(({ citationRef }) =>
+                  citedRefSet.has(citationRef)),
+                liveChatMessages: context.liveChatMessages ?? [],
+              }),
             });
-          } catch (error) {
-            await safelyObserve(agentExecutionObserver, {
-              ...providerObservation,
-              eventType: "provider_request_failed",
-              phase: "sampling",
-              outcome: "error",
-              decisionReason: "model_provider_failed",
-              operationKey: createTurnOperationKey(executionId, "provider:failed"),
-              metadata: {},
-            });
-            throw error;
+            answerText = truncateAnswerDraftText(rendered.answerText.trim());
+          }
+          if (answerText.length === 0) {
+            throw new Error("model answer draft must not be blank");
           }
         }
 
@@ -260,6 +286,63 @@ export function createAnswerDraftOrchestrator({
       }
     },
   };
+}
+
+type ProviderObservationBase = {
+  groupId?: string;
+  actorOpenId?: string;
+  subjectType: "provider_request";
+  subjectId: string;
+  provider?: string;
+  modelId?: string;
+};
+
+async function runObservedProviderRequest<T>({
+  observer,
+  providerObservation,
+  executionId,
+  stageKey,
+  stage,
+  request,
+}: {
+  observer: AgentExecutionObserver | undefined;
+  providerObservation: ProviderObservationBase;
+  executionId: string;
+  stageKey: "planner" | "renderer";
+  stage: "evidence_planning" | "answer_rendering";
+  request: () => Promise<T>;
+}): Promise<T> {
+  const operationPrefix = `provider:${stageKey}`;
+  await safelyObserve(observer, {
+    ...providerObservation,
+    eventType: "provider_request_started",
+    phase: "sampling",
+    operationKey: createTurnOperationKey(executionId, `${operationPrefix}:started`),
+    metadata: { stage },
+  });
+  try {
+    const result = await request();
+    await safelyObserve(observer, {
+      ...providerObservation,
+      eventType: "provider_request_completed",
+      phase: "sampling",
+      outcome: "success",
+      operationKey: createTurnOperationKey(executionId, `${operationPrefix}:completed`),
+      metadata: { stage },
+    });
+    return result;
+  } catch (error) {
+    await safelyObserve(observer, {
+      ...providerObservation,
+      eventType: "provider_request_failed",
+      phase: "sampling",
+      outcome: "error",
+      decisionReason: "model_provider_failed",
+      operationKey: createTurnOperationKey(executionId, `${operationPrefix}:failed`),
+      metadata: { stage },
+    });
+    throw error;
+  }
 }
 
 async function safelyObserve(

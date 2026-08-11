@@ -1,10 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  createAnswerDraftOrchestrator,
+  createAnswerDraftOrchestrator as createProductionAnswerDraftOrchestrator,
   type ModelProvider,
 } from "../src/agent/answer-draft-orchestrator.js";
 import type { AgentExecutionObserver } from "../src/agent-runtime/agent-execution-observer.js";
+import type { EvidencePlanner } from "../src/model/openai-compatible-evidence-planner.js";
+import type { GroundedAnswerRenderer } from "../src/model/openai-compatible-grounded-answer-renderer.js";
+import { createDirectTaskReasoningDoubles } from "./answer-reasoning-test-doubles.js";
+
+type OrchestratorDependencies = Parameters<typeof createProductionAnswerDraftOrchestrator>[0];
+
+function createAnswerDraftOrchestrator(
+  input: Omit<OrchestratorDependencies, "planner" | "renderer"> &
+    Partial<Pick<OrchestratorDependencies, "planner" | "renderer">>,
+) {
+  return createProductionAnswerDraftOrchestrator({
+    ...createDirectTaskReasoningDoubles(),
+    ...input,
+  });
+}
 
 describe("AnswerDraftOrchestrator", () => {
   it("builds safe context, calls model provider, and returns draft metadata", async () => {
@@ -126,7 +141,12 @@ describe("AnswerDraftOrchestrator", () => {
     const model: ModelProvider = {
       generateAnswerDraft: vi.fn(async () => ({ answerText: "Must not be generated." })),
     };
-    const orchestrator = createAnswerDraftOrchestrator({ contextBuilder, model });
+    const reasoning = createDirectTaskReasoningDoubles();
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      ...reasoning,
+    });
 
     const result = await orchestrator.generateDraft({
       question: "What changed?",
@@ -134,6 +154,8 @@ describe("AnswerDraftOrchestrator", () => {
     });
 
     expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(reasoning.planner.plan).not.toHaveBeenCalled();
+    expect(reasoning.renderer.render).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       answerText: "Answer withheld by the live permission guard.",
       deniedDocumentIds: ["source-denied"],
@@ -282,6 +304,117 @@ describe("AnswerDraftOrchestrator", () => {
     expect(supplementalQueryText.match(/Quello 的电子宠物是如何自己产生目标的？/gu))
       .toHaveLength(1);
     expect(supplementalQueryText.length).toBeLessThanOrEqual(4000);
+  });
+
+  it("renders a partial company answer from only planner-selected evidence", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext: "<background_documents></background_documents>",
+        allowedFragments: [
+          retrievedFragment("quello-overview", "Overview", 0),
+          retrievedFragment("quello-evolution", "Evolution", 3),
+        ],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 10,
+        liveChatMessages: [{ speaker: "Alice", text: "请基于资料推理" }],
+        usedGroupMemories: [],
+        usedDiscussionThreads: [],
+        usedActionItems: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Legacy answer" })),
+    };
+    const planner: EvidencePlanner = {
+      plan: vi.fn<EvidencePlanner["plan"]>(async () => ({
+        taskMode: "company_fact",
+        evidenceState: "partial",
+        premises: [{ citationRef: "D2", statement: "Experience shapes preferences" }],
+        proposedAnswer: "Goals likely emerge from state and experience",
+        missingInformation: ["The exact selection algorithm"],
+        confidence: "medium",
+      })),
+    };
+    const renderer: GroundedAnswerRenderer = {
+      render: vi.fn<GroundedAnswerRenderer["render"]>(async () => ({
+        answerText: "证据不足；基于现有证据，我的推测是目标会从状态和经验中形成。",
+        evidenceState: "partial",
+        confidence: "medium",
+      })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      planner,
+      renderer,
+    } as Parameters<typeof createAnswerDraftOrchestrator>[0] & {
+      planner: EvidencePlanner;
+      renderer: GroundedAnswerRenderer;
+    });
+
+    const result = await orchestrator.generateDraft({
+      question: "Quello 如何产生目标？",
+      liveChatMessages: [],
+    });
+
+    expect(result.answerText).toContain("基于现有证据，我的推测是");
+    expect(result.citedSourceRefs).toEqual(["D2"]);
+    expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(renderer.render).toHaveBeenCalledWith(expect.objectContaining({
+      evidence: [{
+        citationRef: "D2",
+        source: "https://example.com/quello-evolution#chunk-3",
+        text: "Evolution",
+      }],
+    }));
+  });
+
+  it("keeps ordinary non-company tasks on the direct answer path", async () => {
+    const contextBuilder = {
+      buildContext: vi.fn(async () => ({
+        promptContext: "<background_documents></background_documents>",
+        allowedFragments: [],
+        deniedDocumentIds: [],
+        retrievedFragmentCount: 0,
+        liveChatMessages: [],
+        usedGroupMemories: [],
+        usedDiscussionThreads: [],
+        usedActionItems: [],
+      })),
+    };
+    const model: ModelProvider = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "整理后的会议纪要。" })),
+    };
+    const planner: EvidencePlanner = {
+      plan: vi.fn<EvidencePlanner["plan"]>(async () => ({
+        taskMode: "direct_task",
+        evidenceState: null,
+        premises: [],
+        proposedAnswer: null,
+        missingInformation: [],
+        confidence: null,
+      })),
+    };
+    const renderer: GroundedAnswerRenderer = {
+      render: vi.fn(async () => {
+        throw new Error("renderer must not run for a direct task");
+      }),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder,
+      model,
+      planner,
+      renderer,
+    });
+
+    await expect(orchestrator.generateDraft({
+      question: "帮我整理一下这段会议纪要",
+      liveChatMessages: [],
+    })).resolves.toEqual(expect.objectContaining({
+      answerText: "整理后的会议纪要。",
+    }));
+    expect(model.generateAnswerDraft).toHaveBeenCalledOnce();
+    expect(renderer.render).not.toHaveBeenCalled();
   });
 
   it("keeps stale earlier chat out of document retrieval while preserving prompt context", async () => {
@@ -874,8 +1007,8 @@ describe("AnswerDraftOrchestrator", () => {
         phase: "sampling",
         provider: "google",
         modelId: "gemini-2.5-flash",
-        operationKey: "turn:om_message_1:provider:started",
-        metadata: {},
+        operationKey: "turn:om_message_1:provider:planner:started",
+        metadata: { stage: "evidence_planning" },
       },
       {
         groupId: "oc_group_1",
@@ -887,8 +1020,33 @@ describe("AnswerDraftOrchestrator", () => {
         provider: "google",
         modelId: "gemini-2.5-flash",
         outcome: "success",
-        operationKey: "turn:om_message_1:provider:completed",
-        metadata: {},
+        operationKey: "turn:om_message_1:provider:planner:completed",
+        metadata: { stage: "evidence_planning" },
+      },
+      {
+        groupId: "oc_group_1",
+        actorOpenId: "ou_alice",
+        subjectType: "provider_request",
+        subjectId: "om_message_1",
+        eventType: "provider_request_started",
+        phase: "sampling",
+        provider: "google",
+        modelId: "gemini-2.5-flash",
+        operationKey: "turn:om_message_1:provider:renderer:started",
+        metadata: { stage: "answer_rendering" },
+      },
+      {
+        groupId: "oc_group_1",
+        actorOpenId: "ou_alice",
+        subjectType: "provider_request",
+        subjectId: "om_message_1",
+        eventType: "provider_request_completed",
+        phase: "sampling",
+        provider: "google",
+        modelId: "gemini-2.5-flash",
+        outcome: "success",
+        operationKey: "turn:om_message_1:provider:renderer:completed",
+        metadata: { stage: "answer_rendering" },
       },
       {
         groupId: "oc_group_1",
@@ -909,6 +1067,79 @@ describe("AnswerDraftOrchestrator", () => {
         },
       },
     ]);
+    expect(JSON.stringify(observe.mock.calls)).not.toContain("SECRET_");
+  });
+
+  it("records distinct content-free planner and renderer provider stages", async () => {
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder: {
+        buildContext: vi.fn(async () => ({
+          promptContext: "SECRET_PROMPT_CONTEXT",
+          allowedFragments: [retrievedFragment("secret-source", "SECRET_DOCUMENT_BODY", 0)],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 1,
+          liveChatMessages: [],
+          usedGroupMemories: [],
+        })),
+      },
+      model: {
+        generateAnswerDraft: vi.fn(async () => ({ answerText: "must not run" })),
+      },
+      planner: {
+        plan: vi.fn<EvidencePlanner["plan"]>(async () => ({
+          taskMode: "company_fact",
+          evidenceState: "explicit",
+          premises: [{ citationRef: "D1", statement: "SECRET_PREMISE" }],
+          proposedAnswer: "SECRET_PROPOSED_ANSWER",
+          missingInformation: [],
+          confidence: "high",
+        })),
+      },
+      renderer: {
+        render: vi.fn<GroundedAnswerRenderer["render"]>(async () => ({
+          answerText: "Rendered answer.",
+          evidenceState: "explicit",
+          confidence: "high",
+        })),
+      },
+      agentExecutionObserver: { observe },
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+    });
+
+    await orchestrator.generateDraft({
+      executionId: "om_reasoning_1",
+      question: "SECRET_QUESTION",
+      liveChatMessages: [],
+    });
+
+    expect(observe.mock.calls
+      .map(([event]) => event)
+      .filter(({ subjectType }) => subjectType === "provider_request")
+      .map(({ eventType, operationKey, metadata }) => ({ eventType, operationKey, metadata })))
+      .toEqual([
+        {
+          eventType: "provider_request_started",
+          operationKey: "turn:om_reasoning_1:provider:planner:started",
+          metadata: { stage: "evidence_planning" },
+        },
+        {
+          eventType: "provider_request_completed",
+          operationKey: "turn:om_reasoning_1:provider:planner:completed",
+          metadata: { stage: "evidence_planning" },
+        },
+        {
+          eventType: "provider_request_started",
+          operationKey: "turn:om_reasoning_1:provider:renderer:started",
+          metadata: { stage: "answer_rendering" },
+        },
+        {
+          eventType: "provider_request_completed",
+          operationKey: "turn:om_reasoning_1:provider:renderer:completed",
+          metadata: { stage: "answer_rendering" },
+        },
+      ]);
     expect(JSON.stringify(observe.mock.calls)).not.toContain("SECRET_");
   });
 
@@ -942,15 +1173,17 @@ describe("AnswerDraftOrchestrator", () => {
     expect(observe.mock.calls.map(([event]) => event.eventType)).toEqual([
       "turn_started",
       "provider_request_started",
+      "provider_request_completed",
+      "provider_request_started",
       "provider_request_failed",
       "turn_failed",
     ]);
-    expect(observe.mock.calls[2]?.[0]).toEqual(expect.objectContaining({
+    expect(observe.mock.calls[4]?.[0]).toEqual(expect.objectContaining({
       outcome: "error",
       decisionReason: "model_provider_failed",
-      metadata: {},
+      metadata: { stage: "answer_rendering" },
     }));
-    expect(observe.mock.calls[3]?.[0]).toEqual(expect.objectContaining({
+    expect(observe.mock.calls[5]?.[0]).toEqual(expect.objectContaining({
       outcome: "error",
       decisionReason: "answer_draft_failed",
       metadata: {},
@@ -986,3 +1219,19 @@ describe("AnswerDraftOrchestrator", () => {
     })).resolves.toEqual(expect.objectContaining({ answerText: "Answer." }));
   });
 });
+
+function retrievedFragment(id: string, text: string, chunkIndex: number) {
+  return {
+    id,
+    documentSourceId: `source-${id}`,
+    documentSnapshotId: `snapshot-${id}`,
+    sourceUri: `https://example.com/${id}`,
+    chunkIndex,
+    text,
+    contentHash: `hash-${id}`,
+    embedding: [1, 0, 0, 0, 0, 0],
+    embeddingProfileId: "static-dev-6d",
+    createdAt: new Date("2026-08-11T00:00:00.000Z"),
+    sourceType: "feishu_wiki" as const,
+  };
+}

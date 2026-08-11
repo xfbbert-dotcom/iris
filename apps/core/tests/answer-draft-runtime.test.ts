@@ -8,7 +8,25 @@ import type { DocumentSource } from "../src/documents/document-source-registry.j
 import type { EmbeddingProfile } from "../src/documents/embedding-profile-repository.js";
 import type { GroupMemory, GroupMemoryRepository } from "../src/memory/group-memory-repository.js";
 import type { GroupMemoryService } from "../src/memory/group-memory-service.js";
-import { createAnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
+import {
+  createAnswerDraftRuntime as createProductionAnswerDraftRuntime,
+} from "../src/runtime/answer-draft-runtime.js";
+import {
+  createDirectTaskReasoningDoubles,
+  createDirectTaskReasoningRuntimeDependencies,
+} from "./answer-reasoning-test-doubles.js";
+
+type RuntimeInput = NonNullable<Parameters<typeof createProductionAnswerDraftRuntime>[0]>;
+
+function createAnswerDraftRuntime(input: RuntimeInput = {}) {
+  return createProductionAnswerDraftRuntime({
+    ...input,
+    dependencies: {
+      ...createDirectTaskReasoningRuntimeDependencies(),
+      ...input.dependencies,
+    },
+  });
+}
 
 describe("createAnswerDraftRuntime", () => {
   it("returns undefined when runtime is disabled", () => {
@@ -41,6 +59,7 @@ describe("createAnswerDraftRuntime", () => {
     const pool = { query: vi.fn(), end: vi.fn(async () => undefined) };
     const conversationMessages = { listRecentByChat: vi.fn(async () => []) };
     const liveChatContextProvider = { loadRecentMessages: vi.fn(async () => []) };
+    const { planner, renderer } = createDirectTaskReasoningDoubles();
     const dependencies = {
       createPostgresPool: vi.fn(() => pool),
       createDocumentFragmentRepository: vi.fn(() => ({
@@ -51,6 +70,8 @@ describe("createAnswerDraftRuntime", () => {
       createModelProvider: vi.fn(() => ({
         generateAnswerDraft: vi.fn(async () => ({ answerText: "Draft" })),
       })),
+      createEvidencePlanner: vi.fn(() => planner),
+      createGroundedAnswerRenderer: vi.fn(() => renderer),
       createEmbeddingProfileRepository: vi.fn(() => ({
         getStaticDevelopmentProfile: vi.fn(async () => profile()),
         findOrCreateProfile: vi.fn(),
@@ -94,6 +115,8 @@ describe("createAnswerDraftRuntime", () => {
       model: "model-a",
       timeoutMs: 30000,
     });
+    expect(dependencies.createEvidencePlanner).toHaveBeenCalledOnce();
+    expect(dependencies.createGroundedAnswerRenderer).toHaveBeenCalledOnce();
     expect(runtime?.chatKnowledgeDraftGenerator).toBeDefined();
 
     await runtime?.close();

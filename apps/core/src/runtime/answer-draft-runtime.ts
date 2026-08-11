@@ -65,6 +65,18 @@ import { assertSupportedRuntimeEmbeddingDimension } from "../model/embedding-pro
 import { createQueryEmbeddingProvider } from "../model/embedding-input-format.js";
 import { createOpenAICompatibleEmbeddingProvider } from "../model/openai-compatible-embedding-provider.js";
 import { createOpenAICompatibleModelProvider } from "../model/openai-compatible-model-provider.js";
+import {
+  createOpenAICompatibleChatCompletionsClient,
+  type OpenAICompatibleChatCompletionsClient,
+} from "../model/openai-compatible-chat-completions-client.js";
+import {
+  createOpenAICompatibleEvidencePlanner,
+  type EvidencePlanner,
+} from "../model/openai-compatible-evidence-planner.js";
+import {
+  createOpenAICompatibleGroundedAnswerRenderer,
+  type GroundedAnswerRenderer,
+} from "../model/openai-compatible-grounded-answer-renderer.js";
 import type { GroupMemoryRepository } from "../memory/group-memory-repository.js";
 import {
   createAnswerSourcePermissionVerifier,
@@ -121,6 +133,15 @@ export type AnswerDraftRuntimeDependencies = {
   createModelProvider?: (config: ModelProviderConfig) => {
     generateAnswerDraft(input: { question: string; promptContext: string }): Promise<{ answerText: string }>;
   };
+  createChatCompletionsClient?: (
+    config: ModelProviderConfig,
+  ) => OpenAICompatibleChatCompletionsClient;
+  createEvidencePlanner?: (dependencies: {
+    client: OpenAICompatibleChatCompletionsClient;
+  }) => EvidencePlanner;
+  createGroundedAnswerRenderer?: (dependencies: {
+    client: OpenAICompatibleChatCompletionsClient;
+  }) => GroundedAnswerRenderer;
   createEmbeddingProfileRepository?: (dependencies: { queryable: Queryable }) => Pick<
     EmbeddingProfileRepository,
     "getStaticDevelopmentProfile" | "findOrCreateProfile" | "getProfileById"
@@ -192,9 +213,9 @@ export function createAnswerDraftRuntime({
     dependencies.createConversationMessageRepository ?? createPostgresConversationMessageRepository;
   const createLiveChatContext =
     dependencies.createLiveChatContextProvider ?? createLiveChatContextProvider;
-  const createModel =
-    dependencies.createModelProvider ??
-    ((config: ModelProviderConfig) => createOpenAICompatibleModelProvider({ config }));
+  const createChatClient =
+    dependencies.createChatCompletionsClient ??
+    ((config: ModelProviderConfig) => createOpenAICompatibleChatCompletionsClient({ config }));
   const createProfiles =
     dependencies.createEmbeddingProfileRepository ?? createEmbeddingProfileRepository;
   const createEmbedding =
@@ -246,7 +267,15 @@ export function createAnswerDraftRuntime({
     delegate: createLiveChatContext({ repository: conversationMessages }),
     runtimeController,
   });
-  const model = createModel(modelConfig);
+  const chatClient = createChatClient(modelConfig);
+  const model = dependencies.createModelProvider?.(modelConfig) ??
+    createOpenAICompatibleModelProvider({ config: modelConfig, client: chatClient });
+  const planner = (dependencies.createEvidencePlanner ?? createOpenAICompatibleEvidencePlanner)({
+    client: chatClient,
+  });
+  const renderer = (
+    dependencies.createGroundedAnswerRenderer ?? createOpenAICompatibleGroundedAnswerRenderer
+  )({ client: chatClient });
   const permissionMode = runtimeConfig.permissionMode;
   const modelProvider = modelConfig.provider;
   const modelId = modelConfig.model;
@@ -325,6 +354,8 @@ export function createAnswerDraftRuntime({
       orchestrator: createAnswerDraftOrchestrator({
         contextBuilder,
         model,
+        planner,
+        renderer,
         liveChatContextProvider,
         agentExecutionObserver,
         provider: modelProvider,
