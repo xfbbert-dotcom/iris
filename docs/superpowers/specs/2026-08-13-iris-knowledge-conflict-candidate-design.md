@@ -1,7 +1,7 @@
 # Iris Knowledge Conflict Candidate And Update Draft Design
 
 Date: 2026-08-13  
-Status: Direction approved in conversation on 2026-08-13; written spec awaiting review  
+Status: Approved in conversation on 2026-08-13
 Product: Iris  
 Implementation baseline: `origin/master@64305009bf19cf289740d1a23316ef48d09f53b5`  
 Constitution: `docs/superpowers/specs/2026-06-30-iris-architecture-whitepaper.md`
