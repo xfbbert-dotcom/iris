@@ -207,3 +207,85 @@ Diff validation:
 - Confirmed the conditional integration fixture has an enabled group-scoped publication policy and two document sources, allowing stale non-target evidence to be exercised.
 - Confirmed the migration catalog test checks reconciliation append-only triggers and behavior against PostgreSQL when configured.
 - Confirmed the work did not alter migrations `0001` through `0045` or expand into Task 3.
+
+## Fix Round 2
+
+### Status and commit
+
+DONE_WITH_CONCERNS
+
+- Code and test commit: `ae04f51785641209cd49ec56678d8f69a40ad7b1` (`fix(core): serialize conflict policy and overlap locks`)
+- Base reviewed: `b8847d8a5dda9056e3993ede9e45290e229308f0`
+- The only concern is environmental: `IRIS_TEST_DATABASE_URL` is not configured, so the isolated-schema PostgreSQL cases—including the two new concurrency regressions—were skipped locally.
+
+### Review blockers resolved
+
+1. Publication authorization is now explicit and fail-closed. Candidate persistence and current-state/overlap validation first lock the exact document source, then select the enabled policy rows for the source's authorized space with `$groupId = ANY(allowed_group_ids)` and `FOR UPDATE`. An empty `allowed_group_ids` no longer authorizes any group. Locking every matching policy row prevents a concurrent disable or group removal from committing past the authorization check before the surrounding transaction completes.
+2. `findCurrentOverlap` now acquires all requested group-memory row locks in deterministic `id` order before selecting and locking candidates. This matches detection's memory-before-candidate order, retains the single transaction and full freshness validation, and removes the candidate-to-memory versus memory-to-candidate blocking inversion.
+3. The conditional PostgreSQL suite now verifies empty-policy denial during persistence and overlap, observes a concurrent policy mutation blocked on the held authorizing-policy row lock, and coordinates overlap with a competing detection to prove that overlap has not locked the candidate while it waits for the memory. The concurrent operations then complete with the newly persisted candidate as the current result and without `40P01`.
+4. No migration changed in this round, migrations `0001` through `0045` remain untouched, and no Task 3 runtime/API/worker/card behavior was added.
+
+### RED evidence
+
+Command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/postgres-knowledge-conflict-repository.test.ts
+```
+
+Initial result: exit 1; 2 focused failures, 27 passes, and 4 conditional skips.
+
+- `denies persistence when no enabled policy explicitly allows the source group` resolved with `outcome: applied` instead of rejecting `source_stale`, demonstrating the fail-open policy path.
+- `locks overlap memories before candidate rows` rejected with `Error: candidate locked before memory`, demonstrating the inverse lock order.
+
+The empty-policy overlap regression was also test-first but already returned `undefined` in the routed double because the old combined source/policy query matched its no-policy route. The real PostgreSQL cases were added to exercise the actual policy predicate and lock behavior; they could not produce local RED output without `IRIS_TEST_DATABASE_URL`.
+
+### GREEN and verification evidence
+
+Focused repository command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/postgres-knowledge-conflict-repository.test.ts
+```
+
+Result: exit 0; 29 deterministic tests passed and 6 conditional PostgreSQL tests skipped (35 total).
+
+Focused Task 2 and adjacent command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/knowledge-conflict.test.ts tests/postgres-knowledge-conflict-repository.test.ts tests/migration-runner.test.ts tests/postgres-answer-reply-repository.test.ts
+```
+
+Result: exit 0; 4 files passed; 109 tests passed and 53 conditional tests skipped (162 total).
+
+Full Core command:
+
+```text
+npm --workspace apps/core test
+```
+
+Result: exit 0; 172 files passed and 2 files skipped; 2,994 tests passed and 238 tests skipped (3,232 total).
+
+Typecheck and production build:
+
+```text
+npm --workspace apps/core run typecheck
+npm --workspace apps/core run build
+```
+
+Result: both exit 0 (`tsc --noEmit`; `tsc --project tsconfig.build.json`).
+
+Diff validation:
+
+- `git diff --check`: exit 0 before staging.
+- `git diff --cached --check`: exit 0 before the code/test commit.
+- Git emitted only the repository's Windows line-ending conversion warnings.
+
+### Fix-round self-review
+
+- Compared authorization behavior with the existing action-proposal policy semantics: group-scoped work now requires explicit membership, including when `allowed_group_ids` is empty.
+- Confirmed source then policy locking is identical in persistence and shared current-state validation; all matching policies are ordered and locked before snapshot/fragment or candidate mutation work continues.
+- Confirmed overlap pre-locks memories in deterministic order and only then locks candidates; its later memory freshness query is a same-transaction re-lock, not an inversion.
+- Confirmed the PostgreSQL policy test holds the repository transaction after its real `SELECT ... FOR UPDATE`, observes the separate mutation backend waiting on a row lock, and only then releases the repository transaction.
+- Confirmed the PostgreSQL cross-operation test holds detection's memory lock, starts overlap, verifies the old candidate remains immediately lockable with `NOWAIT`, then releases detection and asserts both operations complete with the corrected candidate current.
+- Confirmed exact evidence validation, unresolved-delivery quarantine, replay handling, scan lifecycle, and all other round-1 fixes were left unchanged except for the required shared policy and lock-order paths.
