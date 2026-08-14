@@ -193,3 +193,72 @@ by a passing focused dispatcher run, typecheck, and build.
   with the other conditional repository cases because `IRIS_TEST_DATABASE_URL` is not configured in
   this environment. The deterministic repository transaction tests and all non-database race tests
   passed; CI should run the conditional case against an isolated PostgreSQL database.
+
+## Formal Review Fix Round 2
+
+### Commit
+
+- `a283f683` — `fix(core): enforce exact conflict card boundaries`
+- This report update is committed separately after the fix verification.
+
+### Resolved Findings
+
+- Callback identifiers are now validated without trimming or normalization repair. C0/C1 controls,
+  leading or trailing Unicode whitespace, and any NFC-changing value are rejected, so candidate ID,
+  group ID, nonce, and delivery-derived nonce inputs retain exact binding or fail closed.
+- Visible card text retains its bounded replacement/normalization behavior; only callback identity
+  fields use the exact-value rule.
+- Source links now require literal lowercase `https://` followed by a non-empty authority before URL
+  parsing. The renderer rejects backslashes, raw C0/C1 or Unicode whitespace, malformed percent
+  escapes, and percent-encoded data that decodes to controls or Unicode whitespace.
+- WHATWG-repairable forms such as `https:example.com`, `https:/example.com`, backslash separators,
+  uppercase schemes, and boundary whitespace are suppressed instead of emitted as live links.
+- Credential-bearing sources remain suppressed, while valid credential-free HTTPS paths, queries,
+  and ordinary percent-encoded data remain linkable. No callback or later-task behavior was changed.
+
+### TDD Evidence
+
+The new exact-binding and URI cases were written before the renderer change. The RED focused run exited
+1 with 16 expected failures: ten exact identifier/nonce mutations were silently accepted and six
+malformed or encoded-whitespace URI forms were canonicalized into links.
+
+Focused renderer command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/knowledge-conflict-card-renderer.test.ts
+```
+
+Final result: exit 0; 1 file passed; 37 tests passed.
+
+Relevant conflict/repository/Feishu/card command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/knowledge-conflict.test.ts tests/postgres-knowledge-conflict-repository.test.ts tests/knowledge-conflict-current-validator.test.ts tests/knowledge-conflict-card-renderer.test.ts tests/knowledge-conflict-dispatcher.test.ts tests/knowledge-conflict-dispatcher-loop.test.ts tests/feishu-interactive-card-client.test.ts tests/knowledge-card-dispatcher.test.ts tests/knowledge-card-dispatcher-loop.test.ts
+```
+
+Result: exit 0; 9 files passed; 189 tests passed and 13 conditional PostgreSQL tests skipped.
+
+Full Core command:
+
+```text
+npm --workspace apps/core test
+```
+
+Result: exit 0; 181 files passed and 3 files skipped; 3,194 tests passed and 249 tests skipped.
+
+Typecheck, build, and diff validation:
+
+```text
+npm --workspace apps/core run typecheck
+npm --workspace apps/core run build
+git diff --check
+git diff --cached --check
+```
+
+Result: all exited 0. Git emitted only the repository's Windows line-ending conversion warnings.
+
+### Scope Review
+
+- The production change is confined to the Task 7 conflict-card renderer; the only other code artifact
+  is its focused test suite. No Task 8 behavior, migration, plan, spec, ledger, or brief was changed.
+- The existing PostgreSQL-test environment concern from Fix Round 1 remains unchanged.
