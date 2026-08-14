@@ -323,6 +323,78 @@ export function renderAdminConsoleHtml(): string {
       <div id="proactive-candidate-empty" class="empty-state">Enter a group id to load proactive candidates.</div>
     </section>
 
+    <section class="knowledge-conflict-panel" aria-labelledby="knowledge-conflicts-heading">
+      <div class="panel-heading">
+        <div>
+          <h2 id="knowledge-conflicts-heading">Knowledge Conflicts</h2>
+          <p>Possible conflict, not an official update. Review both statements before approving one bounded group delivery.</p>
+        </div>
+        <button id="knowledge-conflict-refresh" type="button" class="secondary">Refresh Conflicts</button>
+      </div>
+      <div class="source-filters knowledge-conflict-filters">
+        <label>
+          Feishu group id
+          <input id="knowledge-conflict-group" placeholder="oc_xxx">
+        </label>
+        <label>
+          Candidate status
+          <select id="knowledge-conflict-status">
+            <option value="pending_review">Pending review</option>
+            <option value="approved_for_delivery">Approved for delivery</option>
+            <option value="delivered">Delivered</option>
+            <option value="dismissed">Dismissed</option>
+            <option value="draft_created">Draft created</option>
+            <option value="superseded">Superseded</option>
+            <option value="">All statuses</option>
+          </select>
+        </label>
+        <label>
+          Limit
+          <input id="knowledge-conflict-limit" inputmode="numeric" placeholder="20">
+        </label>
+      </div>
+      <dl id="knowledge-conflict-status-summary" class="knowledge-conflict-status-summary"></dl>
+      <div class="table-wrap">
+        <table id="knowledge-conflict-candidate-table">
+          <thead>
+            <tr>
+              <th>Subject</th>
+              <th>Status</th>
+              <th>Confidence</th>
+              <th>Target snapshot</th>
+              <th>Version</th>
+              <th>Review</th>
+            </tr>
+          </thead>
+          <tbody id="knowledge-conflict-candidate-rows"></tbody>
+        </table>
+      </div>
+      <div id="knowledge-conflict-candidate-empty" class="empty-state">Enter a group id to load conflict candidates.</div>
+      <div id="knowledge-conflict-detail" class="knowledge-conflict-detail" aria-live="polite"></div>
+
+      <div class="knowledge-conflict-recovery-heading">
+        <div>
+          <h3>Scan recovery</h3>
+          <p>Dead letters contain identifiers and stable error codes only. Replay or delete deliberately.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="knowledge-conflict-dead-letter-table">
+          <thead>
+            <tr>
+              <th>Group</th>
+              <th>Error</th>
+              <th>Attempts</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="knowledge-conflict-dead-letter-rows"></tbody>
+        </table>
+      </div>
+      <div id="knowledge-conflict-dead-letter-empty" class="empty-state">No conflict scan dead letters loaded.</div>
+    </section>
+
     <section class="audit-summary-panel" aria-labelledby="audit-summary-heading">
       <div class="panel-heading">
         <div>
@@ -494,6 +566,7 @@ h2 {
   .knowledge-draft-panel,
 .publication-queue-panel,
 .proactive-candidate-panel,
+.knowledge-conflict-panel,
 .audit-summary-panel,
 .event-panel {
   background: var(--panel);
@@ -630,6 +703,11 @@ dd {
 }
 
 .proactive-candidate-panel {
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.knowledge-conflict-panel {
   margin-top: 16px;
   padding: 16px;
 }
@@ -862,6 +940,72 @@ td.source-title {
   margin-top: 12px;
 }
 
+.knowledge-conflict-status-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.knowledge-conflict-filters {
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 240px) minmax(120px, 160px);
+}
+
+.knowledge-conflict-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 10px 16px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.knowledge-conflict-detail:empty {
+  display: none;
+}
+
+.knowledge-conflict-detail h3,
+.knowledge-conflict-recovery-heading h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.knowledge-conflict-detail-field {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-conflict-detail-field strong {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.knowledge-conflict-detail-field.wide,
+.knowledge-conflict-detail-actions {
+  grid-column: 1 / -1;
+}
+
+.knowledge-conflict-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.knowledge-conflict-recovery-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.knowledge-conflict-recovery-heading p {
+  color: var(--muted);
+}
+
 .proactive-feedback-metric {
   display: grid;
   gap: 2px;
@@ -887,6 +1031,7 @@ td.source-title {
   .status-grid,
   .control-grid,
   .source-filters,
+  .knowledge-conflict-filters,
   .manual-source-form,
   .wiki-space-form {
     grid-template-columns: 1fr;
@@ -951,6 +1096,16 @@ const proactiveCandidateLimit = document.getElementById("proactive-candidate-lim
 const proactiveCandidateRows = document.getElementById("proactive-candidate-rows");
 const proactiveCandidateEmpty = document.getElementById("proactive-candidate-empty");
 const proactiveFeedbackSummary = document.getElementById("proactive-feedback-summary");
+const knowledgeConflictRefresh = document.getElementById("knowledge-conflict-refresh");
+const knowledgeConflictGroup = document.getElementById("knowledge-conflict-group");
+const knowledgeConflictStatus = document.getElementById("knowledge-conflict-status");
+const knowledgeConflictLimit = document.getElementById("knowledge-conflict-limit");
+const knowledgeConflictStatusSummary = document.getElementById("knowledge-conflict-status-summary");
+const knowledgeConflictCandidateRows = document.getElementById("knowledge-conflict-candidate-rows");
+const knowledgeConflictCandidateEmpty = document.getElementById("knowledge-conflict-candidate-empty");
+const knowledgeConflictDetail = document.getElementById("knowledge-conflict-detail");
+const knowledgeConflictDeadLetterRows = document.getElementById("knowledge-conflict-dead-letter-rows");
+const knowledgeConflictDeadLetterEmpty = document.getElementById("knowledge-conflict-dead-letter-empty");
 const auditSummaryRefresh = document.getElementById("audit-summary-refresh");
 const auditSummaryType = document.getElementById("audit-summary-type");
 const auditSummaryDocument = document.getElementById("audit-summary-document");
@@ -991,6 +1146,11 @@ const proactiveFeedbackSummarySuffix = "/feedback-summary";
 const proactiveCandidateScanSuffix = "/scan";
 const proactiveCandidateDismissSuffix = "/dismiss";
 const proactiveCandidateApproveSuffix = "/approve-delivery";
+const knowledgeConflictStatusPath = "/internal/knowledge-conflicts/status";
+const knowledgeConflictGroupBasePath = "/internal/knowledge-conflicts/groups/";
+const knowledgeConflictDeadLetterBasePath = "/internal/knowledge-conflicts/scans/dead-letters";
+const knowledgeConflictDeadLetterListBasePath = "/internal/knowledge-conflicts/scans/dead-letters?limit=";
+const knowledgeConflictDeliveryBasePath = "/internal/knowledge-conflicts/deliveries/";
 const auditSummaryBasePath = "/internal/audit/events/summary?limit=20";
 const auditSummaryAllowedTypes = new Set([
   "permission_guard_denied",
@@ -1836,6 +1996,333 @@ async function transitionProactiveCandidate(candidate, suffix) {
   );
 }
 
+function readKnowledgeConflictGroupId() {
+  const groupId = knowledgeConflictGroup.value.trim();
+  if (groupId.length === 0) throw new Error("group_required");
+  return groupId;
+}
+
+function knowledgeConflictLimitValue() {
+  return boundedNumericInputValue(knowledgeConflictLimit, "20");
+}
+
+function knowledgeConflictCandidateListPath(groupId) {
+  const params = new URLSearchParams();
+  const status = knowledgeConflictStatus.value;
+  if (status.length > 0) params.set("status", status);
+  params.set("limit", knowledgeConflictLimitValue());
+  return knowledgeConflictGroupBasePath + encodeURIComponent(groupId) + "/candidates?" + params.toString();
+}
+
+function knowledgeConflictDeadLetterListPath() {
+  return knowledgeConflictDeadLetterListBasePath + encodeURIComponent(knowledgeConflictLimitValue());
+}
+
+function renderKnowledgeConflictStatus(status) {
+  const values = [
+    ["Pending review", status.candidates?.pending_review ?? 0],
+    ["Approved delivery", status.candidates?.approved_for_delivery ?? 0],
+    ["Scan dead letters", status.scans?.deadLettered ?? 0],
+    ["Outcome unknown", status.deliveries?.outcomeUnknown ?? 0],
+    ["Terminal failures", status.deliveries?.terminalFailed ?? 0],
+    ["Superseded", status.candidates?.superseded ?? 0],
+  ];
+  knowledgeConflictStatusSummary.replaceChildren();
+  for (const [label, value] of values) {
+    const metric = document.createElement("div");
+    metric.className = "proactive-feedback-metric";
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = String(value);
+    metric.append(term, detail);
+    knowledgeConflictStatusSummary.append(metric);
+  }
+}
+
+function validationLabel(validation) {
+  if (validation?.status === "superseded") return "Superseded; approval is blocked";
+  return "Not revalidated; approval performs an exact current-state check";
+}
+
+function renderKnowledgeConflictCandidates(groupId, candidates) {
+  knowledgeConflictCandidateRows.replaceChildren();
+  knowledgeConflictDetail.replaceChildren();
+  for (const candidate of candidates || []) {
+    const row = document.createElement("tr");
+    const subjectCell = document.createElement("td");
+    subjectCell.textContent = text(candidate.subject);
+    const statusCell = document.createElement("td");
+    statusCell.textContent = text(candidate.status);
+    const confidenceCell = document.createElement("td");
+    confidenceCell.textContent = text(candidate.confidence);
+    const targetCell = document.createElement("td");
+    targetCell.textContent = text(candidate.target?.snapshotId) + " / " + text(candidate.target?.sourceVersion, "version unavailable");
+    const versionCell = document.createElement("td");
+    versionCell.textContent = text(candidate.candidateVersion);
+    const reviewCell = document.createElement("td");
+    const review = document.createElement("button");
+    review.type = "button";
+    review.className = "secondary";
+    review.textContent = "Review";
+    review.addEventListener("click", async () => {
+      review.disabled = true;
+      try {
+        await loadKnowledgeConflictDetail(groupId, candidate.candidateId);
+      } catch (error) {
+        setConnection("Request failed", "warn");
+        addEvent("Conflict detail unavailable: " + error.message);
+      } finally {
+        review.disabled = false;
+      }
+    });
+    reviewCell.append(review);
+    row.append(subjectCell, statusCell, confidenceCell, targetCell, versionCell, reviewCell);
+    knowledgeConflictCandidateRows.append(row);
+  }
+  knowledgeConflictCandidateEmpty.textContent = (candidates || []).length === 0
+    ? "No conflict candidates match this group and status."
+    : "";
+}
+
+function addKnowledgeConflictDetailField(label, value, wide = false) {
+  const field = document.createElement("div");
+  field.className = "knowledge-conflict-detail-field" + (wide ? " wide" : "");
+  field.textContent = label + ": " + text(value);
+  knowledgeConflictDetail.append(field);
+}
+
+function evidenceIdentityLabel(evidence) {
+  const type = text(evidence.type).replaceAll("_", " ");
+  const identity = evidence.conversationMessageId
+    || evidence.groupMemoryId
+    || evidence.documentFragmentId
+    || evidence.documentSnapshotId
+    || evidence.documentSourceId;
+  return text(evidence.referenceId) + " · " + type + " · " + text(identity);
+}
+
+function renderKnowledgeConflictDetail(groupId, body, sources) {
+  const candidate = body.candidate;
+  const source = (sources || []).find((item) => item.id === candidate.target?.documentSourceId);
+  knowledgeConflictDetail.replaceChildren();
+  const heading = document.createElement("h3");
+  heading.textContent = "Possible conflict review";
+  knowledgeConflictDetail.append(heading);
+  addKnowledgeConflictDetailField("Group", candidate.groupId);
+  addKnowledgeConflictDetailField("Candidate version", candidate.candidateVersion);
+  addKnowledgeConflictDetailField("Subject", candidate.subject, true);
+  addKnowledgeConflictDetailField("Current synchronized knowledge", candidate.knowledgeBaseStatement, true);
+  addKnowledgeConflictDetailField("Newer group conclusion", candidate.groupConclusionStatement, true);
+  addKnowledgeConflictDetailField("Material difference", candidate.difference, true);
+  addKnowledgeConflictDetailField("Suggested update", candidate.suggestedUpdate, true);
+  addKnowledgeConflictDetailField("Confidence", candidate.confidence);
+  addKnowledgeConflictDetailField("Target title", source?.title || candidate.target?.documentSourceId);
+  addKnowledgeConflictDetailField("Target URI", source?.sourceUri || "URI unavailable", true);
+  addKnowledgeConflictDetailField(
+    "Snapshot / source version",
+    text(candidate.target?.snapshotId) + " / " + text(candidate.target?.sourceVersion, "version unavailable"),
+  );
+  addKnowledgeConflictDetailField("Current validation", validationLabel(candidate.currentValidation), true);
+  for (const evidence of candidate.evidence || []) {
+    addKnowledgeConflictDetailField("Evidence identity", evidenceIdentityLabel(evidence), true);
+  }
+  if (body.delivery !== undefined) {
+    addKnowledgeConflictDetailField("Delivery", text(body.delivery.status) + " · attempt " + text(body.delivery.attemptCount, "0"), true);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "knowledge-conflict-detail-actions";
+  const dismiss = knowledgeConflictActionButton(
+    "Dismiss",
+    "danger",
+    ["pending_review", "approved_for_delivery", "delivered"].includes(candidate.status),
+    async () => governKnowledgeConflict(groupId, candidate, "dismiss"),
+  );
+  const approve = knowledgeConflictActionButton(
+    "Approve one delivery",
+    "secondary",
+    candidate.status === "pending_review",
+    async () => governKnowledgeConflict(groupId, candidate, "approve-delivery"),
+  );
+  actions.append(dismiss, approve);
+  if (body.delivery?.status === "outcome_unknown") {
+    actions.append(
+      knowledgeConflictActionButton(
+        "Mark sent",
+        "secondary",
+        true,
+        async () => reconcileKnowledgeConflictDelivery(body.delivery, "sent"),
+      ),
+      knowledgeConflictActionButton(
+        "Mark not sent",
+        "secondary",
+        true,
+        async () => reconcileKnowledgeConflictDelivery(body.delivery, "not_sent"),
+      ),
+    );
+  }
+  knowledgeConflictDetail.append(actions);
+}
+
+function knowledgeConflictActionButton(label, className, enabled, action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.disabled = !enabled;
+  if (!enabled) button.title = "This action is unavailable in the current candidate state.";
+  if (enabled) button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const outcome = await action();
+      if (outcome === false) return;
+      addEvent(label + " recorded for the selected conflict candidate");
+      await refreshKnowledgeConflicts();
+    } catch (error) {
+      setConnection("Request failed", "warn");
+      addEvent(label + " failed: " + error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return button;
+}
+
+async function loadKnowledgeConflictDetail(groupId, candidateId) {
+  const [body, sourceListResponse] = await Promise.all([
+    requestJson(
+      knowledgeConflictGroupBasePath + encodeURIComponent(groupId)
+        + "/candidates/" + encodeURIComponent(candidateId),
+    ),
+    requestJson(documentSourceListBasePath),
+  ]);
+  renderKnowledgeConflictDetail(groupId, body, sourceListResponse.sources || []);
+}
+
+function requireKnowledgeConflictOperator() {
+  if (readOperator().length === 0) throw new Error("operator_required");
+}
+
+function stableKnowledgeConflictIntent(value) {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+async function governKnowledgeConflict(groupId, candidate, action) {
+  requireKnowledgeConflictOperator();
+  const label = action === "dismiss" ? "dismiss this possible conflict" : "approve one group delivery";
+  if (!window.confirm("Confirm you want to " + label + " at candidate version " + candidate.candidateVersion + "?")) return false;
+  const reason = window.prompt("Operator reason:", action === "dismiss"
+    ? "Reviewed and not suitable for delivery."
+    : "Reviewed for one bounded group delivery.");
+  if (reason === null || reason.trim().length === 0) throw new Error("reason_required");
+  const normalizedReason = reason.trim();
+  return requestJson(
+    knowledgeConflictGroupBasePath + encodeURIComponent(groupId)
+      + "/candidates/" + encodeURIComponent(candidate.candidateId) + "/" + action,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        expectedVersion: candidate.candidateVersion,
+        reason: normalizedReason,
+        operationKey: "admin-console-conflict-" + action + "-" + candidate.candidateId
+          + "-v" + candidate.candidateVersion + "-" + stableKnowledgeConflictIntent(normalizedReason),
+      }),
+    },
+  );
+}
+
+async function reconcileKnowledgeConflictDelivery(delivery, outcome) {
+  requireKnowledgeConflictOperator();
+  if (!window.confirm("Confirm the external delivery outcome is " + (outcome === "sent" ? "sent" : "not sent") + "?")) return false;
+  let messageId;
+  if (outcome === "sent") {
+    messageId = window.prompt("Confirmed Feishu message id:", "");
+    if (messageId === null || messageId.trim().length === 0) throw new Error("message_id_required");
+    messageId = messageId.trim();
+  }
+  const intent = outcome + ":" + (messageId || "not_sent");
+  return requestJson(
+    knowledgeConflictDeliveryBasePath + encodeURIComponent(delivery.deliveryId) + "/reconcile",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        outcome,
+        ...(messageId === undefined ? {} : { messageId }),
+        operationKey: "admin-console-conflict-reconcile-" + outcome + "-" + delivery.deliveryId
+          + "-" + stableKnowledgeConflictIntent(intent),
+      }),
+    },
+  );
+}
+
+function renderKnowledgeConflictDeadLetters(deadLetters) {
+  knowledgeConflictDeadLetterRows.replaceChildren();
+  for (const deadLetter of deadLetters || []) {
+    const row = document.createElement("tr");
+    const groupCell = document.createElement("td");
+    groupCell.textContent = text(deadLetter.groupId);
+    const errorCell = document.createElement("td");
+    errorCell.textContent = text(deadLetter.errorCode, "stable error unavailable");
+    const attemptsCell = document.createElement("td");
+    attemptsCell.textContent = text(deadLetter.attemptCount, "0");
+    const updatedCell = document.createElement("td");
+    updatedCell.textContent = text(deadLetter.updatedAt);
+    const actionsCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "source-actions";
+    for (const [action, label, method] of [["replay", "Replay", "POST"], ["", "Delete", "DELETE"]]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = label === "Delete" ? "danger" : "secondary";
+      button.textContent = label;
+      button.addEventListener("click", async () => {
+        requireKnowledgeConflictOperator();
+        if (!window.confirm(label + " this content-free scan dead letter?")) return;
+        button.disabled = true;
+        try {
+          await requestJson(
+            knowledgeConflictDeadLetterBasePath + "/" + encodeURIComponent(deadLetter.scanId)
+              + (action.length === 0 ? "" : "/" + action),
+            { method, ...(method === "POST" ? { body: JSON.stringify({}) } : {}) },
+          );
+          addEvent(label + " recorded for a conflict scan dead letter");
+          await refreshKnowledgeConflicts();
+        } catch (error) {
+          setConnection("Request failed", "warn");
+          addEvent(label + " failed: " + error.message);
+        } finally {
+          button.disabled = false;
+        }
+      });
+      actions.append(button);
+    }
+    actionsCell.append(actions);
+    row.append(groupCell, errorCell, attemptsCell, updatedCell, actionsCell);
+    knowledgeConflictDeadLetterRows.append(row);
+  }
+  knowledgeConflictDeadLetterEmpty.textContent = (deadLetters || []).length === 0
+    ? "No conflict scan dead letters."
+    : "";
+}
+
+async function refreshKnowledgeConflicts() {
+  const groupId = readKnowledgeConflictGroupId();
+  const [statusBody, candidateBody, deadLetterBody] = await Promise.all([
+    requestJson(knowledgeConflictStatusPath),
+    requestJson(knowledgeConflictCandidateListPath(groupId)),
+    requestJson(knowledgeConflictDeadLetterListPath()),
+  ]);
+  renderKnowledgeConflictStatus(statusBody);
+  renderKnowledgeConflictCandidates(groupId, candidateBody.candidates || []);
+  renderKnowledgeConflictDeadLetters(deadLetterBody.deadLetters || []);
+}
+
 function boundedNumericInputValue(input, fallback) {
   const raw = input.value.trim();
   if (raw.length === 0) return fallback;
@@ -2263,6 +2750,19 @@ proactiveCandidateRefresh.addEventListener("click", async () => {
     addEvent("Proactive candidate refresh failed: " + error.message);
   } finally {
     proactiveCandidateRefresh.disabled = false;
+  }
+});
+
+knowledgeConflictRefresh.addEventListener("click", async () => {
+  knowledgeConflictRefresh.disabled = true;
+  try {
+    await refreshKnowledgeConflicts();
+    addEvent("Knowledge conflicts refreshed");
+  } catch (error) {
+    setConnection("Request failed", "warn");
+    addEvent("Knowledge conflict refresh failed: " + error.message);
+  } finally {
+    knowledgeConflictRefresh.disabled = false;
   }
 });
 

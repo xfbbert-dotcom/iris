@@ -131,6 +131,10 @@ import { registerActionReviewApi } from "./action-reviews/action-review-api.js";
 import { registerAgentExecutionLedgerApi } from "./agent-runtime/agent-execution-ledger-api.js";
 import { registerAnswerReplyApi } from "./answer-replies/answer-reply-api.js";
 import {
+  registerKnowledgeConflictApi,
+  type KnowledgeConflictApiRuntime,
+} from "./knowledge-conflicts/knowledge-conflict-api.js";
+import {
   createAgentExecutionLedgerRuntime as createDefaultAgentExecutionLedgerRuntime,
   type AgentExecutionLedgerRuntime,
 } from "./runtime/agent-execution-ledger-runtime.js";
@@ -208,6 +212,7 @@ export type BuildAppDependencies = {
   createProactiveSignalPlannerRuntime?: (
     input?: Parameters<typeof createDefaultProactiveSignalPlannerRuntime>[0],
   ) => ProactiveSignalPlannerRuntime | undefined;
+  knowledgeConflictRuntime?: KnowledgeConflictApiRuntime;
 };
 
 export type StartServerOptions = {
@@ -629,6 +634,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   });
   registerActionReviewApi(app, actionReviewRuntime, { now });
   registerAgentExecutionLedgerApi(app, agentExecutionLedgerRuntime);
+  registerKnowledgeConflictApi(app, dependencies.knowledgeConflictRuntime, {
+    authenticationConfigured: internalApiToken !== undefined,
+    now,
+  });
 
   app.get("/admin", async (_request, reply) => (
     reply

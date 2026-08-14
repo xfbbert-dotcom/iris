@@ -624,6 +624,10 @@ describe("admin console assets", () => {
   it("renders group-scoped proactive feedback aggregates without feedback details", () => {
     const html = renderAdminConsoleHtml();
     const script = renderAdminConsoleScript();
+    const proactiveScript = script.slice(
+      script.indexOf("function readProactiveGroupId"),
+      script.indexOf("function readKnowledgeConflictGroupId"),
+    );
 
     expect(html).toContain("proactive-feedback-summary");
     expect(script).toContain("/feedback-summary");
@@ -637,9 +641,9 @@ describe("admin console assets", () => {
     expect(script).toContain("refreshProactiveFeedbackSummary");
     expect(script).toContain("refreshProactiveFeedbackSummary(groupId, generation)");
     expect(script).toContain("toFixed(1)");
-    expect(script).not.toContain("actorFingerprint");
-    expect(script).not.toContain("messageId");
-    expect(script).not.toContain("evidenceMessageIds");
+    expect(proactiveScript).not.toContain("actorFingerprint");
+    expect(proactiveScript).not.toContain("messageId");
+    expect(proactiveScript).not.toContain("evidenceMessageIds");
   });
 
   it("keeps only the current group refresh when proactive requests resolve out of order", async () => {
@@ -947,6 +951,303 @@ describe("admin console assets", () => {
     expect(script).not.toContain("draft.content");
     expect(script).not.toContain("currentRevision.content");
   });
+
+  it("renders a scoped knowledge-conflict review and recovery surface without unsafe fields", () => {
+    const html = renderAdminConsoleHtml();
+    const css = renderAdminConsoleCss();
+    const script = renderAdminConsoleScript();
+
+    expect(html).toContain("Knowledge Conflicts");
+    expect(html).toContain("Possible conflict, not an official update");
+    expect(html).toContain("knowledge-conflict-group");
+    expect(html).toContain("knowledge-conflict-status");
+    expect(html).toContain("knowledge-conflict-limit");
+    expect(html).toContain("knowledge-conflict-status-summary");
+    expect(html).toContain("knowledge-conflict-candidate-rows");
+    expect(html).toContain("knowledge-conflict-detail");
+    expect(html).toContain("knowledge-conflict-dead-letter-rows");
+    expect(css).toContain(".knowledge-conflict-detail");
+    expect(css).toContain("repeat(auto-fit, minmax(min(180px, 100%), 1fr))");
+    expect(script).toContain("/internal/knowledge-conflicts/status");
+    expect(script).toContain("/internal/knowledge-conflicts/groups/");
+    expect(script).toContain("/internal/knowledge-conflicts/scans/dead-letters?limit=");
+    expect(script).toContain("/approve-delivery");
+    expect(script).toContain("/reconcile");
+    expect(script).toContain("window.confirm");
+    expect(script).not.toContain("sourceBody");
+    expect(script).not.toContain("deniedContent");
+    expect(script).not.toContain("rawProviderError");
+    expect(script).not.toContain("actorOpenId");
+  });
+
+  it("loads bounded group candidates, content-free status, and scan dead letters", async () => {
+    const paths: string[] = [];
+    const fetch = vi.fn((path: string) => {
+      paths.push(path);
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path === "/internal/knowledge-conflicts/groups/group-a/candidates?status=pending_review&limit=5") {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          groupId: "group-a",
+          candidates: [knowledgeConflictCandidateSummary()],
+        }));
+      }
+      if (path === "/internal/knowledge-conflicts/scans/dead-letters?limit=5") {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          deadLetters: [knowledgeConflictDeadLetter()],
+        }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, { operator: "operator@example.com" });
+    console.element("knowledge-conflict-group").value = "group-a";
+    console.element("knowledge-conflict-status").value = "pending_review";
+    console.element("knowledge-conflict-limit").value = "5";
+
+    await console.trigger("knowledge-conflict-refresh", "click");
+
+    expect(paths).toEqual([
+      "/internal/knowledge-conflicts/status",
+      "/internal/knowledge-conflicts/groups/group-a/candidates?status=pending_review&limit=5",
+      "/internal/knowledge-conflicts/scans/dead-letters?limit=5",
+    ]);
+    expect(metricValues(console.element("knowledge-conflict-status-summary"))).toEqual([
+      "2", "1", "1", "1", "1", "1",
+    ]);
+    expect(console.element("knowledge-conflict-candidate-rows").children).toHaveLength(1);
+    expect(console.element("knowledge-conflict-dead-letter-rows").children).toHaveLength(1);
+    const visibleText = console.allElements().map((element) => element.textContent).join("\n");
+    expect(visibleText).toContain("Expense approval threshold");
+    expect(visibleText).toContain("provider_unavailable");
+    expect(visibleText).not.toContain("hidden source body");
+    expect(visibleText).not.toContain("denied document text");
+    expect(visibleText).not.toContain("operator@example.com");
+  });
+
+  it("shows complete bounded review detail with resolved target metadata and safe evidence identities", async () => {
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path.includes("/groups/group-a/candidates?")) {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          groupId: "group-a",
+          candidates: [knowledgeConflictCandidateSummary()],
+        }));
+      }
+      if (path.includes("/scans/dead-letters?")) {
+        return Promise.resolve(jsonResponse({ ok: true, deadLetters: [] }));
+      }
+      if (path === "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a") {
+        return Promise.resolve(jsonResponse(knowledgeConflictCandidateDetail()));
+      }
+      if (path === "/internal/document-sync/sources?includeLatestSnapshot=true") {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          sources: [{
+            id: "source-a",
+            title: "Finance policy",
+            sourceUri: "https://tenant.feishu.cn/wiki/finance-policy",
+          }],
+        }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, { operator: "operator@example.com" });
+    console.element("knowledge-conflict-group").value = "group-a";
+    await console.trigger("knowledge-conflict-refresh", "click");
+    const view = console.allElements().find((element) => element.textContent === "Review");
+    expect(view).toBeDefined();
+
+    await view!.trigger("click");
+
+    const visibleText = console.element("knowledge-conflict-detail").children
+      .map((element) => element.textContent).join("\n");
+    expect(visibleText).toContain("group-a");
+    expect(visibleText).toContain("Expense approval threshold");
+    expect(visibleText).toContain("Director approval starts at CNY 5,000.");
+    expect(visibleText).toContain("Director approval now starts at CNY 10,000.");
+    expect(visibleText).toContain("The approval threshold differs.");
+    expect(visibleText).toContain("Replace CNY 5,000 with CNY 10,000.");
+    expect(visibleText).toContain("high");
+    expect(visibleText).toContain("Finance policy");
+    expect(visibleText).toContain("https://tenant.feishu.cn/wiki/finance-policy");
+    expect(visibleText).toContain("snapshot-a / revision-7");
+    expect(visibleText).toContain("C1 · conversation message · message-a");
+    expect(visibleText).toContain("D1 · document fragment · fragment-a");
+    expect(visibleText).toContain("Not revalidated; approval performs an exact current-state check");
+    expect(visibleText).toContain("3");
+    expect(visibleText).not.toContain("hidden source body");
+    expect(visibleText).not.toContain("must-not-be-exposed");
+    expect(visibleText).not.toContain("operator@example.com");
+  });
+
+  it("confirms exact-version dismiss, approve, and delivery reconciliation actions", async () => {
+    const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const prompts = [
+      "Reviewed duplicate guidance.",
+      "Reviewed for one bounded delivery.",
+      "om_confirmed_message",
+    ];
+    const fetch = vi.fn((path: string, options?: unknown) => {
+      const request = options as { method?: string; body?: string } | undefined;
+      if (request?.method === "POST") {
+        mutations.push({ path, body: JSON.parse(request.body ?? "{}") as Record<string, unknown> });
+        if (path.endsWith("/dismiss")) {
+          return Promise.resolve(jsonResponse({ ok: true, outcome: "applied", candidateId: "candidate-a", candidateVersion: 4 }));
+        }
+        if (path.endsWith("/approve-delivery")) {
+          return Promise.resolve(jsonResponse({ ok: true, outcome: "applied", candidateId: "candidate-a", candidateVersion: 4, deliveryId: "delivery-a" }));
+        }
+        if (path.endsWith("/reconcile")) {
+          return Promise.resolve(jsonResponse({ ok: true, outcome: "reconciled", deliveryId: "delivery-a", status: "sent" }));
+        }
+      }
+      if (path === "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a") {
+        return Promise.resolve(jsonResponse(knowledgeConflictCandidateDetail()));
+      }
+      if (path === "/internal/document-sync/sources?includeLatestSnapshot=true") {
+        return Promise.resolve(jsonResponse({ ok: true, sources: [] }));
+      }
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path.includes("/groups/group-a/candidates?")) {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          groupId: "group-a",
+          candidates: [knowledgeConflictCandidateSummary()],
+        }));
+      }
+      if (path.includes("/scans/dead-letters?")) {
+        return Promise.resolve(jsonResponse({ ok: true, deadLetters: [] }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, {
+      operator: "operator@example.com",
+      confirm: () => true,
+      prompt: () => prompts.shift() ?? null,
+    });
+    console.element("knowledge-conflict-group").value = "group-a";
+
+    await console.trigger("knowledge-conflict-refresh", "click");
+    await renderConflictDetail(console);
+    await console.allElements().find((element) => element.textContent === "Dismiss")!.trigger("click");
+    await renderConflictDetail(console);
+    await console.allElements().find((element) => element.textContent === "Approve one delivery")!.trigger("click");
+    await renderConflictDetail(console);
+    await console.allElements().find((element) => element.textContent === "Mark sent")!.trigger("click");
+
+    expect(mutations).toHaveLength(3);
+    expect(mutations[0]!.path).toBe("/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a/dismiss");
+    expect(mutations[0]!.body).toMatchObject({
+      expectedVersion: 3,
+      reason: "Reviewed duplicate guidance.",
+    });
+    expect(mutations[1]!.path).toBe("/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a/approve-delivery");
+    expect(mutations[1]!.body).toMatchObject({
+      expectedVersion: 3,
+      reason: "Reviewed for one bounded delivery.",
+    });
+    expect(mutations[2]).toEqual({
+      path: "/internal/knowledge-conflicts/deliveries/delivery-a/reconcile",
+      body: {
+        outcome: "sent",
+        messageId: "om_confirmed_message",
+        operationKey: expect.stringContaining("admin-console-conflict-reconcile-sent-delivery-a-"),
+      },
+    });
+    for (const mutation of mutations) {
+      expect(mutation.body).not.toHaveProperty("actorOpenId");
+      expect(mutation.body.operationKey).toEqual(expect.any(String));
+    }
+  });
+
+  it("confirms dead-letter replay and delete without rendering memory content", async () => {
+    const mutations: Array<{ path: string; method: string }> = [];
+    const fetch = vi.fn((path: string, options?: unknown) => {
+      const request = options as { method?: string } | undefined;
+      if (request?.method === "POST" || request?.method === "DELETE") {
+        mutations.push({ path, method: request.method });
+        return Promise.resolve(jsonResponse({ ok: true, outcome: request.method === "POST" ? "replayed" : "deleted", scanId: "scan-a" }));
+      }
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path.includes("/groups/group-a/candidates?")) {
+        return Promise.resolve(jsonResponse({ ok: true, groupId: "group-a", candidates: [] }));
+      }
+      if (path.includes("/scans/dead-letters?")) {
+        return Promise.resolve(jsonResponse({ ok: true, deadLetters: [knowledgeConflictDeadLetter()] }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, {
+      operator: "operator@example.com",
+      confirm: () => true,
+    });
+    console.element("knowledge-conflict-group").value = "group-a";
+    await console.trigger("knowledge-conflict-refresh", "click");
+
+    const replay = console.allElements().find((element) => element.textContent === "Replay");
+    const remove = console.allElements().find((element) => element.textContent === "Delete");
+    await replay!.trigger("click");
+    await remove!.trigger("click");
+
+    expect(mutations).toEqual([
+      { path: "/internal/knowledge-conflicts/scans/dead-letters/scan-a/replay", method: "POST" },
+      { path: "/internal/knowledge-conflicts/scans/dead-letters/scan-a", method: "DELETE" },
+    ]);
+    expect(console.allElements().map((element) => element.textContent).join("\n")).not.toContain("memory-a");
+  });
+
+  it("treats a declined conflict confirmation as cancellation, not a recorded mutation", async () => {
+    const mutations: string[] = [];
+    const fetch = vi.fn((path: string, options?: unknown) => {
+      const request = options as { method?: string } | undefined;
+      if (request?.method === "POST") mutations.push(path);
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path.includes("/groups/group-a/candidates?")) {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          groupId: "group-a",
+          candidates: [knowledgeConflictCandidateSummary()],
+        }));
+      }
+      if (path.includes("/scans/dead-letters?")) {
+        return Promise.resolve(jsonResponse({ ok: true, deadLetters: [] }));
+      }
+      if (path === "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a") {
+        return Promise.resolve(jsonResponse(knowledgeConflictCandidateDetail()));
+      }
+      if (path === "/internal/document-sync/sources?includeLatestSnapshot=true") {
+        return Promise.resolve(jsonResponse({ ok: true, sources: [] }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, {
+      operator: "operator@example.com",
+      confirm: () => false,
+      prompt: () => "must-not-be-used",
+    });
+    console.element("knowledge-conflict-group").value = "group-a";
+    await console.trigger("knowledge-conflict-refresh", "click");
+    await renderConflictDetail(console);
+
+    await console.allElements().find((element) => element.textContent === "Dismiss")!.trigger("click");
+
+    expect(mutations).toEqual([]);
+    expect(console.element("event-log").children.some((event) =>
+      event.textContent.includes("Dismiss recorded"),
+    )).toBe(false);
+  });
 });
 
 type ResponseStub = {
@@ -1036,9 +1337,19 @@ class FakeDocument {
   }
 }
 
-function runAdminConsole(fetch: (path: string, options?: unknown) => Promise<ResponseStub>) {
+function runAdminConsole(
+  fetch: (path: string, options?: unknown) => Promise<ResponseStub>,
+  options: {
+    token?: string;
+    operator?: string;
+    prompt?: () => string | null;
+    confirm?: () => boolean;
+  } = {},
+) {
   const document = new FakeDocument();
   const session = new Map<string, string>();
+  if (options.token !== undefined) session.set("iris_admin_token", options.token);
+  if (options.operator !== undefined) session.set("iris_admin_operator", options.operator);
   vm.runInNewContext(renderAdminConsoleScript(), {
     Date,
     Error,
@@ -1053,12 +1364,110 @@ function runAdminConsole(fetch: (path: string, options?: unknown) => Promise<Res
       getItem(key: string) { return session.get(key) ?? null; },
       setItem(key: string, value: string) { session.set(key, value); },
     },
-    window: { prompt() { return null; } },
+    window: {
+      prompt: options.prompt ?? (() => null),
+      confirm: options.confirm ?? (() => false),
+    },
   });
   return {
     allElements: () => document.allElements(),
     element: (id: string) => document.getElementById(id),
     trigger: (id: string, event: string) => document.getElementById(id).trigger(event),
+  };
+}
+
+async function renderConflictDetail(console: ReturnType<typeof runAdminConsole>) {
+  const review = console.allElements().filter((element) => element.textContent === "Review").at(-1);
+  if (review !== undefined) {
+    await review.trigger("click");
+    return;
+  }
+  await console.trigger("knowledge-conflict-refresh", "click");
+  const refreshedReview = console.allElements().filter((element) => element.textContent === "Review").at(-1);
+  expect(refreshedReview).toBeDefined();
+  await refreshedReview!.trigger("click");
+}
+
+function knowledgeConflictStatus() {
+  return {
+    ok: true,
+    scans: { pending: 0, processing: 0, retry: 0, completed: 5, deadLettered: 1 },
+    candidates: {
+      pending_review: 2,
+      dismissed: 0,
+      approved_for_delivery: 1,
+      delivered: 0,
+      draft_created: 0,
+      superseded: 1,
+    },
+    deliveries: {
+      pending: 0,
+      processing: 0,
+      externalAttempting: 0,
+      sent: 0,
+      failed: 1,
+      terminalFailed: 1,
+      outcomeUnknown: 1,
+      cancelled: 0,
+    },
+    interactions: { applied: 4, alreadyApplied: 0, rejected: 1 },
+  };
+}
+
+function knowledgeConflictCandidateSummary() {
+  return {
+    candidateId: "candidate-a",
+    groupId: "group-a",
+    status: "pending_review",
+    candidateVersion: 3,
+    subject: "Expense approval threshold",
+    knowledgeBaseStatement: "Director approval starts at CNY 5,000.",
+    groupConclusionStatement: "Director approval now starts at CNY 10,000.",
+    difference: "The approval threshold differs.",
+    suggestedUpdate: "Replace CNY 5,000 with CNY 10,000.",
+    confidence: "high",
+    target: {
+      documentSourceId: "source-a",
+      snapshotId: "snapshot-a",
+      sourceVersion: "revision-7",
+      sourceUpdatedAt: "2026-08-14T01:00:00.000Z",
+      snapshotContentHash: "snapshot-content-hash",
+    },
+    currentValidation: { status: "requires_revalidation" },
+    updatedAt: "2026-08-14T02:00:00.000Z",
+  };
+}
+
+function knowledgeConflictCandidateDetail() {
+  return {
+    ok: true,
+    candidate: {
+      ...knowledgeConflictCandidateSummary(),
+      evidence: [
+        { type: "conversation_message", referenceId: "C1", groupId: "group-a", conversationMessageId: "message-a" },
+        { type: "group_memory", referenceId: "M1", groupId: "group-a", groupMemoryId: "memory-a", expectedUpdatedAt: "2026-08-14T02:00:00.000Z" },
+        { type: "document_fragment", referenceId: "D1", documentSourceId: "source-a", documentSnapshotId: "snapshot-a", documentFragmentId: "fragment-a", snapshotContentHash: "snapshot-content-hash", contentHash: "fragment-content-hash" },
+      ],
+    },
+    delivery: {
+      deliveryId: "delivery-a",
+      status: "outcome_unknown",
+      attemptCount: 1,
+      reconciliationDueAt: "2026-08-15T02:00:00.000Z",
+      sentMessageId: "must-not-be-exposed",
+    },
+  };
+}
+
+function knowledgeConflictDeadLetter() {
+  return {
+    scanId: "scan-a",
+    groupId: "group-a",
+    status: "dead_lettered",
+    attemptCount: 3,
+    errorCode: "provider_unavailable",
+    nextAttemptAt: "2026-08-15T00:00:00.000Z",
+    updatedAt: "2026-08-15T00:00:00.000Z",
   };
 }
 
