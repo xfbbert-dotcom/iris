@@ -140,3 +140,94 @@ the fix review returned `ADDRESSED` and assessed the task ready subject to CI da
   plus existing database suites, were therefore skipped. They are committed and must run in CI or a
   service-enabled environment.
 - No non-blocking hardening work was added beyond the approved Task 3 gates.
+
+## Fix Round 1
+
+### Status And Commit
+
+`DONE_WITH_CONCERNS`
+
+- `b181fca45de943c4d15934c5b074431e928d5afb` — `fix(core): filter conflict evidence before limits`
+
+### Files
+
+- `apps/core/src/documents/document-fragment-repository.ts`
+- `apps/core/src/documents/document-snapshot-repository.ts`
+- `apps/core/src/knowledge-conflicts/knowledge-conflict-evidence-builder.ts`
+- `apps/core/tests/document-fragment-repository.test.ts`
+- `apps/core/tests/document-snapshot-repository.test.ts`
+- `apps/core/tests/knowledge-conflict-evidence-builder.test.ts`
+- `apps/core/tests/knowledge-conflict-evidence-builder-postgres.test.ts`
+
+### Review Findings Addressed
+
+- Added a latest-snapshot metadata reader with an explicit column list that excludes `body_text` and
+  `error_message`. The evidence builder now validates current snapshot identity, version, hash, and
+  fetch time with this metadata-only read before live permission, and it cannot request exact
+  fragment text until every selected source passes permission.
+- Extended the knowledge-candidate query contract with the exact authorized space. For
+  knowledge-draft candidates, `sync_state = 'synced'` and the exact `authorized_space_id` are now
+  enforced inside the ranked SQL CTE before per-source ranking and the global limit. Default
+  answering retrieval remains unchanged.
+- Added deterministic SQL/ordering regressions, a bounded-window starvation fixture with 39
+  higher-ranked wrong-space or unsynced candidates ahead of the eligible source, and a conditional
+  real-Postgres denied-permission trace that rejects any snapshot-body or exact fragment-text query.
+
+### RED Evidence
+
+Command:
+
+```powershell
+npm --workspace apps/core test -- document-snapshot-repository.test.ts document-fragment-repository.test.ts knowledge-conflict-evidence-builder.test.ts
+```
+
+Observed 9 expected failures: the metadata-only snapshot method did not exist; candidate SQL lacked
+pre-limit synced/exact-space predicates; and the builder still invoked the body-bearing snapshot
+method, so the required metadata/snapshot/permission/text trace could not complete.
+
+### Focused GREEN
+
+```powershell
+npm --workspace apps/core test -- document-snapshot-repository.test.ts document-fragment-repository.test.ts knowledge-conflict-evidence-builder.test.ts knowledge-conflict-evidence-builder-postgres.test.ts
+```
+
+Result: 63 passed, 6 skipped; 0 failed. The six skipped cases are conditional database tests because
+`DATABASE_URL` is unavailable locally.
+
+### Relevant Regression GREEN
+
+```powershell
+npm --workspace apps/core test -- document-fragment-repository.test.ts document-snapshot-repository.test.ts document-retrieval-context.test.ts source-aware-fragment-selector.test.ts knowledge-conflict.test.ts knowledge-conflict-evidence-builder.test.ts knowledge-conflict-evidence-builder-postgres.test.ts postgres-knowledge-conflict-repository.test.ts postgres-conversation-message-repository.test.ts event-worker-runtime.test.ts runtime-startup-promise.test.ts
+```
+
+Result: 179 passed, 17 skipped; 0 failed.
+
+### Full Core, Compile, Build, And Diff Gates
+
+```powershell
+npm --workspace apps/core test
+npm --workspace apps/core run typecheck
+npm --workspace apps/core run build
+git diff --check
+```
+
+Results: full Core had 173 files passed, 3 skipped; 3,018 tests passed, 244 skipped; 0 failed.
+Typecheck, build, and diff check each exited 0.
+
+### Self-Review
+
+- Confirmed the only pre-permission snapshot read has an explicit body-free projection and the
+  denied builder path never calls `findFragmentsByIds`.
+- Confirmed exact target space and synced state occur before `row_number`, `source_rank <= 3`, and
+  the global `limit`, so unrelated metadata cannot consume the bounded window.
+- Confirmed candidate and post-load validation retain exact source, snapshot, source-version,
+  snapshot-hash, fragment, and fragment-hash identities from Tasks 1-2.
+- Confirmed source diversity, target-policy saturation, runtime purpose validation, message
+  tombstones/group isolation, strict chronology, and default answering behavior remain covered.
+- Confirmed no plan, spec, ledger, brief, migration, or Task 4+ surface changed.
+
+### Concerns
+
+- `DATABASE_URL` remains unavailable locally, so the new conditional real-Postgres starvation and
+  denied-body-read tests were skipped. They are committed for CI or a service-enabled environment;
+  all unit behavior, relevant regression, full Core, typecheck, build, and diff gates passed locally.
