@@ -110,3 +110,100 @@ Result: exit 0 (`tsc --project tsconfig.build.json`).
 
 - Live Postgres could not be started in this environment. Before integration or deployment, run the conditional migration/catalog and repository integration tests with `IRIS_TEST_DATABASE_URL` pointing at an isolated PostgreSQL database. The tests create an isolated schema and exercise discovery, claiming/lease recovery, candidate persistence/governance, delivery, interaction, overlap, and supersession against the real schema.
 - The repository implementation is deliberately broad because Task 2 defines the complete durable lifecycle. Non-blocking refactoring should wait until the live database suite is exercised; no further hardening is required to proceed to that acceptance gate.
+
+## Fix Round 1
+
+### Status and commit
+
+DONE_WITH_CONCERNS
+
+- Code and test commit: `d0ec85bae8d483e05e684d0b42c14a056c8b6cd4` (`fix(core): harden knowledge conflict persistence`)
+- Base reviewed: `ec88521fee55805beb6cb88c8684aa48828ed7eb`
+- The remaining concern is unchanged: `IRIS_TEST_DATABASE_URL` is not configured and Docker is unavailable, so the new real-Postgres cases are present but were skipped locally.
+
+### Review findings resolved
+
+1. Discovery now selects ungrouped eligible memory identities with an `EXISTS` evidence predicate. The anti-join is composed inside the `WHERE` clause, and `FOR UPDATE OF gm SKIP LOCKED` applies to lockable memory rows.
+2. Current-state validation locks the delivery outbox before superseding stale candidates and rejects supersession while delivery is `external_attempting` or `outcome_unknown`, preserving truthful sent reconciliation.
+3. Detection persistence now requires every cited message to belong to the claimed memory's `group_memory_message_evidence`, requires exact source/snapshot/fragment fact chains for every document reference, revalidates every latest snapshot, and requires a currently enabled publication policy whose space is authorized for the source group.
+4. `findCurrentOverlap` now locks candidate projections, loads evidence, and revalidates all memory/message/source-policy/source-timestamp/snapshot/version/fragment facts through one database transaction.
+5. Delivery reconciliation is append-only per external attempt. A new `knowledge_conflict_delivery_reconciliations` fact table retains all operation identities; starting a later external attempt clears only the outbox's latest-reconciliation projection. Repeated outcome-unknown cycles can therefore each be reconciled and old operation keys remain replayable.
+6. Stale scan cleanup now leaves a processing scan untouched until its lease has expired. Pending/retry rows remain cleanup-eligible, and expired processing rows remain recoverable.
+7. Candidate transitions, approvals, interaction recording, atomic callback application, and reconciliation serialize identical operation keys with transaction-scoped advisory locks before replay checks. This converts concurrent exact duplicates into deterministic `already_applied` results instead of version or uniqueness errors.
+8. The public repository no longer exposes `createCandidate` or generic `transitionCandidate`; candidate creation remains coupled to claimed-scan completion and governance remains constrained to the dedicated methods.
+9. Migration changes remain limited to forward migration `0046`; migrations `0001` through `0045` were not modified. No Task 3 runtime, API, worker, card, or UI behavior was added.
+
+### RED evidence
+
+Command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/postgres-knowledge-conflict-repository.test.ts
+```
+
+Initial result: exit 1; 6 focused failures, 20 passes, and 3 conditional skips.
+
+The six observed failures reproduced:
+
+- unsafe `createCandidate`/`transitionCandidate` public methods;
+- acceptance of a same-group message not bound to the claimed memory;
+- acceptance of a document snapshot without an exact source fact;
+- inability to reconcile a second unknown external attempt;
+- overlap evidence loading outside the transaction;
+- stale-candidate supersession while delivery outcome was unresolved.
+
+The real-Postgres regressions for malformed discovery SQL, a genuinely held competing row lock, live-lease cleanup, current policy enforcement, concurrent replay, repeated reconciliation, and stale non-target overlap were added under the repository's conditional isolated-schema convention. They could not produce local RED output because the database URL is absent; unlike the earlier scripted cases, they execute migrations and actual PostgreSQL locking/transaction behavior whenever `IRIS_TEST_DATABASE_URL` is provided.
+
+### GREEN and full verification evidence
+
+Focused Task 2 and adjacent command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/knowledge-conflict.test.ts tests/postgres-knowledge-conflict-repository.test.ts tests/migration-runner.test.ts tests/postgres-answer-reply-repository.test.ts
+```
+
+Result: exit 0; 4 files passed; 106 tests passed and 51 conditional tests skipped.
+
+The repository suite now contains 30 tests: 26 deterministic tests passed and 4 isolated-schema PostgreSQL tests skipped locally. The database cases now include an actual held lock rather than sequential claims and exercise concurrent duplicate calls with separate pool connections.
+
+Full Core command:
+
+```text
+npm --workspace apps/core test
+```
+
+Result: exit 0; 172 files passed and 2 files skipped; 2,991 tests passed and 236 tests skipped (3,227 total).
+
+Typecheck:
+
+```text
+npm --workspace apps/core run typecheck
+```
+
+Result: exit 0 (`tsc --noEmit`).
+
+Production build:
+
+```text
+npm --workspace apps/core run build
+```
+
+Result: exit 0 (`tsc --project tsconfig.build.json`).
+
+Diff validation:
+
+- `git diff --check`: exit 0 before staging.
+- `git diff --cached --check`: exit 0 before commit.
+- Only Windows line-ending conversion warnings were emitted.
+
+### Fix-round self-review
+
+- Re-read every review finding against the resulting transaction and lock order.
+- Confirmed discovery no longer uses an aggregate query and its anti-join is syntactically inside `WHERE`.
+- Confirmed candidate and callback operation-key locks are acquired before replay checks; same-key operations serialize even when they target different candidate rows.
+- Confirmed current validation and competing detection use the same unresolved-external-outcome quarantine rule.
+- Confirmed the second reconciliation does not overwrite or delete the first reconciliation fact.
+- Confirmed overlap uses the same full exact-evidence validator as approval/callback current-state checks and does not perform a second top-level data-source read.
+- Confirmed the conditional integration fixture has an enabled group-scoped publication policy and two document sources, allowing stale non-target evidence to be exercised.
+- Confirmed the migration catalog test checks reconciliation append-only triggers and behavior against PostgreSQL when configured.
+- Confirmed the work did not alter migrations `0001` through `0045` or expand into Task 3.
