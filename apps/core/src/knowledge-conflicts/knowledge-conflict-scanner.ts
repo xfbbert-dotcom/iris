@@ -172,7 +172,12 @@ async function processClaim(input: {
       await recordTerminal(input, "permission_blocked");
       return;
     }
-    const plan = await dependencies.detector.detect(evidence.input);
+    let plan: KnowledgeConflictPlan;
+    try {
+      plan = await dependencies.detector.detect(evidence.input);
+    } catch (error) {
+      throw new DetectorPhaseError(error);
+    }
     if (plan.outcome === "conflict") {
       const candidate = buildCandidate({
         claim,
@@ -286,24 +291,27 @@ function classifyFailure(error: unknown): {
   if (error instanceof ScannerInternalError) {
     return { classification: "retryable", errorCode: "internal_error" };
   }
-  if (isModelProviderCapacityError(error)) {
-    return { classification: "retryable", errorCode: "provider_capacity" };
-  }
-  if (error instanceof ModelProviderHttpError) {
-    if (error.statusCode === 408 || error.statusCode >= 500) {
+  if (error instanceof DetectorPhaseError) {
+    const detectorError = error.original;
+    if (detectorError instanceof Error
+      && detectorError.message === "knowledge conflict detector input is invalid") {
+      return { classification: "permanent", errorCode: "malformed_persisted_facts" };
+    }
+    if (isModelProviderCapacityError(detectorError)) {
+      return { classification: "retryable", errorCode: "provider_capacity" };
+    }
+    if (detectorError instanceof ModelProviderHttpError) {
+      if (detectorError.statusCode === 408 || detectorError.statusCode >= 500) {
+        return { classification: "retryable", errorCode: "provider_transport" };
+      }
+      return { classification: "permanent", errorCode: "provider_rejected" };
+    }
+    if (detectorError instanceof TypeError || isProviderTransportError(detectorError)) {
       return { classification: "retryable", errorCode: "provider_transport" };
     }
-    return { classification: "permanent", errorCode: "provider_rejected" };
-  }
-  if (error instanceof TypeError || isProviderTransportError(error)) {
-    return { classification: "retryable", errorCode: "provider_transport" };
-  }
-  if (error instanceof Error && error.message === INVALID_DETECTOR_RESPONSE) {
-    return { classification: "retryable", errorCode: "provider_invalid_response" };
-  }
-  if (error instanceof Error
-    && error.message === "knowledge conflict detector input is invalid") {
-    return { classification: "permanent", errorCode: "malformed_persisted_facts" };
+    if (detectorError instanceof Error && detectorError.message === INVALID_DETECTOR_RESPONSE) {
+      return { classification: "retryable", errorCode: "provider_invalid_response" };
+    }
   }
   return { classification: "retryable", errorCode: "internal_error" };
 }
@@ -394,6 +402,11 @@ function validateClaim(claim: KnowledgeConflictScanClaim, workerId: string): voi
     || typeof claim.memory.groupId !== "string"
     || !(claim.memory.updatedAt instanceof Date)
     || Number.isNaN(claim.memory.updatedAt.getTime())
+    || !isValidDate(scan.memoryUpdatedAt)
+    || !isValidDate(scan.nextAttemptAt)
+    || !isValidDate(scan.createdAt)
+    || !isValidDate(scan.updatedAt)
+    || !isValidDate(scan.leaseUntil)
     || !Number.isSafeInteger(scan.attemptCount)
     || scan.attemptCount < 1) throw new MalformedPersistedFactsError();
   if (scan.status !== "processing"
@@ -425,6 +438,11 @@ function validateFingerprint(
 class ImpossibleEvidenceIdentityError extends Error {}
 class MalformedPersistedFactsError extends Error {}
 class ScannerInternalError extends Error {}
+class DetectorPhaseError extends Error {
+  constructor(readonly original: unknown) {
+    super("knowledge conflict detector failed");
+  }
+}
 
 function normalizeEvidenceFailureCode(value: string): string {
   return RETRYABLE_EVIDENCE_CODES.has(value) ? value : "evidence_builder_failed";
@@ -435,6 +453,10 @@ function isProviderTransportError(error: unknown): boolean {
     error.message === "model provider request timed out"
     || error.message === "model provider request attempts exhausted"
   );
+}
+
+function isValidDate(value: unknown): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime());
 }
 
 function retryDelayMs(attemptCount: number, baseMs: number, maximumMs: number): number {

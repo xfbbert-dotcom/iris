@@ -318,6 +318,25 @@ describe("KnowledgeConflictScanner", () => {
     );
   });
 
+  it("dead-letters a malformed persisted scan date instead of treating it as provider transport", async () => {
+    const malformed = claim();
+    (malformed.scan as unknown as { memoryUpdatedAt: unknown }).memoryUpdatedAt =
+      "raw persisted timestamp";
+    const repository = repositoryFake({
+      claims: [malformed],
+      failStatuses: ["dead_lettered"],
+    });
+    const scanner = scannerFixture({ repository });
+
+    await expect(scanner.scanBatch({ limit: 1 })).resolves.toEqual({
+      ...emptyBatch(), claimed: 1, deadLettered: 1,
+    });
+    expect(repository.trace).toContain(
+      "fail:scan-1:permanent:malformed_persisted_facts:none",
+    );
+    expect(repository.trace).not.toContain("provider_transport");
+  });
+
   it("treats detector input rejection as malformed persisted facts, not a provider retry", async () => {
     const repository = repositoryFake({
       claims: [claim()],
