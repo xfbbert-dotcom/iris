@@ -12,6 +12,7 @@ The Task 6 group-scoped operator API and bounded Admin Console governance surfac
 - `bee52a331bfabf997ea56a64399302748874a2cc` — `fix(core): harden conflict governance boundaries`
 - `dc1c12ac84d661d3b6587575727da7493bb78b81` — `fix(core): harden conflict governance invariants`
 - `1af26ba7d7da4da59bc6d43a94ef2f07b459fb11` — `fix(core): close conflict governance race gaps`
+- `475a6f5de7e7fc54e3d46816638e2c309e684b9c` — `test(core): correct conflict lock-order regression`
 - This report is committed separately after verification.
 
 ## Delivered Behavior
@@ -141,4 +142,38 @@ Formal review round 2 is implemented in `1af26ba7d7da4da59bc6d43a94ef2f07b459fb1
 
 ### Remaining Concern
 
-- Real-PostgreSQL migration and concurrency cases are committed but did not execute locally because `IRIS_TEST_DATABASE_URL` is unavailable. No known Critical or Important implementation issue remains after the scoped self-review.
+- Real-PostgreSQL migration and concurrency cases are committed but did not execute locally because `IRIS_TEST_DATABASE_URL` is unavailable. A subsequent scoped review found that the conditional deadlock regression asserted the wrong settled outcomes; Fix Round 3 corrects that test defect without changing production code.
+
+## Fix Round 3
+
+### Outcome
+
+DONE_WITH_CONCERNS
+
+Formal review round 3 is implemented in `475a6f5de7e7fc54e3d46816638e2c309e684b9c`. This is a test-only correction to the conditional PostgreSQL deadlock regression; production and migration files are unchanged, and no Task 7+ behavior was added.
+
+### RED / Root Cause
+
+- The database-gated regression had contradictory expectations for its `outcome_unknown` fixture. After stale validation locks the candidate and then the delivery, the repository must reject validation with `KnowledgeConflictDeliveryConflictError`; rolling that transaction back releases the candidate so the waiting reconciliation can succeed.
+- Static transaction tracing established that the old assertions (`superseded` validation and rejected reconciliation) could not hold for either the old or corrected lock order and would fail whenever `IRIS_TEST_DATABASE_URL` enabled the test. The environment did not provide a live PostgreSQL URL for observing that conditional failure locally.
+
+### Corrected Coverage
+
+- Retains separate connections and the coordinated `FOR UPDATE NOWAIT` discriminator. While reconciliation is waiting for the validation-owned candidate lock, the inspector must still acquire the delivery lock, proving reconciliation did not lock delivery first.
+- Requires validation to reject with the exact `KnowledgeConflictDeliveryConflictError` and explicitly rejects PostgreSQL `40P01`/deadlock evidence.
+- Requires reconciliation to fulfill as `failed` with attempt `1` and `reconciled_not_sent`.
+- Verifies final repository and PostgreSQL state: the delivery is reconciled and failed, the candidate remains `approved_for_delivery` at version `2`, and the append-only reconciliation fact retains the exact delivery, attempt, outcome, operation key, and `knowledge-admin` actor.
+- Cleanup now releases the candidate gate and awaits every started promise on failure, while inspector and worker connections settle through their existing `finally` paths.
+
+### Verification
+
+- Focused migration/repository/scanner/validator/API/Admin suite: 7 files passed; 165 tests passed and 18 PostgreSQL-gated tests skipped.
+- Full Core: 178 files passed, 3 conditional files skipped; 3,123 tests passed and 248 skipped.
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+- `git diff --check`: passed.
+
+### Self-Review And Remaining Concern
+
+- Inspection found no production defect and this round changes only the conditional repository test and this report.
+- The corrected PostgreSQL concurrency case remains skipped locally because `IRIS_TEST_DATABASE_URL` is unavailable. It must run in a database-enabled CI/environment to execute the lock observation and final durable-state assertions.
