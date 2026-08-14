@@ -126,6 +126,11 @@ export type KnowledgeCardRuntime = {
   bindActionApprovalWorker(
     worker: NonNullable<ApprovalInteractionWorkerDependencies["actionApprovalWorker"]>,
   ): void;
+  bindKnowledgeConflictInteractionWorker(
+    worker: NonNullable<
+      ApprovalInteractionWorkerDependencies["knowledgeConflictInteractionWorker"]
+    >,
+  ): void;
   start(): Promise<void>;
   getStatus(): Promise<KnowledgeCardRuntimeStatus>;
   close(): Promise<void>;
@@ -262,11 +267,24 @@ export function createKnowledgeCardRuntime({
     let boundActionApprovalWorker:
       | NonNullable<ApprovalInteractionWorkerDependencies["actionApprovalWorker"]>
       | undefined;
+    let boundKnowledgeConflictInteractionWorker:
+      | NonNullable<ApprovalInteractionWorkerDependencies["knowledgeConflictInteractionWorker"]>
+      | undefined;
     const actionApprovalWorker: NonNullable<
       ApprovalInteractionWorkerDependencies["actionApprovalWorker"]
     > = {
       processActionApproval(job, intent) {
         return boundActionApprovalWorker?.processActionApproval(job, intent) ?? Promise.resolve({
+          status: "denied" as const,
+          code: "runtime_disabled" as const,
+        });
+      },
+    };
+    const knowledgeConflictInteractionWorker: NonNullable<
+      ApprovalInteractionWorkerDependencies["knowledgeConflictInteractionWorker"]
+    > = {
+      processInteraction(job) {
+        return boundKnowledgeConflictInteractionWorker?.processInteraction(job) ?? Promise.resolve({
           status: "denied" as const,
           code: "runtime_disabled" as const,
         });
@@ -284,6 +302,7 @@ export function createKnowledgeCardRuntime({
       intentStore,
       actionApprovalWorker,
       proactiveSignalFeedbackWorker,
+      knowledgeConflictInteractionWorker,
     });
     dispatcherLoop = createDispatcherPollingLoop({
       worker: dispatcher,
@@ -367,6 +386,15 @@ export function createKnowledgeCardRuntime({
           throw new Error("action approval worker must be bound before runtime start");
         }
         boundActionApprovalWorker = worker;
+      },
+      bindKnowledgeConflictInteractionWorker(worker) {
+        if (boundKnowledgeConflictInteractionWorker !== undefined) {
+          throw new Error("knowledge conflict interaction worker is already bound");
+        }
+        if (lifecycle !== "idle") {
+          throw new Error("knowledge conflict interaction worker must be bound before runtime start");
+        }
+        boundKnowledgeConflictInteractionWorker = worker;
       },
       start() {
         if (lifecycle === "closed") {

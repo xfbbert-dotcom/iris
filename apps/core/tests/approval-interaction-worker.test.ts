@@ -522,6 +522,60 @@ describe("ApprovalInteractionWorker", () => {
     expect(harness.queue.acknowledge).toHaveBeenCalledOnce();
   });
 
+  it("delegates a knowledge conflict callback without resolving an intent or touching draft-card state", async () => {
+    const conflict = conflictJob();
+    const processInteraction = vi.fn(async () => ({
+      status: "applied" as const,
+      code: "draft_created" as const,
+      draftId: "knowledge-conflict-draft-1",
+      presentationId: "knowledge-card-1",
+    }));
+    const harness = createHarness({
+      job: conflict,
+      knowledgeConflictInteractionWorker: { processInteraction },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "applied",
+      idempotencyKey: conflict.idempotencyKey,
+      code: "draft_created",
+    }]);
+    expect(processInteraction).toHaveBeenCalledWith(conflict);
+    expect(harness.queue.acknowledge).toHaveBeenCalledWith({
+      job: conflict,
+      workerId: "approval-worker-1",
+    });
+    expect(harness.intentStore.resolveIntent).not.toHaveBeenCalled();
+    expect(harness.repository.getPresentation).not.toHaveBeenCalled();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+  });
+
+  it("routes retryable conflict presentation failure through the shared content-free queue", async () => {
+    const conflict = conflictJob();
+    const harness = createHarness({
+      job: conflict,
+      knowledgeConflictInteractionWorker: {
+        processInteraction: vi.fn(async () => ({
+          status: "retryable" as const,
+          code: "presentation_unavailable" as const,
+        })),
+      },
+    });
+
+    await expect(harness.worker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      idempotencyKey: conflict.idempotencyKey,
+      code: "presentation_unavailable",
+    }]);
+    expect(harness.queue.handleFailure).toHaveBeenCalledWith({
+      job: conflict,
+      workerId: "approval-worker-1",
+      errorCode: "presentation_unavailable",
+      at,
+    });
+    expect(harness.queue.acknowledge).not.toHaveBeenCalled();
+  });
+
   it("routes a retryable action proposal result through the shared finite queue", async () => {
     const harness = createHarness({
       job: actionJob(),
@@ -782,6 +836,11 @@ type HarnessOverrides = {
       job: Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }>,
     ) => Promise<any>;
   };
+  knowledgeConflictInteractionWorker?: {
+    processInteraction: (
+      job: Extract<ApprovalInteractionJob, { kind: "knowledge_conflict_confirmation" }>,
+    ) => Promise<any>;
+  };
   resolveIntent?: (...args: any[]) => Promise<any>;
   deleteIntent?: (...args: any[]) => Promise<void>;
 };
@@ -829,6 +888,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
       now: () => new Date(at),
       actionApprovalWorker: overrides.actionApprovalWorker,
       proactiveSignalFeedbackWorker: overrides.proactiveSignalFeedbackWorker,
+      knowledgeConflictInteractionWorker: overrides.knowledgeConflictInteractionWorker,
       intentStore,
     }),
   };
@@ -875,6 +935,29 @@ function feedbackJob(
     candidateIdempotencyKey: "quiet_open_thread:thread-1:2",
     entityVersion: 2,
     action: "helpful",
+    receivedAt: new Date(at.getTime() - 1_000),
+    attempts: 0,
+    ...overrides,
+  };
+}
+
+function conflictJob(
+  overrides: Partial<Extract<ApprovalInteractionJob, { kind: "knowledge_conflict_confirmation" }>> = {},
+): Extract<ApprovalInteractionJob, { kind: "knowledge_conflict_confirmation" }> {
+  return {
+    kind: "knowledge_conflict_confirmation",
+    idempotencyKey: "feishu-card:cli_app:conflict-event-1",
+    eventId: "conflict-event-1",
+    appId: "cli_app",
+    actorOpenId: "ou_member",
+    chatId: "oc_group",
+    messageId: "om_conflict_card",
+    presentationId: "candidate-1",
+    candidateId: "candidate-1",
+    candidateVersion: 3,
+    groupId: "oc_group",
+    nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
+    action: "create_update_draft",
     receivedAt: new Date(at.getTime() - 1_000),
     attempts: 0,
     ...overrides,

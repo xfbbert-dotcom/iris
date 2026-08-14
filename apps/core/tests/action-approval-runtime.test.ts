@@ -156,6 +156,7 @@ function knowledgeCardRuntime(): KnowledgeCardRuntime {
       botOpenId: "ou_irisbot",
     },
     bindActionApprovalWorker: vi.fn(),
+    bindKnowledgeConflictInteractionWorker: vi.fn(),
     start: vi.fn(),
     getStatus: vi.fn(),
     close: vi.fn(),

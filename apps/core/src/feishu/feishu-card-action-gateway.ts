@@ -292,7 +292,8 @@ function describeActionShape(body: unknown): FeishuCardActionShapeDiagnostic {
     callbackKindRecognized:
       callbackKind === "knowledge_draft_confirmation" ||
       callbackKind === "action_proposal_approval" ||
-      callbackKind === "proactive_signal_feedback",
+      callbackKind === "proactive_signal_feedback" ||
+      callbackKind === "knowledge_conflict_confirmation",
     callbackActionRecognized: isRecognizedDiagnosticAction(callbackKind, callbackAction),
     nameMatchesCallbackAction:
       typeof action?.name === "string" && action.name === callbackAction,
@@ -313,6 +314,9 @@ function isRecognizedDiagnosticAction(kind: unknown, action: unknown): boolean {
   if (kind === "proactive_signal_feedback") {
     return action === "helpful" || action === "irrelevant";
   }
+  if (kind === "knowledge_conflict_confirmation") {
+    return action === "create_update_draft" || action === "not_a_conflict";
+  }
   return false;
 }
 
@@ -325,6 +329,9 @@ function hasValidDiagnosticIdentifiers(value: Record<string, unknown> | undefine
   }
   if (value?.kind === "proactive_signal_feedback") {
     return [value.deliveryId, value.candidateIdempotencyKey].every(isDiagnosticReference);
+  }
+  if (value?.kind === "knowledge_conflict_confirmation") {
+    return [value.candidateId, value.groupId, value.nonce].every(isDiagnosticReference);
   }
   return false;
 }
@@ -343,6 +350,9 @@ function hasCanonicalDiagnosticVersions(value: Record<string, unknown> | undefin
   }
   if (value?.kind === "proactive_signal_feedback") {
     return isCanonicalPositiveIntegerString(value.entityVersion);
+  }
+  if (value?.kind === "knowledge_conflict_confirmation") {
+    return isCanonicalPositiveIntegerString(value.candidateVersion);
   }
   return false;
 }
@@ -442,13 +452,22 @@ async function createJob(
       subjectVersion: action.subjectVersion,
       targetPolicyVersion: action.targetPolicyVersion,
     });
-  } else {
+  } else if (action.kind === "proactive_signal_feedback") {
     interaction = normalizeApprovalInteractionIntentIdentity({
       ...common,
       kind: action.kind,
       deliveryId: action.deliveryId,
       candidateIdempotencyKey: action.candidateIdempotencyKey,
       entityVersion: action.entityVersion,
+    });
+  } else {
+    interaction = normalizeApprovalInteractionIntentIdentity({
+      ...common,
+      kind: action.kind,
+      candidateId: action.candidateId,
+      candidateVersion: action.candidateVersion,
+      groupId: action.groupId,
+      nonce: action.nonce,
     });
   }
   if (action.reason === undefined) {

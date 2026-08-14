@@ -427,6 +427,53 @@ describe("FeishuCardActionGateway", () => {
     });
   });
 
+  it("derives the conflict presentation identity and verified actor/message context", async () => {
+    const now = new Date("2026-08-13T00:00:00.000Z");
+    const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
+    const intentStore = { persistIntent: vi.fn() };
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      intentStore,
+      verifyRequest: () => true,
+      now: () => now,
+    });
+    const body = cardAction();
+    const event = body.event as Record<string, unknown>;
+    const action = event.action as Record<string, unknown>;
+    action.name = "not_a_conflict";
+    action.form_value = {};
+    action.value = {
+      kind: "knowledge_conflict_confirmation",
+      action: "not_a_conflict",
+      candidateId: "candidate-1",
+      candidateVersion: "3",
+      groupId: "oc_approval",
+      nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
+    };
+
+    await expect(gateway.handleCallback({ headers: {}, body })).resolves.toMatchObject({
+      statusCode: 200,
+    });
+    expect(queue.enqueue).toHaveBeenCalledWith({
+      kind: "knowledge_conflict_confirmation",
+      idempotencyKey: "feishu-card:cli_approval:event-1",
+      eventId: "event-1",
+      appId: "cli_approval",
+      actorOpenId: "ou_reviewer",
+      chatId: "oc_approval",
+      messageId: "om_approval",
+      presentationId: "candidate-1",
+      candidateId: "candidate-1",
+      candidateVersion: 3,
+      groupId: "oc_approval",
+      nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
+      action: "not_a_conflict",
+      receivedAt: now,
+      attempts: 0,
+    });
+    expect(intentStore.persistIntent).not.toHaveBeenCalled();
+  });
+
   it("acknowledges signed proactive feedback and leaves duplicate detection to the queue", async () => {
     const now = new Date("2026-07-27T00:00:00.000Z");
     const encryptKey = "feedback-card-encrypt-key";

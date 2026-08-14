@@ -570,6 +570,7 @@ function runtimeFixture(): KnowledgeCardRuntime {
     canUseKnowledgeCards: vi.fn(() => true),
     approvalInteractions: {} as KnowledgeCardRuntime["approvalInteractions"],
     bindActionApprovalWorker: vi.fn(),
+    bindKnowledgeConflictInteractionWorker: vi.fn(),
     start: vi.fn(),
     getStatus: vi.fn(async () => ({
       enabled: true as const,

@@ -8,6 +8,9 @@ import { KnowledgeDraftEvidenceError } from "../knowledge-governance/postgres-kn
 import type {
   ProactiveSignalFeedbackWorkerResult,
 } from "../proactive-signals/proactive-signal-feedback-worker.js";
+import type {
+  KnowledgeConflictInteractionWorkerResult,
+} from "../knowledge-conflicts/knowledge-conflict-interaction-worker.js";
 
 import type { ApprovalInteractionQueue } from "./approval-interaction-queue.js";
 import {
@@ -56,6 +59,13 @@ export type ApprovalInteractionWorkerCode =
   | "feedback_applied"
   | "duplicate_feedback"
   | "stale_delivery"
+  | "stale_candidate"
+  | "validation_unavailable"
+  | "permission_blocked"
+  | "target_unavailable"
+  | "presentation_unavailable"
+  | "draft_created"
+  | "conflict_dismissed"
   | "membership_unavailable"
   | "repository_unavailable"
   | "redis_unavailable"
@@ -88,6 +98,11 @@ export type ApprovalInteractionWorkerDependencies = {
       job: Extract<ApprovalInteractionJob, { kind: "proactive_signal_feedback" }>,
     ): Promise<ProactiveSignalFeedbackWorkerResult>;
   };
+  knowledgeConflictInteractionWorker?: {
+    processInteraction(
+      job: Extract<ApprovalInteractionJob, { kind: "knowledge_conflict_confirmation" }>,
+    ): Promise<KnowledgeConflictInteractionWorkerResult>;
+  };
 };
 
 export function createApprovalInteractionWorker({
@@ -103,6 +118,7 @@ export function createApprovalInteractionWorker({
   intentStore,
   actionApprovalWorker,
   proactiveSignalFeedbackWorker,
+  knowledgeConflictInteractionWorker,
 }: ApprovalInteractionWorkerDependencies) {
   const safeBotOpenId = requireIdentifier("botOpenId", botOpenId);
   const safeWorkerId = requireIdentifier("workerId", workerId);
@@ -132,6 +148,7 @@ export function createApprovalInteractionWorker({
           intentStore,
           actionApprovalWorker,
           proactiveSignalFeedbackWorker,
+          knowledgeConflictInteractionWorker,
         }));
       }
       return results;
@@ -157,12 +174,17 @@ type ProcessJobInput = {
   actionApprovalWorker?: ApprovalInteractionWorkerDependencies["actionApprovalWorker"];
   proactiveSignalFeedbackWorker?:
     ApprovalInteractionWorkerDependencies["proactiveSignalFeedbackWorker"];
+  knowledgeConflictInteractionWorker?:
+    ApprovalInteractionWorkerDependencies["knowledgeConflictInteractionWorker"];
 };
 
 async function processJob(rawInput: ProcessJobInput): Promise<ApprovalInteractionWorkerResult> {
   const { job: rawJob } = rawInput;
   if (rawJob.kind === "proactive_signal_feedback") {
     return processProactiveSignalFeedback({ ...rawInput, job: rawJob });
+  }
+  if (rawJob.kind === "knowledge_conflict_confirmation") {
+    return processKnowledgeConflictInteraction({ ...rawInput, job: rawJob });
   }
   const resolution = await resolveSensitiveIntent(rawInput);
   if (resolution.status === "retryable") {
@@ -505,6 +527,61 @@ async function handleProactiveSignalFeedbackFailure(
   };
 }
 
+async function processKnowledgeConflictInteraction(
+  input: ProcessJobInput & {
+    job: Extract<ApprovalInteractionJob, { kind: "knowledge_conflict_confirmation" }>;
+  },
+): Promise<ApprovalInteractionWorkerResult> {
+  if (input.knowledgeConflictInteractionWorker === undefined) {
+    return handleKnowledgeConflictFailure(input, "internal_error");
+  }
+  let result: KnowledgeConflictInteractionWorkerResult;
+  try {
+    result = await input.knowledgeConflictInteractionWorker.processInteraction(input.job);
+  } catch {
+    return handleKnowledgeConflictFailure(input, "internal_error");
+  }
+  if (result.status === "retryable") {
+    return handleKnowledgeConflictFailure(input, result.code);
+  }
+  try {
+    await input.queue.acknowledge({ job: input.job, workerId: input.workerId });
+  } catch {
+    return handleKnowledgeConflictFailure(input, "redis_unavailable");
+  }
+  return {
+    status: result.status,
+    idempotencyKey: input.job.idempotencyKey,
+    code: result.code,
+  };
+}
+
+async function handleKnowledgeConflictFailure(
+  input: ProcessJobInput & {
+    job: Extract<ApprovalInteractionJob, { kind: "knowledge_conflict_confirmation" }>;
+  },
+  code: Extract<ApprovalInteractionWorkerCode,
+    | "membership_unavailable"
+    | "repository_unavailable"
+    | "validation_unavailable"
+    | "presentation_unavailable"
+    | "redis_unavailable"
+    | "internal_error"
+  >,
+): Promise<ApprovalInteractionWorkerResult> {
+  const failure = await input.queue.handleFailure({
+    job: input.job,
+    workerId: input.workerId,
+    errorCode: code,
+    at: requireDate(input.now()),
+  });
+  return {
+    status: failure.action === "dead_lettered" ? "dead_lettered" : "retrying",
+    idempotencyKey: input.job.idempotencyKey,
+    code,
+  };
+}
+
 async function attemptCommittedResultDisplay(
   input: Parameters<typeof processJob>[0],
 ): Promise<
@@ -580,6 +657,13 @@ function renderStatusCard(code: ApprovalInteractionWorkerCode): string {
     feedback_applied: "Feedback recorded.",
     duplicate_feedback: "Feedback was already recorded.",
     stale_delivery: "This reminder is no longer current.",
+    stale_candidate: "This knowledge conflict is no longer current.",
+    permission_blocked: "This knowledge conflict can no longer be reviewed.",
+    validation_unavailable: "The conflict evidence could not be verified. Try again later.",
+    target_unavailable: "No current publication target is available for this group.",
+    presentation_unavailable: "The draft was recorded but its review card could not be prepared yet.",
+    draft_created: "A governed knowledge update draft was created.",
+    conflict_dismissed: "The knowledge conflict candidate was dismissed.",
     evidence_or_policy_invalid: "This publication can no longer be reviewed because its evidence or policy changed.",
     review_required: "请先打开完整正文审阅页并完成审阅",
     membership_unavailable: "Membership could not be verified. Try again later.",

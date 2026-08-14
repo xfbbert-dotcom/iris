@@ -2,9 +2,11 @@ import {
   ACTION_PROPOSAL_CARD_ACTIONS,
   KNOWLEDGE_CARD_ACTIONS,
   KNOWLEDGE_CARD_REASON_MAX_CHARS,
+  KNOWLEDGE_CONFLICT_CONFIRMATION_ACTIONS,
   PROACTIVE_SIGNAL_FEEDBACK_ACTIONS,
   type ActionProposalCardAction,
   type KnowledgeCardAction,
+  type KnowledgeConflictConfirmationAction,
   type ProactiveSignalFeedbackAction,
 } from "../knowledge-cards/knowledge-card.js";
 import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/knowledge-draft.js";
@@ -55,14 +57,26 @@ type ParsedProactiveSignalFeedbackPayload = {
   action: ProactiveSignalFeedbackAction;
 };
 
+type ParsedKnowledgeConflictPayload = {
+  kind: "knowledge_conflict_confirmation";
+  presentationId: string;
+  candidateId: string;
+  candidateVersion: number;
+  groupId: string;
+  nonce: string;
+  action: KnowledgeConflictConfirmationAction;
+};
+
 type ParsedActionPayload =
   | ParsedKnowledgeActionPayload
   | ParsedActionProposalPayload
-  | ParsedProactiveSignalFeedbackPayload;
+  | ParsedProactiveSignalFeedbackPayload
+  | ParsedKnowledgeConflictPayload;
 type ParsedCallbackValue =
   | Omit<ParsedKnowledgeActionPayload, "reason" | "rejectionConfirmed">
   | Omit<ParsedActionProposalPayload, "reason" | "rejectionConfirmed">
-  | ParsedProactiveSignalFeedbackPayload;
+  | ParsedProactiveSignalFeedbackPayload
+  | ParsedKnowledgeConflictPayload;
 
 export type ParsedFeishuCardAction = ParsedFeishuCardActionCommon & ParsedActionPayload;
 
@@ -108,6 +122,10 @@ function parseEvent(value: unknown): Omit<ParsedFeishuCardAction, "eventId" | "a
   const context = parseContext(value.context);
   const action = parseAction(value.action);
   if (actorOpenId === undefined || context === undefined || action === undefined) return undefined;
+  if (
+    action.kind === "knowledge_conflict_confirmation" &&
+    (context.messageId === undefined || action.groupId !== context.chatId)
+  ) return undefined;
   return {
     actorOpenId,
     chatId: context.chatId,
@@ -150,6 +168,9 @@ function parseAction(value: unknown): ParsedActionPayload | undefined {
   if (callbackValue.kind === "proactive_signal_feedback") {
     return isEmptyFormValue(value.form_value) ? callbackValue : undefined;
   }
+  if (callbackValue.kind === "knowledge_conflict_confirmation") {
+    return isEmptyFormValue(value.form_value) ? callbackValue : undefined;
+  }
 
   const formValue = parseFormValue(value.form_value);
   if (formValue === undefined) return undefined;
@@ -175,6 +196,9 @@ function parseCallbackValue(value: unknown): ParsedCallbackValue | undefined {
   }
   if (value.kind === "proactive_signal_feedback") {
     return parseProactiveSignalFeedbackCallbackValue(value);
+  }
+  if (value.kind === "knowledge_conflict_confirmation") {
+    return parseKnowledgeConflictCallbackValue(value);
   }
   return undefined;
 }
@@ -275,6 +299,36 @@ function parseProactiveSignalFeedbackCallbackValue(
   };
 }
 
+function parseKnowledgeConflictCallbackValue(
+  value: Record<string, unknown>,
+): ParsedKnowledgeConflictPayload | undefined {
+  if (
+    !hasOnlyKeys(value, ["kind", "action", "candidateId", "candidateVersion", "groupId", "nonce"]) ||
+    !KNOWLEDGE_CONFLICT_CONFIRMATION_ACTIONS.includes(
+      value.action as KnowledgeConflictConfirmationAction,
+    )
+  ) return undefined;
+  const candidateId = parseExactReference(value.candidateId);
+  const candidateVersion = parsePositiveIntegerString(value.candidateVersion);
+  const groupId = parseExactReference(value.groupId);
+  const nonce = parseExactReference(value.nonce, 128);
+  if (
+    candidateId === undefined ||
+    candidateVersion === undefined ||
+    groupId === undefined ||
+    nonce === undefined
+  ) return undefined;
+  return {
+    kind: "knowledge_conflict_confirmation",
+    action: value.action as KnowledgeConflictConfirmationAction,
+    presentationId: candidateId,
+    candidateId,
+    candidateVersion,
+    groupId,
+    nonce,
+  };
+}
+
 function parseFormValue(value: unknown): { reason: string } | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, ["reason"]) || typeof value.reason !== "string") {
     return undefined;
@@ -292,6 +346,17 @@ function parseReference(value: unknown): string | undefined {
   const normalized = value.trim();
   return normalized.length >= 1 && normalized.length <= KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS
     ? normalized
+    : undefined;
+}
+
+function parseExactReference(value: unknown, maximum = KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return value.length >= 1 &&
+    value.length <= maximum &&
+    value.normalize("NFC") === value &&
+    value.trim() === value &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(value)
+    ? value
     : undefined;
 }
 

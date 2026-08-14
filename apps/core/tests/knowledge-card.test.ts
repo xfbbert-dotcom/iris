@@ -9,6 +9,7 @@ import {
   KNOWLEDGE_CARD_MAX_COMPONENTS,
   KNOWLEDGE_CARD_PRESENTATION_STATES,
   KNOWLEDGE_CARD_REASON_MAX_CHARS,
+  KNOWLEDGE_CONFLICT_CONFIRMATION_ACTIONS,
   KnowledgeCardValidationError,
   normalizeApprovalInteractionJob,
   normalizeApprovalInteractionIntentIdentity,
@@ -27,6 +28,11 @@ describe("knowledge card contracts", () => {
       "knowledge_draft_confirmation",
       "action_proposal_approval",
       "proactive_signal_feedback",
+      "knowledge_conflict_confirmation",
+    ]);
+    expect(KNOWLEDGE_CONFLICT_CONFIRMATION_ACTIONS).toEqual([
+      "create_update_draft",
+      "not_a_conflict",
     ]);
     expect(KNOWLEDGE_CARD_PRESENTATION_STATES).toEqual([
       "pending_send",
@@ -109,6 +115,74 @@ describe("knowledge card contracts", () => {
     })).toMatchObject({
       receivedAt: new Date("2026-07-19T00:00:00.000Z"),
     });
+  });
+
+  it("normalizes an exact content-free knowledge conflict callback job", () => {
+    const receivedAt = new Date("2026-08-13T00:00:00.000Z");
+    expect(normalizeApprovalInteractionJob({
+      kind: "knowledge_conflict_confirmation",
+      idempotencyKey: "feishu-card:cli_a:event-conflict-1",
+      eventId: "event-conflict-1",
+      appId: "cli_a",
+      actorOpenId: "ou_member",
+      chatId: "oc_group",
+      messageId: "om_conflict_card",
+      presentationId: "candidate-1",
+      candidateId: "candidate-1",
+      candidateVersion: 3,
+      groupId: "oc_group",
+      nonce: "nonce-1",
+      action: "create_update_draft",
+      receivedAt,
+      attempts: 0,
+    })).toEqual({
+      kind: "knowledge_conflict_confirmation",
+      idempotencyKey: "feishu-card:cli_a:event-conflict-1",
+      eventId: "event-conflict-1",
+      appId: "cli_a",
+      actorOpenId: "ou_member",
+      chatId: "oc_group",
+      messageId: "om_conflict_card",
+      presentationId: "candidate-1",
+      candidateId: "candidate-1",
+      candidateVersion: 3,
+      groupId: "oc_group",
+      nonce: "nonce-1",
+      action: "create_update_draft",
+      receivedAt,
+      attempts: 0,
+    });
+  });
+
+  it.each([
+    ["missing message binding", { messageId: undefined }],
+    ["mismatched group binding", { groupId: "oc_other" }],
+    ["mismatched presentation derivation", { presentationId: "candidate-other" }],
+    ["free-text intent", { intentId: "intent-not-allowed" }],
+    ["fake actor field", { actorOpenIdFromCard: "ou_fake" }],
+    ["form reason", { reason: "not allowed" }],
+    ["unknown field", { content: "private conflict content" }],
+    ["unrecognized action", { action: "approve" }],
+    ["oversized nonce", { nonce: "n".repeat(129) }],
+  ])("rejects conflict job %s", (_label, mutation) => {
+    expect(() => normalizeApprovalInteractionJob({
+      kind: "knowledge_conflict_confirmation",
+      idempotencyKey: "feishu-card:cli_a:event-conflict-1",
+      eventId: "event-conflict-1",
+      appId: "cli_a",
+      actorOpenId: "ou_member",
+      chatId: "oc_group",
+      messageId: "om_conflict_card",
+      presentationId: "candidate-1",
+      candidateId: "candidate-1",
+      candidateVersion: 3,
+      groupId: "oc_group",
+      nonce: "nonce-1",
+      action: "create_update_draft",
+      receivedAt: new Date("2026-08-13T00:00:00.000Z"),
+      attempts: 0,
+      ...mutation,
+    })).toThrow(KnowledgeCardValidationError);
   });
 
   it.each([

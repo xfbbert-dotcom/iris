@@ -1171,6 +1171,8 @@ function fakeKnowledgeCardRuntime(
     getStatus: vi.fn(),
     close: vi.fn(async () => undefined),
     ...overrides,
+    bindKnowledgeConflictInteractionWorker:
+      overrides.bindKnowledgeConflictInteractionWorker ?? vi.fn(),
   };
 }
 

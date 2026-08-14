@@ -3,10 +3,15 @@ import { KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS } from "../knowledge-governance/kno
 export const KNOWLEDGE_CARD_ACTIONS = ["confirm", "request_revision", "reject"] as const;
 export const ACTION_PROPOSAL_CARD_ACTIONS = ["approve", "request_revision", "reject"] as const;
 export const PROACTIVE_SIGNAL_FEEDBACK_ACTIONS = ["helpful", "irrelevant"] as const;
+export const KNOWLEDGE_CONFLICT_CONFIRMATION_ACTIONS = [
+  "create_update_draft",
+  "not_a_conflict",
+] as const;
 export const APPROVAL_INTERACTION_KINDS = [
   "knowledge_draft_confirmation",
   "action_proposal_approval",
   "proactive_signal_feedback",
+  "knowledge_conflict_confirmation",
 ] as const;
 export const KNOWLEDGE_CARD_PRESENTATION_STATES = [
   "pending_send",
@@ -23,6 +28,8 @@ export const KNOWLEDGE_CARD_MAX_COMPONENTS = 100;
 export type KnowledgeCardAction = (typeof KNOWLEDGE_CARD_ACTIONS)[number];
 export type ActionProposalCardAction = (typeof ACTION_PROPOSAL_CARD_ACTIONS)[number];
 export type ProactiveSignalFeedbackAction = (typeof PROACTIVE_SIGNAL_FEEDBACK_ACTIONS)[number];
+export type KnowledgeConflictConfirmationAction =
+  (typeof KNOWLEDGE_CONFLICT_CONFIRMATION_ACTIONS)[number];
 export type ApprovalInteractionKind = (typeof APPROVAL_INTERACTION_KINDS)[number];
 export type KnowledgeCardPresentationState = (typeof KNOWLEDGE_CARD_PRESENTATION_STATES)[number];
 
@@ -66,15 +73,26 @@ export type ProactiveSignalFeedbackInteractionJob = ApprovalInteractionJobCommon
   action: ProactiveSignalFeedbackAction;
 };
 
+export type KnowledgeConflictConfirmationInteractionJob = ApprovalInteractionJobCommon & {
+  kind: "knowledge_conflict_confirmation";
+  candidateId: string;
+  candidateVersion: number;
+  groupId: string;
+  nonce: string;
+  action: KnowledgeConflictConfirmationAction;
+};
+
 export type ApprovalInteractionJob =
   | KnowledgeDraftConfirmationInteractionJob
   | ActionProposalApprovalInteractionJob
-  | ProactiveSignalFeedbackInteractionJob;
+  | ProactiveSignalFeedbackInteractionJob
+  | KnowledgeConflictConfirmationInteractionJob;
 
 export type ApprovalInteractionIntentIdentity =
   | Omit<KnowledgeDraftConfirmationInteractionJob, "intentId" | "receivedAt" | "attempts">
   | Omit<ActionProposalApprovalInteractionJob, "intentId" | "receivedAt" | "attempts">
-  | Omit<ProactiveSignalFeedbackInteractionJob, "intentId" | "receivedAt" | "attempts">;
+  | Omit<ProactiveSignalFeedbackInteractionJob, "intentId" | "receivedAt" | "attempts">
+  | Omit<KnowledgeConflictConfirmationInteractionJob, "intentId" | "receivedAt" | "attempts">;
 
 export class KnowledgeCardValidationError extends Error {
   constructor(message: string) {
@@ -112,10 +130,12 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
         "subjectVersion",
         "targetPolicyVersion",
       ]
-      : [...commonFields, "deliveryId", "candidateIdempotencyKey", "entityVersion"]);
+      : kind === "proactive_signal_feedback"
+        ? [...commonFields, "deliveryId", "candidateIdempotencyKey", "entityVersion"]
+        : [...commonFields, "candidateId", "candidateVersion", "groupId", "nonce"]);
 
   const action = requireAction(input.action, kind);
-  const intentId = kind === "proactive_signal_feedback"
+  const intentId = kind === "proactive_signal_feedback" || kind === "knowledge_conflict_confirmation"
     ? undefined
     : normalizeIntentId(input.intentId, action);
   const common = {
@@ -151,6 +171,25 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
       candidateIdempotencyKey: requireReference("candidateIdempotencyKey", input.candidateIdempotencyKey),
       entityVersion: requirePositiveInteger("entityVersion", input.entityVersion),
       action: action as ProactiveSignalFeedbackAction,
+    };
+  }
+  if (kind === "knowledge_conflict_confirmation") {
+    if (input.messageId === undefined) throw validationError("messageId is required");
+    const candidateId = requireExactReference("candidateId", input.candidateId);
+    const groupId = requireExactReference("groupId", input.groupId);
+    const nonce = requireExactReference("nonce", input.nonce, 128);
+    if (common.presentationId !== candidateId) {
+      throw validationError("presentationId must match candidateId");
+    }
+    if (common.chatId !== groupId) throw validationError("groupId must match chatId");
+    return {
+      ...common,
+      kind,
+      candidateId,
+      candidateVersion: requirePositiveInteger("candidateVersion", input.candidateVersion),
+      groupId,
+      nonce,
+      action: action as KnowledgeConflictConfirmationAction,
     };
   }
   return {
@@ -215,6 +254,17 @@ export function toApprovalInteractionIntentIdentity(
       action: job.action,
     };
   }
+  if (job.kind === "knowledge_conflict_confirmation") {
+    return {
+      ...common,
+      kind: job.kind,
+      candidateId: job.candidateId,
+      candidateVersion: job.candidateVersion,
+      groupId: job.groupId,
+      nonce: job.nonce,
+      action: job.action,
+    };
+  }
   return {
     ...common,
     kind: job.kind,
@@ -244,21 +294,26 @@ function requireKind(value: unknown): ApprovalInteractionKind {
 function requireAction(
   value: unknown,
   kind: ApprovalInteractionKind,
-): KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction {
+): KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction |
+  KnowledgeConflictConfirmationAction {
   const actions = kind === "knowledge_draft_confirmation"
     ? KNOWLEDGE_CARD_ACTIONS
     : kind === "action_proposal_approval"
       ? ACTION_PROPOSAL_CARD_ACTIONS
-      : PROACTIVE_SIGNAL_FEEDBACK_ACTIONS;
+      : kind === "proactive_signal_feedback"
+        ? PROACTIVE_SIGNAL_FEEDBACK_ACTIONS
+        : KNOWLEDGE_CONFLICT_CONFIRMATION_ACTIONS;
   if (!(actions as readonly unknown[]).includes(value)) {
     throw validationError("action is invalid");
   }
-  return value as KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction;
+  return value as KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction |
+    KnowledgeConflictConfirmationAction;
 }
 
 function normalizeIntentId(
   value: unknown,
-  action: KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction,
+  action: KnowledgeCardAction | ActionProposalCardAction | ProactiveSignalFeedbackAction |
+    KnowledgeConflictConfirmationAction,
 ): string | undefined {
   if (action === "confirm" || action === "approve") {
     if (value !== undefined) throw validationError("intentId is not allowed for this action");
@@ -274,6 +329,22 @@ function requireReference(name: string, value: unknown): string {
     throw validationError(`${name} length is invalid`);
   }
   return normalized;
+}
+
+function requireExactReference(
+  name: string,
+  value: unknown,
+  maximum = KNOWLEDGE_DRAFT_REFERENCE_MAX_CHARS,
+): string {
+  if (typeof value !== "string") throw validationError(`${name} must be a string`);
+  if (
+    value.length < 1 ||
+    value.length > maximum ||
+    value.normalize("NFC") !== value ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(value)
+  ) throw validationError(`${name} length is invalid`);
+  return value;
 }
 
 function requirePositiveInteger(name: string, value: unknown): number {
