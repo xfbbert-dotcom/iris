@@ -62,8 +62,7 @@ describe("OpenAICompatibleKnowledgeConflictDetector", () => {
       subject: {
         referenceId: "M1",
         category: "decision",
-        exactSubject,
-        groupConclusion: exactSubject,
+        content: exactSubject,
       },
       groupEvidence: [
         { referenceId: "C1", sentAt: "2026-08-13T01:00:00.000Z", text: injectedText },
@@ -214,29 +213,36 @@ describe("OpenAICompatibleKnowledgeConflictDetector", () => {
     expect(client.complete).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a valid long memory conclusion while deriving a deterministic bounded subject", async () => {
-    const longConclusion = "Director approval now starts at CNY 10,000. ".repeat(75).trim();
-    const boundedSubject = `${longConclusion.slice(0, 245)}[truncated]`;
-    const client = completionClient(JSON.stringify(conflictPlan({ subject: boundedSubject })));
+  it.each([
+    ["first shared-prefix conclusion", `${"x".repeat(256)}-policy-a`],
+    ["second shared-prefix conclusion", `${"x".repeat(256)}-policy-b`],
+    ["supplementary character crossing the old slice boundary", `${"x".repeat(244)}😀${"y".repeat(20)}`],
+  ])("rejects %s without deriving or serializing a candidate subject", async (_label, content) => {
+    const client = completionClient(JSON.stringify(conflictPlan()));
+    const detector = createOpenAICompatibleKnowledgeConflictDetector({ client });
+
+    await expect(detector.detect(detectionInput({
+      subject: { ...detectionInput().subject, content },
+    }))).rejects.toThrow("knowledge conflict detector input is invalid");
+    expect(client.complete).not.toHaveBeenCalled();
+  });
+
+  it("sends and requires the exact normalized memory subject when it is representable", async () => {
+    const normalizedSubject = "Caf\u00e9 approval threshold";
+    const client = completionClient(JSON.stringify(conflictPlan({ subject: normalizedSubject })));
     const detector = createOpenAICompatibleKnowledgeConflictDetector({ client });
 
     const result = await detector.detect(detectionInput({
-      subject: { ...detectionInput().subject, content: longConclusion },
+      subject: { ...detectionInput().subject, content: "  Cafe\u0301 approval threshold  " },
     }));
 
-    expect(result.subject).toBe(boundedSubject);
+    expect(result.subject).toBe(normalizedSubject);
     const messages = client.complete.mock.calls[0]?.[0] ?? [];
-    const request = JSON.parse(messages[1]?.content ?? "{}") as {
-      subject: { exactSubject: string; groupConclusion: string };
-    };
-    expect(request.subject).toEqual({
+    expect(JSON.parse(messages[1]?.content ?? "{}").subject).toEqual({
       referenceId: "M1",
       category: "decision",
-      exactSubject: boundedSubject,
-      groupConclusion: longConclusion,
+      content: normalizedSubject,
     });
-    expect(request.subject.exactSubject).toHaveLength(256);
-    expect(request.subject.groupConclusion).toBe(longConclusion);
   });
 
   it.each([
@@ -257,8 +263,8 @@ describe("OpenAICompatibleKnowledgeConflictDetector", () => {
     ["out-of-window document ref", detectionInput({
       documentEvidence: [documentEvidence({ referenceId: "D13" })],
     })],
-    ["oversized memory conclusion", detectionInput({
-      subject: { ...detectionInput().subject, content: "s".repeat(4_001) },
+    ["unrepresentable memory subject", detectionInput({
+      subject: { ...detectionInput().subject, content: "s".repeat(257) },
     })],
     ["oversized message", detectionInput({
       groupEvidence: [groupEvidence({ text: "m".repeat(8_001) })],

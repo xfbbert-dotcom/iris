@@ -122,6 +122,25 @@ describe("KnowledgeConflictEvidenceBuilder", () => {
     });
   });
 
+  it("fails closed on an unrepresentable subject before repositories or providers run", async () => {
+    const harness = createHarness({
+      memory: memory({ content: `  ${"s".repeat(257)}  ` }),
+    });
+
+    await expect(harness.builder.build({ memory: harness.memory })).resolves.toEqual({
+      outcome: "insufficient_evidence",
+      reasonCode: "subject_unbounded",
+    });
+    expect(harness.dependencies.messages.findByIds).not.toHaveBeenCalled();
+    expect(harness.dependencies.publicationTargets.listTargetPolicies).not.toHaveBeenCalled();
+    expect(harness.dependencies.embedder.embedTexts).not.toHaveBeenCalled();
+    expect(harness.dependencies.fragments.searchSimilarFragmentCandidates).not.toHaveBeenCalled();
+    expect(harness.dependencies.documentSources.findSourceById).not.toHaveBeenCalled();
+    expect(harness.dependencies.snapshots.findLatestSnapshotMetadataForSources).not.toHaveBeenCalled();
+    expect(harness.dependencies.permissionChecker.canReadSource).not.toHaveBeenCalled();
+    expect(harness.dependencies.fragments.findFragmentsByIds).not.toHaveBeenCalled();
+  });
+
   it("limits each source to three fragments and the detector window to twelve", async () => {
     const sources = Array.from({ length: 5 }, (_, index) => source({
       id: `source-${index + 1}`,

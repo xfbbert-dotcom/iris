@@ -18,6 +18,7 @@ import type { EmbeddingProvider } from "../documents/document-semantic-indexer.j
 import type { FeishuDocumentPermissionChecker } from "../permissions/feishu-document-permission-checker.js";
 import type { GroupMemory } from "../memory/group-memory-repository.js";
 import { selectSourceAwareFragments } from "../memory/source-aware-fragment-selector.js";
+import { KNOWLEDGE_CONFLICT_SUBJECT_MAX_CHARS } from "./knowledge-conflict.js";
 
 const MAX_DOCUMENT_FRAGMENTS = 12;
 const MAX_SOURCE_MESSAGES = 10;
@@ -127,6 +128,9 @@ export function createKnowledgeConflictEvidenceBuilder(
       const memoryContent = normalizeMemoryContent(memory.content);
       if (!isEligibleMemory(memory) || memoryContent === undefined) {
         return insufficient("memory_ineligible");
+      }
+      if (memoryContent.length > KNOWLEDGE_CONFLICT_SUBJECT_MAX_CHARS) {
+        return insufficient("subject_unbounded");
       }
       const evidenceMessageIds = [...new Set(memory.evidenceMessageIds)].sort();
       if (evidenceMessageIds.length === 0 || evidenceMessageIds.length > MAX_SOURCE_MESSAGES) {
