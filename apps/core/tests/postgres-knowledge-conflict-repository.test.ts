@@ -1928,16 +1928,18 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       operationKey: `validation-reconciliation-supersede-${suffix}`,
       at: changedAt,
     });
-    await candidateLocked.promise;
-    const reconciliation = reconciliationRepository.reconcileDelivery({
-      deliveryId: approval.delivery.id,
-      expectedAttemptCount: 1,
-      outcome: "not_sent",
-      operationKey: `validation-reconciliation-not-sent-${suffix}`,
-      actorRef: "knowledge-admin",
-      at: changedAt,
-    });
+    const reconciliationOperationKey = `validation-reconciliation-not-sent-${suffix}`;
+    let reconciliation: Promise<unknown> | undefined;
     try {
+      await candidateLocked.promise;
+      reconciliation = reconciliationRepository.reconcileDelivery({
+        deliveryId: approval.delivery.id,
+        expectedAttemptCount: 1,
+        outcome: "not_sent",
+        operationKey: reconciliationOperationKey,
+        actorRef: "knowledge-admin",
+        at: changedAt,
+      });
       await waitForPostgresLock(pool!, await reconciliationPid.promise);
       const inspector = await pool!.connect();
       try {
@@ -1955,18 +1957,61 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
         validation,
         reconciliation,
       ]);
-      expect(validationResult).toMatchObject({
-        status: "fulfilled",
-        value: { status: "superseded", reasonCode: "source_stale" },
-      });
-      expect(reconciliationResult.status).toBe("rejected");
-      if (reconciliationResult.status === "rejected") {
-        expect(reconciliationResult.reason).toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
-        expect(String(reconciliationResult.reason)).not.toMatch(/40p01|deadlock/iu);
+      expect(validationResult.status).toBe("rejected");
+      if (validationResult.status === "rejected") {
+        expect(validationResult.reason).toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+        expect((validationResult.reason as { code?: string }).code).not.toBe("40P01");
+        expect(String(validationResult.reason)).not.toMatch(/40p01|deadlock/iu);
       }
+      expect(reconciliationResult).toMatchObject({
+        status: "fulfilled",
+        value: {
+          id: approval.delivery.id,
+          candidateId: fixture.candidateId,
+          status: "failed",
+          attemptCount: 1,
+          failureCode: "reconciled_not_sent",
+        },
+      });
+      await expect(repository.getDelivery(approval.delivery.id)).resolves.toMatchObject({
+        id: approval.delivery.id,
+        candidateId: fixture.candidateId,
+        status: "failed",
+        attemptCount: 1,
+        failureCode: "reconciled_not_sent",
+      });
+      await expect(repository.getCandidate(fixture.candidateId)).resolves.toMatchObject({
+        id: fixture.candidateId,
+        status: "approved_for_delivery",
+        version: 2,
+      });
+      await expect(pool!.query(
+        `SELECT status, attempt_count, reconciliation_operation_key,
+           reconciliation_outcome, failure_code
+         FROM knowledge_conflict_delivery_outbox WHERE id = $1`,
+        [approval.delivery.id],
+      )).resolves.toMatchObject({ rows: [{
+        status: "failed",
+        attempt_count: 1,
+        reconciliation_operation_key: reconciliationOperationKey,
+        reconciliation_outcome: "not_sent",
+        failure_code: "reconciled_not_sent",
+      }] });
+      await expect(pool!.query(
+        `SELECT delivery_id, attempt_count, outcome, actor_ref
+         FROM knowledge_conflict_delivery_reconciliations WHERE operation_key = $1`,
+        [reconciliationOperationKey],
+      )).resolves.toMatchObject({ rows: [{
+        delivery_id: approval.delivery.id,
+        attempt_count: 1,
+        outcome: "not_sent",
+        actor_ref: "knowledge-admin",
+      }] });
     } catch (error) {
       releaseCandidate.resolve();
-      await Promise.allSettled([validation, reconciliation]);
+      await Promise.allSettled(reconciliation === undefined
+        ? [validation]
+        : [validation, reconciliation]);
       throw error;
     } finally {
       await pool!.query("UPDATE document_sources SET updated_at = $2 WHERE id = $1", [sourceId, at]);
