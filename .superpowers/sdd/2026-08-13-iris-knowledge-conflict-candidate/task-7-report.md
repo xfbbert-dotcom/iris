@@ -114,3 +114,82 @@ Diff validation:
   environment with `IRIS_TEST_DATABASE_URL` configured.
 - End-to-end Feishu card delivery, timeout reconciliation, and the ten-step live pilot remain later
   integration/acceptance work; this report does not treat them as completed.
+
+## Formal Review Fix Round 1
+
+### Commit
+
+- `6cb4066b` — `fix(core): close conflict delivery race boundaries`
+- This report update is committed separately after the fix verification.
+
+### Resolved Findings
+
+- The dispatcher now repeats all delivery gates and live bot membership after current validation, then
+  performs one final synchronous gate read immediately before the durable external-attempt boundary.
+- `beginDeliveryAttempt` now binds the exact candidate ID, `approved_for_delivery` status, approved
+  version, delivery ID, worker lease, and durable attempt count in one candidate-before-delivery locked
+  transaction. The Feishu transport call follows that awaited transaction without another await.
+- Candidate dismissal and governance transitions away from approval are rejected while delivery is
+  `external_attempting` or `outcome_unknown`; outcome-unknown reconciliation can therefore still move
+  the bound candidate and delivery to their terminal sent state.
+- Every non-current validator result now settles the claimed delivery. In particular, a superseded
+  result caused by a disappeared source permanently fails the delivery unless another transaction has
+  already placed it in a compatible terminal or quarantined state.
+- The dispatcher loop observer receives only a stable `worker_failed` error object, never the raw
+  worker exception, and its snapshots remain content-free.
+- Visible and callback text now rejects or replaces both C0 and C1 controls. Source URIs containing
+  raw controls/whitespace, malformed percent escapes, or percent-encoded controls are suppressed
+  before URL construction rather than canonicalized into a link.
+- The polling loop uses explicit lifecycle state plus a generation token. `start()` during an in-flight
+  `stop()` is consistently ignored, and the previous generation cannot schedule another timer.
+- No schema change or migration was required; the fix strengthens existing repository transactions.
+
+### TDD Evidence
+
+RED regressions were added first. The initial focused run reported 15 failures covering gate disablement
+during validation, dismissal before and after begin, exact candidate/version/attempt binding, missing-
+source settlement, observer secret leakage, C1/URI handling, and stop/start timer overlap.
+
+Final focused review command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/knowledge-conflict-dispatcher.test.ts tests/knowledge-conflict-dispatcher-loop.test.ts tests/knowledge-conflict-card-renderer.test.ts tests/postgres-knowledge-conflict-repository.test.ts
+```
+
+Result: exit 0; 4 files passed; 85 tests passed and 13 conditional PostgreSQL tests skipped.
+
+Relevant conflict/repository/Feishu/card command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/knowledge-conflict.test.ts tests/postgres-knowledge-conflict-repository.test.ts tests/knowledge-conflict-current-validator.test.ts tests/knowledge-conflict-card-renderer.test.ts tests/knowledge-conflict-dispatcher.test.ts tests/knowledge-conflict-dispatcher-loop.test.ts tests/feishu-interactive-card-client.test.ts tests/knowledge-card-dispatcher.test.ts tests/knowledge-card-dispatcher-loop.test.ts
+```
+
+Result: exit 0; 9 files passed; 166 tests passed and 13 conditional PostgreSQL tests skipped.
+
+Full Core command:
+
+```text
+npm --workspace apps/core test
+```
+
+Result: exit 0; 181 files passed and 3 files skipped; 3,171 tests passed and 249 tests skipped.
+
+Typecheck, build, and diff validation:
+
+```text
+npm --workspace apps/core run typecheck
+npm --workspace apps/core run build
+git diff --check
+git diff --cached --check
+```
+
+Result: all exited 0. The only diagnostics were the repository's Windows line-ending conversion
+warnings. A typecheck-only test-fixture narrowing found after the full run was corrected and followed
+by a passing focused dispatcher run, typecheck, and build.
+
+### Remaining Concern
+
+- The new real-PostgreSQL begin-versus-dismiss serialization regression is present but was skipped
+  with the other conditional repository cases because `IRIS_TEST_DATABASE_URL` is not configured in
+  this environment. The deterministic repository transaction tests and all non-database race tests
+  passed; CI should run the conditional case against an isolated PostgreSQL database.
