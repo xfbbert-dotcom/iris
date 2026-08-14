@@ -4,13 +4,14 @@
 
 DONE_WITH_CONCERNS
 
-The Task 6 group-scoped operator API and bounded Admin Console governance surface are implemented and verified. A later formal review identified reconciliation, live-validation, audit-generation, and stale-response gaps; all were addressed in Fix Round 1 below. The only remaining local verification concern is environmental: tests that require `IRIS_TEST_DATABASE_URL` were skipped because the variable was not configured.
+The Task 6 group-scoped operator API and bounded Admin Console governance surface are implemented and verified. Formal review rounds identified and drove the fixes recorded below, including Task 5 permission compatibility, cross-operation lock ordering, stale action invalidation, typed version-race mapping, and the live-PostgreSQL fixture. The only remaining local verification concern is environmental: tests that require `IRIS_TEST_DATABASE_URL` were skipped because the variable was not configured.
 
 ## Commits
 
 - `c2024b55c1e6727c03bf458866bbbdbb2f654cf7` — `feat(core): govern knowledge conflicts`
 - `bee52a331bfabf997ea56a64399302748874a2cc` — `fix(core): harden conflict governance boundaries`
 - `dc1c12ac84d661d3b6587575727da7493bb78b81` — `fix(core): harden conflict governance invariants`
+- `1af26ba7d7da4da59bc6d43a94ef2f07b459fb11` — `fix(core): close conflict governance race gaps`
 - This report is committed separately after verification.
 
 ## Delivered Behavior
@@ -29,6 +30,10 @@ The Task 6 group-scoped operator API and bounded Admin Console governance surfac
 - Computes detail validation through an injectable live validator that reloads exact sources, checks current permission for each source, and asks the repository to validate the exact evidence/current candidate version with a fresh attestation. Approval is server-gated and UI-enabled only for `current`; stale, denied, and unavailable outcomes fail closed with bounded copy.
 - Binds dead-letter replay/delete to the viewed attempt count and update generation plus a stable operation key. Append-only recovery facts retain the authenticated operator and mutation result even after the scan row is deleted.
 - Uses refresh/detail/source request generations and exact group/candidate checks so older responses cannot overwrite a newer operator context. Approval confirmations name the exact group, candidate, subject, and version.
+- Preserves Task 5 behavior for locally unknown permission state: exact sources still require a successful live permission check, while a live denial blocks use.
+- Uses candidate-before-delivery row locking for validation, reconciliation, and delivery completion, removing the candidate↔delivery deadlock cycle.
+- Invalidates rendered delivery actions as soon as the selected group or detail generation changes. Reconciliation confirmation identifies the exact group, candidate, subject, delivery, attempt, and outcome.
+- Preserves repository version conflicts through current validation so detail and approval return a stable 409 instead of treating a concurrent candidate update as transport unavailability.
 - Registers only the injected API runtime in `app.ts`; it does not compose, start, or deliver the later Task 7+ card/callback/answer/runtime work.
 
 ## TDD Evidence
@@ -99,4 +104,41 @@ Formal review round 1 is implemented in `dc1c12ac84d661d3b6587575727da7493bb78b8
 
 ### Remaining Concern
 
-- The only concern is verification environment coverage: PostgreSQL-gated tests are present but skipped locally without `IRIS_TEST_DATABASE_URL`. No known Critical or Important implementation issue remains in this round.
+- PostgreSQL-gated tests are present but skipped locally without `IRIS_TEST_DATABASE_URL`. A subsequent scoped review identified the additional items recorded in Fix Round 2.
+
+## Fix Round 2
+
+### Outcome
+
+DONE_WITH_CONCERNS
+
+Formal review round 2 is implemented in `1af26ba7d7da4da59bc6d43a94ef2f07b459fb11`. The change is limited to the five requested items and contains no Task 7+ behavior. No migration file changed in this round; schema expectations remain confined to forward migration `0046`.
+
+### RED
+
+- Scanner/current-validator permission regressions produced four failures: locally `unknown` sources were blocked before the live checker, so live allow could not proceed and live deny was never consulted.
+- The repository SQL-order regression observed delivery-before-candidate during completion and no candidate lock during not-sent reconciliation, instead of the required identity-read → candidate-lock → delivery-lock order.
+- Admin regressions failed because reconciliation confirmation lacked exact context and a captured group-A delivery action still posted after the operator changed to group B.
+- The current-validator regression resolved `validation_unavailable` when the repository raised `KnowledgeConflictVersionConflictError`; the required result was a propagated typed conflict. API detail/approval coverage exercised stable 409 mapping and verified no approval call.
+- The conditional migration fixture was inspected and found to omit the required `actor_ref`; it could not be executed locally without `IRIS_TEST_DATABASE_URL`. The corrected conditional test now also verifies the stored actor, NOT NULL enforcement, and append-only rejection.
+
+### GREEN And Verification
+
+- Focused migration/repository/scanner/validator/API/Admin suite: 7 files passed; 165 tests passed and 18 PostgreSQL-gated tests skipped.
+- Full Core: 178 files passed, 3 conditional files skipped; 3,123 tests passed and 248 skipped.
+- `npm run typecheck`: passed.
+- `npm run build`: passed.
+- `git diff --check`: passed.
+
+### Self-Review
+
+- Local permission state accepts only `readable` or `unknown` for live checking; denied, stale, wrong-source-type, unsynced, ineligible, and live-denied sources remain blocked.
+- Transactions that touch both candidate and delivery now use candidate-before-delivery order. Delivery identity is read without a row lock, the candidate is locked, then the delivery is locked and its candidate/status/attempt identity is rechecked. Exact reconciliation replay locks only the delivery and never waits on a candidate, so it cannot complete a lock cycle.
+- The conditional concurrency test uses separate PostgreSQL connections, pauses validation while it owns the candidate lock, observes reconciliation waiting on that candidate, proves the delivery remains independently lockable, and then asserts completion without `40P01`.
+- Admin detail invalidation clears selected candidate/delivery state on input, refresh, and detail-generation changes. Stale captured reconciliation actions return before confirmation or network mutation.
+- Permission/source transport failures remain content-free `validation_unavailable`; only the typed repository version conflict is rethrown and mapped to the existing bounded 409 envelope.
+- The migration fixture has matching reconciliation columns/value positions and exercises attributable, NOT NULL, append-only facts.
+
+### Remaining Concern
+
+- Real-PostgreSQL migration and concurrency cases are committed but did not execute locally because `IRIS_TEST_DATABASE_URL` is unavailable. No known Critical or Important implementation issue remains after the scoped self-review.
