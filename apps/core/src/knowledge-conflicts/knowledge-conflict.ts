@@ -45,6 +45,12 @@ export type KnowledgeConflictPlan = {
   confidence: "high" | "medium" | "low";
 };
 
+export interface KnowledgeConflictDetector {
+  detect(
+    input: import("./knowledge-conflict-evidence-builder.js").KnowledgeConflictDetectionInput,
+  ): Promise<KnowledgeConflictPlan>;
+}
+
 export type KnowledgeConflictEvidenceReference =
   | {
       type: "conversation_message";
