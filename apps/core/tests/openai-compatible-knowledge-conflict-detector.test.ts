@@ -62,7 +62,8 @@ describe("OpenAICompatibleKnowledgeConflictDetector", () => {
       subject: {
         referenceId: "M1",
         category: "decision",
-        content: exactSubject,
+        exactSubject,
+        groupConclusion: exactSubject,
       },
       groupEvidence: [
         { referenceId: "C1", sentAt: "2026-08-13T01:00:00.000Z", text: injectedText },
@@ -213,6 +214,31 @@ describe("OpenAICompatibleKnowledgeConflictDetector", () => {
     expect(client.complete).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a valid long memory conclusion while deriving a deterministic bounded subject", async () => {
+    const longConclusion = "Director approval now starts at CNY 10,000. ".repeat(75).trim();
+    const boundedSubject = `${longConclusion.slice(0, 245)}[truncated]`;
+    const client = completionClient(JSON.stringify(conflictPlan({ subject: boundedSubject })));
+    const detector = createOpenAICompatibleKnowledgeConflictDetector({ client });
+
+    const result = await detector.detect(detectionInput({
+      subject: { ...detectionInput().subject, content: longConclusion },
+    }));
+
+    expect(result.subject).toBe(boundedSubject);
+    const messages = client.complete.mock.calls[0]?.[0] ?? [];
+    const request = JSON.parse(messages[1]?.content ?? "{}") as {
+      subject: { exactSubject: string; groupConclusion: string };
+    };
+    expect(request.subject).toEqual({
+      referenceId: "M1",
+      category: "decision",
+      exactSubject: boundedSubject,
+      groupConclusion: longConclusion,
+    });
+    expect(request.subject.exactSubject).toHaveLength(256);
+    expect(request.subject.groupConclusion).toBe(longConclusion);
+  });
+
   it.each([
     ["missing memory evidence", detectionInput({
       subject: { ...detectionInput().subject, referenceId: "M2" as "M1" },
@@ -231,8 +257,8 @@ describe("OpenAICompatibleKnowledgeConflictDetector", () => {
     ["out-of-window document ref", detectionInput({
       documentEvidence: [documentEvidence({ referenceId: "D13" })],
     })],
-    ["oversized subject", detectionInput({
-      subject: { ...detectionInput().subject, content: "s".repeat(257) },
+    ["oversized memory conclusion", detectionInput({
+      subject: { ...detectionInput().subject, content: "s".repeat(4_001) },
     })],
     ["oversized message", detectionInput({
       groupEvidence: [groupEvidence({ text: "m".repeat(8_001) })],
