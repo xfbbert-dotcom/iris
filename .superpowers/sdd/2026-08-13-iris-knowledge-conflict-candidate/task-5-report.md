@@ -52,3 +52,45 @@ The Task 5 scanner and polling loop are implemented and verified. The only remai
 ## Concerns And Follow-Up
 
 - Run the conditional live-Postgres knowledge-conflict tests in CI or an environment with `IRIS_TEST_DATABASE_URL` configured. This is a verification-environment concern, not an identified scanner defect.
+
+## Fix Round 1
+
+### Status
+
+DONE_WITH_CONCERNS
+
+Formal Task 5 review changes are implemented in `a96e5c2431fad04abf5db4b6faef95d36a29d885` (`fix(core): close scanner review gaps`). The remaining concern is verification-environment-only: `IRIS_TEST_DATABASE_URL` was unset, so the added conditional live-Postgres recovery and bounded-maintenance regressions were skipped locally.
+
+### Changes
+
+- Re-loads every unique admitted document source immediately after detector completion, verifies its exact current identity and authorized-space policy, and calls the existing live Feishu permission checker before any detection result is persisted.
+- Maps a post-model permission denial to terminal `permission_blocked`, maps permission transport failure to stable retryable `permission_check_failed`, and passes the fresh post-model attestation timestamp into the repository transaction.
+- Adds typed, group-scoped `maintainNextScan` outcomes. Each call atomically handles at most one ordered `FOR UPDATE OF inbox SKIP LOCKED` stale or exhausted row.
+- Dead-letters expired final-attempt leases as `scan_attempts_exhausted` without incrementing beyond the configured maximum or the database bound. Remaining batch budget can proceed to later memories.
+- Counts bounded maintenance outcomes in `superseded` or `deadLettered` without misreporting them as claims.
+- Contains startup and later timer-arm failures, publishes a content-free failed snapshot, reports the stable observer error for later failures, stops coherently, and produces no unhandled rejection.
+- Preserves enabled-group claim scope, permanent operation conflicts, phase-scoped provider failures, safe clocks, exact cited evidence, deterministic backoff, Task 4 model retry ownership, and non-overlapping polling.
+
+### RED Evidence
+
+- Post-model revocation, permission transport, and fresh-attestation regressions failed with conflict persistence/no retry/the old pre-model timestamp.
+- Shared-budget recovery and stale-maintenance scanner regressions failed because maintenance was not represented or counted.
+- Repository SQL regressions failed because stale cleanup lacked `LIMIT 1`/`SKIP LOCKED` and claims had no configured attempt guard.
+- Startup/reschedule scheduler regressions failed with a stale succeeded snapshot, `running: true`, no observer signal, and one unhandled rejection.
+- The maintenance-only loop regression failed because the old invariant required every terminal outcome to be counted as a claim.
+- The malformed admitted-source timestamp regression failed as a retryable internal error before date validation was added.
+
+### GREEN Evidence
+
+- Focused scanner/loop/repository: 3 files passed; 68 tests passed, 10 conditional Postgres tests skipped.
+- Relevant knowledge-conflict suite: 6 files passed, 1 conditional file skipped; 125 tests passed, 11 skipped.
+- Full Core: 176 files passed, 3 conditional files skipped; 3,086 tests passed, 246 skipped.
+- `npm --workspace apps/core run typecheck`: passed.
+- `npm --workspace apps/core run build`: passed.
+- `git diff --check`: passed.
+- Independent read-only review: CLEAN, no remaining Critical or Important findings.
+
+### Scope And Concerns
+
+- No Task 6 API, UI, card, migration, or runtime-composition surface was added.
+- Conditional tests now cover real-Postgres final-attempt recovery, repeated maintenance, later-memory progress, and a two-row stale backlog when a database URL is available. They remain the only Task 5 Fix Round 1 concern because the local database URL was unset.
