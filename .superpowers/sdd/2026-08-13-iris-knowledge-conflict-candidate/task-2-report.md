@@ -289,3 +289,85 @@ Diff validation:
 - Confirmed the PostgreSQL policy test holds the repository transaction after its real `SELECT ... FOR UPDATE`, observes the separate mutation backend waiting on a row lock, and only then releases the repository transaction.
 - Confirmed the PostgreSQL cross-operation test holds detection's memory lock, starts overlap, verifies the old candidate remains immediately lockable with `NOWAIT`, then releases detection and asserts both operations complete with the corrected candidate current.
 - Confirmed exact evidence validation, unresolved-delivery quarantine, replay handling, scan lifecycle, and all other round-1 fixes were left unchanged except for the required shared policy and lock-order paths.
+
+## Fix Round 3
+
+### Status and commit
+
+DONE_WITH_CONCERNS
+
+- Code and test commit: `3534e4f85c7268cdc6b5a54ffca765be857beaa1` (`fix(core): enforce global conflict lock order`)
+- Base reviewed: `cde1443e47b89fe1d099ac911b0b28582abd7ed6`
+- The remaining concern is environmental: `IRIS_TEST_DATABASE_URL` is absent, so eight isolated-schema PostgreSQL tests—including the new approval/validation deadlock regressions—were skipped locally.
+
+### Review blocker resolved
+
+1. Audited every repository path that can lock both a group memory and a conflict candidate. Approval, current-state validation, and atomic interaction application were the remaining candidate-before-memory paths; all three now share one memory-before-candidate helper. Detection already locks memory before competing candidates, and overlap already locks ordered memories before candidates. Candidate-only delivery and terminal transition paths do not touch memory and were left unchanged.
+2. Candidate-ID-only operations now perform an unlocked read of the immutable candidate identity, lock its group-memory row, then lock the candidate row. After the candidate lock is acquired, group, memory ID, and memory timestamp are compared again with the identity read; any change fails with a version conflict. Existing optimistic version/status checks and the complete freshness validator still run after the candidate lock.
+3. The global order for transactions that touch both facts is now operation advisory lock when applicable, group memory (ordered when plural), candidate, then evidence/message/source/policy/snapshot/fragment and outbox work. No code path acquires an operation advisory lock after a candidate or memory row lock.
+4. Conditional PostgreSQL coverage coordinates overlap against approval and overlap against current-state validation on separate connections. Each operation is paused while holding its candidate row, the overlap backend is observed waiting on a real row lock, and release must allow both operations to complete without `40P01` while preserving the approved/current result. The existing overlap-versus-detection case remains intact.
+5. No migration or Task 3 runtime/API/worker/card behavior changed.
+
+### RED evidence
+
+Command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/postgres-knowledge-conflict-repository.test.ts
+```
+
+Initial result: exit 1; 2 focused failures, 29 passes, and 6 conditional skips.
+
+- `locks the candidate memory before the candidate during approval freshness validation` rejected with `Error: candidate locked before memory`, with the stack at `approveForDelivery`'s direct `lockCandidate` call.
+- `locks the candidate memory before the candidate during current-state validation` rejected with the same order error at `validateCandidateCurrentState`'s direct candidate lock.
+
+The conditional real-PostgreSQL tests could not produce local RED output without `IRIS_TEST_DATABASE_URL`. Against the prior implementation their coordination forms the reported cycle: approval/validation holds candidate and waits for memory while overlap holds memory and waits for candidate, causing one operation to reject with PostgreSQL `40P01`.
+
+### GREEN and verification evidence
+
+Focused repository command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/postgres-knowledge-conflict-repository.test.ts
+```
+
+Result: exit 0; 31 deterministic tests passed and 8 conditional PostgreSQL tests skipped (39 total).
+
+Focused Task 2 and adjacent command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/knowledge-conflict.test.ts tests/postgres-knowledge-conflict-repository.test.ts tests/migration-runner.test.ts tests/postgres-answer-reply-repository.test.ts
+```
+
+Result: exit 0; 4 files passed; 111 tests passed and 55 conditional tests skipped (166 total).
+
+Full Core command:
+
+```text
+npm --workspace apps/core test
+```
+
+Result: exit 0; 172 files passed and 2 files skipped; 2,996 tests passed and 240 tests skipped (3,236 total).
+
+Typecheck and production build:
+
+```text
+npm --workspace apps/core run typecheck
+npm --workspace apps/core run build
+```
+
+Result: both exit 0 (`tsc --noEmit`; `tsc --project tsconfig.build.json`).
+
+Diff validation:
+
+- `git diff --check`: exit 0 before staging.
+- `git diff --cached --check`: exit 0 before the code/test commit.
+- Git emitted only the repository's Windows line-ending conversion warnings.
+
+### Fix-round self-review
+
+- Confirmed every `findStaleReason` caller either uses `lockCandidateMemoryBeforeCandidate` or, for overlap, pre-locks all requested memories before its candidate query.
+- Confirmed the helper does not trust the unlocked identity read after waiting: it repeats identity checks against the locked candidate, and each caller repeats its version/status/freshness checks afterward.
+- Confirmed advisory operation locks are acquired before row locks in approval and atomic interactions; current-state validation has no advisory acquisition, and no memory/candidate path acquires one later.
+- Confirmed the two new PostgreSQL tests wait on observed backend lock state rather than arbitrary sleep and cleanly release/settle both operations on assertion failure.
+- Confirmed exact policy/evidence guarantees and all earlier lifecycle fixes remain unchanged.
