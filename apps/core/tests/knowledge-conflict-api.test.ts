@@ -202,7 +202,7 @@ describe("knowledge conflict operator API", () => {
       { headers: authorization, payload },
       { headers: operatorHeaders, payload: { ...payload, expectedVersion: 0 } },
       { headers: operatorHeaders, payload: { ...payload, reason: "" } },
-      { headers: operatorHeaders, payload: { ...payload, reason: "x".repeat(513) } },
+      { headers: operatorHeaders, payload: { ...payload, reason: "x".repeat(129) } },
       { headers: operatorHeaders, payload: { ...payload, actorOpenId: "ou_untrusted" } },
     ]) {
       const response = await app.inject({
@@ -213,6 +213,14 @@ describe("knowledge conflict operator API", () => {
       expect(response.statusCode).toBe(400);
       expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
     }
+
+    const maximumReason = await app.inject({
+      method: "POST",
+      url: "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a/dismiss",
+      headers: operatorHeaders,
+      payload: { ...payload, reason: "x".repeat(128), operationKey: "governance:reason-128" },
+    });
+    expect(maximumReason.statusCode).toBe(200);
     await app.close();
   });
 

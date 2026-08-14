@@ -2042,7 +2042,8 @@ function renderKnowledgeConflictStatus(status) {
 
 function validationLabel(validation) {
   if (validation?.status === "superseded") return "Superseded; approval is blocked";
-  return "Not revalidated; approval performs an exact current-state check";
+  if (validation?.status === "current") return "Current-state validation passed";
+  return "Not revalidated in this view; delivery performs a live permission check";
 }
 
 function renderKnowledgeConflictCandidates(groupId, candidates) {
@@ -2102,9 +2103,8 @@ function evidenceIdentityLabel(evidence) {
   return text(evidence.referenceId) + " · " + type + " · " + text(identity);
 }
 
-function renderKnowledgeConflictDetail(groupId, body, sources) {
+function renderKnowledgeConflictDetail(groupId, body, source) {
   const candidate = body.candidate;
-  const source = (sources || []).find((item) => item.id === candidate.target?.documentSourceId);
   knowledgeConflictDetail.replaceChildren();
   const heading = document.createElement("h3");
   heading.textContent = "Possible conflict review";
@@ -2190,14 +2190,18 @@ function knowledgeConflictActionButton(label, className, enabled, action) {
 }
 
 async function loadKnowledgeConflictDetail(groupId, candidateId) {
-  const [body, sourceListResponse] = await Promise.all([
-    requestJson(
-      knowledgeConflictGroupBasePath + encodeURIComponent(groupId)
-        + "/candidates/" + encodeURIComponent(candidateId),
-    ),
-    requestJson(documentSourceListBasePath),
-  ]);
-  renderKnowledgeConflictDetail(groupId, body, sourceListResponse.sources || []);
+  const body = await requestJson(
+    knowledgeConflictGroupBasePath + encodeURIComponent(groupId)
+      + "/candidates/" + encodeURIComponent(candidateId),
+  );
+  const sourceId = body.candidate?.target?.documentSourceId;
+  const sourceResponse = sourceId === undefined
+    ? {}
+    : await requestJson(
+      "/internal/document-sync/sources/" + encodeURIComponent(sourceId)
+        + "?includeLatestSnapshot=true",
+    );
+  renderKnowledgeConflictDetail(groupId, body, sourceResponse.source);
 }
 
 function requireKnowledgeConflictOperator() {
@@ -2246,7 +2250,8 @@ async function reconcileKnowledgeConflictDelivery(delivery, outcome) {
     if (messageId === null || messageId.trim().length === 0) throw new Error("message_id_required");
     messageId = messageId.trim();
   }
-  const intent = outcome + ":" + (messageId || "not_sent");
+  const attempt = text(delivery.attemptCount, "0");
+  const intent = attempt + ":" + outcome + ":" + (messageId || "not_sent");
   return requestJson(
     knowledgeConflictDeliveryBasePath + encodeURIComponent(delivery.deliveryId) + "/reconcile",
     {
@@ -2255,7 +2260,7 @@ async function reconcileKnowledgeConflictDelivery(delivery, outcome) {
         outcome,
         ...(messageId === undefined ? {} : { messageId }),
         operationKey: "admin-console-conflict-reconcile-" + outcome + "-" + delivery.deliveryId
-          + "-" + stableKnowledgeConflictIntent(intent),
+          + "-attempt-" + attempt + "-" + stableKnowledgeConflictIntent(intent),
       }),
     },
   );
@@ -2312,11 +2317,16 @@ function renderKnowledgeConflictDeadLetters(deadLetters) {
 }
 
 async function refreshKnowledgeConflicts() {
-  const groupId = readKnowledgeConflictGroupId();
+  const groupId = knowledgeConflictGroup.value.trim();
+  const statusRequest = requestJson(knowledgeConflictStatusPath);
+  const candidateRequest = groupId.length === 0
+    ? Promise.resolve({ candidates: [] })
+    : requestJson(knowledgeConflictCandidateListPath(groupId));
+  const deadLetterRequest = requestJson(knowledgeConflictDeadLetterListPath());
   const [statusBody, candidateBody, deadLetterBody] = await Promise.all([
-    requestJson(knowledgeConflictStatusPath),
-    requestJson(knowledgeConflictCandidateListPath(groupId)),
-    requestJson(knowledgeConflictDeadLetterListPath()),
+    statusRequest,
+    candidateRequest,
+    deadLetterRequest,
   ]);
   renderKnowledgeConflictStatus(statusBody);
   renderKnowledgeConflictCandidates(groupId, candidateBody.candidates || []);

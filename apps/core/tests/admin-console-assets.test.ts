@@ -1045,14 +1045,14 @@ describe("admin console assets", () => {
       if (path === "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a") {
         return Promise.resolve(jsonResponse(knowledgeConflictCandidateDetail()));
       }
-      if (path === "/internal/document-sync/sources?includeLatestSnapshot=true") {
+      if (path === "/internal/document-sync/sources/source-a?includeLatestSnapshot=true") {
         return Promise.resolve(jsonResponse({
           ok: true,
-          sources: [{
+          source: {
             id: "source-a",
             title: "Finance policy",
             sourceUri: "https://tenant.feishu.cn/wiki/finance-policy",
-          }],
+          },
         }));
       }
       throw new Error("unexpected_request:" + path);
@@ -1079,7 +1079,7 @@ describe("admin console assets", () => {
     expect(visibleText).toContain("snapshot-a / revision-7");
     expect(visibleText).toContain("C1 · conversation message · message-a");
     expect(visibleText).toContain("D1 · document fragment · fragment-a");
-    expect(visibleText).toContain("Not revalidated; approval performs an exact current-state check");
+    expect(visibleText).toContain("Not revalidated in this view; delivery performs a live permission check");
     expect(visibleText).toContain("3");
     expect(visibleText).not.toContain("hidden source body");
     expect(visibleText).not.toContain("must-not-be-exposed");
@@ -1110,8 +1110,8 @@ describe("admin console assets", () => {
       if (path === "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a") {
         return Promise.resolve(jsonResponse(knowledgeConflictCandidateDetail()));
       }
-      if (path === "/internal/document-sync/sources?includeLatestSnapshot=true") {
-        return Promise.resolve(jsonResponse({ ok: true, sources: [] }));
+      if (path === "/internal/document-sync/sources/source-a?includeLatestSnapshot=true") {
+        return Promise.resolve(jsonResponse({ ok: true, source: undefined }));
       }
       if (path === "/internal/knowledge-conflicts/status") {
         return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
@@ -1159,7 +1159,7 @@ describe("admin console assets", () => {
       body: {
         outcome: "sent",
         messageId: "om_confirmed_message",
-        operationKey: expect.stringContaining("admin-console-conflict-reconcile-sent-delivery-a-"),
+        operationKey: expect.stringContaining("admin-console-conflict-reconcile-sent-delivery-a-attempt-1-"),
       },
     });
     for (const mutation of mutations) {
@@ -1227,8 +1227,8 @@ describe("admin console assets", () => {
       if (path === "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a") {
         return Promise.resolve(jsonResponse(knowledgeConflictCandidateDetail()));
       }
-      if (path === "/internal/document-sync/sources?includeLatestSnapshot=true") {
-        return Promise.resolve(jsonResponse({ ok: true, sources: [] }));
+      if (path === "/internal/document-sync/sources/source-a?includeLatestSnapshot=true") {
+        return Promise.resolve(jsonResponse({ ok: true, source: undefined }));
       }
       throw new Error("unexpected_request:" + path);
     });
@@ -1247,6 +1247,30 @@ describe("admin console assets", () => {
     expect(console.element("event-log").children.some((event) =>
       event.textContent.includes("Dismiss recorded"),
     )).toBe(false);
+  });
+
+  it("refreshes global conflict status and dead letters before a group is selected", async () => {
+    const paths: string[] = [];
+    const fetch = vi.fn((path: string) => {
+      paths.push(path);
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path === "/internal/knowledge-conflicts/scans/dead-letters?limit=20") {
+        return Promise.resolve(jsonResponse({ ok: true, deadLetters: [knowledgeConflictDeadLetter()] }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, { operator: "operator@example.com" });
+
+    await console.trigger("knowledge-conflict-refresh", "click");
+
+    expect(paths).toEqual([
+      "/internal/knowledge-conflicts/status",
+      "/internal/knowledge-conflicts/scans/dead-letters?limit=20",
+    ]);
+    expect(console.element("knowledge-conflict-candidate-rows").children).toHaveLength(0);
+    expect(console.element("knowledge-conflict-dead-letter-rows").children).toHaveLength(1);
   });
 });
 

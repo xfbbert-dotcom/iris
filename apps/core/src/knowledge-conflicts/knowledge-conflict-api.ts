@@ -22,7 +22,7 @@ const DEFAULT_LIST_LIMIT = 20;
 const DEFAULT_EVENT_LIMIT = 50;
 const MAX_LIST_LIMIT = 100;
 const MAX_REFERENCE_CHARS = 512;
-const MAX_REASON_CHARS = 512;
+const MAX_REASON_CHARS = 128;
 const STALE_REASON_CODES = new Set([
   "scan_identity_mismatch",
   "memory_stale",
