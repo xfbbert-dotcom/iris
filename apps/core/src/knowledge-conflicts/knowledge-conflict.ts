@@ -63,6 +63,7 @@ export type KnowledgeConflictEvidenceReference =
       type: "document_source";
       referenceId: KnowledgeConflictDocumentReference;
       documentSourceId: string;
+      expectedUpdatedAt: Date;
     }
   | {
       type: "document_snapshot";
@@ -89,6 +90,8 @@ export type KnowledgeConflictCandidate = {
   memoryUpdatedAt: Date;
   sourceMessageId: string;
   targetDocumentSourceId: string;
+  targetSourceUpdatedAt: Date;
+  targetSourceVersion?: string;
   targetSnapshotId: string;
   targetContentHash: string;
   detectorContractVersion: string;

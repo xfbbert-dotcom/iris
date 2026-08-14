@@ -1068,6 +1068,22 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           definition: expect.stringContaining("group_memory"),
         }),
       ]));
+      const scanOutcomeDefinition = definitions.rows.find((row) =>
+        row.definition.includes("terminal_outcome"));
+      expect(scanOutcomeDefinition?.definition).toContain("superseded");
+      expect(scanOutcomeDefinition?.definition).toContain("permission_blocked");
+
+      await expect(client.query<{ column_name: string; is_nullable: string }>(`
+        SELECT column_name, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'knowledge_conflict_candidates'
+          AND column_name IN ('target_source_updated_at', 'target_source_version')
+        ORDER BY column_name
+      `)).resolves.toEqual({ rows: [
+        { column_name: "target_source_updated_at", is_nullable: "NO" },
+        { column_name: "target_source_version", is_nullable: "YES" },
+      ] });
 
       await client.query(`
         INSERT INTO conversation_messages (
@@ -1143,13 +1159,15 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         ) VALUES ('scan-1', 'group-1', 'memory-1', NOW(), 'pending');
         INSERT INTO knowledge_conflict_candidates (
           id, idempotency_key, group_id, group_memory_id, memory_updated_at,
-          source_message_id, target_document_source_id, target_snapshot_id,
+          source_message_id, target_document_source_id, target_source_updated_at,
+          target_source_version, target_snapshot_id,
           target_content_hash, detector_contract_version, status, subject,
           knowledge_base_statement, group_conclusion_statement, difference,
           suggested_update, target_document_ref, confidence
         ) VALUES (
           'candidate-1', 'candidate-key-1', 'group-1', 'memory-1', NOW(),
-          'message-1', 'document-1', 'snapshot-1', repeat('a', 64), 'v1',
+          'message-1', 'document-1', NOW(), 'revision-7',
+          'snapshot-1', repeat('a', 64), 'v1',
           'pending_review', 'Expense threshold', 'CNY 5,000', 'CNY 10,000',
           'Threshold differs', 'Use CNY 10,000', 'D1', 'high'
         );
@@ -1208,8 +1226,9 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           group_memory_id, source_updated_at, created_at
         ) VALUES ('candidate-1', 'group_memory', 'C2', 'group-1', 'memory-1', NOW(), NOW())`,
         `INSERT INTO knowledge_conflict_evidence (
-          candidate_id, evidence_type, reference_id, document_source_id, created_at
-        ) VALUES ('candidate-1', 'document_source', 'C3', 'document-1', NOW())`,
+          candidate_id, evidence_type, reference_id, document_source_id,
+          source_updated_at, created_at
+        ) VALUES ('candidate-1', 'document_source', 'C3', 'document-1', NOW(), NOW())`,
       ]) {
         await expect(client.query(invalidReferenceInsert)).rejects.toMatchObject({
           constraint: "knowledge_conflict_evidence_reference_kind_check",
@@ -1219,25 +1238,27 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
       for (const candidateInsert of [
         `INSERT INTO knowledge_conflict_candidates (
           id, idempotency_key, group_id, group_memory_id, memory_updated_at,
-          source_message_id, target_document_source_id, target_snapshot_id,
+          source_message_id, target_document_source_id, target_source_updated_at,
+          target_snapshot_id,
           target_content_hash, detector_contract_version, status, subject,
           knowledge_base_statement, group_conclusion_statement, difference,
           suggested_update, target_document_ref, confidence
         ) VALUES (
           'candidate-cross-source', 'candidate-cross-source-key', 'group-1',
-          'memory-1', NOW(), 'message-1', 'document-1', 'snapshot-2',
+          'memory-1', NOW(), 'message-1', 'document-1', NOW(), 'snapshot-2',
           repeat('d', 64), 'v1', 'pending_review', 'Subject', 'Prior',
           'Current', 'Difference', 'Update', 'D1', 'high'
         )`,
         `INSERT INTO knowledge_conflict_candidates (
           id, idempotency_key, group_id, group_memory_id, memory_updated_at,
-          source_message_id, target_document_source_id, target_snapshot_id,
+          source_message_id, target_document_source_id, target_source_updated_at,
+          target_snapshot_id,
           target_content_hash, detector_contract_version, status, subject,
           knowledge_base_statement, group_conclusion_statement, difference,
           suggested_update, target_document_ref, confidence
         ) VALUES (
           'candidate-wrong-hash', 'candidate-wrong-hash-key', 'group-1',
-          'memory-1', NOW(), 'message-1', 'document-1', 'snapshot-1',
+          'memory-1', NOW(), 'message-1', 'document-1', NOW(), 'snapshot-1',
           repeat('f', 64), 'v1', 'pending_review', 'Subject', 'Prior',
           'Current', 'Difference', 'Update', 'D1', 'high'
         )`,

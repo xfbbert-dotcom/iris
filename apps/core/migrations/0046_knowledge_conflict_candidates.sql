@@ -22,7 +22,9 @@ CREATE TABLE knowledge_conflict_scan_inbox (
   lease_until TIMESTAMPTZ,
   terminal_outcome TEXT CHECK (
     terminal_outcome IS NULL
-    OR terminal_outcome IN ('conflict', 'no_conflict', 'insufficient_evidence')
+    OR terminal_outcome IN (
+      'conflict', 'no_conflict', 'insufficient_evidence', 'superseded', 'permission_blocked'
+    )
   ),
   last_error_code TEXT CHECK (
     last_error_code IS NULL OR char_length(last_error_code) BETWEEN 1 AND 128
@@ -56,6 +58,10 @@ CREATE TABLE knowledge_conflict_candidates (
   source_message_id TEXT NOT NULL CHECK (char_length(source_message_id) BETWEEN 1 AND 512),
   target_document_source_id TEXT NOT NULL CHECK (
     char_length(target_document_source_id) BETWEEN 1 AND 512
+  ),
+  target_source_updated_at TIMESTAMPTZ NOT NULL,
+  target_source_version TEXT CHECK (
+    target_source_version IS NULL OR char_length(target_source_version) BETWEEN 1 AND 512
   ),
   target_snapshot_id TEXT NOT NULL CHECK (char_length(target_snapshot_id) BETWEEN 1 AND 512),
   target_content_hash TEXT NOT NULL CHECK (target_content_hash ~ '^[0-9a-f]{64}$'),
@@ -161,7 +167,7 @@ CREATE TABLE knowledge_conflict_evidence (
       AND content_hash IS NULL)
     OR (evidence_type = 'document_source'
       AND group_id IS NULL AND conversation_message_id IS NULL
-      AND group_memory_id IS NULL AND source_updated_at IS NULL
+      AND group_memory_id IS NULL AND source_updated_at IS NOT NULL
       AND document_source_id IS NOT NULL AND document_snapshot_id IS NULL
       AND document_fragment_id IS NULL AND snapshot_content_hash IS NULL
       AND content_hash IS NULL)
@@ -225,6 +231,7 @@ CREATE TABLE knowledge_conflict_delivery_outbox (
       'failed', 'outcome_unknown', 'cancelled'
     )
   ),
+  retryable BOOLEAN NOT NULL DEFAULT TRUE,
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 20),
   next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   lease_worker_id TEXT CHECK (
@@ -233,6 +240,14 @@ CREATE TABLE knowledge_conflict_delivery_outbox (
   lease_until TIMESTAMPTZ,
   external_attempt_started_at TIMESTAMPTZ,
   reconciliation_due_at TIMESTAMPTZ,
+  reconciliation_operation_key TEXT UNIQUE CHECK (
+    reconciliation_operation_key IS NULL
+    OR char_length(reconciliation_operation_key) BETWEEN 1 AND 512
+  ),
+  reconciliation_outcome TEXT CHECK (
+    reconciliation_outcome IS NULL OR reconciliation_outcome IN ('sent', 'not_sent')
+  ),
+  reconciled_at TIMESTAMPTZ,
   sent_message_id TEXT CHECK (
     sent_message_id IS NULL OR char_length(sent_message_id) BETWEEN 1 AND 512
   ),
@@ -242,12 +257,21 @@ CREATE TABLE knowledge_conflict_delivery_outbox (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (
-    (status = 'processing' AND lease_worker_id IS NOT NULL AND lease_until IS NOT NULL)
-    OR (status <> 'processing' AND lease_worker_id IS NULL AND lease_until IS NULL)
+    (status IN ('processing', 'external_attempting')
+      AND lease_worker_id IS NOT NULL AND lease_until IS NOT NULL)
+    OR (status NOT IN ('processing', 'external_attempting')
+      AND lease_worker_id IS NULL AND lease_until IS NULL)
   ),
   CHECK (status <> 'external_attempting' OR external_attempt_started_at IS NOT NULL),
   CHECK (status <> 'outcome_unknown' OR reconciliation_due_at IS NOT NULL),
-  CHECK (status <> 'sent' OR sent_message_id IS NOT NULL)
+  CHECK (
+    (reconciliation_operation_key IS NULL
+      AND reconciliation_outcome IS NULL AND reconciled_at IS NULL)
+    OR (reconciliation_operation_key IS NOT NULL
+      AND reconciliation_outcome IS NOT NULL AND reconciled_at IS NOT NULL)
+  ),
+  CHECK (status <> 'sent' OR sent_message_id IS NOT NULL),
+  CHECK (status = 'failed' OR retryable = TRUE)
 );
 
 CREATE UNIQUE INDEX knowledge_conflict_one_delivery_idx

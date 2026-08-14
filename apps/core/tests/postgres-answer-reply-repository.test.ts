@@ -1617,13 +1617,15 @@ async function insertKnowledgeConflictCandidateFixture(
     `
     INSERT INTO knowledge_conflict_candidates (
       id, idempotency_key, group_id, group_memory_id, memory_updated_at,
-      source_message_id, target_document_source_id, target_snapshot_id,
+      source_message_id, target_document_source_id, target_source_updated_at,
+      target_snapshot_id,
       target_content_hash, detector_contract_version, status, subject,
       knowledge_base_statement, group_conclusion_statement, difference,
       suggested_update, target_document_ref, confidence
     ) VALUES (
       $1, $2, $3, $4, (SELECT updated_at FROM group_memories WHERE id = $4),
-      $5, $6, $7, $8, 'v1', 'pending_review', 'Subject', 'Prior statement',
+      $5, $6, (SELECT updated_at FROM document_sources WHERE id = $6),
+      $7, $8, 'v1', 'pending_review', 'Subject', 'Prior statement',
       'Current conclusion', 'Difference', 'Suggested update', 'D1', 'high'
     )
     `,
