@@ -368,3 +368,92 @@ git diff --cached --check
 - `IRIS_TEST_DATABASE_URL` was absent. The meaningful stateful repository oracle passed, but the
   forward migration and semantic replay were not executed against a live PostgreSQL instance here.
 - No live Feishu callback/redelivery, membership, card, or Wiki workflow was exercised or claimed.
+
+---
+
+## Fix Round 3/5 — Presentation Reattestation and Legacy Draft Recovery
+
+Status: `DONE_WITH_CONCERNS`
+
+Implementation commit:
+
+- `791a0270c1423fff6c4f6b44c8ab86c199232a25` —
+  `fix(core): reattest conflict draft presentation retries`
+
+### Findings and decisions
+
+Both scoped findings were reproduced and confirmed.
+
+1. A callback retry whose candidate was already `draft_created` loaded the draft directly and checked
+   only draft ID, group, and origin. It could present a revised or semantically altered draft, and a
+   permission proof older than 60 seconds made the real presentation validator fail closed forever.
+   The worker now routes both first attempts and committed-candidate retries through the same stable
+   `createDraft` operation. That transaction revalidates current evidence, live permission, and the
+   exact publication-policy identity/version, and appends a fresh immutable governance attestation.
+   Before candidate commit or presentation, the worker verifies version 1/revision 1 plus the exact
+   title, body, medium risk, member reviewer, publication suggestion, and evidence set. Operation
+   conflicts and changed drafts are stable immutable-intent denials rather than presentation retries.
+2. Drafts committed by the pre-Fix-Round-2 implementation retained a legacy creation fingerprint
+   containing `operation: create`, creation time, and the original full governance proof. The v2
+   semantic fingerprint correctly rejected those rows but left a crash between draft creation and
+   conflict interaction unrecoverable across deployment. The repository now has a narrow legacy
+   acceptance path only for a knowledge-conflict creation replay. It requires the deterministic draft
+   ID, operation key, immutable `created` event, version/revision 1, Iris actor, the original earliest
+   per-source governance facts, identical policy identity/version, and an exact recomputation of the
+   old fingerprint. It then performs the normal current evidence/permission/policy validation,
+   appends the fresh proof, and verifies the complete current semantic revision. Changed intent,
+   changed legacy binding, or a revised draft remains an operation conflict. General draft replay is
+   unchanged and still requires exact fingerprint equality.
+
+No migration was added or changed in this round. In particular, no migration at or below `0045` was
+modified.
+
+### RED evidence
+
+Initial command:
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-interaction-worker.test.ts postgres-knowledge-draft-repository.test.ts knowledge-draft-presentation-service.test.ts
+```
+
+Exit 1: 2 files failed and 1 file passed; 4 tests failed, 44 passed, and 14 conditional PostgreSQL
+tests skipped. The failures proved that an already-committed candidate did not call `createDraft` to
+reattest, the meaningful presentation validator rejected the stale proof, a revised committed draft
+was presented, and an exact legacy committed draft could not recover.
+
+### GREEN and regression evidence
+
+The same focused command exited 0: 3 files passed; 48 tests passed and 14 conditional tests skipped.
+
+Focused Task 8 and relevant queue/gateway/repository/migration regressions:
+
+```powershell
+npm --workspace apps/core test -- migration-runner.test.ts postgres-knowledge-conflict-callback-identity-store.test.ts feishu-card-action-gateway.test.ts knowledge-conflict-interaction-worker.test.ts postgres-knowledge-draft-repository.test.ts approval-interaction-worker.test.ts redis-approval-interaction-queue.test.ts postgres-knowledge-conflict-repository.test.ts knowledge-draft-presentation-service.test.ts
+```
+
+Exit 0: 9 files passed; 239 tests passed and 36 conditional tests skipped.
+
+Full Core suite:
+
+```powershell
+npm --workspace apps/core test
+```
+
+Exit 0: 183 files passed and 3 conditional files skipped; 3,280 tests passed and 250 skipped
+(3,530 total).
+
+The following final gates also exited 0:
+
+```powershell
+npm run typecheck
+npm run build
+git diff --check
+git diff --cached --check
+```
+
+### Remaining concerns
+
+- `IRIS_TEST_DATABASE_URL` was absent. The stateful repository oracle exercises the legacy and v2
+  recovery rules, but neither recovery path nor its transaction/SQL locking was executed against a
+  live PostgreSQL instance in this environment.
+- No live Feishu callback, membership, card delivery, or Wiki workflow was exercised or claimed.
