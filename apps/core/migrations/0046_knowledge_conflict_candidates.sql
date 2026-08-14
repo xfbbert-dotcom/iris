@@ -49,6 +49,21 @@ CREATE INDEX knowledge_conflict_scan_inbox_due_idx
   ON knowledge_conflict_scan_inbox (status, next_attempt_at, created_at, id)
   WHERE status IN ('pending', 'retry');
 
+CREATE TABLE knowledge_conflict_scan_operations (
+  operation_key TEXT PRIMARY KEY CHECK (char_length(operation_key) BETWEEN 1 AND 512),
+  scan_id TEXT NOT NULL CHECK (char_length(scan_id) BETWEEN 1 AND 512),
+  group_id TEXT NOT NULL CHECK (char_length(group_id) BETWEEN 1 AND 512),
+  actor_ref TEXT NOT NULL CHECK (char_length(actor_ref) BETWEEN 1 AND 512),
+  action TEXT NOT NULL CHECK (action IN ('replay', 'delete')),
+  expected_attempt_count INTEGER NOT NULL CHECK (expected_attempt_count BETWEEN 1 AND 20),
+  expected_updated_at TIMESTAMPTZ NOT NULL,
+  result_status TEXT NOT NULL CHECK (result_status IN ('pending', 'deleted')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX knowledge_conflict_scan_operations_scan_idx
+  ON knowledge_conflict_scan_operations (scan_id, created_at, operation_key);
+
 CREATE TABLE knowledge_conflict_candidates (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   idempotency_key TEXT NOT NULL UNIQUE CHECK (char_length(idempotency_key) BETWEEN 1 AND 512),
@@ -290,6 +305,7 @@ CREATE TABLE knowledge_conflict_delivery_reconciliations (
   sent_message_id TEXT CHECK (
     sent_message_id IS NULL OR char_length(sent_message_id) BETWEEN 1 AND 512
   ),
+  actor_ref TEXT NOT NULL CHECK (char_length(actor_ref) BETWEEN 1 AND 512),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK ((outcome = 'sent') = (sent_message_id IS NOT NULL))
 );
@@ -391,6 +407,14 @@ FOR EACH ROW EXECUTE FUNCTION knowledge_draft_append_only_guard();
 
 CREATE TRIGGER knowledge_conflict_delivery_reconciliations_truncate_guard
 BEFORE TRUNCATE ON knowledge_conflict_delivery_reconciliations
+FOR EACH STATEMENT EXECUTE FUNCTION knowledge_draft_append_only_guard();
+
+CREATE TRIGGER knowledge_conflict_scan_operations_append_only
+BEFORE UPDATE OR DELETE ON knowledge_conflict_scan_operations
+FOR EACH ROW EXECUTE FUNCTION knowledge_draft_append_only_guard();
+
+CREATE TRIGGER knowledge_conflict_scan_operations_truncate_guard
+BEFORE TRUNCATE ON knowledge_conflict_scan_operations
 FOR EACH STATEMENT EXECUTE FUNCTION knowledge_draft_append_only_guard();
 
 CREATE TRIGGER answer_reply_knowledge_conflicts_append_only

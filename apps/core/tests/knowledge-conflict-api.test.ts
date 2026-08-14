@@ -105,7 +105,7 @@ describe("knowledge conflict operator API", () => {
           snapshotId: "snapshot-a",
           sourceVersion: "revision-7",
         }),
-        currentValidation: { status: "requires_revalidation" },
+        currentValidation: { status: "current" },
         evidence: expect.arrayContaining([
           expect.objectContaining({
             type: "conversation_message",
@@ -279,6 +279,90 @@ describe("knowledge conflict operator API", () => {
     await app.close();
   });
 
+  it("rejects a stale reviewed version before current validation or approval", async () => {
+    const harness = createHarness();
+    const validator = { validate: vi.fn() };
+    const app = await createApp(harness.repository, validator);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a/approve-delivery",
+      headers: operatorHeaders,
+      payload: {
+        expectedVersion: 2,
+        reason: "Reviewed an earlier candidate generation.",
+        operationKey: "governance:candidate-a:approve:2",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      ok: false,
+      error: "knowledge_conflict_version_conflict",
+    });
+    expect(validator.validate).not.toHaveBeenCalled();
+    expect(harness.repository.approveForDelivery).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns bounded current validation outcomes and fails approval closed unless current", async () => {
+    const harness = createHarness();
+    const validator = {
+      validate: vi.fn()
+        .mockResolvedValueOnce({
+          status: "superseded", candidate: candidate({ status: "superseded", version: 4 }),
+          reason: "snapshot_stale",
+        })
+        .mockResolvedValueOnce({ status: "permission_blocked", candidate: candidate() })
+        .mockResolvedValueOnce({ status: "validation_unavailable", candidate: candidate() }),
+    };
+    const app = await createApp(harness.repository, validator);
+
+    const superseded = await app.inject({
+      method: "GET",
+      url: "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a",
+      headers: authorization,
+    });
+    expect(superseded.statusCode).toBe(200);
+    expect(superseded.json().candidate).toMatchObject({
+      status: "superseded", candidateVersion: 4,
+      currentValidation: { status: "superseded", reason: "snapshot_stale" },
+    });
+
+    const approvalPayload = {
+      expectedVersion: 3,
+      reason: "Reviewed for one bounded group delivery.",
+      operationKey: "governance:candidate-a:approve:3",
+    };
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a/approve-delivery",
+      headers: operatorHeaders,
+      payload: approvalPayload,
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toEqual({
+      ok: false,
+      error: "knowledge_conflict_validation_required",
+      currentValidation: { status: "permission_blocked" },
+    });
+    expect(harness.repository.approveForDelivery).not.toHaveBeenCalled();
+
+    const unavailable = await app.inject({
+      method: "POST",
+      url: "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a/approve-delivery",
+      headers: operatorHeaders,
+      payload: approvalPayload,
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toEqual({
+      ok: false,
+      error: "knowledge_conflict_validation_unavailable",
+    });
+    expect(unavailable.body).not.toMatch(/database secret|tenant token/iu);
+    await app.close();
+  });
+
   it("exposes content-free status and bounded dead-letter replay/delete operations", async () => {
     const harness = createHarness();
     const app = await createApp(harness.repository);
@@ -335,7 +419,11 @@ describe("knowledge conflict operator API", () => {
       method: "POST",
       url: "/internal/knowledge-conflicts/scans/dead-letters/scan-a/replay",
       headers: operatorHeaders,
-      payload: {},
+      payload: {
+        expectedAttemptCount: 3,
+        expectedUpdatedAt: "2026-08-15T00:00:00.000Z",
+        operationKey: "admin-replay:scan-a:attempt-3",
+      },
     });
     expect(replay.statusCode).toBe(200);
     expect(replay.json()).toEqual({ ok: true, outcome: "replayed", scanId: "scan-a", status: "pending" });
@@ -344,9 +432,38 @@ describe("knowledge conflict operator API", () => {
       method: "DELETE",
       url: "/internal/knowledge-conflicts/scans/dead-letters/scan-a",
       headers: operatorHeaders,
+      payload: {
+        expectedAttemptCount: 3,
+        expectedUpdatedAt: "2026-08-15T00:00:00.000Z",
+        operationKey: "admin-delete:scan-a:attempt-3",
+      },
     });
     expect(deleted.statusCode).toBe(200);
     expect(deleted.json()).toEqual({ ok: true, outcome: "deleted", scanId: "scan-a" });
+    expect(harness.repository.replayDeadLetterScan).toHaveBeenCalledWith({
+      scanId: "scan-a", expectedAttemptCount: 3,
+      expectedUpdatedAt: new Date("2026-08-15T00:00:00.000Z"),
+      operationKey: "admin-replay:scan-a:attempt-3", actorRef: "operator@example.com",
+      at: new Date("2026-08-15T01:00:00.000Z"),
+    });
+    expect(harness.repository.deleteDeadLetterScan).toHaveBeenCalledWith({
+      scanId: "scan-a", expectedAttemptCount: 3,
+      expectedUpdatedAt: new Date("2026-08-15T00:00:00.000Z"),
+      operationKey: "admin-delete:scan-a:attempt-3", actorRef: "operator@example.com",
+      at: new Date("2026-08-15T01:00:00.000Z"),
+    });
+
+    for (const invalidPayload of [
+      {},
+      { expectedAttemptCount: 0, expectedUpdatedAt: "2026-08-15T00:00:00.000Z", operationKey: "x" },
+      { expectedAttemptCount: 3, expectedUpdatedAt: "not-a-date", operationKey: "x" },
+      { expectedAttemptCount: 3, expectedUpdatedAt: "2026-08-15T00:00:00.000Z", operationKey: "x", actorOpenId: "ou-untrusted" },
+    ]) expect((await app.inject({
+      method: "POST",
+      url: "/internal/knowledge-conflicts/scans/dead-letters/scan-a/replay",
+      headers: operatorHeaders,
+      payload: invalidPayload,
+    })).statusCode).toBe(400);
 
     expect((await app.inject({
       method: "GET",
@@ -367,6 +484,7 @@ describe("knowledge conflict operator API", () => {
         outcome: "sent",
         messageId: "message-sent-a",
         operationKey: "reconcile:delivery-a:attempt-1",
+        expectedAttemptCount: 1,
       },
     });
     expect(sent.statusCode).toBe(200);
@@ -376,12 +494,18 @@ describe("knowledge conflict operator API", () => {
       deliveryId: "delivery-a",
       status: "sent",
     });
+    expect(harness.repository.reconcileDelivery).toHaveBeenCalledWith({
+      deliveryId: "delivery-a", expectedAttemptCount: 1, outcome: "sent",
+      operationKey: "reconcile:delivery-a:attempt-1", actorRef: "operator@example.com",
+      messageId: "message-sent-a", at: new Date("2026-08-15T01:00:00.000Z"),
+    });
 
     for (const payload of [
-      { outcome: "sent", operationKey: "reconcile:missing-message" },
-      { outcome: "not_sent", messageId: "must-not-be-supplied", operationKey: "reconcile:not-sent" },
-      { outcome: "unknown", operationKey: "reconcile:unknown" },
-      { outcome: "sent", messageId: "message-a", operationKey: "reconcile:a", actorOpenId: "ou_untrusted" },
+      { outcome: "sent", expectedAttemptCount: 1, operationKey: "reconcile:missing-message" },
+      { outcome: "not_sent", expectedAttemptCount: 1, messageId: "must-not-be-supplied", operationKey: "reconcile:not-sent" },
+      { outcome: "unknown", expectedAttemptCount: 1, operationKey: "reconcile:unknown" },
+      { outcome: "sent", expectedAttemptCount: 0, messageId: "message-a", operationKey: "reconcile:zero" },
+      { outcome: "sent", expectedAttemptCount: 1, messageId: "message-a", operationKey: "reconcile:a", actorOpenId: "ou_untrusted" },
     ]) expect((await app.inject({
       method: "POST",
       url: "/internal/knowledge-conflicts/deliveries/delivery-a/reconcile",
@@ -397,6 +521,7 @@ describe("knowledge conflict operator API", () => {
       payload: {
         outcome: "not_sent",
         operationKey: "reconcile:delivery-a:not-sent",
+        expectedAttemptCount: 1,
       },
     })).json()).toEqual({ ok: false, error: "knowledge_conflict_delivery_conflict" });
     await app.close();
@@ -410,17 +535,18 @@ describe("knowledge conflict operator API", () => {
       method: "POST",
       url: "/internal/knowledge-conflicts/scans/dead-letters/scan-a/replay",
       headers: operatorHeaders,
-      payload: {},
+      payload: { expectedAttemptCount: 3, expectedUpdatedAt: "2026-08-15T00:00:00.000Z", operationKey: "replay-conflict" },
     })).json()).toEqual({ ok: false, error: "knowledge_conflict_scan_conflict" });
 
-    harness.repository.deleteDeadLetterScan.mockResolvedValueOnce("not_found");
-    const missing = await app.inject({
+    harness.repository.deleteDeadLetterScan.mockRejectedValueOnce(new KnowledgeConflictOperationConflictError());
+    const conflict = await app.inject({
       method: "DELETE",
       url: "/internal/knowledge-conflicts/scans/dead-letters/missing",
       headers: operatorHeaders,
+      payload: { expectedAttemptCount: 3, expectedUpdatedAt: "2026-08-15T00:00:00.000Z", operationKey: "delete-conflict" },
     });
-    expect(missing.statusCode).toBe(404);
-    expect(missing.json()).toEqual({ ok: false, error: "knowledge_conflict_scan_not_found" });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toEqual({ ok: false, error: "knowledge_conflict_operation_conflict" });
 
     harness.repository.getCandidate.mockRejectedValueOnce(new Error("raw database credentials"));
     const unavailable = await app.inject({
@@ -435,12 +561,17 @@ describe("knowledge conflict operator API", () => {
   });
 });
 
-async function createApp(repository: KnowledgeConflictRepository | undefined) {
+async function createApp(
+  repository: KnowledgeConflictRepository | undefined,
+  currentValidator: { validate(input: { candidate: KnowledgeConflictCandidate; expectedVersion: number }): Promise<Record<string, unknown>> } = {
+    async validate(input) { return { status: "current", candidate: input.candidate }; },
+  },
+) {
   const dependencies = {
     ...disabledRuntimeFactories(),
     internalApiToken: "operator-secret",
     now: () => new Date("2026-08-15T01:00:00.000Z"),
-    knowledgeConflictRuntime: repository === undefined ? undefined : { repository },
+    knowledgeConflictRuntime: repository === undefined ? undefined : { repository, currentValidator },
   };
   return buildApp(dependencies as BuildAppDependencies);
 }
@@ -471,8 +602,8 @@ function createHarness() {
     completeScan: vi.fn(),
     failScan: vi.fn(),
     listDeadLetterScans: vi.fn(async () => [deadLetter()]),
-    replayDeadLetterScan: vi.fn(async () => ({ ...deadLetter(), status: "pending" as const, attemptCount: 0 })),
-    deleteDeadLetterScan: vi.fn(async (): Promise<"deleted" | "not_found"> => "deleted"),
+    replayDeadLetterScan: vi.fn(async () => ({ outcome: "applied" as const, scanId: "scan-a", status: "pending" as const })),
+    deleteDeadLetterScan: vi.fn(async () => ({ outcome: "applied" as const, scanId: "scan-a", status: "deleted" as const })),
     getScanStatusCounts: vi.fn(async () => ({
       pending: 0, processing: 0, retry: 0, completed: 5, deadLettered: 1,
     })),

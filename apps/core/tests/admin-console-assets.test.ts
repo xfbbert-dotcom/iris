@@ -1079,7 +1079,7 @@ describe("admin console assets", () => {
     expect(visibleText).toContain("snapshot-a / revision-7");
     expect(visibleText).toContain("C1 · conversation message · message-a");
     expect(visibleText).toContain("D1 · document fragment · fragment-a");
-    expect(visibleText).toContain("Not revalidated in this view; delivery performs a live permission check");
+    expect(visibleText).toContain("Current-state validation passed");
     expect(visibleText).toContain("3");
     expect(visibleText).not.toContain("hidden source body");
     expect(visibleText).not.toContain("must-not-be-exposed");
@@ -1088,6 +1088,7 @@ describe("admin console assets", () => {
 
   it("confirms exact-version dismiss, approve, and delivery reconciliation actions", async () => {
     const mutations: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const confirmations: string[] = [];
     const prompts = [
       "Reviewed duplicate guidance.",
       "Reviewed for one bounded delivery.",
@@ -1130,7 +1131,7 @@ describe("admin console assets", () => {
     });
     const console = runAdminConsole(fetch, {
       operator: "operator@example.com",
-      confirm: () => true,
+      confirm: (message: string) => { confirmations.push(message); return true; },
       prompt: () => prompts.shift() ?? null,
     });
     console.element("knowledge-conflict-group").value = "group-a";
@@ -1157,6 +1158,7 @@ describe("admin console assets", () => {
     expect(mutations[2]).toEqual({
       path: "/internal/knowledge-conflicts/deliveries/delivery-a/reconcile",
       body: {
+        expectedAttemptCount: 1,
         outcome: "sent",
         messageId: "om_confirmed_message",
         operationKey: expect.stringContaining("admin-console-conflict-reconcile-sent-delivery-a-attempt-1-"),
@@ -1166,14 +1168,57 @@ describe("admin console assets", () => {
       expect(mutation.body).not.toHaveProperty("actorOpenId");
       expect(mutation.body.operationKey).toEqual(expect.any(String));
     }
+    expect(confirmations.some((message) =>
+      message.includes("group-a")
+      && message.includes("candidate-a")
+      && message.includes("Expense approval threshold")
+      && message.includes("version 3"),
+    )).toBe(true);
+  });
+
+  it("disables approval unless detail validation is current", async () => {
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path.includes("/groups/group-a/candidates?")) {
+        return Promise.resolve(jsonResponse({ ok: true, groupId: "group-a",
+          candidates: [knowledgeConflictCandidateSummary()] }));
+      }
+      if (path.includes("/scans/dead-letters?")) {
+        return Promise.resolve(jsonResponse({ ok: true, deadLetters: [] }));
+      }
+      if (path.endsWith("/groups/group-a/candidates/candidate-a")) {
+        const body = knowledgeConflictCandidateDetail();
+        return Promise.resolve(jsonResponse({ ...body, candidate: {
+          ...body.candidate,
+          currentValidation: { status: "permission_blocked" },
+        } }));
+      }
+      if (path === "/internal/document-sync/sources/source-a?includeLatestSnapshot=true") {
+        return Promise.resolve(jsonResponse({ ok: true, source: undefined }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, { operator: "operator@example.com" });
+    console.element("knowledge-conflict-group").value = "group-a";
+    await console.trigger("knowledge-conflict-refresh", "click");
+    await renderConflictDetail(console);
+
+    const approve = console.allElements().find((element) => element.textContent === "Approve one delivery");
+    expect(approve?.disabled).toBe(true);
+    expect(console.element("knowledge-conflict-detail").children
+      .map((element) => element.textContent).join("\n"))
+      .toContain("Live permission is blocked; approval is unavailable");
   });
 
   it("confirms dead-letter replay and delete without rendering memory content", async () => {
-    const mutations: Array<{ path: string; method: string }> = [];
+    const mutations: Array<{ path: string; method: string; body: Record<string, unknown> }> = [];
     const fetch = vi.fn((path: string, options?: unknown) => {
-      const request = options as { method?: string } | undefined;
+      const request = options as { method?: string; body?: string } | undefined;
       if (request?.method === "POST" || request?.method === "DELETE") {
-        mutations.push({ path, method: request.method });
+        mutations.push({ path, method: request.method,
+          body: JSON.parse(request.body ?? "{}") as Record<string, unknown> });
         return Promise.resolve(jsonResponse({ ok: true, outcome: request.method === "POST" ? "replayed" : "deleted", scanId: "scan-a" }));
       }
       if (path === "/internal/knowledge-conflicts/status") {
@@ -1200,8 +1245,12 @@ describe("admin console assets", () => {
     await remove!.trigger("click");
 
     expect(mutations).toEqual([
-      { path: "/internal/knowledge-conflicts/scans/dead-letters/scan-a/replay", method: "POST" },
-      { path: "/internal/knowledge-conflicts/scans/dead-letters/scan-a", method: "DELETE" },
+      { path: "/internal/knowledge-conflicts/scans/dead-letters/scan-a/replay", method: "POST",
+        body: { expectedAttemptCount: 3, expectedUpdatedAt: "2026-08-15T00:00:00.000Z",
+          operationKey: expect.stringContaining("admin-console-conflict-scan-replay-scan-a-attempt-3-") } },
+      { path: "/internal/knowledge-conflicts/scans/dead-letters/scan-a", method: "DELETE",
+        body: { expectedAttemptCount: 3, expectedUpdatedAt: "2026-08-15T00:00:00.000Z",
+          operationKey: expect.stringContaining("admin-console-conflict-scan-delete-scan-a-attempt-3-") } },
     ]);
     expect(console.allElements().map((element) => element.textContent).join("\n")).not.toContain("memory-a");
   });
@@ -1271,6 +1320,103 @@ describe("admin console assets", () => {
     ]);
     expect(console.element("knowledge-conflict-candidate-rows").children).toHaveLength(0);
     expect(console.element("knowledge-conflict-dead-letter-rows").children).toHaveLength(1);
+  });
+
+  it("ignores an older candidate refresh after the operator changes groups", async () => {
+    const groupA = deferred<ResponseStub>();
+    const groupB = deferred<ResponseStub>();
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path.includes("/scans/dead-letters?")) {
+        return Promise.resolve(jsonResponse({ ok: true, deadLetters: [] }));
+      }
+      if (path.includes("/groups/group-a/candidates?")) return groupA.promise;
+      if (path.includes("/groups/group-b/candidates?")) return groupB.promise;
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, { operator: "operator@example.com" });
+    console.element("knowledge-conflict-group").value = "group-a";
+    const older = console.trigger("knowledge-conflict-refresh", "click");
+    console.element("knowledge-conflict-group").value = "group-b";
+    const newer = console.trigger("knowledge-conflict-refresh", "click");
+    groupB.resolve(jsonResponse({ ok: true, groupId: "group-b", candidates: [{
+      ...knowledgeConflictCandidateSummary(), candidateId: "candidate-b", groupId: "group-b",
+      subject: "Group B current subject",
+    }] }));
+    await newer;
+    groupA.resolve(jsonResponse({ ok: true, groupId: "group-a",
+      candidates: [knowledgeConflictCandidateSummary()] }));
+    await older;
+
+    const renderedSubject = console.element("knowledge-conflict-candidate-rows")
+      .children[0]?.children[0]?.textContent;
+    expect(renderedSubject).toBe("Group B current subject");
+  });
+
+  it("ignores stale detail and source responses after the operator changes groups", async () => {
+    const sourceA = deferred<ResponseStub>();
+    const fetch = vi.fn((path: string) => {
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path.includes("/scans/dead-letters?")) {
+        return Promise.resolve(jsonResponse({ ok: true, deadLetters: [] }));
+      }
+      if (path.includes("/groups/group-a/candidates?")) {
+        return Promise.resolve(jsonResponse({ ok: true, groupId: "group-a",
+          candidates: [knowledgeConflictCandidateSummary()] }));
+      }
+      if (path.includes("/groups/group-b/candidates?")) {
+        return Promise.resolve(jsonResponse({ ok: true, groupId: "group-b", candidates: [{
+          ...knowledgeConflictCandidateSummary(), candidateId: "candidate-b", groupId: "group-b",
+          subject: "Group B current subject", target: {
+            ...knowledgeConflictCandidateSummary().target, documentSourceId: "source-b",
+          },
+        }] }));
+      }
+      if (path.endsWith("/groups/group-a/candidates/candidate-a")) {
+        return Promise.resolve(jsonResponse(knowledgeConflictCandidateDetail()));
+      }
+      if (path === "/internal/document-sync/sources/source-a?includeLatestSnapshot=true") {
+        return sourceA.promise;
+      }
+      if (path.endsWith("/groups/group-b/candidates/candidate-b")) {
+        const body = knowledgeConflictCandidateDetail();
+        return Promise.resolve(jsonResponse({ ...body, candidate: {
+          ...body.candidate, candidateId: "candidate-b", groupId: "group-b",
+          subject: "Group B current subject", target: {
+            ...body.candidate.target, documentSourceId: "source-b",
+          },
+        } }));
+      }
+      if (path === "/internal/document-sync/sources/source-b?includeLatestSnapshot=true") {
+        return Promise.resolve(jsonResponse({ ok: true, source: { id: "source-b",
+          title: "Group B source", sourceUri: "https://example.invalid/group-b" } }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, { operator: "operator@example.com" });
+    console.element("knowledge-conflict-group").value = "group-a";
+    await console.trigger("knowledge-conflict-refresh", "click");
+    const oldDetail = console.allElements().find((element) => element.textContent === "Review")!
+      .trigger("click");
+    await Promise.resolve();
+    console.element("knowledge-conflict-group").value = "group-b";
+    await console.trigger("knowledge-conflict-refresh", "click");
+    await console.allElements().filter((element) => element.textContent === "Review").at(-1)!
+      .trigger("click");
+    sourceA.resolve(jsonResponse({ ok: true, source: { id: "source-a", title: "Stale source",
+      sourceUri: "https://example.invalid/stale" } }));
+    await oldDetail;
+
+    const visible = console.element("knowledge-conflict-detail").children
+      .map((element) => element.textContent).join("\n");
+    expect(visible).toContain("Group B current subject");
+    expect(visible).toContain("Group B source");
+    expect(visible).not.toContain("Stale source");
+    expect(visible).not.toContain("group-a");
   });
 });
 
@@ -1367,7 +1513,7 @@ function runAdminConsole(
     token?: string;
     operator?: string;
     prompt?: () => string | null;
-    confirm?: () => boolean;
+    confirm?: (message: string) => boolean;
   } = {},
 ) {
   const document = new FakeDocument();
@@ -1457,7 +1603,7 @@ function knowledgeConflictCandidateSummary() {
       sourceUpdatedAt: "2026-08-14T01:00:00.000Z",
       snapshotContentHash: "snapshot-content-hash",
     },
-    currentValidation: { status: "requires_revalidation" },
+    currentValidation: { status: "current" },
     updatedAt: "2026-08-14T02:00:00.000Z",
   };
 }

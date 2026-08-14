@@ -26,6 +26,26 @@ describe("runMigrations", () => {
       .toBeGreaterThan(migrationNames.indexOf("0045_answer_source_citations.sql"));
   });
 
+  it("defines attempt-bound attributable reconciliation and append-only scan recovery facts in 0046", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0046_knowledge_conflict_candidates.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("create table knowledge_conflict_scan_operations");
+    expect(normalized).toContain("expected_attempt_count integer not null");
+    expect(normalized).toContain("expected_updated_at timestamptz not null");
+    expect(normalized).toContain("actor_ref text not null");
+    expect(normalized).toContain("knowledge_conflict_scan_operations_append_only");
+    expect(normalized).toContain("knowledge_conflict_scan_operations_truncate_guard");
+    const reconciliationTable = normalized.match(
+      /create table knowledge_conflict_delivery_reconciliations \((.*?)\);/u,
+    )?.[1];
+    expect(reconciliationTable).toContain("attempt_count integer not null");
+    expect(reconciliationTable).toContain("actor_ref text not null");
+  });
+
   it("defines bounded append-only answer source citation receipts", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0045_answer_source_citations.sql"),
@@ -957,6 +977,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         "knowledge_conflict_delivery_outbox",
         "knowledge_conflict_evidence",
         "knowledge_conflict_interactions",
+        "knowledge_conflict_scan_operations",
         "knowledge_conflict_scan_inbox",
       ]])).resolves.toMatchObject({ rows: [
         { table_name: "answer_reply_knowledge_conflicts" },
@@ -965,6 +986,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         { table_name: "knowledge_conflict_delivery_outbox" },
         { table_name: "knowledge_conflict_evidence" },
         { table_name: "knowledge_conflict_interactions" },
+        { table_name: "knowledge_conflict_scan_operations" },
         { table_name: "knowledge_conflict_scan_inbox" },
       ] });
 
@@ -1036,6 +1058,8 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           "knowledge_conflict_delivery_reconciliations_truncate_guard",
           "knowledge_conflict_evidence_append_only",
           "knowledge_conflict_interactions_append_only",
+          "knowledge_conflict_scan_operations_append_only",
+          "knowledge_conflict_scan_operations_truncate_guard",
         ]),
       });
       expect(catalog.rows[0]?.foreign_keys).toBeGreaterThanOrEqual(10);

@@ -22,6 +22,10 @@ import type {
   KnowledgeConflictEvidenceReference,
   KnowledgeConflictPlan,
 } from "./knowledge-conflict.js";
+import {
+  KnowledgeConflictPermissionUnavailableError,
+  reattestKnowledgeConflictSourcePermissions,
+} from "./knowledge-conflict-permission-reattestation.js";
 
 const MAX_BATCH_LIMIT = 50;
 const MAX_GROUP_IDS = 50;
@@ -494,34 +498,28 @@ async function reattestPermissions(input: {
   }
   if (expectedSources.size === 0) throw new ImpossibleEvidenceIdentityError();
 
-  for (const [sourceId, expectedUpdatedAt] of [...expectedSources.entries()].sort()) {
-    let source: DocumentSource | undefined;
-    try {
-      source = await input.dependencies.documentSources.findSourceById(sourceId);
-    } catch {
+  try {
+    const result = await reattestKnowledgeConflictSourcePermissions({
+      sources: [...expectedSources].map(([documentSourceId, expectedUpdatedAt]) => ({
+        documentSourceId,
+        expectedUpdatedAt,
+      })),
+      documentSources: input.dependencies.documentSources,
+      permissionChecker: input.dependencies.permissionChecker,
+      now: input.now,
+      isEligibleSource: (source) =>
+        source.authorizedSpaceId === input.evidence.fingerprint.publicationTarget.spaceId,
+    });
+    if (result.status === "stale") {
+      throw new KnowledgeConflictStaleEvidenceError(result.reason);
+    }
+    return result.status === "attested" ? result.permissionAttestedAt : undefined;
+  } catch (error) {
+    if (error instanceof KnowledgeConflictPermissionUnavailableError) {
       throw new PermissionPhaseError();
     }
-    if (source === undefined
-      || source.id !== sourceId
-      || !isValidDate(source.updatedAt)
-      || source.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
-      throw new KnowledgeConflictStaleEvidenceError("source_stale");
-    }
-    if (source.sourceType !== "authorized_wiki_document"
-      || source.syncState !== "synced"
-      || source.permissionState === "denied"
-      || source.permissionState === "stale"
-      || !source.canUseForKnowledgeDrafts
-      || source.authorizedSpaceId !== input.evidence.fingerprint.publicationTarget.spaceId) {
-      return undefined;
-    }
-    try {
-      if (!(await input.dependencies.permissionChecker.canReadSource(source))) return undefined;
-    } catch {
-      throw new PermissionPhaseError();
-    }
+    throw error;
   }
-  return requireDate("permission attestation time", input.now());
 }
 
 function normalizeEvidenceFailureCode(value: string): string {

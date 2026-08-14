@@ -44,6 +44,12 @@ export type KnowledgeConflictScanMaintenanceOutcome =
   | { outcome: "superseded"; scanId: string }
   | { outcome: "dead_lettered"; scanId: string; errorCode: "scan_attempts_exhausted" };
 
+export type KnowledgeConflictScanOperationResult = {
+  outcome: "applied" | "already_applied";
+  scanId: string;
+  status: "pending" | "deleted";
+};
+
 export type CreateKnowledgeConflictCandidateInput = {
   id: string;
   idempotencyKey: string;
@@ -210,8 +216,22 @@ export interface KnowledgeConflictRepository {
     at: Date;
   }): Promise<{ status: "retry" | "dead_lettered" }>;
   listDeadLetterScans(input: { limit: number }): Promise<KnowledgeConflictScan[]>;
-  replayDeadLetterScan(input: { scanId: string; at: Date }): Promise<KnowledgeConflictScan>;
-  deleteDeadLetterScan(scanId: string): Promise<"deleted" | "not_found">;
+  replayDeadLetterScan(input: {
+    scanId: string;
+    expectedAttemptCount: number;
+    expectedUpdatedAt: Date;
+    operationKey: string;
+    actorRef: string;
+    at: Date;
+  }): Promise<KnowledgeConflictScanOperationResult>;
+  deleteDeadLetterScan(input: {
+    scanId: string;
+    expectedAttemptCount: number;
+    expectedUpdatedAt: Date;
+    operationKey: string;
+    actorRef: string;
+    at: Date;
+  }): Promise<KnowledgeConflictScanOperationResult>;
   getScanStatusCounts(): Promise<KnowledgeConflictScanStatusCounts>;
   recordDetectionResult(
     input: RecordKnowledgeConflictDetectionInput,
@@ -228,6 +248,7 @@ export interface KnowledgeConflictRepository {
   }): Promise<KnowledgeConflictCandidateEvent[]>;
   validateCandidateCurrentState(input: {
     candidateId: string;
+    expectedVersion: number;
     permissionAttestedAt: Date;
     operationKey: string;
     at: Date;
@@ -280,8 +301,10 @@ export interface KnowledgeConflictRepository {
   }): Promise<KnowledgeConflictDelivery>;
   reconcileDelivery(input: {
     deliveryId: string;
+    expectedAttemptCount: number;
     outcome: "sent" | "not_sent";
     operationKey: string;
+    actorRef: string;
     messageId?: string;
     at: Date;
   }): Promise<KnowledgeConflictDelivery>;

@@ -239,6 +239,9 @@ describe("PostgresKnowledgeConflictRepository scan lifecycle", () => {
       if (sql.includes("FROM knowledge_conflict_scan_inbox") && sql.includes("dead_lettered")) {
         return { rows: [scanRow({ status: "dead_lettered", last_error_code: "provider_capacity" })] };
       }
+      if (sql.includes("FROM knowledge_conflict_scan_inbox") && sql.includes("FOR UPDATE")) {
+        return { rows: [scanRow({ status: "dead_lettered", attempt_count: 1 })] };
+      }
       if (sql.includes("UPDATE knowledge_conflict_scan_inbox") && sql.includes("RETURNING")) {
         return { rows: [scanRow({ status: "pending", attempt_count: 0 })] };
       }
@@ -252,9 +255,65 @@ describe("PostgresKnowledgeConflictRepository scan lifecycle", () => {
     await expect(repository.listDeadLetterScans({ limit: 10 })).resolves.toMatchObject([
       { id: "scan-1", status: "dead_lettered", lastErrorCode: "provider_capacity" },
     ]);
-    await expect(repository.replayDeadLetterScan({ scanId: "scan-1", at }))
-      .resolves.toMatchObject({ status: "pending", attemptCount: 0 });
-    await expect(repository.deleteDeadLetterScan("scan-1")).resolves.toBe("deleted");
+    await expect(repository.replayDeadLetterScan({
+      scanId: "scan-1",
+      expectedAttemptCount: 1,
+      expectedUpdatedAt: at,
+      operationKey: "replay-scan-1-attempt-1",
+      actorRef: "knowledge-admin",
+      at,
+    })).resolves.toMatchObject({ outcome: "applied", scanId: "scan-1", status: "pending" });
+    await expect(repository.deleteDeadLetterScan({
+      scanId: "scan-1",
+      expectedAttemptCount: 1,
+      expectedUpdatedAt: at,
+      operationKey: "delete-scan-1-attempt-1",
+      actorRef: "knowledge-admin",
+      at,
+    })).resolves.toMatchObject({ outcome: "applied", scanId: "scan-1", status: "deleted" });
+  });
+
+  it("idempotently replays one exact dead-letter generation and rejects a stale generation", async () => {
+    let scan = scanRow({ status: "dead_lettered", attempt_count: 3, updated_at: at });
+    const operations = new Map<string, Record<string, unknown>>();
+    const client = routedClient((sql, values) => {
+      if (sql.includes("FROM knowledge_conflict_scan_operations")) {
+        const row = operations.get(String(values?.[0]));
+        return { rows: row === undefined ? [] : [row] };
+      }
+      if (sql.includes("FROM knowledge_conflict_scan_inbox") && sql.includes("FOR UPDATE")) {
+        return { rows: [scan] };
+      }
+      if (sql.includes("UPDATE knowledge_conflict_scan_inbox")) {
+        scan = scanRow({ status: "pending", attempt_count: 0, updated_at: at });
+        return { rows: [scan] };
+      }
+      if (sql.includes("INSERT INTO knowledge_conflict_scan_operations")) {
+        const row = {
+          operation_key: values?.[0], scan_id: values?.[1], group_id: values?.[2],
+          actor_ref: values?.[3], action: values?.[4], expected_attempt_count: values?.[5],
+          expected_updated_at: values?.[6], result_status: values?.[7], created_at: values?.[8],
+        };
+        operations.set(String(values?.[0]), row);
+        return { rows: [row] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+    const input = {
+      scanId: "scan-1", expectedAttemptCount: 3, expectedUpdatedAt: at,
+      operationKey: "replay-scan-generation-3", actorRef: "knowledge-admin", at,
+    };
+
+    await expect(repository.replayDeadLetterScan(input)).resolves.toEqual({
+      outcome: "applied", scanId: "scan-1", status: "pending",
+    });
+    await expect(repository.replayDeadLetterScan(input)).resolves.toEqual({
+      outcome: "already_applied", scanId: "scan-1", status: "pending",
+    });
+    await expect(repository.replayDeadLetterScan({
+      ...input, operationKey: "stale-replay", expectedAttemptCount: 2,
+    })).rejects.toBeInstanceOf(KnowledgeConflictLeaseConflictError);
   });
 });
 
@@ -512,6 +571,7 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
 
     await expect(repository.validateCandidateCurrentState({
       candidateId: "candidate-1",
+      expectedVersion: 1,
       permissionAttestedAt: at,
       operationKey: "validate-memory-first",
       at,
@@ -595,8 +655,36 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       deliveryId: "delivery-1",
       outcome: "not_sent",
       operationKey: "reconcile-1",
+      expectedAttemptCount: 1,
+      actorRef: "knowledge-admin",
       at,
     })).resolves.toMatchObject({ status: "failed", failureCode: "reconciled_not_sent" });
+  });
+
+  it("rejects reconciliation from a stale delivery attempt before mutating the current attempt", async () => {
+    const delivery = deliveryRow({
+      status: "outcome_unknown", attempt_count: 2, reconciliation_due_at: leaseUntil,
+    });
+    const client = routedClient((sql) => {
+      if (sql.includes("FROM knowledge_conflict_delivery_reconciliations")) return { rows: [] };
+      if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
+        return { rows: [delivery] };
+      }
+      if (sql.includes("UPDATE knowledge_conflict_delivery_outbox")) {
+        return { rows: [deliveryRow({ status: "failed", attempt_count: 2 })] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.reconcileDelivery({
+      deliveryId: "delivery-1", outcome: "not_sent", operationKey: "stale-attempt-1",
+      expectedAttemptCount: 1, actorRef: "knowledge-admin", at,
+    })).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO knowledge_conflict_delivery_reconciliations"),
+      expect.anything(),
+    );
   });
 
   it("reconciles a second unknown external attempt after the first was confirmed not sent", async () => {
@@ -616,10 +704,12 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       }
       if (sql.includes("INSERT INTO knowledge_conflict_delivery_reconciliations")) {
         const row = {
-          operation_key: String(values?.[1]),
-          delivery_id: "delivery-1",
-          outcome: String(values?.[2]),
-          sent_message_id: values?.[3] ?? null,
+          operation_key: String(values?.[0]),
+          delivery_id: String(values?.[1]),
+          attempt_count: Number(values?.[2]),
+          outcome: String(values?.[3]),
+          sent_message_id: values?.[4] ?? null,
+          actor_ref: values?.[5],
         };
         state.reconciliations.set(row.operation_key, row);
         return { rows: [row] };
@@ -666,7 +756,8 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
 
     await expect(repository.reconcileDelivery({
       deliveryId: "delivery-1", outcome: "not_sent",
-      operationKey: "reconcile-not-sent", at,
+      operationKey: "reconcile-not-sent", expectedAttemptCount: 1,
+      actorRef: "knowledge-admin", at,
     })).resolves.toMatchObject({ status: "failed" });
     await repository.claimNextDelivery({ workerId: "worker-2", at, leaseUntil });
     await repository.beginDeliveryAttempt({ deliveryId: "delivery-1", workerId: "worker-2", at });
@@ -676,7 +767,7 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     });
     await expect(repository.reconcileDelivery({
       deliveryId: "delivery-1", outcome: "sent", operationKey: "reconcile-sent",
-      messageId: "om-second", at,
+      expectedAttemptCount: 2, actorRef: "knowledge-admin", messageId: "om-second", at,
     })).resolves.toMatchObject({ status: "sent", sentMessageId: "om-second" });
   });
 
@@ -896,6 +987,7 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
     await expect(repository.validateCandidateCurrentState({
       candidateId: "candidate-1",
+      expectedVersion: 1,
       permissionAttestedAt: at,
       operationKey: "supersede-hash-change",
       at,
@@ -934,7 +1026,7 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
 
     await expect(repository.validateCandidateCurrentState({
-      candidateId: "candidate-1", permissionAttestedAt: at,
+      candidateId: "candidate-1", expectedVersion: 2, permissionAttestedAt: at,
       operationKey: "validate-unresolved-delivery", at,
     })).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
   });
@@ -1343,6 +1435,75 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       last_error_code: "scan_attempts_exhausted" }] });
   });
 
+  it("persists attributable idempotent dead-letter recovery across replay and delete", async () => {
+    const memoryId = `recovery-audit-memory-${suffix}`;
+    const messageId = `feishu:recovery-audit-message-${suffix}`;
+    const replayScanId = `recovery-audit-replay-${suffix}`;
+    const deleteScanId = `recovery-audit-delete-${suffix}`;
+    await insertMessage(pool!, messageId, groupId);
+    await pool!.query(
+      `INSERT INTO group_memories (
+         id, group_id, memory_scope, category, content, importance, confidence,
+         status, idempotency_key, origin, created_by, created_at, updated_at
+       ) VALUES ($1, $2, 'group', 'decision', 'Recovery audit', 4, 0.9,
+         'active', $3, 'operator', 'tester', $4, $4)`,
+      [memoryId, groupId, `recovery-audit-memory-op-${suffix}`, at],
+    );
+    await pool!.query(
+      "INSERT INTO group_memory_message_evidence (memory_id, conversation_message_id) VALUES ($1, $2)",
+      [memoryId, messageId],
+    );
+    for (const [scanId, attempts] of [[replayScanId, 3], [deleteScanId, 4]] as const) {
+      await pool!.query(
+        `INSERT INTO knowledge_conflict_scan_inbox (
+           id, group_id, group_memory_id, memory_updated_at, status, attempt_count,
+           next_attempt_at, last_error_code, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, 'dead_lettered', $5, $4, 'provider_unavailable', $4, $4)`,
+        [scanId, groupId, memoryId, at, attempts],
+      );
+    }
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+    const replayInput = {
+      scanId: replayScanId, expectedAttemptCount: 3, expectedUpdatedAt: at,
+      operationKey: `replay-audit-${suffix}`, actorRef: "knowledge-admin", at,
+    };
+    const replayResults = await Promise.all([
+      repository.replayDeadLetterScan(replayInput),
+      repository.replayDeadLetterScan(replayInput),
+    ]);
+    expect(replayResults.map((result) => result.outcome).sort())
+      .toEqual(["already_applied", "applied"]);
+    await expect(repository.replayDeadLetterScan({
+      ...replayInput, operationKey: `replay-stale-${suffix}`, expectedAttemptCount: 2,
+    })).rejects.toBeInstanceOf(KnowledgeConflictLeaseConflictError);
+
+    const deleteInput = {
+      scanId: deleteScanId, expectedAttemptCount: 4, expectedUpdatedAt: at,
+      operationKey: `delete-audit-${suffix}`, actorRef: "knowledge-admin", at,
+    };
+    await expect(repository.deleteDeadLetterScan(deleteInput)).resolves.toMatchObject({
+      outcome: "applied", status: "deleted",
+    });
+    await expect(repository.deleteDeadLetterScan(deleteInput)).resolves.toMatchObject({
+      outcome: "already_applied", status: "deleted",
+    });
+    await expect(pool!.query(
+      `SELECT scan_id, actor_ref, action, expected_attempt_count, result_status
+       FROM knowledge_conflict_scan_operations
+       WHERE operation_key IN ($1, $2) ORDER BY action`,
+      [deleteInput.operationKey, replayInput.operationKey],
+    )).resolves.toMatchObject({ rows: [
+      { scan_id: deleteScanId, actor_ref: "knowledge-admin", action: "delete",
+        expected_attempt_count: 4, result_status: "deleted" },
+      { scan_id: replayScanId, actor_ref: "knowledge-admin", action: "replay",
+        expected_attempt_count: 3, result_status: "pending" },
+    ] });
+    await expect(pool!.query(
+      "UPDATE knowledge_conflict_scan_operations SET actor_ref = 'changed' WHERE operation_key = $1",
+      [deleteInput.operationKey],
+    )).rejects.toThrow(/append-only/iu);
+  });
+
   it("maintains at most one stale row from a backlog per call", async () => {
     const staleGroupId = `stale-backlog-group-${suffix}`;
     const staleScanIds: string[] = [];
@@ -1626,6 +1787,7 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       "overlap-validation",
       (repository, candidateId) => repository.validateCandidateCurrentState({
         candidateId,
+        expectedVersion: 1,
         permissionAttestedAt: at,
         operationKey: `overlap-validation-operation-${suffix}`,
         at,
@@ -1843,6 +2005,7 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     ]);
     await expect(repository.validateCandidateCurrentState({
       candidateId,
+      expectedVersion: 2,
       permissionAttestedAt: staleDuringUnknown,
       operationKey: `validate-outcome-unknown-${suffix}`,
       at: staleDuringUnknown,
@@ -1857,6 +2020,8 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       deliveryId: approval.delivery.id,
       outcome: "not_sent",
       operationKey: `reconcile-not-sent-${suffix}`,
+      expectedAttemptCount: 1,
+      actorRef: "knowledge-admin",
       at,
     })).resolves.toMatchObject({ status: "failed", failureCode: "reconciled_not_sent" });
     const retryClaim = await repository.claimNextDelivery({
@@ -1876,19 +2041,33 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     });
     await expect(repository.reconcileDelivery({
       deliveryId: approval.delivery.id,
+      outcome: "not_sent",
+      operationKey: `stale-reconcile-not-sent-${suffix}`,
+      expectedAttemptCount: 1,
+      actorRef: "knowledge-admin",
+      at,
+    })).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+    await expect(repository.reconcileDelivery({
+      deliveryId: approval.delivery.id,
       outcome: "sent",
       operationKey: `reconcile-sent-${suffix}`,
+      expectedAttemptCount: 2,
+      actorRef: "knowledge-admin",
       messageId: `om-${suffix}`,
       at,
     })).resolves.toMatchObject({ status: "sent", sentMessageId: `om-${suffix}` });
     await expect(repository.getCandidate(candidateId))
       .resolves.toMatchObject({ status: "delivered", version: 3 });
     await expect(pool!.query(
-      "SELECT operation_key, outcome FROM knowledge_conflict_delivery_reconciliations WHERE delivery_id = $1 ORDER BY operation_key",
+      `SELECT operation_key, attempt_count, actor_ref, outcome
+       FROM knowledge_conflict_delivery_reconciliations
+       WHERE delivery_id = $1 ORDER BY operation_key`,
       [approval.delivery.id],
     )).resolves.toMatchObject({ rows: [
-      { operation_key: `reconcile-not-sent-${suffix}`, outcome: "not_sent" },
-      { operation_key: `reconcile-sent-${suffix}`, outcome: "sent" },
+      { operation_key: `reconcile-not-sent-${suffix}`, attempt_count: 1,
+        actor_ref: "knowledge-admin", outcome: "not_sent" },
+      { operation_key: `reconcile-sent-${suffix}`, attempt_count: 2,
+        actor_ref: "knowledge-admin", outcome: "sent" },
     ] });
 
     await expect(repository.findCurrentOverlap({
@@ -1996,6 +2175,7 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     })).resolves.toBeUndefined();
     await expect(repository.validateCandidateCurrentState({
       candidateId,
+      expectedVersion: 3,
       permissionAttestedAt: changedAt,
       operationKey: `supersede-${suffix}`,
       at: changedAt,
@@ -2559,7 +2739,7 @@ function repositoryForDeliveryMutation(row: ReturnType<typeof deliveryRow>) {
     dataSource: dataSource(routedClient((sql) => {
       if (sql.includes("UPDATE knowledge_conflict_delivery_outbox")) return { rows: [row] };
       if (sql.includes("FROM knowledge_conflict_delivery_outbox")) {
-        return { rows: [deliveryRow({ status: "outcome_unknown" })] };
+        return { rows: [deliveryRow({ status: "outcome_unknown", attempt_count: 1 })] };
       }
       return { rows: [] };
     })),

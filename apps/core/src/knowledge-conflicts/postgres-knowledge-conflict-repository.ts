@@ -13,6 +13,7 @@ import type {
   KnowledgeConflictScan,
   KnowledgeConflictScanClaim,
   KnowledgeConflictScanMaintenanceOutcome,
+  KnowledgeConflictScanOperationResult,
 } from "./knowledge-conflict-repository.js";
 import {
   KnowledgeConflictDeliveryConflictError,
@@ -219,6 +220,19 @@ type ReconciliationRow = {
   attempt_count: string | number;
   outcome: "sent" | "not_sent";
   sent_message_id: string | null;
+  actor_ref: string;
+  created_at: Date;
+};
+
+type ScanOperationRow = {
+  operation_key: string;
+  scan_id: string;
+  group_id: string;
+  actor_ref: string;
+  action: "replay" | "delete";
+  expected_attempt_count: string | number;
+  expected_updated_at: Date;
+  result_status: "pending" | "deleted";
   created_at: Date;
 };
 
@@ -285,8 +299,8 @@ export function createPostgresKnowledgeConflictRepository({
     replayDeadLetterScan(input) {
       return replayDeadLetterScan(dataSource, input);
     },
-    deleteDeadLetterScan(scanId) {
-      return deleteDeadLetterScan(dataSource, scanId);
+    deleteDeadLetterScan(input) {
+      return deleteDeadLetterScan(dataSource, input);
     },
     getScanStatusCounts() {
       return getScanStatusCounts(dataSource);
@@ -631,32 +645,92 @@ async function listDeadLetterScans(
 
 async function replayDeadLetterScan(
   dataSource: PostgresKnowledgeConflictDataSource,
-  input: { scanId: string; at: Date },
-): Promise<KnowledgeConflictScan> {
-  const result = await dataSource.query<ScanRow>(
-    `UPDATE knowledge_conflict_scan_inbox
-     SET status = 'pending', attempt_count = 0, next_attempt_at = $2,
-         last_error_code = NULL, lease_worker_id = NULL, lease_until = NULL, updated_at = $2
-     WHERE id = $1 AND status = 'dead_lettered'
-     RETURNING *`,
-    [requireReference("scanId", input.scanId), requireDate("at", input.at)],
-  );
-  const row = result.rows[0];
-  if (row === undefined) throw new KnowledgeConflictLeaseConflictError();
-  return mapScan(row);
+  input: Parameters<KnowledgeConflictRepository["replayDeadLetterScan"]>[0],
+): Promise<KnowledgeConflictScanOperationResult> {
+  return applyDeadLetterScanOperation(dataSource, { ...input, action: "replay" });
 }
 
 async function deleteDeadLetterScan(
   dataSource: PostgresKnowledgeConflictDataSource,
-  scanId: string,
-): Promise<"deleted" | "not_found"> {
-  const result = await dataSource.query<{ id: string }>(
-    `DELETE FROM knowledge_conflict_scan_inbox
-     WHERE id = $1 AND status = 'dead_lettered'
-     RETURNING id`,
-    [requireReference("scanId", scanId)],
+  input: Parameters<KnowledgeConflictRepository["deleteDeadLetterScan"]>[0],
+): Promise<KnowledgeConflictScanOperationResult> {
+  return applyDeadLetterScanOperation(dataSource, { ...input, action: "delete" });
+}
+
+async function applyDeadLetterScanOperation(
+  dataSource: PostgresKnowledgeConflictDataSource,
+  input: Parameters<KnowledgeConflictRepository["replayDeadLetterScan"]>[0] & {
+    action: "replay" | "delete";
+  },
+): Promise<KnowledgeConflictScanOperationResult> {
+  const scanId = requireReference("scanId", input.scanId);
+  const operationKey = requireReference("operationKey", input.operationKey);
+  const actorRef = requireReference("actorRef", input.actorRef);
+  const expectedAttemptCount = requireAttemptCount(
+    "expectedAttemptCount",
+    input.expectedAttemptCount,
   );
-  return result.rows.length === 0 ? "not_found" : "deleted";
+  const expectedUpdatedAt = requireDate("expectedUpdatedAt", input.expectedUpdatedAt);
+  const at = requireDate("at", input.at);
+  const resultStatus = input.action === "replay" ? "pending" as const : "deleted" as const;
+  return withTransaction(dataSource, async (client) => {
+    await lockOperationKey(client, operationKey);
+    const existingResult = await client.query<ScanOperationRow>(
+      "SELECT * FROM knowledge_conflict_scan_operations WHERE operation_key = $1",
+      [operationKey],
+    );
+    const existing = existingResult.rows[0];
+    if (existing !== undefined) {
+      if (existing.scan_id !== scanId
+        || existing.actor_ref !== actorRef
+        || existing.action !== input.action
+        || requireAttemptCount("stored expected attempt count", existing.expected_attempt_count)
+          !== expectedAttemptCount
+        || requireDate("stored expected updated at", existing.expected_updated_at).getTime()
+          !== expectedUpdatedAt.getTime()
+        || existing.result_status !== resultStatus) {
+        throw new KnowledgeConflictOperationConflictError();
+      }
+      return { outcome: "already_applied", scanId, status: existing.result_status };
+    }
+
+    const scan = await lockScan(client, scanId);
+    if (scan.status !== "dead_lettered"
+      || requireAttemptCount("scan attempt count", scan.attempt_count) !== expectedAttemptCount
+      || requireDate("scan updated at", scan.updated_at).getTime() !== expectedUpdatedAt.getTime()) {
+      throw new KnowledgeConflictLeaseConflictError();
+    }
+    if (input.action === "replay") {
+      const updated = await client.query<ScanRow>(
+        `UPDATE knowledge_conflict_scan_inbox
+         SET status = 'pending', attempt_count = 0, next_attempt_at = $2,
+             last_error_code = NULL, lease_worker_id = NULL, lease_until = NULL, updated_at = $2
+         WHERE id = $1 AND status = 'dead_lettered'
+         RETURNING *`,
+        [scanId, at],
+      );
+      if (updated.rows[0] === undefined) throw new KnowledgeConflictLeaseConflictError();
+    }
+    await client.query<ScanOperationRow>(
+      `INSERT INTO knowledge_conflict_scan_operations (
+         operation_key, scan_id, group_id, actor_ref, action, expected_attempt_count,
+         expected_updated_at, result_status, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [operationKey, scanId, scan.group_id, actorRef, input.action, expectedAttemptCount,
+        expectedUpdatedAt, resultStatus, at],
+    );
+    if (input.action === "delete") {
+      const deleted = await client.query<{ id: string }>(
+        `DELETE FROM knowledge_conflict_scan_inbox
+         WHERE id = $1 AND status = 'dead_lettered'
+         RETURNING id`,
+        [scanId],
+      );
+      if (deleted.rows[0] === undefined) throw new KnowledgeConflictLeaseConflictError();
+    }
+    return { outcome: "applied", scanId, status: resultStatus };
+  });
 }
 
 async function getScanStatusCounts(dataSource: PostgresKnowledgeConflictDataSource) {
@@ -1728,16 +1802,19 @@ async function validateCandidateCurrentState(
   maxPermissionAgeMs: number,
   input: {
     candidateId: string;
+    expectedVersion: number;
     permissionAttestedAt: Date;
     operationKey: string;
     at: Date;
   },
 ) {
   const candidateId = requireReference("candidateId", input.candidateId);
+  const expectedVersion = requirePositiveSafeInteger("expectedVersion", input.expectedVersion);
   const at = requireDate("at", input.at);
   assertFreshPermission(input.permissionAttestedAt, at, maxPermissionAgeMs);
   return withTransaction(dataSource, async (client) => {
     const row = await lockCandidateMemoryBeforeCandidate(client, candidateId);
+    if (Number(row.version) !== expectedVersion) throw new KnowledgeConflictVersionConflictError();
     const evidence = await loadEvidence(client, candidateId);
     const staleReason = await findStaleReason(client, row, evidence);
     if (staleReason === undefined) return { status: "current" as const, candidate: mapCandidate(row, evidence) };
@@ -2125,14 +2202,21 @@ async function reconcileDelivery(
   createId: () => string,
   input: {
     deliveryId: string;
+    expectedAttemptCount: number;
     outcome: "sent" | "not_sent";
     operationKey: string;
+    actorRef: string;
     messageId?: string;
     at: Date;
   },
 ): Promise<KnowledgeConflictDelivery> {
   const deliveryId = requireReference("deliveryId", input.deliveryId);
   const operationKey = requireReference("operationKey", input.operationKey);
+  const expectedAttemptCount = requireAttemptCount(
+    "expectedAttemptCount",
+    input.expectedAttemptCount,
+  );
+  const actorRef = requireReference("actorRef", input.actorRef);
   const at = requireDate("at", input.at);
   if (input.outcome === "sent" && input.messageId === undefined) {
     throw new Error("messageId is required for sent reconciliation");
@@ -2147,7 +2231,10 @@ async function reconcileDelivery(
     const replay = replayResult.rows[0];
     if (replay !== undefined) {
       if (replay.delivery_id !== deliveryId
+        || requireAttemptCount("stored delivery attempt count", replay.attempt_count)
+          !== expectedAttemptCount
         || replay.outcome !== input.outcome
+        || replay.actor_ref !== actorRef
         || (replay.sent_message_id ?? undefined) !== input.messageId) {
         throw new KnowledgeConflictOperationConflictError();
       }
@@ -2155,14 +2242,16 @@ async function reconcileDelivery(
       return mapDelivery(current);
     }
     const delivery = await lockDelivery(client, deliveryId);
-    if (delivery.status !== "outcome_unknown") throw new KnowledgeConflictDeliveryConflictError();
+    if (requireAttemptCount("delivery attempt count", delivery.attempt_count)
+      !== expectedAttemptCount
+      || delivery.status !== "outcome_unknown") throw new KnowledgeConflictDeliveryConflictError();
     await client.query<ReconciliationRow>(
       `INSERT INTO knowledge_conflict_delivery_reconciliations (
-         operation_key, delivery_id, attempt_count, outcome, sent_message_id, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6)
+         operation_key, delivery_id, attempt_count, outcome, sent_message_id, actor_ref, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [operationKey, deliveryId, Number(delivery.attempt_count), input.outcome,
-        input.messageId ?? null, at],
+      [operationKey, deliveryId, expectedAttemptCount, input.outcome,
+        input.messageId ?? null, actorRef, at],
     );
     if (input.outcome === "not_sent") {
       const result = await client.query<DeliveryRow>(
@@ -2194,7 +2283,7 @@ async function reconcileDelivery(
       candidateId: candidate.id,
       operationKey,
       actorType: "admin_role",
-      actorRef: "delivery_reconciler",
+      actorRef,
       fromStatus: "approved_for_delivery",
       toStatus: "delivered",
       fromVersion: Number(candidate.version),
@@ -2735,6 +2824,12 @@ function requireNonNegativeInteger(name: string, value: string | number): number
 function requirePositiveInteger(name: string, value: string | number): number {
   const normalized = Number(value);
   if (!Number.isSafeInteger(normalized) || normalized < 1) throw new Error(`${name} is invalid`);
+  return normalized;
+}
+
+function requireAttemptCount(name: string, value: string | number): number {
+  const normalized = requirePositiveInteger(name, value);
+  if (normalized > 20) throw new Error(`${name} is invalid`);
   return normalized;
 }
 

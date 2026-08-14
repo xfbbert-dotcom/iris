@@ -1,5 +1,10 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 
+import type {
+  KnowledgeConflictCurrentValidationResult,
+  KnowledgeConflictCurrentValidator,
+} from "./knowledge-conflict-current-validator.js";
+
 import {
   KNOWLEDGE_CONFLICT_CANDIDATE_STATUSES,
   type KnowledgeConflictCandidate,
@@ -50,6 +55,7 @@ const SCAN_ERROR_CODES = new Set([
 
 export type KnowledgeConflictApiRuntime = {
   repository: KnowledgeConflictRepository;
+  currentValidator: KnowledgeConflictCurrentValidator;
 };
 
 export function registerKnowledgeConflictApi(
@@ -121,10 +127,17 @@ export function registerKnowledgeConflictApi(
           requireReference("candidateId", request.params.candidateId),
         );
         if (candidate === undefined) return candidateNotFound(reply);
-        const delivery = await runtime.repository.getDeliveryForCandidate(candidate.id);
+        const validation = candidate.status === "superseded"
+          ? { status: "superseded" as const, candidate, reason: "evidence_stale" }
+          : await runtime.currentValidator.validate({
+              candidate,
+              expectedVersion: candidate.version,
+            });
+        const validatedCandidate = validation.candidate;
+        const delivery = await runtime.repository.getDeliveryForCandidate(validatedCandidate.id);
         return {
           ok: true,
-          candidate: toCandidateDetail(candidate),
+          candidate: toCandidateDetail(validatedCandidate, validation),
           ...(delivery === undefined ? {} : {
             delivery: {
               deliveryId: delivery.id,
@@ -205,8 +218,29 @@ export function registerKnowledgeConflictApi(
         const candidateId = requireReference("candidateId", request.params.candidateId);
         const body = parseGovernanceBody(unwrapBody(request.body));
         const actorRef = requireOperator(request.headers["x-iris-operator"]);
-        if (await loadScopedCandidate(runtime.repository, groupId, candidateId) === undefined) {
+        const candidate = await loadScopedCandidate(runtime.repository, groupId, candidateId);
+        if (candidate === undefined) {
           return candidateNotFound(reply);
+        }
+        if (candidate.version !== body.expectedVersion) {
+          throw new KnowledgeConflictVersionConflictError();
+        }
+        const validation = await runtime.currentValidator.validate({
+          candidate,
+          expectedVersion: body.expectedVersion,
+        });
+        if (validation.status === "validation_unavailable") {
+          return reply.code(503).send({
+            ok: false,
+            error: "knowledge_conflict_validation_unavailable",
+          });
+        }
+        if (validation.status !== "current") {
+          return reply.code(409).send({
+            ok: false,
+            error: "knowledge_conflict_validation_required",
+            currentValidation: toCurrentValidation(validation),
+          });
         }
         const result = await runtime.repository.approveForDelivery({
           candidateId,
@@ -249,15 +283,18 @@ export function registerKnowledgeConflictApi(
       if (!authenticationConfigured) return authenticationUnavailable(reply);
       if (runtime === undefined) return unavailable(reply);
       try {
-        requireOperator(request.headers["x-iris-operator"]);
-        const body = requireRecord(unwrapBody(request.body), "request");
-        assertOnlyKeys(body, []);
+        const actorRef = requireOperator(request.headers["x-iris-operator"]);
+        const body = parseScanOperationBody(unwrapBody(request.body));
         const scanId = requireReference("scanId", request.params.scanId);
-        const scan = await runtime.repository.replayDeadLetterScan({
+        const result = await runtime.repository.replayDeadLetterScan({
           scanId,
+          expectedAttemptCount: body.expectedAttemptCount,
+          expectedUpdatedAt: body.expectedUpdatedAt,
+          operationKey: body.operationKey,
+          actorRef,
           at: requireDate(now()),
         });
-        return { ok: true, outcome: "replayed", scanId, status: scan.status };
+        return { ok: true, outcome: "replayed", scanId, status: result.status };
       } catch (error) {
         return handleError(reply, error);
       }
@@ -270,13 +307,18 @@ export function registerKnowledgeConflictApi(
       if (!authenticationConfigured) return authenticationUnavailable(reply);
       if (runtime === undefined) return unavailable(reply);
       try {
-        requireOperator(request.headers["x-iris-operator"]);
+        const actorRef = requireOperator(request.headers["x-iris-operator"]);
+        const body = parseScanOperationBody(unwrapBody(request.body));
         const scanId = requireReference("scanId", request.params.scanId);
-        const outcome = await runtime.repository.deleteDeadLetterScan(scanId);
-        if (outcome === "not_found") {
-          return reply.code(404).send({ ok: false, error: "knowledge_conflict_scan_not_found" });
-        }
-        return { ok: true, outcome, scanId };
+        await runtime.repository.deleteDeadLetterScan({
+          scanId,
+          expectedAttemptCount: body.expectedAttemptCount,
+          expectedUpdatedAt: body.expectedUpdatedAt,
+          operationKey: body.operationKey,
+          actorRef,
+          at: requireDate(now()),
+        });
+        return { ok: true, outcome: "deleted", scanId };
       } catch (error) {
         return handleError(reply, error);
       }
@@ -289,13 +331,15 @@ export function registerKnowledgeConflictApi(
       if (!authenticationConfigured) return authenticationUnavailable(reply);
       if (runtime === undefined) return unavailable(reply);
       try {
-        requireOperator(request.headers["x-iris-operator"]);
+        const actorRef = requireOperator(request.headers["x-iris-operator"]);
         const deliveryId = requireReference("deliveryId", request.params.deliveryId);
         const body = parseReconciliationBody(unwrapBody(request.body));
         const delivery = await runtime.repository.reconcileDelivery({
           deliveryId,
+          expectedAttemptCount: body.expectedAttemptCount,
           outcome: body.outcome,
           operationKey: body.operationKey,
+          actorRef,
           ...(body.messageId === undefined ? {} : { messageId: body.messageId }),
           at: requireDate(now()),
         });
@@ -345,11 +389,25 @@ function toCandidateSummary(candidate: KnowledgeConflictCandidate) {
   };
 }
 
-function toCandidateDetail(candidate: KnowledgeConflictCandidate) {
+function toCandidateDetail(
+  candidate: KnowledgeConflictCandidate,
+  validation: KnowledgeConflictCurrentValidationResult,
+) {
   return {
     ...toCandidateSummary(candidate),
+    currentValidation: toCurrentValidation(validation),
     evidence: candidate.evidence.map(toEvidenceIdentity),
   };
+}
+
+function toCurrentValidation(validation: KnowledgeConflictCurrentValidationResult) {
+  if (validation.status === "superseded") {
+    return {
+      status: validation.status,
+      reason: STALE_REASON_CODES.has(validation.reason) ? validation.reason : "evidence_stale",
+    };
+  }
+  return { status: validation.status };
 }
 
 function toEvidenceIdentity(evidence: KnowledgeConflictEvidenceReference) {
@@ -448,25 +506,52 @@ function parseGovernanceBody(value: unknown) {
 }
 
 function parseReconciliationBody(value: unknown): {
+  expectedAttemptCount: number;
   outcome: "sent" | "not_sent";
   operationKey: string;
   messageId?: string;
 } {
   const body = requireRecord(value, "request");
-  assertOnlyKeys(body, ["outcome", "operationKey", "messageId"]);
+  assertOnlyKeys(body, ["expectedAttemptCount", "outcome", "operationKey", "messageId"]);
   if (body.outcome !== "sent" && body.outcome !== "not_sent") {
     throw validationError("outcome is invalid");
   }
   const operationKey = requireReference("operationKey", body.operationKey);
+  const expectedAttemptCount = requirePositiveInteger(
+    "expectedAttemptCount",
+    body.expectedAttemptCount,
+  );
   if (body.outcome === "sent") {
     return {
       outcome: body.outcome,
+      expectedAttemptCount,
       operationKey,
       messageId: requireReference("messageId", body.messageId),
     };
   }
   if (body.messageId !== undefined) throw validationError("messageId is invalid");
-  return { outcome: body.outcome, operationKey };
+  return { outcome: body.outcome, expectedAttemptCount, operationKey };
+}
+
+function parseScanOperationBody(value: unknown) {
+  const body = requireRecord(value, "request");
+  assertOnlyKeys(body, ["expectedAttemptCount", "expectedUpdatedAt", "operationKey"]);
+  return {
+    expectedAttemptCount: requirePositiveInteger("expectedAttemptCount", body.expectedAttemptCount),
+    expectedUpdatedAt: requireIsoDate("expectedUpdatedAt", body.expectedUpdatedAt),
+    operationKey: requireReference("operationKey", body.operationKey),
+  };
+}
+
+function requireIsoDate(name: string, value: unknown): Date {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) {
+    throw validationError(`${name} is invalid`);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== value) {
+    throw validationError(`${name} is invalid`);
+  }
+  return parsed;
 }
 
 function parseStatuses(value: unknown): KnowledgeConflictCandidateStatus[] {

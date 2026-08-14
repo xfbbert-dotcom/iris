@@ -1132,6 +1132,8 @@ let wikiSpaceOperationGeneration = 0;
 let wikiSpaceMutationCount = 0;
 let wikiSpaceMutationsIdle = Promise.resolve();
 let resolveWikiSpaceMutationsIdle;
+let knowledgeConflictRefreshGeneration = 0;
+let knowledgeConflictDetailGeneration = 0;
 const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
 const userSubmittedDocumentPath = "/internal/document-sync/user-submitted-documents";
 const wikiSpaceListPath = "/internal/document-sync/wiki-spaces?limit=20";
@@ -2043,7 +2045,10 @@ function renderKnowledgeConflictStatus(status) {
 function validationLabel(validation) {
   if (validation?.status === "superseded") return "Superseded; approval is blocked";
   if (validation?.status === "current") return "Current-state validation passed";
-  return "Not revalidated in this view; delivery performs a live permission check";
+  if (validation?.status === "permission_blocked") {
+    return "Live permission is blocked; approval is unavailable";
+  }
+  return "Current validation is unavailable; approval is unavailable";
 }
 
 function renderKnowledgeConflictCandidates(groupId, candidates) {
@@ -2142,7 +2147,7 @@ function renderKnowledgeConflictDetail(groupId, body, source) {
   const approve = knowledgeConflictActionButton(
     "Approve one delivery",
     "secondary",
-    candidate.status === "pending_review",
+    candidate.status === "pending_review" && candidate.currentValidation?.status === "current",
     async () => governKnowledgeConflict(groupId, candidate, "approve-delivery"),
   );
   actions.append(dismiss, approve);
@@ -2190,10 +2195,15 @@ function knowledgeConflictActionButton(label, className, enabled, action) {
 }
 
 async function loadKnowledgeConflictDetail(groupId, candidateId) {
+  const generation = ++knowledgeConflictDetailGeneration;
+  const refreshGeneration = knowledgeConflictRefreshGeneration;
   const body = await requestJson(
     knowledgeConflictGroupBasePath + encodeURIComponent(groupId)
       + "/candidates/" + encodeURIComponent(candidateId),
   );
+  if (!isCurrentKnowledgeConflictDetail(
+    generation, refreshGeneration, groupId, candidateId, body.candidate,
+  )) return;
   const sourceId = body.candidate?.target?.documentSourceId;
   const sourceResponse = sourceId === undefined
     ? {}
@@ -2201,7 +2211,18 @@ async function loadKnowledgeConflictDetail(groupId, candidateId) {
       "/internal/document-sync/sources/" + encodeURIComponent(sourceId)
         + "?includeLatestSnapshot=true",
     );
+  if (!isCurrentKnowledgeConflictDetail(
+    generation, refreshGeneration, groupId, candidateId, body.candidate,
+  )) return;
   renderKnowledgeConflictDetail(groupId, body, sourceResponse.source);
+}
+
+function isCurrentKnowledgeConflictDetail(generation, refreshGeneration, groupId, candidateId, candidate) {
+  return generation === knowledgeConflictDetailGeneration
+    && refreshGeneration === knowledgeConflictRefreshGeneration
+    && knowledgeConflictGroup.value.trim() === groupId
+    && candidate?.groupId === groupId
+    && candidate?.candidateId === candidateId;
 }
 
 function requireKnowledgeConflictOperator() {
@@ -2220,7 +2241,11 @@ function stableKnowledgeConflictIntent(value) {
 async function governKnowledgeConflict(groupId, candidate, action) {
   requireKnowledgeConflictOperator();
   const label = action === "dismiss" ? "dismiss this possible conflict" : "approve one group delivery";
-  if (!window.confirm("Confirm you want to " + label + " at candidate version " + candidate.candidateVersion + "?")) return false;
+  if (!window.confirm(
+    "Confirm you want to " + label + " for group " + groupId
+      + ", candidate " + candidate.candidateId + " (" + candidate.subject + ")"
+      + " at version " + candidate.candidateVersion + "?",
+  )) return false;
   const reason = window.prompt("Operator reason:", action === "dismiss"
     ? "Reviewed and not suitable for delivery."
     : "Reviewed for one bounded group delivery.");
@@ -2257,6 +2282,7 @@ async function reconcileKnowledgeConflictDelivery(delivery, outcome) {
     {
       method: "POST",
       body: JSON.stringify({
+        expectedAttemptCount: delivery.attemptCount,
         outcome,
         ...(messageId === undefined ? {} : { messageId }),
         operationKey: "admin-console-conflict-reconcile-" + outcome + "-" + delivery.deliveryId
@@ -2291,10 +2317,21 @@ function renderKnowledgeConflictDeadLetters(deadLetters) {
         if (!window.confirm(label + " this content-free scan dead letter?")) return;
         button.disabled = true;
         try {
+          const recoveryIntent = label.toLowerCase() + ":" + deadLetter.scanId + ":"
+            + text(deadLetter.attemptCount, "0") + ":" + text(deadLetter.updatedAt);
           await requestJson(
             knowledgeConflictDeadLetterBasePath + "/" + encodeURIComponent(deadLetter.scanId)
               + (action.length === 0 ? "" : "/" + action),
-            { method, ...(method === "POST" ? { body: JSON.stringify({}) } : {}) },
+            {
+              method,
+              body: JSON.stringify({
+                expectedAttemptCount: deadLetter.attemptCount,
+                expectedUpdatedAt: deadLetter.updatedAt,
+                operationKey: "admin-console-conflict-scan-" + label.toLowerCase() + "-"
+                  + deadLetter.scanId + "-attempt-" + deadLetter.attemptCount + "-"
+                  + stableKnowledgeConflictIntent(recoveryIntent),
+              }),
+            },
           );
           addEvent(label + " recorded for a conflict scan dead letter");
           await refreshKnowledgeConflicts();
@@ -2317,6 +2354,8 @@ function renderKnowledgeConflictDeadLetters(deadLetters) {
 }
 
 async function refreshKnowledgeConflicts() {
+  const generation = ++knowledgeConflictRefreshGeneration;
+  knowledgeConflictDetailGeneration += 1;
   const groupId = knowledgeConflictGroup.value.trim();
   const statusRequest = requestJson(knowledgeConflictStatusPath);
   const candidateRequest = groupId.length === 0
@@ -2328,6 +2367,8 @@ async function refreshKnowledgeConflicts() {
     candidateRequest,
     deadLetterRequest,
   ]);
+  if (generation !== knowledgeConflictRefreshGeneration
+    || knowledgeConflictGroup.value.trim() !== groupId) return;
   renderKnowledgeConflictStatus(statusBody);
   renderKnowledgeConflictCandidates(groupId, candidateBody.candidates || []);
   renderKnowledgeConflictDeadLetters(deadLetterBody.deadLetters || []);
