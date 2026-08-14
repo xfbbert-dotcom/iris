@@ -262,3 +262,109 @@ git diff --check
   integration case and other conditional PostgreSQL cases were skipped locally. Static migration,
   repository-oracle, and transaction-routing tests passed, but this is not a live database claim.
 - No live Feishu callback, membership, card, or Wiki workflow was exercised or claimed.
+
+---
+
+## Fix Round 2/5 — Redelivery, Final Membership, and Draft-Crash Recovery
+
+Status: `DONE_WITH_CONCERNS`
+
+Implementation commit:
+
+- `7e9f1770823ecdace50763d4682da0e58ac0b753` —
+  `fix(core): recover conflict draft callbacks safely`
+
+### Findings and decisions
+
+All three scoped findings were reproduced and confirmed.
+
+1. `receivedAt` was incorrectly part of callback identity equality and the operation fingerprint.
+   An exact Feishu event delivered again after a Redis enqueue failure therefore conflicted with its
+   already-persisted PostgreSQL identity. `receivedAt` is now first-write arrival metadata only. The
+   stable fingerprint remains bound to callback key, event/app, verified actor/chat/message,
+   candidate/presentation/group/version/nonce, and action. New rows use the stable v2 fingerprint;
+   exact legacy v1 rows remain resolvable using their own first-write timestamp. Changed context or
+   intent still raises `KnowledgeConflictCallbackIdentityConflictError`.
+2. Membership was checked before the final awaited permission/current-state validation. The worker
+   now checks membership after that validation and makes membership the final external await before
+   each repository mutation: dismissal, draft creation, and the final interaction/candidate commit.
+   Runtime gates remain synchronous immediately after the membership check, while permission proof
+   timestamps and publication policy identity/version remain transaction-bound.
+3. Conflict draft creation used a fingerprint containing volatile creation and permission-attestation
+   timestamps. A crash after the draft transaction but before the conflict interaction made the next
+   attempt conflict permanently. Conflict creation now fingerprints only semantic intent: stable IDs,
+   origin/creator, exact revision/reviewer/evidence, attested source identities, and target policy
+   identity/version. Replay revalidates current evidence, fresh live-permission proof, and the exact
+   current policy transactionally. It accepts only the untouched deterministic version-1/revision-1
+   draft, appends the fresh proof, and returns `already_applied`; altered intent remains an immutable
+   operation conflict.
+
+Forward migration `0048_knowledge_conflict_draft_reattestations.sql` expands the append-only
+governance-attestation primary key with `permission_attested_at`, allowing fresh immutable proof rows
+without updating or deleting history. No migration at or below `0045` was changed.
+
+### RED evidence
+
+Initial command:
+
+```powershell
+npm --workspace apps/core test -- postgres-knowledge-conflict-callback-identity-store.test.ts feishu-card-action-gateway.test.ts knowledge-conflict-interaction-worker.test.ts postgres-knowledge-draft-repository.test.ts
+```
+
+Raw exit 1 result: 4 files failed; 6 tests failed, 55 passed, and 14 conditional tests skipped. Five
+failures represented the product defects: exact callback redelivery conflict, missing final
+membership checks for dismiss/create, missing forward reattestation migration, and volatile conflict
+draft replay fingerprint. The sixth failure was a test-harness expectation of HTTP 503; the existing
+public callback contract intentionally returns HTTP 200 with an error toast on enqueue rejection, so
+that assertion was corrected before implementation.
+
+An additional last-await oracle was captured after the initial fixes:
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-interaction-worker.test.ts
+```
+
+Exit 1: 1 failed and 33 passed. It proved membership could also change during the pre-draft
+permission validation and that draft creation still occurred. The final pre-draft membership check
+made this case fail closed before `createDraft`.
+
+### GREEN and regression evidence
+
+Focused/relevant command:
+
+```powershell
+npm --workspace apps/core test -- migration-runner.test.ts postgres-knowledge-conflict-callback-identity-store.test.ts feishu-card-action-gateway.test.ts knowledge-conflict-interaction-worker.test.ts postgres-knowledge-draft-repository.test.ts approval-interaction-worker.test.ts redis-approval-interaction-queue.test.ts postgres-knowledge-conflict-repository.test.ts knowledge-draft-presentation-service.test.ts
+```
+
+Exit 0: 9 files passed; 236 tests passed and 36 conditional tests skipped.
+
+Coverage includes distinct-arrival callback identity reuse plus changed-intent rejection, a
+gateway-shaped Redis failure/redelivery/enqueue retry, membership revocation during both pre-draft
+and final validations, draft-commit/interaction-failure recovery with a later clock and fresh proof,
+one semantic draft creation only, append-only reattestation, and changed draft-intent rejection. The
+real-PostgreSQL suite contains the same later-attestation replay/count/conflict oracle but remained
+conditionally skipped in this environment.
+
+Full Core suite:
+
+```powershell
+npm --workspace apps/core test
+```
+
+Exit 0: 183 files passed and 3 conditional files skipped; 3,277 tests passed and 250 skipped
+(3,527 total).
+
+The following also exited 0 after the final source and test changes:
+
+```powershell
+npm --workspace apps/core run typecheck
+npm run build
+git diff --check
+git diff --cached --check
+```
+
+### Remaining concerns
+
+- `IRIS_TEST_DATABASE_URL` was absent. The meaningful stateful repository oracle passed, but the
+  forward migration and semantic replay were not executed against a live PostgreSQL instance here.
+- No live Feishu callback/redelivery, membership, card, or Wiki workflow was exercised or claimed.
