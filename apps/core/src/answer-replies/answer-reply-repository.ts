@@ -22,6 +22,7 @@ export type AnswerReplyDelivery = {
   preparedReplyText?: string;
   renderedReplyFingerprint: string;
   semanticFingerprint: string;
+  knowledgeConflictCandidateId?: string;
   replyMessageId?: string;
   safeNoticeMessageId?: string;
   attemptCount: number;

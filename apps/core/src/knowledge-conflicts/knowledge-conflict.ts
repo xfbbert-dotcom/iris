@@ -25,6 +25,11 @@ export type KnowledgeConflictScanStatus = (typeof KNOWLEDGE_CONFLICT_SCAN_STATUS
 export type KnowledgeConflictDeliveryStatus =
   (typeof KNOWLEDGE_CONFLICT_DELIVERY_STATUSES)[number];
 export type KnowledgeConflictConfidence = "high" | "medium" | "low";
+export type KnowledgeConflictMessageReference =
+  `C${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10}`;
+export type KnowledgeConflictMemoryReference = "M1";
+export type KnowledgeConflictDocumentReference =
+  `D${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12}`;
 
 export type KnowledgeConflictPlan = {
   outcome: "conflict" | "no_conflict" | "insufficient_evidence";
@@ -43,35 +48,36 @@ export type KnowledgeConflictPlan = {
 export type KnowledgeConflictEvidenceReference =
   | {
       type: "conversation_message";
-      referenceId: string;
+      referenceId: KnowledgeConflictMessageReference;
       groupId: string;
       conversationMessageId: string;
     }
   | {
       type: "group_memory";
-      referenceId: string;
+      referenceId: KnowledgeConflictMemoryReference;
       groupId: string;
       groupMemoryId: string;
       expectedUpdatedAt: Date;
     }
   | {
       type: "document_source";
-      referenceId: string;
+      referenceId: KnowledgeConflictDocumentReference;
       documentSourceId: string;
     }
   | {
       type: "document_snapshot";
-      referenceId: string;
+      referenceId: KnowledgeConflictDocumentReference;
       documentSourceId: string;
       documentSnapshotId: string;
       contentHash: string;
     }
   | {
       type: "document_fragment";
-      referenceId: string;
+      referenceId: KnowledgeConflictDocumentReference;
       documentSourceId: string;
       documentSnapshotId: string;
       documentFragmentId: string;
+      snapshotContentHash: string;
       contentHash: string;
     };
 

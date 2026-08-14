@@ -1,3 +1,11 @@
+ALTER TABLE document_snapshots
+  ADD CONSTRAINT document_snapshots_exact_identity_key
+  UNIQUE (id, document_source_id, content_hash);
+
+ALTER TABLE document_fragments
+  ADD CONSTRAINT document_fragments_exact_identity_key
+  UNIQUE (id, document_source_id, document_snapshot_id, content_hash);
+
 CREATE TABLE knowledge_conflict_scan_inbox (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   group_id TEXT NOT NULL CHECK (char_length(group_id) BETWEEN 1 AND 512),
@@ -80,8 +88,9 @@ CREATE TABLE knowledge_conflict_candidates (
     REFERENCES conversation_messages(id, chat_id) ON DELETE RESTRICT,
   FOREIGN KEY (target_document_source_id)
     REFERENCES document_sources(id) ON DELETE RESTRICT,
-  FOREIGN KEY (target_snapshot_id)
-    REFERENCES document_snapshots(id) ON DELETE RESTRICT
+  CONSTRAINT knowledge_conflict_candidates_target_snapshot_fkey
+    FOREIGN KEY (target_snapshot_id, target_document_source_id, target_content_hash)
+    REFERENCES document_snapshots(id, document_source_id, content_hash) ON DELETE RESTRICT
 );
 
 CREATE UNIQUE INDEX knowledge_conflict_one_live_evidence_idx
@@ -110,43 +119,64 @@ CREATE TABLE knowledge_conflict_evidence (
   document_source_id TEXT,
   document_snapshot_id TEXT,
   document_fragment_id TEXT,
+  snapshot_content_hash TEXT CHECK (
+    snapshot_content_hash IS NULL OR snapshot_content_hash ~ '^[0-9a-f]{64}$'
+  ),
   content_hash TEXT CHECK (content_hash IS NULL OR content_hash ~ '^[0-9a-f]{64}$'),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT knowledge_conflict_evidence_reference_key
     UNIQUE (candidate_id, evidence_type, reference_id),
+  CONSTRAINT knowledge_conflict_evidence_reference_kind_check CHECK (
+    (evidence_type = 'conversation_message' AND reference_id ~ '^C([1-9]|10)$')
+    OR (evidence_type = 'group_memory' AND reference_id = 'M1')
+    OR (evidence_type IN ('document_source', 'document_snapshot', 'document_fragment')
+      AND reference_id ~ '^D([1-9]|1[0-2])$')
+  ),
   FOREIGN KEY (conversation_message_id, group_id)
     REFERENCES conversation_messages(id, chat_id) ON DELETE RESTRICT,
   FOREIGN KEY (group_memory_id, group_id)
     REFERENCES group_memories(id, group_id) ON DELETE RESTRICT,
   FOREIGN KEY (document_source_id) REFERENCES document_sources(id) ON DELETE RESTRICT,
-  FOREIGN KEY (document_snapshot_id) REFERENCES document_snapshots(id) ON DELETE RESTRICT,
-  FOREIGN KEY (document_fragment_id) REFERENCES document_fragments(id) ON DELETE RESTRICT,
+  CONSTRAINT knowledge_conflict_evidence_snapshot_identity_fkey
+    FOREIGN KEY (document_snapshot_id, document_source_id, snapshot_content_hash)
+    REFERENCES document_snapshots(id, document_source_id, content_hash) ON DELETE RESTRICT,
+  CONSTRAINT knowledge_conflict_evidence_fragment_identity_fkey
+    FOREIGN KEY (
+      document_fragment_id, document_source_id, document_snapshot_id, content_hash
+    ) REFERENCES document_fragments(
+      id, document_source_id, document_snapshot_id, content_hash
+    ) ON DELETE RESTRICT,
   CHECK (
     (evidence_type = 'conversation_message'
       AND group_id IS NOT NULL AND conversation_message_id IS NOT NULL
       AND group_memory_id IS NULL AND source_updated_at IS NULL
       AND document_source_id IS NULL AND document_snapshot_id IS NULL
-      AND document_fragment_id IS NULL AND content_hash IS NULL)
+      AND document_fragment_id IS NULL AND snapshot_content_hash IS NULL
+      AND content_hash IS NULL)
     OR (evidence_type = 'group_memory'
       AND group_id IS NOT NULL AND conversation_message_id IS NULL
       AND group_memory_id IS NOT NULL AND source_updated_at IS NOT NULL
       AND document_source_id IS NULL AND document_snapshot_id IS NULL
-      AND document_fragment_id IS NULL AND content_hash IS NULL)
+      AND document_fragment_id IS NULL AND snapshot_content_hash IS NULL
+      AND content_hash IS NULL)
     OR (evidence_type = 'document_source'
       AND group_id IS NULL AND conversation_message_id IS NULL
       AND group_memory_id IS NULL AND source_updated_at IS NULL
       AND document_source_id IS NOT NULL AND document_snapshot_id IS NULL
-      AND document_fragment_id IS NULL AND content_hash IS NULL)
+      AND document_fragment_id IS NULL AND snapshot_content_hash IS NULL
+      AND content_hash IS NULL)
     OR (evidence_type = 'document_snapshot'
       AND group_id IS NULL AND conversation_message_id IS NULL
       AND group_memory_id IS NULL AND source_updated_at IS NULL
       AND document_source_id IS NOT NULL AND document_snapshot_id IS NOT NULL
-      AND document_fragment_id IS NULL AND content_hash IS NOT NULL)
+      AND document_fragment_id IS NULL AND snapshot_content_hash IS NOT NULL
+      AND content_hash = snapshot_content_hash)
     OR (evidence_type = 'document_fragment'
       AND group_id IS NULL AND conversation_message_id IS NULL
       AND group_memory_id IS NULL AND source_updated_at IS NULL
       AND document_source_id IS NOT NULL AND document_snapshot_id IS NOT NULL
-      AND document_fragment_id IS NOT NULL AND content_hash IS NOT NULL)
+      AND document_fragment_id IS NOT NULL AND snapshot_content_hash IS NOT NULL
+      AND content_hash IS NOT NULL)
   )
 );
 

@@ -649,6 +649,47 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     expect(replay.receipt.events).toHaveLength(1);
   });
 
+  it("persists the knowledge-conflict candidate as exact preparation identity", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const candidateId = `answer-candidate-${randomUUID()}`;
+    await insertKnowledgeConflictCandidateFixture(pool!, candidateId);
+    const input = prepareInput(`candidate-${randomUUID()}`, {
+      knowledgeConflictCandidateId: candidateId,
+    });
+
+    const first = await repository.prepare(input);
+    expect(first.receipt.delivery.knowledgeConflictCandidateId).toBe(candidateId);
+    await expect(pool!.query<{ knowledge_conflict_candidate_id: string }>(
+      `SELECT knowledge_conflict_candidate_id
+       FROM answer_reply_deliveries WHERE id = $1`,
+      [first.receipt.delivery.id],
+    )).resolves.toMatchObject({
+      rows: [{ knowledge_conflict_candidate_id: candidateId }],
+    });
+
+    await expect(repository.prepare({
+      ...input,
+      at: new Date(input.at.getTime() + 1_000),
+    })).resolves.toMatchObject({
+      outcome: "already_applied",
+      receipt: { delivery: { knowledgeConflictCandidateId: candidateId } },
+    });
+    await expect(repository.prepare({
+      ...input,
+      knowledgeConflictCandidateId: `${candidateId}-different`,
+    })).rejects.toBeInstanceOf(AnswerReplyPreparationConflictError);
+    const { knowledgeConflictCandidateId: _removed, ...withoutCandidate } = input;
+    await expect(repository.prepare(withoutCandidate))
+      .rejects.toBeInstanceOf(AnswerReplyPreparationConflictError);
+
+    await expect(repository.findByIncomingMessage({
+      provider: "feishu",
+      incomingMessageId: input.incomingMessageId,
+    })).resolves.toMatchObject({
+      delivery: { knowledgeConflictCandidateId: candidateId },
+    });
+  });
+
   it("rejects changed rendered text or source facts as a semantic conflict", async () => {
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const input = prepareInput("conflict");
@@ -1271,6 +1312,7 @@ function deliveryRow(overrides: Record<string, unknown> = {}) {
     prepared_reply_text: "Answer body",
     rendered_reply_fingerprint: renderedFingerprint,
     semantic_fingerprint: "",
+    knowledge_conflict_candidate_id: null,
     reply_message_id: null,
     safe_notice_message_id: null,
     attempt_count: 0,
@@ -1397,13 +1439,14 @@ async function insertRawReceipt(pool: pg.Pool, fixture: RawReceiptFixture): Prom
        id, provider, incoming_message_id, chat_id, reply_uuid,
        safe_notice_uuid, state, prepared_reply_text,
        rendered_reply_fingerprint, semantic_fingerprint,
+       knowledge_conflict_candidate_id,
        reply_message_id, safe_notice_message_id, attempt_count,
        safe_notice_attempt_count, version, created_at, updated_at,
        last_send_started_at, sent_at, permission_blocked_at,
        reconciliation_required_at, safe_notice_sent_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-       $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+       $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
      )`,
     [
       delivery.id,
@@ -1416,6 +1459,7 @@ async function insertRawReceipt(pool: pg.Pool, fixture: RawReceiptFixture): Prom
       delivery.prepared_reply_text,
       delivery.rendered_reply_fingerprint,
       delivery.semantic_fingerprint,
+      delivery.knowledge_conflict_candidate_id,
       delivery.reply_message_id,
       delivery.safe_notice_message_id,
       delivery.attempt_count,
@@ -1499,6 +1543,7 @@ function testSemanticFingerprintForRows(
     incomingMessageId: delivery.incoming_message_id,
     chatId: delivery.chat_id,
     renderedReplyFingerprint: delivery.rendered_reply_fingerprint,
+    knowledgeConflictCandidateId: delivery.knowledge_conflict_candidate_id ?? undefined,
     sourceTraces: sources.map((source) => ({
       promptRank: source.prompt_rank,
       citationRank: source.citation_rank ?? undefined,
@@ -1513,6 +1558,86 @@ function testSemanticFingerprintForRows(
       embeddingProfileId: source.embedding_profile_id,
     })),
   });
+}
+
+async function insertKnowledgeConflictCandidateFixture(
+  pool: pg.Pool,
+  candidateId: string,
+): Promise<void> {
+  const groupId = `${candidateId}-group`;
+  const messageId = `${candidateId}-message`;
+  const memoryId = `${candidateId}-memory`;
+  const sourceId = `${candidateId}-source`;
+  const snapshotId = `${candidateId}-snapshot`;
+  const contentHash = "e".repeat(64);
+  const sourceUri = `https://example.com/${candidateId}`;
+  await pool.query(
+    `
+    INSERT INTO conversation_messages (
+      id, provider, provider_message_id, chat_id, message_type,
+      sent_at, raw_event_idempotency_key, created_at
+    ) VALUES ($1, 'feishu', $2, $3, 'text', NOW(), $4, NOW())
+    `,
+    [messageId, `${candidateId}-provider-message`, groupId, `${candidateId}-raw-event`],
+  );
+  await pool.query(
+    `
+    INSERT INTO group_memories (
+      id, group_id, memory_scope, category, content, importance, confidence,
+      status, idempotency_key, origin, created_by, request_fingerprint
+    ) VALUES (
+      $1, $2, 'group', 'decision', 'Current conclusion', 5, 0.95,
+      'active', $3, 'system', 'iris', repeat('f', 64)
+    )
+    `,
+    [memoryId, groupId, `${candidateId}-memory-key`],
+  );
+  await pool.query(
+    `
+    INSERT INTO document_sources (
+      id, source_type, source_uri, permission_state, sync_state,
+      can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
+    ) VALUES (
+      $1, 'authorized_wiki_document', $2, 'readable', 'synced',
+      TRUE, TRUE, NOW(), NOW()
+    )
+    `,
+    [sourceId, sourceUri],
+  );
+  await pool.query(
+    `
+    INSERT INTO document_snapshots (
+      id, document_source_id, source_uri, fetch_status, body_text,
+      content_hash, fetched_at, created_at
+    ) VALUES ($1, $2, $3, 'succeeded', 'Prior statement', $4, NOW(), NOW())
+    `,
+    [snapshotId, sourceId, sourceUri, contentHash],
+  );
+  await pool.query(
+    `
+    INSERT INTO knowledge_conflict_candidates (
+      id, idempotency_key, group_id, group_memory_id, memory_updated_at,
+      source_message_id, target_document_source_id, target_snapshot_id,
+      target_content_hash, detector_contract_version, status, subject,
+      knowledge_base_statement, group_conclusion_statement, difference,
+      suggested_update, target_document_ref, confidence
+    ) VALUES (
+      $1, $2, $3, $4, (SELECT updated_at FROM group_memories WHERE id = $4),
+      $5, $6, $7, $8, 'v1', 'pending_review', 'Subject', 'Prior statement',
+      'Current conclusion', 'Difference', 'Suggested update', 'D1', 'high'
+    )
+    `,
+    [
+      candidateId,
+      `${candidateId}-key`,
+      groupId,
+      memoryId,
+      messageId,
+      sourceId,
+      snapshotId,
+      contentHash,
+    ],
+  );
 }
 
 function testFingerprint(value: unknown): string {

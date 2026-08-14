@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   KnowledgeConflictValidationError,
   parseKnowledgeConflictPlan,
+  type KnowledgeConflictEvidenceReference,
 } from "../src/knowledge-conflicts/knowledge-conflict.js";
 
 const fullyReferencedConflict = {
@@ -20,6 +21,33 @@ const fullyReferencedConflict = {
 } as const;
 
 describe("parseKnowledgeConflictPlan", () => {
+  it("assigns C refs only to messages, M1 only to memory, and D refs only to documents", () => {
+    type MessageEvidence = Extract<
+      KnowledgeConflictEvidenceReference,
+      { type: "conversation_message" }
+    >;
+    type MemoryEvidence = Extract<KnowledgeConflictEvidenceReference, { type: "group_memory" }>;
+    type DocumentEvidence = Extract<
+      KnowledgeConflictEvidenceReference,
+      { type: "document_source" | "document_snapshot" | "document_fragment" }
+    >;
+
+    expectTypeOf<MessageEvidence["referenceId"]>()
+      .toEqualTypeOf<`C${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10}`>();
+    expectTypeOf<MemoryEvidence["referenceId"]>().toEqualTypeOf<"M1">();
+    expectTypeOf<DocumentEvidence["referenceId"]>()
+      .toEqualTypeOf<`D${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12}`>();
+
+    expect(() => parseKnowledgeConflictPlan(
+      conflictJson({ groupCitationRefs: ["M1", "D1"] }),
+      new Set(["M1", "D1"]),
+    )).toThrow(KnowledgeConflictValidationError);
+    expect(() => parseKnowledgeConflictPlan(
+      conflictJson({ groupCitationRefs: ["M2", "C1"] }),
+      new Set(["M2", "C1", "D1"]),
+    )).toThrow(KnowledgeConflictValidationError);
+  });
+
   it("accepts a fully referenced conflict plan", () => {
     expect(parseKnowledgeConflictPlan(
       JSON.stringify(fullyReferencedConflict),

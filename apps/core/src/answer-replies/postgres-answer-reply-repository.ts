@@ -42,6 +42,7 @@ export type PostgresAnswerReplyDataSource = AnswerReplyQueryable & {
 const DELIVERY_COLUMNS = `
   id, provider, incoming_message_id, chat_id, reply_uuid, safe_notice_uuid,
   state, prepared_reply_text, rendered_reply_fingerprint, semantic_fingerprint,
+  knowledge_conflict_candidate_id,
   reply_message_id, safe_notice_message_id, attempt_count,
   safe_notice_attempt_count, version, created_at, updated_at,
   last_send_started_at, sent_at, permission_blocked_at,
@@ -81,6 +82,7 @@ type DeliveryRow = {
   prepared_reply_text: unknown;
   rendered_reply_fingerprint: unknown;
   semantic_fingerprint: unknown;
+  knowledge_conflict_candidate_id: unknown;
   reply_message_id: unknown;
   safe_notice_message_id: unknown;
   attempt_count: unknown;
@@ -136,6 +138,7 @@ type NormalizedPrepareInput = {
   deliveryId: string;
   renderedReplyFingerprint: string;
   semanticFingerprint: string;
+  knowledgeConflictCandidateId?: string;
 };
 
 class AnswerReplyPersistenceError extends Error {
@@ -257,13 +260,14 @@ export function createPostgresAnswerReplyRepository(input: {
              id, provider, incoming_message_id, chat_id, reply_uuid,
              safe_notice_uuid, state, prepared_reply_text,
              rendered_reply_fingerprint, semantic_fingerprint,
+             knowledge_conflict_candidate_id,
              reply_message_id, safe_notice_message_id, attempt_count,
              safe_notice_attempt_count, version, created_at, updated_at,
              last_send_started_at, sent_at, permission_blocked_at,
              reconciliation_required_at, safe_notice_sent_at
            ) VALUES (
-             $1, $2, $3, $4, $5, $6, 'prepared', $7, $8, $9,
-             NULL, NULL, 0, 0, 1, $10, $10, NULL, NULL, NULL, NULL, NULL
+             $1, $2, $3, $4, $5, $6, 'prepared', $7, $8, $9, $10,
+             NULL, NULL, 0, 0, 1, $11, $11, NULL, NULL, NULL, NULL, NULL
            )`,
           [
             normalized.deliveryId,
@@ -275,6 +279,7 @@ export function createPostgresAnswerReplyRepository(input: {
             normalized.renderedText,
             normalized.renderedReplyFingerprint,
             normalized.semanticFingerprint,
+            normalized.knowledgeConflictCandidateId ?? null,
             normalized.at,
           ],
         );
@@ -796,6 +801,10 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     throw new Error("safeNoticeUuid is invalid");
   }
   const renderedText = requireExactString("renderedText", input.renderedText, MAX_REPLY_CHARS);
+  const knowledgeConflictCandidateId = normalizeOptionalReference(
+    "knowledgeConflictCandidateId",
+    input.knowledgeConflictCandidateId,
+  );
   const sourceTraces = normalizeSourceTraces(input.sourceTraces);
   const blockedDocumentSourceIds = normalizePreflightBlockedDocumentSourceIds(
     input.blockedDocumentSourceIds,
@@ -808,6 +817,7 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     incomingMessageId,
     chatId,
     renderedReplyFingerprint,
+    knowledgeConflictCandidateId,
     sourceTraces,
   });
   return {
@@ -817,6 +827,7 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     replyUuid,
     safeNoticeUuid,
     renderedText,
+    ...(knowledgeConflictCandidateId === undefined ? {} : { knowledgeConflictCandidateId }),
     sourceTraces,
     blockedDocumentSourceIds,
     at,
@@ -876,7 +887,8 @@ function hasSamePrepareIdentity(
     && delivery.incomingMessageId === input.incomingMessageId
     && delivery.chatId === input.chatId
     && delivery.replyUuid === input.replyUuid
-    && delivery.safeNoticeUuid === input.safeNoticeUuid;
+    && delivery.safeNoticeUuid === input.safeNoticeUuid
+    && delivery.knowledgeConflictCandidateId === input.knowledgeConflictCandidateId;
 }
 
 function normalizeSourceTraces(
@@ -997,6 +1009,14 @@ function mapDelivery(row: DeliveryRow): AnswerReplyDelivery {
         }),
     renderedReplyFingerprint: requireDatabaseFingerprint(row.rendered_reply_fingerprint),
     semanticFingerprint: requireDatabaseFingerprint(row.semantic_fingerprint),
+    ...(row.knowledge_conflict_candidate_id === null
+      ? {}
+      : {
+          knowledgeConflictCandidateId: requireDatabaseBoundedString(
+            row.knowledge_conflict_candidate_id,
+            MAX_REFERENCE_CHARS,
+          ),
+        }),
     ...(row.reply_message_id === null
       ? {}
       : {

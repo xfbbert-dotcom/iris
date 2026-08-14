@@ -67,6 +67,7 @@ export function createAnswerReplySemanticFingerprint(input: {
   incomingMessageId: string;
   chatId: string;
   renderedReplyFingerprint: string;
+  knowledgeConflictCandidateId?: string;
   sourceTraces: readonly AnswerReplySourceTraceInput[];
 }): string {
   return fingerprint({
@@ -74,6 +75,7 @@ export function createAnswerReplySemanticFingerprint(input: {
     incomingMessageId: input.incomingMessageId,
     chatId: input.chatId,
     renderedReplyFingerprint: input.renderedReplyFingerprint,
+    knowledgeConflictCandidateId: input.knowledgeConflictCandidateId,
     sourceTraces: input.sourceTraces.map((trace) => ({
       promptRank: trace.promptRank,
       citationRank: trace.citationRank,
@@ -113,6 +115,10 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
     || !isOptionalExactText(delivery.preparedReplyText, MAX_REPLY_CHARS)
     || !isFingerprint(delivery.renderedReplyFingerprint)
     || !isFingerprint(delivery.semanticFingerprint)
+    || !isOptionalBoundedString(
+      delivery.knowledgeConflictCandidateId,
+      MAX_REFERENCE_CHARS,
+    )
     || !isOptionalBoundedString(delivery.replyMessageId, MAX_REFERENCE_CHARS)
     || !isOptionalBoundedString(delivery.safeNoticeMessageId, MAX_REFERENCE_CHARS)
     || !isNonnegativeSafeInteger(delivery.attemptCount)
@@ -285,6 +291,7 @@ function requireFingerprintContract(receipt: AnswerReplyReceipt): void {
       incomingMessageId: delivery.incomingMessageId,
       chatId: delivery.chatId,
       renderedReplyFingerprint: delivery.renderedReplyFingerprint,
+      knowledgeConflictCandidateId: delivery.knowledgeConflictCandidateId,
       sourceTraces: sources,
     }) !== delivery.semanticFingerprint
   ) {

@@ -1087,16 +1087,38 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         INSERT INTO document_sources (
           id, source_type, source_uri, permission_state, sync_state,
           can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
-        ) VALUES (
+        ) VALUES
+        (
           'document-1', 'authorized_wiki_document', 'https://example.com/document-1',
+          'readable', 'synced', TRUE, TRUE, NOW(), NOW()
+        ),
+        (
+          'document-2', 'authorized_wiki_document', 'https://example.com/document-2',
           'readable', 'synced', TRUE, TRUE, NOW(), NOW()
         );
         INSERT INTO document_snapshots (
           id, document_source_id, source_uri, fetch_status, body_text,
           content_hash, fetched_at, created_at
-        ) VALUES (
+        ) VALUES
+        (
           'snapshot-1', 'document-1', 'https://example.com/document-1', 'succeeded',
           'CNY 5,000', repeat('a', 64), NOW(), NOW()
+        ),
+        (
+          'snapshot-2', 'document-2', 'https://example.com/document-2', 'succeeded',
+          'CNY 20,000', repeat('d', 64), NOW(), NOW()
+        );
+        INSERT INTO document_fragments (
+          id, document_source_id, document_snapshot_id, source_uri,
+          chunk_index, text, content_hash, embedding, created_at
+        ) VALUES
+        (
+          'fragment-1', 'document-1', 'snapshot-1', 'https://example.com/document-1',
+          0, 'CNY 5,000', repeat('c', 64), '[0,0,0,0,0,0]', NOW()
+        ),
+        (
+          'fragment-2', 'document-2', 'snapshot-2', 'https://example.com/document-2',
+          0, 'CNY 20,000', repeat('e', 64), '[0,0,0,0,0,0]', NOW()
         );
         INSERT INTO knowledge_drafts (
           id, source_group_id, origin_kind, status, current_revision_number,
@@ -1135,11 +1157,32 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           candidate_id, evidence_type, reference_id, group_id,
           conversation_message_id, created_at
         ) VALUES (
-          'candidate-1', 'conversation_message', 'M1', 'group-1', 'message-1', NOW()
+          'candidate-1', 'conversation_message', 'C1', 'group-1', 'message-1', NOW()
+        );
+        INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, group_id,
+          group_memory_id, source_updated_at, created_at
+        ) VALUES (
+          'candidate-1', 'group_memory', 'M1', 'group-1', 'memory-1', NOW(), NOW()
+        );
+        INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, document_source_id,
+          document_snapshot_id, snapshot_content_hash, content_hash, created_at
+        ) VALUES (
+          'candidate-1', 'document_snapshot', 'D1', 'document-1',
+          'snapshot-1', repeat('a', 64), repeat('a', 64), NOW()
+        );
+        INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, document_source_id,
+          document_snapshot_id, document_fragment_id, snapshot_content_hash,
+          content_hash, created_at
+        ) VALUES (
+          'candidate-1', 'document_fragment', 'D2', 'document-1',
+          'snapshot-1', 'fragment-1', repeat('a', 64), repeat('c', 64), NOW()
         );
       `);
       await expect(client.query(
-        "UPDATE knowledge_conflict_evidence SET reference_id = 'M2' WHERE candidate_id = 'candidate-1'",
+        "UPDATE knowledge_conflict_evidence SET reference_id = 'C2' WHERE candidate_id = 'candidate-1' AND reference_id = 'C1'",
       )).rejects.toThrow(/append-only/iu);
       await expect(client.query(
         "DELETE FROM knowledge_conflict_evidence WHERE candidate_id = 'candidate-1'",
@@ -1154,6 +1197,100 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         )
       `)).rejects.toMatchObject({
         constraint: "knowledge_draft_revision_evidence_shape_check",
+      });
+      for (const invalidReferenceInsert of [
+        `INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, group_id,
+          conversation_message_id, created_at
+        ) VALUES ('candidate-1', 'conversation_message', 'M1', 'group-1', 'message-1', NOW())`,
+        `INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, group_id,
+          group_memory_id, source_updated_at, created_at
+        ) VALUES ('candidate-1', 'group_memory', 'C2', 'group-1', 'memory-1', NOW(), NOW())`,
+        `INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, document_source_id, created_at
+        ) VALUES ('candidate-1', 'document_source', 'C3', 'document-1', NOW())`,
+      ]) {
+        await expect(client.query(invalidReferenceInsert)).rejects.toMatchObject({
+          constraint: "knowledge_conflict_evidence_reference_kind_check",
+        });
+      }
+
+      for (const candidateInsert of [
+        `INSERT INTO knowledge_conflict_candidates (
+          id, idempotency_key, group_id, group_memory_id, memory_updated_at,
+          source_message_id, target_document_source_id, target_snapshot_id,
+          target_content_hash, detector_contract_version, status, subject,
+          knowledge_base_statement, group_conclusion_statement, difference,
+          suggested_update, target_document_ref, confidence
+        ) VALUES (
+          'candidate-cross-source', 'candidate-cross-source-key', 'group-1',
+          'memory-1', NOW(), 'message-1', 'document-1', 'snapshot-2',
+          repeat('d', 64), 'v1', 'pending_review', 'Subject', 'Prior',
+          'Current', 'Difference', 'Update', 'D1', 'high'
+        )`,
+        `INSERT INTO knowledge_conflict_candidates (
+          id, idempotency_key, group_id, group_memory_id, memory_updated_at,
+          source_message_id, target_document_source_id, target_snapshot_id,
+          target_content_hash, detector_contract_version, status, subject,
+          knowledge_base_statement, group_conclusion_statement, difference,
+          suggested_update, target_document_ref, confidence
+        ) VALUES (
+          'candidate-wrong-hash', 'candidate-wrong-hash-key', 'group-1',
+          'memory-1', NOW(), 'message-1', 'document-1', 'snapshot-1',
+          repeat('f', 64), 'v1', 'pending_review', 'Subject', 'Prior',
+          'Current', 'Difference', 'Update', 'D1', 'high'
+        )`,
+      ]) {
+        await expect(client.query(candidateInsert)).rejects.toMatchObject({
+          constraint: "knowledge_conflict_candidates_target_snapshot_fkey",
+        });
+      }
+
+      await expect(client.query(`
+        INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, document_source_id,
+          document_snapshot_id, snapshot_content_hash, content_hash, created_at
+        ) VALUES (
+          'candidate-1', 'document_snapshot', 'D3', 'document-2',
+          'snapshot-1', repeat('a', 64), repeat('a', 64), NOW()
+        )
+      `)).rejects.toMatchObject({
+        constraint: "knowledge_conflict_evidence_snapshot_identity_fkey",
+      });
+      for (const fragmentInsert of [
+        `INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, document_source_id,
+          document_snapshot_id, document_fragment_id, snapshot_content_hash,
+          content_hash, created_at
+        ) VALUES (
+          'candidate-1', 'document_fragment', 'D4', 'document-1',
+          'snapshot-1', 'fragment-2', repeat('a', 64), repeat('e', 64), NOW()
+        )`,
+        `INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, document_source_id,
+          document_snapshot_id, document_fragment_id, snapshot_content_hash,
+          content_hash, created_at
+        ) VALUES (
+          'candidate-1', 'document_fragment', 'D5', 'document-1',
+          'snapshot-1', 'fragment-1', repeat('a', 64), repeat('f', 64), NOW()
+        )`,
+      ]) {
+        await expect(client.query(fragmentInsert)).rejects.toMatchObject({
+          constraint: "knowledge_conflict_evidence_fragment_identity_fkey",
+        });
+      }
+      await expect(client.query(`
+        INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, document_source_id,
+          document_snapshot_id, document_fragment_id, snapshot_content_hash,
+          content_hash, created_at
+        ) VALUES (
+          'candidate-1', 'document_fragment', 'D6', 'document-1',
+          'snapshot-2', 'fragment-1', repeat('d', 64), repeat('c', 64), NOW()
+        )
+      `)).rejects.toMatchObject({
+        constraint: "knowledge_conflict_evidence_snapshot_identity_fkey",
       });
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
