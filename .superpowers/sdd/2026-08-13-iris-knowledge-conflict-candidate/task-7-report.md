@@ -262,3 +262,67 @@ Result: all exited 0. Git emitted only the repository's Windows line-ending conv
 - The production change is confined to the Task 7 conflict-card renderer; the only other code artifact
   is its focused test suite. No Task 8 behavior, migration, plan, spec, ledger, or brief was changed.
 - The existing PostgreSQL-test environment concern from Fix Round 1 remains unchanged.
+
+## Formal Review Fix Round 3
+
+### Commit
+
+- `2271e476` — `fix(core): reject byte-order-mark conflict links`
+- This report update is committed separately after the fix verification.
+
+### Resolved Finding
+
+- Source-URI validation now applies both ECMAScript whitespace (`\s`) and Unicode
+  `White_Space` checks to the raw normalized URI and its percent-decoded form. Raw U+FEFF and
+  percent-encoded `%EF%BB%BF` are therefore suppressed instead of becoming live card links.
+- Targeted boundary coverage now verifies callback-identifier rejection at C0 lower/upper, DEL, and
+  C1 lower/upper endpoints. The URI table verifies the same raw endpoints plus their percent-encoded
+  forms, in addition to the two U+FEFF regressions.
+- The endpoint cases were already rejected by the existing explicit C0/C1 ranges; only U+FEFF needed
+  a production change. No Task 8 behavior or unrelated code was changed.
+
+### TDD Evidence
+
+The raw and encoded U+FEFF regressions and boundary matrix were added before the renderer change. The
+RED focused run exited 1 with exactly 2 failures for the U+FEFF cases; 52 other tests passed, including
+all newly added C0/C1 endpoint cases.
+
+Focused renderer command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/knowledge-conflict-card-renderer.test.ts
+```
+
+Final result: exit 0; 1 file passed; 54 tests passed.
+
+Relevant Task 7 command:
+
+```text
+npm --workspace apps/core exec vitest run -- tests/knowledge-conflict.test.ts tests/postgres-knowledge-conflict-repository.test.ts tests/knowledge-conflict-current-validator.test.ts tests/knowledge-conflict-card-renderer.test.ts tests/knowledge-conflict-dispatcher.test.ts tests/knowledge-conflict-dispatcher-loop.test.ts tests/feishu-interactive-card-client.test.ts tests/knowledge-card-dispatcher.test.ts tests/knowledge-card-dispatcher-loop.test.ts
+```
+
+Result: exit 0; 9 files passed; 206 tests passed and 13 conditional PostgreSQL tests skipped.
+
+Full Core command:
+
+```text
+npm --workspace apps/core test
+```
+
+Result: exit 0; 181 files passed and 3 files skipped; 3,211 tests passed and 249 tests skipped.
+
+Typecheck, build, and diff validation:
+
+```text
+npm --workspace apps/core run typecheck
+npm --workspace apps/core run build
+git diff --check
+git diff --cached --check
+```
+
+Result: all exited 0. Git emitted only the repository's Windows line-ending conversion warnings.
+
+### Remaining Concern
+
+- No new concern was introduced. The conditional real-PostgreSQL concurrency case remains skipped in
+  this environment because `IRIS_TEST_DATABASE_URL` is not configured, as recorded in Fix Round 1.
