@@ -1516,6 +1516,37 @@ async function lockCandidate(
   return row;
 }
 
+async function lockCandidateMemoryBeforeCandidate(
+  client: PostgresKnowledgeConflictTransactionClient,
+  id: string,
+): Promise<CandidateRow> {
+  const identityResult = await client.query<Pick<
+    CandidateRow,
+    "id" | "group_id" | "group_memory_id" | "memory_updated_at"
+  >>(
+    `SELECT id, group_id, group_memory_id, memory_updated_at
+     FROM knowledge_conflict_candidates
+     WHERE id = $1`,
+    [id],
+  );
+  const identity = identityResult.rows[0];
+  if (identity === undefined) throw new KnowledgeConflictNotFoundError();
+  await client.query<{ id: string }>(
+    `SELECT id FROM group_memories
+     WHERE id = $1 AND group_id = $2
+     ORDER BY id
+     FOR UPDATE`,
+    [identity.group_memory_id, identity.group_id],
+  );
+  const candidate = await lockCandidate(client, id);
+  if (candidate.group_id !== identity.group_id
+    || candidate.group_memory_id !== identity.group_memory_id
+    || candidate.memory_updated_at.getTime() !== identity.memory_updated_at.getTime()) {
+    throw new KnowledgeConflictVersionConflictError();
+  }
+  return candidate;
+}
+
 function normalizeTransition(input: {
   candidateId: string;
   expectedVersion: number;
@@ -1597,7 +1628,7 @@ async function approveForDelivery(
     }
     if (existingDelivery !== undefined) throw new KnowledgeConflictOperationConflictError();
 
-    const locked = await lockCandidate(client, normalized.candidateId);
+    const locked = await lockCandidateMemoryBeforeCandidate(client, normalized.candidateId);
     if (Number(locked.version) !== normalized.expectedVersion) {
       throw new KnowledgeConflictVersionConflictError();
     }
@@ -1667,7 +1698,7 @@ async function validateCandidateCurrentState(
   const at = requireDate("at", input.at);
   assertFreshPermission(input.permissionAttestedAt, at, maxPermissionAgeMs);
   return withTransaction(dataSource, async (client) => {
-    const row = await lockCandidate(client, candidateId);
+    const row = await lockCandidateMemoryBeforeCandidate(client, candidateId);
     const evidence = await loadEvidence(client, candidateId);
     const staleReason = await findStaleReason(client, row, evidence);
     if (staleReason === undefined) return { status: "current" as const, candidate: mapCandidate(row, evidence) };
@@ -2318,7 +2349,7 @@ async function applyInteraction(
       return { outcome: "already_applied" as const, interaction: mapInteraction(existing), candidate };
     }
 
-    const candidateRow = await lockCandidate(client, normalized.candidateId);
+    const candidateRow = await lockCandidateMemoryBeforeCandidate(client, normalized.candidateId);
     if (Number(candidateRow.version) !== normalized.expectedVersion) {
       throw new KnowledgeConflictVersionConflictError();
     }
