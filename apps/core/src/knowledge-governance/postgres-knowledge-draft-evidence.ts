@@ -174,8 +174,11 @@ async function hasFreshKnowledgeConflictPermission(
   const result = await queryable.query<{ permission_attested_at: Date }>(
     `SELECT permission_attested_at
      FROM knowledge_conflict_draft_governance_attestations
-     WHERE draft_id = $1 AND revision_number = $2 AND document_source_id = $3`,
-    [identity.draftId, identity.revisionNumber, documentSourceId],
+     WHERE draft_id = $1 AND revision_number = $2 AND document_source_id = $3
+       AND permission_attested_at <= $4
+     ORDER BY permission_attested_at DESC
+     LIMIT 1`,
+    [identity.draftId, identity.revisionNumber, documentSourceId, identity.validationAt],
   );
   const attestedAt = result.rows[0]?.permission_attested_at;
   return attestedAt !== undefined

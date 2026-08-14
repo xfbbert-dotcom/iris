@@ -56,9 +56,53 @@ describe("PostgresKnowledgeConflictCallbackIdentityStore", () => {
       interaction: conflictJob({ action: "not_a_conflict" }),
     })).rejects.toBeInstanceOf(KnowledgeConflictCallbackIdentityConflictError);
   });
+
+  it("reuses the first opaque identity when an exact event is redelivered at a later arrival time", async () => {
+    const row = identityRow();
+    row.operation_fingerprint = createHash("sha256").update(JSON.stringify([
+      "knowledge_conflict_callback_identity_v2",
+      "feishu-card:cli_conflict:event-1",
+      "event-1",
+      "cli_conflict",
+      "ou_member",
+      "oc_group",
+      "om_conflict_card",
+      "candidate-1",
+      "candidate-1",
+      3,
+      "oc_group",
+      "nonce-1",
+      "create_update_draft",
+    ])).digest("hex");
+    let insertCount = 0;
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("INSERT INTO")) {
+        insertCount += 1;
+        return { rows: insertCount === 1 ? [{ id: row.id }] : [] };
+      }
+      return { rows: [row] };
+    });
+    const store = createPostgresKnowledgeConflictCallbackIdentityStore({
+      dataSource: { query } as never,
+      idGenerator: () => row.id,
+    });
+    const later = new Date(receivedAt.getTime() + 30_000);
+
+    await expect(store.persistIdentity(identityInput())).resolves.toEqual({ id: row.id });
+    await expect(store.persistIdentity(identityInput({ receivedAt: later })))
+      .resolves.toEqual({ id: row.id });
+    await expect(store.resolveIdentity({
+      id: row.id,
+      interaction: conflictJob({ receivedAt: later }),
+    })).resolves.toMatchObject({ actorOpenId: "ou_member", messageId: "om_conflict_card" });
+    await expect(store.persistIdentity(identityInput({
+      receivedAt: later,
+      action: "not_a_conflict",
+    }))).rejects.toBeInstanceOf(KnowledgeConflictCallbackIdentityConflictError);
+  });
 });
 
-function identityInput() {
+function identityInput(overrides: Record<string, unknown> = {}) {
   return {
     idempotencyKey: "feishu-card:cli_conflict:event-1",
     eventId: "event-1",
@@ -73,6 +117,7 @@ function identityInput() {
     nonce: "nonce-1",
     action: "create_update_draft" as const,
     receivedAt,
+    ...overrides,
   };
 }
 

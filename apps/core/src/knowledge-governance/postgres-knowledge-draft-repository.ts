@@ -210,21 +210,63 @@ async function createDraft(
     at,
     maxAgeMs: permissionAgeMs,
   });
-  const fingerprint = operationFingerprint({
-    operation: "create",
-    id,
-    operationKey,
-    originKind,
-    createdBy,
-    at,
-    revision,
-    knowledgeConflictGovernance,
-  });
+  const fingerprint = knowledgeConflictGovernance === undefined
+    ? operationFingerprint({
+        operation: "create",
+        id,
+        operationKey,
+        originKind,
+        createdBy,
+        at,
+        revision,
+      })
+    : operationFingerprint({
+        operation: "create_knowledge_conflict_v2",
+        id,
+        operationKey,
+        originKind,
+        createdBy,
+        revision,
+        knowledgeConflictGovernance: {
+          permission: {
+            documentSourceIds: knowledgeConflictGovernance.permission.documentSourceIds,
+          },
+          publicationTarget: knowledgeConflictGovernance.publicationTarget,
+        },
+      });
 
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, operationKey);
-    const replay = await replayOperation(client, operationKey, fingerprint);
-    if (replay !== undefined) return replay;
+    const replay = await findReplayEvent(client, operationKey, fingerprint);
+    if (replay !== undefined) {
+      if (knowledgeConflictGovernance !== undefined) {
+        await validateCurrentKnowledgeDraftEvidence({
+          queryable: client,
+          sourceGroupId: revision.sourceGroupId,
+          evidence: revision.evidence,
+          knowledgeConflictPermission: {
+            documentSourceIds: knowledgeConflictGovernance.permission.documentSourceIds,
+            attestedAt: knowledgeConflictGovernance.permission.attestedAt,
+            validationAt: at,
+            maxAgeMs: permissionAgeMs,
+          },
+        });
+        await validateKnowledgeConflictTargetPolicy(client, knowledgeConflictGovernance, revision);
+        await insertKnowledgeConflictGovernanceAttestations(
+          client,
+          replay.draftId,
+          replay.revisionNumber,
+          at,
+          knowledgeConflictGovernance,
+        );
+      }
+      const draft = await requireDraft(client, replay.draftId, at, permissionAgeMs);
+      if (knowledgeConflictGovernance !== undefined &&
+        (draft.id !== id || draft.version !== 1 || draft.currentRevisionNumber !== 1)) {
+        throw new KnowledgeDraftOperationConflictError();
+      }
+      return { outcome: "already_applied", draft };
+    }
     const existing = await client.query("SELECT 1 FROM knowledge_drafts WHERE id = $1", [id]);
     if (existing.rows.length > 0) throw new KnowledgeDraftOperationConflictError();
     await validateCurrentKnowledgeDraftEvidence({
@@ -482,14 +524,32 @@ async function replayOperation(
   operationKey: string,
   fingerprint: string,
 ): Promise<KnowledgeDraftMutationResult | undefined> {
-  const result = await client.query<Pick<EventRow, "draft_id" | "operation_fingerprint">>(
-    "SELECT draft_id, operation_fingerprint FROM knowledge_draft_events WHERE operation_key = $1",
+  const event = await findReplayEvent(client, operationKey, fingerprint);
+  return event === undefined
+    ? undefined
+    : { outcome: "already_applied", draft: await requireDraft(client, event.draftId) };
+}
+
+async function findReplayEvent(
+  client: KnowledgeDraftEvidenceQueryable,
+  operationKey: string,
+  fingerprint: string,
+): Promise<{ draftId: string; revisionNumber: number } | undefined> {
+  const result = await client.query<Pick<
+    EventRow,
+    "draft_id" | "operation_fingerprint" | "revision_number"
+  >>(
+    `SELECT draft_id, operation_fingerprint, revision_number
+     FROM knowledge_draft_events WHERE operation_key = $1`,
     [operationKey],
   );
   const event = result.rows[0];
   if (event === undefined) return undefined;
   if (event.operation_fingerprint !== fingerprint) throw new KnowledgeDraftOperationConflictError();
-  return { outcome: "already_applied", draft: await requireDraft(client, event.draft_id) };
+  return {
+    draftId: event.draft_id,
+    revisionNumber: requirePositiveInteger("event revision number", Number(event.revision_number)),
+  };
 }
 
 async function lockOperation(
@@ -619,7 +679,8 @@ async function insertKnowledgeConflictGovernanceAttestations(
       `INSERT INTO knowledge_conflict_draft_governance_attestations (
         draft_id, revision_number, document_source_id, permission_attested_at,
         target_policy_id, target_policy_version, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT DO NOTHING`,
       [draftId, revisionNumber, documentSourceId, governance.permission.attestedAt,
         governance.publicationTarget.id, governance.publicationTarget.version, at],
     );

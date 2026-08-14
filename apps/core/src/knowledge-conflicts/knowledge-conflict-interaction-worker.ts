@@ -189,6 +189,12 @@ export function createKnowledgeConflictInteractionWorker(
       if (secondValidation.status !== "current") return secondValidation.result;
 
       if (job.action === "not_a_conflict") {
+        const finalMembership = await checkMembership(
+          dependencies.membershipChecker,
+          job.groupId,
+          job.actorOpenId,
+        );
+        if (finalMembership !== true) return finalMembership;
         if (!readGate(dependencies.canProcessKnowledgeConflicts, job.groupId)) {
           return denied("runtime_disabled");
         }
@@ -217,6 +223,12 @@ export function createKnowledgeConflictInteractionWorker(
       }
 
       if (targetPolicy === undefined) return denied("target_unavailable");
+      const draftMembership = await checkMembership(
+        dependencies.membershipChecker,
+        job.groupId,
+        job.actorOpenId,
+      );
+      if (draftMembership !== true) return draftMembership;
       if (!readGate(dependencies.canProcessKnowledgeConflicts, job.groupId)) {
         return denied("runtime_disabled");
       }
@@ -269,6 +281,13 @@ export function createKnowledgeConflictInteractionWorker(
 
       const finalValidation = await validateCurrentCandidate(dependencies.currentValidator, candidate);
       if (finalValidation.status !== "current") return finalValidation.result;
+
+      const commitMembership = await checkMembership(
+        dependencies.membershipChecker,
+        job.groupId,
+        job.actorOpenId,
+      );
+      if (commitMembership !== true) return commitMembership;
 
       if (!readGate(dependencies.canProcessKnowledgeConflicts, job.groupId)) {
         return denied("runtime_disabled");

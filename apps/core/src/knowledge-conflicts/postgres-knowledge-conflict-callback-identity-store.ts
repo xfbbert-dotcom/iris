@@ -166,11 +166,32 @@ function identityMatches(row: IdentityRow, input: ReturnType<typeof normalizeIde
     && row.group_id === input.groupId
     && row.nonce === input.nonce
     && row.action === input.action
-    && new Date(row.received_at).getTime() === input.receivedAt.getTime()
-    && row.operation_fingerprint === identityFingerprint(input);
+    && (row.operation_fingerprint === identityFingerprint(input)
+      || row.operation_fingerprint === legacyIdentityFingerprint({
+        ...input,
+        receivedAt: new Date(row.received_at),
+      }));
 }
 
 function identityFingerprint(input: ReturnType<typeof normalizeIdentity>): string {
+  return createHash("sha256").update(JSON.stringify([
+    "knowledge_conflict_callback_identity_v2",
+    input.idempotencyKey,
+    input.eventId,
+    input.appId,
+    input.actorOpenId,
+    input.chatId,
+    input.messageId,
+    input.presentationId,
+    input.candidateId,
+    input.candidateVersion,
+    input.groupId,
+    input.nonce,
+    input.action,
+  ])).digest("hex");
+}
+
+function legacyIdentityFingerprint(input: ReturnType<typeof normalizeIdentity>): string {
   return createHash("sha256").update(JSON.stringify([
     "knowledge_conflict_callback_identity_v1",
     input.idempotencyKey,

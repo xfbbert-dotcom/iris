@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -51,6 +51,56 @@ describe("knowledge draft migration contract", () => {
     expect(migration).toMatch(/knowledge_draft_events_append_only/iu);
     expect(migration).toMatch(/operation_fingerprint/iu);
     expect(migration).not.toMatch(/document_fragments|group_memories|embedding|feishu_document_id/iu);
+  });
+
+  it("keeps conflict permission reattestations append-only for semantic creation replay", () => {
+    const migrationUrl = new URL(
+      "../migrations/0048_knowledge_conflict_draft_reattestations.sql",
+      import.meta.url,
+    );
+    expect(existsSync(migrationUrl)).toBe(true);
+    if (!existsSync(migrationUrl)) return;
+    const migration = readFileSync(migrationUrl, "utf8");
+    expect(migration).toMatch(/drop constraint knowledge_conflict_draft_governance_attestations_pkey/iu);
+    expect(migration).toMatch(
+      /primary key \(\s*draft_id,\s*revision_number,\s*document_source_id,\s*permission_attested_at\s*\)/iu,
+    );
+  });
+});
+
+describe("PostgresKnowledgeDraftRepository semantic conflict replay", () => {
+  it("accepts a later fresh attestation for the same draft intent and rejects altered intent", async () => {
+    const fixture = semanticConflictDraftDataSource();
+    const repository = createPostgresKnowledgeDraftRepository({
+      dataSource: fixture.dataSource,
+      knowledgeConflictPermissionAttestationMaxAgeMs: 60_000,
+    });
+    const firstAt = new Date("2026-08-13T04:00:00.000Z");
+    const laterAt = new Date("2026-08-13T04:02:00.000Z");
+    const input = semanticConflictCreateInput(firstAt);
+
+    await expect(repository.createDraft(input)).resolves.toMatchObject({ outcome: "applied" });
+    await expect(repository.createDraft({
+      ...input,
+      at: laterAt,
+      knowledgeConflictGovernance: {
+        ...input.knowledgeConflictGovernance,
+        permission: { documentSourceIds: ["source-1"], attestedAt: laterAt },
+      },
+    })).resolves.toMatchObject({
+      outcome: "already_applied",
+      draft: { currentRevision: { evidenceState: { status: "current" } } },
+    });
+    expect(fixture.attestations).toEqual([firstAt, laterAt]);
+    await expect(repository.createDraft({
+      ...input,
+      at: laterAt,
+      knowledgeConflictGovernance: {
+        ...input.knowledgeConflictGovernance,
+        permission: { documentSourceIds: ["source-1"], attestedAt: laterAt },
+      },
+      revision: { ...input.revision, title: "Altered intent" },
+    })).rejects.toBeInstanceOf(KnowledgeDraftOperationConflictError);
   });
 });
 
@@ -446,10 +496,10 @@ runIfDatabase("PostgresKnowledgeDraftRepository with Postgres", () => {
       reason: "document_permission_unavailable",
     });
 
-    await expect(repository.createDraft({
+    const conflictInput = {
       id: id("draft-unknown-conflict"),
       operationKey: id("create-unknown-conflict"),
-      originKind: "knowledge_conflict",
+      originKind: "knowledge_conflict" as const,
       createdBy: "iris",
       knowledgeConflictGovernance: {
         permission: { documentSourceIds: [unknownSourceId], attestedAt: at },
@@ -457,10 +507,38 @@ runIfDatabase("PostgresKnowledgeDraftRepository with Postgres", () => {
       },
       revision,
       at,
-    })).resolves.toMatchObject({
+    };
+    await expect(repository.createDraft(conflictInput)).resolves.toMatchObject({
       outcome: "applied",
       draft: { originKind: "knowledge_conflict", status: "pending_confirmation" },
     });
+    const laterAt = new Date(at.getTime() + 120_000);
+    await expect(repository.createDraft({
+      ...conflictInput,
+      at: laterAt,
+      knowledgeConflictGovernance: {
+        ...conflictInput.knowledgeConflictGovernance,
+        permission: { documentSourceIds: [unknownSourceId], attestedAt: laterAt },
+      },
+    })).resolves.toMatchObject({
+      outcome: "already_applied",
+      draft: { currentRevision: { evidenceState: { status: "current" } } },
+    });
+    await expect(pool.query(
+      `SELECT count(*)::int AS count
+       FROM knowledge_conflict_draft_governance_attestations
+       WHERE draft_id = $1`,
+      [conflictInput.id],
+    )).resolves.toMatchObject({ rows: [{ count: 2 }] });
+    await expect(repository.createDraft({
+      ...conflictInput,
+      at: laterAt,
+      knowledgeConflictGovernance: {
+        ...conflictInput.knowledgeConflictGovernance,
+        permission: { documentSourceIds: [unknownSourceId], attestedAt: laterAt },
+      },
+      revision: { ...revision, title: "Altered conflict intent" },
+    })).rejects.toBeInstanceOf(KnowledgeDraftOperationConflictError);
   });
 
   it("redacts content after semantic evidence advances to another version", async () => {
@@ -577,4 +655,138 @@ function groupRevision() {
 
 function id(value: string): string {
   return `${value}-${suffix}`;
+}
+
+function semanticConflictCreateInput(atValue: Date) {
+  return {
+    id: "semantic-conflict-draft-1",
+    operationKey: "semantic-conflict-create-1",
+    originKind: "knowledge_conflict" as const,
+    createdBy: "iris",
+    knowledgeConflictGovernance: {
+      permission: { documentSourceIds: ["source-1"], attestedAt: atValue },
+      publicationTarget: { id: "policy-1", version: 7 },
+    },
+    revision: {
+      sourceGroupId: "group-1",
+      title: "Knowledge update: deployment window",
+      content: "Current and newer conclusions.",
+      riskLevel: "medium" as const,
+      reviewer: { type: "feishu_user" as const, ref: "ou-member" },
+      suggestedPublication: { spaceId: "space-main", parentNodeToken: "parent-main" },
+      evidence: [{
+        type: "document_source" as const,
+        id: "source-1",
+        expectedUpdatedAt: new Date("2026-08-13T03:00:00.000Z"),
+      }],
+    },
+    at: atValue,
+  };
+}
+
+function semanticConflictDraftDataSource() {
+  const attestations: Date[] = [];
+  let created = false;
+  let operationFingerprint: string | undefined;
+  const createdAt = new Date("2026-08-13T04:00:00.000Z");
+  const sourceUpdatedAt = new Date("2026-08-13T03:00:00.000Z");
+  const query = async (sql: string, params: unknown[] = []): Promise<{ rows: any[] }> => {
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/u.test(sql) || sql.includes("pg_advisory_xact_lock")) {
+      return { rows: [] };
+    }
+    if (sql.includes("FROM knowledge_draft_events WHERE operation_key")) {
+      return { rows: operationFingerprint === undefined ? [] : [{
+        draft_id: "semantic-conflict-draft-1",
+        operation_fingerprint: operationFingerprint,
+        revision_number: 1,
+      }] };
+    }
+    if (sql.includes("SELECT 1 FROM knowledge_drafts")) {
+      return { rows: created ? [{ exists: 1 }] : [] };
+    }
+    if (sql.includes("FROM document_sources")) {
+      return { rows: [{
+        source_type: "authorized_wiki_document",
+        permission_state: "unknown",
+        sync_state: "synced",
+        can_use_for_knowledge_drafts: true,
+        updated_at: sourceUpdatedAt,
+        exact_group_evidence: false,
+      }] };
+    }
+    if (sql.includes("FROM knowledge_publication_target_policies")) {
+      return { rows: [{
+        id: "policy-1",
+        space_id: "space-main",
+        parent_node_token: "parent-main",
+        allowed_group_ids: ["group-1"],
+        allowed_risk_levels: ["medium"],
+        enabled: true,
+        version: 7,
+      }] };
+    }
+    if (sql.includes("INSERT INTO knowledge_drafts")) {
+      created = true;
+      return { rows: [] };
+    }
+    if (sql.includes("INSERT INTO knowledge_conflict_draft_governance_attestations")) {
+      const attestedAt = params[3];
+      if (attestedAt instanceof Date &&
+        !attestations.some((existing) => existing.getTime() === attestedAt.getTime())) {
+        attestations.push(new Date(attestedAt));
+      }
+      return { rows: [] };
+    }
+    if (sql.includes("INSERT INTO knowledge_draft_events")) {
+      operationFingerprint = String(params[6]);
+      return { rows: [] };
+    }
+    if (sql.includes("FROM knowledge_drafts draft")) {
+      return { rows: created ? [{
+        id: "semantic-conflict-draft-1",
+        source_group_id: "group-1",
+        origin_kind: "knowledge_conflict",
+        status: "pending_confirmation",
+        current_revision_number: 1,
+        version: 1,
+        created_by: "iris",
+        rejected_at: null,
+        rejected_by: null,
+        rejection_reason: null,
+        created_at: createdAt,
+        updated_at: createdAt,
+        title: "Knowledge update: deployment window",
+        content: "Current and newer conclusions.",
+        risk_level: "medium",
+        reviewer_type: "feishu_user",
+        reviewer_ref: "ou-member",
+        suggested_space_id: "space-main",
+        suggested_parent_node_token: "parent-main",
+        revision_author: "iris",
+        revision_created_at: createdAt,
+      }] : [] };
+    }
+    if (sql.includes("FROM knowledge_draft_revision_evidence")) {
+      return { rows: [{
+        evidence_type: "document_source",
+        reference_id: "source-1",
+        source_group_id: null,
+        entity_version: null,
+        source_updated_at: sourceUpdatedAt,
+      }] };
+    }
+    if (sql.includes("FROM knowledge_conflict_draft_governance_attestations")) {
+      const latest = attestations.at(-1);
+      return { rows: latest === undefined ? [] : [{ permission_attested_at: latest }] };
+    }
+    return { rows: [] };
+  };
+  const client = { query, release() {} };
+  return {
+    attestations,
+    dataSource: {
+      query,
+      async connect() { return client; },
+    },
+  };
 }

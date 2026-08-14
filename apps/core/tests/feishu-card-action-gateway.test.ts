@@ -490,6 +490,65 @@ describe("FeishuCardActionGateway", () => {
     expect(JSON.stringify(queue.enqueue.mock.calls)).not.toContain("ou_reviewer");
   });
 
+  it("retries enqueue for an exact conflict event redelivered at a later arrival time", async () => {
+    const arrivals = [
+      new Date("2026-08-13T00:00:00.000Z"),
+      new Date("2026-08-13T00:00:30.000Z"),
+    ];
+    let arrivalIndex = 0;
+    const queue = {
+      enqueue: vi.fn()
+        .mockRejectedValueOnce(new Error("redis unavailable"))
+        .mockResolvedValueOnce("enqueued" as const),
+    };
+    let persisted: Record<string, unknown> | undefined;
+    const callbackIdentityStore = {
+      persistIdentity: vi.fn(async (input: Record<string, unknown>) => {
+        const { receivedAt: _receivedAt, ...stable } = input;
+        if (persisted !== undefined && JSON.stringify(stable) !== JSON.stringify(persisted)) {
+          throw new Error("identity conflict");
+        }
+        persisted = stable;
+        return { id: "callback-identity-1" };
+      }),
+    };
+    const gateway = createFeishuCardActionGateway({
+      queue,
+      callbackIdentityStore,
+      verifyRequest: () => true,
+      now: () => arrivals[arrivalIndex++]!,
+    });
+    const body = cardAction();
+    const event = body.event as Record<string, unknown>;
+    const action = event.action as Record<string, unknown>;
+    action.name = "create_update_draft";
+    action.form_value = {};
+    action.value = {
+      kind: "knowledge_conflict_confirmation",
+      action: "create_update_draft",
+      candidateId: "candidate-1",
+      candidateVersion: "3",
+      groupId: "oc_approval",
+      nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
+    };
+
+    await expect(gateway.handleCallback({ headers: {}, body })).resolves.toMatchObject({
+      statusCode: 200,
+      body: { toast: { type: "error" } },
+    });
+    await expect(gateway.handleCallback({ headers: {}, body })).resolves.toMatchObject({
+      statusCode: 200,
+      body: { toast: { type: "info" } },
+    });
+    expect(callbackIdentityStore.persistIdentity.mock.calls.map(([input]) => input.receivedAt))
+      .toEqual(arrivals);
+    expect(queue.enqueue).toHaveBeenCalledTimes(2);
+    expect(queue.enqueue.mock.calls[1]?.[0]).toMatchObject({
+      callbackIdentityId: "callback-identity-1",
+      receivedAt: arrivals[1],
+    });
+  });
+
   it("acknowledges signed proactive feedback and leaves duplicate detection to the queue", async () => {
     const now = new Date("2026-07-27T00:00:00.000Z");
     const encryptKey = "feedback-card-encrypt-key";

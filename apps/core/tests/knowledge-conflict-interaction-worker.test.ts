@@ -133,6 +133,26 @@ describe("KnowledgeConflictInteractionWorker", () => {
     expect(harness.presentKnowledgeDraft).not.toHaveBeenCalled();
   });
 
+  it("does not dismiss when membership is revoked during the final permission validation", async () => {
+    let currentMember = true;
+    let validations = 0;
+    const harness = createHarness({
+      action: "not_a_conflict",
+      isCurrentMember: async () => currentMember,
+      validate: async () => {
+        validations += 1;
+        if (validations === 2) currentMember = false;
+        return { status: "current", candidate: candidate(), permissionAttestedAt: at };
+      },
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "denied",
+      code: "not_current_member",
+    });
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+  });
+
   it("rejects a conflicting intent under the same callback operation key", async () => {
     const harness = createHarness({
       action: "not_a_conflict",
@@ -308,6 +328,61 @@ describe("KnowledgeConflictInteractionWorker", () => {
     expect(JSON.stringify(result)).not.toMatch(/draft body|remote card failure|ou_member/iu);
   });
 
+  it("recovers after draft commit and interaction failure using later fresh proof without a second draft", async () => {
+    let clock = new Date("2026-08-13T04:00:00.000Z");
+    let storedSemanticIntent: string | undefined;
+    let appliedDraftCreates = 0;
+    let interactionAttempts = 0;
+    const createDraft = vi.fn(async (input: any) => {
+      const semanticIntent = JSON.stringify({
+        ...input,
+        at: undefined,
+        knowledgeConflictGovernance: {
+          ...input.knowledgeConflictGovernance,
+          permission: {
+            ...input.knowledgeConflictGovernance.permission,
+            attestedAt: undefined,
+          },
+        },
+      });
+      if (storedSemanticIntent === undefined) {
+        storedSemanticIntent = semanticIntent;
+        appliedDraftCreates += 1;
+        return draftMutation(input.id, "applied");
+      }
+      if (semanticIntent !== storedSemanticIntent) throw new Error("immutable draft intent changed");
+      return draftMutation(input.id, "already_applied");
+    });
+    const harness = createHarness({
+      now: () => new Date(clock),
+      validate: async () => ({
+        status: "current",
+        candidate: candidate(),
+        permissionAttestedAt: new Date(clock),
+      }),
+      createDraft,
+      applyInteraction: async () => {
+        interactionAttempts += 1;
+        if (interactionAttempts === 1) throw new Error("crash after draft commit");
+        return interactionMutation("applied");
+      },
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "retryable",
+      code: "repository_unavailable",
+    });
+    clock = new Date("2026-08-13T04:02:00.000Z");
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toMatchObject({
+      status: "applied",
+      code: "draft_created",
+    });
+    expect(createDraft).toHaveBeenCalledTimes(2);
+    expect(appliedDraftCreates).toBe(1);
+    expect(harness.repository.applyInteraction).toHaveBeenCalledTimes(2);
+    expect(harness.presentKnowledgeDraft).toHaveBeenCalledOnce();
+  });
+
   it("requires exactly one current medium-risk group publication target", async () => {
     const harness = createHarness({ policies: [] });
 
@@ -345,6 +420,26 @@ describe("KnowledgeConflictInteractionWorker", () => {
       code: "permission_blocked",
     });
     expect(harness.drafts.createDraft).not.toHaveBeenCalled();
+  });
+
+  it("does not create a draft when membership is revoked during pre-draft permission validation", async () => {
+    let currentMember = true;
+    let validations = 0;
+    const harness = createHarness({
+      isCurrentMember: async () => currentMember,
+      validate: async () => {
+        validations += 1;
+        if (validations === 2) currentMember = false;
+        return { status: "current", candidate: candidate(), permissionAttestedAt: at };
+      },
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "denied",
+      code: "not_current_member",
+    });
+    expect(harness.drafts.createDraft).not.toHaveBeenCalled();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
   });
 
   it("rejects a selected publication policy whose exact version changed after initial validation", async () => {
@@ -389,7 +484,7 @@ describe("KnowledgeConflictInteractionWorker", () => {
   it("does not commit the candidate when membership changes while draft creation is in flight", async () => {
     let membershipChecks = 0;
     const harness = createHarness({
-      isCurrentMember: async () => ++membershipChecks < 3,
+      isCurrentMember: async () => ++membershipChecks < 4,
     });
 
     await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
@@ -411,6 +506,26 @@ describe("KnowledgeConflictInteractionWorker", () => {
     await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
       status: "denied",
       code: "permission_blocked",
+    });
+    expect(harness.drafts.createDraft).toHaveBeenCalledOnce();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+  });
+
+  it("does not commit draft_created when membership is revoked during final permission validation", async () => {
+    let currentMember = true;
+    let validations = 0;
+    const harness = createHarness({
+      isCurrentMember: async () => currentMember,
+      validate: async () => {
+        validations += 1;
+        if (validations === 3) currentMember = false;
+        return { status: "current", candidate: candidate(), permissionAttestedAt: at };
+      },
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "denied",
+      code: "not_current_member",
     });
     expect(harness.drafts.createDraft).toHaveBeenCalledOnce();
     expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
@@ -474,6 +589,7 @@ type HarnessOverrides = {
   createDraft?: (...args: any[]) => Promise<any>;
   applyInteraction?: (...args: any[]) => Promise<any>;
   presentKnowledgeDraft?: (...args: any[]) => Promise<any>;
+  now?: () => Date;
 };
 
 function createHarness(overrides: HarnessOverrides = {}) {
@@ -544,7 +660,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
     presentKnowledgeDraft,
     canProcessKnowledgeConflicts: overrides.canProcessKnowledgeConflicts ?? (() => true),
     botOpenId: "ou_bot",
-    now: () => new Date(at),
+    now: overrides.now ?? (() => new Date(at)),
   });
   return {
     worker,
