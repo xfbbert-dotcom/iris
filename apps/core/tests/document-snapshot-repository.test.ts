@@ -392,6 +392,44 @@ describe("DocumentSnapshotRepository", () => {
     ]);
   });
 
+  it("finds latest snapshot metadata without selecting or mapping document bodies", async () => {
+    const fetchedAt = new Date("2026-08-13T01:00:00.000Z");
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain("distinct on (document_source_id)");
+      expect(normalized).not.toContain("select distinct on (document_source_id) *");
+      expect(normalized).not.toContain("body_text");
+      expect(normalized).not.toContain("error_message");
+      expect(values).toEqual([["source-1"]]);
+      return {
+        rows: [{
+          id: "snapshot-1",
+          document_source_id: "source-1",
+          source_uri: "https://example.com/source-1",
+          fetch_status: "succeeded",
+          content_hash: "a".repeat(64),
+          source_version: "revision-7",
+          fetched_at: fetchedAt,
+          created_at: fetchedAt,
+        }],
+      };
+    });
+    const repository = createDocumentSnapshotRepository({ queryable: queryableFrom(query) });
+
+    await expect(
+      repository.findLatestSnapshotMetadataForSources(["source-1"]),
+    ).resolves.toEqual([{
+      id: "snapshot-1",
+      documentSourceId: "source-1",
+      sourceUri: "https://example.com/source-1",
+      fetchStatus: "succeeded",
+      contentHash: "a".repeat(64),
+      sourceVersion: "revision-7",
+      fetchedAt,
+      createdAt: fetchedAt,
+    }]);
+  });
+
   it("finds a snapshot by id", async () => {
     const createdAt = new Date("2026-07-02T01:00:00.000Z");
     const query = vi.fn(async (sql: string, values?: unknown[]) => {

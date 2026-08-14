@@ -843,6 +843,8 @@ describe("DocumentFragmentRepository", () => {
       );
       expect(normalized).toContain("where source_rank <= 3");
       expect(normalized).toContain("can_use_for_knowledge_drafts = true");
+      expect(normalized).toContain("ds.sync_state = 'synced'");
+      expect(normalized).toContain("ds.authorized_space_id = $5");
       expect(normalized).not.toContain("f.*");
       expect(normalized).not.toContain("f.text");
       return { rows: [retrievedCandidateRow()] };
@@ -860,12 +862,43 @@ describe("DocumentFragmentRepository", () => {
       limit: 36,
       sourceTypes: ["authorized_wiki_document"],
       usage: "knowledge_drafts",
+      authorizedSpaceId: "space-1",
     })).resolves.toEqual([
       expect.objectContaining({
         id: "fragment-1",
         documentSourceId: "source-1",
         documentSnapshotId: "snapshot-1",
       }),
+    ]);
+  });
+
+  it("requires an exact authorized space before knowledge candidates can consume the ranked window", async () => {
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized.indexOf("ds.sync_state = 'synced'")).toBeLessThan(
+        normalized.indexOf("where source_rank <= 3"),
+      );
+      expect(normalized.indexOf("ds.authorized_space_id = $4")).toBeLessThan(
+        normalized.indexOf("where source_rank <= 3"),
+      );
+      expect(values).toEqual(["static-dev-6d", "[1,2,3,4,5,6]", 36, "space-1"]);
+      return { rows: [retrievedCandidateRow({ id: "eligible-fragment" })] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(repository.searchSimilarFragmentCandidates({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 36,
+      usage: "knowledge_drafts",
+      authorizedSpaceId: "space-1",
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "eligible-fragment" }),
     ]);
   });
 
@@ -1345,6 +1378,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
     const otherSourceId = `fragment-other-source-${suffix}`;
     const noisySnapshotId = `fragment-noisy-snapshot-${suffix}`;
     const otherSnapshotId = `fragment-other-snapshot-${suffix}`;
+    const authorizedSpaceId = `fragment-space-${suffix}`;
     const createdAt = new Date("2026-08-13T00:00:00.000Z");
     const repository = createDocumentFragmentRepository({
       queryable: pool,
@@ -1360,9 +1394,11 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
         await pool.query(
           `insert into document_sources (
              id, source_type, source_uri, permission_state, sync_state,
-             can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
-           ) values ($1, 'authorized_wiki_document', $2, 'readable', 'synced', false, true, $3, $3)`,
-          [id, uri, createdAt],
+             can_use_for_answering, can_use_for_knowledge_drafts, authorized_space_id,
+             created_at, updated_at
+           ) values ($1, 'authorized_wiki_document', $2, 'readable', 'synced', false, true,
+                     $3, $4, $4)`,
+          [id, uri, authorizedSpaceId, createdAt],
         );
       }
       for (const [id, source, uri] of [
@@ -1402,6 +1438,7 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
         embedding: [1, 0, 0, 0, 0, 0],
         limit: 36,
         usage: "knowledge_drafts",
+        authorizedSpaceId,
       });
 
       expect(candidates.filter((item) => item.documentSourceId === noisySourceId)).toHaveLength(3);
@@ -1415,6 +1452,84 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
       await pool.query("delete from document_sources where id = any($1::text[])", [
         [noisySourceId, otherSourceId],
       ]);
+    }
+  });
+
+  it("filters wrong-space and unsynced sources before the bounded knowledge-candidate window", async () => {
+    if (!pool) throw new Error("Expected Postgres pool to be initialized");
+    const suffix = randomUUID();
+    const authorizedSpaceId = `fragment-target-space-${suffix}`;
+    const eligibleSourceId = `fragment-z-eligible-${suffix}`;
+    const sourceIds = [
+      ...Array.from({ length: 7 }, (_, index) => `fragment-a-wrong-space-${index}-${suffix}`),
+      ...Array.from({ length: 6 }, (_, index) => `fragment-b-unsynced-${index}-${suffix}`),
+      eligibleSourceId,
+    ];
+    const createdAt = new Date("2026-08-13T00:00:00.000Z");
+    const repository = createDocumentFragmentRepository({
+      queryable: pool,
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: embeddingProfileId, dimensions: 6 })),
+      },
+    });
+
+    try {
+      for (const [index, id] of sourceIds.entries()) {
+        const isEligible = id === eligibleSourceId;
+        const isUnsynced = id.includes("-unsynced-");
+        const uri = `https://example.com/candidate-window/${id}`;
+        const snapshot = `fragment-window-snapshot-${index}-${suffix}`;
+        await pool.query(
+          `insert into document_sources (
+             id, source_type, source_uri, permission_state, sync_state,
+             can_use_for_answering, can_use_for_knowledge_drafts, authorized_space_id,
+             created_at, updated_at
+           ) values ($1, 'authorized_wiki_document', $2, 'readable', $3, false, true, $4, $5, $5)`,
+          [
+            id,
+            uri,
+            isUnsynced ? "pending" : "synced",
+            isEligible || isUnsynced ? authorizedSpaceId : `fragment-other-space-${suffix}`,
+            createdAt,
+          ],
+        );
+        await pool.query(
+          `insert into document_snapshots (
+             id, document_source_id, source_uri, fetch_status, body_text,
+             content_hash, source_version, fetched_at, created_at
+           ) values ($1, $2, $3, 'succeeded', 'body', $1, 'v1', $4, $4)`,
+          [snapshot, id, uri, createdAt],
+        );
+        const chunkCount = isEligible ? 1 : 3;
+        await repository.replaceFragmentsForSnapshot({
+          documentSourceId: id,
+          documentSnapshotId: snapshot,
+          sourceUri: uri,
+          embeddingProfileId,
+          chunks: Array.from({ length: chunkCount }, (_, chunkIndex) => ({
+            chunkIndex,
+            text: isEligible ? "Eligible target-space evidence" : `Ineligible ${index}-${chunkIndex}`,
+          })),
+          embeddings: Array.from({ length: chunkCount }, () =>
+            isEligible ? [0.9, 0.1, 0, 0, 0, 0] : [1, 0, 0, 0, 0, 0]),
+        });
+      }
+
+      const candidates = await repository.searchSimilarFragmentCandidates({
+        embeddingProfileId,
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 36,
+        usage: "knowledge_drafts",
+        authorizedSpaceId,
+      });
+
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]).toMatchObject({ documentSourceId: eligibleSourceId });
+      expect(candidates.every((candidate) => candidate.documentSourceId === eligibleSourceId)).toBe(
+        true,
+      );
+    } finally {
+      await pool.query("delete from document_sources where id = any($1::text[])", [sourceIds]);
     }
   });
 });

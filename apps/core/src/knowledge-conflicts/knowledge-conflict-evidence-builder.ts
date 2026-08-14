@@ -9,7 +9,10 @@ import type {
   RetrievedDocumentFragmentCandidate,
   RetrievedDocumentFragment,
 } from "../documents/document-fragment-repository.js";
-import type { DocumentSnapshotRepository } from "../documents/document-snapshot-repository.js";
+import type {
+  DocumentSnapshotMetadata,
+  DocumentSnapshotRepository,
+} from "../documents/document-snapshot-repository.js";
 import type { DocumentSource } from "../documents/document-source-registry.js";
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 import type { FeishuDocumentPermissionChecker } from "../permissions/feishu-document-permission-checker.js";
@@ -104,7 +107,7 @@ export type KnowledgeConflictEvidenceBuilderDependencies = {
   documentSources: {
     findSourceById(id: string): Promise<DocumentSource | undefined>;
   };
-  snapshots: Pick<DocumentSnapshotRepository, "findLatestSnapshotsForSources">;
+  snapshots: Pick<DocumentSnapshotRepository, "findLatestSnapshotMetadataForSources">;
   publicationTargets: Pick<ActionProposalRepository, "listTargetPolicies">;
   permissionChecker: FeishuDocumentPermissionChecker;
   now?: () => Date;
@@ -183,6 +186,7 @@ export function createKnowledgeConflictEvidenceBuilder(
           limit: CANDIDATE_FETCH_LIMIT,
           sourceTypes: ["authorized_wiki_document"],
           usage: "knowledge_drafts",
+          authorizedSpaceId: publicationTarget.spaceId,
         });
       } catch {
         return retryable("fragment_search_failed");
@@ -204,9 +208,9 @@ export function createKnowledgeConflictEvidenceBuilder(
         return insufficient("no_authorized_document_evidence");
       }
 
-      let snapshots: Awaited<ReturnType<DocumentSnapshotRepository["findLatestSnapshotsForSources"]>>;
+      let snapshots: DocumentSnapshotMetadata[];
       try {
-        snapshots = await dependencies.snapshots.findLatestSnapshotsForSources(
+        snapshots = await dependencies.snapshots.findLatestSnapshotMetadataForSources(
           [...eligibleSourceIds].sort(),
         );
       } catch {

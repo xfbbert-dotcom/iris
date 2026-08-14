@@ -90,6 +90,10 @@ export type SearchSimilarFragmentsInput = {
   usage?: "answering" | "knowledge_drafts";
 };
 
+export type SearchSimilarFragmentCandidatesInput = SearchSimilarFragmentsInput & {
+  authorizedSpaceId?: string;
+};
+
 export type DocumentFragmentRepositoryDependencies = {
   queryable: Queryable;
   embeddingProfiles: EmbeddingProfileLookup;
@@ -103,7 +107,7 @@ export interface DocumentFragmentRepository {
   listFragmentsForSnapshot(documentSnapshotId: string): Promise<DocumentFragment[]>;
   searchSimilarFragments(input: SearchSimilarFragmentsInput): Promise<RetrievedDocumentFragment[]>;
   searchSimilarFragmentCandidates(
-    input: SearchSimilarFragmentsInput,
+    input: SearchSimilarFragmentCandidatesInput,
   ): Promise<RetrievedDocumentFragmentCandidate[]>;
   findFragmentsByIds(input: { ids: readonly string[] }): Promise<DocumentFragment[]>;
   hasFragmentsForSnapshotProfile(input: {
@@ -302,6 +306,10 @@ limit $3
       if (sourceTypes !== undefined && sourceTypes.length === 0) return [];
       const groupId = sanitizeGroupId(input.groupId);
       const usageColumn = resolveSourceUsageColumn(input.usage);
+      const authorizedSpaceId = sanitizeAuthorizedSpaceId(input.authorizedSpaceId);
+      if (input.usage === "knowledge_drafts" && authorizedSpaceId === undefined) {
+        throw new Error("authorizedSpaceId is required for knowledge-draft fragment candidates");
+      }
       const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
       const embeddingTable = resolveEmbeddingTable(profile.dimensions);
       validateVectorDimension(input.embedding, profile.dimensions);
@@ -311,6 +319,13 @@ limit $3
         groupId,
         values,
       });
+      let knowledgeEligibilityClause = "";
+      if (input.usage === "knowledge_drafts") {
+        values.push(authorizedSpaceId!);
+        knowledgeEligibilityClause = `    and ds.sync_state = 'synced'
+    and ds.authorized_space_id = $${values.length}
+`;
+      }
       const result = await dependencies.queryable.query<RetrievedDocumentFragmentCandidateRow>(
         `
 with latest_snapshots as (
@@ -343,7 +358,7 @@ ranked_candidates as (
     on ds.id = f.document_source_id
     and ds.${usageColumn} = true
     and ds.permission_state in ('unknown', 'readable')
-${sourceTypeClause}${groupScopeClause}  join ${embeddingTable} e
+${knowledgeEligibilityClause}${sourceTypeClause}${groupScopeClause}  join ${embeddingTable} e
     on e.document_fragment_id = f.id
   where f.embedding_profile_id = $1
     and e.embedding_profile_id = $1
@@ -482,6 +497,16 @@ function sanitizeGroupId(groupId: string | undefined): string | undefined {
     throw new Error(`groupId must be at most ${MAX_GROUP_ID_CHARS} characters`);
   }
 
+  return normalized;
+}
+
+function sanitizeAuthorizedSpaceId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (normalized.length === 0) throw new Error("authorizedSpaceId must not be blank");
+  if (normalized.length > MAX_GROUP_ID_CHARS) {
+    throw new Error(`authorizedSpaceId must be at most ${MAX_GROUP_ID_CHARS} characters`);
+  }
   return normalized;
 }
 

@@ -39,12 +39,13 @@ describe("KnowledgeConflictEvidenceBuilder", () => {
         return true;
       },
       onCandidateSearch: () => events.push("metadata"),
+      onSnapshotMetadataRead: () => events.push("snapshot"),
       onFragmentLoad: () => events.push("text"),
     });
 
     const result = await harness.builder.build({ memory: harness.memory });
 
-    expect(events).toEqual(["metadata", "permission", "text"]);
+    expect(events).toEqual(["metadata", "snapshot", "permission", "text"]);
     expect(harness.dependencies.embedder.embedTexts).toHaveBeenCalledWith([
       "Director approval now starts at CNY 10,000.",
     ]);
@@ -54,6 +55,7 @@ describe("KnowledgeConflictEvidenceBuilder", () => {
       limit: 36,
       sourceTypes: ["authorized_wiki_document"],
       usage: "knowledge_drafts",
+      authorizedSpaceId: "space-1",
     });
     expect(result).toEqual({
       outcome: "ready",
@@ -163,6 +165,7 @@ describe("KnowledgeConflictEvidenceBuilder", () => {
       reasonCode: "permission_denied",
     });
     expect(harness.dependencies.fragments.findFragmentsByIds).not.toHaveBeenCalled();
+    expect(harness.dependencies.snapshots.findLatestSnapshotMetadataForSources).toHaveBeenCalled();
   });
 
   it("classifies permission-check exceptions without leaking provider details", async () => {
@@ -260,6 +263,7 @@ function createHarness(overrides: {
   snapshots?: DocumentSnapshot[];
   canReadSource?: (source: DocumentSource) => Promise<boolean>;
   onCandidateSearch?: () => void;
+  onSnapshotMetadataRead?: () => void;
   onFragmentLoad?: () => void;
   policies?: Awaited<ReturnType<KnowledgeConflictEvidenceBuilderDependencies["publicationTargets"]["listTargetPolicies"]>>;
   findSourceById?: (id: string) => Promise<DocumentSource | undefined>;
@@ -289,7 +293,12 @@ function createHarness(overrides: {
     documentSources: {
       findSourceById: vi.fn(overrides.findSourceById ?? (async (id: string) => sourceById.get(id))),
     },
-    snapshots: { findLatestSnapshotsForSources: vi.fn(async () => selectedSnapshots) },
+    snapshots: {
+      findLatestSnapshotMetadataForSources: vi.fn(async () => {
+        overrides.onSnapshotMetadataRead?.();
+        return selectedSnapshots.map(({ bodyText: _bodyText, errorMessage: _errorMessage, ...item }) => item);
+      }),
+    },
     publicationTargets: {
       listTargetPolicies: vi.fn(async () => overrides.policies ?? [{
         id: "policy-1",
