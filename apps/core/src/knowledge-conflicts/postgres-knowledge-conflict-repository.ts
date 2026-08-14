@@ -849,15 +849,8 @@ async function validateDetectionFingerprint(
          source.can_use_for_knowledge_drafts, source.updated_at
        FROM document_sources source
        WHERE source.id = $1
-         AND EXISTS (
-           SELECT 1 FROM knowledge_publication_target_policies policy
-           WHERE policy.space_id = source.authorized_space_id
-             AND policy.enabled = TRUE
-             AND (cardinality(policy.allowed_group_ids) = 0
-               OR $2 = ANY(policy.allowed_group_ids))
-         )
        FOR UPDATE OF source`,
-      [expectedSource.documentSourceId, input.groupId],
+      [expectedSource.documentSourceId],
     );
     const source = sourceResult.rows[0];
     if (
@@ -869,6 +862,10 @@ async function validateDetectionFingerprint(
       || !source.can_use_for_knowledge_drafts
       || source.updated_at.getTime() !== expectedSource.expectedUpdatedAt.getTime()
     ) throw new KnowledgeConflictStaleEvidenceError("source_stale");
+    if (source.authorized_space_id === null
+      || !(await lockAuthorizingPublicationPolicy(client, source.authorized_space_id, input.groupId))) {
+      throw new KnowledgeConflictStaleEvidenceError("source_stale");
+    }
   }
 
   const snapshots = input.evidence.filter(
@@ -1750,15 +1747,8 @@ async function findStaleReason(
          source.can_use_for_knowledge_drafts, source.updated_at
        FROM document_sources source
        WHERE source.id = $1
-         AND EXISTS (
-           SELECT 1 FROM knowledge_publication_target_policies policy
-           WHERE policy.space_id = source.authorized_space_id
-             AND policy.enabled = TRUE
-             AND (cardinality(policy.allowed_group_ids) = 0
-               OR $2 = ANY(policy.allowed_group_ids))
-         )
        FOR UPDATE OF source`,
-      [expectedSource.documentSourceId, candidate.group_id],
+      [expectedSource.documentSourceId],
     );
     const currentSource = source.rows[0];
     if (currentSource === undefined
@@ -1770,6 +1760,12 @@ async function findStaleReason(
       || currentSource.updated_at.getTime() !== expectedSource.expectedUpdatedAt.getTime()) {
       return "source_stale";
     }
+    if (currentSource.authorized_space_id === null
+      || !(await lockAuthorizingPublicationPolicy(
+        client,
+        currentSource.authorized_space_id,
+        candidate.group_id,
+      ))) return "source_stale";
   }
   const snapshots = evidence.filter(
     (item): item is Extract<KnowledgeConflictEvidenceReference, { type: "document_snapshot" }> =>
@@ -1817,6 +1813,23 @@ async function findStaleReason(
     })) return "fragment_stale";
   }
   return undefined;
+}
+
+async function lockAuthorizingPublicationPolicy(
+  client: PostgresKnowledgeConflictTransactionClient,
+  authorizedSpaceId: string,
+  groupId: string,
+): Promise<boolean> {
+  const policies = await client.query<{ id: string }>(
+    `SELECT id FROM knowledge_publication_target_policies
+     WHERE space_id = $1
+       AND enabled = TRUE
+       AND $2 = ANY(allowed_group_ids)
+     ORDER BY id
+     FOR UPDATE`,
+    [authorizedSpaceId, groupId],
+  );
+  return policies.rows.length > 0;
 }
 
 async function loadDeliveryByCandidate(
@@ -2403,6 +2416,13 @@ async function findCurrentOverlap(
   }));
   if (memoryIds.length === 0 || documents.length === 0) return undefined;
   return withTransaction(dataSource, async (client) => {
+    await client.query<{ id: string }>(
+      `SELECT id FROM group_memories
+       WHERE group_id = $1 AND id = ANY($2::text[])
+       ORDER BY id
+       FOR UPDATE`,
+      [groupId, memoryIds],
+    );
     const result = await client.query<CandidateRow>(
       `SELECT candidate.*
        FROM knowledge_conflict_candidates candidate

@@ -211,6 +211,11 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
         ]),
       },
     });
+    const policyLock = client.query.mock.calls.find(([sql]) =>
+      sql.includes("FROM knowledge_publication_target_policies"));
+    expect(policyLock?.[0]).toContain("$2 = ANY(allowed_group_ids)");
+    expect(policyLock?.[0]).toContain("FOR UPDATE");
+    expect(policyLock?.[1]).toEqual(["space-1", "group-1"]);
 
     const replayClient = candidateClient({ existingCandidate: true, completedScan: true });
     const replayRepository = createPostgresKnowledgeConflictRepository({
@@ -263,6 +268,15 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
 
     await expect(repository.recordDetectionResult(input))
       .rejects.toThrow("candidate document evidence is incomplete");
+  });
+
+  it("denies persistence when no enabled policy explicitly allows the source group", async () => {
+    const repository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(candidateClient({ authorizedPolicy: false })),
+    });
+
+    await expect(repository.recordDetectionResult(conflictDetectionInput()))
+      .rejects.toMatchObject({ reasonCode: "source_stale" });
   });
 
   it.each([
@@ -616,6 +630,9 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
         if (sql.includes("SELECT message.id FROM conversation_messages")) {
           return { rows: [{ id: "message-1" }] };
         }
+        if (sql.includes("FROM knowledge_publication_target_policies")) {
+          return { rows: [{ id: "policy-1" }] };
+        }
         if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
         if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
         if (sql.includes("FROM document_fragments")) {
@@ -653,6 +670,9 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       if (sql.includes("SELECT message.id FROM conversation_messages")) {
         return { rows: [{ id: "message-1" }] };
       }
+      if (sql.includes("FROM knowledge_publication_target_policies")) {
+        return { rows: [{ id: "policy-1" }] };
+      }
       if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
       if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
       if (sql.includes("FROM document_fragments")) {
@@ -677,6 +697,71 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     expect(source.connect).toHaveBeenCalledOnce();
   });
 
+  it("denies overlap when no enabled policy explicitly allows the source group", async () => {
+    const client = routedClient((sql) => {
+      if (sql.includes("FROM knowledge_conflict_candidates")) return { rows: [candidateRow()] };
+      if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
+      if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+      if (sql.includes("SELECT message.id FROM conversation_messages")) {
+        return { rows: [{ id: "message-1" }] };
+      }
+      if (sql.includes("FROM knowledge_publication_target_policies")) return { rows: [] };
+      if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
+      if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
+      if (sql.includes("FROM document_fragments")) {
+        return { rows: [{ id: "fragment-1", document_source_id: "source-1",
+          document_snapshot_id: "snapshot-1", content_hash: "c".repeat(64) }] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.findCurrentOverlap({
+      groupId: "group-1",
+      groupMemoryIds: ["memory-1"],
+      documents: [{ sourceId: "source-1", snapshotId: "snapshot-1" }],
+      permissionAttestedAt: at,
+      at,
+    })).resolves.toBeUndefined();
+  });
+
+  it("locks overlap memories before candidate rows", async () => {
+    let memoryLocked = false;
+    const client = routedClient((sql) => {
+      if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
+        memoryLocked = true;
+        return { rows: [{ id: "memory-1" }] };
+      }
+      if (sql.includes("FROM knowledge_conflict_candidates")) {
+        if (!memoryLocked) throw new Error("candidate locked before memory");
+        return { rows: [candidateRow()] };
+      }
+      if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
+      if (sql.includes("SELECT message.id FROM conversation_messages")) {
+        return { rows: [{ id: "message-1" }] };
+      }
+      if (sql.includes("FROM knowledge_publication_target_policies")) {
+        return { rows: [{ id: "policy-1" }] };
+      }
+      if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
+      if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
+      if (sql.includes("FROM document_fragments")) {
+        return { rows: [{ id: "fragment-1", document_source_id: "source-1",
+          document_snapshot_id: "snapshot-1", content_hash: "c".repeat(64) }] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.findCurrentOverlap({
+      groupId: "group-1",
+      groupMemoryIds: ["memory-1"],
+      documents: [{ sourceId: "source-1", snapshotId: "snapshot-1" }],
+      permissionAttestedAt: at,
+      at,
+    })).resolves.toMatchObject({ id: "candidate-1" });
+  });
+
   it("supersedes a candidate when the current snapshot hash no longer matches", async () => {
     const client = routedClient((sql) => {
       if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
@@ -686,6 +771,9 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
       if (sql.includes("SELECT message.id FROM conversation_messages")) {
         return { rows: [{ id: "message-1" }] };
+      }
+      if (sql.includes("FROM knowledge_publication_target_policies")) {
+        return { rows: [{ id: "policy-1" }] };
       }
       if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
       if (sql.includes("FROM document_snapshots")) {
@@ -757,6 +845,9 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       }
       if (sql.includes("FROM document_sources") && sql.includes("FOR UPDATE")) {
         return { rows: [sourceRow()] };
+      }
+      if (sql.includes("FROM knowledge_publication_target_policies")) {
+        return { rows: [{ id: "policy-1" }] };
       }
       if (sql.includes("FROM document_snapshots") && sql.includes("FOR UPDATE")) {
         return { rows: [snapshotRow()] };
@@ -924,6 +1015,56 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     }
   });
 
+  async function insertDetectionFixture(label: string, memoryUpdatedAt = at) {
+    const memoryId = `${label}-memory-${suffix}`;
+    const messageId = `feishu:${label}-message-${suffix}`;
+    const scanId = `${label}-scan-${suffix}`;
+    const candidateId = `${label}-candidate-${suffix}`;
+    const workerId = `${label}-worker`;
+    await insertMessage(pool!, messageId, groupId);
+    await pool!.query(
+      `INSERT INTO group_memories (
+         id, group_id, memory_scope, category, content, importance, confidence,
+         status, idempotency_key, origin, created_by, created_at, updated_at
+       ) VALUES ($1, $2, 'group', 'decision', 'CNY 10,000', 5, 0.95,
+         'active', $3, 'operator', 'tester', $4, $4)`,
+      [memoryId, groupId, `${label}-memory-operation-${suffix}`, memoryUpdatedAt],
+    );
+    await pool!.query(
+      `INSERT INTO group_memory_message_evidence (memory_id, conversation_message_id)
+       VALUES ($1, $2)`,
+      [memoryId, messageId],
+    );
+    await pool!.query(
+      `INSERT INTO knowledge_conflict_scan_inbox (
+         id, group_id, group_memory_id, memory_updated_at, status, attempt_count,
+         next_attempt_at, lease_worker_id, lease_until, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'processing', 1, $4, $5, $6, $4, $4)`,
+      [scanId, groupId, memoryId, memoryUpdatedAt, workerId,
+        new Date(memoryUpdatedAt.getTime() + 30_000)],
+    );
+    return {
+      memoryId,
+      messageId,
+      scanId,
+      candidateId,
+      workerId,
+      input: integrationDetectionInput({
+        scanId,
+        candidateId,
+        workerId,
+        groupId,
+        memoryId,
+        messageId,
+        memoryUpdatedAt,
+        operationKey: `${label}-candidate-operation-${suffix}`,
+        sourceId,
+        snapshotId,
+        fragmentId,
+      }),
+    };
+  }
+
   it("discovers only eligible allowlisted group memories and deduplicates corrected identities", async () => {
     const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
     await expect(repository.discoverEligibleScans({ groupIds: [groupId], limit: 20, at }))
@@ -1011,6 +1152,169 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       "SELECT status, terminal_outcome FROM knowledge_conflict_scan_inbox WHERE id = $1",
       [scanId],
     )).resolves.toMatchObject({ rows: [{ status: "completed", terminal_outcome: "superseded" }] });
+  });
+
+  it("requires explicit policy membership and holds its policy lock through persistence", async () => {
+    const fixture = await insertDetectionFixture("policy-lock");
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+    await pool!.query(
+      "UPDATE knowledge_publication_target_policies SET allowed_group_ids = '{}' WHERE id = $1",
+      [targetPolicyId],
+    );
+    await expect(repository.recordDetectionResult(fixture.input))
+      .rejects.toMatchObject({ reasonCode: "source_stale" });
+    await pool!.query(
+      `UPDATE knowledge_publication_target_policies
+       SET allowed_group_ids = ARRAY[$2]::text[] WHERE id = $1`,
+      [targetPolicyId, groupId],
+    );
+
+    const policyLocked = deferred<void>();
+    const releasePolicy = deferred<void>();
+    let paused = false;
+    const gatedRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: instrumentedDataSource(pool!, async (sql, execute) => {
+        const result = await execute();
+        if (!paused
+          && sql.includes("FROM knowledge_publication_target_policies")
+          && sql.includes("FOR UPDATE")) {
+          paused = true;
+          policyLocked.resolve();
+          await releasePolicy.promise;
+        }
+        return result;
+      }),
+    });
+    const detection = gatedRepository.recordDetectionResult(fixture.input);
+    await policyLocked.promise;
+
+    const mutator = await pool!.connect();
+    await mutator.query("BEGIN");
+    try {
+      const pid = (await mutator.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      const mutation = mutator.query(
+        "UPDATE knowledge_publication_target_policies SET allowed_group_ids = '{}' WHERE id = $1",
+        [targetPolicyId],
+      );
+      await waitForPostgresLock(pool!, pid);
+      await expect(pool!.query<{ wait_event_type: string | null }>(
+        "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+        [pid],
+      )).resolves.toMatchObject({ rows: [{ wait_event_type: "Lock" }] });
+      releasePolicy.resolve();
+      await expect(detection).resolves.toMatchObject({ outcome: "applied" });
+      await mutation;
+      await mutator.query("COMMIT");
+    } catch (error) {
+      releasePolicy.resolve();
+      await Promise.allSettled([detection]);
+      await mutator.query("ROLLBACK");
+      throw error;
+    } finally {
+      mutator.release();
+    }
+    await pool!.query(
+      `UPDATE knowledge_publication_target_policies
+       SET allowed_group_ids = ARRAY[$2]::text[] WHERE id = $1`,
+      [targetPolicyId, groupId],
+    );
+  });
+
+  it("uses memory-before-candidate locking across overlap and competing detection", async () => {
+    const first = await insertDetectionFixture("lock-order");
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+    await expect(repository.recordDetectionResult(first.input))
+      .resolves.toMatchObject({ outcome: "applied", candidate: { id: first.candidateId } });
+
+    const correctedAt = new Date(at.getTime() + 10_000);
+    const nextScanId = `lock-order-next-scan-${suffix}`;
+    const nextCandidateId = `lock-order-next-candidate-${suffix}`;
+    const nextWorkerId = "lock-order-next-worker";
+    await pool!.query("UPDATE group_memories SET updated_at = $2 WHERE id = $1", [
+      first.memoryId, correctedAt,
+    ]);
+    await pool!.query(
+      `INSERT INTO knowledge_conflict_scan_inbox (
+         id, group_id, group_memory_id, memory_updated_at, status, attempt_count,
+         next_attempt_at, lease_worker_id, lease_until, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'processing', 1, $4, $5, $6, $4, $4)`,
+      [nextScanId, groupId, first.memoryId, correctedAt, nextWorkerId,
+        new Date(correctedAt.getTime() + 30_000)],
+    );
+    const nextInput = integrationDetectionInput({
+      scanId: nextScanId,
+      candidateId: nextCandidateId,
+      workerId: nextWorkerId,
+      groupId,
+      memoryId: first.memoryId,
+      messageId: first.messageId,
+      memoryUpdatedAt: correctedAt,
+      operationKey: `lock-order-next-operation-${suffix}`,
+      sourceId,
+      snapshotId,
+      fragmentId,
+    });
+
+    const detectionMemoryLocked = deferred<void>();
+    const releaseDetection = deferred<void>();
+    let detectionPaused = false;
+    const detectionRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: instrumentedDataSource(pool!, async (sql, execute) => {
+        const result = await execute();
+        if (!detectionPaused && sql.startsWith("SELECT * FROM group_memories")
+          && sql.includes("FOR UPDATE")) {
+          detectionPaused = true;
+          detectionMemoryLocked.resolve();
+          await releaseDetection.promise;
+        }
+        return result;
+      }),
+    });
+    const overlapMemoryQueryStarted = deferred<void>();
+    let overlapStarted = false;
+    const overlapRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: instrumentedDataSource(pool!, async (sql, execute) => {
+        if (!overlapStarted && sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
+          overlapStarted = true;
+          overlapMemoryQueryStarted.resolve();
+        }
+        return execute();
+      }),
+    });
+
+    const detection = detectionRepository.recordDetectionResult(nextInput);
+    await detectionMemoryLocked.promise;
+    const overlap = overlapRepository.findCurrentOverlap({
+      groupId,
+      groupMemoryIds: [first.memoryId],
+      documents: [{ sourceId, snapshotId }],
+      permissionAttestedAt: correctedAt,
+      at: correctedAt,
+    });
+    await overlapMemoryQueryStarted.promise;
+
+    try {
+      const inspector = await pool!.connect();
+      await inspector.query("BEGIN");
+      try {
+        await expect(inspector.query(
+          "SELECT id FROM knowledge_conflict_candidates WHERE id = $1 FOR UPDATE NOWAIT",
+          [first.candidateId],
+        )).resolves.toMatchObject({ rows: [{ id: first.candidateId }] });
+      } finally {
+        await inspector.query("ROLLBACK");
+        inspector.release();
+      }
+
+      releaseDetection.resolve();
+      const [detected, current] = await Promise.all([detection, overlap]);
+      expect(detected).toMatchObject({ outcome: "applied", candidate: { id: nextCandidateId } });
+      expect(current).toMatchObject({ id: nextCandidateId, status: "pending_review" });
+    } catch (error) {
+      releaseDetection.resolve();
+      await Promise.allSettled([detection, overlap]);
+      throw error;
+    }
   });
 
   it("persists and governs an exact current conflict through one delivery and interaction", async () => {
@@ -1104,6 +1408,18 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     };
     await expect(repository.recordDetectionResult(unrelatedMessageInput))
       .rejects.toMatchObject({ reasonCode: "message_stale" });
+
+    await pool!.query(
+      "UPDATE knowledge_publication_target_policies SET allowed_group_ids = '{}' WHERE id = $1",
+      [targetPolicyId],
+    );
+    await expect(repository.recordDetectionResult(candidateInput))
+      .rejects.toMatchObject({ reasonCode: "source_stale" });
+    await pool!.query(
+      `UPDATE knowledge_publication_target_policies
+       SET allowed_group_ids = ARRAY[$2]::text[] WHERE id = $1`,
+      [targetPolicyId, groupId],
+    );
 
     await pool!.query(
       "UPDATE knowledge_publication_target_policies SET enabled = FALSE WHERE id = $1",
@@ -1260,6 +1576,22 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       permissionAttestedAt: at,
       at,
     })).resolves.toMatchObject({ id: candidateId, status: "delivered" });
+    await pool!.query(
+      "UPDATE knowledge_publication_target_policies SET allowed_group_ids = '{}' WHERE id = $1",
+      [targetPolicyId],
+    );
+    await expect(repository.findCurrentOverlap({
+      groupId,
+      groupMemoryIds: [memoryId],
+      documents: [{ sourceId, snapshotId }],
+      permissionAttestedAt: at,
+      at,
+    })).resolves.toBeUndefined();
+    await pool!.query(
+      `UPDATE knowledge_publication_target_policies
+       SET allowed_group_ids = ARRAY[$2]::text[] WHERE id = $1`,
+      [targetPolicyId, groupId],
+    );
 
     const interaction = {
       id: `interaction-${suffix}`,
@@ -1352,6 +1684,102 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     });
   });
 });
+
+function integrationDetectionInput(input: {
+  scanId: string;
+  candidateId: string;
+  workerId: string;
+  groupId: string;
+  memoryId: string;
+  messageId: string;
+  memoryUpdatedAt: Date;
+  operationKey: string;
+  sourceId: string;
+  snapshotId: string;
+  fragmentId: string;
+}): RecordKnowledgeConflictDetectionInput {
+  return {
+    scanId: input.scanId,
+    workerId: input.workerId,
+    result: {
+      outcome: "conflict",
+      candidate: {
+        id: input.candidateId,
+        idempotencyKey: input.operationKey,
+        groupId: input.groupId,
+        groupMemoryId: input.memoryId,
+        memoryUpdatedAt: input.memoryUpdatedAt,
+        sourceMessageId: input.messageId,
+        targetDocumentSourceId: input.sourceId,
+        targetSourceUpdatedAt: at,
+        targetSourceVersion: "revision-7",
+        targetSnapshotId: input.snapshotId,
+        targetContentHash: "a".repeat(64),
+        detectorContractVersion: "v1",
+        permissionAttestedAt: input.memoryUpdatedAt,
+        plan: conflictPlan(),
+        evidence: [
+          { type: "conversation_message", referenceId: "C1", groupId: input.groupId,
+            conversationMessageId: input.messageId },
+          { type: "group_memory", referenceId: "M1", groupId: input.groupId,
+            groupMemoryId: input.memoryId, expectedUpdatedAt: input.memoryUpdatedAt },
+          { type: "document_source", referenceId: "D1", documentSourceId: input.sourceId,
+            expectedUpdatedAt: at },
+          { type: "document_snapshot", referenceId: "D1", documentSourceId: input.sourceId,
+            documentSnapshotId: input.snapshotId, contentHash: "a".repeat(64) },
+          { type: "document_fragment", referenceId: "D1", documentSourceId: input.sourceId,
+            documentSnapshotId: input.snapshotId, documentFragmentId: input.fragmentId,
+            snapshotContentHash: "a".repeat(64), contentHash: "c".repeat(64) },
+        ],
+      },
+    },
+    at: input.memoryUpdatedAt,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function instrumentedDataSource(
+  pool: pg.Pool,
+  intercept: (
+    normalizedSql: string,
+    execute: () => Promise<{ rows: Record<string, unknown>[] }>,
+  ) => Promise<{ rows: Record<string, unknown>[] }>,
+): PostgresKnowledgeConflictDataSource {
+  return {
+    query: (sql: string, values?: unknown[]) => pool.query(sql, values),
+    connect: async () => {
+      const client = await pool.connect();
+      return {
+        release: () => client.release(),
+        query: (sql: string, values?: unknown[]) => intercept(
+          sql.replaceAll(/\s+/gu, " ").trim(),
+          async () => client.query(sql, values),
+        ),
+      };
+    },
+  } as unknown as PostgresKnowledgeConflictDataSource;
+}
+
+async function waitForPostgresLock(pool: pg.Pool, pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const activity = await pool.query<{ wait_event_type: string | null }>(
+      "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+      [pid],
+    );
+    if (activity.rows[0]?.wait_event_type === "Lock") return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`PostgreSQL backend ${pid} did not block on the policy row lock`);
+}
 
 function dataSource(client: ReturnType<typeof routedClient>): PostgresKnowledgeConflictDataSource {
   return {
@@ -1574,6 +2002,7 @@ function candidateRow(overrides: Record<string, unknown> = {}) {
 function sourceRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "source-1",
+    authorized_space_id: "space-1",
     source_type: "authorized_wiki_document",
     permission_state: "readable",
     sync_state: "synced",
@@ -1628,7 +2057,11 @@ function evidenceRows() {
   }));
 }
 
-function candidateClient(input: { existingCandidate?: boolean; completedScan?: boolean } = {}) {
+function candidateClient(input: {
+  existingCandidate?: boolean;
+  completedScan?: boolean;
+  authorizedPolicy?: boolean;
+} = {}) {
   return routedClient((sql) => {
     if (sql.includes("FROM knowledge_conflict_scan_inbox") && sql.includes("FOR UPDATE")) {
       return { rows: [scanRow({
@@ -1648,6 +2081,9 @@ function candidateClient(input: { existingCandidate?: boolean; completedScan?: b
     }
     if (sql.includes("FROM document_sources") && sql.includes("FOR UPDATE")) {
       return { rows: [sourceRow()] };
+    }
+    if (sql.includes("FROM knowledge_publication_target_policies")) {
+      return { rows: input.authorizedPolicy === false ? [] : [{ id: "policy-1" }] };
     }
     if (sql.includes("FROM document_snapshots") && sql.includes("FOR UPDATE")) {
       return { rows: [snapshotRow()] };
@@ -1685,6 +2121,9 @@ function transitionClient(input: {
     if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
     if (sql.includes("SELECT message.id FROM conversation_messages")) {
       return { rows: [{ id: "message-1" }] };
+    }
+    if (sql.includes("FROM knowledge_publication_target_policies")) {
+      return { rows: [{ id: "policy-1" }] };
     }
     if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
     if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
