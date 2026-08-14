@@ -7,6 +7,7 @@ import {
   KnowledgeConflictDeliveryConflictError,
   KnowledgeConflictLeaseConflictError,
   KnowledgeConflictOperationConflictError,
+  KnowledgeConflictTargetPolicyConflictError,
   KnowledgeConflictStaleEvidenceError,
   KnowledgeConflictVersionConflictError,
   createPostgresKnowledgeConflictRepository,
@@ -980,6 +981,31 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       interaction: { action: "dismiss", result: "applied" },
       candidate: { status: "dismissed", version: 2 },
     });
+  });
+
+  it("rejects create_draft when the bound publication policy version changed before commit", async () => {
+    const repository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(transitionClient({
+        toStatus: "draft_created",
+        targetPolicy: policyRow({ version: 8 }),
+      })),
+      createId: () => "interaction-1",
+    });
+
+    await expect(repository.applyInteraction({
+      id: "interaction-1",
+      candidateId: "candidate-1",
+      expectedVersion: 1,
+      callbackOperationKey: "callback-atomic-1",
+      actorRef: "ou-member",
+      action: "create_draft",
+      draftId: "draft-1",
+      reasonCode: "member_requested_update_draft",
+      permissionAttestedAt: at,
+      targetPolicyId: "policy-1",
+      targetPolicyVersion: 7,
+      at,
+    })).rejects.toBeInstanceOf(KnowledgeConflictTargetPolicyConflictError);
   });
 
   it("returns current overlap only for exact memory and source/snapshot identities", async () => {
@@ -3018,9 +3044,10 @@ function candidateClient(input: {
 }
 
 function transitionClient(input: {
-  toStatus: "dismissed" | "approved_for_delivery";
+  toStatus: "dismissed" | "approved_for_delivery" | "draft_created";
   delivery?: boolean;
   currentVersion?: number;
+  targetPolicy?: ReturnType<typeof policyRow>;
 }) {
   return routedClient((sql) => {
     if (sql.includes("FROM knowledge_conflict_interactions")) return { rows: [] };
@@ -3032,7 +3059,7 @@ function transitionClient(input: {
       return { rows: [{ id: "message-1" }] };
     }
     if (sql.includes("FROM knowledge_publication_target_policies")) {
-      return { rows: [{ id: "policy-1" }] };
+      return { rows: [input.targetPolicy ?? policyRow()] };
     }
     if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
     if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
@@ -3058,6 +3085,22 @@ function transitionClient(input: {
     if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
     return { rows: [] };
   });
+}
+
+function policyRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "policy-1",
+    space_id: "space-main",
+    parent_node_token: "parent-main",
+    display_name: "Main knowledge",
+    allowed_group_ids: ["group-1"],
+    allowed_risk_levels: ["medium"],
+    enabled: true,
+    version: 7,
+    created_at: at,
+    updated_at: at,
+    ...overrides,
+  };
 }
 
 function memoryBeforeCandidateClient(input: { approval?: boolean } = {}) {

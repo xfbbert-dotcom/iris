@@ -5,6 +5,8 @@ import {
   type ApprovalInteractionJob,
 } from "../knowledge-cards/knowledge-card.js";
 import type { ApprovalInteractionIntentStore } from "../knowledge-cards/approval-interaction-intent-store.js";
+import type { KnowledgeConflictCallbackIdentityStore } from
+  "../knowledge-conflicts/knowledge-conflict-callback-identity-store.js";
 import {
   parseFeishuCardAction,
   type ParsedFeishuCardAction,
@@ -89,6 +91,7 @@ type FeishuCardActionShapeDiagnostic = {
 export type FeishuCardActionGatewayDependencies = {
   queue: ApprovalInteractionEnqueuer;
   intentStore?: Pick<ApprovalInteractionIntentStore, "persistIntent">;
+  callbackIdentityStore?: Pick<KnowledgeConflictCallbackIdentityStore, "persistIdentity">;
   verifyRequest: RequestVerifier;
   decodeRequest?: RequestDecoder;
   verifyDecodedRequest?: RequestVerifier;
@@ -208,6 +211,7 @@ export function createFeishuCardActionGateway(dependencies: FeishuCardActionGate
         receivedAt: now(),
         queue: dependencies.queue,
         intentStore: dependencies.intentStore,
+        callbackIdentityStore: dependencies.callbackIdentityStore,
       });
       if (outcome === "accepted") return acceptedResponse();
       return outcome === "rejected" ? enqueueFailureResponse() : enqueueUncertaintyResponse();
@@ -418,6 +422,7 @@ async function createJob(
   action: ParsedFeishuCardAction,
   receivedAt: Date,
   intentStore: Pick<ApprovalInteractionIntentStore, "persistIntent"> | undefined,
+  callbackIdentityStore: Pick<KnowledgeConflictCallbackIdentityStore, "persistIdentity"> | undefined,
 ): Promise<ApprovalInteractionJob> {
   const common = {
     kind: action.kind,
@@ -432,6 +437,39 @@ async function createJob(
       : action.presentationId,
     action: action.action,
   };
+  if (action.kind === "knowledge_conflict_confirmation") {
+    if (callbackIdentityStore === undefined || action.messageId === undefined) {
+      throw new Error("knowledge conflict callback identity store is unavailable");
+    }
+    const persisted = await callbackIdentityStore.persistIdentity({
+      idempotencyKey: common.idempotencyKey,
+      eventId: action.eventId,
+      appId: action.appId,
+      actorOpenId: action.actorOpenId,
+      chatId: action.chatId,
+      messageId: action.messageId,
+      presentationId: action.presentationId,
+      candidateId: action.candidateId,
+      candidateVersion: action.candidateVersion,
+      groupId: action.groupId,
+      nonce: action.nonce,
+      action: action.action,
+      receivedAt,
+    });
+    return normalizeApprovalInteractionJob({
+      kind: action.kind,
+      idempotencyKey: common.idempotencyKey,
+      callbackIdentityId: persisted.id,
+      presentationId: action.presentationId,
+      candidateId: action.candidateId,
+      candidateVersion: action.candidateVersion,
+      groupId: action.groupId,
+      nonce: action.nonce,
+      action: action.action,
+      receivedAt,
+      attempts: 0,
+    });
+  }
   let interaction: ApprovalInteractionIntentIdentity;
   if (action.kind === "knowledge_draft_confirmation") {
     interaction = normalizeApprovalInteractionIntentIdentity({
@@ -460,16 +498,7 @@ async function createJob(
       candidateIdempotencyKey: action.candidateIdempotencyKey,
       entityVersion: action.entityVersion,
     });
-  } else {
-    interaction = normalizeApprovalInteractionIntentIdentity({
-      ...common,
-      kind: action.kind,
-      candidateId: action.candidateId,
-      candidateVersion: action.candidateVersion,
-      groupId: action.groupId,
-      nonce: action.nonce,
-    });
-  }
+  } else throw new Error("unsupported approval interaction kind");
   if (action.reason === undefined) {
     return normalizeApprovalInteractionJob({ ...interaction, receivedAt, attempts: 0 });
   }
@@ -495,16 +524,18 @@ async function submitWithinDeadline({
   receivedAt,
   queue,
   intentStore,
+  callbackIdentityStore,
 }: {
   action: ParsedFeishuCardAction;
   receivedAt: Date;
   queue: ApprovalInteractionEnqueuer;
   intentStore: Pick<ApprovalInteractionIntentStore, "persistIntent"> | undefined;
+  callbackIdentityStore: Pick<KnowledgeConflictCallbackIdentityStore, "persistIdentity"> | undefined;
 }): Promise<"accepted" | "rejected" | "uncertain"> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const submission = Promise.resolve()
     .then(async () => {
-      const job = await createJob(action, receivedAt, intentStore);
+      const job = await createJob(action, receivedAt, intentStore, callbackIdentityStore);
       await queue.enqueue(job);
     })
     .then(

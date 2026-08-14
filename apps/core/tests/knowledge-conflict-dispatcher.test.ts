@@ -38,7 +38,10 @@ describe("KnowledgeConflictDispatcher", () => {
       gates: () => { order.push("gates"); return openGates(); },
       botMember: async () => { order.push("bot"); return true; },
       findSource: async () => { order.push("source"); return source(); },
-      validate: async () => { order.push("validate"); return { status: "current", candidate: candidate() }; },
+      validate: async () => {
+        order.push("validate");
+        return { status: "current", candidate: candidate(), permissionAttestedAt: at };
+      },
       begin: async () => { order.push("begin"); },
       send: async (input) => {
         order.push("send");
@@ -122,7 +125,7 @@ describe("KnowledgeConflictDispatcher", () => {
       gates: () => ({ ...openGates(), featureEnabled: enabled }),
       validate: async () => {
         enabled = false;
-        return { status: "current", candidate: candidate() };
+        return { status: "current", candidate: candidate(), permissionAttestedAt: at };
       },
     });
 
@@ -406,7 +409,7 @@ type HarnessOverrides = {
   botMember?: (groupId: string) => Promise<boolean>;
   findSource?: (id: string) => Promise<DocumentSource | undefined>;
   validate?: () => Promise<
-    | { status: "current"; candidate: KnowledgeConflictCandidate }
+    | { status: "current"; candidate: KnowledgeConflictCandidate; permissionAttestedAt: Date }
     | { status: "superseded"; candidate: KnowledgeConflictCandidate; reason: string }
     | { status: "permission_blocked"; candidate: KnowledgeConflictCandidate }
     | { status: "validation_unavailable"; candidate: KnowledgeConflictCandidate }
@@ -449,7 +452,11 @@ function createHarness(overrides: HarnessOverrides = {}) {
     | "getDelivery"
   >;
   const currentValidator = {
-    validate: vi.fn(overrides.validate ?? (async () => ({ status: "current" as const, candidate: candidate() }))),
+    validate: vi.fn(overrides.validate ?? (async () => ({
+      status: "current" as const,
+      candidate: candidate(),
+      permissionAttestedAt: at,
+    }))),
   };
   const cardClient = {
     sendCard: vi.fn(overrides.send ?? (async () => ({ messageId: "om_conflict" }))),

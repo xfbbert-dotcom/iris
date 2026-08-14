@@ -431,9 +431,13 @@ describe("FeishuCardActionGateway", () => {
     const now = new Date("2026-08-13T00:00:00.000Z");
     const queue = { enqueue: vi.fn(async () => "enqueued" as const) };
     const intentStore = { persistIntent: vi.fn() };
+    const callbackIdentityStore = {
+      persistIdentity: vi.fn(async () => ({ id: "callback-identity-1" })),
+    };
     const gateway = createFeishuCardActionGateway({
       queue,
       intentStore,
+      callbackIdentityStore,
       verifyRequest: () => true,
       now: () => now,
     });
@@ -454,8 +458,7 @@ describe("FeishuCardActionGateway", () => {
     await expect(gateway.handleCallback({ headers: {}, body })).resolves.toMatchObject({
       statusCode: 200,
     });
-    expect(queue.enqueue).toHaveBeenCalledWith({
-      kind: "knowledge_conflict_confirmation",
+    expect(callbackIdentityStore.persistIdentity).toHaveBeenCalledWith({
       idempotencyKey: "feishu-card:cli_approval:event-1",
       eventId: "event-1",
       appId: "cli_approval",
@@ -469,9 +472,22 @@ describe("FeishuCardActionGateway", () => {
       nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
       action: "not_a_conflict",
       receivedAt: now,
+    });
+    expect(queue.enqueue).toHaveBeenCalledWith({
+      kind: "knowledge_conflict_confirmation",
+      idempotencyKey: "feishu-card:cli_approval:event-1",
+      callbackIdentityId: "callback-identity-1",
+      presentationId: "candidate-1",
+      candidateId: "candidate-1",
+      candidateVersion: 3,
+      groupId: "oc_approval",
+      nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
+      action: "not_a_conflict",
+      receivedAt: now,
       attempts: 0,
     });
     expect(intentStore.persistIntent).not.toHaveBeenCalled();
+    expect(JSON.stringify(queue.enqueue.mock.calls)).not.toContain("ou_reviewer");
   });
 
   it("acknowledges signed proactive feedback and leaves duplicate detection to the queue", async () => {

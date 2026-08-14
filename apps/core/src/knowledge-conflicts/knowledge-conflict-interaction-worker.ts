@@ -6,8 +6,8 @@ import type {
 } from "../action-approvals/action-proposal-repository.js";
 import type { FeishuGroupMembershipChecker } from
   "../feishu/feishu-group-membership-checker.js";
-import type { KnowledgeConflictConfirmationInteractionJob } from
-  "../knowledge-cards/knowledge-card.js";
+import type { AuthenticatedKnowledgeConflictConfirmationInteraction } from
+  "./knowledge-conflict-callback-identity-store.js";
 import {
   presentKnowledgeDraft as defaultPresentKnowledgeDraft,
   type KnowledgeDraftPresentationRuntime,
@@ -23,6 +23,7 @@ import {
   KnowledgeConflictNotFoundError,
   KnowledgeConflictOperationConflictError,
   KnowledgeConflictStaleEvidenceError,
+  KnowledgeConflictTargetPolicyConflictError,
   KnowledgeConflictVersionConflictError,
   type KnowledgeConflictDelivery,
   type KnowledgeConflictRepository,
@@ -94,7 +95,7 @@ export type KnowledgeConflictInteractionWorkerDependencies = {
   currentValidator: KnowledgeConflictCurrentValidator;
   membershipChecker: FeishuGroupMembershipChecker;
   drafts: Pick<KnowledgeDraftRepository, "getDraft" | "createDraft">;
-  publicationTargets: Pick<ActionProposalRepository, "listTargetPolicies">;
+  publicationTargets: Pick<ActionProposalRepository, "listTargetPolicies" | "getTargetPolicy">;
   cardRuntime: KnowledgeDraftPresentationRuntime;
   canProcessKnowledgeConflicts(groupId: string): boolean;
   botOpenId: string;
@@ -111,7 +112,7 @@ export function createKnowledgeConflictInteractionWorker(
 
   return {
     async processInteraction(
-      job: KnowledgeConflictConfirmationInteractionJob,
+      job: AuthenticatedKnowledgeConflictConfirmationInteraction,
     ): Promise<KnowledgeConflictInteractionWorkerResult> {
       if (!readGate(dependencies.canProcessKnowledgeConflicts, job.groupId)) {
         return denied("runtime_disabled");
@@ -161,21 +162,31 @@ export function createKnowledgeConflictInteractionWorker(
         if (targetPolicy === undefined) return denied("target_unavailable");
       }
 
-      let validation: Awaited<ReturnType<KnowledgeConflictCurrentValidator["validate"]>>;
-      try {
-        validation = await dependencies.currentValidator.validate({
-          candidate,
-          expectedVersion: candidate.version,
-        });
-      } catch (error) {
-        return error instanceof KnowledgeConflictVersionConflictError
-          ? denied("stale_candidate")
-          : retryable("validation_unavailable");
+      const firstValidation = await validateCurrentCandidate(dependencies.currentValidator, candidate);
+      if (firstValidation.status !== "current") return firstValidation.result;
+
+      const secondMembership = await checkMembership(
+        dependencies.membershipChecker,
+        job.groupId,
+        job.actorOpenId,
+      );
+      if (secondMembership !== true) return secondMembership;
+
+      if (targetPolicy !== undefined) {
+        let exactTargetPolicy: PublicationTargetPolicy | undefined;
+        try {
+          exactTargetPolicy = await dependencies.publicationTargets.getTargetPolicy(targetPolicy.id);
+        } catch {
+          return retryable("repository_unavailable");
+        }
+        if (!isExactTargetPolicy(targetPolicy, exactTargetPolicy, job.groupId)) {
+          return denied("target_unavailable");
+        }
+        targetPolicy = exactTargetPolicy;
       }
-      if (validation.status === "superseded") return denied("evidence_invalidated");
-      if (validation.status === "permission_blocked") return denied("permission_blocked");
-      if (validation.status === "validation_unavailable") return retryable("validation_unavailable");
-      if (!sameCandidateState(candidate, validation.candidate)) return denied("stale_candidate");
+
+      const secondValidation = await validateCurrentCandidate(dependencies.currentValidator, candidate);
+      if (secondValidation.status !== "current") return secondValidation.result;
 
       if (job.action === "not_a_conflict") {
         if (!readGate(dependencies.canProcessKnowledgeConflicts, job.groupId)) {
@@ -191,7 +202,7 @@ export function createKnowledgeConflictInteractionWorker(
             actorRef: job.actorOpenId,
             action: "dismiss",
             reasonCode: "member_not_a_conflict",
-            permissionAttestedAt: interactionAt,
+            permissionAttestedAt: secondValidation.permissionAttestedAt,
             at: interactionAt,
           });
           return {
@@ -230,6 +241,13 @@ export function createKnowledgeConflictInteractionWorker(
             operationKey: identity.creationOperationKey,
             originKind: "knowledge_conflict",
             createdBy: "iris",
+            knowledgeConflictGovernance: {
+              permission: {
+                documentSourceIds: conflictDocumentSourceIds(candidate),
+                attestedAt: secondValidation.permissionAttestedAt,
+              },
+              publicationTarget: { id: targetPolicy.id, version: targetPolicy.version },
+            },
             revision,
             at: draftAt,
           });
@@ -241,6 +259,16 @@ export function createKnowledgeConflictInteractionWorker(
           return denied("immutable_intent_conflict");
         }
       }
+
+      const finalMembership = await checkMembership(
+        dependencies.membershipChecker,
+        job.groupId,
+        job.actorOpenId,
+      );
+      if (finalMembership !== true) return finalMembership;
+
+      const finalValidation = await validateCurrentCandidate(dependencies.currentValidator, candidate);
+      if (finalValidation.status !== "current") return finalValidation.result;
 
       if (!readGate(dependencies.canProcessKnowledgeConflicts, job.groupId)) {
         return denied("runtime_disabled");
@@ -257,7 +285,9 @@ export function createKnowledgeConflictInteractionWorker(
           action: "create_draft",
           draftId: identity.draftId,
           reasonCode: "member_requested_update_draft",
-          permissionAttestedAt: interactionAt,
+          permissionAttestedAt: finalValidation.permissionAttestedAt,
+          targetPolicyId: targetPolicy.id,
+          targetPolicyVersion: targetPolicy.version,
           at: interactionAt,
         });
       } catch (error) {
@@ -356,7 +386,7 @@ function selectTargetPolicy(
 
 function isExactCandidateBinding(
   candidate: KnowledgeConflictCandidate | undefined,
-  job: KnowledgeConflictConfirmationInteractionJob,
+  job: AuthenticatedKnowledgeConflictConfirmationInteraction,
 ): candidate is KnowledgeConflictCandidate {
   if (candidate === undefined || candidate.id !== job.candidateId || candidate.groupId !== job.groupId) {
     return false;
@@ -370,7 +400,7 @@ function isExactCandidateBinding(
 
 function isExactDeliveryBinding(
   delivery: KnowledgeConflictDelivery | undefined,
-  job: KnowledgeConflictConfirmationInteractionJob,
+  job: AuthenticatedKnowledgeConflictConfirmationInteraction,
 ): delivery is KnowledgeConflictDelivery & { sentMessageId: string } {
   return delivery !== undefined &&
     delivery.candidateId === job.candidateId &&
@@ -379,6 +409,72 @@ function isExactDeliveryBinding(
     delivery.sentMessageId !== undefined &&
     delivery.sentMessageId === job.messageId &&
     createKnowledgeConflictCallbackNonce(delivery.id) === job.nonce;
+}
+
+function conflictDocumentSourceIds(candidate: KnowledgeConflictCandidate): string[] {
+  return [candidate.targetDocumentSourceId];
+}
+
+function isExactTargetPolicy(
+  selected: PublicationTargetPolicy,
+  current: PublicationTargetPolicy | undefined,
+  groupId: string,
+): current is PublicationTargetPolicy {
+  return current !== undefined &&
+    current.id === selected.id &&
+    current.version === selected.version &&
+    current.enabled &&
+    current.allowedGroupIds.includes(groupId) &&
+    current.allowedRiskLevels.includes("medium") &&
+    current.spaceId === selected.spaceId &&
+    current.parentNodeToken === selected.parentNodeToken;
+}
+
+async function checkMembership(
+  checker: FeishuGroupMembershipChecker,
+  groupId: string,
+  actorOpenId: string,
+): Promise<true | KnowledgeConflictInteractionWorkerResult> {
+  try {
+    return await checker.isCurrentMember({ chatId: groupId, openId: actorOpenId })
+      ? true
+      : denied("not_current_member");
+  } catch {
+    return retryable("membership_unavailable");
+  }
+}
+
+async function validateCurrentCandidate(
+  validator: KnowledgeConflictCurrentValidator,
+  candidate: KnowledgeConflictCandidate,
+): Promise<
+  | { status: "current"; permissionAttestedAt: Date }
+  | { status: "not_current"; result: KnowledgeConflictInteractionWorkerResult }
+> {
+  let validation: Awaited<ReturnType<KnowledgeConflictCurrentValidator["validate"]>>;
+  try {
+    validation = await validator.validate({ candidate, expectedVersion: candidate.version });
+  } catch (error) {
+    return {
+      status: "not_current",
+      result: error instanceof KnowledgeConflictVersionConflictError
+        ? denied("stale_candidate")
+        : retryable("validation_unavailable"),
+    };
+  }
+  if (validation.status === "superseded") {
+    return { status: "not_current", result: denied("evidence_invalidated") };
+  }
+  if (validation.status === "permission_blocked") {
+    return { status: "not_current", result: denied("permission_blocked") };
+  }
+  if (validation.status === "validation_unavailable") {
+    return { status: "not_current", result: retryable("validation_unavailable") };
+  }
+  if (!sameCandidateState(candidate, validation.candidate)) {
+    return { status: "not_current", result: denied("stale_candidate") };
+  }
+  return { status: "current", permissionAttestedAt: new Date(validation.permissionAttestedAt) };
 }
 
 function sameCandidateState(
@@ -434,6 +530,7 @@ function classifyMutationError(error: unknown): KnowledgeConflictInteractionWork
     error instanceof KnowledgeConflictDeliveryConflictError
   ) return denied("stale_candidate");
   if (error instanceof KnowledgeConflictStaleEvidenceError) return denied("evidence_invalidated");
+  if (error instanceof KnowledgeConflictTargetPolicyConflictError) return denied("target_unavailable");
   return retryable("repository_unavailable");
 }
 

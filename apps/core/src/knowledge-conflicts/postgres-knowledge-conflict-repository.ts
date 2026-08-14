@@ -21,6 +21,7 @@ import {
   KnowledgeConflictNotFoundError,
   KnowledgeConflictOperationConflictError,
   KnowledgeConflictStaleEvidenceError,
+  KnowledgeConflictTargetPolicyConflictError,
   KnowledgeConflictVersionConflictError,
 } from "./knowledge-conflict-repository.js";
 export {
@@ -29,6 +30,7 @@ export {
   KnowledgeConflictNotFoundError,
   KnowledgeConflictOperationConflictError,
   KnowledgeConflictStaleEvidenceError,
+  KnowledgeConflictTargetPolicyConflictError,
   KnowledgeConflictVersionConflictError,
 } from "./knowledge-conflict-repository.js";
 import type {
@@ -2513,6 +2515,8 @@ async function applyInteraction(
     actorRef: string;
     action: "dismiss" | "create_draft";
     draftId?: string;
+    targetPolicyId?: string;
+    targetPolicyVersion?: number;
     reasonCode: string;
     permissionAttestedAt: Date;
     at: Date;
@@ -2526,12 +2530,23 @@ async function applyInteraction(
     actorRef: requireReference("actorRef", input.actorRef),
     action: input.action,
     ...(input.draftId === undefined ? {} : { draftId: requireReference("draftId", input.draftId) }),
+    ...(input.targetPolicyId === undefined
+      ? {} : { targetPolicyId: requireReference("targetPolicyId", input.targetPolicyId) }),
+    ...(input.targetPolicyVersion === undefined
+      ? {} : { targetPolicyVersion: requirePositiveInteger(
+          "targetPolicyVersion",
+          input.targetPolicyVersion,
+        ) }),
     reasonCode: requireBoundedString("reasonCode", input.reasonCode, 128),
     permissionAttestedAt: requireDate("permissionAttestedAt", input.permissionAttestedAt),
     at: requireDate("at", input.at),
   };
   if ((normalized.action === "create_draft") !== (normalized.draftId !== undefined)) {
     throw new Error("create_draft interaction requires a draft id");
+  }
+  if ((normalized.action === "create_draft") !==
+    (normalized.targetPolicyId !== undefined && normalized.targetPolicyVersion !== undefined)) {
+    throw new Error("create_draft interaction requires a target policy identity");
   }
   assertFreshPermission(normalized.permissionAttestedAt, normalized.at, maxPermissionAgeMs);
   return withTransaction(dataSource, async (client) => {
@@ -2558,6 +2573,13 @@ async function applyInteraction(
     const evidence = await loadEvidence(client, candidateRow.id);
     const staleReason = await findStaleReason(client, candidateRow, evidence);
     if (staleReason !== undefined) throw new KnowledgeConflictStaleEvidenceError(staleReason);
+    if (normalized.action === "create_draft") {
+      await validateInteractionTargetPolicy(client, {
+        id: normalized.targetPolicyId!,
+        version: normalized.targetPolicyVersion!,
+        groupId: candidateRow.group_id,
+      });
+    }
     const toStatus = normalized.action === "dismiss" ? "dismissed" : "draft_created";
     requireCandidateTransition(candidateRow.status, toStatus);
     const interactionResult = await client.query<InteractionRow>(
@@ -2589,6 +2611,35 @@ async function applyInteraction(
       candidate: mutation.candidate,
     };
   });
+}
+
+type InteractionTargetPolicyRow = {
+  id: string;
+  allowed_group_ids: string[];
+  allowed_risk_levels: string[];
+  enabled: boolean;
+  version: string | number;
+};
+
+async function validateInteractionTargetPolicy(
+  client: PostgresKnowledgeConflictQueryable,
+  input: { id: string; version: number; groupId: string },
+): Promise<void> {
+  const result = await client.query<InteractionTargetPolicyRow>(
+    `SELECT id, allowed_group_ids, allowed_risk_levels, enabled, version
+     FROM knowledge_publication_target_policies
+     WHERE id = $1
+     FOR UPDATE`,
+    [input.id],
+  );
+  const policy = result.rows[0];
+  if (policy === undefined ||
+    Number(policy.version) !== input.version ||
+    policy.enabled !== true ||
+    !policy.allowed_group_ids.includes(input.groupId) ||
+    !policy.allowed_risk_levels.includes("medium")) {
+    throw new KnowledgeConflictTargetPolicyConflictError();
+  }
 }
 
 function interactionMatches(

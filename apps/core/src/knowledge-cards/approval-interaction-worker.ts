@@ -11,6 +11,11 @@ import type {
 import type {
   KnowledgeConflictInteractionWorkerResult,
 } from "../knowledge-conflicts/knowledge-conflict-interaction-worker.js";
+import {
+  KnowledgeConflictCallbackIdentityConflictError,
+  type AuthenticatedKnowledgeConflictConfirmationInteraction,
+  type KnowledgeConflictCallbackIdentityStore,
+} from "../knowledge-conflicts/knowledge-conflict-callback-identity-store.js";
 
 import type { ApprovalInteractionQueue } from "./approval-interaction-queue.js";
 import {
@@ -86,6 +91,7 @@ export type ApprovalInteractionWorkerDependencies = {
   leaseMs: number;
   now?: () => Date;
   intentStore?: Pick<ApprovalInteractionIntentStore, "resolveIntent" | "deleteIntent">;
+  callbackIdentityStore?: Pick<KnowledgeConflictCallbackIdentityStore, "resolveIdentity">;
   actionApprovalWorker?: {
     processActionApproval(
       job: Extract<ApprovalInteractionJob, { kind: "action_proposal_approval" }>,
@@ -100,7 +106,7 @@ export type ApprovalInteractionWorkerDependencies = {
   };
   knowledgeConflictInteractionWorker?: {
     processInteraction(
-      job: Extract<ApprovalInteractionJob, { kind: "knowledge_conflict_confirmation" }>,
+      job: AuthenticatedKnowledgeConflictConfirmationInteraction,
     ): Promise<KnowledgeConflictInteractionWorkerResult>;
   };
 };
@@ -116,6 +122,7 @@ export function createApprovalInteractionWorker({
   leaseMs,
   now = () => new Date(),
   intentStore,
+  callbackIdentityStore,
   actionApprovalWorker,
   proactiveSignalFeedbackWorker,
   knowledgeConflictInteractionWorker,
@@ -146,6 +153,7 @@ export function createApprovalInteractionWorker({
           workerId: safeWorkerId,
           now,
           intentStore,
+          callbackIdentityStore,
           actionApprovalWorker,
           proactiveSignalFeedbackWorker,
           knowledgeConflictInteractionWorker,
@@ -170,6 +178,7 @@ type ProcessJobInput = {
   workerId: string;
   now: () => Date;
   intentStore?: ApprovalInteractionWorkerDependencies["intentStore"];
+  callbackIdentityStore?: ApprovalInteractionWorkerDependencies["callbackIdentityStore"];
   resolvedIntent?: ApprovalInteractionIntent;
   actionApprovalWorker?: ApprovalInteractionWorkerDependencies["actionApprovalWorker"];
   proactiveSignalFeedbackWorker?:
@@ -535,9 +544,42 @@ async function processKnowledgeConflictInteraction(
   if (input.knowledgeConflictInteractionWorker === undefined) {
     return handleKnowledgeConflictFailure(input, "internal_error");
   }
+  if (input.callbackIdentityStore === undefined) {
+    return handleKnowledgeConflictFailure(input, "repository_unavailable");
+  }
+  let authenticated;
+  try {
+    authenticated = await input.callbackIdentityStore.resolveIdentity({
+      id: input.job.callbackIdentityId,
+      interaction: input.job,
+    });
+  } catch (error) {
+    if (!(error instanceof KnowledgeConflictCallbackIdentityConflictError)) {
+      return handleKnowledgeConflictFailure(input, "repository_unavailable");
+    }
+    const ackFailure = await acknowledge(input);
+    if (ackFailure !== undefined) return ackFailure;
+    return {
+      status: "denied",
+      idempotencyKey: input.job.idempotencyKey,
+      code: "immutable_intent_conflict",
+    };
+  }
+  if (authenticated === undefined) {
+    const ackFailure = await acknowledge(input);
+    if (ackFailure !== undefined) return ackFailure;
+    return {
+      status: "denied",
+      idempotencyKey: input.job.idempotencyKey,
+      code: "immutable_intent_conflict",
+    };
+  }
   let result: KnowledgeConflictInteractionWorkerResult;
   try {
-    result = await input.knowledgeConflictInteractionWorker.processInteraction(input.job);
+    result = await input.knowledgeConflictInteractionWorker.processInteraction({
+      ...input.job,
+      ...authenticated,
+    });
   } catch {
     return handleKnowledgeConflictFailure(input, "internal_error");
   }

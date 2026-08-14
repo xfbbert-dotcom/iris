@@ -28,11 +28,9 @@ export class KnowledgeDraftEvidenceError extends Error {
   }
 }
 
-export async function validateCurrentKnowledgeDraftEvidence(input: {
-  queryable: KnowledgeDraftEvidenceQueryable;
-  sourceGroupId?: string;
-  evidence: readonly KnowledgeDraftEvidenceReference[];
-}): Promise<void> {
+export async function validateCurrentKnowledgeDraftEvidence(
+  input: Parameters<typeof findInvalidKnowledgeDraftEvidence>[0],
+): Promise<void> {
   const reason = await findInvalidKnowledgeDraftEvidence(input);
   if (reason !== undefined) throw new KnowledgeDraftEvidenceError(reason);
 }
@@ -41,9 +39,21 @@ export async function findInvalidKnowledgeDraftEvidence(input: {
   queryable: KnowledgeDraftEvidenceQueryable;
   sourceGroupId?: string;
   evidence: readonly KnowledgeDraftEvidenceReference[];
+  knowledgeConflictPermission?: {
+    documentSourceIds: readonly string[];
+    attestedAt: Date;
+    validationAt: Date;
+    maxAgeMs: number;
+  };
+  draftIdentity?: {
+    draftId: string;
+    revisionNumber: number;
+    validationAt: Date;
+    maxAgeMs: number;
+  };
 }): Promise<KnowledgeDraftEvidenceInvalidReason | undefined> {
   for (const evidence of input.evidence) {
-    const reason = await findInvalidReference(input.queryable, input.sourceGroupId, evidence);
+    const reason = await findInvalidReference(input.queryable, input.sourceGroupId, evidence, input);
     if (reason !== undefined) return reason;
   }
   return undefined;
@@ -53,6 +63,7 @@ async function findInvalidReference(
   queryable: KnowledgeDraftEvidenceQueryable,
   sourceGroupId: string | undefined,
   evidence: KnowledgeDraftEvidenceReference,
+  context: Parameters<typeof findInvalidKnowledgeDraftEvidence>[0],
 ): Promise<KnowledgeDraftEvidenceInvalidReason | undefined> {
   if (evidence.type === "conversation_message") {
     const result = await queryable.query<MessageStateRow>(
@@ -131,7 +142,12 @@ async function findInvalidReference(
   );
   const row = result.rows[0];
   if (row === undefined) return "source_missing";
-  if (row.permission_state !== "readable") return "document_permission_unavailable";
+  if (row.permission_state !== "readable") {
+    if (row.permission_state !== "unknown"
+      || !await hasFreshKnowledgeConflictPermission(queryable, evidence.id, context)) {
+      return "document_permission_unavailable";
+    }
+  }
   if (row.sync_state !== "synced") return "document_not_synced";
   if (!row.can_use_for_knowledge_drafts) return "document_draft_use_disabled";
   if (new Date(row.updated_at).getTime() !== evidence.expectedUpdatedAt.getTime()) {
@@ -142,4 +158,34 @@ async function findInvalidReference(
     (sourceGroupId === undefined || !row.exact_group_evidence)
   ) return "group_scope_mismatch";
   return undefined;
+}
+
+async function hasFreshKnowledgeConflictPermission(
+  queryable: KnowledgeDraftEvidenceQueryable,
+  documentSourceId: string,
+  context: Parameters<typeof findInvalidKnowledgeDraftEvidence>[0],
+): Promise<boolean> {
+  const direct = context.knowledgeConflictPermission;
+  if (direct !== undefined
+    && direct.documentSourceIds.includes(documentSourceId)
+    && isFresh(direct.attestedAt, direct.validationAt, direct.maxAgeMs)) return true;
+  const identity = context.draftIdentity;
+  if (identity === undefined) return false;
+  const result = await queryable.query<{ permission_attested_at: Date }>(
+    `SELECT permission_attested_at
+     FROM knowledge_conflict_draft_governance_attestations
+     WHERE draft_id = $1 AND revision_number = $2 AND document_source_id = $3`,
+    [identity.draftId, identity.revisionNumber, documentSourceId],
+  );
+  const attestedAt = result.rows[0]?.permission_attested_at;
+  return attestedAt !== undefined
+    && isFresh(new Date(attestedAt), identity.validationAt, identity.maxAgeMs);
+}
+
+function isFresh(attestedAt: Date, validationAt: Date, maxAgeMs: number): boolean {
+  const attestedMs = attestedAt.getTime();
+  const validationMs = validationAt.getTime();
+  return Number.isFinite(attestedMs) && Number.isFinite(validationMs)
+    && Number.isSafeInteger(maxAgeMs) && maxAgeMs >= 0
+    && attestedMs <= validationMs && validationMs - attestedMs <= maxAgeMs;
 }

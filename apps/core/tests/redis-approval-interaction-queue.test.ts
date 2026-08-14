@@ -748,11 +748,7 @@ describe("Redis approval interaction queue", () => {
     const job = normalizeApprovalInteractionJob({
       kind: "knowledge_conflict_confirmation",
       idempotencyKey: "feishu-card:cli_conflict:event-conflict",
-      eventId: "event-conflict",
-      appId: "cli_conflict",
-      actorOpenId: "ou_member",
-      chatId: "oc_group",
-      messageId: "om_conflict_card",
+      callbackIdentityId: "callback-identity-1",
       presentationId: "candidate-1",
       candidateId: "candidate-1",
       candidateVersion: 3,
@@ -779,6 +775,9 @@ describe("Redis approval interaction queue", () => {
     });
     const [deadLetter] = await queue.listDeadLetters({ limit: 1 });
     const stored = [serializeApprovalInteractionJob(job), JSON.stringify(deadLetter)].join("\n");
+    expect(stored).toContain("callback-identity-1");
+    expect(stored).not.toContain("ou_member");
+    expect(stored).not.toContain("actorOpenId");
     expect(stored).not.toMatch(/current synchronized knowledge|newer group conclusion|proposed update|reason/iu);
     expect(stored).not.toContain("private conflict content");
   });

@@ -35,7 +35,11 @@ describe("KnowledgeConflictCurrentValidator", () => {
     });
 
     await expect(validator.validate({ candidate: currentCandidate, expectedVersion: 3 }))
-      .resolves.toEqual({ status: "current", candidate: currentCandidate });
+      .resolves.toEqual({
+        status: "current",
+        candidate: currentCandidate,
+        permissionAttestedAt: validatedAt,
+      });
     expect(trace).toEqual(["source:source-a", "permission:source-a"]);
     expect(validateCandidateCurrentState).toHaveBeenCalledWith({
       candidateId: "candidate-a",

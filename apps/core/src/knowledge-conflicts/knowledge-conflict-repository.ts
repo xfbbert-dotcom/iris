@@ -335,6 +335,8 @@ export interface KnowledgeConflictRepository {
     actorRef: string;
     action: "dismiss" | "create_draft";
     draftId?: string;
+    targetPolicyId?: string;
+    targetPolicyVersion?: number;
     reasonCode: string;
     permissionAttestedAt: Date;
     at: Date;
@@ -394,5 +396,12 @@ export class KnowledgeConflictDeliveryConflictError extends Error {
   constructor() {
     super("knowledge conflict delivery conflict");
     this.name = "KnowledgeConflictDeliveryConflictError";
+  }
+}
+
+export class KnowledgeConflictTargetPolicyConflictError extends Error {
+  constructor() {
+    super("knowledge conflict target policy conflict");
+    this.name = "KnowledgeConflictTargetPolicyConflictError";
   }
 }

@@ -524,6 +524,7 @@ describe("ApprovalInteractionWorker", () => {
 
   it("delegates a knowledge conflict callback without resolving an intent or touching draft-card state", async () => {
     const conflict = conflictJob();
+    const authenticated = authenticatedConflictCallback();
     const processInteraction = vi.fn(async () => ({
       status: "applied" as const,
       code: "draft_created" as const,
@@ -532,6 +533,7 @@ describe("ApprovalInteractionWorker", () => {
     }));
     const harness = createHarness({
       job: conflict,
+      resolveCallbackIdentity: async () => authenticated,
       knowledgeConflictInteractionWorker: { processInteraction },
     });
 
@@ -540,7 +542,7 @@ describe("ApprovalInteractionWorker", () => {
       idempotencyKey: conflict.idempotencyKey,
       code: "draft_created",
     }]);
-    expect(processInteraction).toHaveBeenCalledWith(conflict);
+    expect(processInteraction).toHaveBeenCalledWith({ ...conflict, ...authenticated });
     expect(harness.queue.acknowledge).toHaveBeenCalledWith({
       job: conflict,
       workerId: "approval-worker-1",
@@ -554,6 +556,7 @@ describe("ApprovalInteractionWorker", () => {
     const conflict = conflictJob();
     const harness = createHarness({
       job: conflict,
+      resolveCallbackIdentity: async () => authenticatedConflictCallback(),
       knowledgeConflictInteractionWorker: {
         processInteraction: vi.fn(async () => ({
           status: "retryable" as const,
@@ -837,10 +840,9 @@ type HarnessOverrides = {
     ) => Promise<any>;
   };
   knowledgeConflictInteractionWorker?: {
-    processInteraction: (
-      job: Extract<ApprovalInteractionJob, { kind: "knowledge_conflict_confirmation" }>,
-    ) => Promise<any>;
+    processInteraction: (job: any) => Promise<any>;
   };
+  resolveCallbackIdentity?: (...args: any[]) => Promise<any>;
   resolveIntent?: (...args: any[]) => Promise<any>;
   deleteIntent?: (...args: any[]) => Promise<void>;
 };
@@ -870,12 +872,16 @@ function createHarness(overrides: HarnessOverrides = {}) {
     resolveIntent: vi.fn(overrides.resolveIntent ?? (async () => undefined)),
     deleteIntent: vi.fn(overrides.deleteIntent ?? (async () => undefined)),
   };
+  const callbackIdentityStore = {
+    resolveIdentity: vi.fn(overrides.resolveCallbackIdentity ?? (async () => undefined)),
+  };
   return {
     queue,
     repository,
     membershipChecker,
     cardClient,
     intentStore,
+    callbackIdentityStore,
     worker: createApprovalInteractionWorker({
       queue,
       repository,
@@ -890,6 +896,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
       proactiveSignalFeedbackWorker: overrides.proactiveSignalFeedbackWorker,
       knowledgeConflictInteractionWorker: overrides.knowledgeConflictInteractionWorker,
       intentStore,
+      callbackIdentityStore,
     }),
   };
 }
@@ -947,11 +954,7 @@ function conflictJob(
   return {
     kind: "knowledge_conflict_confirmation",
     idempotencyKey: "feishu-card:cli_app:conflict-event-1",
-    eventId: "conflict-event-1",
-    appId: "cli_app",
-    actorOpenId: "ou_member",
-    chatId: "oc_group",
-    messageId: "om_conflict_card",
+    callbackIdentityId: "callback-identity-1",
     presentationId: "candidate-1",
     candidateId: "candidate-1",
     candidateVersion: 3,
@@ -961,6 +964,16 @@ function conflictJob(
     receivedAt: new Date(at.getTime() - 1_000),
     attempts: 0,
     ...overrides,
+  };
+}
+
+function authenticatedConflictCallback() {
+  return {
+    eventId: "conflict-event-1",
+    appId: "cli_app",
+    actorOpenId: "ou_member",
+    chatId: "oc_group",
+    messageId: "om_conflict_card",
   };
 }
 

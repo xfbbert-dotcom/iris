@@ -399,6 +399,70 @@ runIfDatabase("PostgresKnowledgeDraftRepository with Postgres", () => {
     });
   });
 
+  it("keeps local unknown fail-closed generally but accepts an exact fresh conflict attestation", async () => {
+    const repository = createPostgresKnowledgeDraftRepository({ dataSource: pool });
+    const unknownSourceId = id("draft-unknown-source");
+    const policyId = id("draft-conflict-policy");
+    await pool.query(
+      `INSERT INTO document_sources (
+        id, source_type, source_uri, title, permission_state, sync_state,
+        can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
+      ) VALUES ($1, 'authorized_wiki_document', $2, 'Unknown local permission',
+        'unknown', 'synced', TRUE, TRUE, $3, $3)`,
+      [unknownSourceId, `https://example.com/wiki/unknown/${suffix}`, documentUpdatedAt],
+    );
+    await pool.query(
+      `INSERT INTO knowledge_publication_target_policies (
+        id, space_id, parent_node_token, display_name, allowed_group_ids,
+        allowed_risk_levels, enabled, version, operation_key, operation_fingerprint,
+        created_by, updated_by, created_at, updated_at
+      ) VALUES ($1, $2, $3, 'Conflict target', $4, ARRAY['medium'], TRUE, 7,
+        $5, $6, 'test', 'test', $7, $7)`,
+      [policyId, id("space-conflict"), id("parent-conflict"), [groupId],
+        id("policy-operation"), "d".repeat(64), at],
+    );
+    const revision = {
+      sourceGroupId: groupId,
+      title: "Knowledge conflict",
+      content: "Review exact current evidence.",
+      riskLevel: "medium" as const,
+      suggestedPublication: { spaceId: id("space-conflict"), parentNodeToken: id("parent-conflict") },
+      evidence: [{
+        type: "document_source" as const,
+        id: unknownSourceId,
+        expectedUpdatedAt: documentUpdatedAt,
+      }],
+    };
+
+    await expect(repository.createDraft({
+      id: id("draft-unknown-general"),
+      operationKey: id("create-unknown-general"),
+      originKind: "user_requested",
+      createdBy: "operator",
+      revision,
+      at,
+    })).rejects.toMatchObject({
+      name: KnowledgeDraftEvidenceError.name,
+      reason: "document_permission_unavailable",
+    });
+
+    await expect(repository.createDraft({
+      id: id("draft-unknown-conflict"),
+      operationKey: id("create-unknown-conflict"),
+      originKind: "knowledge_conflict",
+      createdBy: "iris",
+      knowledgeConflictGovernance: {
+        permission: { documentSourceIds: [unknownSourceId], attestedAt: at },
+        publicationTarget: { id: policyId, version: 7 },
+      },
+      revision,
+      at,
+    })).resolves.toMatchObject({
+      outcome: "applied",
+      draft: { originKind: "knowledge_conflict", status: "pending_confirmation" },
+    });
+  });
+
   it("redacts content after semantic evidence advances to another version", async () => {
     const repository = createPostgresKnowledgeDraftRepository({ dataSource: pool });
     await repository.createDraft({

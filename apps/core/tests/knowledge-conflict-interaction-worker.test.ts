@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { PublicationTargetPolicy } from
   "../src/action-approvals/action-proposal-repository.js";
-import type { ApprovalInteractionJob } from "../src/knowledge-cards/knowledge-card.js";
+import type { AuthenticatedKnowledgeConflictConfirmationInteraction } from
+  "../src/knowledge-conflicts/knowledge-conflict-callback-identity-store.js";
 import { createKnowledgeConflictCallbackNonce } from
   "../src/knowledge-conflicts/knowledge-conflict-card-renderer.js";
 import { createKnowledgeConflictInteractionWorker } from
@@ -173,6 +174,10 @@ describe("KnowledgeConflictInteractionWorker", () => {
       operationKey: expect.stringMatching(/^knowledge-conflict-draft-create-[0-9a-f]{64}$/u),
       originKind: "knowledge_conflict",
       createdBy: "iris",
+      knowledgeConflictGovernance: {
+        permission: { documentSourceIds: ["source-1"], attestedAt: at },
+        publicationTarget: { id: "policy-1", version: 7 },
+      },
       revision: {
         sourceGroupId: "oc_group",
         title: "Knowledge update: Deployment window",
@@ -219,6 +224,9 @@ describe("KnowledgeConflictInteractionWorker", () => {
       action: "create_draft",
       draftId,
       reasonCode: "member_requested_update_draft",
+      permissionAttestedAt: at,
+      targetPolicyId: "policy-1",
+      targetPolicyVersion: 7,
     }));
     expect(harness.presentKnowledgeDraft).toHaveBeenCalledWith({
       runtime: harness.cardRuntime,
@@ -227,6 +235,29 @@ describe("KnowledgeConflictInteractionWorker", () => {
       operationKey: expect.stringMatching(/^knowledge-conflict-draft-present-[0-9a-f]{64}$/u),
       at,
     });
+  });
+
+  it("attests only the target source included in the governed draft", async () => {
+    const withContextSource = candidate({
+      evidence: [
+        ...candidate().evidence,
+        {
+          type: "document_source",
+          referenceId: "D2",
+          documentSourceId: "source-context",
+          expectedUpdatedAt: new Date("2026-08-12T02:00:00.000Z"),
+        },
+      ],
+    });
+    const harness = createHarness({ candidate: withContextSource });
+
+    await harness.worker.processInteraction(harness.job);
+
+    expect(harness.drafts.createDraft).toHaveBeenCalledWith(expect.objectContaining({
+      knowledgeConflictGovernance: expect.objectContaining({
+        permission: { documentSourceIds: ["source-1"], attestedAt: at },
+      }),
+    }));
   });
 
   it("uses stable draft and operation identities across callback event retries", async () => {
@@ -249,7 +280,7 @@ describe("KnowledgeConflictInteractionWorker", () => {
     const expectedDraftId = stableDraftId("candidate-1");
     const harness = createHarness({
       candidate: existingCandidate,
-      validation: { status: "current", candidate: existingCandidate },
+      validation: { status: "current", candidate: existingCandidate, permissionAttestedAt: at },
       existingDraft: draftMutation(expectedDraftId, "already_applied").draft,
       applyInteraction: async () => interactionMutation("already_applied", existingCandidate),
     });
@@ -287,16 +318,118 @@ describe("KnowledgeConflictInteractionWorker", () => {
     expect(harness.drafts.createDraft).not.toHaveBeenCalled();
   });
 
-  it("reads the current target before the final evidence and permission validation", async () => {
+  it("rechecks membership after initial validation and before draft mutation", async () => {
+    let membershipChecks = 0;
+    const harness = createHarness({
+      isCurrentMember: async () => ++membershipChecks === 1,
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "denied",
+      code: "not_current_member",
+    });
+    expect(harness.validator.validate).toHaveBeenCalledOnce();
+    expect(harness.drafts.createDraft).not.toHaveBeenCalled();
+  });
+
+  it("rechecks live permission after initial validation and before draft mutation", async () => {
+    let validations = 0;
+    const harness = createHarness({
+      validate: async () => ++validations === 1
+        ? { status: "current" as const, candidate: candidate(), permissionAttestedAt: at }
+        : { status: "permission_blocked" as const, candidate: candidate() },
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "denied",
+      code: "permission_blocked",
+    });
+    expect(harness.drafts.createDraft).not.toHaveBeenCalled();
+  });
+
+  it("rejects a selected publication policy whose exact version changed after initial validation", async () => {
+    const harness = createHarness({
+      getTargetPolicy: async () => policy({ version: 8 }),
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "denied",
+      code: "target_unavailable",
+    });
+    expect(harness.drafts.createDraft).not.toHaveBeenCalled();
+  });
+
+  it("uses the second live attestation for draft creation and the post-draft attestation for commit", async () => {
+    const attestations = [
+      new Date("2026-08-13T03:59:57.000Z"),
+      new Date("2026-08-13T03:59:58.000Z"),
+      new Date("2026-08-13T03:59:59.000Z"),
+    ];
+    let validationIndex = 0;
+    const harness = createHarness({
+      validate: async () => ({
+        status: "current" as const,
+        candidate: candidate(),
+        permissionAttestedAt: attestations[validationIndex++]!,
+      }),
+    });
+
+    await harness.worker.processInteraction(harness.job);
+
+    expect(harness.drafts.createDraft).toHaveBeenCalledWith(expect.objectContaining({
+      knowledgeConflictGovernance: expect.objectContaining({
+        permission: { documentSourceIds: ["source-1"], attestedAt: attestations[1] },
+      }),
+    }));
+    expect(harness.repository.applyInteraction).toHaveBeenCalledWith(expect.objectContaining({
+      permissionAttestedAt: attestations[2],
+    }));
+  });
+
+  it("does not commit the candidate when membership changes while draft creation is in flight", async () => {
+    let membershipChecks = 0;
+    const harness = createHarness({
+      isCurrentMember: async () => ++membershipChecks < 3,
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "denied",
+      code: "not_current_member",
+    });
+    expect(harness.drafts.createDraft).toHaveBeenCalledOnce();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+  });
+
+  it("does not commit the candidate when permission changes while draft creation is in flight", async () => {
+    let validations = 0;
+    const harness = createHarness({
+      validate: async () => ++validations < 3
+        ? { status: "current" as const, candidate: candidate(), permissionAttestedAt: at }
+        : { status: "permission_blocked" as const, candidate: candidate() },
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "denied",
+      code: "permission_blocked",
+    });
+    expect(harness.drafts.createDraft).toHaveBeenCalledOnce();
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+  });
+
+  it("reads and binds the exact target around the final evidence and permission validation", async () => {
     const order: string[] = [];
     const harness = createHarness({
       listTargetPolicies: async () => {
-        order.push("target");
+        order.push("target-list");
         return [policy()];
+      },
+      getTargetPolicy: async () => {
+        order.push("target-exact");
+        return policy();
       },
       validate: async () => {
         order.push("validation");
-        return { status: "current" as const, candidate: candidate() };
+        return { status: "current" as const, candidate: candidate(), permissionAttestedAt: at };
       },
       createDraft: async (input) => {
         order.push("draft");
@@ -306,11 +439,18 @@ describe("KnowledgeConflictInteractionWorker", () => {
 
     await harness.worker.processInteraction(harness.job);
 
-    expect(order).toEqual(["target", "validation", "draft"]);
+    expect(order).toEqual([
+      "target-list",
+      "validation",
+      "target-exact",
+      "validation",
+      "draft",
+      "validation",
+    ]);
   });
 });
 
-type ConflictJob = Extract<ApprovalInteractionJob, { kind: "knowledge_conflict_confirmation" }>;
+type ConflictJob = AuthenticatedKnowledgeConflictConfirmationInteraction;
 type Validation = KnowledgeConflictCurrentValidationResult;
 
 type HarnessOverrides = {
@@ -327,6 +467,7 @@ type HarnessOverrides = {
   existingDraft?: ReturnType<typeof draftMutation>["draft"];
   policies?: PublicationTargetPolicy[];
   listTargetPolicies?: (...args: any[]) => Promise<PublicationTargetPolicy[]>;
+  getTargetPolicy?: (...args: any[]) => Promise<PublicationTargetPolicy | undefined>;
   validate?: (...args: any[]) => Promise<Validation>;
   canProcessKnowledgeConflicts?: (groupId: string) => boolean;
   isCurrentMember?: () => Promise<boolean>;
@@ -343,6 +484,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
   const job: ConflictJob = {
     kind: "knowledge_conflict_confirmation",
     idempotencyKey: `feishu-card:cli_conflict:${eventId}`,
+    callbackIdentityId: "callback-identity-1",
     eventId,
     appId: "cli_conflict",
     actorOpenId: overrides.actorOpenId ?? "ou_member",
@@ -366,6 +508,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
     validate: vi.fn(overrides.validate ?? (async () => overrides.validation ?? {
       status: "current" as const,
       candidate: currentCandidate!,
+      permissionAttestedAt: at,
     })),
   };
   const membershipChecker = {
@@ -377,6 +520,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
   };
   const publicationTargets = {
     listTargetPolicies: vi.fn(overrides.listTargetPolicies ?? (async () => overrides.policies ?? [policy()])),
+    getTargetPolicy: vi.fn(overrides.getTargetPolicy ?? (async () => policy())),
   };
   const cardRuntime = {
     repository: {

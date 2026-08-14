@@ -122,11 +122,7 @@ describe("knowledge card contracts", () => {
     expect(normalizeApprovalInteractionJob({
       kind: "knowledge_conflict_confirmation",
       idempotencyKey: "feishu-card:cli_a:event-conflict-1",
-      eventId: "event-conflict-1",
-      appId: "cli_a",
-      actorOpenId: "ou_member",
-      chatId: "oc_group",
-      messageId: "om_conflict_card",
+      callbackIdentityId: "callback-identity-1",
       presentationId: "candidate-1",
       candidateId: "candidate-1",
       candidateVersion: 3,
@@ -138,11 +134,7 @@ describe("knowledge card contracts", () => {
     })).toEqual({
       kind: "knowledge_conflict_confirmation",
       idempotencyKey: "feishu-card:cli_a:event-conflict-1",
-      eventId: "event-conflict-1",
-      appId: "cli_a",
-      actorOpenId: "ou_member",
-      chatId: "oc_group",
-      messageId: "om_conflict_card",
+      callbackIdentityId: "callback-identity-1",
       presentationId: "candidate-1",
       candidateId: "candidate-1",
       candidateVersion: 3,
@@ -155,10 +147,10 @@ describe("knowledge card contracts", () => {
   });
 
   it.each([
-    ["missing message binding", { messageId: undefined }],
-    ["mismatched group binding", { groupId: "oc_other" }],
+    ["missing opaque identity", { callbackIdentityId: undefined }],
     ["mismatched presentation derivation", { presentationId: "candidate-other" }],
     ["free-text intent", { intentId: "intent-not-allowed" }],
+    ["persisted actor id", { actorOpenId: "ou_member" }],
     ["fake actor field", { actorOpenIdFromCard: "ou_fake" }],
     ["form reason", { reason: "not allowed" }],
     ["unknown field", { content: "private conflict content" }],
@@ -168,11 +160,7 @@ describe("knowledge card contracts", () => {
     expect(() => normalizeApprovalInteractionJob({
       kind: "knowledge_conflict_confirmation",
       idempotencyKey: "feishu-card:cli_a:event-conflict-1",
-      eventId: "event-conflict-1",
-      appId: "cli_a",
-      actorOpenId: "ou_member",
-      chatId: "oc_group",
-      messageId: "om_conflict_card",
+      callbackIdentityId: "callback-identity-1",
       presentationId: "candidate-1",
       candidateId: "candidate-1",
       candidateVersion: 3,

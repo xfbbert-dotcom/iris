@@ -18,7 +18,7 @@ const SAFE_STALE_REASONS = new Set([
 ]);
 
 export type KnowledgeConflictCurrentValidationResult =
-  | { status: "current"; candidate: KnowledgeConflictCandidate }
+  | { status: "current"; candidate: KnowledgeConflictCandidate; permissionAttestedAt: Date }
   | { status: "superseded"; candidate: KnowledgeConflictCandidate; reason: string }
   | { status: "permission_blocked"; candidate: KnowledgeConflictCandidate }
   | { status: "validation_unavailable"; candidate: KnowledgeConflictCandidate };
@@ -71,7 +71,11 @@ export function createKnowledgeConflictCurrentValidator(dependencies: {
           at,
         });
         return result.status === "current"
-          ? { status: "current", candidate: result.candidate }
+          ? {
+              status: "current",
+              candidate: result.candidate,
+              permissionAttestedAt: new Date(permissionAttestedAt),
+            }
           : {
               status: "superseded",
               candidate: result.candidate,

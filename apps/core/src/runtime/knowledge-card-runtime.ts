@@ -44,6 +44,8 @@ import {
 import {
   createPostgresApprovalInteractionIntentStore,
 } from "../knowledge-cards/postgres-approval-interaction-intent-store.js";
+import { createPostgresKnowledgeConflictCallbackIdentityStore } from
+  "../knowledge-conflicts/postgres-knowledge-conflict-callback-identity-store.js";
 import {
   createApprovalInteractionWorkerLoop,
   type ApprovalInteractionWorkerLoop,
@@ -149,6 +151,8 @@ export type KnowledgeCardRuntimeDependencies = {
     client: RedisApprovalInteractionQueueClient;
   }) => ApprovalInteractionQueue;
   createApprovalInteractionIntentStore?: typeof createPostgresApprovalInteractionIntentStore;
+  createKnowledgeConflictCallbackIdentityStore?:
+    typeof createPostgresKnowledgeConflictCallbackIdentityStore;
   createInteractionWorker?: typeof createApprovalInteractionWorker;
   createFeishuTenantAccessTokenProvider?: typeof createFeishuTenantAccessTokenProvider;
   createFeishuInteractiveCardClient?: typeof createFeishuInteractiveCardClient;
@@ -191,6 +195,8 @@ export function createKnowledgeCardRuntime({
     createRedisApprovalInteractionQueue;
   const createIntentStore = dependencies.createApprovalInteractionIntentStore ??
     createPostgresApprovalInteractionIntentStore;
+  const createCallbackIdentityStore = dependencies.createKnowledgeConflictCallbackIdentityStore ??
+    createPostgresKnowledgeConflictCallbackIdentityStore;
   const createInteractionWorker = dependencies.createInteractionWorker ??
     createApprovalInteractionWorker;
   const createTokenProvider = dependencies.createFeishuTenantAccessTokenProvider ??
@@ -218,6 +224,7 @@ export function createKnowledgeCardRuntime({
     }));
     const queue = createQueue({ client: createLazyRedisQueueClient(redisConnection) });
     const intentStore = createIntentStore({ dataSource: pool });
+    const callbackIdentityStore = createCallbackIdentityStore({ dataSource: pool });
     const cardRepository = createRepository({ dataSource: pool });
     const drafts = createDrafts({ dataSource: pool });
     const repository: KnowledgeCardRuntimeRepository = {
@@ -300,6 +307,7 @@ export function createKnowledgeCardRuntime({
       workerId: INTERACTION_WORKER_ID,
       leaseMs: EXTERNAL_LEASE_MS,
       intentStore,
+      callbackIdentityStore,
       actionApprovalWorker,
       proactiveSignalFeedbackWorker,
       knowledgeConflictInteractionWorker,
@@ -338,6 +346,7 @@ export function createKnowledgeCardRuntime({
     const gateway = createFeishuCardActionGateway({
       queue,
       intentStore,
+      callbackIdentityStore,
       verifyRequest: verifyFeishuEnvelopeWithDiagnostics,
       allowUnsignedEncryptedUrlVerification: feishuAuthConfig.encryptKey !== undefined,
       onDiagnostic: dependencies.onCardCallbackDiagnostic ?? reportCardCallbackDiagnostic,

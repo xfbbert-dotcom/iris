@@ -77,11 +77,23 @@ export type KnowledgeDraftEvent = {
   createdAt: Date;
 };
 
+export type KnowledgeConflictDraftGovernanceAttestation = {
+  permission: {
+    documentSourceIds: string[];
+    attestedAt: Date;
+  };
+  publicationTarget: {
+    id: string;
+    version: number;
+  };
+};
+
 export type CreateKnowledgeDraftInput = {
   id: string;
   operationKey: string;
   originKind: KnowledgeDraftOriginKind;
   createdBy: string;
+  knowledgeConflictGovernance?: KnowledgeConflictDraftGovernanceAttestation;
   revision: KnowledgeDraftRevisionInput;
   at: Date;
 };

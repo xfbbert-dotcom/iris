@@ -73,8 +73,18 @@ export type ProactiveSignalFeedbackInteractionJob = ApprovalInteractionJobCommon
   action: ProactiveSignalFeedbackAction;
 };
 
-export type KnowledgeConflictConfirmationInteractionJob = ApprovalInteractionJobCommon & {
+export type KnowledgeConflictConfirmationInteractionJob = Omit<
+  ApprovalInteractionJobCommon,
+  "eventId" | "appId" | "actorOpenId" | "chatId" | "messageId" | "intentId"
+> & {
   kind: "knowledge_conflict_confirmation";
+  eventId?: never;
+  appId?: never;
+  actorOpenId?: never;
+  chatId?: never;
+  messageId?: never;
+  intentId?: never;
+  callbackIdentityId: string;
   candidateId: string;
   candidateVersion: number;
   groupId: string;
@@ -91,8 +101,7 @@ export type ApprovalInteractionJob =
 export type ApprovalInteractionIntentIdentity =
   | Omit<KnowledgeDraftConfirmationInteractionJob, "intentId" | "receivedAt" | "attempts">
   | Omit<ActionProposalApprovalInteractionJob, "intentId" | "receivedAt" | "attempts">
-  | Omit<ProactiveSignalFeedbackInteractionJob, "intentId" | "receivedAt" | "attempts">
-  | Omit<KnowledgeConflictConfirmationInteractionJob, "intentId" | "receivedAt" | "attempts">;
+  | Omit<ProactiveSignalFeedbackInteractionJob, "intentId" | "receivedAt" | "attempts">;
 
 export class KnowledgeCardValidationError extends Error {
   constructor(message: string) {
@@ -104,6 +113,30 @@ export class KnowledgeCardValidationError extends Error {
 export function normalizeApprovalInteractionJob(input: unknown): ApprovalInteractionJob {
   if (!isRecord(input)) throw validationError("approval interaction job must be an object");
   const kind = requireKind(input.kind);
+  if (kind === "knowledge_conflict_confirmation") {
+    assertKnownFields(input, [
+      "kind", "idempotencyKey", "callbackIdentityId", "presentationId", "candidateId",
+      "candidateVersion", "groupId", "nonce", "action", "receivedAt", "attempts",
+    ]);
+    const candidateId = requireExactReference("candidateId", input.candidateId);
+    const presentationId = requireReference("presentationId", input.presentationId);
+    if (presentationId !== candidateId) {
+      throw validationError("presentationId must match candidateId");
+    }
+    return {
+      kind,
+      idempotencyKey: requireReference("idempotencyKey", input.idempotencyKey),
+      callbackIdentityId: requireReference("callbackIdentityId", input.callbackIdentityId),
+      presentationId,
+      candidateId,
+      candidateVersion: requirePositiveInteger("candidateVersion", input.candidateVersion),
+      groupId: requireExactReference("groupId", input.groupId),
+      nonce: requireExactReference("nonce", input.nonce, 128),
+      action: requireAction(input.action, kind) as KnowledgeConflictConfirmationAction,
+      receivedAt: requireDate("receivedAt", input.receivedAt),
+      attempts: requireNonnegativeInteger("attempts", input.attempts),
+    };
+  }
   const commonFields = [
     "kind",
     "idempotencyKey",
@@ -130,12 +163,10 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
         "subjectVersion",
         "targetPolicyVersion",
       ]
-      : kind === "proactive_signal_feedback"
-        ? [...commonFields, "deliveryId", "candidateIdempotencyKey", "entityVersion"]
-        : [...commonFields, "candidateId", "candidateVersion", "groupId", "nonce"]);
+      : [...commonFields, "deliveryId", "candidateIdempotencyKey", "entityVersion"]);
 
   const action = requireAction(input.action, kind);
-  const intentId = kind === "proactive_signal_feedback" || kind === "knowledge_conflict_confirmation"
+  const intentId = kind === "proactive_signal_feedback"
     ? undefined
     : normalizeIntentId(input.intentId, action);
   const common = {
@@ -173,25 +204,6 @@ export function normalizeApprovalInteractionJob(input: unknown): ApprovalInterac
       action: action as ProactiveSignalFeedbackAction,
     };
   }
-  if (kind === "knowledge_conflict_confirmation") {
-    if (input.messageId === undefined) throw validationError("messageId is required");
-    const candidateId = requireExactReference("candidateId", input.candidateId);
-    const groupId = requireExactReference("groupId", input.groupId);
-    const nonce = requireExactReference("nonce", input.nonce, 128);
-    if (common.presentationId !== candidateId) {
-      throw validationError("presentationId must match candidateId");
-    }
-    if (common.chatId !== groupId) throw validationError("groupId must match chatId");
-    return {
-      ...common,
-      kind,
-      candidateId,
-      candidateVersion: requirePositiveInteger("candidateVersion", input.candidateVersion),
-      groupId,
-      nonce,
-      action: action as KnowledgeConflictConfirmationAction,
-    };
-  }
   return {
     ...common,
     kind,
@@ -223,6 +235,9 @@ export function normalizeApprovalInteractionIntentIdentity(
 export function toApprovalInteractionIntentIdentity(
   job: ApprovalInteractionJob,
 ): ApprovalInteractionIntentIdentity {
+  if (job.kind === "knowledge_conflict_confirmation") {
+    throw validationError("knowledge conflict callbacks have no sensitive intent");
+  }
   const common = {
     kind: job.kind,
     idempotencyKey: job.idempotencyKey,
@@ -251,17 +266,6 @@ export function toApprovalInteractionIntentIdentity(
       deliveryId: job.deliveryId,
       candidateIdempotencyKey: job.candidateIdempotencyKey,
       entityVersion: job.entityVersion,
-      action: job.action,
-    };
-  }
-  if (job.kind === "knowledge_conflict_confirmation") {
-    return {
-      ...common,
-      kind: job.kind,
-      candidateId: job.candidateId,
-      candidateVersion: job.candidateVersion,
-      groupId: job.groupId,
-      nonce: job.nonce,
       action: job.action,
     };
   }
