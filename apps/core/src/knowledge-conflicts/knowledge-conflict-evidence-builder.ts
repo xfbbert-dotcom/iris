@@ -5,6 +5,8 @@ import type {
 } from "../conversation/conversation-message-repository.js";
 import type {
   DocumentFragmentRepository,
+  DocumentFragment,
+  RetrievedDocumentFragmentCandidate,
   RetrievedDocumentFragment,
 } from "../documents/document-fragment-repository.js";
 import type { DocumentSnapshotRepository } from "../documents/document-snapshot-repository.js";
@@ -94,7 +96,10 @@ export type KnowledgeConflictEvidenceBuildResult =
 export type KnowledgeConflictEvidenceBuilderDependencies = {
   embeddingProfileId: string;
   embedder: Pick<EmbeddingProvider, "embedTexts">;
-  fragments: Pick<DocumentFragmentRepository, "searchSimilarFragments">;
+  fragments: Pick<
+    DocumentFragmentRepository,
+    "searchSimilarFragmentCandidates" | "findFragmentsByIds"
+  >;
   messages: Pick<ConversationMessageRepository, "findByIds">;
   documentSources: {
     findSourceById(id: string): Promise<DocumentSource | undefined>;
@@ -151,6 +156,9 @@ export function createKnowledgeConflictEvidenceBuilder(
         policy.enabled
         && policy.allowedGroupIds.includes(memory.groupId)
         && policy.allowedRiskLevels.includes("medium"));
+      if (policies.length === PUBLICATION_TARGET_LIMIT) {
+        return insufficient("target_policy_ambiguous");
+      }
       if (matchingPolicies.length !== 1) {
         return insufficient("target_policy_unavailable");
       }
@@ -167,9 +175,9 @@ export function createKnowledgeConflictEvidenceBuilder(
         return retryable("embedding_failed");
       }
 
-      let rankedFragments: RetrievedDocumentFragment[];
+      let rankedCandidates: RetrievedDocumentFragmentCandidate[];
       try {
-        rankedFragments = await dependencies.fragments.searchSimilarFragments({
+        rankedCandidates = await dependencies.fragments.searchSimilarFragmentCandidates({
           embeddingProfileId: dependencies.embeddingProfileId,
           embedding,
           limit: CANDIDATE_FETCH_LIMIT,
@@ -179,20 +187,20 @@ export function createKnowledgeConflictEvidenceBuilder(
       } catch {
         return retryable("fragment_search_failed");
       }
-      if (rankedFragments.length === 0) {
+      if (rankedCandidates.length === 0) {
         return insufficient("no_authorized_document_evidence");
       }
 
-      const sources = await loadSources(dependencies.documentSources, rankedFragments);
+      const sources = await loadSources(dependencies.documentSources, rankedCandidates);
       if (sources === undefined) {
         return retryable("source_lookup_failed");
       }
       const eligibleSourceIds = new Set([...sources.entries()]
         .filter(([, source]) => sourceEligible(source, publicationTarget.spaceId))
         .map(([id]) => id));
-      const sourceEligibleFragments = rankedFragments.filter((fragment) =>
-        eligibleSourceIds.has(fragment.documentSourceId));
-      if (sourceEligibleFragments.length === 0) {
+      const sourceEligibleCandidates = rankedCandidates.filter((candidate) =>
+        eligibleSourceIds.has(candidate.documentSourceId));
+      if (sourceEligibleCandidates.length === 0) {
         return insufficient("no_authorized_document_evidence");
       }
 
@@ -205,21 +213,21 @@ export function createKnowledgeConflictEvidenceBuilder(
         return retryable("snapshot_lookup_failed");
       }
       const snapshotBySourceId = new Map(snapshots.map((item) => [item.documentSourceId, item]));
-      const currentChronologicalFragments = sourceEligibleFragments.filter((fragment) => {
-        const snapshot = snapshotBySourceId.get(fragment.documentSourceId);
+      const currentChronologicalCandidates = sourceEligibleCandidates.filter((candidate) => {
+        const snapshot = snapshotBySourceId.get(candidate.documentSourceId);
         return snapshot !== undefined
           && snapshot.fetchStatus === "succeeded"
           && snapshot.contentHash !== undefined
-          && snapshot.documentSourceId === fragment.documentSourceId
-          && snapshot.id === fragment.documentSnapshotId
+          && snapshot.documentSourceId === candidate.documentSourceId
+          && snapshot.id === candidate.documentSnapshotId
           && validDate(snapshot.fetchedAt)
           && messages.every((message) => message.sentAt.getTime() > snapshot.fetchedAt.getTime());
       });
-      if (currentChronologicalFragments.length === 0) {
+      if (currentChronologicalCandidates.length === 0) {
         return insufficient("chronology_unproven");
       }
 
-      const permissionSourceIds = uniqueSourceIds(currentChronologicalFragments);
+      const permissionSourceIds = uniqueSourceIds(currentChronologicalCandidates);
       for (const sourceId of permissionSourceIds) {
         const source = sources.get(sourceId)!;
         try {
@@ -235,7 +243,30 @@ export function createKnowledgeConflictEvidenceBuilder(
         return retryable("permission_attestation_invalid");
       }
 
-      const meaningfulFragments = currentChronologicalFragments.filter((fragment) =>
+      let materializedFragments: RetrievedDocumentFragment[];
+      try {
+        const loaded = await dependencies.fragments.findFragmentsByIds({
+          ids: currentChronologicalCandidates.map((candidate) => candidate.id),
+        });
+        const loadedById = new Map(loaded.map((fragment) => [fragment.id, fragment]));
+        materializedFragments = [];
+        for (const candidate of currentChronologicalCandidates) {
+          const fragment = loadedById.get(candidate.id);
+          if (fragment === undefined || !sameFragmentIdentity(candidate, fragment)) {
+            return insufficient("document_evidence_stale");
+          }
+          materializedFragments.push({
+            ...fragment,
+            ...(candidate.sourceTitle === undefined ? {} : { sourceTitle: candidate.sourceTitle }),
+            sourceType: candidate.sourceType,
+            ...(candidate.distance === undefined ? {} : { distance: candidate.distance }),
+          });
+        }
+      } catch {
+        return retryable("fragment_lookup_failed");
+      }
+
+      const meaningfulFragments = materializedFragments.filter((fragment) =>
         fragment.text.trim().length > 0);
       const selectedFragments = await selectSourceAwareFragments({
         queryText: memoryContent,
@@ -352,13 +383,13 @@ function validSourceMessages(
 
 async function loadSources(
   repository: KnowledgeConflictEvidenceBuilderDependencies["documentSources"],
-  fragments: readonly RetrievedDocumentFragment[],
+  fragments: readonly Pick<RetrievedDocumentFragmentCandidate, "documentSourceId">[],
 ): Promise<Map<string, DocumentSource> | undefined> {
   const result = new Map<string, DocumentSource>();
   try {
     for (const id of uniqueSourceIds(fragments)) {
       const source = await repository.findSourceById(id);
-      if (source !== undefined) result.set(id, source);
+      if (source !== undefined && source.id === id) result.set(id, source);
     }
     return result;
   } catch {
@@ -375,8 +406,23 @@ function sourceEligible(source: DocumentSource, targetSpaceId: string): boolean 
     && validDate(source.updatedAt);
 }
 
-function uniqueSourceIds(fragments: readonly RetrievedDocumentFragment[]): string[] {
+function uniqueSourceIds(
+  fragments: readonly Pick<RetrievedDocumentFragmentCandidate, "documentSourceId">[],
+): string[] {
   return [...new Set(fragments.map((fragment) => fragment.documentSourceId))].sort();
+}
+
+function sameFragmentIdentity(
+  candidate: RetrievedDocumentFragmentCandidate,
+  fragment: DocumentFragment,
+): boolean {
+  return fragment.id === candidate.id
+    && fragment.documentSourceId === candidate.documentSourceId
+    && fragment.documentSnapshotId === candidate.documentSnapshotId
+    && fragment.sourceUri === candidate.sourceUri
+    && fragment.chunkIndex === candidate.chunkIndex
+    && fragment.contentHash === candidate.contentHash
+    && fragment.embeddingProfileId === candidate.embeddingProfileId;
 }
 
 function validEmbedding(embedding: readonly number[]): boolean {

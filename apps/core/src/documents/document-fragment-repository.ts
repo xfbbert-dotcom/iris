@@ -67,6 +67,11 @@ export type RetrievedDocumentFragment = DocumentFragment & {
   distance?: number;
 };
 
+export type RetrievedDocumentFragmentCandidate = Omit<
+  RetrievedDocumentFragment,
+  "text" | "embedding"
+>;
+
 export type ReplaceFragmentsInput = {
   documentSourceId: string;
   documentSnapshotId: string;
@@ -97,6 +102,10 @@ export interface DocumentFragmentRepository {
   listFragmentsForSource(documentSourceId: string): Promise<DocumentFragment[]>;
   listFragmentsForSnapshot(documentSnapshotId: string): Promise<DocumentFragment[]>;
   searchSimilarFragments(input: SearchSimilarFragmentsInput): Promise<RetrievedDocumentFragment[]>;
+  searchSimilarFragmentCandidates(
+    input: SearchSimilarFragmentsInput,
+  ): Promise<RetrievedDocumentFragmentCandidate[]>;
+  findFragmentsByIds(input: { ids: readonly string[] }): Promise<DocumentFragment[]>;
   hasFragmentsForSnapshotProfile(input: {
     documentSnapshotId: string;
     embeddingProfileId: string;
@@ -117,6 +126,12 @@ type DocumentFragmentRow = {
 };
 
 type RetrievedDocumentFragmentRow = DocumentFragmentRow & {
+  source_title: string | null;
+  source_type: DocumentSourceType;
+  distance?: number | string;
+};
+
+type RetrievedDocumentFragmentCandidateRow = Omit<DocumentFragmentRow, "text" | "embedding"> & {
   source_title: string | null;
   source_type: DocumentSourceType;
   distance?: number | string;
@@ -218,7 +233,7 @@ order by chunk_index asc, id asc
         return [];
       }
       const groupId = sanitizeGroupId(input.groupId);
-      const usageColumn = SOURCE_USAGE_COLUMN[input.usage ?? "answering"];
+      const usageColumn = resolveSourceUsageColumn(input.usage);
 
       const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
       const embeddingTable = resolveEmbeddingTable(profile.dimensions);
@@ -278,6 +293,96 @@ limit $3
       );
 
       return result.rows.map(mapRetrievedFragmentRow);
+    },
+
+    async searchSimilarFragmentCandidates(input) {
+      const limit = sanitizeLimit(input.limit);
+      if (limit === 0) return [];
+      const sourceTypes = sanitizeSourceTypes(input.sourceTypes);
+      if (sourceTypes !== undefined && sourceTypes.length === 0) return [];
+      const groupId = sanitizeGroupId(input.groupId);
+      const usageColumn = resolveSourceUsageColumn(input.usage);
+      const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
+      const embeddingTable = resolveEmbeddingTable(profile.dimensions);
+      validateVectorDimension(input.embedding, profile.dimensions);
+      const values: unknown[] = [input.embeddingProfileId, serializeVector(input.embedding), limit];
+      const { sourceTypeClause, groupScopeClause } = buildSourceFilterClauses({
+        sourceTypes,
+        groupId,
+        values,
+      });
+      const result = await dependencies.queryable.query<RetrievedDocumentFragmentCandidateRow>(
+        `
+with latest_snapshots as (
+  select distinct on (document_source_id) id
+  from document_snapshots
+  where fetch_status = 'succeeded'
+  order by document_source_id asc, fetched_at desc, id asc
+),
+ranked_candidates as (
+  select
+    f.id,
+    f.document_source_id,
+    f.document_snapshot_id,
+    f.source_uri,
+    f.chunk_index,
+    f.content_hash,
+    f.embedding_profile_id,
+    f.created_at,
+    ds.title as source_title,
+    ds.source_type,
+    e.embedding <=> $2::vector as distance,
+    row_number() over (
+      partition by f.document_source_id
+      order by e.embedding <=> $2::vector asc, f.chunk_index asc, f.id asc
+    ) as source_rank
+  from document_fragments f
+  join latest_snapshots
+    on f.document_snapshot_id = latest_snapshots.id
+  join document_sources ds
+    on ds.id = f.document_source_id
+    and ds.${usageColumn} = true
+    and ds.permission_state in ('unknown', 'readable')
+${sourceTypeClause}${groupScopeClause}  join ${embeddingTable} e
+    on e.document_fragment_id = f.id
+  where f.embedding_profile_id = $1
+    and e.embedding_profile_id = $1
+)
+select
+  id,
+  document_source_id,
+  document_snapshot_id,
+  source_uri,
+  chunk_index,
+  content_hash,
+  embedding_profile_id,
+  created_at,
+  source_title,
+  source_type,
+  distance
+from ranked_candidates
+where source_rank <= 3
+order by distance asc, document_source_id asc, chunk_index asc, id asc
+limit $3
+`,
+        values,
+      );
+      return result.rows.map(mapRetrievedFragmentCandidateRow);
+    },
+
+    async findFragmentsByIds(input) {
+      const ids = sanitizeFragmentIds(input.ids);
+      if (ids.length === 0) return [];
+      const result = await dependencies.queryable.query<DocumentFragmentRow>(
+        `
+select *
+from document_fragments
+where id = any($1::text[])
+order by id asc
+`,
+        [ids],
+      );
+      return result.rows.map(mapFragmentRow).sort((left, right) => compareStrings(left.id, right.id));
     },
 
     async hasFragmentsForSnapshotProfile(input) {
@@ -380,6 +485,58 @@ function sanitizeGroupId(groupId: string | undefined): string | undefined {
   return normalized;
 }
 
+function resolveSourceUsageColumn(
+  usage: SearchSimilarFragmentsInput["usage"],
+): (typeof SOURCE_USAGE_COLUMN)[keyof typeof SOURCE_USAGE_COLUMN] {
+  const resolved = usage ?? "answering";
+  if (resolved !== "answering" && resolved !== "knowledge_drafts") {
+    throw new Error("fragment search usage is invalid");
+  }
+  return SOURCE_USAGE_COLUMN[resolved];
+}
+
+function buildSourceFilterClauses(input: {
+  sourceTypes: DocumentSourceType[] | undefined;
+  groupId: string | undefined;
+  values: unknown[];
+}): { sourceTypeClause: string; groupScopeClause: string } {
+  let sourceTypeClause = "";
+  if (input.sourceTypes !== undefined) {
+    input.values.push(input.sourceTypes);
+    sourceTypeClause = `  and ds.source_type = any($${input.values.length}::text[])\n`;
+  }
+  let groupScopeClause = "";
+  if (input.groupId !== undefined) {
+    input.values.push(input.groupId);
+    const parameter = `$${input.values.length}`;
+    groupScopeClause = `  and (
+    ds.source_type <> 'group_visible_document'
+    or ds.origin_group_id = ${parameter}
+    or exists (
+      select 1
+      from document_source_evidence evidence
+      where evidence.document_source_id = ds.id
+        and evidence.group_id = ${parameter}
+    )
+  )
+`;
+  }
+  return { sourceTypeClause, groupScopeClause };
+}
+
+function sanitizeFragmentIds(ids: readonly string[]): string[] {
+  if (ids.length > MAX_FRAGMENT_SEARCH_LIMIT) {
+    throw new Error(`fragment ids must include at most ${MAX_FRAGMENT_SEARCH_LIMIT} entries`);
+  }
+  return [...new Set(ids.map((id) => {
+    const normalized = id.trim();
+    if (normalized.length === 0 || normalized.length > DOCUMENT_SOURCE_METADATA_MAX_CHARS) {
+      throw new Error("fragment id is invalid");
+    }
+    return normalized;
+  }))].sort(compareStrings);
+}
+
 async function insertFragment(
   queryable: Queryable,
   fragment: DocumentFragment,
@@ -469,6 +626,34 @@ function mapRetrievedFragmentRow(row: RetrievedDocumentFragmentRow): RetrievedDo
     sourceType: mapRetrievedSourceType(row.source_type),
     distance: row.distance === undefined ? undefined : Number(row.distance),
   };
+}
+
+function mapRetrievedFragmentCandidateRow(
+  row: RetrievedDocumentFragmentCandidateRow,
+): RetrievedDocumentFragmentCandidate {
+  const sourceTitle = row.source_title?.trim();
+  if (sourceTitle !== undefined && sourceTitle.length > DOCUMENT_SOURCE_METADATA_MAX_CHARS) {
+    throw new Error(
+      `source title must be at most ${DOCUMENT_SOURCE_METADATA_MAX_CHARS} characters`,
+    );
+  }
+  return {
+    id: row.id,
+    documentSourceId: row.document_source_id,
+    documentSnapshotId: row.document_snapshot_id,
+    sourceUri: row.source_uri,
+    chunkIndex: row.chunk_index,
+    contentHash: row.content_hash,
+    embeddingProfileId: row.embedding_profile_id,
+    createdAt: row.created_at,
+    ...(sourceTitle === undefined || sourceTitle.length === 0 ? {} : { sourceTitle }),
+    sourceType: mapRetrievedSourceType(row.source_type),
+    distance: row.distance === undefined ? undefined : Number(row.distance),
+  };
+}
+
+function compareStrings(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
 }
 
 function mapRetrievedSourceType(value: unknown): RetrievedDocumentSourceType {

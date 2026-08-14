@@ -36,6 +36,11 @@ function retrievedRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function retrievedCandidateRow(overrides: Record<string, unknown> = {}) {
+  const { text: _text, embedding: _embedding, ...candidate } = retrievedRow(overrides);
+  return candidate;
+}
+
 function queryableFrom(query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[] }>): Queryable {
   return { query: query as Queryable["query"] };
 }
@@ -809,6 +814,86 @@ describe("DocumentFragmentRepository", () => {
     ]);
   });
 
+  it.each(["invalid", "__proto__"])(
+    "rejects invalid runtime retrieval purpose %s before profile or fragment reads",
+    async (usage) => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const getProfileById = vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 }));
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: { getProfileById },
+    });
+
+    await expect(repository.searchSimilarFragments({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 3,
+      usage: usage as "answering",
+    })).rejects.toThrow("fragment search usage is invalid");
+    expect(getProfileById).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    },
+  );
+
+  it("returns source-balanced knowledge candidates without selecting fragment text", async () => {
+    const query = vi.fn(async (sql: string) => {
+      const normalized = normalizeSql(sql);
+      expect(normalized).toContain(
+        "row_number() over ( partition by f.document_source_id",
+      );
+      expect(normalized).toContain("where source_rank <= 3");
+      expect(normalized).toContain("can_use_for_knowledge_drafts = true");
+      expect(normalized).not.toContain("f.*");
+      expect(normalized).not.toContain("f.text");
+      return { rows: [retrievedCandidateRow()] };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(repository.searchSimilarFragmentCandidates({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 36,
+      sourceTypes: ["authorized_wiki_document"],
+      usage: "knowledge_drafts",
+    })).resolves.toEqual([
+      expect.objectContaining({
+        id: "fragment-1",
+        documentSourceId: "source-1",
+        documentSnapshotId: "snapshot-1",
+      }),
+    ]);
+  });
+
+  it("loads exact fragment text only for a bounded deterministic id set", async () => {
+    const query = vi.fn(async (_sql: string, values?: unknown[]) => {
+      expect(values).toEqual([["fragment-1", "fragment-2"]]);
+      return {
+        rows: [
+          retrievedRow({ id: "fragment-2", text: "Second" }),
+          retrievedRow({ id: "fragment-1", text: "First" }),
+        ],
+      };
+    });
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(repository.findFragmentsByIds({
+      ids: ["fragment-2", "fragment-1", "fragment-2"],
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "fragment-1", text: "First" }),
+      expect.objectContaining({ id: "fragment-2", text: "Second" }),
+    ]);
+  });
+
   it("limits vector search to requested document source types", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       expect(normalizeSql(sql)).toContain("and ds.source_type = any($4::text[])");
@@ -1251,5 +1336,85 @@ values ($1, $2, $3, 'succeeded', 'Alpha body', 'hash', 'v1', $4, null, $4)
         limit: 3,
       }),
     ).resolves.toEqual([]);
+  });
+
+  it("balances knowledge candidates across sources before exact text materialization", async () => {
+    if (!pool) throw new Error("Expected Postgres pool to be initialized");
+    const suffix = randomUUID();
+    const noisySourceId = `fragment-noisy-source-${suffix}`;
+    const otherSourceId = `fragment-other-source-${suffix}`;
+    const noisySnapshotId = `fragment-noisy-snapshot-${suffix}`;
+    const otherSnapshotId = `fragment-other-snapshot-${suffix}`;
+    const createdAt = new Date("2026-08-13T00:00:00.000Z");
+    const repository = createDocumentFragmentRepository({
+      queryable: pool,
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: embeddingProfileId, dimensions: 6 })),
+      },
+    });
+    try {
+      for (const [id, uri] of [
+        [noisySourceId, `https://example.com/noisy/${suffix}`],
+        [otherSourceId, `https://example.com/other/${suffix}`],
+      ]) {
+        await pool.query(
+          `insert into document_sources (
+             id, source_type, source_uri, permission_state, sync_state,
+             can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
+           ) values ($1, 'authorized_wiki_document', $2, 'readable', 'synced', false, true, $3, $3)`,
+          [id, uri, createdAt],
+        );
+      }
+      for (const [id, source, uri] of [
+        [noisySnapshotId, noisySourceId, `https://example.com/noisy/${suffix}`],
+        [otherSnapshotId, otherSourceId, `https://example.com/other/${suffix}`],
+      ]) {
+        await pool.query(
+          `insert into document_snapshots (
+             id, document_source_id, source_uri, fetch_status, body_text,
+             content_hash, source_version, fetched_at, created_at
+           ) values ($1, $2, $3, 'succeeded', 'body', $1, 'v1', $4, $4)`,
+          [id, source, uri, createdAt],
+        );
+      }
+      await repository.replaceFragmentsForSnapshot({
+        documentSourceId: noisySourceId,
+        documentSnapshotId: noisySnapshotId,
+        sourceUri: `https://example.com/noisy/${suffix}`,
+        embeddingProfileId,
+        chunks: Array.from({ length: 37 }, (_, chunkIndex) => ({
+          chunkIndex,
+          text: `Noisy ${chunkIndex}`,
+        })),
+        embeddings: Array.from({ length: 37 }, () => [1, 0, 0, 0, 0, 0]),
+      });
+      await repository.replaceFragmentsForSnapshot({
+        documentSourceId: otherSourceId,
+        documentSnapshotId: otherSnapshotId,
+        sourceUri: `https://example.com/other/${suffix}`,
+        embeddingProfileId,
+        chunks: [{ chunkIndex: 0, text: "Other source" }],
+        embeddings: [[0.9, 0.1, 0, 0, 0, 0]],
+      });
+
+      const candidates = await repository.searchSimilarFragmentCandidates({
+        embeddingProfileId,
+        embedding: [1, 0, 0, 0, 0, 0],
+        limit: 36,
+        usage: "knowledge_drafts",
+      });
+
+      expect(candidates.filter((item) => item.documentSourceId === noisySourceId)).toHaveLength(3);
+      expect(candidates.some((item) => item.documentSourceId === otherSourceId)).toBe(true);
+      expect(candidates.every((item) => !("text" in item))).toBe(true);
+      const materialized = await repository.findFragmentsByIds({
+        ids: candidates.map((item) => item.id),
+      });
+      expect(materialized.some((item) => item.text === "Other source")).toBe(true);
+    } finally {
+      await pool.query("delete from document_sources where id = any($1::text[])", [
+        [noisySourceId, otherSourceId],
+      ]);
+    }
   });
 });

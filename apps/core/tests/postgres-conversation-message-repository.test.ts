@@ -498,6 +498,7 @@ runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
   const suffix = randomUUID();
   const providerMessageId = `mention-replacement-${suffix}`;
   const typedIdentityProviderMessageId = `typed-identity-${suffix}`;
+  const evidenceProviderMessageId = `exact-evidence-${suffix}`;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: databaseUrl });
@@ -516,7 +517,7 @@ runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
     try {
       await pool.query(
         "DELETE FROM conversation_messages WHERE provider = 'feishu' AND provider_message_id = ANY($1::text[])",
-        [[providerMessageId, typedIdentityProviderMessageId]],
+        [[providerMessageId, typedIdentityProviderMessageId, evidenceProviderMessageId]],
       );
     } finally {
       await pool.end();
@@ -598,6 +599,31 @@ runIfDatabase("PostgresConversationMessageRepository with Postgres", () => {
         sender_user_id: "user_sender",
       }],
     });
+  });
+
+  it("returns exact group-scoped source evidence with current tombstone state", async () => {
+    const repository = createPostgresConversationMessageRepository({ queryable: pool! });
+    const chatId = `exact-evidence-chat-${suffix}`;
+    const persisted = await repository.upsertMessage({
+      ...baseUpsertInput(),
+      providerMessageId: evidenceProviderMessageId,
+      chatId,
+      rawEventIdempotencyKey: `raw-event:exact-evidence-${suffix}`,
+    });
+    await pool!.query(
+      `insert into conversation_message_deletion_tombstones (
+         provider, provider_message_id, conversation_message_id, chat_id, deleted_at
+       ) values ('feishu', $1, $2, $3, $4)`,
+      [evidenceProviderMessageId, persisted.id, chatId, new Date("2026-08-13T02:00:00.000Z")],
+    );
+
+    await expect(repository.findByIds({ chatId, ids: [persisted.id] })).resolves.toEqual([
+      expect.objectContaining({ id: persisted.id, chatId, tombstoned: true }),
+    ]);
+    await expect(repository.findByIds({
+      chatId: `wrong-${chatId}`,
+      ids: [persisted.id],
+    })).resolves.toEqual([]);
   });
 });
 

@@ -19,17 +19,9 @@ const attestedAt = new Date("2026-08-13T02:00:00.000Z");
 describe("KnowledgeConflictEvidenceBuilder", () => {
   it("builds exact knowledge-purpose evidence only after live permission", async () => {
     const events: string[] = [];
-    const allowedFragment = fragment();
-    Object.defineProperty(allowedFragment, "text", {
-      enumerable: true,
-      get() {
-        events.push("text");
-        return "Director approval starts at CNY 5,000.";
-      },
-    });
     const harness = createHarness({
       memory: memory({ content: "  Director approval now starts at CNY 10,000.  " }),
-      fragments: [allowedFragment, fragment({
+      fragments: [fragment(), fragment({
         id: "wrong-space-fragment",
         documentSourceId: "source-wrong-space",
         documentSnapshotId: "snapshot-wrong-space",
@@ -46,17 +38,17 @@ describe("KnowledgeConflictEvidenceBuilder", () => {
         events.push("permission");
         return true;
       },
+      onCandidateSearch: () => events.push("metadata"),
+      onFragmentLoad: () => events.push("text"),
     });
 
     const result = await harness.builder.build({ memory: harness.memory });
 
-    expect(events[0]).toBe("permission");
-    expect(events.slice(1)).not.toHaveLength(0);
-    expect(events.slice(1).every((event) => event === "text")).toBe(true);
+    expect(events).toEqual(["metadata", "permission", "text"]);
     expect(harness.dependencies.embedder.embedTexts).toHaveBeenCalledWith([
       "Director approval now starts at CNY 10,000.",
     ]);
-    expect(harness.dependencies.fragments.searchSimilarFragments).toHaveBeenCalledWith({
+    expect(harness.dependencies.fragments.searchSimilarFragmentCandidates).toHaveBeenCalledWith({
       embeddingProfileId: "profile-6d",
       embedding: [1, 0, 0, 0, 0, 0],
       limit: 36,
@@ -164,22 +156,13 @@ describe("KnowledgeConflictEvidenceBuilder", () => {
   });
 
   it("fails closed without detector input when any selected source is denied", async () => {
-    const deniedTextReads: string[] = [];
-    const deniedFragment = fragment();
-    Object.defineProperty(deniedFragment, "text", {
-      enumerable: true,
-      get() {
-        deniedTextReads.push("read");
-        return "Denied source text";
-      },
-    });
-    const harness = createHarness({ fragments: [deniedFragment], canReadSource: async () => false });
+    const harness = createHarness({ canReadSource: async () => false });
 
     await expect(harness.builder.build({ memory: harness.memory })).resolves.toEqual({
       outcome: "permission_blocked",
       reasonCode: "permission_denied",
     });
-    expect(deniedTextReads).toEqual([]);
+    expect(harness.dependencies.fragments.findFragmentsByIds).not.toHaveBeenCalled();
   });
 
   it("classifies permission-check exceptions without leaking provider details", async () => {
@@ -234,6 +217,39 @@ describe("KnowledgeConflictEvidenceBuilder", () => {
     });
     expect(harness.dependencies.permissionChecker.canReadSource).not.toHaveBeenCalled();
   });
+
+  it("fails closed when the bounded target-policy read could hide another match", async () => {
+    const policies = Array.from({ length: 100 }, (_, index) => ({
+      id: `policy-${index + 1}`,
+      spaceId: index === 0 ? "space-1" : `space-${index + 2}`,
+      displayName: `Policy ${index + 1}`,
+      allowedGroupIds: index === 0 ? ["group-1"] : ["group-other"],
+      allowedRiskLevels: ["medium" as const],
+      enabled: true,
+      version: 1,
+      createdAt: sourceUpdatedAt,
+      updatedAt: sourceUpdatedAt,
+    }));
+    const harness = createHarness({ policies });
+
+    await expect(harness.builder.build({ memory: harness.memory })).resolves.toEqual({
+      outcome: "insufficient_evidence",
+      reasonCode: "target_policy_ambiguous",
+    });
+    expect(harness.dependencies.embedder.embedTexts).not.toHaveBeenCalled();
+  });
+
+  it("rejects source metadata returned under a different requested identity", async () => {
+    const harness = createHarness({
+      findSourceById: async () => source({ id: "source-substituted" }),
+    });
+
+    await expect(harness.builder.build({ memory: harness.memory })).resolves.toEqual({
+      outcome: "insufficient_evidence",
+      reasonCode: "no_authorized_document_evidence",
+    });
+    expect(harness.dependencies.permissionChecker.canReadSource).not.toHaveBeenCalled();
+  });
 });
 
 function createHarness(overrides: {
@@ -243,6 +259,10 @@ function createHarness(overrides: {
   sources?: DocumentSource[];
   snapshots?: DocumentSnapshot[];
   canReadSource?: (source: DocumentSource) => Promise<boolean>;
+  onCandidateSearch?: () => void;
+  onFragmentLoad?: () => void;
+  policies?: Awaited<ReturnType<KnowledgeConflictEvidenceBuilderDependencies["publicationTargets"]["listTargetPolicies"]>>;
+  findSourceById?: (id: string) => Promise<DocumentSource | undefined>;
 } = {}) {
   const selectedMemory = overrides.memory ?? memory();
   const selectedMessages = overrides.messages ?? [message()];
@@ -250,15 +270,28 @@ function createHarness(overrides: {
   const selectedSources = overrides.sources ?? [source()];
   const selectedSnapshots = overrides.snapshots ?? [snapshot()];
   const sourceById = new Map(selectedSources.map((item) => [item.id, item]));
+  const candidates = selectedFragments.map(({ text: _text, embedding: _embedding, ...item }) => item);
   const dependencies = {
     embeddingProfileId: "profile-6d",
     embedder: { embedTexts: vi.fn(async () => [[1, 0, 0, 0, 0, 0]]) },
-    fragments: { searchSimilarFragments: vi.fn(async () => selectedFragments) },
+    fragments: {
+      searchSimilarFragmentCandidates: vi.fn(async () => {
+        overrides.onCandidateSearch?.();
+        return candidates;
+      }),
+      findFragmentsByIds: vi.fn(async ({ ids }: { ids: readonly string[] }) => {
+        overrides.onFragmentLoad?.();
+        const selectedIds = new Set(ids);
+        return selectedFragments.filter((item) => selectedIds.has(item.id));
+      }),
+    },
     messages: { findByIds: vi.fn(async () => selectedMessages) },
-    documentSources: { findSourceById: vi.fn(async (id: string) => sourceById.get(id)) },
+    documentSources: {
+      findSourceById: vi.fn(overrides.findSourceById ?? (async (id: string) => sourceById.get(id))),
+    },
     snapshots: { findLatestSnapshotsForSources: vi.fn(async () => selectedSnapshots) },
     publicationTargets: {
-      listTargetPolicies: vi.fn(async () => [{
+      listTargetPolicies: vi.fn(async () => overrides.policies ?? [{
         id: "policy-1",
         spaceId: "space-1",
         displayName: "Pilot wiki",
