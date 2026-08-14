@@ -16,6 +16,8 @@ import {
   type KnowledgeConflictDelivery,
 } from "../src/knowledge-conflicts/knowledge-conflict-repository.js";
 import type { KnowledgeConflictCandidate } from "../src/knowledge-conflicts/knowledge-conflict.js";
+import { KnowledgeDraftOperationConflictError } from
+  "../src/knowledge-governance/postgres-knowledge-draft-repository.js";
 
 const at = new Date("2026-08-13T04:00:00.000Z");
 
@@ -298,10 +300,13 @@ describe("KnowledgeConflictInteractionWorker", () => {
   it("retries presentation after a committed draft without creating a second draft", async () => {
     const existingCandidate = candidate({ status: "draft_created", version: 4 });
     const expectedDraftId = stableDraftId("candidate-1");
+    const laterAt = new Date(at.getTime() + 120_000);
     const harness = createHarness({
       candidate: existingCandidate,
-      validation: { status: "current", candidate: existingCandidate, permissionAttestedAt: at },
+      now: () => new Date(laterAt),
+      validation: { status: "current", candidate: existingCandidate, permissionAttestedAt: laterAt },
       existingDraft: draftMutation(expectedDraftId, "already_applied").draft,
+      createDraft: async (input) => draftMutation(input.id, "already_applied"),
       applyInteraction: async () => interactionMutation("already_applied", existingCandidate),
     });
 
@@ -311,8 +316,78 @@ describe("KnowledgeConflictInteractionWorker", () => {
       draftId: expectedDraftId,
       presentationId: "knowledge-card-1",
     });
-    expect(harness.drafts.createDraft).not.toHaveBeenCalled();
+    expect(harness.drafts.createDraft).toHaveBeenCalledWith(expect.objectContaining({
+      id: expectedDraftId,
+      knowledgeConflictGovernance: expect.objectContaining({
+        permission: { documentSourceIds: ["source-1"], attestedAt: laterAt },
+      }),
+    }));
     expect(harness.presentKnowledgeDraft).toHaveBeenCalledOnce();
+  });
+
+  it("reattests an old committed draft before the real presentation validator loads it", async () => {
+    const existingCandidate = candidate({ status: "draft_created", version: 4 });
+    const expectedDraftId = stableDraftId("candidate-1");
+    const laterAt = new Date(at.getTime() + 120_000);
+    let visibleDraft: any = {
+      ...draftMutation(expectedDraftId, "already_applied").draft,
+      currentRevision: {
+        revisionNumber: 1,
+        riskLevel: "medium",
+        author: "iris",
+        createdAt: at,
+        evidenceState: { status: "invalidated", reason: "document_permission_unavailable" },
+      },
+    };
+    const harness = createHarness({
+      candidate: existingCandidate,
+      now: () => new Date(laterAt),
+      validation: { status: "current", candidate: existingCandidate, permissionAttestedAt: laterAt },
+      getDraft: async () => visibleDraft,
+      createDraft: async (input) => {
+        visibleDraft = draftMutation(input.id, "already_applied").draft;
+        return { outcome: "already_applied" as const, draft: visibleDraft };
+      },
+      applyInteraction: async () => interactionMutation("already_applied", existingCandidate),
+      useDefaultPresentation: true,
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toMatchObject({
+      status: "already_applied",
+      code: "duplicate_callback",
+      draftId: expectedDraftId,
+      presentationId: expect.stringMatching(/^knowledge-card-/u),
+    });
+    expect(harness.drafts.createDraft).toHaveBeenCalledOnce();
+    expect(harness.cardRuntime.repository.createPresentation).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a revised or semantically changed committed conflict draft before presentation", async () => {
+    const existingCandidate = candidate({ status: "draft_created", version: 4 });
+    const expectedDraftId = stableDraftId("candidate-1");
+    const changedDraft = {
+      ...draftMutation(expectedDraftId, "already_applied").draft,
+      version: 2,
+      currentRevisionNumber: 2,
+      currentRevision: {
+        ...draftMutation(expectedDraftId, "already_applied").draft.currentRevision,
+        revisionNumber: 2,
+        content: "Changed after the conflict interaction.",
+      },
+    };
+    const harness = createHarness({
+      candidate: existingCandidate,
+      existingDraft: changedDraft,
+      createDraft: async () => { throw new KnowledgeDraftOperationConflictError(); },
+      applyInteraction: async () => interactionMutation("already_applied", existingCandidate),
+    });
+
+    await expect(harness.worker.processInteraction(harness.job)).resolves.toEqual({
+      status: "denied",
+      code: "immutable_intent_conflict",
+    });
+    expect(harness.repository.applyInteraction).not.toHaveBeenCalled();
+    expect(harness.presentKnowledgeDraft).not.toHaveBeenCalled();
   });
 
   it("returns a retryable presentation result only after draft and interaction commit", async () => {
@@ -580,6 +655,7 @@ type HarnessOverrides = {
   delivery?: KnowledgeConflictDelivery;
   validation?: Validation;
   existingDraft?: ReturnType<typeof draftMutation>["draft"];
+  getDraft?: (...args: any[]) => Promise<any>;
   policies?: PublicationTargetPolicy[];
   listTargetPolicies?: (...args: any[]) => Promise<PublicationTargetPolicy[]>;
   getTargetPolicy?: (...args: any[]) => Promise<PublicationTargetPolicy | undefined>;
@@ -590,6 +666,7 @@ type HarnessOverrides = {
   applyInteraction?: (...args: any[]) => Promise<any>;
   presentKnowledgeDraft?: (...args: any[]) => Promise<any>;
   now?: () => Date;
+  useDefaultPresentation?: boolean;
 };
 
 function createHarness(overrides: HarnessOverrides = {}) {
@@ -631,7 +708,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
     isCurrentMember: vi.fn(overrides.isCurrentMember ?? (async () => true)),
   };
   const drafts = {
-    getDraft: vi.fn(async () => overrides.existingDraft),
+    getDraft: vi.fn(overrides.getDraft ?? (async () => overrides.existingDraft)),
     createDraft: vi.fn(overrides.createDraft ?? (async (input) => draftMutation(input.id, "applied"))),
   };
   const publicationTargets = {
@@ -641,11 +718,24 @@ function createHarness(overrides: HarnessOverrides = {}) {
   const cardRuntime = {
     repository: {
       getDraft: drafts.getDraft,
-      getPresentation: vi.fn(),
-      createPresentation: vi.fn(),
+      getPresentation: vi.fn(async () => undefined),
+      createPresentation: vi.fn(async (input) => ({
+        outcome: "applied" as const,
+        presentation: {
+          id: input.id,
+          draftId: input.draftId,
+          revisionNumber: input.expectedRevisionNumber,
+          draftVersion: input.expectedDraftVersion,
+          chatId: input.chatId,
+          contentHash: input.contentHash,
+          state: "pending_send" as const,
+          createdAt: input.at,
+          version: 1,
+        },
+      })),
     },
     canUseKnowledgeCards: vi.fn(() => true),
-  } as never;
+  };
   const presentKnowledgeDraft = vi.fn(overrides.presentKnowledgeDraft ?? (async () => ({
     outcome: "applied" as const,
     presentation: { id: "knowledge-card-1" },
@@ -656,8 +746,8 @@ function createHarness(overrides: HarnessOverrides = {}) {
     membershipChecker,
     drafts,
     publicationTargets,
-    cardRuntime,
-    presentKnowledgeDraft,
+    cardRuntime: cardRuntime as never,
+    ...(overrides.useDefaultPresentation ? {} : { presentKnowledgeDraft }),
     canProcessKnowledgeConflicts: overrides.canProcessKnowledgeConflicts ?? (() => true),
     botOpenId: "ou_bot",
     now: overrides.now ?? (() => new Date(at)),
@@ -769,8 +859,36 @@ function draftMutation(id: string, outcome: "applied" | "already_applied") {
         createdAt: at,
         evidenceState: { status: "current" as const },
         title: "Knowledge update: Deployment window",
-        content: "draft content",
-        evidence: [],
+        content: [
+          "Current synchronized knowledge:",
+          "Deployments happen on Tuesdays.",
+          "",
+          "Newer group conclusion:",
+          "Deployments now happen on Thursdays.",
+          "",
+          "Material difference:",
+          "The deployment day changed from Tuesday to Thursday.",
+          "",
+          "Proposed update:",
+          "Replace Tuesday with Thursday.",
+        ].join("\n"),
+        reviewer: { type: "feishu_user" as const, ref: "ou_member" },
+        suggestedPublication: { spaceId: "space-main", parentNodeToken: "parent-main" },
+        evidence: [
+          { type: "conversation_message" as const, id: "message-1", groupId: "oc_group" },
+          { type: "conversation_message" as const, id: "message-2", groupId: "oc_group" },
+          {
+            type: "group_memory" as const,
+            id: "memory-1",
+            groupId: "oc_group",
+            expectedUpdatedAt: new Date("2026-08-12T01:00:00.000Z"),
+          },
+          {
+            type: "document_source" as const,
+            id: "source-1",
+            expectedUpdatedAt: new Date("2026-08-12T02:00:00.000Z"),
+          },
+        ],
       },
     },
   };

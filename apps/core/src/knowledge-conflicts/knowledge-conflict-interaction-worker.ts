@@ -15,6 +15,8 @@ import {
 import type { KnowledgeDraftRevisionInput } from "../knowledge-governance/knowledge-draft.js";
 import type { KnowledgeDraftRepository } from
   "../knowledge-governance/knowledge-draft-repository.js";
+import { KnowledgeDraftOperationConflictError } from
+  "../knowledge-governance/postgres-knowledge-draft-repository.js";
 import { createKnowledgeConflictCallbackNonce } from "./knowledge-conflict-card-renderer.js";
 import type { KnowledgeConflictCurrentValidator } from
   "./knowledge-conflict-current-validator.js";
@@ -234,42 +236,33 @@ export function createKnowledgeConflictInteractionWorker(
       }
 
       const identity = draftIdentity(candidate.id);
+      const revision = conflictRevision(candidate, job.actorOpenId, targetPolicy);
+      const draftAt = requireDate(now());
       let draft;
-      if (candidate.status === "draft_created") {
-        try {
-          draft = await dependencies.drafts.getDraft(identity.draftId);
-        } catch {
-          return retryable("repository_unavailable");
-        }
-        if (!isExactConflictDraft(draft, identity.draftId, candidate.groupId)) {
-          return denied("immutable_intent_conflict");
-        }
-      } else {
-        const revision = conflictRevision(candidate, job.actorOpenId, targetPolicy);
-        const draftAt = requireDate(now());
-        try {
-          const creation = await dependencies.drafts.createDraft({
-            id: identity.draftId,
-            operationKey: identity.creationOperationKey,
-            originKind: "knowledge_conflict",
-            createdBy: "iris",
-            knowledgeConflictGovernance: {
-              permission: {
-                documentSourceIds: conflictDocumentSourceIds(candidate),
-                attestedAt: secondValidation.permissionAttestedAt,
-              },
-              publicationTarget: { id: targetPolicy.id, version: targetPolicy.version },
+      try {
+        const creation = await dependencies.drafts.createDraft({
+          id: identity.draftId,
+          operationKey: identity.creationOperationKey,
+          originKind: "knowledge_conflict",
+          createdBy: "iris",
+          knowledgeConflictGovernance: {
+            permission: {
+              documentSourceIds: conflictDocumentSourceIds(candidate),
+              attestedAt: secondValidation.permissionAttestedAt,
             },
-            revision,
-            at: draftAt,
-          });
-          draft = creation.draft;
-        } catch {
-          return retryable("repository_unavailable");
-        }
-        if (!isExactConflictDraft(draft, identity.draftId, candidate.groupId)) {
-          return denied("immutable_intent_conflict");
-        }
+            publicationTarget: { id: targetPolicy.id, version: targetPolicy.version },
+          },
+          revision,
+          at: draftAt,
+        });
+        draft = creation.draft;
+      } catch (error) {
+        return error instanceof KnowledgeDraftOperationConflictError
+          ? denied("immutable_intent_conflict")
+          : retryable("repository_unavailable");
+      }
+      if (!isExactConflictDraft(draft, identity.draftId, revision)) {
+        return denied("immutable_intent_conflict");
       }
 
       const finalMembership = await checkMembership(
@@ -513,12 +506,39 @@ function sameCandidateState(
 function isExactConflictDraft(
   draft: Awaited<ReturnType<KnowledgeDraftRepository["getDraft"]>>,
   draftId: string,
-  groupId: string,
+  revision: KnowledgeDraftRevisionInput,
 ): draft is NonNullable<typeof draft> {
   return draft !== undefined &&
     draft.id === draftId &&
-    draft.sourceGroupId === groupId &&
-    draft.originKind === "knowledge_conflict";
+    draft.sourceGroupId === revision.sourceGroupId &&
+    draft.originKind === "knowledge_conflict" &&
+    draft.createdBy === "iris" &&
+    draft.status === "pending_confirmation" &&
+    draft.version === 1 &&
+    draft.currentRevisionNumber === 1 &&
+    draft.currentRevision.revisionNumber === 1 &&
+    "content" in draft.currentRevision &&
+    draft.currentRevision.author === "iris" &&
+    draft.currentRevision.riskLevel === revision.riskLevel &&
+    draft.currentRevision.title === revision.title &&
+    draft.currentRevision.content === revision.content &&
+    canonicalValue(draft.currentRevision.reviewer) === canonicalValue(revision.reviewer) &&
+    canonicalValue(draft.currentRevision.suggestedPublication) ===
+      canonicalValue(revision.suggestedPublication) &&
+    canonicalEvidence(draft.currentRevision.evidence) === canonicalEvidence(revision.evidence);
+}
+
+function canonicalEvidence(evidence: readonly unknown[]): string {
+  return canonicalValue([...evidence].sort((left, right) => {
+    const leftKey = canonicalValue(left);
+    const rightKey = canonicalValue(right);
+    return leftKey.localeCompare(rightKey);
+  }));
+}
+
+function canonicalValue(value: unknown): string {
+  return JSON.stringify(value, (_key, item) => item instanceof Date ? item.toISOString() : item) ??
+    "undefined";
 }
 
 function draftIdentity(candidateId: string) {

@@ -95,6 +95,23 @@ type EventRow = {
   created_at: Date;
 };
 
+type ReplayEvent = {
+  draftId: string;
+  operationFingerprint: string;
+  revisionNumber: number;
+  eventType: EventRow["event_type"];
+  toVersion: number;
+  actor: string;
+  createdAt: Date;
+};
+
+type LegacyConflictGovernanceRow = {
+  document_source_id: string;
+  permission_attested_at: Date;
+  target_policy_id: string;
+  target_policy_version: string | number;
+};
+
 type CountRow = { status: KnowledgeDraftStatus; count: string | number };
 
 export class KnowledgeDraftVersionConflictError extends Error {
@@ -237,7 +254,23 @@ async function createDraft(
 
   return withTransaction(dataSource, async (client) => {
     await lockOperation(client, operationKey);
-    const replay = await findReplayEvent(client, operationKey, fingerprint);
+    const replay = await findReplayEvent(
+      client,
+      operationKey,
+      fingerprint,
+      knowledgeConflictGovernance === undefined
+        ? undefined
+        : (event) => isExactLegacyKnowledgeConflictCreate({
+            client,
+            event,
+            id,
+            operationKey,
+            originKind,
+            createdBy,
+            revision,
+            governance: knowledgeConflictGovernance,
+          }),
+    );
     if (replay !== undefined) {
       if (knowledgeConflictGovernance !== undefined) {
         await validateCurrentKnowledgeDraftEvidence({
@@ -262,7 +295,7 @@ async function createDraft(
       }
       const draft = await requireDraft(client, replay.draftId, at, permissionAgeMs);
       if (knowledgeConflictGovernance !== undefined &&
-        (draft.id !== id || draft.version !== 1 || draft.currentRevisionNumber !== 1)) {
+        !isExactKnowledgeConflictCreationDraft(draft, id, createdBy, revision)) {
         throw new KnowledgeDraftOperationConflictError();
       }
       return { outcome: "already_applied", draft };
@@ -534,22 +567,128 @@ async function findReplayEvent(
   client: KnowledgeDraftEvidenceQueryable,
   operationKey: string,
   fingerprint: string,
-): Promise<{ draftId: string; revisionNumber: number } | undefined> {
+  acceptLegacy?: (event: ReplayEvent) => Promise<boolean>,
+): Promise<ReplayEvent | undefined> {
   const result = await client.query<Pick<
     EventRow,
-    "draft_id" | "operation_fingerprint" | "revision_number"
+    "draft_id" | "operation_fingerprint" | "revision_number" | "event_type" | "to_version" |
+    "actor" | "created_at"
   >>(
-    `SELECT draft_id, operation_fingerprint, revision_number
+    `SELECT draft_id, operation_fingerprint, revision_number, event_type,
+       to_version, actor, created_at
      FROM knowledge_draft_events WHERE operation_key = $1`,
     [operationKey],
   );
   const event = result.rows[0];
   if (event === undefined) return undefined;
-  if (event.operation_fingerprint !== fingerprint) throw new KnowledgeDraftOperationConflictError();
-  return {
+  const normalized: ReplayEvent = {
     draftId: event.draft_id,
+    operationFingerprint: event.operation_fingerprint,
     revisionNumber: requirePositiveInteger("event revision number", Number(event.revision_number)),
+    eventType: event.event_type,
+    toVersion: requirePositiveInteger("event version", Number(event.to_version)),
+    actor: requireReference("event actor", event.actor),
+    createdAt: requireDate(event.created_at),
   };
+  if (event.operation_fingerprint !== fingerprint &&
+    (acceptLegacy === undefined || !(await acceptLegacy(normalized)))) {
+    throw new KnowledgeDraftOperationConflictError();
+  }
+  return normalized;
+}
+
+async function isExactLegacyKnowledgeConflictCreate(input: {
+  client: KnowledgeDraftEvidenceQueryable;
+  event: ReplayEvent;
+  id: string;
+  operationKey: string;
+  originKind: KnowledgeDraftOriginKind;
+  createdBy: string;
+  revision: ReturnType<typeof normalizeKnowledgeDraftRevisionInput>;
+  governance: KnowledgeConflictDraftGovernanceAttestation;
+}): Promise<boolean> {
+  if (input.originKind !== "knowledge_conflict" ||
+    input.event.draftId !== input.id ||
+    input.event.eventType !== "created" ||
+    input.event.toVersion !== 1 ||
+    input.event.revisionNumber !== 1 ||
+    input.event.actor !== input.createdBy) {
+    return false;
+  }
+  const result = await input.client.query<LegacyConflictGovernanceRow>(
+    `SELECT DISTINCT ON (document_source_id)
+       document_source_id, permission_attested_at, target_policy_id, target_policy_version
+     FROM knowledge_conflict_draft_governance_attestations
+     WHERE draft_id = $1 AND revision_number = $2
+     ORDER BY document_source_id ASC, created_at ASC, permission_attested_at ASC`,
+    [input.id, 1],
+  );
+  const rows = [...result.rows].sort((left, right) =>
+    left.document_source_id.localeCompare(right.document_source_id));
+  const expectedSourceIds = input.governance.permission.documentSourceIds;
+  if (rows.length !== expectedSourceIds.length || rows.length < 1 ||
+    rows.some((row, index) => row.document_source_id !== expectedSourceIds[index] ||
+      row.target_policy_id !== input.governance.publicationTarget.id ||
+      Number(row.target_policy_version) !== input.governance.publicationTarget.version)) {
+    return false;
+  }
+  const originalAttestedAt = requireDate(rows[0]?.permission_attested_at);
+  if (rows.some((row) => requireDate(row.permission_attested_at).getTime() !==
+    originalAttestedAt.getTime())) {
+    return false;
+  }
+  const legacyFingerprint = operationFingerprint({
+    operation: "create",
+    id: input.id,
+    operationKey: input.operationKey,
+    originKind: input.originKind,
+    createdBy: input.createdBy,
+    at: input.event.createdAt,
+    revision: input.revision,
+    knowledgeConflictGovernance: {
+      permission: {
+        documentSourceIds: expectedSourceIds,
+        attestedAt: originalAttestedAt,
+      },
+      publicationTarget: input.governance.publicationTarget,
+    },
+  });
+  return input.event.operationFingerprint === legacyFingerprint;
+}
+
+function isExactKnowledgeConflictCreationDraft(
+  draft: KnowledgeDraft,
+  id: string,
+  createdBy: string,
+  revision: ReturnType<typeof normalizeKnowledgeDraftRevisionInput>,
+): boolean {
+  return draft.id === id &&
+    draft.sourceGroupId === revision.sourceGroupId &&
+    draft.originKind === "knowledge_conflict" &&
+    draft.createdBy === createdBy &&
+    draft.status === "pending_confirmation" &&
+    draft.version === 1 &&
+    draft.currentRevisionNumber === 1 &&
+    draft.currentRevision.revisionNumber === 1 &&
+    "content" in draft.currentRevision &&
+    draft.currentRevision.author === createdBy &&
+    draft.currentRevision.riskLevel === revision.riskLevel &&
+    draft.currentRevision.title === revision.title &&
+    draft.currentRevision.content === revision.content &&
+    canonicalValue(draft.currentRevision.reviewer) === canonicalValue(revision.reviewer) &&
+    canonicalValue(draft.currentRevision.suggestedPublication) ===
+      canonicalValue(revision.suggestedPublication) &&
+    canonicalEvidence(draft.currentRevision.evidence) === canonicalEvidence(revision.evidence);
+}
+
+function canonicalEvidence(evidence: readonly KnowledgeDraftEvidenceReference[]): string {
+  return canonicalValue([...evidence].sort((left, right) =>
+    left.type.localeCompare(right.type) || left.id.localeCompare(right.id)));
+}
+
+function canonicalValue(value: unknown): string {
+  return JSON.stringify(value, (_key, item) => item instanceof Date ? item.toISOString() : item) ??
+    "undefined";
 }
 
 async function lockOperation(
