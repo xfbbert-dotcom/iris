@@ -136,6 +136,31 @@ describe("KnowledgeConflictCardRenderer", () => {
     })).toThrow("knowledge conflict card binding");
   });
 
+  it.each([
+    ["leading C0 candidate ID", candidate({ id: "\ncandidate-1" }), "nonce-1"],
+    ["trailing whitespace candidate ID", candidate({ id: "candidate-1 " }), "nonce-1"],
+    ["leading whitespace group ID", candidate({ groupId: " oc_group" }), "nonce-1"],
+    ["NFC-changing candidate ID", candidate({ id: "candidate-e\u0301" }), "nonce-1"],
+    ["trailing C0 nonce", candidate(), "nonce-1\t"],
+    ["leading Unicode whitespace nonce", candidate(), "\u00a0nonce-1"],
+    ["NFC-changing nonce", candidate(), "nonce-e\u0301"],
+  ] as const)("rejects a %s instead of silently changing callback identity", (_label, value, nonce) => {
+    expect(() => renderKnowledgeConflictCard({
+      candidate: value,
+      source: source(),
+      nonce,
+    })).toThrow("knowledge conflict card binding");
+  });
+
+  it.each([
+    "\ndelivery-1",
+    "delivery-1 ",
+    "delivery-e\u0301",
+  ])("rejects an inexact delivery identifier before deriving its callback nonce: %s", (deliveryId) => {
+    expect(() => createKnowledgeConflictCallbackNonce(deliveryId))
+      .toThrow("knowledge conflict card binding");
+  });
+
   it("strips C1 controls from visible text and rejects them in callback identifiers", () => {
     const result = renderKnowledgeConflictCard({
       candidate: candidate({
@@ -160,6 +185,16 @@ describe("KnowledgeConflictCardRenderer", () => {
     "https://example.feishu.cn/wiki/expense policy",
     "https://example.feishu.cn/wiki/expense%0A-policy",
     "https://example.feishu.cn/wiki/expense%zz-policy",
+    "https:example.feishu.cn/wiki/expense-policy",
+    "https:/example.feishu.cn/wiki/expense-policy",
+    "https:\\example.feishu.cn/wiki/expense-policy",
+    "HTTPS://example.feishu.cn/wiki/expense-policy",
+    "https://example.feishu.cn/wiki/expense%20policy",
+    "https://example.feishu.cn/wiki/expense%09policy",
+    "https://example.feishu.cn/wiki/expense%C2%A0policy",
+    " https://example.feishu.cn/wiki/expense-policy",
+    "https://example.feishu.cn/wiki/expense-policy ",
+    "\u00a0https://example.feishu.cn/wiki/expense-policy",
   ])("suppresses a control, whitespace, or malformed-percent URI instead of canonicalizing it: %s", (sourceUri) => {
     const result = renderKnowledgeConflictCard({
       candidate: candidate(),
@@ -170,6 +205,20 @@ describe("KnowledgeConflictCardRenderer", () => {
     const visible = markdownContent(result.card);
     expect(visible).toContain("**Target:** Expense policy");
     expect(visible).not.toContain("](https://");
+  });
+
+  it.each([
+    "https://example.feishu.cn/wiki/expense-policy",
+    "https://example.feishu.cn/wiki/expense%2Dpolicy?revision=7&locale=zh-CN",
+    "https://example.feishu.cn/wiki/%E5%AE%A1%E6%89%B9?view=compact",
+  ])("preserves a valid credential-free HTTPS source URI: %s", (sourceUri) => {
+    const result = renderKnowledgeConflictCard({
+      candidate: candidate(),
+      source: source({ sourceUri }),
+      nonce: "nonce-1",
+    });
+
+    expect(markdownContent(result.card)).toContain(`](${sourceUri})`);
   });
 });
 
