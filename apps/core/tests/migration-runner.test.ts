@@ -1032,6 +1032,8 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           "answer_reply_knowledge_conflicts_append_only",
           "answer_reply_knowledge_conflicts_truncate_guard",
           "knowledge_conflict_candidate_events_append_only",
+          "knowledge_conflict_delivery_reconciliations_append_only",
+          "knowledge_conflict_delivery_reconciliations_truncate_guard",
           "knowledge_conflict_evidence_append_only",
           "knowledge_conflict_interactions_append_only",
         ]),
@@ -1046,6 +1048,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           'knowledge_conflict_scan_inbox'::regclass,
           'knowledge_conflict_candidates'::regclass,
           'knowledge_conflict_delivery_outbox'::regclass,
+          'knowledge_conflict_delivery_reconciliations'::regclass,
           'knowledge_draft_revision_evidence'::regclass
         ) AND constraint_row.contype = 'c'
         ORDER BY constraint_row.conname
@@ -1171,6 +1174,12 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           'pending_review', 'Expense threshold', 'CNY 5,000', 'CNY 10,000',
           'Threshold differs', 'Use CNY 10,000', 'D1', 'high'
         );
+        INSERT INTO knowledge_conflict_delivery_outbox (
+          id, candidate_id, group_id, status, attempt_count, next_attempt_at
+        ) VALUES ('delivery-1', 'candidate-1', 'group-1', 'pending', 1, NOW());
+        INSERT INTO knowledge_conflict_delivery_reconciliations (
+          operation_key, delivery_id, attempt_count, outcome, created_at
+        ) VALUES ('reconcile-1', 'delivery-1', 1, 'not_sent', NOW());
         INSERT INTO knowledge_conflict_evidence (
           candidate_id, evidence_type, reference_id, group_id,
           conversation_message_id, created_at
@@ -1204,6 +1213,9 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
       )).rejects.toThrow(/append-only/iu);
       await expect(client.query(
         "DELETE FROM knowledge_conflict_evidence WHERE candidate_id = 'candidate-1'",
+      )).rejects.toThrow(/append-only/iu);
+      await expect(client.query(
+        "UPDATE knowledge_conflict_delivery_reconciliations SET outcome = 'sent' WHERE operation_key = 'reconcile-1'",
       )).rejects.toThrow(/append-only/iu);
       await expect(client.query(`
         INSERT INTO knowledge_draft_revision_evidence (

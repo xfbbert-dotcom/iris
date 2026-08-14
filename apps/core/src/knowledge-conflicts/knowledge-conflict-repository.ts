@@ -207,12 +207,6 @@ export interface KnowledgeConflictRepository {
   recordDetectionResult(
     input: RecordKnowledgeConflictDetectionInput,
   ): Promise<RecordKnowledgeConflictDetectionResult>;
-  createCandidate(
-    input: CreateKnowledgeConflictCandidateInput,
-  ): Promise<KnowledgeConflictMutationResult>;
-  transitionCandidate(
-    input: TransitionKnowledgeConflictCandidateInput,
-  ): Promise<KnowledgeConflictMutationResult>;
   getCandidate(id: string): Promise<KnowledgeConflictCandidate | undefined>;
   listCandidates(input: {
     groupId?: string;

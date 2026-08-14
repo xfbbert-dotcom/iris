@@ -281,6 +281,22 @@ CREATE INDEX knowledge_conflict_delivery_outbox_due_idx
   ON knowledge_conflict_delivery_outbox (status, next_attempt_at, created_at, id)
   WHERE status IN ('pending', 'failed');
 
+CREATE TABLE knowledge_conflict_delivery_reconciliations (
+  operation_key TEXT PRIMARY KEY CHECK (char_length(operation_key) BETWEEN 1 AND 512),
+  delivery_id TEXT NOT NULL
+    REFERENCES knowledge_conflict_delivery_outbox(id) ON DELETE RESTRICT,
+  attempt_count INTEGER NOT NULL CHECK (attempt_count BETWEEN 1 AND 20),
+  outcome TEXT NOT NULL CHECK (outcome IN ('sent', 'not_sent')),
+  sent_message_id TEXT CHECK (
+    sent_message_id IS NULL OR char_length(sent_message_id) BETWEEN 1 AND 512
+  ),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK ((outcome = 'sent') = (sent_message_id IS NOT NULL))
+);
+
+CREATE INDEX knowledge_conflict_delivery_reconciliations_delivery_idx
+  ON knowledge_conflict_delivery_reconciliations (delivery_id, attempt_count, created_at);
+
 CREATE TABLE knowledge_conflict_interactions (
   id TEXT PRIMARY KEY CHECK (char_length(id) BETWEEN 1 AND 512),
   candidate_id TEXT NOT NULL REFERENCES knowledge_conflict_candidates(id) ON DELETE RESTRICT,
@@ -367,6 +383,14 @@ FOR EACH ROW EXECUTE FUNCTION knowledge_draft_append_only_guard();
 
 CREATE TRIGGER knowledge_conflict_interactions_truncate_guard
 BEFORE TRUNCATE ON knowledge_conflict_interactions
+FOR EACH STATEMENT EXECUTE FUNCTION knowledge_draft_append_only_guard();
+
+CREATE TRIGGER knowledge_conflict_delivery_reconciliations_append_only
+BEFORE UPDATE OR DELETE ON knowledge_conflict_delivery_reconciliations
+FOR EACH ROW EXECUTE FUNCTION knowledge_draft_append_only_guard();
+
+CREATE TRIGGER knowledge_conflict_delivery_reconciliations_truncate_guard
+BEFORE TRUNCATE ON knowledge_conflict_delivery_reconciliations
 FOR EACH STATEMENT EXECUTE FUNCTION knowledge_draft_append_only_guard();
 
 CREATE TRIGGER answer_reply_knowledge_conflicts_append_only

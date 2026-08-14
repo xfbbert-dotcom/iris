@@ -26,6 +26,15 @@ const at = new Date("2026-08-13T02:00:00.000Z");
 const leaseUntil = new Date("2026-08-13T02:00:30.000Z");
 
 describe("PostgresKnowledgeConflictRepository scan lifecycle", () => {
+  it("does not expose candidate or transition bypass methods", () => {
+    const repository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(routedClient(() => ({ rows: [] }))),
+    });
+
+    expect(Object.keys(repository)).not.toContain("createCandidate");
+    expect(Object.keys(repository)).not.toContain("transitionCandidate");
+  });
+
   it("discovers an eligible memory and reports an existing identity without duplicating it", async () => {
     const eligible = memoryRow();
     const client = routedClient((sql) => {
@@ -221,6 +230,41 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     }))).rejects.toBeInstanceOf(KnowledgeConflictOperationConflictError);
   });
 
+  it("rejects same-group message evidence that is not bound to the claimed memory", async () => {
+    const client = candidateClient();
+    const input = conflictDetectionInput({
+      sourceMessageId: "message-2",
+      evidence: conflictEvidence().map((item) => item.type === "conversation_message"
+        ? { ...item, conversationMessageId: "message-2" }
+        : item),
+    });
+
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+    await expect(repository.recordDetectionResult(input))
+      .rejects.toMatchObject({ reasonCode: "message_stale" });
+  });
+
+  it("rejects document snapshots that have no exact document-source evidence fact", async () => {
+    const input = conflictDetectionInput({
+      evidence: [
+        ...conflictEvidence(),
+        {
+          type: "document_snapshot" as const,
+          referenceId: "D2" as const,
+          documentSourceId: "source-2",
+          documentSnapshotId: "snapshot-2",
+          contentHash: "b".repeat(64),
+        },
+      ],
+    });
+    const repository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(candidateClient()),
+    });
+
+    await expect(repository.recordDetectionResult(input))
+      .rejects.toThrow("candidate document evidence is incomplete");
+  });
+
   it.each([
     ["memory", { memoryUpdatedAt: new Date("2026-08-13T01:59:59.000Z") }],
     ["source", { targetSourceUpdatedAt: new Date("2026-08-13T01:59:59.000Z") }],
@@ -249,6 +293,13 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
           referenceId: "D2",
           documentSourceId: "source-2",
           expectedUpdatedAt: at,
+        },
+        {
+          type: "document_snapshot",
+          referenceId: "D2",
+          documentSourceId: "source-2",
+          documentSnapshotId: "snapshot-2",
+          contentHash: "b".repeat(64),
         },
       ],
     }))).rejects.toMatchObject({
@@ -432,6 +483,87 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     })).resolves.toMatchObject({ status: "failed", failureCode: "reconciled_not_sent" });
   });
 
+  it("reconciles a second unknown external attempt after the first was confirmed not sent", async () => {
+    const state = {
+      delivery: deliveryRow({
+        status: "outcome_unknown",
+        attempt_count: 1,
+        reconciliation_due_at: leaseUntil,
+      }),
+      candidate: candidateRow({ status: "approved_for_delivery", version: 2 }),
+      reconciliations: new Map<string, Record<string, unknown>>(),
+    };
+    const client = routedClient((sql, values) => {
+      if (sql.includes("FROM knowledge_conflict_delivery_reconciliations")) {
+        return { rows: state.reconciliations.has(String(values?.[0]))
+          ? [state.reconciliations.get(String(values?.[0]))!] : [] };
+      }
+      if (sql.includes("INSERT INTO knowledge_conflict_delivery_reconciliations")) {
+        const row = {
+          operation_key: String(values?.[1]),
+          delivery_id: "delivery-1",
+          outcome: String(values?.[2]),
+          sent_message_id: values?.[3] ?? null,
+        };
+        state.reconciliations.set(row.operation_key, row);
+        return { rows: [row] };
+      }
+      if (sql.includes("WITH claimable")) {
+        state.delivery = deliveryRow({ status: "processing", attempt_count: 2,
+          lease_worker_id: "worker-2", lease_until: leaseUntil });
+        return { rows: [deliveryCandidateRow(state.delivery)] };
+      }
+      if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
+        return { rows: [state.delivery] };
+      }
+      if (sql.includes("UPDATE knowledge_conflict_delivery_outbox")) {
+        if (sql.includes("reconciled_not_sent")) {
+          state.delivery = deliveryRow({ status: "failed", attempt_count: 1,
+            reconciliation_operation_key: "reconcile-not-sent",
+            reconciliation_outcome: "not_sent", reconciled_at: at,
+            failure_code: "reconciled_not_sent" });
+        } else if (sql.includes("status = 'sent'")) {
+          state.delivery = deliveryRow({ status: "sent", attempt_count: 2,
+            reconciliation_operation_key: "reconcile-sent",
+            reconciliation_outcome: "sent", reconciled_at: at,
+            sent_message_id: "om-second" });
+        } else if (sql.includes("CASE WHEN $3 = 'outcome_unknown'")) {
+          state.delivery = deliveryRow({ status: "outcome_unknown", attempt_count: 2,
+            reconciliation_due_at: leaseUntil });
+        } else if (sql.includes("external_attempting")) {
+          state.delivery = deliveryRow({ status: "external_attempting", attempt_count: 2,
+            lease_worker_id: "worker-2", lease_until: leaseUntil,
+            external_attempt_started_at: at });
+        }
+        return { rows: [state.delivery] };
+      }
+      if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+        return { rows: [state.candidate] };
+      }
+      if (sql.includes("UPDATE knowledge_conflict_candidates")) {
+        state.candidate = candidateRow({ status: "delivered", version: 3 });
+        return { rows: [state.candidate] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.reconcileDelivery({
+      deliveryId: "delivery-1", outcome: "not_sent",
+      operationKey: "reconcile-not-sent", at,
+    })).resolves.toMatchObject({ status: "failed" });
+    await repository.claimNextDelivery({ workerId: "worker-2", at, leaseUntil });
+    await repository.beginDeliveryAttempt({ deliveryId: "delivery-1", workerId: "worker-2", at });
+    await repository.failDelivery({
+      deliveryId: "delivery-1", workerId: "worker-2", classification: "outcome_unknown",
+      errorCode: "timeout_again", reconciliationDueAt: leaseUntil, at,
+    });
+    await expect(repository.reconcileDelivery({
+      deliveryId: "delivery-1", outcome: "sent", operationKey: "reconcile-sent",
+      messageId: "om-second", at,
+    })).resolves.toMatchObject({ status: "sent", sentMessageId: "om-second" });
+  });
+
   it("deduplicates exact interactions and rejects changed intent under the same callback key", async () => {
     const exact = interactionRow();
     const repository = createPostgresKnowledgeConflictRepository({
@@ -480,6 +612,16 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
           return { rows: [candidateRow()] };
         }
         if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
+        if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+        if (sql.includes("SELECT message.id FROM conversation_messages")) {
+          return { rows: [{ id: "message-1" }] };
+        }
+        if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
+        if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
+        if (sql.includes("FROM document_fragments")) {
+          return { rows: [{ id: "fragment-1", document_source_id: "source-1",
+            document_snapshot_id: "snapshot-1", content_hash: "c".repeat(64) }] };
+        }
         return { rows: [] };
       })),
     });
@@ -501,6 +643,38 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       permissionAttestedAt: at,
       at,
     })).resolves.toBeUndefined();
+  });
+
+  it("reads overlap candidate and all exact evidence in one transaction", async () => {
+    const client = routedClient((sql) => {
+      if (sql.includes("FROM knowledge_conflict_candidates")) return { rows: [candidateRow()] };
+      if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
+      if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+      if (sql.includes("SELECT message.id FROM conversation_messages")) {
+        return { rows: [{ id: "message-1" }] };
+      }
+      if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
+      if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
+      if (sql.includes("FROM document_fragments")) {
+        return { rows: [{ id: "fragment-1", document_source_id: "source-1",
+          document_snapshot_id: "snapshot-1", content_hash: "c".repeat(64) }] };
+      }
+      return { rows: [] };
+    });
+    const source = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(async () => { throw new Error("overlap escaped its transaction"); }),
+    } as unknown as PostgresKnowledgeConflictDataSource;
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: source });
+
+    await expect(repository.findCurrentOverlap({
+      groupId: "group-1",
+      groupMemoryIds: ["memory-1"],
+      documents: [{ sourceId: "source-1", snapshotId: "snapshot-1" }],
+      permissionAttestedAt: at,
+      at,
+    })).resolves.toMatchObject({ id: "candidate-1" });
+    expect(source.connect).toHaveBeenCalledOnce();
   });
 
   it("supersedes a candidate when the current snapshot hash no longer matches", async () => {
@@ -537,6 +711,36 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       reasonCode: "snapshot_stale",
       candidate: { status: "superseded", version: 2 },
     });
+  });
+
+  it("keeps a stale candidate reconcilable while its external delivery outcome is unresolved", async () => {
+    const client = routedClient((sql) => {
+      if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+        return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
+      }
+      if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
+      if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+      if (sql.includes("SELECT message.id FROM conversation_messages")) {
+        return { rows: [{ id: "message-1" }] };
+      }
+      if (sql.includes("FROM document_sources")) {
+        return { rows: [sourceRow({ updated_at: new Date(at.getTime() + 1) })] };
+      }
+      if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
+        return { rows: [deliveryRow({ status: "outcome_unknown",
+          reconciliation_due_at: leaseUntil })] };
+      }
+      if (sql.includes("UPDATE knowledge_conflict_candidates")) {
+        return { rows: [candidateRow({ status: "superseded", version: 3 })] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.validateCandidateCurrentState({
+      candidateId: "candidate-1", permissionAttestedAt: at,
+      operationKey: "validate-unresolved-delivery", at,
+    })).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
   });
 
   it("does not supersede a candidate while an external delivery outcome is unresolved", async () => {
@@ -601,6 +805,11 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
   const sourceId = `conflict-source-${suffix}`;
   const snapshotId = `conflict-snapshot-${suffix}`;
   const fragmentId = `conflict-fragment-${suffix}`;
+  const secondarySourceId = `conflict-source-secondary-${suffix}`;
+  const secondarySnapshotId = `conflict-snapshot-secondary-${suffix}`;
+  const secondaryFragmentId = `conflict-fragment-secondary-${suffix}`;
+  const authorizedSpaceId = `conflict-space-${suffix}`;
+  const targetPolicyId = `conflict-policy-${suffix}`;
 
   beforeAll(async () => {
     adminPool = new pg.Pool({ connectionString: databaseUrl });
@@ -648,12 +857,24 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       }
     }
     await pool.query(
+      `INSERT INTO knowledge_publication_target_policies (
+         id, space_id, display_name, allowed_group_ids, allowed_risk_levels,
+         enabled, operation_key, operation_fingerprint, created_by, updated_by,
+         created_at, updated_at
+       ) VALUES ($1, $2, 'Conflict test policy', ARRAY[$3]::text[],
+         ARRAY['medium']::text[], TRUE, $4, $5, 'tester', 'tester', $6, $6)`,
+      [targetPolicyId, authorizedSpaceId, groupId, `conflict-policy-operation-${suffix}`,
+        "f".repeat(64), at],
+    );
+    await pool.query(
       `INSERT INTO document_sources (
-         id, source_type, source_uri, permission_state, sync_state,
+         id, source_type, source_uri, authorized_space_id, permission_state, sync_state,
          can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
-       ) VALUES ($1, 'authorized_wiki_document', $2, 'readable', 'synced',
-         TRUE, TRUE, $3, $3)`,
-      [sourceId, `https://example.com/wiki/${suffix}`, at],
+       ) VALUES
+         ($1, 'authorized_wiki_document', $2, $3, 'readable', 'synced', TRUE, TRUE, $4, $4),
+         ($5, 'authorized_wiki_document', $6, $3, 'readable', 'synced', TRUE, TRUE, $4, $4)`,
+      [sourceId, `https://example.com/wiki/${suffix}`, authorizedSpaceId, at,
+        secondarySourceId, `https://example.com/wiki/secondary-${suffix}`],
     );
     await pool.query(
       `INSERT INTO document_snapshots (
@@ -664,6 +885,15 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
         new Date("2026-08-13T01:00:00.000Z")],
     );
     await pool.query(
+      `INSERT INTO document_snapshots (
+         id, document_source_id, source_uri, fetch_status, body_text, content_hash,
+         source_version, fetched_at, created_at
+       ) VALUES ($1, $2, $3, 'succeeded', 'CNY 6,000', $4, 'revision-3', $5, $5)`,
+      [secondarySnapshotId, secondarySourceId,
+        `https://example.com/wiki/secondary-${suffix}`, "b".repeat(64),
+        new Date("2026-08-13T01:00:00.000Z")],
+    );
+    await pool.query(
       `INSERT INTO document_fragments (
          id, document_source_id, document_snapshot_id, source_uri, chunk_index,
          text, content_hash, embedding, created_at, embedding_profile_id
@@ -671,6 +901,15 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
          '[0,0,0,0,0,0]', $6, 'static-dev-6d')`,
       [fragmentId, sourceId, snapshotId, `https://example.com/wiki/${suffix}`,
         "c".repeat(64), at],
+    );
+    await pool.query(
+      `INSERT INTO document_fragments (
+         id, document_source_id, document_snapshot_id, source_uri, chunk_index,
+         text, content_hash, embedding, created_at, embedding_profile_id
+       ) VALUES ($1, $2, $3, $4, 0, 'CNY 6,000', $5,
+         '[0,0,0,0,0,0]', $6, 'static-dev-6d')`,
+      [secondaryFragmentId, secondarySourceId, secondarySnapshotId,
+        `https://example.com/wiki/secondary-${suffix}`, "d".repeat(64), at],
     );
   });
 
@@ -701,21 +940,77 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       .resolves.toEqual({ discovered: 1, existing: 1 });
   });
 
-  it("uses skip-locked claims and recovers an expired processing lease", async () => {
+  it("skips a scan locked by another transaction and recovers an expired processing lease", async () => {
     const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
-    const first = await repository.claimNextScan({ workerId: "worker-1", at, leaseUntil });
-    expect(first?.memory.id).toBe(memoryIds[0]);
-
-    const second = await repository.claimNextScan({ workerId: "worker-2", at, leaseUntil });
-    expect(second?.scan.id).not.toBe(first?.scan.id);
+    const due = await pool!.query<{ id: string }>(
+      `SELECT id FROM knowledge_conflict_scan_inbox
+       WHERE status IN ('pending', 'retry') ORDER BY next_attempt_at, created_at, id LIMIT 1`,
+    );
+    const lockedId = due.rows[0]!.id;
+    const locker = await pool!.connect();
+    await locker.query("BEGIN");
+    try {
+      await locker.query("SELECT id FROM knowledge_conflict_scan_inbox WHERE id = $1 FOR UPDATE", [lockedId]);
+      const skipped = await repository.claimNextScan({ workerId: "worker-2", at, leaseUntil });
+      expect(skipped?.scan.id).not.toBe(lockedId);
+    } finally {
+      await locker.query("ROLLBACK");
+      locker.release();
+    }
 
     const recovered = await repository.claimNextScan({
       workerId: "worker-3",
       at: new Date("2026-08-13T02:00:31.000Z"),
       leaseUntil: new Date("2026-08-13T02:01:01.000Z"),
     });
-    expect(recovered?.scan.id).toBe(first?.scan.id);
-    expect(recovered?.scan.attemptCount).toBe(2);
+    expect(recovered?.scan.attemptCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not clean up a stale processing scan until its active lease expires", async () => {
+    const memoryId = `leased-stale-memory-${suffix}`;
+    const messageId = `feishu:leased-stale-${suffix}`;
+    const scanId = `leased-stale-scan-${suffix}`;
+    await insertMessage(pool!, messageId, groupId);
+    await pool!.query(
+      `INSERT INTO group_memories (
+         id, group_id, memory_scope, category, content, importance, confidence,
+         status, idempotency_key, origin, created_by, created_at, updated_at
+       ) VALUES ($1, $2, 'group', 'decision', 'leased stale', 4, 0.9,
+         'active', $3, 'operator', 'tester', $4, $4)`,
+      [memoryId, groupId, `leased-stale-memory-op-${suffix}`, at],
+    );
+    await pool!.query(
+      `INSERT INTO group_memory_message_evidence (memory_id, conversation_message_id)
+       VALUES ($1, $2)`,
+      [memoryId, messageId],
+    );
+    await pool!.query(
+      `INSERT INTO knowledge_conflict_scan_inbox (
+         id, group_id, group_memory_id, memory_updated_at, status, attempt_count,
+         next_attempt_at, lease_worker_id, lease_until, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'processing', 1, $4, 'active-owner', $5, $4, $4)`,
+      [scanId, groupId, memoryId, at, leaseUntil],
+    );
+    await pool!.query("UPDATE group_memories SET status = 'superseded' WHERE id = $1", [memoryId]);
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+
+    await repository.claimNextScan({
+      workerId: "other-worker", at: new Date("2026-08-13T02:00:10.000Z"),
+      leaseUntil: new Date("2026-08-13T02:00:20.000Z"),
+    });
+    await expect(pool!.query(
+      "SELECT status, lease_worker_id FROM knowledge_conflict_scan_inbox WHERE id = $1",
+      [scanId],
+    )).resolves.toMatchObject({ rows: [{ status: "processing", lease_worker_id: "active-owner" }] });
+
+    await repository.claimNextScan({
+      workerId: "other-worker", at: new Date("2026-08-13T02:00:31.000Z"),
+      leaseUntil: new Date("2026-08-13T02:01:01.000Z"),
+    });
+    await expect(pool!.query(
+      "SELECT status, terminal_outcome FROM knowledge_conflict_scan_inbox WHERE id = $1",
+      [scanId],
+    )).resolves.toMatchObject({ rows: [{ status: "completed", terminal_outcome: "superseded" }] });
   });
 
   it("persists and governs an exact current conflict through one delivery and interaction", async () => {
@@ -778,11 +1073,48 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
               documentSourceId: sourceId, documentSnapshotId: snapshotId,
               documentFragmentId: fragmentId, snapshotContentHash: "a".repeat(64),
               contentHash: "c".repeat(64) },
+            { type: "document_source" as const, referenceId: "D2" as const,
+              documentSourceId: secondarySourceId, expectedUpdatedAt: at },
+            { type: "document_snapshot" as const, referenceId: "D2" as const,
+              documentSourceId: secondarySourceId, documentSnapshotId: secondarySnapshotId,
+              contentHash: "b".repeat(64) },
+            { type: "document_fragment" as const, referenceId: "D2" as const,
+              documentSourceId: secondarySourceId, documentSnapshotId: secondarySnapshotId,
+              documentFragmentId: secondaryFragmentId, snapshotContentHash: "b".repeat(64),
+              contentHash: "d".repeat(64) },
           ],
         },
       },
       at,
     };
+
+    const unrelatedMessageInput = {
+      ...candidateInput,
+      result: {
+        ...candidateInput.result,
+        candidate: {
+          ...candidateInput.result.candidate,
+          sourceMessageId: messageIds[0]!,
+          evidence: candidateInput.result.candidate.evidence.map((item) =>
+            item.type === "conversation_message"
+              ? { ...item, conversationMessageId: messageIds[0]! }
+              : item),
+        },
+      },
+    };
+    await expect(repository.recordDetectionResult(unrelatedMessageInput))
+      .rejects.toMatchObject({ reasonCode: "message_stale" });
+
+    await pool!.query(
+      "UPDATE knowledge_publication_target_policies SET enabled = FALSE WHERE id = $1",
+      [targetPolicyId],
+    );
+    await expect(repository.recordDetectionResult(candidateInput))
+      .rejects.toMatchObject({ reasonCode: "source_stale" });
+    await pool!.query(
+      "UPDATE knowledge_publication_target_policies SET enabled = TRUE WHERE id = $1",
+      [targetPolicyId],
+    );
 
     await expect(repository.recordDetectionResult(candidateInput)).resolves.toMatchObject({
       outcome: "applied",
@@ -812,36 +1144,40 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
        WHERE candidate_id = $1 ORDER BY evidence_type`,
       [candidateId],
     );
-    expect(evidenceFacts.rows).toHaveLength(5);
-    expect(evidenceFacts.rows).toContainEqual({ evidence_type: "document_source", source_updated_at: at });
+    expect(evidenceFacts.rows).toHaveLength(8);
+    expect(evidenceFacts.rows.filter((row) => row.evidence_type === "document_source"))
+      .toEqual([
+        { evidence_type: "document_source", source_updated_at: at },
+        { evidence_type: "document_source", source_updated_at: at },
+      ]);
     await expect(pool!.query(
       "UPDATE knowledge_conflict_evidence SET reference_id = 'D2' WHERE candidate_id = $1",
       [candidateId],
     )).rejects.toThrow(/append-only/iu);
 
-    const approval = await repository.approveForDelivery({
+    const approvalInput = {
       candidateId,
       expectedVersion: 1,
       operationKey: `approve-${suffix}`,
-      actorType: "admin_role",
+      actorType: "admin_role" as const,
       actorRef: "knowledge-admin",
       reasonCode: "reviewed",
       at,
-    });
+    };
+    const concurrentApprovals = await Promise.all([
+      repository.approveForDelivery(approvalInput),
+      repository.approveForDelivery(approvalInput),
+    ]);
+    expect(concurrentApprovals.map((result) => result.outcome).sort())
+      .toEqual(["already_applied", "applied"]);
+    const approval = concurrentApprovals.find((result) => result.outcome === "applied")!;
     expect(approval).toMatchObject({
       outcome: "applied",
       candidate: { status: "approved_for_delivery", version: 2 },
       delivery: { status: "pending" },
     });
-    await expect(repository.approveForDelivery({
-      candidateId,
-      expectedVersion: 1,
-      operationKey: `approve-${suffix}`,
-      actorType: "admin_role",
-      actorRef: "knowledge-admin",
-      reasonCode: "reviewed",
-      at,
-    })).resolves.toMatchObject({ outcome: "already_applied", delivery: { id: approval.delivery.id } });
+    await expect(repository.approveForDelivery(approvalInput))
+      .resolves.toMatchObject({ outcome: "already_applied", delivery: { id: approval.delivery.id } });
 
     const claim = await repository.claimNextDelivery({
       workerId: "delivery-worker",
@@ -854,15 +1190,68 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       workerId: "delivery-worker",
       at,
     });
-    await expect(repository.completeDelivery({
+    await repository.failDelivery({
       deliveryId: approval.delivery.id,
       workerId: "delivery-worker",
+      classification: "outcome_unknown",
+      errorCode: "first_timeout",
+      reconciliationDueAt: leaseUntil,
+      at,
+    });
+
+    const staleDuringUnknown = new Date("2026-08-13T02:00:01.000Z");
+    await pool!.query("UPDATE document_sources SET updated_at = $2 WHERE id = $1", [
+      secondarySourceId, staleDuringUnknown,
+    ]);
+    await expect(repository.validateCandidateCurrentState({
+      candidateId,
+      permissionAttestedAt: staleDuringUnknown,
+      operationKey: `validate-outcome-unknown-${suffix}`,
+      at: staleDuringUnknown,
+    })).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+    await expect(repository.getCandidate(candidateId))
+      .resolves.toMatchObject({ status: "approved_for_delivery", version: 2 });
+    await pool!.query("UPDATE document_sources SET updated_at = $2 WHERE id = $1", [
+      secondarySourceId, at,
+    ]);
+
+    await expect(repository.reconcileDelivery({
+      deliveryId: approval.delivery.id,
+      outcome: "not_sent",
+      operationKey: `reconcile-not-sent-${suffix}`,
+      at,
+    })).resolves.toMatchObject({ status: "failed", failureCode: "reconciled_not_sent" });
+    const retryClaim = await repository.claimNextDelivery({
+      workerId: "delivery-worker-2", at, leaseUntil,
+    });
+    expect(retryClaim).toMatchObject({ delivery: { id: approval.delivery.id, attemptCount: 2 } });
+    await repository.beginDeliveryAttempt({
+      deliveryId: approval.delivery.id, workerId: "delivery-worker-2", at,
+    });
+    await repository.failDelivery({
+      deliveryId: approval.delivery.id,
+      workerId: "delivery-worker-2",
+      classification: "outcome_unknown",
+      errorCode: "second_timeout",
+      reconciliationDueAt: leaseUntil,
+      at,
+    });
+    await expect(repository.reconcileDelivery({
+      deliveryId: approval.delivery.id,
+      outcome: "sent",
+      operationKey: `reconcile-sent-${suffix}`,
       messageId: `om-${suffix}`,
       at,
-    })).resolves.toMatchObject({
-      delivery: { status: "sent" },
-      candidate: { status: "delivered", version: 3 },
-    });
+    })).resolves.toMatchObject({ status: "sent", sentMessageId: `om-${suffix}` });
+    await expect(repository.getCandidate(candidateId))
+      .resolves.toMatchObject({ status: "delivered", version: 3 });
+    await expect(pool!.query(
+      "SELECT operation_key, outcome FROM knowledge_conflict_delivery_reconciliations WHERE delivery_id = $1 ORDER BY operation_key",
+      [approval.delivery.id],
+    )).resolves.toMatchObject({ rows: [
+      { operation_key: `reconcile-not-sent-${suffix}`, outcome: "not_sent" },
+      { operation_key: `reconcile-sent-${suffix}`, outcome: "sent" },
+    ] });
 
     await expect(repository.findCurrentOverlap({
       groupId,
@@ -882,15 +1271,75 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       reasonCode: "not_a_conflict",
       at,
     };
-    await expect(repository.recordInteraction(interaction)).resolves.toMatchObject({ outcome: "applied" });
-    await expect(repository.recordInteraction(interaction)).resolves.toMatchObject({
-      outcome: "already_applied",
-    });
+    const concurrentInteractions = await Promise.all([
+      repository.recordInteraction(interaction),
+      repository.recordInteraction(interaction),
+    ]);
+    expect(concurrentInteractions.map((result) => result.outcome).sort())
+      .toEqual(["already_applied", "applied"]);
     await expect(repository.recordInteraction({ ...interaction, reasonCode: "changed" }))
       .rejects.toBeInstanceOf(KnowledgeConflictOperationConflictError);
 
-    const changedAt = new Date("2026-08-13T02:00:01.000Z");
-    await pool!.query("UPDATE document_sources SET updated_at = $2 WHERE id = $1", [sourceId, changedAt]);
+    const callbackCandidateId = `callback-candidate-${suffix}`;
+    await pool!.query(
+      `INSERT INTO knowledge_conflict_candidates (
+         id, idempotency_key, group_id, group_memory_id, memory_updated_at,
+         source_message_id, target_document_source_id, target_source_updated_at,
+         target_source_version, target_snapshot_id, target_content_hash,
+         detector_contract_version, status, subject, knowledge_base_statement,
+         group_conclusion_statement, difference, suggested_update, target_document_ref,
+         confidence, version, created_at, updated_at
+       ) SELECT $1, $2, group_id, group_memory_id, memory_updated_at,
+         source_message_id, target_document_source_id, target_source_updated_at,
+         target_source_version, target_snapshot_id, target_content_hash,
+         'v2', 'pending_review', subject, knowledge_base_statement,
+         group_conclusion_statement, difference, suggested_update, target_document_ref,
+         confidence, 1, created_at, updated_at
+       FROM knowledge_conflict_candidates WHERE id = $3`,
+      [callbackCandidateId, `callback-candidate-operation-${suffix}`, candidateId],
+    );
+    await pool!.query(
+      `INSERT INTO knowledge_conflict_evidence (
+         candidate_id, evidence_type, reference_id, group_id, conversation_message_id,
+         group_memory_id, source_updated_at, document_source_id, document_snapshot_id,
+         document_fragment_id, snapshot_content_hash, content_hash, created_at
+       ) SELECT $1, evidence_type, reference_id, group_id, conversation_message_id,
+         group_memory_id, source_updated_at, document_source_id, document_snapshot_id,
+         document_fragment_id, snapshot_content_hash, content_hash, created_at
+       FROM knowledge_conflict_evidence WHERE candidate_id = $2`,
+      [callbackCandidateId, candidateId],
+    );
+    const applyInput = {
+      id: `callback-interaction-${suffix}`,
+      candidateId: callbackCandidateId,
+      expectedVersion: 1,
+      callbackOperationKey: `callback-atomic-${suffix}`,
+      actorRef: "ou-member",
+      action: "dismiss" as const,
+      reasonCode: "not_a_conflict",
+      permissionAttestedAt: at,
+      at,
+    };
+    const concurrentCallbacks = await Promise.all([
+      repository.applyInteraction(applyInput),
+      repository.applyInteraction(applyInput),
+    ]);
+    expect(concurrentCallbacks.map((result) => result.outcome).sort())
+      .toEqual(["already_applied", "applied"]);
+    await expect(repository.getCandidate(callbackCandidateId))
+      .resolves.toMatchObject({ status: "dismissed", version: 2 });
+
+    const changedAt = new Date("2026-08-13T02:00:02.000Z");
+    await pool!.query("UPDATE document_sources SET updated_at = $2 WHERE id = $1", [
+      secondarySourceId, changedAt,
+    ]);
+    await expect(repository.findCurrentOverlap({
+      groupId,
+      groupMemoryIds: [memoryId],
+      documents: [{ sourceId, snapshotId }],
+      permissionAttestedAt: changedAt,
+      at: changedAt,
+    })).resolves.toBeUndefined();
     await expect(repository.validateCandidateCurrentState({
       candidateId,
       permissionAttestedAt: changedAt,

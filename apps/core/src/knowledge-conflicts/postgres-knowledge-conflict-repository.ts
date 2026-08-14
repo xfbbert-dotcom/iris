@@ -12,7 +12,6 @@ import type {
   RecordKnowledgeConflictDetectionResult,
   KnowledgeConflictScan,
   KnowledgeConflictScanClaim,
-  TransitionKnowledgeConflictCandidateInput,
 } from "./knowledge-conflict-repository.js";
 import {
   KnowledgeConflictDeliveryConflictError,
@@ -209,8 +208,18 @@ type InteractionRow = {
   created_at: Date;
 };
 
+type ReconciliationRow = {
+  operation_key: string;
+  delivery_id: string;
+  attempt_count: string | number;
+  outcome: "sent" | "not_sent";
+  sent_message_id: string | null;
+  created_at: Date;
+};
+
 type SourceValidationRow = {
   id: string;
+  authorized_space_id: string | null;
   source_type: string;
   permission_state: string;
   sync_state: string;
@@ -276,12 +285,6 @@ export function createPostgresKnowledgeConflictRepository({
     },
     recordDetectionResult(input) {
       return recordDetectionResult(dataSource, createId, permissionAgeMs, input);
-    },
-    createCandidate(input) {
-      return createCandidate(dataSource, createId, input);
-    },
-    transitionCandidate(input) {
-      return transitionCandidate(dataSource, createId, input);
     },
     getCandidate(id) {
       return loadCandidate(dataSource, requireReference("candidate id", id));
@@ -354,7 +357,7 @@ async function discoverEligibleScans(
   if (groupIds.length === 0 || limit === 0) return { discovered: 0, existing: 0 };
 
   return withTransaction(dataSource, async (client) => {
-    const eligible = await client.query<MemoryRow>(
+    const eligible = await client.query<Pick<MemoryRow, "id" | "group_id" | "updated_at">>(
       `${eligibleMemorySelect()}
        AND NOT EXISTS (
          SELECT 1 FROM knowledge_conflict_scan_inbox inbox
@@ -417,7 +420,10 @@ async function claimNextScan(
       `UPDATE knowledge_conflict_scan_inbox inbox
        SET status = 'completed', terminal_outcome = 'superseded',
            lease_worker_id = NULL, lease_until = NULL, updated_at = $1
-       WHERE inbox.status IN ('pending', 'retry', 'processing')
+       WHERE (
+           inbox.status IN ('pending', 'retry')
+           OR (inbox.status = 'processing' AND inbox.lease_until <= $1)
+         )
          AND (
            NOT EXISTS (
              SELECT 1 FROM group_memories gm
@@ -701,32 +707,6 @@ async function recordDetectionResult(
   });
 }
 
-async function createCandidate(
-  dataSource: PostgresKnowledgeConflictDataSource,
-  createId: () => string,
-  input: CreateKnowledgeConflictCandidateInput,
-): Promise<KnowledgeConflictMutationResult> {
-  const normalized = normalizeCandidateInput(input, input.at);
-  return withTransaction(dataSource, async (client) => {
-    const existingResult = await client.query<CandidateRow>(
-      "SELECT * FROM knowledge_conflict_candidates WHERE idempotency_key = $1 FOR UPDATE",
-      [normalized.idempotencyKey],
-    );
-    const existing = existingResult.rows[0];
-    if (existing !== undefined) {
-      const evidence = await loadEvidence(client, existing.id);
-      if (!candidateMatchesInput(existing, evidence, normalized)) {
-        throw new KnowledgeConflictOperationConflictError();
-      }
-      return { outcome: "already_applied", candidate: mapCandidate(existing, evidence) };
-    }
-    return {
-      outcome: "applied",
-      candidate: await insertCandidateFacts(client, createId, normalized, normalized.at),
-    };
-  });
-}
-
 async function lockScan(
   client: PostgresKnowledgeConflictTransactionClient,
   scanId: string,
@@ -840,6 +820,9 @@ async function validateDetectionFingerprint(
   const messageResult = await client.query<{ id: string; chat_id: string }>(
     `SELECT message.id, message.chat_id
      FROM conversation_messages message
+     JOIN group_memory_message_evidence memory_evidence
+       ON memory_evidence.conversation_message_id = message.id
+      AND memory_evidence.memory_id = $3
      LEFT JOIN conversation_message_deletion_tombstones tombstone
        ON tombstone.conversation_message_id = message.id
      WHERE message.id = ANY($1::text[])
@@ -847,9 +830,11 @@ async function validateDetectionFingerprint(
        AND tombstone.conversation_message_id IS NULL
      ORDER BY message.id
      FOR UPDATE OF message`,
-    [messageEvidence.map((item) => item.conversationMessageId), input.groupId],
+    [messageEvidence.map((item) => item.conversationMessageId), input.groupId, input.groupMemoryId],
   );
-  if (messageResult.rows.length !== messageEvidence.length) {
+  const actualMessageIds = new Set(messageResult.rows.map((row) => row.id));
+  if (messageResult.rows.length !== messageEvidence.length
+    || messageEvidence.some((item) => !actualMessageIds.has(item.conversationMessageId))) {
     throw new KnowledgeConflictStaleEvidenceError("message_stale");
   }
 
@@ -859,10 +844,20 @@ async function validateDetectionFingerprint(
   ).sort((left, right) => left.documentSourceId.localeCompare(right.documentSourceId));
   for (const expectedSource of sourceEvidence) {
     const sourceResult = await client.query<SourceValidationRow>(
-      `SELECT id, source_type, permission_state, sync_state,
-         can_use_for_knowledge_drafts, updated_at
-       FROM document_sources WHERE id = $1 FOR UPDATE`,
-      [expectedSource.documentSourceId],
+      `SELECT source.id, source.authorized_space_id, source.source_type,
+         source.permission_state, source.sync_state,
+         source.can_use_for_knowledge_drafts, source.updated_at
+       FROM document_sources source
+       WHERE source.id = $1
+         AND EXISTS (
+           SELECT 1 FROM knowledge_publication_target_policies policy
+           WHERE policy.space_id = source.authorized_space_id
+             AND policy.enabled = TRUE
+             AND (cardinality(policy.allowed_group_ids) = 0
+               OR $2 = ANY(policy.allowed_group_ids))
+         )
+       FOR UPDATE OF source`,
+      [expectedSource.documentSourceId, input.groupId],
     );
     const source = sourceResult.rows[0];
     if (
@@ -876,23 +871,31 @@ async function validateDetectionFingerprint(
     ) throw new KnowledgeConflictStaleEvidenceError("source_stale");
   }
 
-  const snapshotResult = await client.query<SnapshotValidationRow>(
-    `SELECT id, document_source_id, fetch_status, content_hash, source_version, fetched_at
-     FROM document_snapshots
-     WHERE document_source_id = $1
-     ORDER BY fetched_at DESC, id ASC
-     LIMIT 1
-     FOR UPDATE`,
-    [input.targetDocumentSourceId],
-  );
-  const snapshot = snapshotResult.rows[0];
-  if (
-    snapshot === undefined
-    || snapshot.fetch_status !== "succeeded"
-    || snapshot.id !== input.targetSnapshotId
-    || snapshot.content_hash !== input.targetContentHash
-    || (snapshot.source_version ?? undefined) !== input.targetSourceVersion
-  ) throw new KnowledgeConflictStaleEvidenceError("snapshot_stale");
+  const snapshots = input.evidence.filter(
+    (item): item is Extract<KnowledgeConflictEvidenceReference, { type: "document_snapshot" }> =>
+      item.type === "document_snapshot",
+  ).sort((left, right) => left.documentSourceId.localeCompare(right.documentSourceId));
+  for (const expectedSnapshot of snapshots) {
+    const snapshotResult = await client.query<SnapshotValidationRow>(
+      `SELECT id, document_source_id, fetch_status, content_hash, source_version, fetched_at
+       FROM document_snapshots
+       WHERE document_source_id = $1
+       ORDER BY fetched_at DESC, id ASC
+       LIMIT 1
+       FOR UPDATE`,
+      [expectedSnapshot.documentSourceId],
+    );
+    const snapshot = snapshotResult.rows[0];
+    if (
+      snapshot === undefined
+      || snapshot.document_source_id !== expectedSnapshot.documentSourceId
+      || snapshot.fetch_status !== "succeeded"
+      || snapshot.id !== expectedSnapshot.documentSnapshotId
+      || snapshot.content_hash !== expectedSnapshot.contentHash
+      || (expectedSnapshot.documentSourceId === input.targetDocumentSourceId
+        && (snapshot.source_version ?? undefined) !== input.targetSourceVersion)
+    ) throw new KnowledgeConflictStaleEvidenceError("snapshot_stale");
+  }
 
   const fragments = input.evidence.filter(
     (item): item is Extract<KnowledgeConflictEvidenceReference, { type: "document_fragment" }> =>
@@ -1299,6 +1302,7 @@ function validateCandidateEvidenceShape(input: NormalizedCandidateInput): void {
   const messages = input.evidence.filter((item) => item.type === "conversation_message");
   const sources = input.evidence.filter((item) => item.type === "document_source");
   const snapshots = input.evidence.filter((item) => item.type === "document_snapshot");
+  const fragments = input.evidence.filter((item) => item.type === "document_fragment");
   if (memory.length !== 1 || messages.length < 1 || sources.length < 1 || snapshots.length < 1) {
     throw new Error("candidate evidence is incomplete");
   }
@@ -1325,6 +1329,27 @@ function validateCandidateEvidenceShape(input: NormalizedCandidateInput): void {
     && item.contentHash === input.targetContentHash
     && item.referenceId === input.plan.targetDocumentRef)) {
     throw new Error("candidate snapshot evidence does not match candidate identity");
+  }
+  const hasExactSource = (snapshot: Extract<KnowledgeConflictEvidenceReference,
+    { type: "document_snapshot" }>) => sources.some((source) => source.type === "document_source"
+      && source.referenceId === snapshot.referenceId
+      && source.documentSourceId === snapshot.documentSourceId);
+  const hasExactSnapshot = (source: Extract<KnowledgeConflictEvidenceReference,
+    { type: "document_source" }>) => snapshots.some((snapshot) => snapshot.type === "document_snapshot"
+      && snapshot.referenceId === source.referenceId
+      && snapshot.documentSourceId === source.documentSourceId);
+  const fragmentHasExactSnapshot = (fragment: Extract<KnowledgeConflictEvidenceReference,
+    { type: "document_fragment" }>) => snapshots.some((snapshot) =>
+      snapshot.type === "document_snapshot"
+      && snapshot.referenceId === fragment.referenceId
+      && snapshot.documentSourceId === fragment.documentSourceId
+      && snapshot.documentSnapshotId === fragment.documentSnapshotId
+      && snapshot.contentHash === fragment.snapshotContentHash);
+  if (!snapshots.every((item) => item.type === "document_snapshot" && hasExactSource(item))
+    || !sources.every((item) => item.type === "document_source" && hasExactSnapshot(item))
+    || !fragments.every((item) => item.type === "document_fragment"
+      && fragmentHasExactSnapshot(item))) {
+    throw new Error("candidate document evidence is incomplete");
   }
   if (new Set(input.evidence.map((item) => `${item.type}:${item.referenceId}`)).size
     !== input.evidence.length) throw new Error("candidate evidence contains duplicate identities");
@@ -1400,23 +1425,6 @@ async function listCandidateEvents(
   return result.rows.map(mapEvent);
 }
 
-async function transitionCandidate(
-  dataSource: PostgresKnowledgeConflictDataSource,
-  createId: () => string,
-  input: TransitionKnowledgeConflictCandidateInput,
-): Promise<KnowledgeConflictMutationResult> {
-  return withTransaction(dataSource, (client) => transitionCandidateInTransaction(client, createId, {
-    candidateId: input.id,
-    expectedVersion: input.expectedVersion,
-    operationKey: input.operationKey,
-    actorType: input.actorType,
-    actorRef: input.actorRef,
-    toStatus: input.toStatus,
-    reasonCode: input.reasonCode,
-    at: input.at,
-  }));
-}
-
 async function dismissCandidate(
   dataSource: PostgresKnowledgeConflictDataSource,
   createId: () => string,
@@ -1451,6 +1459,7 @@ async function transitionCandidateInTransaction(
   },
 ): Promise<KnowledgeConflictMutationResult> {
   const input = normalizeTransition(raw);
+  await lockOperationKey(client, input.operationKey);
   const replayResult = await client.query<EventRow>(
     "SELECT * FROM knowledge_conflict_candidate_events WHERE operation_key = $1",
     [input.operationKey],
@@ -1578,6 +1587,7 @@ async function approveForDelivery(
 ): Promise<KnowledgeConflictMutationResult & { delivery: KnowledgeConflictDelivery }> {
   return withTransaction(dataSource, async (client) => {
     const normalized = normalizeTransition({ ...input, toStatus: "approved_for_delivery" });
+    await lockOperationKey(client, normalized.operationKey);
     const existingDelivery = await loadDeliveryByCandidate(client, normalized.candidateId);
     const replayEvent = await client.query<EventRow>(
       "SELECT * FROM knowledge_conflict_candidate_events WHERE operation_key = $1",
@@ -1667,6 +1677,16 @@ async function validateCandidateCurrentState(
     if (["dismissed", "draft_created", "superseded"].includes(row.status)) {
       return { status: "superseded" as const, candidate: mapCandidate(row, evidence), reasonCode: staleReason };
     }
+    const deliveryResult = await client.query<DeliveryRow>(
+      `SELECT * FROM knowledge_conflict_delivery_outbox
+       WHERE candidate_id = $1
+       FOR UPDATE`,
+      [candidateId],
+    );
+    const delivery = deliveryResult.rows[0];
+    if (delivery?.status === "external_attempting" || delivery?.status === "outcome_unknown") {
+      throw new KnowledgeConflictDeliveryConflictError();
+    }
     const transition = await transitionLockedCandidate(client, createId, row, evidence, normalizeTransition({
       candidateId,
       expectedVersion: Number(row.version),
@@ -1706,24 +1726,39 @@ async function findStaleReason(
   ).map((item) => item.conversationMessageId);
   const messages = await client.query<{ id: string }>(
     `SELECT message.id FROM conversation_messages message
+     JOIN group_memory_message_evidence memory_evidence
+       ON memory_evidence.conversation_message_id = message.id
+      AND memory_evidence.memory_id = $3
      LEFT JOIN conversation_message_deletion_tombstones tombstone
        ON tombstone.conversation_message_id = message.id
      WHERE message.id = ANY($1::text[]) AND message.chat_id = $2
        AND tombstone.conversation_message_id IS NULL
      ORDER BY message.id FOR UPDATE OF message`,
-    [messageIds, candidate.group_id],
+    [messageIds, candidate.group_id, candidate.group_memory_id],
   );
-  if (messages.rows.length !== messageIds.length) return "message_stale";
+  const actualMessageIds = new Set(messages.rows.map((row) => row.id));
+  if (messages.rows.length !== messageIds.length
+    || messageIds.some((id) => !actualMessageIds.has(id))) return "message_stale";
   const sources = evidence.filter(
     (item): item is Extract<KnowledgeConflictEvidenceReference, { type: "document_source" }> =>
       item.type === "document_source",
   ).sort((left, right) => left.documentSourceId.localeCompare(right.documentSourceId));
   for (const expectedSource of sources) {
     const source = await client.query<SourceValidationRow>(
-      `SELECT id, source_type, permission_state, sync_state,
-         can_use_for_knowledge_drafts, updated_at
-       FROM document_sources WHERE id = $1 FOR UPDATE`,
-      [expectedSource.documentSourceId],
+      `SELECT source.id, source.authorized_space_id, source.source_type,
+         source.permission_state, source.sync_state,
+         source.can_use_for_knowledge_drafts, source.updated_at
+       FROM document_sources source
+       WHERE source.id = $1
+         AND EXISTS (
+           SELECT 1 FROM knowledge_publication_target_policies policy
+           WHERE policy.space_id = source.authorized_space_id
+             AND policy.enabled = TRUE
+             AND (cardinality(policy.allowed_group_ids) = 0
+               OR $2 = ANY(policy.allowed_group_ids))
+         )
+       FOR UPDATE OF source`,
+      [expectedSource.documentSourceId, candidate.group_id],
     );
     const currentSource = source.rows[0];
     if (currentSource === undefined
@@ -1894,7 +1929,9 @@ async function beginDeliveryAttempt(
 ): Promise<KnowledgeConflictDelivery> {
   const result = await dataSource.query<DeliveryRow>(
     `UPDATE knowledge_conflict_delivery_outbox
-     SET status = 'external_attempting', external_attempt_started_at = $3, updated_at = $3
+     SET status = 'external_attempting', external_attempt_started_at = $3,
+         reconciliation_operation_key = NULL, reconciliation_outcome = NULL,
+         reconciled_at = NULL, updated_at = $3
      WHERE id = $1 AND status = 'processing' AND lease_worker_id = $2
      RETURNING *`,
     [requireReference("deliveryId", input.deliveryId), requireReference("workerId", input.workerId),
@@ -2018,16 +2055,32 @@ async function reconcileDelivery(
     throw new Error("messageId is required for sent reconciliation");
   }
   return withTransaction(dataSource, async (client) => {
-    const delivery = await lockDelivery(client, deliveryId);
-    if (delivery.reconciliation_operation_key !== null) {
-      if (delivery.reconciliation_operation_key !== operationKey
-        || delivery.reconciliation_outcome !== input.outcome
-        || (input.outcome === "sent" && delivery.sent_message_id !== input.messageId)) {
+    await lockOperationKey(client, operationKey);
+    const replayResult = await client.query<ReconciliationRow>(
+      `SELECT * FROM knowledge_conflict_delivery_reconciliations
+       WHERE operation_key = $1`,
+      [operationKey],
+    );
+    const replay = replayResult.rows[0];
+    if (replay !== undefined) {
+      if (replay.delivery_id !== deliveryId
+        || replay.outcome !== input.outcome
+        || (replay.sent_message_id ?? undefined) !== input.messageId) {
         throw new KnowledgeConflictOperationConflictError();
       }
-      return mapDelivery(delivery);
+      const current = await lockDelivery(client, deliveryId);
+      return mapDelivery(current);
     }
+    const delivery = await lockDelivery(client, deliveryId);
     if (delivery.status !== "outcome_unknown") throw new KnowledgeConflictDeliveryConflictError();
+    await client.query<ReconciliationRow>(
+      `INSERT INTO knowledge_conflict_delivery_reconciliations (
+         operation_key, delivery_id, attempt_count, outcome, sent_message_id, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [operationKey, deliveryId, Number(delivery.attempt_count), input.outcome,
+        input.messageId ?? null, at],
+    );
     if (input.outcome === "not_sent") {
       const result = await client.query<DeliveryRow>(
         `UPDATE knowledge_conflict_delivery_outbox
@@ -2176,6 +2229,7 @@ async function recordInteraction(
     throw new Error("interaction draft identity is invalid");
   }
   return withTransaction(dataSource, async (client) => {
+    await lockOperationKey(client, normalized.callbackOperationKey);
     const existingResult = await client.query<InteractionRow>(
       "SELECT * FROM knowledge_conflict_interactions WHERE callback_operation_key = $1",
       [normalized.callbackOperationKey],
@@ -2235,6 +2289,7 @@ async function applyInteraction(
   }
   assertFreshPermission(normalized.permissionAttestedAt, normalized.at, maxPermissionAgeMs);
   return withTransaction(dataSource, async (client) => {
+    await lockOperationKey(client, normalized.callbackOperationKey);
     const existingResult = await client.query<InteractionRow>(
       "SELECT * FROM knowledge_conflict_interactions WHERE callback_operation_key = $1",
       [normalized.callbackOperationKey],
@@ -2347,61 +2402,34 @@ async function findCurrentOverlap(
     snapshotId: requireReference("snapshotId", document.snapshotId),
   }));
   if (memoryIds.length === 0 || documents.length === 0) return undefined;
-  const result = await dataSource.query<CandidateRow>(
-    `SELECT candidate.*
-     FROM knowledge_conflict_candidates candidate
-     JOIN group_memories memory
-       ON memory.id = candidate.group_memory_id
-      AND memory.group_id = candidate.group_id
-      AND memory.updated_at = candidate.memory_updated_at
-      AND memory.status = 'active'
-     JOIN document_sources source
-       ON source.id = candidate.target_document_source_id
-      AND source.updated_at = candidate.target_source_updated_at
-      AND source.source_type = 'authorized_wiki_document'
-      AND source.sync_state = 'synced'
-      AND source.permission_state IN ('unknown', 'readable')
-      AND source.can_use_for_knowledge_drafts = TRUE
-     JOIN document_snapshots snapshot
-       ON snapshot.id = candidate.target_snapshot_id
-      AND snapshot.document_source_id = candidate.target_document_source_id
-      AND snapshot.content_hash = candidate.target_content_hash
-      AND snapshot.fetch_status = 'succeeded'
-     WHERE candidate.group_id = $1
-       AND candidate.group_memory_id = ANY($2::text[])
-       AND candidate.status IN (
-         'pending_review', 'approved_for_delivery', 'delivered', 'draft_created'
-       )
-       AND EXISTS (
-         SELECT 1 FROM unnest($3::text[], $4::text[]) AS overlap(source_id, snapshot_id)
-         WHERE overlap.source_id = candidate.target_document_source_id
-           AND overlap.snapshot_id = candidate.target_snapshot_id
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM document_snapshots newer
-         WHERE newer.document_source_id = candidate.target_document_source_id
-           AND (newer.fetched_at > snapshot.fetched_at
-             OR (newer.fetched_at = snapshot.fetched_at AND newer.id < snapshot.id))
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM knowledge_conflict_evidence evidence
-         LEFT JOIN conversation_messages message
-           ON message.id = evidence.conversation_message_id
-          AND message.chat_id = candidate.group_id
-         LEFT JOIN conversation_message_deletion_tombstones tombstone
-           ON tombstone.conversation_message_id = evidence.conversation_message_id
-         WHERE evidence.candidate_id = candidate.id
-           AND evidence.evidence_type = 'conversation_message'
-           AND (message.id IS NULL OR tombstone.conversation_message_id IS NOT NULL)
-       )
-     ORDER BY candidate.updated_at DESC, candidate.id ASC
-     LIMIT 1`,
-    [groupId, memoryIds, documents.map((item) => item.sourceId),
-      documents.map((item) => item.snapshotId)],
-  );
-  const row = result.rows[0];
-  if (row === undefined) return undefined;
-  return mapCandidate(row, await loadEvidence(dataSource, row.id));
+  return withTransaction(dataSource, async (client) => {
+    const result = await client.query<CandidateRow>(
+      `SELECT candidate.*
+       FROM knowledge_conflict_candidates candidate
+       WHERE candidate.group_id = $1
+         AND candidate.group_memory_id = ANY($2::text[])
+         AND candidate.status IN (
+           'pending_review', 'approved_for_delivery', 'delivered', 'draft_created'
+         )
+         AND EXISTS (
+           SELECT 1 FROM unnest($3::text[], $4::text[]) AS overlap(source_id, snapshot_id)
+           WHERE overlap.source_id = candidate.target_document_source_id
+             AND overlap.snapshot_id = candidate.target_snapshot_id
+         )
+       ORDER BY candidate.updated_at DESC, candidate.id ASC
+       LIMIT 50
+       FOR UPDATE OF candidate`,
+      [groupId, memoryIds, documents.map((item) => item.sourceId),
+        documents.map((item) => item.snapshotId)],
+    );
+    for (const row of result.rows) {
+      const evidence = await loadEvidence(client, row.id);
+      if (await findStaleReason(client, row, evidence) === undefined) {
+        return mapCandidate(row, evidence);
+      }
+    }
+    return undefined;
+  });
 }
 
 async function getCandidateStatusCounts(dataSource: PostgresKnowledgeConflictDataSource) {
@@ -2452,24 +2480,15 @@ async function getInteractionResultCounts(dataSource: PostgresKnowledgeConflictD
 }
 
 function eligibleMemorySelect(): string {
-  return `SELECT gm.*,
-      ARRAY_AGG(evidence.conversation_message_id ORDER BY evidence.conversation_message_id)
-        AS evidence_message_ids
+  return `SELECT gm.id, gm.group_id, gm.updated_at
     FROM group_memories gm
-    JOIN group_memory_message_evidence evidence ON evidence.memory_id = gm.id
-    JOIN conversation_messages message
-      ON message.id = evidence.conversation_message_id
-     AND message.chat_id = gm.group_id
-    LEFT JOIN conversation_message_deletion_tombstones tombstone
-      ON tombstone.conversation_message_id = message.id
     WHERE gm.group_id = ANY($1::text[])
       AND gm.memory_scope = 'group'
       AND gm.category IN ('decision', 'workflow', 'term')
       AND gm.confidence >= 0.80
       AND gm.importance >= 3
       AND gm.status = 'active'
-      AND tombstone.conversation_message_id IS NULL
-    GROUP BY gm.id`;
+      AND EXISTS (${currentEvidenceExistsSql()})`;
 }
 
 function currentEvidenceExistsSql(): string {
@@ -2541,6 +2560,16 @@ async function withTransaction<T>(
   } finally {
     client.release();
   }
+}
+
+async function lockOperationKey(
+  client: PostgresKnowledgeConflictTransactionClient,
+  operationKey: string,
+): Promise<void> {
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+    [operationKey],
+  );
 }
 
 function normalizeGroupIds(values: readonly string[]): string[] {
