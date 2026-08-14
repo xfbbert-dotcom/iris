@@ -591,12 +591,29 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
         candidate: { id: "candidate-1", status: "approved_for_delivery" },
       });
 
-    const beginRepository = repositoryForDeliveryMutation(deliveryRow({
-      status: "external_attempting", lease_worker_id: "worker-1", lease_until: leaseUntil,
-      external_attempt_started_at: at,
-    }));
+    const beginRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(routedClient((sql) => {
+        if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+          return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
+        }
+        if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
+          return { rows: [deliveryRow({
+            status: "processing", attempt_count: 1, lease_worker_id: "worker-1",
+            lease_until: leaseUntil,
+          })] };
+        }
+        if (sql.includes("UPDATE knowledge_conflict_delivery_outbox")) {
+          return { rows: [deliveryRow({
+            status: "external_attempting", attempt_count: 1, lease_worker_id: "worker-1",
+            lease_until: leaseUntil, external_attempt_started_at: at,
+          })] };
+        }
+        return { rows: [] };
+      })),
+    });
     await expect(beginRepository.beginDeliveryAttempt({
-      deliveryId: "delivery-1", workerId: "worker-1", at,
+      deliveryId: "delivery-1", candidateId: "candidate-1", expectedCandidateVersion: 2,
+      expectedAttemptCount: 1, workerId: "worker-1", at,
     })).resolves.toMatchObject({ status: "external_attempting" });
 
     const completeClient = routedClient((sql) => {
@@ -662,6 +679,79 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       actorRef: "knowledge-admin",
       at,
     })).resolves.toMatchObject({ status: "failed", failureCode: "reconciled_not_sent" });
+  });
+
+  it("binds begin to the exact approved candidate and attempt under candidate-before-delivery locks", async () => {
+    let candidateLocked = false;
+    let deliveryLocked = false;
+    const client = routedClient((sql, params) => {
+      if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+        candidateLocked = true;
+        expect(params).toEqual(["candidate-1"]);
+        return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
+      }
+      if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
+        expect(candidateLocked).toBe(true);
+        deliveryLocked = true;
+        return { rows: [deliveryRow({
+          status: "processing", candidate_id: "candidate-1", group_id: "group-1",
+          attempt_count: 1, lease_worker_id: "worker-1", lease_until: leaseUntil,
+        })] };
+      }
+      if (sql.includes("UPDATE knowledge_conflict_delivery_outbox")) {
+        if (!candidateLocked || !deliveryLocked) throw new Error("begin was not fully bound");
+        return { rows: [deliveryRow({
+          status: "external_attempting", candidate_id: "candidate-1", group_id: "group-1",
+          attempt_count: 1, lease_worker_id: "worker-1", lease_until: leaseUntil,
+          external_attempt_started_at: at,
+        })] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.beginDeliveryAttempt({
+      deliveryId: "delivery-1",
+      candidateId: "candidate-1",
+      expectedCandidateVersion: 2,
+      expectedAttemptCount: 1,
+      workerId: "worker-1",
+      at,
+    })).resolves.toMatchObject({ status: "external_attempting", attemptCount: 1 });
+  });
+
+  it("blocks dismissal while an approved candidate has an unresolved external delivery", async () => {
+    const client = routedClient((sql) => {
+      if (sql.includes("FROM knowledge_conflict_candidate_events")) return { rows: [] };
+      if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+        return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
+      }
+      if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
+        return { rows: [deliveryRow({
+          status: "external_attempting", candidate_id: "candidate-1",
+          lease_worker_id: "worker-1", lease_until: leaseUntil,
+        })] };
+      }
+      if (sql.includes("UPDATE knowledge_conflict_candidates")) {
+        return { rows: [candidateRow({ status: "dismissed", version: 3 })] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.dismissCandidate({
+      candidateId: "candidate-1",
+      expectedVersion: 2,
+      operationKey: "dismiss-during-external",
+      actorType: "admin_role",
+      actorRef: "knowledge-admin",
+      reasonCode: "not_current_policy",
+      at,
+    })).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE knowledge_conflict_candidates"),
+      expect.anything(),
+    );
   });
 
   it("locks the candidate before the delivery for completion and reconciliation", async () => {
@@ -837,7 +927,10 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       actorRef: "knowledge-admin", at,
     })).resolves.toMatchObject({ status: "failed" });
     await repository.claimNextDelivery({ workerId: "worker-2", at, leaseUntil });
-    await repository.beginDeliveryAttempt({ deliveryId: "delivery-1", workerId: "worker-2", at });
+    await repository.beginDeliveryAttempt({
+      deliveryId: "delivery-1", candidateId: "candidate-1", expectedCandidateVersion: 2,
+      expectedAttemptCount: 2, workerId: "worker-2", at,
+    });
     await repository.failDelivery({
       deliveryId: "delivery-1", workerId: "worker-2", classification: "outcome_unknown",
       errorCode: "timeout_again", reconciliationDueAt: leaseUntil, at,
@@ -1878,6 +1971,94 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     expect(result.current).toMatchObject({ status: "pending_review", version: 1 });
   });
 
+  it("serializes begin against dismissal and preserves outcome-unknown reconciliation", async () => {
+    const fixture = await insertDetectionFixture("begin-dismissal-race");
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+    await repository.recordDetectionResult(fixture.input);
+    const approval = await repository.approveForDelivery({
+      candidateId: fixture.candidateId,
+      expectedVersion: 1,
+      operationKey: `begin-dismissal-approve-${suffix}`,
+      actorType: "admin_role",
+      actorRef: "knowledge-admin",
+      reasonCode: "reviewed",
+      at,
+    });
+    await repository.claimNextDelivery({ workerId: "delivery-worker", at, leaseUntil });
+
+    const beginUpdated = deferred<void>();
+    const releaseBegin = deferred<void>();
+    const beginRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: instrumentedDataSource(pool!, async (sql, execute) => {
+        const result = await execute();
+        if (sql.startsWith("UPDATE knowledge_conflict_delivery_outbox")
+          && sql.includes("external_attempting")) {
+          beginUpdated.resolve();
+          await releaseBegin.promise;
+        }
+        return result;
+      }),
+    });
+    const dismissalPid = deferred<number>();
+    const dismissalRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: instrumentedDataSource(
+        pool!,
+        async (_sql, execute) => execute(),
+        (pid) => dismissalPid.resolve(pid),
+      ),
+    });
+
+    const begin = beginRepository.beginDeliveryAttempt({
+      deliveryId: approval.delivery.id,
+      candidateId: fixture.candidateId,
+      expectedCandidateVersion: 2,
+      expectedAttemptCount: 1,
+      workerId: "delivery-worker",
+      at,
+    });
+    await beginUpdated.promise;
+    const dismissal = dismissalRepository.dismissCandidate({
+      candidateId: fixture.candidateId,
+      expectedVersion: 2,
+      operationKey: `dismiss-during-begin-${suffix}`,
+      actorType: "admin_role",
+      actorRef: "knowledge-admin",
+      reasonCode: "not_current_policy",
+      at,
+    });
+
+    try {
+      await waitForPostgresLock(pool!, await dismissalPid.promise);
+      releaseBegin.resolve();
+      await expect(begin).resolves.toMatchObject({ status: "external_attempting" });
+      await expect(dismissal).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+    } catch (error) {
+      releaseBegin.resolve();
+      await Promise.allSettled([begin, dismissal]);
+      throw error;
+    }
+
+    await repository.failDelivery({
+      deliveryId: approval.delivery.id,
+      workerId: "delivery-worker",
+      classification: "outcome_unknown",
+      errorCode: "timeout",
+      reconciliationDueAt: leaseUntil,
+      at,
+    });
+    await expect(repository.reconcileDelivery({
+      deliveryId: approval.delivery.id,
+      expectedAttemptCount: 1,
+      outcome: "sent",
+      operationKey: `begin-dismissal-reconcile-${suffix}`,
+      actorRef: "knowledge-admin",
+      messageId: `om-begin-dismissal-${suffix}`,
+      at,
+    })).resolves.toMatchObject({ status: "sent" });
+    await expect(repository.getCandidate(fixture.candidateId))
+      .resolves.toMatchObject({ status: "delivered", version: 3 });
+  });
+
   it("serializes stale validation and reconciliation candidate-before-delivery", async () => {
     const fixture = await insertDetectionFixture("validation-reconciliation-lock-order");
     const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
@@ -2204,6 +2385,9 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     expect(claim).toMatchObject({ delivery: { id: approval.delivery.id, status: "processing" } });
     await repository.beginDeliveryAttempt({
       deliveryId: approval.delivery.id,
+      candidateId,
+      expectedCandidateVersion: 2,
+      expectedAttemptCount: 1,
       workerId: "delivery-worker",
       at,
     });
@@ -2246,7 +2430,8 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     });
     expect(retryClaim).toMatchObject({ delivery: { id: approval.delivery.id, attemptCount: 2 } });
     await repository.beginDeliveryAttempt({
-      deliveryId: approval.delivery.id, workerId: "delivery-worker-2", at,
+      deliveryId: approval.delivery.id, candidateId, expectedCandidateVersion: 2,
+      expectedAttemptCount: 2, workerId: "delivery-worker-2", at,
     });
     await repository.failDelivery({
       deliveryId: approval.delivery.id,

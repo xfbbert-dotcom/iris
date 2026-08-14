@@ -44,6 +44,15 @@ export type KnowledgeConflictDispatcherLoopDependencies = {
   clearTimeout?: typeof globalThis.clearTimeout;
 };
 
+export class KnowledgeConflictDispatcherLoopError extends Error {
+  readonly code = "worker_failed" as const;
+
+  constructor() {
+    super("knowledge conflict dispatcher worker failed");
+    this.name = "KnowledgeConflictDispatcherLoopError";
+  }
+}
+
 export function createKnowledgeConflictDispatcherLoop({
   worker,
   intervalMs,
@@ -55,7 +64,8 @@ export function createKnowledgeConflictDispatcherLoop({
 }: KnowledgeConflictDispatcherLoopDependencies) {
   const safeIntervalMs = sanitizeInterval(intervalMs);
   const safeBatchLimit = sanitizeBatchLimit(batchLimit);
-  let running = false;
+  let lifecycle: "stopped" | "running" | "stopping" = "stopped";
+  let generation = 0;
   let timer: TimerHandle | undefined;
   let inFlight: Promise<void> | undefined;
   let latestBatch: KnowledgeConflictDispatcherBatchSnapshot | undefined;
@@ -86,41 +96,45 @@ export function createKnowledgeConflictDispatcherLoop({
         failed: true,
         errorCode: "worker_failed",
       };
-      reportError(onError, error);
+      reportError(onError, new KnowledgeConflictDispatcherLoopError());
     }
   };
 
-  const scheduleNext = (): void => {
-    if (!running) return;
+  const scheduleNext = (scheduledGeneration: number): void => {
+    if (lifecycle !== "running" || scheduledGeneration !== generation) return;
     timer = scheduleTimeout(() => {
       timer = undefined;
       inFlight = tick().finally(() => {
         inFlight = undefined;
-        scheduleNext();
+        scheduleNext(scheduledGeneration);
       });
     }, safeIntervalMs);
   };
 
   return {
     start() {
-      if (running) return;
-      running = true;
-      scheduleNext();
+      if (lifecycle !== "stopped") return;
+      lifecycle = "running";
+      generation += 1;
+      scheduleNext(generation);
     },
     async stop() {
-      running = false;
+      if (lifecycle === "stopped") return;
+      lifecycle = "stopping";
+      generation += 1;
       if (timer !== undefined) {
         cancelTimeout(timer);
         timer = undefined;
       }
       await inFlight;
+      lifecycle = "stopped";
     },
     isRunning() {
-      return running;
+      return lifecycle === "running";
     },
     getSnapshot(): KnowledgeConflictDispatcherLoopSnapshot {
       return {
-        running,
+        running: lifecycle === "running",
         intervalMs: safeIntervalMs,
         batchLimit: safeBatchLimit,
         ...(latestBatch === undefined ? {} : { latestBatch: cloneSnapshot(latestBatch) }),

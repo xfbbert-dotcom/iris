@@ -281,6 +281,9 @@ export interface KnowledgeConflictRepository {
   }): Promise<KnowledgeConflictDeliveryClaim | undefined>;
   beginDeliveryAttempt(input: {
     deliveryId: string;
+    candidateId: string;
+    expectedCandidateVersion: number;
+    expectedAttemptCount: number;
     workerId: string;
     at: Date;
   }): Promise<KnowledgeConflictDelivery>;

@@ -17,6 +17,10 @@ import type {
   KnowledgeConflictDeliveryClaim,
   KnowledgeConflictRepository,
 } from "./knowledge-conflict-repository.js";
+import {
+  KnowledgeConflictDeliveryConflictError,
+  KnowledgeConflictVersionConflictError,
+} from "./knowledge-conflict-repository.js";
 
 const MAX_BATCH_LIMIT = 100;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -53,7 +57,12 @@ export type KnowledgeConflictDispatcherResult = {
 
 export type KnowledgeConflictDispatcherDependencies = {
   repository: Pick<KnowledgeConflictRepository,
-    "claimNextDelivery" | "beginDeliveryAttempt" | "completeDelivery" | "failDelivery">;
+    | "claimNextDelivery"
+    | "beginDeliveryAttempt"
+    | "completeDelivery"
+    | "failDelivery"
+    | "getDelivery"
+  >;
   currentValidator: KnowledgeConflictCurrentValidator;
   documentSources: { findSourceById(id: string): Promise<DocumentSource | undefined> };
   cardClient: Pick<FeishuInteractiveCardClient, "sendCard">;
@@ -187,7 +196,7 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<KnowledgeConfli
     return fail(input, "retryable", "validation_unavailable");
   }
   if (validation.status === "superseded") {
-    return result(delivery.id, "permanent_failure", "stale_candidate");
+    return settlePermanent(input, "stale_candidate");
   }
   if (validation.status === "permission_blocked") {
     return fail(input, "permanent", "permission_blocked");
@@ -196,16 +205,36 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<KnowledgeConfli
     return fail(input, "retryable", "validation_unavailable");
   }
   if (!exactValidatedCandidate(candidate, validation.candidate)) {
-    return fail(input, "permanent", "stale_candidate");
+    return settlePermanent(input, "stale_candidate");
+  }
+
+  if (!gatesOpen(input, candidate.groupId)) {
+    return settlePermanent(input, "runtime_disabled");
+  }
+  const postValidationMembership = await readMembership(input, candidate.groupId);
+  if (postValidationMembership !== "member") {
+    return postValidationMembership === "not_member"
+      ? settlePermanent(input, "bot_not_in_group")
+      : fail(input, "retryable", "membership_unavailable");
+  }
+  if (!gatesOpen(input, candidate.groupId)) {
+    return settlePermanent(input, "runtime_disabled");
   }
 
   try {
     await input.repository.beginDeliveryAttempt({
       deliveryId: delivery.id,
+      candidateId: candidate.id,
+      expectedCandidateVersion: candidate.version,
+      expectedAttemptCount: delivery.attemptCount,
       workerId: input.workerId,
       at: requireDate(input.now()),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof KnowledgeConflictVersionConflictError
+      || error instanceof KnowledgeConflictDeliveryConflictError) {
+      return settlePermanent(input, "stale_candidate");
+    }
     return fail(input, "retryable", "attempt_boundary_unavailable");
   }
 
@@ -230,6 +259,28 @@ async function dispatchClaim(input: DispatchClaimInput): Promise<KnowledgeConfli
     return fail(input, "outcome_unknown", "outcome_unknown");
   }
   return result(delivery.id, "sent", "send_succeeded");
+}
+
+async function settlePermanent(
+  input: DispatchClaimInput,
+  code: KnowledgeConflictDispatcherCode,
+): Promise<KnowledgeConflictDispatcherResult> {
+  try {
+    return await fail(input, "permanent", code);
+  } catch (error) {
+    if (!(error instanceof KnowledgeConflictDeliveryConflictError)) throw error;
+    const current = await input.repository.getDelivery(input.claim.delivery.id);
+    if (current?.status === "cancelled" || (current?.status === "failed" && !current.retryable)) {
+      return result(input.claim.delivery.id, "permanent_failure", code);
+    }
+    if (current?.status === "outcome_unknown") {
+      return result(input.claim.delivery.id, "outcome_unknown", "outcome_unknown");
+    }
+    if (current?.status === "sent") {
+      return result(input.claim.delivery.id, "sent", "send_succeeded");
+    }
+    throw error;
+  }
 }
 
 function failFromCardError(

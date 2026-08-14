@@ -135,6 +135,42 @@ describe("KnowledgeConflictCardRenderer", () => {
       nonce: "nonce\n1",
     })).toThrow("knowledge conflict card binding");
   });
+
+  it("strips C1 controls from visible text and rejects them in callback identifiers", () => {
+    const result = renderKnowledgeConflictCard({
+      candidate: candidate({
+        plan: { ...candidate().plan, subject: "Expense\u0085threshold" },
+      }),
+      source: source(),
+      nonce: "nonce-1",
+    });
+    expect(markdownContent(result.card)).toContain("Expense threshold");
+    expect(result.json).not.toContain("\u0085");
+
+    expect(() => renderKnowledgeConflictCard({
+      candidate: candidate({ id: "candidate\u00851" }),
+      source: source(),
+      nonce: "nonce-1",
+    })).toThrow("knowledge conflict card binding");
+  });
+
+  it.each([
+    "https://example.feishu.cn/wiki/expense\u0085-policy",
+    "https://example.feishu.cn/wiki/expense\n-policy",
+    "https://example.feishu.cn/wiki/expense policy",
+    "https://example.feishu.cn/wiki/expense%0A-policy",
+    "https://example.feishu.cn/wiki/expense%zz-policy",
+  ])("suppresses a control, whitespace, or malformed-percent URI instead of canonicalizing it: %s", (sourceUri) => {
+    const result = renderKnowledgeConflictCard({
+      candidate: candidate(),
+      source: source({ sourceUri }),
+      nonce: "nonce-1",
+    });
+
+    const visible = markdownContent(result.card);
+    expect(visible).toContain("**Target:** Expense policy");
+    expect(visible).not.toContain("](https://");
+  });
 });
 
 function candidate(

@@ -87,7 +87,13 @@ describe("KnowledgeConflictDispatcherLoop", () => {
       failed: true,
     });
     expect(JSON.stringify(loop.getSnapshot())).not.toMatch(/conflict statement|ou_actor|bearer_secret/iu);
-    expect(onError).toHaveBeenCalledWith(raw);
+    expect(onError).not.toHaveBeenCalledWith(raw);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      name: "KnowledgeConflictDispatcherLoopError",
+      code: "worker_failed",
+      message: "knowledge conflict dispatcher worker failed",
+    }));
+    expect(JSON.stringify(onError.mock.calls)).not.toMatch(/conflict statement|ou_actor|bearer_secret/iu);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(worker.processBatch).toHaveBeenCalledTimes(2);
     await loop.stop();
@@ -117,5 +123,26 @@ describe("KnowledgeConflictDispatcherLoop", () => {
       intervalMs: 1_000,
       batchLimit: 101,
     })).toThrow("batchLimit must not exceed 100");
+  });
+
+  it("ignores start while stopping and prevents the old generation from rescheduling", async () => {
+    vi.useFakeTimers();
+    let resolveBatch: (() => void) | undefined;
+    const worker = {
+      processBatch: vi.fn(() => new Promise<[]>((resolve) => { resolveBatch = () => resolve([]); })),
+    };
+    const loop = createKnowledgeConflictDispatcherLoop({ worker, intervalMs: 1_000, batchLimit: 10 });
+
+    loop.start();
+    await vi.runOnlyPendingTimersAsync();
+    const stopping = loop.stop();
+    loop.start();
+    resolveBatch?.();
+    await stopping;
+
+    expect(loop.isRunning()).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(worker.processBatch).toHaveBeenCalledOnce();
   });
 });

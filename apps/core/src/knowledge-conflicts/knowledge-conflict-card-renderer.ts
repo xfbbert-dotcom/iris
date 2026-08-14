@@ -195,7 +195,7 @@ function escapedVisible(value: string | null, maximum: number): string {
 
 function visibleText(value: string, maximum: number): string {
   if (typeof value !== "string") throw new KnowledgeConflictCardBindingError();
-  const normalized = value.normalize("NFC").replace(/[\u0000-\u001f\u007f]/gu, " ")
+  const normalized = value.normalize("NFC").replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
     .replace(/\s+/gu, " ").trim();
   if (normalized.length === 0) throw new KnowledgeConflictCardBindingError();
   const characters = Array.from(normalized);
@@ -212,6 +212,10 @@ function escapeFeishuMarkdown(value: string): string {
 
 function safeSourceUri(value: string): string | undefined {
   if (typeof value !== "string" || value.length > MAX_SOURCE_URL_CHARS) return undefined;
+  if (/[\u0000-\u001f\u007f-\u009f\s]/u.test(value)
+    || /%(?![0-9a-f]{2})/iu.test(value)
+    || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/iu.test(value)
+    || /%c2%(?:8[0-9a-f]|9[0-9a-f])/iu.test(value)) return undefined;
   try {
     const uri = new URL(value);
     if (uri.protocol !== "https:" || uri.username !== "" || uri.password !== "") return undefined;
@@ -227,7 +231,7 @@ function requireIdentifier(value: string): string {
   const normalized = value.normalize("NFC").trim();
   if (normalized.length < 1
     || normalized.length > MAX_IDENTIFIER_CHARS
-    || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    || /[\u0000-\u001f\u007f-\u009f]/u.test(normalized)) {
     throw new KnowledgeConflictCardBindingError();
   }
   return normalized;

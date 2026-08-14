@@ -8,9 +8,15 @@ import {
 } from "../src/feishu/feishu-interactive-card-client.js";
 import type { KnowledgeConflictCandidate } from "../src/knowledge-conflicts/knowledge-conflict.js";
 import type {
+  KnowledgeConflictDelivery,
   KnowledgeConflictDeliveryClaim,
   KnowledgeConflictRepository,
 } from "../src/knowledge-conflicts/knowledge-conflict-repository.js";
+import {
+  KnowledgeConflictDeliveryConflictError,
+  KnowledgeConflictVersionConflictError,
+} from
+  "../src/knowledge-conflicts/knowledge-conflict-repository.js";
 import {
   createKnowledgeConflictDispatcher,
 } from "../src/knowledge-conflicts/knowledge-conflict-dispatcher.js";
@@ -50,11 +56,20 @@ describe("KnowledgeConflictDispatcher", () => {
       code: "send_succeeded",
     }]);
     expect(order).toEqual([
-      "gates", "bot", "source", "gates", "bot", "validate", "begin", "send", "complete",
+      "gates", "bot", "source", "gates", "bot", "validate", "gates", "bot", "gates",
+      "begin", "send", "complete",
     ]);
     expect(harness.currentValidator.validate).toHaveBeenCalledWith({
       candidate: expect.objectContaining({ id: "candidate-1", version: 2 }),
       expectedVersion: 2,
+    });
+    expect(harness.repository.beginDeliveryAttempt).toHaveBeenCalledWith({
+      deliveryId: "delivery-1",
+      candidateId: "candidate-1",
+      expectedCandidateVersion: 2,
+      expectedAttemptCount: 1,
+      workerId: "conflict-dispatcher-1",
+      at,
     });
     expect(harness.repository.completeDelivery).toHaveBeenCalledWith({
       deliveryId: "delivery-1",
@@ -101,6 +116,46 @@ describe("KnowledgeConflictDispatcher", () => {
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
   });
 
+  it("does not begin or send when delivery is disabled during current validation", async () => {
+    let enabled = true;
+    const harness = createHarness({
+      gates: () => ({ ...openGates(), featureEnabled: enabled }),
+      validate: async () => {
+        enabled = false;
+        return { status: "current", candidate: candidate() };
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      deliveryId: "delivery-1",
+      code: "runtime_disabled",
+    }]);
+    expect(harness.repository.beginDeliveryAttempt).not.toHaveBeenCalled();
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+  });
+
+  it("performs a final local gate read after post-validation membership", async () => {
+    let enabled = true;
+    let membershipReads = 0;
+    const harness = createHarness({
+      gates: () => ({ ...openGates(), groupAllowed: enabled }),
+      botMember: async () => {
+        membershipReads += 1;
+        if (membershipReads === 3) enabled = false;
+        return true;
+      },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toMatchObject([{
+      status: "permanent_failure",
+      code: "runtime_disabled",
+    }]);
+    expect(membershipReads).toBe(3);
+    expect(harness.repository.beginDeliveryAttempt).not.toHaveBeenCalled();
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["superseded", { status: "superseded" as const, candidate: candidate({ status: "superseded", version: 3 }), reason: "snapshot_stale" }, "stale_candidate"],
     ["permission denied", { status: "permission_blocked" as const, candidate: candidate() }, "permission_blocked"],
@@ -113,14 +168,69 @@ describe("KnowledgeConflictDispatcher", () => {
       code,
     }]);
     expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
-    if (validation.status === "superseded") {
-      expect(harness.repository.failDelivery).not.toHaveBeenCalled();
-    } else {
-      expect(harness.repository.failDelivery).toHaveBeenCalledWith(expect.objectContaining({
-        classification: "permanent",
-        errorCode: code,
-      }));
-    }
+    expect(harness.repository.failDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      classification: "permanent",
+      errorCode: code,
+    }));
+  });
+
+  it("permanently settles a missing-source supersession that did not mutate the approved candidate", async () => {
+    const harness = createHarness({
+      claims: [claim(), undefined],
+      validate: async () => ({
+        status: "superseded",
+        candidate: candidate(),
+        reason: "source_stale",
+      }),
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 2 })).resolves.toEqual([{
+      status: "permanent_failure",
+      deliveryId: "delivery-1",
+      code: "stale_candidate",
+    }]);
+    expect(harness.repository.failDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      classification: "permanent",
+      errorCode: "stale_candidate",
+    }));
+    expect(harness.repository.claimNextDelivery).toHaveBeenCalledTimes(2);
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+  });
+
+  it("treats an atomically cancelled superseded delivery as already settled", async () => {
+    const harness = createHarness({
+      validate: async () => ({
+        status: "superseded",
+        candidate: candidate({ status: "superseded", version: 3 }),
+        reason: "snapshot_stale",
+      }),
+      fail: async () => { throw new KnowledgeConflictDeliveryConflictError(); },
+      getDelivery: async () => ({ ...claim().delivery, status: "cancelled", retryable: false }),
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      deliveryId: "delivery-1",
+      code: "stale_candidate",
+    }]);
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+  });
+
+  it("does not send when dismissal wins before the exact begin transaction", async () => {
+    const harness = createHarness({
+      begin: async () => { throw new KnowledgeConflictVersionConflictError(); },
+    });
+
+    await expect(harness.dispatcher.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "permanent_failure",
+      deliveryId: "delivery-1",
+      code: "stale_candidate",
+    }]);
+    expect(harness.cardClient.sendCard).not.toHaveBeenCalled();
+    expect(harness.repository.failDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      classification: "permanent",
+      errorCode: "stale_candidate",
+    }));
   });
 
   it("retries unavailable validation with deterministic exponential backoff", async () => {
@@ -304,6 +414,8 @@ type HarnessOverrides = {
   begin?: () => Promise<void>;
   send?: (input: { chatId: string; cardJson: string; uuid: string }) => Promise<{ messageId: string }>;
   complete?: () => Promise<void>;
+  fail?: () => Promise<void>;
+  getDelivery?: () => Promise<KnowledgeConflictDelivery | undefined>;
 };
 
 function createHarness(overrides: HarnessOverrides = {}) {
@@ -324,9 +436,18 @@ function createHarness(overrides: HarnessOverrides = {}) {
         candidate: candidate({ status: "delivered", version: 3 }),
       };
     }),
-    failDelivery: vi.fn(async () => claim().delivery),
+    failDelivery: vi.fn(async () => {
+      await overrides.fail?.();
+      return claim().delivery;
+    }),
+    getDelivery: vi.fn(overrides.getDelivery ?? (async () => claim().delivery)),
   } satisfies Pick<KnowledgeConflictRepository,
-    "claimNextDelivery" | "beginDeliveryAttempt" | "completeDelivery" | "failDelivery">;
+    | "claimNextDelivery"
+    | "beginDeliveryAttempt"
+    | "completeDelivery"
+    | "failDelivery"
+    | "getDelivery"
+  >;
   const currentValidator = {
     validate: vi.fn(overrides.validate ?? (async () => ({ status: "current" as const, candidate: candidate() }))),
   };
