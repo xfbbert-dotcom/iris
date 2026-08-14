@@ -124,3 +124,100 @@ All exited 0.
 
 None for Task 4. The skipped full-suite tests are existing conditional database suites; this detector
 adds no database behavior and its complete focused/relevant coverage executed locally.
+
+## Fix Round 1
+
+### Status And Commit
+
+`DONE`
+
+- `c368c64323858a094741796ed3972afbb07ef4ff` — `fix(core): reject unbounded conflict subjects`
+
+This section supersedes the earlier report's long-memory truncation behavior. No synthetic or lossy
+candidate subject is now derived.
+
+### Review Findings Addressed
+
+- Removed the 245-UTF-16-code-unit prefix plus `[truncated]` derivation. The detector accepts the
+  normalized memory content as the exact candidate subject only when it fits the existing
+  256-character subject contract; otherwise it throws the fixed content-free input error before
+  constructing or sending a model request.
+- Restored one exact `subject.content` field in the bounded model input. Accepted content is
+  NFC-normalized and must be echoed exactly by the validated output, so related-subject substitution
+  still consumes the one semantic correction attempt and then fails closed.
+- Added an evidence-builder boundary that returns
+  `{ outcome: "insufficient_evidence", reasonCode: "subject_unbounded" }` before message lookup,
+  target-policy lookup, embedding, retrieval, source/snapshot reads, permission checks, or fragment
+  materialization. Unrepresentable memories therefore cannot become repeated scanner poison work.
+- Added regressions for two distinct over-limit conclusions with the same 256-character prefix and
+  for a supplementary character crossing the removed UTF-16 slice boundary. Every case fails before
+  model serialization, so no colliding or unpaired-surrogate candidate subject can be produced.
+- No migration, new subject field, semantic subject guess, Task 5 scanner/DLQ behavior, persistence
+  mutation, or external side effect was added. Task 3 fingerprints and reference identities remain
+  unchanged.
+
+### RED Evidence
+
+```powershell
+npm --workspace apps/core test -- openai-compatible-knowledge-conflict-detector.test.ts knowledge-conflict-evidence-builder.test.ts knowledge-conflict.test.ts
+```
+
+Exit 1 with seven expected failures: the detector still serialized `exactSubject` and
+`groupConclusion`, called the model for both shared-prefix cases and the surrogate-boundary case,
+accepted a 257-character subject into the semantic-retry path, and the evidence builder returned
+`ready` after dependency work instead of stable `subject_unbounded`.
+
+### GREEN Evidence
+
+Focused:
+
+```powershell
+npm --workspace apps/core test -- openai-compatible-knowledge-conflict-detector.test.ts knowledge-conflict-evidence-builder.test.ts knowledge-conflict.test.ts
+```
+
+Exit 0: 3 files passed; 57 tests passed; 0 failed.
+
+Relevant Task 3/4 and structured-model regressions:
+
+```powershell
+npm --workspace apps/core test -- openai-compatible-knowledge-conflict-detector.test.ts knowledge-conflict.test.ts knowledge-conflict-evidence-builder.test.ts knowledge-conflict-evidence-builder-postgres.test.ts document-fragment-repository.test.ts document-snapshot-repository.test.ts openai-compatible-chat-completions-client.test.ts openai-compatible-evidence-planner.test.ts openai-compatible-grounded-answer-renderer.test.ts postgres-knowledge-conflict-repository.test.ts
+```
+
+Exit 0: 9 files passed and 1 conditional Postgres file skipped; 152 tests passed and 14 conditional
+tests skipped; 0 failed.
+
+Full Core:
+
+```powershell
+npm --workspace apps/core test
+```
+
+Exit 0: 174 files passed and 3 conditional files skipped; 3,049 tests passed and 244 conditional
+tests skipped; 0 failed.
+
+```powershell
+npm --workspace apps/core run typecheck
+npm --workspace apps/core run build
+git diff --check
+```
+
+All exited 0.
+
+### Fix-Round Self-Review
+
+- Confirmed there is no remaining subject slicing, truncation marker, prefix derivation, hash-based
+  label, category-based label, or ID-based label in the detector.
+- Confirmed the detector rejects greater-than-256 normalized content before invoking the injected
+  chat-completions client, including the old unpaired-surrogate boundary.
+- Confirmed the builder checks the same exported subject limit immediately after memory eligibility
+  and normalization, before every repository/provider dependency.
+- Confirmed exactly-256-character content remains accepted; accepted input retains its full exact
+  content and exact local output equality check.
+- Confirmed one invalid-response correction, invalid-twice behavior, transport propagation, strict
+  schema, citation-reference validation, approved-evidence-only prompting, content-free errors, and
+  no raw prompt/output logging or persistence remain unchanged.
+
+### Fix-Round Concerns
+
+None. The skipped cases are existing conditional database suites; this correction adds no database
+behavior and all new subject-boundary tests executed locally.
