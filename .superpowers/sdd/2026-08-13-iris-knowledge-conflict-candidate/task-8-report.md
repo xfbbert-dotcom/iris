@@ -161,3 +161,104 @@ whitespace errors.
 - No live Feishu callback/card delivery or Wiki publication flow was attempted. This task proves the
   authenticated parser/gateway/queue/worker contracts with automated tests only; live pilot acceptance
   remains a later explicit gate.
+
+---
+
+## Fix Round 1/5 — Callback Identity and Mutation Freshness
+
+Status: `DONE_WITH_CONCERNS`
+
+Implementation commit:
+
+- `9a6f2f706d6dc698c5598881a3c08a1ede8af390` — `fix(core): harden conflict callback governance`
+
+### Findings and decisions
+
+All three independent findings were confirmed.
+
+1. A locally `unknown` document permission could pass the conflict worker's live Feishu check but
+   fail the general draft repository's local-readable rule. The fix adds a conflict-only governance
+   attestation carried into the draft transaction. The repository verifies the exact draft source
+   set, attestation freshness, medium-risk/group scope, and selected publication policy identity and
+   version while preserving the original fail-closed rule for all general draft origins.
+2. Membership, live permission, and publication policy could change across awaited work. The worker
+   now propagates the permission check's actual timestamp, rechecks membership and live permission
+   immediately before draft creation and again after draft creation before candidate commit, reads
+   the exact selected policy/version before draft creation, and binds that policy to both the draft
+   transaction and final conflict-interaction transaction. The repository locks and validates the
+   current policy row before the `draft_created` transition.
+3. Redis jobs and replayable dead letters contained `actorOpenId`. Migration `0047` adds an
+   append-only PostgreSQL callback-identity fact. The authenticated gateway persists verified Feishu
+   actor/message context there and queues only an opaque `callbackIdentityId`; the approval worker
+   resolves and verifies the exact immutable job binding before delegation. Redis jobs and dead
+   letters now contain neither actor identity fields nor actor values.
+
+Migration `0047` is forward-only. No migration at or below `0045` was modified. Callback identities
+do not require the candidate to exist, allowing authenticated stale/unknown candidate callbacks to
+reach the worker's stable denial path rather than failing callback ingress.
+
+### RED evidence
+
+Initial review regressions:
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-interaction-worker.test.ts knowledge-conflict-current-validator.test.ts postgres-knowledge-draft-repository.test.ts postgres-knowledge-conflict-repository.test.ts knowledge-card.test.ts approval-interaction-worker.test.ts feishu-card-action-gateway.test.ts redis-approval-interaction-queue.test.ts postgres-knowledge-conflict-callback-identity-store.test.ts
+```
+
+Exit 1: 8 files failed and 1 passed; 14 tests failed, 208 passed, and 30 conditional tests skipped.
+The failures covered the missing opaque identity store/migration, actor-bearing queue shape, missing
+permission timestamp, absent conflict governance proof, stale membership/permission/policy races,
+and missing transaction-time target-policy rejection.
+
+An additional exact-evidence regression was then captured:
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-interaction-worker.test.ts
+```
+
+Exit 1: 1 failed and 29 passed. It proved contextual candidate document sources were incorrectly
+included in the attestation even though the generated draft contains only the exact target source.
+
+### GREEN and regression evidence
+
+Focused Task 8 command:
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-interaction-worker.test.ts knowledge-conflict-current-validator.test.ts postgres-knowledge-draft-repository.test.ts postgres-knowledge-conflict-repository.test.ts knowledge-card.test.ts approval-interaction-worker.test.ts feishu-card-action-gateway.test.ts redis-approval-interaction-queue.test.ts postgres-knowledge-conflict-callback-identity-store.test.ts
+```
+
+Exit 0: 9 files passed; 226 tests passed and 30 conditional tests skipped.
+
+Relevant dispatcher/migration/presentation/runtime regressions:
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-dispatcher.test.ts knowledge-conflict-callback-parser.test.ts migration-runner.test.ts knowledge-draft-presentation-service.test.ts knowledge-card-runtime.test.ts
+```
+
+Exit 0: 4 discovered files passed; 83 tests passed and 6 conditional tests skipped. The requested
+`knowledge-conflict-callback-parser.test.ts` filename does not exist; callback parser coverage remains
+in `feishu-card-action.test.ts` and the focused gateway/card suites.
+
+Full Core suite:
+
+```powershell
+npm --workspace apps/core test
+```
+
+Exit 0: 183 test files passed and 3 conditional files skipped; 3,269 tests passed and 250 skipped
+(3,519 total).
+
+The following also exited 0:
+
+```powershell
+npm --workspace apps/core run typecheck
+npm run build
+git diff --check
+```
+
+### Remaining concerns
+
+- `IRIS_TEST_DATABASE_URL` was absent, so the new real-PostgreSQL unknown-permission/live-attestation
+  integration case and other conditional PostgreSQL cases were skipped locally. Static migration,
+  repository-oracle, and transaction-routing tests passed, but this is not a live database claim.
+- No live Feishu callback, membership, card, or Wiki workflow was exercised or claimed.
