@@ -2111,11 +2111,13 @@ async function completeDelivery(
   const workerId = requireReference("workerId", input.workerId);
   const at = requireDate("at", input.at);
   return withTransaction(dataSource, async (client) => {
+    const candidateId = await loadDeliveryCandidateId(client, deliveryId);
+    const candidate = await lockCandidate(client, candidateId);
     const delivery = await lockDelivery(client, deliveryId);
+    if (delivery.candidate_id !== candidate.id) throw new KnowledgeConflictDeliveryConflictError();
     if (delivery.status !== "external_attempting" || delivery.lease_worker_id !== workerId) {
       throw new KnowledgeConflictDeliveryConflictError();
     }
-    const candidate = await lockCandidate(client, delivery.candidate_id);
     if (candidate.status !== "approved_for_delivery") throw new KnowledgeConflictDeliveryConflictError();
     const evidence = await loadEvidence(client, candidate.id);
     const candidateResult = await client.query<CandidateRow>(
@@ -2241,7 +2243,13 @@ async function reconcileDelivery(
       const current = await lockDelivery(client, deliveryId);
       return mapDelivery(current);
     }
+    const candidateId = await loadDeliveryCandidateId(client, deliveryId);
+    const candidate = await lockCandidate(client, candidateId);
     const delivery = await lockDelivery(client, deliveryId);
+    if (delivery.candidate_id !== candidate.id
+      || candidate.status !== "approved_for_delivery") {
+      throw new KnowledgeConflictDeliveryConflictError();
+    }
     if (requireAttemptCount("delivery attempt count", delivery.attempt_count)
       !== expectedAttemptCount
       || delivery.status !== "outcome_unknown") throw new KnowledgeConflictDeliveryConflictError();
@@ -2269,8 +2277,6 @@ async function reconcileDelivery(
       return mapDelivery(row);
     }
 
-    const candidate = await lockCandidate(client, delivery.candidate_id);
-    if (candidate.status !== "approved_for_delivery") throw new KnowledgeConflictDeliveryConflictError();
     const candidateResult = await client.query<CandidateRow>(
       `UPDATE knowledge_conflict_candidates
        SET status = 'delivered', version = version + 1, updated_at = $2
@@ -2304,6 +2310,19 @@ async function reconcileDelivery(
     if (row === undefined) throw new KnowledgeConflictDeliveryConflictError();
     return mapDelivery(row);
   });
+}
+
+async function loadDeliveryCandidateId(
+  queryable: PostgresKnowledgeConflictQueryable,
+  deliveryId: string,
+): Promise<string> {
+  const result = await queryable.query<{ candidate_id: string }>(
+    "SELECT candidate_id FROM knowledge_conflict_delivery_outbox WHERE id = $1",
+    [deliveryId],
+  );
+  const candidateId = result.rows[0]?.candidate_id;
+  if (candidateId === undefined) throw new KnowledgeConflictDeliveryConflictError();
+  return requireReference("delivery candidate id", candidateId);
 }
 
 async function lockDelivery(

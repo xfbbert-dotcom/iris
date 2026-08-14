@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { KnowledgeConflictCandidate } from "../src/knowledge-conflicts/knowledge-conflict.js";
+import { KnowledgeConflictVersionConflictError } from
+  "../src/knowledge-conflicts/knowledge-conflict-repository.js";
 import { createKnowledgeConflictCurrentValidator } from
   "../src/knowledge-conflicts/knowledge-conflict-current-validator.js";
 
@@ -115,6 +117,38 @@ describe("KnowledgeConflictCurrentValidator", () => {
   });
 
   it.each([
+    [true, "current"],
+    [false, "permission_blocked"],
+  ] as const)(
+    "uses live permission for a locally unknown exact source (allowed=%s)",
+    async (allowed, expectedStatus) => {
+      const validateCandidateCurrentState = vi.fn(async () => ({
+        status: "current" as const,
+        candidate: candidate(),
+      }));
+      let permissionCalls = 0;
+      const validator = createKnowledgeConflictCurrentValidator({
+        repository: { validateCandidateCurrentState },
+        documentSources: {
+          async findSourceById() { return source({ permissionState: "unknown" }); },
+        },
+        permissionChecker: {
+          async canReadSource() {
+            permissionCalls += 1;
+            return allowed;
+          },
+        },
+        now: () => validatedAt,
+      });
+
+      const result = await validator.validate({ candidate: candidate(), expectedVersion: 3 });
+      expect(result.status).toBe(expectedStatus);
+      expect(permissionCalls).toBe(1);
+      expect(validateCandidateCurrentState).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    },
+  );
+
+  it.each([
     ["source lookup", { findSourceById: async () => { throw new Error("database secret"); } },
       { canReadSource: async () => true }],
     ["permission transport", { findSourceById: async () => source() },
@@ -130,6 +164,22 @@ describe("KnowledgeConflictCurrentValidator", () => {
     const result = await validator.validate({ candidate: candidate(), expectedVersion: 3 });
     expect(result).toEqual({ status: "validation_unavailable", candidate: candidate() });
     expect(JSON.stringify(result)).not.toMatch(/database secret|tenant token/iu);
+  });
+
+  it("preserves a repository version conflict after live validation", async () => {
+    const validator = createKnowledgeConflictCurrentValidator({
+      repository: {
+        validateCandidateCurrentState: vi.fn(async () => {
+          throw new KnowledgeConflictVersionConflictError();
+        }),
+      },
+      documentSources: { async findSourceById() { return source(); } },
+      permissionChecker: { async canReadSource() { return true; } },
+      now: () => validatedAt,
+    });
+
+    await expect(validator.validate({ candidate: candidate(), expectedVersion: 3 }))
+      .rejects.toBeInstanceOf(KnowledgeConflictVersionConflictError);
   });
 });
 

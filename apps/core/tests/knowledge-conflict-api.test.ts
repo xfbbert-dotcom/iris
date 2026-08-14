@@ -305,6 +305,43 @@ describe("knowledge conflict operator API", () => {
     await app.close();
   });
 
+  it("maps a candidate version change during detail validation and approval to stable 409", async () => {
+    const harness = createHarness();
+    const validator = {
+      validate: vi.fn(async () => { throw new KnowledgeConflictVersionConflictError(); }),
+    };
+    const app = await createApp(harness.repository, validator);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a",
+      headers: authorization,
+    });
+    expect(detail.statusCode).toBe(409);
+    expect(detail.json()).toEqual({
+      ok: false,
+      error: "knowledge_conflict_version_conflict",
+    });
+
+    const approval = await app.inject({
+      method: "POST",
+      url: "/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a/approve-delivery",
+      headers: operatorHeaders,
+      payload: {
+        expectedVersion: 3,
+        reason: "Reviewed immediately before a concurrent update.",
+        operationKey: "governance:candidate-a:approve:race-v3",
+      },
+    });
+    expect(approval.statusCode).toBe(409);
+    expect(approval.json()).toEqual({
+      ok: false,
+      error: "knowledge_conflict_version_conflict",
+    });
+    expect(harness.repository.approveForDelivery).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("returns bounded current validation outcomes and fails approval closed unless current", async () => {
     const harness = createHarness();
     const validator = {

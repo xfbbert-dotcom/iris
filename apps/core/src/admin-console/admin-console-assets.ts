@@ -1134,6 +1134,7 @@ let wikiSpaceMutationsIdle = Promise.resolve();
 let resolveWikiSpaceMutationsIdle;
 let knowledgeConflictRefreshGeneration = 0;
 let knowledgeConflictDetailGeneration = 0;
+let knowledgeConflictSelection;
 const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
 const userSubmittedDocumentPath = "/internal/document-sync/user-submitted-documents";
 const wikiSpaceListPath = "/internal/document-sync/wiki-spaces?limit=20";
@@ -2110,6 +2111,14 @@ function evidenceIdentityLabel(evidence) {
 
 function renderKnowledgeConflictDetail(groupId, body, source) {
   const candidate = body.candidate;
+  const selection = {
+    groupId,
+    candidateId: candidate.candidateId,
+    subject: candidate.subject,
+    detailGeneration: knowledgeConflictDetailGeneration,
+    refreshGeneration: knowledgeConflictRefreshGeneration,
+  };
+  knowledgeConflictSelection = selection;
   knowledgeConflictDetail.replaceChildren();
   const heading = document.createElement("h3");
   heading.textContent = "Possible conflict review";
@@ -2157,13 +2166,13 @@ function renderKnowledgeConflictDetail(groupId, body, source) {
         "Mark sent",
         "secondary",
         true,
-        async () => reconcileKnowledgeConflictDelivery(body.delivery, "sent"),
+        async () => reconcileKnowledgeConflictDelivery(selection, body.delivery, "sent"),
       ),
       knowledgeConflictActionButton(
         "Mark not sent",
         "secondary",
         true,
-        async () => reconcileKnowledgeConflictDelivery(body.delivery, "not_sent"),
+        async () => reconcileKnowledgeConflictDelivery(selection, body.delivery, "not_sent"),
       ),
     );
   }
@@ -2195,7 +2204,8 @@ function knowledgeConflictActionButton(label, className, enabled, action) {
 }
 
 async function loadKnowledgeConflictDetail(groupId, candidateId) {
-  const generation = ++knowledgeConflictDetailGeneration;
+  invalidateKnowledgeConflictDetail();
+  const generation = knowledgeConflictDetailGeneration;
   const refreshGeneration = knowledgeConflictRefreshGeneration;
   const body = await requestJson(
     knowledgeConflictGroupBasePath + encodeURIComponent(groupId)
@@ -2215,6 +2225,12 @@ async function loadKnowledgeConflictDetail(groupId, candidateId) {
     generation, refreshGeneration, groupId, candidateId, body.candidate,
   )) return;
   renderKnowledgeConflictDetail(groupId, body, sourceResponse.source);
+}
+
+function invalidateKnowledgeConflictDetail() {
+  knowledgeConflictDetailGeneration += 1;
+  knowledgeConflictSelection = undefined;
+  knowledgeConflictDetail.replaceChildren();
 }
 
 function isCurrentKnowledgeConflictDetail(generation, refreshGeneration, groupId, candidateId, candidate) {
@@ -2266,15 +2282,30 @@ async function governKnowledgeConflict(groupId, candidate, action) {
   );
 }
 
-async function reconcileKnowledgeConflictDelivery(delivery, outcome) {
+function isCurrentKnowledgeConflictSelection(selection) {
+  return knowledgeConflictSelection === selection
+    && selection.detailGeneration === knowledgeConflictDetailGeneration
+    && selection.refreshGeneration === knowledgeConflictRefreshGeneration
+    && knowledgeConflictGroup.value.trim() === selection.groupId;
+}
+
+async function reconcileKnowledgeConflictDelivery(selection, delivery, outcome) {
+  if (!isCurrentKnowledgeConflictSelection(selection)) return false;
   requireKnowledgeConflictOperator();
-  if (!window.confirm("Confirm the external delivery outcome is " + (outcome === "sent" ? "sent" : "not sent") + "?")) return false;
+  const outcomeLabel = outcome === "sent" ? "sent" : "not sent";
+  if (!window.confirm(
+    "Confirm group " + selection.groupId + ", candidate " + selection.candidateId
+      + " (" + selection.subject + "), delivery " + delivery.deliveryId
+      + " attempt " + text(delivery.attemptCount, "0") + " was " + outcomeLabel + "?",
+  )) return false;
+  if (!isCurrentKnowledgeConflictSelection(selection)) return false;
   let messageId;
   if (outcome === "sent") {
     messageId = window.prompt("Confirmed Feishu message id:", "");
     if (messageId === null || messageId.trim().length === 0) throw new Error("message_id_required");
     messageId = messageId.trim();
   }
+  if (!isCurrentKnowledgeConflictSelection(selection)) return false;
   const attempt = text(delivery.attemptCount, "0");
   const intent = attempt + ":" + outcome + ":" + (messageId || "not_sent");
   return requestJson(
@@ -2355,7 +2386,7 @@ function renderKnowledgeConflictDeadLetters(deadLetters) {
 
 async function refreshKnowledgeConflicts() {
   const generation = ++knowledgeConflictRefreshGeneration;
-  knowledgeConflictDetailGeneration += 1;
+  invalidateKnowledgeConflictDetail();
   const groupId = knowledgeConflictGroup.value.trim();
   const statusRequest = requestJson(knowledgeConflictStatusPath);
   const candidateRequest = groupId.length === 0
@@ -2815,6 +2846,10 @@ knowledgeConflictRefresh.addEventListener("click", async () => {
   } finally {
     knowledgeConflictRefresh.disabled = false;
   }
+});
+
+knowledgeConflictGroup.addEventListener("input", () => {
+  invalidateKnowledgeConflictDetail();
 });
 
 auditSummaryRefresh.addEventListener("click", async () => {

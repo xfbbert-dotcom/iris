@@ -1202,8 +1202,8 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           id, candidate_id, group_id, status, attempt_count, next_attempt_at
         ) VALUES ('delivery-1', 'candidate-1', 'group-1', 'pending', 1, NOW());
         INSERT INTO knowledge_conflict_delivery_reconciliations (
-          operation_key, delivery_id, attempt_count, outcome, created_at
-        ) VALUES ('reconcile-1', 'delivery-1', 1, 'not_sent', NOW());
+          operation_key, delivery_id, attempt_count, outcome, actor_ref, created_at
+        ) VALUES ('reconcile-1', 'delivery-1', 1, 'not_sent', 'knowledge-admin', NOW());
         INSERT INTO knowledge_conflict_evidence (
           candidate_id, evidence_type, reference_id, group_id,
           conversation_message_id, created_at
@@ -1238,6 +1238,14 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
       await expect(client.query(
         "DELETE FROM knowledge_conflict_evidence WHERE candidate_id = 'candidate-1'",
       )).rejects.toThrow(/append-only/iu);
+      await expect(client.query(
+        "SELECT actor_ref FROM knowledge_conflict_delivery_reconciliations WHERE operation_key = 'reconcile-1'",
+      )).resolves.toMatchObject({ rows: [{ actor_ref: "knowledge-admin" }] });
+      await expect(client.query(`
+        INSERT INTO knowledge_conflict_delivery_reconciliations (
+          operation_key, delivery_id, attempt_count, outcome, created_at
+        ) VALUES ('reconcile-missing-actor', 'delivery-1', 1, 'not_sent', NOW())
+      `)).rejects.toMatchObject({ code: "23502", column: "actor_ref" });
       await expect(client.query(
         "UPDATE knowledge_conflict_delivery_reconciliations SET outcome = 'sent' WHERE operation_key = 'reconcile-1'",
       )).rejects.toThrow(/append-only/iu);

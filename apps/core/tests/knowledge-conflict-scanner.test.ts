@@ -249,6 +249,40 @@ describe("KnowledgeConflictScanner", () => {
     expect(repository.recordInputs[0]?.result.outcome).not.toBe("conflict");
   });
 
+  it.each([
+    [true, { conflict: 1, permissionBlocked: 0 }],
+    [false, { conflict: 0, permissionBlocked: 1 }],
+  ] as const)(
+    "requires the live permission result for a locally unknown source (allowed=%s)",
+    async (allowed, expected) => {
+      const repository = repositoryFake({ claims: [claim()] });
+      let permissionCalls = 0;
+      const scanner = scannerFixture({
+        documentSources: {
+          async findSourceById(id: string) {
+            return { ...source(id), permissionState: "unknown" };
+          },
+        },
+        permissionChecker: {
+          async canReadSource() {
+            permissionCalls += 1;
+            return allowed;
+          },
+        },
+        repository,
+      });
+
+      await expect(scanner.scanBatch({ limit: 1 })).resolves.toEqual({
+        ...emptyBatch(), claimed: 1, ...expected,
+      });
+      expect(permissionCalls).toBe(1);
+      expect(repository.records).toEqual([{
+        scanId: "scan-1",
+        outcome: allowed ? "conflict" : "permission_blocked",
+      }]);
+    },
+  );
+
   it("retries a post-model permission transport failure with a content-free code", async () => {
     const repository = repositoryFake({ claims: [claim()] });
     const scanner = scannerFixture({

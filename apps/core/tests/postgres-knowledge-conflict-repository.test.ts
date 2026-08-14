@@ -600,6 +600,9 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     })).resolves.toMatchObject({ status: "external_attempting" });
 
     const completeClient = routedClient((sql) => {
+      if (sql === "SELECT candidate_id FROM knowledge_conflict_delivery_outbox WHERE id = $1") {
+        return { rows: [{ candidate_id: "candidate-1" }] };
+      }
       if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
         return { rows: [deliveryRow({ status: "external_attempting", lease_worker_id: "worker-1",
           lease_until: leaseUntil, external_attempt_started_at: at })] };
@@ -661,12 +664,83 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     })).resolves.toMatchObject({ status: "failed", failureCode: "reconciled_not_sent" });
   });
 
+  it("locks the candidate before the delivery for completion and reconciliation", async () => {
+    const completeOrder: string[] = [];
+    const completeClient = routedClient((sql) => {
+      if (sql === "SELECT candidate_id FROM knowledge_conflict_delivery_outbox WHERE id = $1") {
+        completeOrder.push("identity");
+        return { rows: [{ candidate_id: "candidate-1" }] };
+      }
+      if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+        completeOrder.push("candidate");
+        return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
+      }
+      if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
+        completeOrder.push("delivery");
+        return { rows: [deliveryRow({ status: "external_attempting", attempt_count: 1,
+          lease_worker_id: "worker-1" })] };
+      }
+      if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
+      if (sql.includes("UPDATE knowledge_conflict_candidates")) {
+        return { rows: [candidateRow({ status: "delivered", version: 3 })] };
+      }
+      if (sql.includes("UPDATE knowledge_conflict_delivery_outbox")) {
+        return { rows: [deliveryRow({ status: "sent", attempt_count: 1,
+          sent_message_id: "om-1" })] };
+      }
+      return { rows: [] };
+    });
+    const completeRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(completeClient),
+    });
+    await completeRepository.completeDelivery({
+      deliveryId: "delivery-1", workerId: "worker-1", messageId: "om-1", at,
+    });
+    expect(completeOrder).toEqual(["identity", "candidate", "delivery"]);
+
+    const reconcileOrder: string[] = [];
+    const reconcileClient = routedClient((sql) => {
+      if (sql.includes("FROM knowledge_conflict_delivery_reconciliations")) return { rows: [] };
+      if (sql === "SELECT candidate_id FROM knowledge_conflict_delivery_outbox WHERE id = $1") {
+        reconcileOrder.push("identity");
+        return { rows: [{ candidate_id: "candidate-1" }] };
+      }
+      if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+        reconcileOrder.push("candidate");
+        return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
+      }
+      if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
+        reconcileOrder.push("delivery");
+        return { rows: [deliveryRow({ status: "outcome_unknown", attempt_count: 1 })] };
+      }
+      if (sql.includes("UPDATE knowledge_conflict_delivery_outbox")) {
+        return { rows: [deliveryRow({ status: "failed", attempt_count: 1,
+          failure_code: "reconciled_not_sent" })] };
+      }
+      return { rows: [] };
+    });
+    const reconcileRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(reconcileClient),
+    });
+    await reconcileRepository.reconcileDelivery({
+      deliveryId: "delivery-1", outcome: "not_sent", operationKey: "reconcile-order",
+      expectedAttemptCount: 1, actorRef: "knowledge-admin", at,
+    });
+    expect(reconcileOrder).toEqual(["identity", "candidate", "delivery"]);
+  });
+
   it("rejects reconciliation from a stale delivery attempt before mutating the current attempt", async () => {
     const delivery = deliveryRow({
       status: "outcome_unknown", attempt_count: 2, reconciliation_due_at: leaseUntil,
     });
     const client = routedClient((sql) => {
       if (sql.includes("FROM knowledge_conflict_delivery_reconciliations")) return { rows: [] };
+      if (sql === "SELECT candidate_id FROM knowledge_conflict_delivery_outbox WHERE id = $1") {
+        return { rows: [{ candidate_id: "candidate-1" }] };
+      }
+      if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+        return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
+      }
       if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
         return { rows: [delivery] };
       }
@@ -718,6 +792,9 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
         state.delivery = deliveryRow({ status: "processing", attempt_count: 2,
           lease_worker_id: "worker-2", lease_until: leaseUntil });
         return { rows: [deliveryCandidateRow(state.delivery)] };
+      }
+      if (sql === "SELECT candidate_id FROM knowledge_conflict_delivery_outbox WHERE id = $1") {
+        return { rows: [{ candidate_id: state.delivery.candidate_id }] };
       }
       if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
         return { rows: [state.delivery] };
@@ -1801,6 +1878,101 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     expect(result.current).toMatchObject({ status: "pending_review", version: 1 });
   });
 
+  it("serializes stale validation and reconciliation candidate-before-delivery", async () => {
+    const fixture = await insertDetectionFixture("validation-reconciliation-lock-order");
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+    await repository.recordDetectionResult(fixture.input);
+    const approval = await repository.approveForDelivery({
+      candidateId: fixture.candidateId,
+      expectedVersion: 1,
+      operationKey: `validation-reconciliation-approve-${suffix}`,
+      actorType: "admin_role",
+      actorRef: "knowledge-admin",
+      reasonCode: "reviewed",
+      at,
+    });
+    await pool!.query(
+      `UPDATE knowledge_conflict_delivery_outbox
+       SET status = 'outcome_unknown', attempt_count = 1, reconciliation_due_at = $2,
+           updated_at = $2
+       WHERE id = $1`,
+      [approval.delivery.id, leaseUntil],
+    );
+    const changedAt = new Date("2026-08-13T02:00:03.000Z");
+    await pool!.query("UPDATE document_sources SET updated_at = $2 WHERE id = $1", [sourceId, changedAt]);
+
+    const candidateLocked = deferred<void>();
+    const releaseCandidate = deferred<void>();
+    const validationRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: instrumentedDataSource(pool!, async (sql, execute) => {
+        const result = await execute();
+        if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+          candidateLocked.resolve();
+          await releaseCandidate.promise;
+        }
+        return result;
+      }),
+    });
+    const reconciliationPid = deferred<number>();
+    const reconciliationRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: instrumentedDataSource(
+        pool!,
+        async (_sql, execute) => execute(),
+        (pid) => reconciliationPid.resolve(pid),
+      ),
+    });
+    const validation = validationRepository.validateCandidateCurrentState({
+      candidateId: fixture.candidateId,
+      expectedVersion: 2,
+      permissionAttestedAt: changedAt,
+      operationKey: `validation-reconciliation-supersede-${suffix}`,
+      at: changedAt,
+    });
+    await candidateLocked.promise;
+    const reconciliation = reconciliationRepository.reconcileDelivery({
+      deliveryId: approval.delivery.id,
+      expectedAttemptCount: 1,
+      outcome: "not_sent",
+      operationKey: `validation-reconciliation-not-sent-${suffix}`,
+      actorRef: "knowledge-admin",
+      at: changedAt,
+    });
+    try {
+      await waitForPostgresLock(pool!, await reconciliationPid.promise);
+      const inspector = await pool!.connect();
+      try {
+        await inspector.query("BEGIN");
+        await expect(inspector.query(
+          "SELECT id FROM knowledge_conflict_delivery_outbox WHERE id = $1 FOR UPDATE NOWAIT",
+          [approval.delivery.id],
+        )).resolves.toMatchObject({ rows: [{ id: approval.delivery.id }] });
+      } finally {
+        await inspector.query("ROLLBACK");
+        inspector.release();
+      }
+      releaseCandidate.resolve();
+      const [validationResult, reconciliationResult] = await Promise.allSettled([
+        validation,
+        reconciliation,
+      ]);
+      expect(validationResult).toMatchObject({
+        status: "fulfilled",
+        value: { status: "superseded", reasonCode: "source_stale" },
+      });
+      expect(reconciliationResult.status).toBe("rejected");
+      if (reconciliationResult.status === "rejected") {
+        expect(reconciliationResult.reason).toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+        expect(String(reconciliationResult.reason)).not.toMatch(/40p01|deadlock/iu);
+      }
+    } catch (error) {
+      releaseCandidate.resolve();
+      await Promise.allSettled([validation, reconciliation]);
+      throw error;
+    } finally {
+      await pool!.query("UPDATE document_sources SET updated_at = $2 WHERE id = $1", [sourceId, at]);
+    }
+  });
+
   it("persists and governs an exact current conflict through one delivery and interaction", async () => {
     const memoryId = memoryIds[9]!;
     const messageId = messageIds[9]!;
@@ -2738,6 +2910,12 @@ function repositoryForDeliveryMutation(row: ReturnType<typeof deliveryRow>) {
   return createPostgresKnowledgeConflictRepository({
     dataSource: dataSource(routedClient((sql) => {
       if (sql.includes("UPDATE knowledge_conflict_delivery_outbox")) return { rows: [row] };
+      if (sql === "SELECT candidate_id FROM knowledge_conflict_delivery_outbox WHERE id = $1") {
+        return { rows: [{ candidate_id: "candidate-1" }] };
+      }
+      if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("FOR UPDATE")) {
+        return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
+      }
       if (sql.includes("FROM knowledge_conflict_delivery_outbox")) {
         return { rows: [deliveryRow({ status: "outcome_unknown", attempt_count: 1 })] };
       }

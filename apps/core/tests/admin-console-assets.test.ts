@@ -1138,11 +1138,14 @@ describe("admin console assets", () => {
 
     await console.trigger("knowledge-conflict-refresh", "click");
     await renderConflictDetail(console);
-    await console.allElements().find((element) => element.textContent === "Dismiss")!.trigger("click");
+    await console.allElements().filter((element) => element.textContent === "Dismiss").at(-1)!
+      .trigger("click");
     await renderConflictDetail(console);
-    await console.allElements().find((element) => element.textContent === "Approve one delivery")!.trigger("click");
+    await console.allElements().filter((element) => element.textContent === "Approve one delivery").at(-1)!
+      .trigger("click");
     await renderConflictDetail(console);
-    await console.allElements().find((element) => element.textContent === "Mark sent")!.trigger("click");
+    await console.allElements().filter((element) => element.textContent === "Mark sent").at(-1)!
+      .trigger("click");
 
     expect(mutations).toHaveLength(3);
     expect(mutations[0]!.path).toBe("/internal/knowledge-conflicts/groups/group-a/candidates/candidate-a/dismiss");
@@ -1173,6 +1176,14 @@ describe("admin console assets", () => {
       && message.includes("candidate-a")
       && message.includes("Expense approval threshold")
       && message.includes("version 3"),
+    )).toBe(true);
+    expect(confirmations.some((message) =>
+      message.includes("group-a")
+      && message.includes("candidate-a")
+      && message.includes("Expense approval threshold")
+      && message.includes("delivery-a")
+      && message.includes("attempt 1")
+      && message.includes("sent"),
     )).toBe(true);
   });
 
@@ -1417,6 +1428,57 @@ describe("admin console assets", () => {
     expect(visible).toContain("Group B source");
     expect(visible).not.toContain("Stale source");
     expect(visible).not.toContain("group-a");
+  });
+
+  it("clears detail and rejects a captured reconciliation action after the group changes", async () => {
+    const groupB = deferred<ResponseStub>();
+    const mutations: string[] = [];
+    const confirmations: string[] = [];
+    const fetch = vi.fn((path: string, options?: unknown) => {
+      const request = options as { method?: string } | undefined;
+      if (request?.method === "POST") {
+        mutations.push(path);
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      if (path === "/internal/knowledge-conflicts/status") {
+        return Promise.resolve(jsonResponse(knowledgeConflictStatus()));
+      }
+      if (path.includes("/scans/dead-letters?")) {
+        return Promise.resolve(jsonResponse({ ok: true, deadLetters: [] }));
+      }
+      if (path.includes("/groups/group-a/candidates?")) {
+        return Promise.resolve(jsonResponse({ ok: true, groupId: "group-a",
+          candidates: [knowledgeConflictCandidateSummary()] }));
+      }
+      if (path.includes("/groups/group-b/candidates?")) return groupB.promise;
+      if (path.endsWith("/groups/group-a/candidates/candidate-a")) {
+        return Promise.resolve(jsonResponse(knowledgeConflictCandidateDetail()));
+      }
+      if (path === "/internal/document-sync/sources/source-a?includeLatestSnapshot=true") {
+        return Promise.resolve(jsonResponse({ ok: true, source: undefined }));
+      }
+      throw new Error("unexpected_request:" + path);
+    });
+    const console = runAdminConsole(fetch, {
+      operator: "operator@example.com",
+      confirm: (message: string) => { confirmations.push(message); return true; },
+    });
+    console.element("knowledge-conflict-group").value = "group-a";
+    await console.trigger("knowledge-conflict-refresh", "click");
+    await renderConflictDetail(console);
+    const staleAction = console.allElements()
+      .find((element) => element.textContent === "Mark not sent")!;
+
+    console.element("knowledge-conflict-group").value = "group-b";
+    await console.trigger("knowledge-conflict-group", "input");
+    const newerRefresh = console.trigger("knowledge-conflict-refresh", "click");
+    const staleClick = staleAction.trigger("click");
+    groupB.resolve(jsonResponse({ ok: true, groupId: "group-b", candidates: [] }));
+    await Promise.all([newerRefresh, staleClick]);
+
+    expect(mutations).toEqual([]);
+    expect(confirmations).toEqual([]);
+    expect(console.element("knowledge-conflict-detail").children).toHaveLength(0);
   });
 });
 

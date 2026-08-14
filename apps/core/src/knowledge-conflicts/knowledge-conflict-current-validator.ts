@@ -4,6 +4,7 @@ import type { FeishuDocumentPermissionChecker } from
 import type { KnowledgeConflictCandidate } from "./knowledge-conflict.js";
 import {
   KnowledgeConflictStaleEvidenceError,
+  KnowledgeConflictVersionConflictError,
   type KnowledgeConflictRepository,
 } from "./knowledge-conflict-repository.js";
 import {
@@ -77,6 +78,7 @@ export function createKnowledgeConflictCurrentValidator(dependencies: {
               reason: safeReason(result.reasonCode),
             };
       } catch (error) {
+        if (error instanceof KnowledgeConflictVersionConflictError) throw error;
         if (error instanceof KnowledgeConflictStaleEvidenceError) {
           return { status: "superseded", candidate, reason: safeReason(error.reasonCode) };
         }

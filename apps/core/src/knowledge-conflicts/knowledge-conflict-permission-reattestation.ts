@@ -48,7 +48,7 @@ export async function reattestKnowledgeConflictSourcePermissions(input: {
     }
     if (source.sourceType !== "authorized_wiki_document"
       || source.syncState !== "synced"
-      || source.permissionState !== "readable"
+      || (source.permissionState !== "readable" && source.permissionState !== "unknown")
       || !source.canUseForKnowledgeDrafts
       || (input.isEligibleSource !== undefined && !input.isEligibleSource(source))) {
       return { status: "permission_blocked" };
