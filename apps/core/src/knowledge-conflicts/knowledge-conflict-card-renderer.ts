@@ -216,7 +216,7 @@ function safeSourceUri(value: string): string | undefined {
   if (!normalized.startsWith("https://")
     || !/^https:\/\/[^/?#]+(?:[/?#]|$)/u.test(normalized)
     || normalized.includes("\\")
-    || /[\u0000-\u001f\u007f-\u009f\p{White_Space}]/u.test(normalized)
+    || /[\u0000-\u001f\u007f-\u009f\s\p{White_Space}]/u.test(normalized)
     || /%(?![0-9a-f]{2})/iu.test(normalized)) return undefined;
   let decoded: string;
   try {
@@ -224,7 +224,7 @@ function safeSourceUri(value: string): string | undefined {
   } catch {
     return undefined;
   }
-  if (/[\u0000-\u001f\u007f-\u009f\p{White_Space}]/u.test(decoded)) return undefined;
+  if (/[\u0000-\u001f\u007f-\u009f\s\p{White_Space}]/u.test(decoded)) return undefined;
   try {
     const uri = new URL(normalized);
     if (uri.protocol !== "https:" || uri.username !== "" || uri.password !== "") return undefined;

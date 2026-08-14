@@ -180,10 +180,36 @@ describe("KnowledgeConflictCardRenderer", () => {
   });
 
   it.each([
+    ["C0 lower bound", "\u0000candidate-1"],
+    ["C0 upper bound", "candidate-1\u001f"],
+    ["DEL boundary", "candidate\u007f-1"],
+    ["C1 lower bound", "candidate\u0080-1"],
+    ["C1 upper bound", "candidate-1\u009f"],
+  ])("rejects the %s in callback identifiers", (_label, id) => {
+    expect(() => renderKnowledgeConflictCard({
+      candidate: candidate({ id }),
+      source: source(),
+      nonce: "nonce-1",
+    })).toThrow("knowledge conflict card binding");
+  });
+
+  it.each([
+    "https://example.feishu.cn/wiki/expense\u0000-policy",
+    "https://example.feishu.cn/wiki/expense\u001f-policy",
+    "https://example.feishu.cn/wiki/expense\u007f-policy",
+    "https://example.feishu.cn/wiki/expense\u0080-policy",
+    "https://example.feishu.cn/wiki/expense\u009f-policy",
     "https://example.feishu.cn/wiki/expense\u0085-policy",
     "https://example.feishu.cn/wiki/expense\n-policy",
+    "https://example.feishu.cn/wiki/expense%00-policy",
+    "https://example.feishu.cn/wiki/expense%1F-policy",
+    "https://example.feishu.cn/wiki/expense%7F-policy",
+    "https://example.feishu.cn/wiki/expense%C2%80-policy",
+    "https://example.feishu.cn/wiki/expense%C2%9F-policy",
     "https://example.feishu.cn/wiki/expense policy",
     "https://example.feishu.cn/wiki/expense%0A-policy",
+    "https://example.feishu.cn/wiki/expense\uFEFF-policy",
+    "https://example.feishu.cn/wiki/expense%EF%BB%BF-policy",
     "https://example.feishu.cn/wiki/expense%zz-policy",
     "https:example.feishu.cn/wiki/expense-policy",
     "https:/example.feishu.cn/wiki/expense-policy",
