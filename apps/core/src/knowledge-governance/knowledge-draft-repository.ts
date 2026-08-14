@@ -16,6 +16,9 @@ export const KNOWLEDGE_DRAFT_EVIDENCE_INVALID_REASONS = [
   "document_draft_use_disabled",
   "source_timestamp_changed",
   "group_scope_mismatch",
+  "memory_missing",
+  "memory_superseded",
+  "memory_timestamp_changed",
 ] as const;
 
 export type KnowledgeDraftEvidenceInvalidReason =

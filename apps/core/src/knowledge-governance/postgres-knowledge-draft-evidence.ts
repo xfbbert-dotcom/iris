@@ -15,6 +15,11 @@ type DocumentStateRow = {
   updated_at: Date;
   exact_group_evidence: boolean;
 };
+type GroupMemoryStateRow = {
+  group_id: string;
+  status: "active" | "superseded";
+  updated_at: Date;
+};
 
 export class KnowledgeDraftEvidenceError extends Error {
   constructor(public readonly reason: KnowledgeDraftEvidenceInvalidReason) {
@@ -82,6 +87,22 @@ async function findInvalidReference(
       return "group_scope_mismatch";
     }
     if (Number(row.version) !== evidence.entityVersion) return "entity_version_changed";
+    return undefined;
+  }
+
+  if (evidence.type === "group_memory") {
+    const result = await queryable.query<GroupMemoryStateRow>(
+      "SELECT group_id, status, updated_at FROM group_memories WHERE id = $1",
+      [evidence.id],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return "memory_missing";
+    if (sourceGroupId === undefined || evidence.groupId !== sourceGroupId
+      || row.group_id !== sourceGroupId) return "group_scope_mismatch";
+    if (row.status !== "active") return "memory_superseded";
+    if (new Date(row.updated_at).getTime() !== evidence.expectedUpdatedAt.getTime()) {
+      return "memory_timestamp_changed";
+    }
     return undefined;
   }
 

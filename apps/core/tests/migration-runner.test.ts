@@ -17,6 +17,15 @@ const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
 const runIfDatabase = databaseUrl ? describe : describe.skip;
 
 describe("runMigrations", () => {
+  it("reserves exactly one ordered 0046 knowledge-conflict migration", async () => {
+    const migrationNames = await readdir(defaultMigrationsDir());
+    expect(migrationNames.filter((name) => name.startsWith("0046_"))).toEqual([
+      "0046_knowledge_conflict_candidates.sql",
+    ]);
+    expect(migrationNames.indexOf("0046_knowledge_conflict_candidates.sql"))
+      .toBeGreaterThan(migrationNames.indexOf("0045_answer_source_citations.sql"));
+  });
+
   it("defines bounded append-only answer source citation receipts", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0045_answer_source_citations.sql"),
@@ -918,6 +927,234 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           'system', 'conversation-state-projector', repeat('a', 64)
         )
       `)).resolves.toMatchObject({ rows: [] });
+    } finally {
+      await client.query("RESET search_path").catch(() => undefined);
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      client.release();
+      await pool.end();
+    }
+  });
+
+  it("applies 0046 with enforceable knowledge-conflict facts and append-only receipts", async () => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    const schema = `knowledge_conflict_0046_${randomUUID().replaceAll("-", "")}`;
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await runMigrations({ client, migrationsDir: defaultMigrationsDir() });
+
+      await expect(client.query<{ table_name: string }>(`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = current_schema()
+          AND table_name = ANY($1::text[])
+        ORDER BY table_name
+      `, [[
+        "answer_reply_knowledge_conflicts",
+        "knowledge_conflict_candidate_events",
+        "knowledge_conflict_candidates",
+        "knowledge_conflict_delivery_outbox",
+        "knowledge_conflict_evidence",
+        "knowledge_conflict_interactions",
+        "knowledge_conflict_scan_inbox",
+      ]])).resolves.toMatchObject({ rows: [
+        { table_name: "answer_reply_knowledge_conflicts" },
+        { table_name: "knowledge_conflict_candidate_events" },
+        { table_name: "knowledge_conflict_candidates" },
+        { table_name: "knowledge_conflict_delivery_outbox" },
+        { table_name: "knowledge_conflict_evidence" },
+        { table_name: "knowledge_conflict_interactions" },
+        { table_name: "knowledge_conflict_scan_inbox" },
+      ] });
+
+      const catalog = await client.query<{
+        constraints: string[];
+        indexes: string[];
+        triggers: string[];
+        foreign_keys: number;
+      }>(`
+        SELECT
+          ARRAY(
+            SELECT constraint_row.conname
+            FROM pg_constraint constraint_row
+            JOIN pg_class table_row ON table_row.oid = constraint_row.conrelid
+            JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+            WHERE namespace_row.nspname = current_schema()
+              AND table_row.relname LIKE 'knowledge_conflict%'
+            ORDER BY constraint_row.conname
+          ) AS constraints,
+          ARRAY(
+            SELECT index_row.relname
+            FROM pg_class index_row
+            JOIN pg_namespace namespace_row ON namespace_row.oid = index_row.relnamespace
+            WHERE namespace_row.nspname = current_schema()
+              AND index_row.relkind = 'i'
+              AND index_row.relname LIKE 'knowledge_conflict%'
+            ORDER BY index_row.relname
+          ) AS indexes,
+          ARRAY(
+            SELECT trigger_row.tgname
+            FROM pg_trigger trigger_row
+            JOIN pg_class table_row ON table_row.oid = trigger_row.tgrelid
+            JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+            WHERE namespace_row.nspname = current_schema()
+              AND NOT trigger_row.tgisinternal
+              AND (table_row.relname LIKE 'knowledge_conflict%'
+                OR table_row.relname = 'answer_reply_knowledge_conflicts')
+            ORDER BY trigger_row.tgname
+          ) AS triggers,
+          (
+            SELECT COUNT(*)::int
+            FROM pg_constraint constraint_row
+            JOIN pg_class table_row ON table_row.oid = constraint_row.conrelid
+            JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+            WHERE namespace_row.nspname = current_schema()
+              AND constraint_row.contype = 'f'
+              AND (table_row.relname LIKE 'knowledge_conflict%'
+                OR table_row.relname = 'answer_reply_knowledge_conflicts')
+          ) AS foreign_keys
+      `);
+      expect(catalog.rows[0]).toMatchObject({
+        constraints: expect.arrayContaining([
+          "knowledge_conflict_candidates_status_check",
+          "knowledge_conflict_delivery_outbox_status_check",
+          "knowledge_conflict_evidence_evidence_type_check",
+          "knowledge_conflict_scan_inbox_status_check",
+        ]),
+        indexes: expect.arrayContaining([
+          "knowledge_conflict_one_delivery_idx",
+          "knowledge_conflict_one_live_evidence_idx",
+          "knowledge_conflict_evidence_reference_key",
+          "knowledge_conflict_scan_memory_version_key",
+        ]),
+        triggers: expect.arrayContaining([
+          "answer_reply_knowledge_conflicts_append_only",
+          "answer_reply_knowledge_conflicts_truncate_guard",
+          "knowledge_conflict_candidate_events_append_only",
+          "knowledge_conflict_evidence_append_only",
+          "knowledge_conflict_interactions_append_only",
+        ]),
+      });
+      expect(catalog.rows[0]?.foreign_keys).toBeGreaterThanOrEqual(10);
+
+      const definitions = await client.query<{ conname: string; definition: string }>(`
+        SELECT constraint_row.conname, pg_get_constraintdef(constraint_row.oid) AS definition
+        FROM pg_constraint constraint_row
+        JOIN pg_class table_row ON table_row.oid = constraint_row.conrelid
+        WHERE table_row.oid IN (
+          'knowledge_conflict_scan_inbox'::regclass,
+          'knowledge_conflict_candidates'::regclass,
+          'knowledge_conflict_delivery_outbox'::regclass,
+          'knowledge_draft_revision_evidence'::regclass
+        ) AND constraint_row.contype = 'c'
+        ORDER BY constraint_row.conname
+      `);
+      expect(definitions.rows).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          conname: "knowledge_conflict_scan_inbox_status_check",
+          definition: expect.stringContaining("dead_lettered"),
+        }),
+        expect.objectContaining({
+          conname: "knowledge_conflict_candidates_status_check",
+          definition: expect.stringContaining("approved_for_delivery"),
+        }),
+        expect.objectContaining({
+          conname: "knowledge_conflict_delivery_outbox_status_check",
+          definition: expect.stringContaining("external_attempting"),
+        }),
+        expect.objectContaining({
+          conname: "knowledge_draft_revision_evidence_shape_check",
+          definition: expect.stringContaining("group_memory"),
+        }),
+      ]));
+
+      await client.query(`
+        INSERT INTO conversation_messages (
+          id, provider, provider_message_id, chat_id, message_type,
+          sent_at, raw_event_idempotency_key, created_at
+        ) VALUES (
+          'message-1', 'feishu', 'provider-message-1', 'group-1', 'text',
+          NOW(), 'raw-event-1', NOW()
+        );
+        INSERT INTO group_memories (
+          id, group_id, memory_scope, category, content, importance, confidence,
+          status, idempotency_key, origin, created_by, request_fingerprint
+        ) VALUES (
+          'memory-1', 'group-1', 'group', 'decision', 'CNY 10,000', 5, 0.95,
+          'active', 'memory-key-1', 'system', 'iris', repeat('b', 64)
+        );
+        INSERT INTO document_sources (
+          id, source_type, source_uri, permission_state, sync_state,
+          can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
+        ) VALUES (
+          'document-1', 'authorized_wiki_document', 'https://example.com/document-1',
+          'readable', 'synced', TRUE, TRUE, NOW(), NOW()
+        );
+        INSERT INTO document_snapshots (
+          id, document_source_id, source_uri, fetch_status, body_text,
+          content_hash, fetched_at, created_at
+        ) VALUES (
+          'snapshot-1', 'document-1', 'https://example.com/document-1', 'succeeded',
+          'CNY 5,000', repeat('a', 64), NOW(), NOW()
+        );
+        INSERT INTO knowledge_drafts (
+          id, source_group_id, origin_kind, status, current_revision_number,
+          version, created_by, created_at, updated_at
+        ) VALUES (
+          'draft-1', 'group-1', 'knowledge_conflict', 'pending_confirmation',
+          1, 1, 'iris', NOW(), NOW()
+        );
+        INSERT INTO knowledge_draft_revisions (
+          draft_id, revision_number, title, content, risk_level, author, created_at
+        ) VALUES (
+          'draft-1', 1, 'Expense threshold', 'Review the conflict', 'medium', 'iris', NOW()
+        );
+        INSERT INTO knowledge_draft_revision_evidence (
+          draft_id, revision_number, evidence_type, reference_id,
+          source_group_id, source_updated_at, created_at
+        ) VALUES (
+          'draft-1', 1, 'group_memory', 'memory-1', 'group-1', NOW(), NOW()
+        );
+        INSERT INTO knowledge_conflict_scan_inbox (
+          id, group_id, group_memory_id, memory_updated_at, status
+        ) VALUES ('scan-1', 'group-1', 'memory-1', NOW(), 'pending');
+        INSERT INTO knowledge_conflict_candidates (
+          id, idempotency_key, group_id, group_memory_id, memory_updated_at,
+          source_message_id, target_document_source_id, target_snapshot_id,
+          target_content_hash, detector_contract_version, status, subject,
+          knowledge_base_statement, group_conclusion_statement, difference,
+          suggested_update, target_document_ref, confidence
+        ) VALUES (
+          'candidate-1', 'candidate-key-1', 'group-1', 'memory-1', NOW(),
+          'message-1', 'document-1', 'snapshot-1', repeat('a', 64), 'v1',
+          'pending_review', 'Expense threshold', 'CNY 5,000', 'CNY 10,000',
+          'Threshold differs', 'Use CNY 10,000', 'D1', 'high'
+        );
+        INSERT INTO knowledge_conflict_evidence (
+          candidate_id, evidence_type, reference_id, group_id,
+          conversation_message_id, created_at
+        ) VALUES (
+          'candidate-1', 'conversation_message', 'M1', 'group-1', 'message-1', NOW()
+        );
+      `);
+      await expect(client.query(
+        "UPDATE knowledge_conflict_evidence SET reference_id = 'M2' WHERE candidate_id = 'candidate-1'",
+      )).rejects.toThrow(/append-only/iu);
+      await expect(client.query(
+        "DELETE FROM knowledge_conflict_evidence WHERE candidate_id = 'candidate-1'",
+      )).rejects.toThrow(/append-only/iu);
+      await expect(client.query(`
+        INSERT INTO knowledge_draft_revision_evidence (
+          draft_id, revision_number, evidence_type, reference_id,
+          source_group_id, source_updated_at, created_at
+        ) VALUES (
+          'draft-1', 1, 'group_memory', 'missing-memory-time',
+          'group-1', NULL, NOW()
+        )
+      `)).rejects.toMatchObject({
+        constraint: "knowledge_draft_revision_evidence_shape_check",
+      });
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

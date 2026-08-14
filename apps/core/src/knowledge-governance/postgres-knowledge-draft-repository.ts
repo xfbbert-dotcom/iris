@@ -71,7 +71,7 @@ type DraftHeaderRow = Pick<
 >;
 
 type EvidenceRow = {
-  evidence_type: "conversation_message" | "discussion_thread" | "action_item" | "document_source";
+  evidence_type: "conversation_message" | "discussion_thread" | "action_item" | "group_memory" | "document_source";
   reference_id: string;
   source_group_id: string | null;
   entity_version: string | number | null;
@@ -595,6 +595,14 @@ async function loadEvidence(
         id: row.reference_id,
         groupId: requireDatabaseValue(row.source_group_id),
         entityVersion: Number(requireDatabaseValue(row.entity_version)),
+      };
+    }
+    if (row.evidence_type === "group_memory") {
+      return {
+        type: "group_memory",
+        id: row.reference_id,
+        groupId: requireDatabaseValue(row.source_group_id),
+        expectedUpdatedAt: requireDate(requireDatabaseValue(row.source_updated_at)),
       };
     }
     return {

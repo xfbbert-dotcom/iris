@@ -26,6 +26,7 @@ const messageId = `feishu:om-draft-${suffix}`;
 const otherMessageId = `feishu:om-draft-other-${suffix}`;
 const threadId = `draft-thread-${suffix}`;
 const actionId = `draft-action-${suffix}`;
+const memoryId = `draft-memory-${suffix}`;
 const documentSourceId = `draft-document-${suffix}`;
 const companyDocumentSourceId = `draft-wiki-${suffix}`;
 const documentUpdatedAt = new Date("2026-07-18T04:00:00.000Z");
@@ -109,6 +110,17 @@ runIfDatabase("PostgresKnowledgeDraftRepository with Postgres", () => {
     );
     await pool.query(
       `
+      INSERT INTO group_memories (
+        id, group_id, memory_scope, category, content, importance, confidence,
+        status, idempotency_key, origin, created_by, created_at, updated_at,
+        request_fingerprint
+      ) VALUES ($1, $2, 'group', 'decision', 'Director approval starts at CNY 10,000.',
+        5, 0.95, 'active', $3, 'system', 'iris', $4, $4, $5)
+      `,
+      [memoryId, groupId, `draft-memory-key-${suffix}`, documentUpdatedAt, "b".repeat(64)],
+    );
+    await pool.query(
+      `
       INSERT INTO document_sources (
         id, source_type, source_uri, title, origin_group_id, origin_message_id,
         permission_state, sync_state, can_use_for_answering,
@@ -176,11 +188,71 @@ runIfDatabase("PostgresKnowledgeDraftRepository with Postgres", () => {
       expect.objectContaining({ type: "conversation_message", id: messageId }),
       expect.objectContaining({ type: "discussion_thread", id: threadId, entityVersion: 3 }),
       expect.objectContaining({ type: "action_item", id: actionId, entityVersion: 2 }),
+      expect.objectContaining({
+        type: "group_memory",
+        id: memoryId,
+        groupId,
+        expectedUpdatedAt: documentUpdatedAt,
+      }),
       expect.objectContaining({ type: "document_source", id: documentSourceId }),
     ]));
     await expect(repository.listEvents(id("draft-main"))).resolves.toEqual([
       expect.objectContaining({ eventType: "created", toVersion: 1, operationKey: id("create-main") }),
     ]);
+  });
+
+  it.each([
+    ["missing", "memory_missing"],
+    ["superseded", "memory_superseded"],
+    ["timestamp", "memory_timestamp_changed"],
+  ] as const)("redacts content when group memory evidence becomes %s", async (change, reason) => {
+    const repository = createPostgresKnowledgeDraftRepository({ dataSource: pool });
+    const isolatedMemoryId = `${memoryId}-${change}`;
+    await pool.query(
+      `INSERT INTO group_memories (
+        id, group_id, memory_scope, category, content, importance, confidence,
+        status, idempotency_key, origin, created_by, created_at, updated_at,
+        request_fingerprint
+      ) VALUES ($1, $2, 'group', 'decision', 'Current memory', 4, 0.9, 'active',
+        $3, 'system', 'iris', $4, $4, $5)`,
+      [isolatedMemoryId, groupId, `memory-${change}-${suffix}`, documentUpdatedAt, "c".repeat(64)],
+    );
+    await repository.createDraft({
+      id: id(`draft-memory-${change}`),
+      operationKey: id(`create-memory-${change}`),
+      originKind: "knowledge_conflict",
+      createdBy: "iris",
+      at,
+      revision: {
+        sourceGroupId: groupId,
+        title: "Knowledge conflict",
+        content: "Review the conflict.",
+        riskLevel: "medium",
+        evidence: [{
+          type: "group_memory",
+          id: isolatedMemoryId,
+          groupId,
+          expectedUpdatedAt: documentUpdatedAt,
+        }],
+      },
+    });
+
+    if (change === "missing") {
+      await pool.query("DELETE FROM group_memories WHERE id = $1", [isolatedMemoryId]);
+    } else if (change === "superseded") {
+      await pool.query("UPDATE group_memories SET status = 'superseded' WHERE id = $1", [isolatedMemoryId]);
+    } else {
+      await pool.query("UPDATE group_memories SET updated_at = $2 WHERE id = $1", [
+        isolatedMemoryId,
+        new Date(documentUpdatedAt.getTime() + 1_000),
+      ]);
+    }
+
+    const draft = await repository.getDraft(id(`draft-memory-${change}`));
+    expect(draft?.currentRevision).toMatchObject({
+      evidenceState: { status: "invalidated", reason },
+    });
+    expect(draft?.currentRevision).not.toHaveProperty("content");
   });
 
   it("returns the existing result for an identical operation replay", async () => {
@@ -428,6 +500,12 @@ function groupRevision() {
       { type: "conversation_message" as const, id: messageId, groupId },
       { type: "discussion_thread" as const, id: threadId, groupId, entityVersion: 3 },
       { type: "action_item" as const, id: actionId, groupId, entityVersion: 2 },
+      {
+        type: "group_memory" as const,
+        id: memoryId,
+        groupId,
+        expectedUpdatedAt: documentUpdatedAt,
+      },
       { type: "document_source" as const, id: documentSourceId, expectedUpdatedAt: documentUpdatedAt },
     ],
   };

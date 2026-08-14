@@ -76,6 +76,7 @@ export type PrepareAnswerReplyInput = {
   renderedText: string;
   sourceTraces: readonly AnswerReplySourceTraceInput[];
   blockedDocumentSourceIds?: readonly string[];
+  knowledgeConflictCandidateId?: string;
   at: Date;
 };
 
