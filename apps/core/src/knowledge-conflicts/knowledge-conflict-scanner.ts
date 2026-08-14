@@ -8,6 +8,7 @@ import type {
   KnowledgeConflictEvidenceBuilder,
 } from "./knowledge-conflict-evidence-builder.js";
 import {
+  KnowledgeConflictOperationConflictError,
   KnowledgeConflictStaleEvidenceError,
   type KnowledgeConflictRepository,
   type KnowledgeConflictScanClaim,
@@ -109,6 +110,7 @@ export function createKnowledgeConflictScanner(
       for (let index = 0; index < safeLimit; index += 1) {
         const claimAt = requireDate("scanner time", now());
         const claimed = await dependencies.repository.claimNextScan({
+          groupIds: enabledGroups,
           workerId,
           at: claimAt,
           leaseUntil: addMilliseconds(claimAt, leaseDurationMs),
@@ -149,7 +151,12 @@ async function processClaim(input: {
       return;
     }
 
-    const evidence = await dependencies.evidenceBuilder.build({ memory: claim.memory });
+    let evidence: KnowledgeConflictEvidenceBuildResult;
+    try {
+      evidence = await dependencies.evidenceBuilder.build({ memory: claim.memory });
+    } catch {
+      throw new ScannerInternalError();
+    }
     if (evidence.outcome === "retryable_failure") {
       await recordFailure(input, "retryable", normalizeEvidenceFailureCode(evidence.reasonCode));
       return;
@@ -214,12 +221,18 @@ async function recordResult(
     input.claim.scan.groupId,
   );
   const safeResult = gateOpen ? result : { outcome: "permission_blocked" as const };
-  await input.dependencies.repository.recordDetectionResult({
-    scanId: input.claim.scan.id,
-    workerId: input.workerId,
-    result: safeResult,
-    at: requireDate("scanner time", input.now()),
-  });
+  try {
+    await input.dependencies.repository.recordDetectionResult({
+      scanId: input.claim.scan.id,
+      workerId: input.workerId,
+      result: safeResult,
+      at: requireDate("scanner time", input.now()),
+    });
+  } catch (error) {
+    if (error instanceof KnowledgeConflictStaleEvidenceError
+      || error instanceof KnowledgeConflictOperationConflictError) throw error;
+    throw new ScannerInternalError();
+  }
   if (!gateOpen && result.outcome !== "permission_blocked") {
     input.result.permissionBlocked += 1;
     throw new OutcomeAlreadyCountedError();
@@ -266,6 +279,12 @@ function classifyFailure(error: unknown): {
   }
   if (error instanceof MalformedPersistedFactsError) {
     return { classification: "permanent", errorCode: "malformed_persisted_facts" };
+  }
+  if (error instanceof KnowledgeConflictOperationConflictError) {
+    return { classification: "permanent", errorCode: "operation_conflict" };
+  }
+  if (error instanceof ScannerInternalError) {
+    return { classification: "retryable", errorCode: "internal_error" };
   }
   if (isModelProviderCapacityError(error)) {
     return { classification: "retryable", errorCode: "provider_capacity" };
@@ -405,6 +424,7 @@ function validateFingerprint(
 
 class ImpossibleEvidenceIdentityError extends Error {}
 class MalformedPersistedFactsError extends Error {}
+class ScannerInternalError extends Error {}
 
 function normalizeEvidenceFailureCode(value: string): string {
   return RETRYABLE_EVIDENCE_CODES.has(value) ? value : "evidence_builder_failed";

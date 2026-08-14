@@ -182,6 +182,7 @@ export interface KnowledgeConflictRepository {
     at: Date;
   }): Promise<{ discovered: number; existing: number }>;
   claimNextScan(input: {
+    groupIds: readonly string[];
     workerId: string;
     at: Date;
     leaseUntil: Date;

@@ -6,6 +6,7 @@ import type {
   CurrentConflictFingerprint,
 } from "../src/knowledge-conflicts/knowledge-conflict-evidence-builder.js";
 import {
+  KnowledgeConflictOperationConflictError,
   KnowledgeConflictStaleEvidenceError,
   type KnowledgeConflictRepository,
   type KnowledgeConflictScanClaim,
@@ -36,6 +37,19 @@ describe("KnowledgeConflictScanner", () => {
     const noGroup = scannerFixture({ repository: noGroupRepository, groupIds: [] });
     await expect(noGroup.scanBatch({ limit: 10 })).resolves.toEqual(emptyBatch());
     expect(noGroupRepository.trace).toEqual([]);
+  });
+
+  it("restricts claims to groups whose live application gate passed discovery", async () => {
+    const repository = repositoryFake();
+    const scanner = scannerFixture({
+      repository,
+      groupIds: ["group-disabled", "group-1"],
+      canUseKnowledgeConflict: (groupId) => groupId === "group-1",
+    });
+
+    await scanner.scanBatch({ limit: 1 });
+
+    expect(repository.claimGroupIds).toEqual([["group-1"]]);
   });
 
   it("discovers before bounded claims and lets one subject failure yield to the next", async () => {
@@ -208,6 +222,38 @@ describe("KnowledgeConflictScanner", () => {
     expect(JSON.stringify(result)).not.toContain(error.message);
   });
 
+  it("permanently rejects a divergent idempotency replay", async () => {
+    const repository = repositoryFake({
+      claims: [claim()],
+      recordError: new KnowledgeConflictOperationConflictError(),
+      failStatuses: ["dead_lettered"],
+    });
+    const scanner = scannerFixture({ repository });
+
+    await expect(scanner.scanBatch({ limit: 1 })).resolves.toMatchObject({
+      claimed: 1, retrying: 0, deadLettered: 1,
+    });
+    expect(repository.trace).toContain(
+      "fail:scan-1:permanent:operation_conflict:none",
+    );
+  });
+
+  it("does not mislabel a non-provider TypeError as provider transport", async () => {
+    const repository = repositoryFake({ claims: [claim()] });
+    const scanner = scannerFixture({
+      repository,
+      evidenceBuilder: {
+        async build() { throw new TypeError("local evidence adapter defect"); },
+      },
+    });
+
+    await scanner.scanBatch({ limit: 1 });
+
+    expect(repository.trace).toContain(
+      "fail:scan-1:retryable:internal_error:2026-08-13T02:00:30.000Z",
+    );
+  });
+
   it("uses attempt-count-only capped exponential backoff and reports exhaustion", async () => {
     const repository = repositoryFake({
       claims: [claim({ scanId: "scan-1", attemptCount: 1 }),
@@ -317,6 +363,7 @@ type RepositoryFake = Pick<KnowledgeConflictRepository,
     records: Array<{ scanId: string; outcome: string }>;
     recordInputs: RecordKnowledgeConflictDetectionInput[];
     retryTimes: Array<Date | undefined>;
+    claimGroupIds: string[][];
   };
 
 function repositoryFake(options: {
@@ -331,16 +378,19 @@ function repositoryFake(options: {
   const records: RepositoryFake["records"] = [];
   const recordInputs: RecordKnowledgeConflictDetectionInput[] = [];
   const retryTimes: Array<Date | undefined> = [];
+  const claimGroupIds: string[][] = [];
   return {
     trace,
     records,
     recordInputs,
     retryTimes,
+    claimGroupIds,
     async discoverEligibleScans({ limit }) {
       trace.push(`discover:${limit}`);
       return { discovered: options.discovered ?? 0, existing: 0 };
     },
-    async claimNextScan() {
+    async claimNextScan(input) {
+      claimGroupIds.push([...(input as typeof input & { groupIds?: string[] }).groupIds ?? []]);
       const next = claims.shift();
       if (next !== undefined) trace.push(`claim:${next.scan.id}`);
       return next;

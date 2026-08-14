@@ -88,6 +88,7 @@ describe("PostgresKnowledgeConflictRepository scan lifecycle", () => {
   });
 
   it("claims a due scan with its exact active memory evidence and recovers an expired lease", async () => {
+    const queryValues: unknown[][] = [];
     const client = routedClient((sql) => {
       if (sql.includes("WITH claimable")) {
         return { rows: [claimRow({ status: "processing", attempt_count: 2 })] };
@@ -97,6 +98,7 @@ describe("PostgresKnowledgeConflictRepository scan lifecycle", () => {
     const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
 
     await expect(repository.claimNextScan({
+      groupIds: ["group-1"],
       workerId: "conflict-scanner-1",
       at,
       leaseUntil,
@@ -113,6 +115,9 @@ describe("PostgresKnowledgeConflictRepository scan lifecycle", () => {
         evidenceMessageIds: ["message-1"],
       },
     });
+    for (const call of client.query.mock.calls) queryValues.push(call[1] ?? []);
+    expect(queryValues.filter((values) => values.includes("conflict-scanner-1")))
+      .toEqual([[at, "conflict-scanner-1", leaseUntil, ["group-1"]]]);
   });
 
   it("retries only for the lease owner and dead-letters permanent or exhausted failures", async () => {
@@ -1199,7 +1204,9 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     await locker.query("BEGIN");
     try {
       await locker.query("SELECT id FROM knowledge_conflict_scan_inbox WHERE id = $1 FOR UPDATE", [lockedId]);
-      const skipped = await repository.claimNextScan({ workerId: "worker-2", at, leaseUntil });
+      const skipped = await repository.claimNextScan({
+        groupIds: [groupId], workerId: "worker-2", at, leaseUntil,
+      });
       expect(skipped?.scan.id).not.toBe(lockedId);
     } finally {
       await locker.query("ROLLBACK");
@@ -1207,6 +1214,7 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     }
 
     const recovered = await repository.claimNextScan({
+      groupIds: [groupId],
       workerId: "worker-3",
       at: new Date("2026-08-13T02:00:31.000Z"),
       leaseUntil: new Date("2026-08-13T02:01:01.000Z"),
@@ -1243,6 +1251,7 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
 
     await repository.claimNextScan({
+      groupIds: [groupId],
       workerId: "other-worker", at: new Date("2026-08-13T02:00:10.000Z"),
       leaseUntil: new Date("2026-08-13T02:00:20.000Z"),
     });
@@ -1252,6 +1261,7 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     )).resolves.toMatchObject({ rows: [{ status: "processing", lease_worker_id: "active-owner" }] });
 
     await repository.claimNextScan({
+      groupIds: [groupId],
       workerId: "other-worker", at: new Date("2026-08-13T02:00:31.000Z"),
       leaseUntil: new Date("2026-08-13T02:01:01.000Z"),
     });

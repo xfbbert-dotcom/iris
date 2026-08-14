@@ -408,8 +408,10 @@ async function discoverEligibleScans(
 
 async function claimNextScan(
   dataSource: PostgresKnowledgeConflictDataSource,
-  input: { workerId: string; at: Date; leaseUntil: Date },
+  input: { groupIds: readonly string[]; workerId: string; at: Date; leaseUntil: Date },
 ): Promise<KnowledgeConflictScanClaim | undefined> {
+  const groupIds = normalizeGroupIds(input.groupIds);
+  if (groupIds.length === 0) return undefined;
   const workerId = requireReference("workerId", input.workerId);
   const at = requireDate("at", input.at);
   const leaseUntil = requireDate("leaseUntil", input.leaseUntil);
@@ -424,6 +426,7 @@ async function claimNextScan(
            inbox.status IN ('pending', 'retry')
            OR (inbox.status = 'processing' AND inbox.lease_until <= $1)
          )
+         AND inbox.group_id = ANY($2::text[])
          AND (
            NOT EXISTS (
              SELECT 1 FROM group_memories gm
@@ -444,7 +447,7 @@ async function claimNextScan(
                AND tombstone.conversation_message_id IS NULL
            )
          )`,
-      [at],
+      [at, groupIds],
     );
 
     const result = await client.query<ClaimRow>(
@@ -455,6 +458,7 @@ async function claimNextScan(
            (inbox.status IN ('pending', 'retry') AND inbox.next_attempt_at <= $1)
            OR (inbox.status = 'processing' AND inbox.lease_until <= $1)
          )
+           AND inbox.group_id = ANY($4::text[])
          ORDER BY inbox.next_attempt_at ASC, inbox.created_at ASC, inbox.id ASC
          LIMIT 1
          FOR UPDATE SKIP LOCKED
@@ -503,7 +507,7 @@ async function claimNextScan(
          claimed.next_attempt_at, claimed.lease_worker_id, claimed.lease_until,
          claimed.terminal_outcome, claimed.last_error_code, claimed.created_at,
          claimed.updated_at, gm.id`,
-      [at, workerId, leaseUntil],
+      [at, workerId, leaseUntil, groupIds],
     );
     const row = result.rows[0];
     if (row === undefined) return undefined;

@@ -71,20 +71,35 @@ export function createKnowledgeConflictScannerLoop({
   let startPromise: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
   let latestBatch: KnowledgeConflictScannerBatchSnapshot | undefined;
+  let lastClockValue = new Date(0);
+
+  const readClock = (): Date => {
+    lastClockValue = requireDate(now());
+    return new Date(lastClockValue);
+  };
+
+  const readFailureClock = (): Date => {
+    try {
+      return readClock();
+    } catch {
+      return new Date(lastClockValue);
+    }
+  };
 
   const tick = async (startup: boolean): Promise<void> => {
-    const startedAt = requireDate(now());
+    let startedAt = new Date(lastClockValue);
     try {
+      startedAt = readClock();
       const result = requireBatchResult(await scanner.scanBatch({ limit: safeBatchLimit }), safeBatchLimit);
       latestBatch = {
         status: "succeeded",
         startedAt,
-        finishedAt: requireDate(now()),
+        finishedAt: readClock(),
         ...result,
         failed: false,
       };
     } catch {
-      latestBatch = failedSnapshot(startedAt, requireDate(now()));
+      latestBatch = failedSnapshot(startedAt, readFailureClock());
       if (startup) throw new Error("knowledge conflict scanner startup failed");
       reportError(onError);
     }

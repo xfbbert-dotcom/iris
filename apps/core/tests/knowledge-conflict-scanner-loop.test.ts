@@ -25,6 +25,22 @@ describe("KnowledgeConflictScannerLoop", () => {
     expect(JSON.stringify(loop.getSnapshot())).not.toContain("denied document");
   });
 
+  it("surfaces a startup clock failure through the same safe boundary", async () => {
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch(); } },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now() { throw new Error("clock secret"); },
+    });
+
+    await expect(loop.start()).rejects.toThrow("knowledge conflict scanner startup failed");
+    expect(loop.getSnapshot()).toMatchObject({
+      running: false,
+      latestBatch: { status: "failed", errorCode: "scanner_failed" },
+    });
+    expect(JSON.stringify(loop.getSnapshot())).not.toContain("clock secret");
+  });
+
   it("serializes scheduled batches and stop awaits the in-flight batch", async () => {
     vi.useFakeTimers();
     let resolveSecond: (() => void) | undefined;
@@ -88,6 +104,32 @@ describe("KnowledgeConflictScannerLoop", () => {
     expect(loop.getSnapshot().latestBatch).toMatchObject({
       status: "succeeded", conflict: 1, failed: false,
     });
+    await loop.stop();
+  });
+
+  it("contains a scheduled clock failure and keeps polling without an unhandled rejection", async () => {
+    vi.useFakeTimers();
+    let clockReads = 0;
+    const errors: string[] = [];
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch(); } },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now() {
+        clockReads += 1;
+        if (clockReads > 2) throw new Error("later clock secret");
+        return new Date("2026-08-13T02:00:00.000Z");
+      },
+      onError(error) { errors.push((error as Error).message); },
+    });
+
+    await loop.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(loop.getSnapshot().latestBatch).toMatchObject({
+      status: "failed", errorCode: "scanner_failed",
+    });
+    expect(errors).toEqual(["knowledge conflict scanner batch failed"]);
     await loop.stop();
   });
 
