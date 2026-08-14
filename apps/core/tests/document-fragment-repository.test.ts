@@ -764,6 +764,51 @@ describe("DocumentFragmentRepository", () => {
     ).resolves.toEqual([]);
   });
 
+  it("uses knowledge-draft source policy for knowledge-purpose retrieval", async () => {
+    const query = vi.fn(async (sql: string) => ({
+      rows: normalizeSql(sql).includes("ds.can_use_for_knowledge_drafts = true")
+        ? [retrievedRow()]
+        : [],
+    }));
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(repository.searchSimilarFragments({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 3,
+      usage: "knowledge_drafts",
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "fragment-1", documentSourceId: "source-1" }),
+    ]);
+  });
+
+  it("keeps answering source policy as the default retrieval purpose", async () => {
+    const query = vi.fn(async (sql: string) => ({
+      rows: normalizeSql(sql).includes("ds.can_use_for_answering = true")
+        ? [retrievedRow()]
+        : [],
+    }));
+    const repository = createDocumentFragmentRepository({
+      queryable: queryableFrom(query),
+      embeddingProfiles: {
+        getProfileById: vi.fn(async () => ({ id: "static-dev-6d", dimensions: 6 })),
+      },
+    });
+
+    await expect(repository.searchSimilarFragments({
+      embeddingProfileId: "static-dev-6d",
+      embedding: [1, 2, 3, 4, 5, 6],
+      limit: 3,
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "fragment-1", documentSourceId: "source-1" }),
+    ]);
+  });
+
   it("limits vector search to requested document source types", async () => {
     const query = vi.fn(async (sql: string, values?: unknown[]) => {
       expect(normalizeSql(sql)).toContain("and ds.source_type = any($4::text[])");

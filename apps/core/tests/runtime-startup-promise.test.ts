@@ -174,6 +174,7 @@ function eventWorkerDependencies({ connect }: { connect: ReturnType<typeof vi.fn
     createConversationMessageRepository: vi.fn(() => ({
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
+      findByIds: vi.fn(),
     })),
     createDocumentSourceRegistry: vi.fn(() => ({
       registerGroupVisibleDocument: vi.fn(),

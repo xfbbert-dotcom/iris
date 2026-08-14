@@ -8,6 +8,10 @@ import {
 
 const MAX_FRAGMENT_SEARCH_LIMIT = 100;
 const MAX_GROUP_ID_CHARS = 512;
+const SOURCE_USAGE_COLUMN = {
+  answering: "can_use_for_answering",
+  knowledge_drafts: "can_use_for_knowledge_drafts",
+} as const;
 const RETRIEVED_SOURCE_TYPE_BY_PERSISTED_SOURCE_TYPE: Record<
   DocumentSourceType,
   RetrievedDocumentSourceType
@@ -78,6 +82,7 @@ export type SearchSimilarFragmentsInput = {
   limit: number;
   sourceTypes?: DocumentSourceType[];
   groupId?: string;
+  usage?: "answering" | "knowledge_drafts";
 };
 
 export type DocumentFragmentRepositoryDependencies = {
@@ -213,6 +218,7 @@ order by chunk_index asc, id asc
         return [];
       }
       const groupId = sanitizeGroupId(input.groupId);
+      const usageColumn = SOURCE_USAGE_COLUMN[input.usage ?? "answering"];
 
       const profile = await dependencies.embeddingProfiles.getProfileById(input.embeddingProfileId);
       const embeddingTable = resolveEmbeddingTable(profile.dimensions);
@@ -259,7 +265,7 @@ join latest_snapshots
   on f.document_snapshot_id = latest_snapshots.id
 join document_sources ds
   on ds.id = f.document_source_id
-  and ds.can_use_for_answering = true
+  and ds.${usageColumn} = true
   and ds.permission_state in ('unknown', 'readable')
 ${sourceTypeClause}${groupScopeClause}join ${embeddingTable} e
   on e.document_fragment_id = f.id

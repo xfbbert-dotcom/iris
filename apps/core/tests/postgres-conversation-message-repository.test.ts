@@ -351,6 +351,58 @@ describe("PostgresConversationMessageRepository", () => {
     );
   });
 
+  it("finds exact source messages in deterministic id order with tombstone state", async () => {
+    const queryable = fakeQueryable([
+      {
+        id: "feishu:message-2",
+        provider: "feishu",
+        provider_message_id: "message-2",
+        chat_id: "chat-1",
+        sender_id: null,
+        message_type: "text",
+        text: "Second",
+        sent_at: new Date("2026-07-02T01:02:00.000Z"),
+        raw_event_idempotency_key: "raw-event:feishu:event-2",
+        created_at: new Date("2026-07-02T01:02:01.000Z"),
+        tombstoned: true,
+      },
+      {
+        id: "feishu:message-1",
+        provider: "feishu",
+        provider_message_id: "message-1",
+        chat_id: "chat-1",
+        sender_id: null,
+        message_type: "text",
+        text: "First",
+        sent_at: new Date("2026-07-02T01:01:00.000Z"),
+        raw_event_idempotency_key: "raw-event:feishu:event-1",
+        created_at: new Date("2026-07-02T01:01:01.000Z"),
+        tombstoned: false,
+      },
+    ]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(repository.findByIds({
+      chatId: "chat-1",
+      ids: ["feishu:message-2", "feishu:message-1", "feishu:message-2"],
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "feishu:message-1", tombstoned: false }),
+      expect.objectContaining({ id: "feishu:message-2", tombstoned: true }),
+    ]);
+    expect(firstQueryParams(queryable)).toEqual([
+      "chat-1",
+      ["feishu:message-1", "feishu:message-2"],
+    ]);
+  });
+
+  it("does not query for an empty exact source-message set", async () => {
+    const queryable = fakeQueryable([]);
+    const repository = createPostgresConversationMessageRepository({ queryable });
+
+    await expect(repository.findByIds({ chatId: "chat-1", ids: [] })).resolves.toEqual([]);
+    expect(queryable.query).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized recent chat ids before querying Postgres", async () => {
     const queryable = fakeQueryable([]);
     const repository = createPostgresConversationMessageRepository({ queryable });

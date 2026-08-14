@@ -92,6 +92,7 @@ describe("createEventWorkerRuntime", () => {
     const messages = {
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
+      findByIds: vi.fn(),
     };
     const messageReplayGuard = {
       runUnlessDeleted: vi.fn(),
@@ -242,6 +243,7 @@ describe("createEventWorkerRuntime", () => {
     const messages = {
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
+      findByIds: vi.fn(),
     };
     const tokenProvider = { getTenantAccessToken: vi.fn() };
     const replier = { replyText: vi.fn() };
@@ -526,6 +528,7 @@ describe("createEventWorkerRuntime", () => {
       createConversationMessageRepository: vi.fn(() => ({
         upsertMessage: vi.fn(),
         listRecentByChat: vi.fn(),
+        findByIds: vi.fn(),
       })),
       createDocumentSourceRegistry: vi.fn(() => ({
         registerGroupVisibleDocument: vi.fn(),
@@ -663,6 +666,7 @@ function createConstructionFailureFixture({
     createConversationMessageRepository: vi.fn(() => ({
       upsertMessage: vi.fn(),
       listRecentByChat: vi.fn(),
+      findByIds: vi.fn(),
     })),
     createMessageReplayGuard: vi.fn(() => ({ runUnlessDeleted: vi.fn() })),
     createDocumentSourceRegistry: vi.fn(() => ({
