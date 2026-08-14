@@ -40,6 +40,10 @@ export type KnowledgeConflictScanStatusCounts = {
   deadLettered: number;
 };
 
+export type KnowledgeConflictScanMaintenanceOutcome =
+  | { outcome: "superseded"; scanId: string }
+  | { outcome: "dead_lettered"; scanId: string; errorCode: "scan_attempts_exhausted" };
+
 export type CreateKnowledgeConflictCandidateInput = {
   id: string;
   idempotencyKey: string;
@@ -181,6 +185,10 @@ export interface KnowledgeConflictRepository {
     limit: number;
     at: Date;
   }): Promise<{ discovered: number; existing: number }>;
+  maintainNextScan(input: {
+    groupIds: readonly string[];
+    at: Date;
+  }): Promise<KnowledgeConflictScanMaintenanceOutcome | undefined>;
   claimNextScan(input: {
     groupIds: readonly string[];
     workerId: string;

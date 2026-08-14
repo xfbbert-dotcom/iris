@@ -41,6 +41,23 @@ describe("KnowledgeConflictScannerLoop", () => {
     expect(JSON.stringify(loop.getSnapshot())).not.toContain("clock secret");
   });
 
+  it("surfaces startup scheduler failure with a stopped content-free failed snapshot", async () => {
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch(); } },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now: fixedClock(),
+      setTimeout: (() => { throw new Error("raw scheduler internals"); }) as unknown as typeof setTimeout,
+    });
+
+    await expect(loop.start()).rejects.toThrow("knowledge conflict scanner startup failed");
+    expect(loop.getSnapshot()).toMatchObject({
+      running: false,
+      latestBatch: { status: "failed", errorCode: "scanner_failed", failed: true },
+    });
+    expect(JSON.stringify(loop.getSnapshot())).not.toContain("scheduler internals");
+  });
+
   it("serializes scheduled batches and stop awaits the in-flight batch", async () => {
     vi.useFakeTimers();
     let resolveSecond: (() => void) | undefined;
@@ -73,6 +90,22 @@ describe("KnowledgeConflictScannerLoop", () => {
     resolveSecond?.();
     await stop;
     expect(stopped).toBe(true);
+  });
+
+  it("accepts a bounded maintenance-only batch without counting it as a claim", async () => {
+    vi.useFakeTimers();
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch({ superseded: 1 }); } },
+      intervalMs: 1_000,
+      batchLimit: 1,
+      now: fixedClock(),
+    });
+
+    await expect(loop.start()).resolves.toBeUndefined();
+    expect(loop.getSnapshot().latestBatch).toMatchObject({
+      status: "succeeded", claimed: 0, superseded: 1,
+    });
+    await loop.stop();
   });
 
   it("keeps later failures safe, reports a stable observer error, and continues polling", async () => {
@@ -130,6 +163,39 @@ describe("KnowledgeConflictScannerLoop", () => {
       status: "failed", errorCode: "scanner_failed",
     });
     expect(errors).toEqual(["knowledge conflict scanner batch failed"]);
+    await loop.stop();
+  });
+
+  it("contains a reschedule failure, reports it once, and stops coherently", async () => {
+    let callback: (() => void) | undefined;
+    let scheduleCalls = 0;
+    const errors: string[] = [];
+    const schedule = ((next: () => void) => {
+      scheduleCalls += 1;
+      if (scheduleCalls === 2) throw new Error("raw reschedule internals");
+      callback = next;
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    const loop = createKnowledgeConflictScannerLoop({
+      scanner: { async scanBatch() { return batch(); } },
+      intervalMs: 1_000,
+      batchLimit: 5,
+      now: fixedClock(),
+      setTimeout: schedule,
+      clearTimeout: (() => undefined) as typeof clearTimeout,
+      onError(error) { errors.push((error as Error).message); },
+    });
+
+    await loop.start();
+    callback?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(loop.getSnapshot()).toMatchObject({
+      running: false,
+      latestBatch: { status: "failed", errorCode: "scanner_failed", failed: true },
+    });
+    expect(errors).toEqual(["knowledge conflict scanner batch failed"]);
+    expect(JSON.stringify(loop.getSnapshot())).not.toContain("reschedule internals");
     await loop.stop();
   });
 

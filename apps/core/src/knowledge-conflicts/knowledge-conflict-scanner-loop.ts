@@ -105,15 +105,24 @@ export function createKnowledgeConflictScannerLoop({
     }
   };
 
-  const schedule = (): void => {
-    if (!running || closed || timer !== undefined || inFlight !== undefined) return;
-    timer = scheduleTimeout(() => {
-      timer = undefined;
-      inFlight = tick(false).finally(() => {
-        inFlight = undefined;
-        schedule();
-      });
-    }, safeIntervalMs);
+  const schedule = (startup: boolean): boolean => {
+    if (!running || closed || timer !== undefined || inFlight !== undefined) return true;
+    try {
+      timer = scheduleTimeout(() => {
+        timer = undefined;
+        inFlight = tick(false).finally(() => {
+          inFlight = undefined;
+          schedule(false);
+        });
+      }, safeIntervalMs);
+      return true;
+    } catch {
+      running = false;
+      const failedAt = readFailureClock();
+      latestBatch = failedSnapshot(failedAt, readFailureClock());
+      if (!startup) reportError(onError);
+      return false;
+    }
   };
 
   return {
@@ -124,7 +133,7 @@ export function createKnowledgeConflictScannerLoop({
       const startup = (async () => {
         try {
           await tick(true);
-          schedule();
+          if (!schedule(true)) throw new Error("knowledge conflict scanner startup failed");
         } catch {
           running = false;
           throw new Error("knowledge conflict scanner startup failed");
@@ -199,7 +208,7 @@ function requireBatchResult(
   const outcomeCount = normalized.conflict + normalized.noConflict
     + normalized.insufficientEvidence + normalized.permissionBlocked
     + normalized.retrying + normalized.deadLettered + normalized.superseded;
-  if (outcomeCount !== normalized.claimed) {
+  if (outcomeCount < normalized.claimed || outcomeCount > limit) {
     throw new Error("knowledge conflict scanner outcome counts are inconsistent");
   }
   return normalized;

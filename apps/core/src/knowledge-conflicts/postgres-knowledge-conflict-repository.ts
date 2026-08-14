@@ -12,6 +12,7 @@ import type {
   RecordKnowledgeConflictDetectionResult,
   KnowledgeConflictScan,
   KnowledgeConflictScanClaim,
+  KnowledgeConflictScanMaintenanceOutcome,
 } from "./knowledge-conflict-repository.js";
 import {
   KnowledgeConflictDeliveryConflictError,
@@ -109,6 +110,10 @@ type ClaimRow = ScanRow & {
   memory_evidence_message_ids: string[];
   memory_created_at: Date;
   memory_updated_at: Date;
+};
+
+type MaintenanceRow = ScanRow & {
+  maintenance_outcome: KnowledgeConflictScanMaintenanceOutcome["outcome"];
 };
 
 type CountRow = { existing_count: string | number };
@@ -262,8 +267,11 @@ export function createPostgresKnowledgeConflictRepository({
     discoverEligibleScans(input) {
       return discoverEligibleScans(dataSource, createId, input);
     },
+    maintainNextScan(input) {
+      return maintainNextScan(dataSource, attemptLimit, input);
+    },
     claimNextScan(input) {
-      return claimNextScan(dataSource, input);
+      return claimNextScan(dataSource, attemptLimit, input);
     },
     completeScan(input) {
       return completeScan(dataSource, input);
@@ -408,6 +416,7 @@ async function discoverEligibleScans(
 
 async function claimNextScan(
   dataSource: PostgresKnowledgeConflictDataSource,
+  attemptLimit: number,
   input: { groupIds: readonly string[]; workerId: string; at: Date; leaseUntil: Date },
 ): Promise<KnowledgeConflictScanClaim | undefined> {
   const groupIds = normalizeGroupIds(input.groupIds);
@@ -418,38 +427,6 @@ async function claimNextScan(
   if (leaseUntil.getTime() <= at.getTime()) throw new Error("leaseUntil must be after at");
 
   return withTransaction(dataSource, async (client) => {
-    await client.query(
-      `UPDATE knowledge_conflict_scan_inbox inbox
-       SET status = 'completed', terminal_outcome = 'superseded',
-           lease_worker_id = NULL, lease_until = NULL, updated_at = $1
-       WHERE (
-           inbox.status IN ('pending', 'retry')
-           OR (inbox.status = 'processing' AND inbox.lease_until <= $1)
-         )
-         AND inbox.group_id = ANY($2::text[])
-         AND (
-           NOT EXISTS (
-             SELECT 1 FROM group_memories gm
-             WHERE gm.id = inbox.group_memory_id
-               AND gm.group_id = inbox.group_id
-               AND gm.updated_at = inbox.memory_updated_at
-               AND gm.status = 'active'
-           )
-           OR NOT EXISTS (
-             SELECT 1
-             FROM group_memory_message_evidence evidence
-             JOIN conversation_messages message
-               ON message.id = evidence.conversation_message_id
-              AND message.chat_id = inbox.group_id
-             LEFT JOIN conversation_message_deletion_tombstones tombstone
-               ON tombstone.conversation_message_id = message.id
-             WHERE evidence.memory_id = inbox.group_memory_id
-               AND tombstone.conversation_message_id IS NULL
-           )
-         )`,
-      [at, groupIds],
-    );
-
     const result = await client.query<ClaimRow>(
       `WITH claimable AS (
          SELECT inbox.id
@@ -459,6 +436,8 @@ async function claimNextScan(
            OR (inbox.status = 'processing' AND inbox.lease_until <= $1)
          )
            AND inbox.group_id = ANY($4::text[])
+           AND inbox.attempt_count < $5
+           AND ${currentScanFactsExistSql("inbox")}
          ORDER BY inbox.next_attempt_at ASC, inbox.created_at ASC, inbox.id ASC
          LIMIT 1
          FOR UPDATE SKIP LOCKED
@@ -507,7 +486,7 @@ async function claimNextScan(
          claimed.next_attempt_at, claimed.lease_worker_id, claimed.lease_until,
          claimed.terminal_outcome, claimed.last_error_code, claimed.created_at,
          claimed.updated_at, gm.id`,
-      [at, workerId, leaseUntil, groupIds],
+      [at, workerId, leaseUntil, groupIds, attemptLimit],
     );
     const row = result.rows[0];
     if (row === undefined) return undefined;
@@ -516,6 +495,62 @@ async function claimNextScan(
       memory: mapClaimMemory(row),
     };
   });
+}
+
+async function maintainNextScan(
+  dataSource: PostgresKnowledgeConflictDataSource,
+  attemptLimit: number,
+  input: { groupIds: readonly string[]; at: Date },
+): Promise<KnowledgeConflictScanMaintenanceOutcome | undefined> {
+  const groupIds = normalizeGroupIds(input.groupIds);
+  if (groupIds.length === 0) return undefined;
+  const at = requireDate("at", input.at);
+  const currentFacts = currentScanFactsExistSql("inbox");
+  const result = await dataSource.query<MaintenanceRow>(
+    `WITH maintainable AS (
+       SELECT inbox.id,
+         CASE WHEN NOT ${currentFacts}
+           THEN 'superseded' ELSE 'dead_lettered' END AS maintenance_outcome
+       FROM knowledge_conflict_scan_inbox inbox
+       WHERE inbox.group_id = ANY($2::text[])
+         AND (
+           (inbox.status IN ('pending', 'retry') AND NOT ${currentFacts})
+           OR (
+             inbox.status = 'processing'
+             AND inbox.lease_until <= $1
+             AND (NOT ${currentFacts} OR inbox.attempt_count >= $3)
+           )
+           OR (
+             inbox.status IN ('pending', 'retry')
+             AND inbox.next_attempt_at <= $1
+             AND inbox.attempt_count >= $3
+           )
+         )
+       ORDER BY inbox.next_attempt_at ASC, inbox.created_at ASC, inbox.id ASC
+       LIMIT 1
+       FOR UPDATE OF inbox SKIP LOCKED
+     ), maintained AS (
+       UPDATE knowledge_conflict_scan_inbox inbox
+       SET status = CASE maintainable.maintenance_outcome
+             WHEN 'superseded' THEN 'completed' ELSE 'dead_lettered' END,
+           terminal_outcome = CASE maintainable.maintenance_outcome
+             WHEN 'superseded' THEN 'superseded' ELSE NULL END,
+           last_error_code = CASE maintainable.maintenance_outcome
+             WHEN 'dead_lettered' THEN 'scan_attempts_exhausted' ELSE NULL END,
+           lease_worker_id = NULL, lease_until = NULL, updated_at = $1
+       FROM maintainable
+       WHERE inbox.id = maintainable.id
+       RETURNING inbox.*, maintainable.maintenance_outcome
+     )
+     SELECT * FROM maintained`,
+    [at, groupIds, attemptLimit],
+  );
+  const row = result.rows[0];
+  if (row === undefined) return undefined;
+  const scanId = requireReference("scan id", row.id);
+  return row.maintenance_outcome === "superseded"
+    ? { outcome: "superseded", scanId }
+    : { outcome: "dead_lettered", scanId, errorCode: "scan_attempts_exhausted" };
 }
 
 async function completeScan(
@@ -2556,6 +2591,28 @@ function currentEvidenceExistsSql(): string {
       ON tombstone.conversation_message_id = message.id
     WHERE evidence.memory_id = gm.id
       AND tombstone.conversation_message_id IS NULL`;
+}
+
+function currentScanFactsExistSql(inboxAlias: "inbox"): string {
+  return `EXISTS (
+    SELECT 1
+    FROM group_memories current_memory
+    WHERE current_memory.id = ${inboxAlias}.group_memory_id
+      AND current_memory.group_id = ${inboxAlias}.group_id
+      AND current_memory.updated_at = ${inboxAlias}.memory_updated_at
+      AND current_memory.status = 'active'
+      AND EXISTS (
+        SELECT 1
+        FROM group_memory_message_evidence current_evidence
+        JOIN conversation_messages current_message
+          ON current_message.id = current_evidence.conversation_message_id
+         AND current_message.chat_id = ${inboxAlias}.group_id
+        LEFT JOIN conversation_message_deletion_tombstones current_tombstone
+          ON current_tombstone.conversation_message_id = current_message.id
+        WHERE current_evidence.memory_id = current_memory.id
+          AND current_tombstone.conversation_message_id IS NULL
+      )
+  )`;
 }
 
 function mapScan(row: ScanRow): KnowledgeConflictScan {

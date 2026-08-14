@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 
+import type { DocumentSource } from "../documents/document-source-registry.js";
 import { ModelProviderHttpError, isModelProviderCapacityError } from
   "../model/model-provider-error.js";
+import type { FeishuDocumentPermissionChecker } from
+  "../permissions/feishu-document-permission-checker.js";
 import type {
   CurrentConflictFingerprint,
   KnowledgeConflictEvidenceBuildResult,
@@ -55,13 +58,15 @@ export type KnowledgeConflictScanner = {
 };
 
 type ScannerRepository = Pick<KnowledgeConflictRepository,
-  "discoverEligibleScans" | "claimNextScan" | "completeScan" | "failScan" |
+  "discoverEligibleScans" | "maintainNextScan" | "claimNextScan" | "completeScan" | "failScan" |
   "recordDetectionResult">;
 
 export type KnowledgeConflictScannerDependencies = {
   repository: ScannerRepository;
   evidenceBuilder: KnowledgeConflictEvidenceBuilder;
   detector: KnowledgeConflictDetector;
+  documentSources: { findSourceById(id: string): Promise<DocumentSource | undefined> };
+  permissionChecker: FeishuDocumentPermissionChecker;
   groupIds: readonly string[];
   canUseKnowledgeConflict(groupId: string): boolean;
   workerId: string;
@@ -108,6 +113,16 @@ export function createKnowledgeConflictScanner(
       result.discovered = Math.min(safeLimit, requireCount("discovered", discovery.discovered));
 
       for (let index = 0; index < safeLimit; index += 1) {
+        const maintenanceAt = requireDate("scanner time", now());
+        const maintenance = await dependencies.repository.maintainNextScan({
+          groupIds: enabledGroups,
+          at: maintenanceAt,
+        });
+        if (maintenance !== undefined) {
+          if (maintenance.outcome === "superseded") result.superseded += 1;
+          else result.deadLettered += 1;
+          continue;
+        }
         const claimAt = requireDate("scanner time", now());
         const claimed = await dependencies.repository.claimNextScan({
           groupIds: enabledGroups,
@@ -178,12 +193,23 @@ async function processClaim(input: {
     } catch (error) {
       throw new DetectorPhaseError(error);
     }
+    const permissionAttestedAt = await reattestPermissions({
+      dependencies,
+      claim,
+      evidence,
+      now: input.now,
+    });
+    if (permissionAttestedAt === undefined) {
+      await recordTerminal(input, "permission_blocked");
+      return;
+    }
     if (plan.outcome === "conflict") {
       const candidate = buildCandidate({
         claim,
         evidence,
         plan: { ...plan, outcome: "conflict" },
         detectorContractVersion: input.detectorContractVersion,
+        permissionAttestedAt,
       });
       await recordResult(input, { outcome: "conflict", candidate });
       result.conflict += 1;
@@ -291,6 +317,9 @@ function classifyFailure(error: unknown): {
   if (error instanceof ScannerInternalError) {
     return { classification: "retryable", errorCode: "internal_error" };
   }
+  if (error instanceof PermissionPhaseError) {
+    return { classification: "retryable", errorCode: "permission_check_failed" };
+  }
   if (error instanceof DetectorPhaseError) {
     const detectorError = error.original;
     if (detectorError instanceof Error
@@ -321,6 +350,7 @@ function buildCandidate(input: {
   evidence: Extract<KnowledgeConflictEvidenceBuildResult, { outcome: "ready" }>;
   plan: KnowledgeConflictPlan & { outcome: "conflict" };
   detectorContractVersion: string;
+  permissionAttestedAt: Date;
 }): Extract<RecordKnowledgeConflictDetectionInput["result"], { outcome: "conflict" }>["candidate"] {
   const { claim, evidence, plan } = input;
   const fingerprint = evidence.fingerprint;
@@ -389,7 +419,7 @@ function buildCandidate(input: {
     targetSnapshotId: target.documentSnapshotId,
     targetContentHash: target.snapshotContentHash,
     detectorContractVersion: input.detectorContractVersion,
-    permissionAttestedAt: new Date(fingerprint.permissionAttestedAt),
+    permissionAttestedAt: new Date(input.permissionAttestedAt),
     plan,
     evidence: evidenceReferences,
   };
@@ -425,7 +455,9 @@ function validateFingerprint(
   if (!(fingerprint.memory.updatedAt instanceof Date)
     || Number.isNaN(fingerprint.memory.updatedAt.getTime())
     || !(fingerprint.permissionAttestedAt instanceof Date)
-    || Number.isNaN(fingerprint.permissionAttestedAt.getTime())) {
+    || Number.isNaN(fingerprint.permissionAttestedAt.getTime())
+    || fingerprint.documents.some((document) =>
+      !isValidDate(document.sourceUpdatedAt) || !isValidDate(document.snapshotFetchedAt))) {
     throw new MalformedPersistedFactsError();
   }
   if (fingerprint.memory.groupMemoryId !== claim.scan.groupMemoryId
@@ -438,10 +470,58 @@ function validateFingerprint(
 class ImpossibleEvidenceIdentityError extends Error {}
 class MalformedPersistedFactsError extends Error {}
 class ScannerInternalError extends Error {}
+class PermissionPhaseError extends Error {}
 class DetectorPhaseError extends Error {
   constructor(readonly original: unknown) {
     super("knowledge conflict detector failed");
   }
+}
+
+async function reattestPermissions(input: {
+  dependencies: KnowledgeConflictScannerDependencies;
+  claim: KnowledgeConflictScanClaim;
+  evidence: Extract<KnowledgeConflictEvidenceBuildResult, { outcome: "ready" }>;
+  now: () => Date;
+}): Promise<Date | undefined> {
+  const expectedSources = new Map<string, Date>();
+  for (const document of input.evidence.fingerprint.documents) {
+    const existing = expectedSources.get(document.documentSourceId);
+    if (existing !== undefined
+      && existing.getTime() !== document.sourceUpdatedAt.getTime()) {
+      throw new ImpossibleEvidenceIdentityError();
+    }
+    expectedSources.set(document.documentSourceId, document.sourceUpdatedAt);
+  }
+  if (expectedSources.size === 0) throw new ImpossibleEvidenceIdentityError();
+
+  for (const [sourceId, expectedUpdatedAt] of [...expectedSources.entries()].sort()) {
+    let source: DocumentSource | undefined;
+    try {
+      source = await input.dependencies.documentSources.findSourceById(sourceId);
+    } catch {
+      throw new PermissionPhaseError();
+    }
+    if (source === undefined
+      || source.id !== sourceId
+      || !isValidDate(source.updatedAt)
+      || source.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
+      throw new KnowledgeConflictStaleEvidenceError("source_stale");
+    }
+    if (source.sourceType !== "authorized_wiki_document"
+      || source.syncState !== "synced"
+      || source.permissionState === "denied"
+      || source.permissionState === "stale"
+      || !source.canUseForKnowledgeDrafts
+      || source.authorizedSpaceId !== input.evidence.fingerprint.publicationTarget.spaceId) {
+      return undefined;
+    }
+    try {
+      if (!(await input.dependencies.permissionChecker.canReadSource(source))) return undefined;
+    } catch {
+      throw new PermissionPhaseError();
+    }
+  }
+  return requireDate("permission attestation time", input.now());
 }
 
 function normalizeEvidenceFailureCode(value: string): string {

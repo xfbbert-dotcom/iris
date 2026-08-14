@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { GroupMemory } from "../src/memory/group-memory-repository.js";
 import type {
   KnowledgeConflictEvidenceBuildResult,
@@ -10,6 +11,7 @@ import {
   KnowledgeConflictStaleEvidenceError,
   type KnowledgeConflictRepository,
   type KnowledgeConflictScanClaim,
+  type KnowledgeConflictScanMaintenanceOutcome,
   type RecordKnowledgeConflictDetectionInput,
 } from "../src/knowledge-conflicts/knowledge-conflict-repository.js";
 import type { KnowledgeConflictPlan } from "../src/knowledge-conflicts/knowledge-conflict.js";
@@ -90,6 +92,51 @@ describe("KnowledgeConflictScanner", () => {
     ]);
   });
 
+  it("counts one expired final-attempt recovery and uses remaining budget for a later memory", async () => {
+    const repository = repositoryFake({
+      maintenanceOutcomes: [{ outcome: "dead_lettered", scanId: "scan-final",
+        errorCode: "scan_attempts_exhausted" }],
+      claims: [claim({ scanId: "scan-later", memoryId: "memory-2" })],
+    });
+    const scanner = scannerFixture({
+      evidenceBuilder: {
+        async build() {
+          return { outcome: "insufficient_evidence", reasonCode: "no_authorized_document_evidence" };
+        },
+      },
+      repository,
+    });
+
+    await expect(scanner.scanBatch({ limit: 2 })).resolves.toEqual({
+      ...emptyBatch(), claimed: 1, deadLettered: 1, insufficientEvidence: 1,
+    });
+    expect(repository.trace).toEqual([
+      "discover:2",
+      "maintenance:scan-final:dead_lettered",
+      "claim:scan-later",
+      "record:scan-later:insufficient_evidence",
+    ]);
+  });
+
+  it("lets bounded stale maintenance consume a limit-one batch and reports it", async () => {
+    const repository = repositoryFake({
+      maintenanceOutcomes: [
+        { outcome: "superseded", scanId: "scan-stale-1" },
+        { outcome: "superseded", scanId: "scan-stale-2" },
+      ],
+      claims: [claim({ scanId: "scan-current" })],
+    });
+    const scanner = scannerFixture({ repository });
+
+    await expect(scanner.scanBatch({ limit: 1 })).resolves.toEqual({
+      ...emptyBatch(), superseded: 1,
+    });
+    expect(repository.trace).toEqual([
+      "discover:1",
+      "maintenance:scan-stale-1:superseded",
+    ]);
+  });
+
   it.each([
     ["insufficient_evidence", "insufficientEvidence"],
     ["permission_blocked", "permissionBlocked"],
@@ -167,6 +214,83 @@ describe("KnowledgeConflictScanner", () => {
         documentSnapshotId: "snapshot-1", documentFragmentId: "fragment-1",
         snapshotContentHash: HASH_A, contentHash: HASH_B },
     ]);
+  });
+
+  it("rechecks the exact admitted source after detection and blocks a revoked source", async () => {
+    const repository = repositoryFake({ claims: [claim()] });
+    const trace: string[] = [];
+    const scanner = scannerFixture({
+      detector: {
+        async detect() {
+          trace.push("detect");
+          return conflictPlan();
+        },
+      },
+      documentSources: {
+        async findSourceById(id: string) {
+          trace.push(`source:${id}`);
+          return source(id);
+        },
+      },
+      permissionChecker: {
+        async canReadSource(current: DocumentSource) {
+          trace.push(`permission:${current.id}`);
+          return false;
+        },
+      },
+      repository,
+    });
+
+    await expect(scanner.scanBatch({ limit: 1 })).resolves.toEqual({
+      ...emptyBatch(), claimed: 1, permissionBlocked: 1,
+    });
+    expect(trace).toEqual(["detect", "source:source-1", "permission:source-1"]);
+    expect(repository.records).toEqual([{ scanId: "scan-1", outcome: "permission_blocked" }]);
+    expect(repository.recordInputs[0]?.result.outcome).not.toBe("conflict");
+  });
+
+  it("retries a post-model permission transport failure with a content-free code", async () => {
+    const repository = repositoryFake({ claims: [claim()] });
+    const scanner = scannerFixture({
+      permissionChecker: {
+        async canReadSource() {
+          throw new Error("raw Feishu permission response and tenant token");
+        },
+      },
+      repository,
+    });
+
+    await expect(scanner.scanBatch({ limit: 1 })).resolves.toEqual({
+      ...emptyBatch(), claimed: 1, retrying: 1,
+    });
+    expect(repository.trace).toContain(
+      "fail:scan-1:retryable:permission_check_failed:2026-08-13T02:00:30.000Z",
+    );
+    expect(JSON.stringify(repository.trace)).not.toContain("tenant token");
+    expect(repository.records).toEqual([]);
+  });
+
+  it("persists the fresh post-model permission attestation timestamp", async () => {
+    const repository = repositoryFake({ claims: [claim()] });
+    const clock = [
+      new Date("2026-08-13T02:00:00.000Z"),
+      new Date("2026-08-13T02:00:01.000Z"),
+      new Date("2026-08-13T02:00:02.000Z"),
+      new Date("2026-08-13T02:00:20.000Z"),
+      new Date("2026-08-13T02:00:21.000Z"),
+    ];
+    const scanner = scannerFixture({
+      now: () => new Date(clock.shift() ?? NOW),
+      repository,
+    });
+
+    await scanner.scanBatch({ limit: 1 });
+
+    const recorded = repository.recordInputs[0];
+    if (recorded?.result.outcome !== "conflict") throw new Error("expected conflict record");
+    expect(recorded.result.candidate.permissionAttestedAt).toEqual(
+      new Date("2026-08-13T02:00:20.000Z"),
+    );
   });
 
   it("rechecks the live application gate before retrieval, model use, and persistence", async () => {
@@ -337,6 +461,26 @@ describe("KnowledgeConflictScanner", () => {
     expect(repository.trace).not.toContain("provider_transport");
   });
 
+  it("dead-letters a malformed admitted-source timestamp before live permission lookup", async () => {
+    const malformed = readyEvidence();
+    (malformed.fingerprint.documents[0] as unknown as { sourceUpdatedAt: unknown })
+      .sourceUpdatedAt = "raw source timestamp";
+    const repository = repositoryFake({ claims: [claim()], failStatuses: ["dead_lettered"] });
+    let permissionCalls = 0;
+    const scanner = scannerFixture({
+      evidenceBuilder: { async build() { return malformed; } },
+      permissionChecker: { async canReadSource() { permissionCalls += 1; return true; } },
+      repository,
+    });
+
+    await scanner.scanBatch({ limit: 1 });
+
+    expect(repository.trace).toContain(
+      "fail:scan-1:permanent:malformed_persisted_facts:none",
+    );
+    expect(permissionCalls).toBe(0);
+  });
+
   it("treats detector input rejection as malformed persisted facts, not a provider retry", async () => {
     const repository = repositoryFake({
       claims: [claim()],
@@ -358,11 +502,19 @@ describe("KnowledgeConflictScanner", () => {
   });
 });
 
-function scannerFixture(overrides: Partial<Parameters<typeof createKnowledgeConflictScanner>[0]> = {}) {
+type ScannerDependencies = Parameters<typeof createKnowledgeConflictScanner>[0];
+type ScannerFixtureOverrides = Partial<ScannerDependencies> & {
+  documentSources?: { findSourceById(id: string): Promise<DocumentSource | undefined> };
+  permissionChecker?: { canReadSource(source: DocumentSource): Promise<boolean> };
+};
+
+function scannerFixture(overrides: ScannerFixtureOverrides = {}) {
   return createKnowledgeConflictScanner({
     repository: repositoryFake(),
     evidenceBuilder: { async build() { return readyEvidence(); } },
     detector: { async detect() { return conflictPlan(); } },
+    documentSources: { async findSourceById(id: string) { return source(id); } },
+    permissionChecker: { async canReadSource() { return true; } },
     groupIds: ["group-1"],
     canUseKnowledgeConflict: () => true,
     workerId: "scanner-1",
@@ -372,12 +524,15 @@ function scannerFixture(overrides: Partial<Parameters<typeof createKnowledgeConf
     detectorContractVersion: "knowledge-conflict-v1",
     now: () => new Date(NOW),
     ...overrides,
-  });
+  } as ScannerDependencies);
 }
 
 type RepositoryFake = Pick<KnowledgeConflictRepository,
   "discoverEligibleScans" | "claimNextScan" | "completeScan" | "failScan" |
   "recordDetectionResult"> & {
+    maintainNextScan(input: { groupIds: readonly string[]; at: Date }): Promise<
+      KnowledgeConflictScanMaintenanceOutcome | undefined
+    >;
     trace: string[];
     records: Array<{ scanId: string; outcome: string }>;
     recordInputs: RecordKnowledgeConflictDetectionInput[];
@@ -390,6 +545,7 @@ function repositoryFake(options: {
   discovered?: number;
   failStatuses?: Array<"retry" | "dead_lettered">;
   recordError?: Error;
+  maintenanceOutcomes?: KnowledgeConflictScanMaintenanceOutcome[];
 } = {}): RepositoryFake {
   const claims = [...(options.claims ?? [])];
   const failStatuses = [...(options.failStatuses ?? [])];
@@ -398,6 +554,7 @@ function repositoryFake(options: {
   const recordInputs: RecordKnowledgeConflictDetectionInput[] = [];
   const retryTimes: Array<Date | undefined> = [];
   const claimGroupIds: string[][] = [];
+  const maintenanceOutcomes = [...(options.maintenanceOutcomes ?? [])];
   return {
     trace,
     records,
@@ -407,6 +564,11 @@ function repositoryFake(options: {
     async discoverEligibleScans({ limit }) {
       trace.push(`discover:${limit}`);
       return { discovered: options.discovered ?? 0, existing: 0 };
+    },
+    async maintainNextScan() {
+      const outcome = maintenanceOutcomes.shift();
+      if (outcome !== undefined) trace.push(`maintenance:${outcome.scanId}:${outcome.outcome}`);
+      return outcome;
     },
     async claimNextScan(input) {
       claimGroupIds.push([...(input as typeof input & { groupIds?: string[] }).groupIds ?? []]);
@@ -499,6 +661,23 @@ function memory(id = "memory-1"): GroupMemory {
     evidenceMessageIds: ["message-1"],
     createdAt: new Date(NOW),
     updatedAt: new Date(NOW),
+  };
+}
+
+function source(id = "source-1"): DocumentSource {
+  return {
+    id,
+    sourceType: "authorized_wiki_document",
+    sourceUri: `https://example.invalid/wiki/${id}`,
+    authorizedSpaceId: "space-1",
+    permissionState: "readable",
+    syncState: "synced",
+    canUseForAnswering: true,
+    canUseForKnowledgeDrafts: true,
+    createdAt: new Date(NOW),
+    updatedAt: new Date(NOW),
+    evidence: [{ kind: "admin_authorization", sourceUri: `https://example.invalid/wiki/${id}`,
+      spaceId: "space-1", observedAt: new Date(NOW) }],
   };
 }
 

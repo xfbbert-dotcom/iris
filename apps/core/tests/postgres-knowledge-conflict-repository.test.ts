@@ -117,7 +117,71 @@ describe("PostgresKnowledgeConflictRepository scan lifecycle", () => {
     });
     for (const call of client.query.mock.calls) queryValues.push(call[1] ?? []);
     expect(queryValues.filter((values) => values.includes("conflict-scanner-1")))
-      .toEqual([[at, "conflict-scanner-1", leaseUntil, ["group-1"]]]);
+      .toEqual([[at, "conflict-scanner-1", leaseUntil, ["group-1"], 5]]);
+  });
+
+  it("bounds stale maintenance to one ordered lock-safe row", async () => {
+    const client = routedClient((sql) => sql.includes("WITH maintainable")
+      ? { rows: [{ ...scanRow({ status: "completed", terminal_outcome: "superseded" }),
+        maintenance_outcome: "superseded" }] }
+      : { rows: [] });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.maintainNextScan({ groupIds: ["group-1"], at }))
+      .resolves.toEqual({ outcome: "superseded", scanId: "scan-1" });
+
+    const staleMutation = client.query.mock.calls
+      .map(([sql]) => String(sql).replaceAll(/\s+/gu, " ").trim())
+      .find((sql) => sql.includes("WITH maintainable"));
+    expect(staleMutation).toContain("LIMIT 1");
+    expect(staleMutation).toContain("FOR UPDATE OF inbox SKIP LOCKED");
+  });
+
+  it("dead-letters an expired final attempt once with a stable content-free code", async () => {
+    let maintenanceCalls = 0;
+    const client = routedClient((sql) => {
+      if (!sql.includes("WITH maintainable")) return { rows: [] };
+      maintenanceCalls += 1;
+      return maintenanceCalls === 1
+        ? { rows: [{ ...scanRow({ status: "dead_lettered", attempt_count: 3,
+          last_error_code: "scan_attempts_exhausted" }), maintenance_outcome: "dead_lettered" }] }
+        : { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(client), maxScanAttempts: 3,
+    });
+
+    await expect(repository.maintainNextScan({ groupIds: ["group-1"], at }))
+      .resolves.toEqual({ outcome: "dead_lettered", scanId: "scan-1",
+        errorCode: "scan_attempts_exhausted" });
+    await expect(repository.maintainNextScan({ groupIds: ["group-1"], at }))
+      .resolves.toBeUndefined();
+
+    const values = client.query.mock.calls
+      .filter(([sql]) => String(sql).includes("WITH maintainable"))
+      .map(([, parameters]) => parameters);
+    expect(values).toEqual([[at, ["group-1"], 3], [at, ["group-1"], 3]]);
+  });
+
+  it("passes the configured attempt bound into claiming so recovery cannot exceed it", async () => {
+    const client = routedClient((sql) => {
+      if (sql.includes("WITH claimable")) {
+        return { rows: [claimRow({ status: "processing", attempt_count: 3 })] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(client),
+      maxScanAttempts: 3,
+    });
+
+    await repository.claimNextScan({
+      groupIds: ["group-1"], workerId: "conflict-scanner-1", at, leaseUntil,
+    });
+
+    const claimCall = client.query.mock.calls.find(([sql]) => String(sql).includes("WITH claimable"));
+    expect(String(claimCall?.[0])).toContain("attempt_count <");
+    expect(claimCall?.[1]).toContain(3);
   });
 
   it("retries only for the lease owner and dead-letters permanent or exhausted failures", async () => {
@@ -1222,18 +1286,122 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     expect(recovered?.scan.attemptCount).toBeGreaterThanOrEqual(1);
   });
 
+  it("dead-letters an expired final attempt once and then claims a later memory", async () => {
+    const recoveryGroupId = `recovery-group-${suffix}`;
+    const recoveryAt = new Date("2026-08-13T03:00:00.000Z");
+    const recoveryNow = new Date("2026-08-13T03:01:00.000Z");
+    const rows = ["final", "later"] as const;
+    for (const label of rows) {
+      const messageId = `feishu:recovery-${label}-${suffix}`;
+      const memoryId = `recovery-${label}-memory-${suffix}`;
+      await insertMessage(pool!, messageId, recoveryGroupId);
+      await pool!.query(
+        `INSERT INTO group_memories (
+           id, group_id, memory_scope, category, content, importance, confidence,
+           status, idempotency_key, origin, created_by, created_at, updated_at
+         ) VALUES ($1, $2, 'group', 'decision', $3, 4, 0.9,
+           'active', $4, 'operator', 'tester', $5, $5)`,
+        [memoryId, recoveryGroupId, label, `recovery-${label}-op-${suffix}`, recoveryAt],
+      );
+      await pool!.query(
+        `INSERT INTO group_memory_message_evidence (memory_id, conversation_message_id)
+         VALUES ($1, $2)`,
+        [memoryId, messageId],
+      );
+    }
+    const finalScanId = `recovery-final-scan-${suffix}`;
+    const laterScanId = `recovery-later-scan-${suffix}`;
+    await pool!.query(
+      `INSERT INTO knowledge_conflict_scan_inbox (
+         id, group_id, group_memory_id, memory_updated_at, status, attempt_count,
+         next_attempt_at, lease_worker_id, lease_until, created_at, updated_at
+       ) VALUES
+         ($1, $2, $3, $4, 'processing', 2, $4, 'dead-worker', $5, $4, $4),
+         ($6, $2, $7, $4, 'pending', 0, $4, NULL, NULL, $8, $8)`,
+      [finalScanId, recoveryGroupId, `recovery-final-memory-${suffix}`, recoveryAt,
+        new Date("2026-08-13T03:00:30.000Z"), laterScanId,
+        `recovery-later-memory-${suffix}`, new Date(recoveryAt.getTime() + 1)],
+    );
+    const repository = createPostgresKnowledgeConflictRepository({
+      dataSource: pool!, maxScanAttempts: 2,
+    });
+
+    await expect(repository.maintainNextScan({ groupIds: [recoveryGroupId], at: recoveryNow }))
+      .resolves.toEqual({ outcome: "dead_lettered", scanId: finalScanId,
+        errorCode: "scan_attempts_exhausted" });
+    await expect(repository.maintainNextScan({ groupIds: [recoveryGroupId], at: recoveryNow }))
+      .resolves.toBeUndefined();
+    await expect(repository.claimNextScan({
+      groupIds: [recoveryGroupId], workerId: "recovery-worker", at: recoveryNow,
+      leaseUntil: new Date("2026-08-13T03:01:30.000Z"),
+    })).resolves.toMatchObject({ scan: { id: laterScanId, attemptCount: 1 } });
+    await expect(pool!.query(
+      `SELECT status, attempt_count, last_error_code
+       FROM knowledge_conflict_scan_inbox WHERE id = $1`,
+      [finalScanId],
+    )).resolves.toMatchObject({ rows: [{ status: "dead_lettered", attempt_count: 2,
+      last_error_code: "scan_attempts_exhausted" }] });
+  });
+
+  it("maintains at most one stale row from a backlog per call", async () => {
+    const staleGroupId = `stale-backlog-group-${suffix}`;
+    const staleScanIds: string[] = [];
+    for (const index of [1, 2]) {
+      const messageId = `feishu:stale-backlog-${index}-${suffix}`;
+      const memoryId = `stale-backlog-memory-${index}-${suffix}`;
+      const scanId = `stale-backlog-scan-${index}-${suffix}`;
+      staleScanIds.push(scanId);
+      await insertMessage(pool!, messageId, staleGroupId);
+      await pool!.query(
+        `INSERT INTO group_memories (
+           id, group_id, memory_scope, category, content, importance, confidence,
+           status, idempotency_key, origin, created_by, created_at, updated_at
+         ) VALUES ($1, $2, 'group', 'decision', $3, 4, 0.9,
+           'superseded', $4, 'operator', 'tester', $5, $5)`,
+        [memoryId, staleGroupId, `stale ${index}`,
+          `stale-backlog-op-${index}-${suffix}`, at],
+      );
+      await pool!.query(
+        `INSERT INTO group_memory_message_evidence (memory_id, conversation_message_id)
+         VALUES ($1, $2)`,
+        [memoryId, messageId],
+      );
+      await pool!.query(
+        `INSERT INTO knowledge_conflict_scan_inbox (
+           id, group_id, group_memory_id, memory_updated_at, status, attempt_count,
+           next_attempt_at, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, 'pending', 0, $4, $5, $5)`,
+        [scanId, staleGroupId, memoryId, at, new Date(at.getTime() + index)],
+      );
+    }
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+
+    await expect(repository.maintainNextScan({ groupIds: [staleGroupId], at: leaseUntil }))
+      .resolves.toEqual({ outcome: "superseded", scanId: staleScanIds[0] });
+    await expect(pool!.query<{ status: string; count: string }>(
+      `SELECT status, count(*) AS count
+       FROM knowledge_conflict_scan_inbox
+       WHERE id = ANY($1::text[]) GROUP BY status ORDER BY status`,
+      [staleScanIds],
+    )).resolves.toMatchObject({ rows: [
+      { status: "completed", count: "1" },
+      { status: "pending", count: "1" },
+    ] });
+  });
+
   it("does not clean up a stale processing scan until its active lease expires", async () => {
+    const leasedGroupId = `leased-stale-group-${suffix}`;
     const memoryId = `leased-stale-memory-${suffix}`;
     const messageId = `feishu:leased-stale-${suffix}`;
     const scanId = `leased-stale-scan-${suffix}`;
-    await insertMessage(pool!, messageId, groupId);
+    await insertMessage(pool!, messageId, leasedGroupId);
     await pool!.query(
       `INSERT INTO group_memories (
          id, group_id, memory_scope, category, content, importance, confidence,
          status, idempotency_key, origin, created_by, created_at, updated_at
        ) VALUES ($1, $2, 'group', 'decision', 'leased stale', 4, 0.9,
          'active', $3, 'operator', 'tester', $4, $4)`,
-      [memoryId, groupId, `leased-stale-memory-op-${suffix}`, at],
+      [memoryId, leasedGroupId, `leased-stale-memory-op-${suffix}`, at],
     );
     await pool!.query(
       `INSERT INTO group_memory_message_evidence (memory_id, conversation_message_id)
@@ -1245,25 +1413,23 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
          id, group_id, group_memory_id, memory_updated_at, status, attempt_count,
          next_attempt_at, lease_worker_id, lease_until, created_at, updated_at
        ) VALUES ($1, $2, $3, $4, 'processing', 1, $4, 'active-owner', $5, $4, $4)`,
-      [scanId, groupId, memoryId, at, leaseUntil],
+      [scanId, leasedGroupId, memoryId, at, leaseUntil],
     );
     await pool!.query("UPDATE group_memories SET status = 'superseded' WHERE id = $1", [memoryId]);
     const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
 
-    await repository.claimNextScan({
-      groupIds: [groupId],
-      workerId: "other-worker", at: new Date("2026-08-13T02:00:10.000Z"),
-      leaseUntil: new Date("2026-08-13T02:00:20.000Z"),
+    await repository.maintainNextScan({
+      groupIds: [leasedGroupId],
+      at: new Date("2026-08-13T02:00:10.000Z"),
     });
     await expect(pool!.query(
       "SELECT status, lease_worker_id FROM knowledge_conflict_scan_inbox WHERE id = $1",
       [scanId],
     )).resolves.toMatchObject({ rows: [{ status: "processing", lease_worker_id: "active-owner" }] });
 
-    await repository.claimNextScan({
-      groupIds: [groupId],
-      workerId: "other-worker", at: new Date("2026-08-13T02:00:31.000Z"),
-      leaseUntil: new Date("2026-08-13T02:01:01.000Z"),
+    await repository.maintainNextScan({
+      groupIds: [leasedGroupId],
+      at: new Date("2026-08-13T02:00:31.000Z"),
     });
     await expect(pool!.query(
       "SELECT status, terminal_outcome FROM knowledge_conflict_scan_inbox WHERE id = $1",
