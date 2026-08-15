@@ -209,3 +209,92 @@ whitespace errors.
 - No live Redis or Feishu callback/card integration was exercised. Queue retention, callback drain,
   permission gates, and shutdown ordering are covered by deterministic module/app tests only.
 - No deployment, pilot, or Task 11+ runbook claim is made.
+
+## Fix Round 2/5: Close-Wins Conflict Runtime Startup
+
+This round addresses only the knowledge-conflict runtime `start()`/`close()` lifecycle race. It does
+not add Task 11+ deployment or runbook scope, and the three Round 1 fixes remain covered by the
+relevant regression suite.
+
+### Finding And Root Cause
+
+`start()` awaited dependency preparation and the scanner's initial asynchronous batch without
+checking whether a concurrent `close()` had invalidated that startup. During the scanner race,
+`close()` stopped the not-yet-started dispatcher, waited for the scanner, and closed PostgreSQL.
+The stale startup continuation could then start the dispatcher and overwrite `closed` with
+`started`; the cached close promise prevented a later close from repairing the state. The startup
+catch also overwrote a concurrent `closed` state with `failed` when scanner startup rejected.
+
+### Disposition
+
+- Added a monotonic lifecycle generation captured by each startup. External close permanently sets
+  `closed` and advances the generation before resource cleanup.
+- Startup validates both `starting` state and its captured generation after dependency preparation,
+  after the awaited scanner startup batch, immediately before dispatcher startup, and again before
+  committing `started`. A stale continuation rejects with the existing content-free
+  `knowledge conflict runtime is closed` error.
+- Cancellation cleanup reuses the idempotent close promise without overwriting `closed`; ordinary
+  non-cancelled startup failure retains the existing `failed` lifecycle and original error.
+- Deterministic tests use the real scanner and dispatcher loops to hold the initial scan open, race
+  repeated close calls, release the scan, and execute any captured dispatcher timer. They verify no
+  dispatcher work or PostgreSQL call occurs after close, the delivery gate stays closed, resources
+  close once, and later start remains rejected. Separate regressions cover close during dependency
+  preparation and close racing a rejected real scanner startup.
+- Runtime construction is synchronous and returns no closable runtime until composition completes,
+  so there is no construction-time public `close()` race to exercise. Default `prepare()` performs
+  one PostgreSQL operation already initiated before its await; the post-await generation check
+  prevents every later startup stage after close.
+
+### RED Evidence
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-runtime.test.ts
+```
+
+Exit 1: 1 file failed; 3 tests failed and 12 passed. The in-flight real scanner case reported that
+startup resolved instead of rejecting as closed; the preparation race also resolved and continued;
+the scanner-rejection race left the cached scanner startup error visible to later `start()` instead
+of the permanent closed state.
+
+### GREEN Evidence
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-runtime.test.ts
+```
+
+Exit 0: 1 file passed; 15 tests passed.
+
+```powershell
+npm --workspace apps/core test -- runtime-config.test.ts answer-draft-runtime.test.ts answer-draft-api.test.ts knowledge-conflict-runtime.test.ts knowledge-conflict-api.test.ts knowledge-conflict-answer-provider.test.ts knowledge-conflict-interaction-worker.test.ts knowledge-conflict-scanner-loop.test.ts knowledge-conflict-dispatcher-loop.test.ts approval-interaction-worker.test.ts approval-interaction-worker-loop.test.ts knowledge-card-runtime.test.ts server-startup.test.ts internal-status-snapshot.test.ts internal-rollout-readiness.test.ts internal-readiness-api.test.ts runtime-close.test.ts
+```
+
+Exit 0: 17 files passed; 466 tests passed with no failures or skips.
+
+```powershell
+npm --workspace apps/core test
+```
+
+Exit 0: 185 files passed and 3 conditional files skipped; 3,362 tests passed and 250 skipped
+(3,612 total).
+
+```powershell
+npm run typecheck
+npm run build
+git diff --check
+git diff --cached --check
+```
+
+All final gates exited 0. Diff checks emitted only the repository's LF-to-CRLF checkout warnings
+and no whitespace errors.
+
+### Implementation Commit
+
+- `ab490e2129233aae9b28dd3588d76c776ba67aee` —
+  `fix(core): make conflict runtime close win startup`
+
+### Remaining Verification Boundaries
+
+- `IRIS_TEST_DATABASE_URL` was unset. The 250 skips include conditional PostgreSQL cases; no live
+  PostgreSQL lifecycle or driver-drain behavior is claimed.
+- No live Redis or Feishu interaction was exercised, and no deployment, pilot, or Task 11+ claim is
+  made.
