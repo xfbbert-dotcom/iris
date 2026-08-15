@@ -328,3 +328,78 @@
   smoke, default-off, and mocked boundary contracts passed.
 - The loop remains pending live acceptance and produces only a governed update draft, never an
   in-place Wiki edit.
+
+## Fix Round 5: Real Node Redis Destruction And Lazy Status Connection
+
+### Result
+
+- Implementation/tests commit: `16568d29eac1b32bfd9ecffd90a7333b0923be2b`.
+- The disabled knowledge-card status reader now composes its PostgreSQL repository, Redis queue,
+  and status surface synchronously before it can start a Redis connection. The first Redis-backed
+  count read starts one observed connection; closing before that read permanently prevents connect.
+- This separately owned read-only Redis client never sends `QUIT`. Shutdown uses one deterministic
+  `destroy()` only when the client is open. `ClientClosedError` is accepted only after `isOpen`
+  proves false; any other destruction failure or a client that remains open fails closed.
+- A close racing a real Node Redis handshake coordinates on either the observed connect outcome or
+  successful socket destruction. This is necessary because Node Redis 6.1 can leave `connect()`
+  pending after `destroy()` has already closed the handshake socket. The abandoned internal outcome
+  remains rejection-observed, while status callers reject and shutdown settles without a timer,
+  socket, reconnect, or unhandled rejection leak.
+- Concurrent and later `close()` calls reuse the same fulfilled promise. PostgreSQL `end()` and
+  Redis `destroy()` each run at most once. Synchronous composition failure preserves the primary
+  error, schedules no connect microtask, and still closes the acquired PostgreSQL pool.
+- The enabled knowledge-card runtime and its existing Redis close helper were not changed.
+- Live pilot: not run and not claimed. Task 12 remains the owner of exact-SHA live acceptance.
+
+### TDD RED
+
+- Command:
+  `npm exec --workspace apps/core -- vitest run tests/knowledge-card-status-reader-real-redis.test.ts`.
+- With the production-real TCP fixture corrected to Node Redis RESP2 startup semantics, all 5 tests
+  failed against the Round 4 implementation. Refused-connect and synchronous-composition cleanup
+  rejected `ClientClosedError`; close-before-read still reached the delayed connection; connected
+  close used the unsafe `QUIT` path; and a pending handshake did not settle within the test bound.
+- Source inspection confirmed the Node Redis 6.1 ordering: `quit()` marks the client closed before
+  awaiting the protocol reply, so a timeout fallback cannot safely call `destroy()`.
+- An intermediate real-adapter run reached 4/5 pass and proved that successful destruction closes
+  the socket and flips `isOpen`/`isReady` false while Node Redis can leave the original handshake
+  promise pending. That evidence drove the destruction-or-connect terminal coordination used here.
+
+### GREEN Verification
+
+- Production-real and mocked status-reader lifecycle contracts: 12/12 pass. The real suite uses the
+  installed Node Redis 6.1 client plus a local TCP server and covers refused connection with
+  reconnect disabled, a server that would hang `QUIT` but receives none, synchronous composition
+  failure, close-before-first-read, pending-handshake close, repeated/concurrent close, exact
+  resource-close counts, closed sockets, and no unhandled rejection.
+- Consolidated status reader, enabled runtime, startup, readiness, API, and resource-close
+  regressions: 129/129 pass.
+- Full Core `npm test`: 3,381 pass, 0 fail, 250 environment-gated skips; 187 test files passed and
+  3 were skipped.
+- Pilot operations contracts: 41/41 pass.
+- Fresh full `npm run test:pilot`: 156 tests, 155 pass, 0 fail, 1 skip. The sole skip accurately
+  reports that the Docker daemon is unavailable for the executable pinned-Caddy boundary probe;
+  no container result is claimed.
+- `npm run readiness -- --env-file deploy/pilot/ci.env`: 17/17 pass in static disabled-env mode.
+- `npm run typecheck`: exit `0`.
+- `npm run build`: exit `0`.
+- `npm run pilot:config`: exit `0`; rendered conflict/card/action-approval defaults remain false
+  and their allowlists remain empty.
+- Extracted PowerShell controller parse: pass, 6,856 tokens.
+- `git diff --check`: exit `0` before the implementation commit; line-ending notices only.
+
+### Artifact SHA-256
+
+- Knowledge-card runtime/status reader: `b02030d7c5df04d738e836653c90599606f97f684552f243c54b6cc72a3dca49`.
+- Mocked status-reader contract: `cdf32b08c8427abed8deb79ab2bcc6775c2b7cc6071c52a0e48f271840f843b0`.
+- Real Node Redis lifecycle contract: `fdab3fae68b1e8bc3be9516c09d701326fa71f7b9dfc7bd1160d678abdf4f1be`.
+
+### Residual Risk
+
+- No live PostgreSQL query, Redis service/queue, Feishu callback/card, model request, Wiki read,
+  credential, or pilot mutation was used in this fix round. The real adapter regression used only
+  an ephemeral local TCP server and metadata-free Redis protocol responses.
+- Docker remained unavailable for the executable Caddy container probe. Static Caddy, Compose,
+  smoke, default-off, and mocked public-boundary contracts passed.
+- The loop remains pending live acceptance and produces only a governed update draft, never an
+  in-place Wiki edit.
