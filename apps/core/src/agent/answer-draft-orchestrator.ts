@@ -20,8 +20,11 @@ import type {
 } from "../memory/context-assembly.js";
 import type { EvidencePlanner } from "../model/openai-compatible-evidence-planner.js";
 import type { GroundedAnswerRenderer } from "../model/openai-compatible-grounded-answer-renderer.js";
-import type { KnowledgeConflictAnswerProvider } from
-  "../knowledge-conflicts/knowledge-conflict-answer-provider.js";
+import type {
+  KnowledgeConflictAnswerProvider,
+  KnowledgeConflictAnswerValidationInput,
+  KnowledgeConflictAnswerValidationResult,
+} from "../knowledge-conflicts/knowledge-conflict-answer-provider.js";
 
 export type GenerateAnswerDraftInput = {
   question: string;
@@ -73,6 +76,9 @@ export interface AnswerDraftOrchestrator {
   inspectPromptPermissions(
     input: AnswerDraftInput,
   ): Promise<AnswerDraftPermissionInspectionResult>;
+  validateKnowledgeConflictForSend(
+    input: KnowledgeConflictAnswerValidationInput,
+  ): Promise<KnowledgeConflictAnswerValidationResult>;
 }
 
 type LiveChatContextProvider = {
@@ -173,6 +179,13 @@ export function createAnswerDraftOrchestrator({
   }
 
   return {
+    async validateKnowledgeConflictForSend(input) {
+      if (knowledgeConflictAnswerProvider?.validateForSend === undefined) {
+        return { status: "blocked" };
+      }
+      return knowledgeConflictAnswerProvider.validateForSend(input);
+    },
+
     async inspectPromptPermissions(input) {
       const normalized = normalizeInput(input);
       if (classifyDirectTask(normalized.question) !== undefined) {

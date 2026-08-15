@@ -30,6 +30,7 @@ export async function reattestKnowledgeConflictSourcePermissions(input: {
   const ordered = [...input.sources].sort((left, right) =>
     left.documentSourceId.localeCompare(right.documentSourceId));
   let sourceIdentityChanged = false;
+  let earliestPermissionAttestedAt: Date | undefined;
   for (const identity of ordered) {
     let source: DocumentSource | undefined;
     try {
@@ -60,17 +61,28 @@ export async function reattestKnowledgeConflictSourcePermissions(input: {
     } catch {
       throw new KnowledgeConflictPermissionUnavailableError();
     }
+    const permissionAttestedAt = input.now();
+    if (!validDate(permissionAttestedAt)) {
+      throw new KnowledgeConflictPermissionUnavailableError();
+    }
+    if (
+      earliestPermissionAttestedAt === undefined
+      || permissionAttestedAt.getTime() < earliestPermissionAttestedAt.getTime()
+    ) {
+      earliestPermissionAttestedAt = new Date(permissionAttestedAt);
+    }
   }
-  const permissionAttestedAt = input.now();
-  if (!validDate(permissionAttestedAt)) throw new KnowledgeConflictPermissionUnavailableError();
+  if (earliestPermissionAttestedAt === undefined) {
+    throw new KnowledgeConflictPermissionUnavailableError();
+  }
   if (sourceIdentityChanged) {
     return {
       status: "stale",
       reason: "source_stale",
-      permissionAttestedAt: new Date(permissionAttestedAt),
+      permissionAttestedAt: earliestPermissionAttestedAt,
     };
   }
-  return { status: "attested", permissionAttestedAt: new Date(permissionAttestedAt) };
+  return { status: "attested", permissionAttestedAt: earliestPermissionAttestedAt };
 }
 
 function validDate(value: unknown): value is Date {

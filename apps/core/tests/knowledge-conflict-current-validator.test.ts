@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DocumentSource } from "../src/documents/document-source-registry.js";
 import type { KnowledgeConflictCandidate } from "../src/knowledge-conflicts/knowledge-conflict.js";
-import { KnowledgeConflictVersionConflictError } from
+import {
+  KnowledgeConflictStaleEvidenceError,
+  KnowledgeConflictVersionConflictError,
+} from
   "../src/knowledge-conflicts/knowledge-conflict-repository.js";
 import { createKnowledgeConflictCurrentValidator } from
   "../src/knowledge-conflicts/knowledge-conflict-current-validator.js";
@@ -48,6 +51,45 @@ describe("KnowledgeConflictCurrentValidator", () => {
       operationKey: "current-validation:candidate-a:v3",
       at: validatedAt,
     });
+  });
+
+  it("preserves the earliest real permission completion time across multiple sources", async () => {
+    const firstPermissionAt = new Date("2026-08-15T01:00:00.000Z");
+    const secondPermissionAt = new Date("2026-08-15T01:00:30.000Z");
+    const validationAt = new Date("2026-08-15T01:01:01.000Z");
+    const baseCandidate = candidate();
+    const currentCandidate = candidate({
+      evidence: [
+        ...baseCandidate.evidence,
+        {
+          type: "document_source",
+          referenceId: "D2",
+          documentSourceId: "source-b",
+          expectedUpdatedAt: new Date("2026-08-14T01:00:00.000Z"),
+        },
+      ],
+    });
+    const validateCandidateCurrentState = vi.fn(async (input) => {
+      expect(input.permissionAttestedAt).toEqual(firstPermissionAt);
+      expect(input.at).toEqual(validationAt);
+      throw new KnowledgeConflictStaleEvidenceError("permission_stale");
+    });
+    const times = [firstPermissionAt, secondPermissionAt, validationAt];
+    const validator = createKnowledgeConflictCurrentValidator({
+      repository: { validateCandidateCurrentState },
+      documentSources: {
+        async findSourceById(id) { return source({ id }); },
+      },
+      permissionChecker: { async canReadSource() { return true; } },
+      now: () => times.shift() ?? validationAt,
+    });
+
+    await expect(validator.validate({ candidate: currentCandidate, expectedVersion: 3 }))
+      .resolves.toEqual({
+        status: "superseded",
+        candidate: currentCandidate,
+        reason: "permission_stale",
+      });
   });
 
   it("returns the repository's stable superseded result after live permission succeeds", async () => {

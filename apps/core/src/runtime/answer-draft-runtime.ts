@@ -117,7 +117,10 @@ import {
 
 export type AnswerDraftRuntime = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">
-    & Partial<Pick<AnswerDraftOrchestrator, "inspectPromptPermissions">>;
+    & Partial<Pick<
+      AnswerDraftOrchestrator,
+      "inspectPromptPermissions" | "validateKnowledgeConflictForSend"
+    >>;
   answerSourcePermissionVerifier: AnswerSourcePermissionVerifier;
   chatKnowledgeDraftGenerator?: ChatKnowledgeDraftGenerator;
   groupMemoryService?: GroupMemoryService;
@@ -175,9 +178,15 @@ export type AnswerDraftRuntimeDependencies = {
   }) => ConversationStateContextProvider;
   createKnowledgeConflictRepository?: (dependencies: {
     dataSource: PostgresKnowledgeConflictDataSource;
-  }) => Pick<KnowledgeConflictRepository, "findCurrentOverlap">;
+  }) => Pick<
+    KnowledgeConflictRepository,
+    "findCurrentOverlap" | "getCandidate" | "validateCandidateCurrentState"
+  >;
   createKnowledgeConflictAnswerProvider?: (dependencies: {
-    repository: Pick<KnowledgeConflictRepository, "findCurrentOverlap">;
+    repository: Pick<
+      KnowledgeConflictRepository,
+      "findCurrentOverlap" | "getCandidate" | "validateCandidateCurrentState"
+    >;
     documentSources: Pick<AsyncDocumentSourceRegistry, "findSourceById">;
     permissionChecker: Pick<FeishuDocumentPermissionChecker, "canReadSource">;
   }) => KnowledgeConflictAnswerProvider;
@@ -398,6 +407,12 @@ export function createAnswerDraftRuntime({
   }
 
   const answerDraftOrchestrator: AnswerDraftOrchestrator = {
+    validateKnowledgeConflictForSend(input) {
+      if (knowledgeConflictAnswerProvider?.validateForSend === undefined) {
+        return Promise.resolve({ status: "blocked" });
+      }
+      return knowledgeConflictAnswerProvider.validateForSend(input);
+    },
     generateDraft(input) {
       const scoped = createScopedAnswerDraftOrchestrator(input);
       return scoped.orchestrator.generateDraft({

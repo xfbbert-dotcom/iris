@@ -9,6 +9,8 @@ import {
 import type { KnowledgeConflictCandidate } from
   "../src/knowledge-conflicts/knowledge-conflict.js";
 import type { PromptGroupMemory } from "../src/memory/context-assembly.js";
+import { KnowledgeConflictStaleEvidenceError } from
+  "../src/knowledge-conflicts/knowledge-conflict-repository.js";
 
 const answerAt = new Date("2026-08-15T03:00:00.000Z");
 
@@ -20,7 +22,7 @@ describe("KnowledgeConflictAnswerProvider", () => {
       return candidate();
     });
     const provider = createKnowledgeConflictAnswerProvider({
-      repository: { findCurrentOverlap },
+      repository: repository({ findCurrentOverlap }),
       documentSources: {
         async findSourceById(id) {
           trace.push(`source:${id}`);
@@ -42,7 +44,15 @@ describe("KnowledgeConflictAnswerProvider", () => {
       allowedFragments: [fragment()],
     });
 
-    expect(trace).toEqual(["source:source-a", "permission:source-a", "repository"]);
+    expect(trace).toEqual([
+      "source:source-a",
+      "permission:source-a",
+      "repository",
+      "source:source-a",
+      "permission:source-a",
+      "source:source-a",
+      "permission:source-a",
+    ]);
     expect(findCurrentOverlap).toHaveBeenCalledWith({
       groupId: "group-a",
       groupMemoryIds: ["memory-a"],
@@ -71,7 +81,7 @@ describe("KnowledgeConflictAnswerProvider", () => {
   it("falls through without repository text access when live permission is denied", async () => {
     const findCurrentOverlap = vi.fn();
     const provider = createKnowledgeConflictAnswerProvider({
-      repository: { findCurrentOverlap },
+      repository: repository({ findCurrentOverlap }),
       documentSources: { async findSourceById() { return source(); } },
       permissionChecker: { async canReadSource() { return false; } },
       now: () => answerAt,
@@ -106,11 +116,143 @@ describe("KnowledgeConflictAnswerProvider", () => {
       allowedFragments: [fragment()],
     })).resolves.toBeUndefined();
   });
+
+  it("binds the conflict citation to the exact fragment when a document has multiple fragments", async () => {
+    const provider = providerReturning(candidate());
+
+    const result = await provider.findConflictPlan({
+      groupId: "group-a",
+      usedGroupMemories: [memory()],
+      allowedFragments: [
+        fragment({ id: "fragment-other", contentHash: "c".repeat(64) }),
+        fragment(),
+      ],
+    });
+
+    expect(result?.plan.premises[1]?.citationRef).toBe("D2");
+  });
+
+  it("uses the true earliest permission completion time for a multi-document lookup", async () => {
+    const firstCheckAt = new Date("2026-08-15T03:00:00.000Z");
+    const agedLookupAt = new Date(firstCheckAt.getTime() + 61_000);
+    const times = [firstCheckAt, agedLookupAt, agedLookupAt];
+    const findCurrentOverlap = vi.fn(async (input) => {
+      expect(input.permissionAttestedAt).toEqual(firstCheckAt);
+      expect(input.at).toEqual(agedLookupAt);
+      throw new KnowledgeConflictStaleEvidenceError("permission_stale");
+    });
+    const provider = createKnowledgeConflictAnswerProvider({
+      repository: repository({ findCurrentOverlap }),
+      documentSources: {
+        async findSourceById(id) { return source({ id }); },
+      },
+      permissionChecker: { async canReadSource() { return true; } },
+      now: () => times.shift() ?? agedLookupAt,
+    });
+
+    await expect(provider.findConflictPlan({
+      groupId: "group-a",
+      usedGroupMemories: [memory()],
+      allowedFragments: [
+        fragment(),
+        fragment({
+          id: "fragment-b",
+          documentSourceId: "source-b",
+          documentSnapshotId: "snapshot-b",
+        }),
+      ],
+    })).resolves.toBeUndefined();
+    expect(findCurrentOverlap).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["dismissed candidate", { candidate: candidate({ status: "dismissed" }) }],
+    ["superseded candidate", { candidate: candidate({ status: "superseded" }) }],
+    ["memory update", { reasonCode: "memory_stale" }],
+    ["source update", { reasonCode: "source_stale" }],
+    ["latest snapshot change", { reasonCode: "snapshot_stale" }],
+    ["fragment change", { reasonCode: "fragment_stale" }],
+  ] as const)("blocks final send after %s", async (_label, scenario) => {
+    const currentCandidate = "candidate" in scenario
+      ? scenario.candidate
+      : candidate();
+    const validateCandidateCurrentState = vi.fn(async () => (
+      "reasonCode" in scenario
+        ? { status: "superseded" as const, candidate: currentCandidate,
+            reasonCode: scenario.reasonCode }
+        : { status: "current" as const, candidate: currentCandidate }
+    ));
+    const provider = createKnowledgeConflictAnswerProvider({
+      repository: repository({
+        getCandidate: vi.fn(async () => currentCandidate),
+        validateCandidateCurrentState,
+      }),
+      documentSources: { async findSourceById() { return source(); } },
+      permissionChecker: { async canReadSource() { return true; } },
+      now: () => answerAt,
+    });
+
+    await expect(provider.validateForSend({
+      candidateId: "candidate-a",
+      groupId: "group-a",
+      sources: [answerSourceIdentity()],
+    })).resolves.toEqual({ status: "blocked" });
+  });
+
+  it("rechecks target permission at the final boundary and reports its actual timestamp", async () => {
+    const finalPermissionAt = new Date(answerAt.getTime() + 1_000);
+    const now = vi.fn()
+      .mockReturnValueOnce(answerAt)
+      .mockReturnValue(finalPermissionAt);
+    const validateCandidateCurrentState = vi.fn(async () => ({
+      status: "current" as const,
+      candidate: candidate(),
+    }));
+    const provider = createKnowledgeConflictAnswerProvider({
+      repository: repository({ validateCandidateCurrentState }),
+      documentSources: { async findSourceById() { return source(); } },
+      permissionChecker: { async canReadSource() { return true; } },
+      now,
+    });
+
+    await expect(provider.validateForSend({
+      candidateId: "candidate-a",
+      groupId: "group-a",
+      sources: [answerSourceIdentity()],
+    })).resolves.toEqual({
+      status: "current",
+      permissionAttestedAt: finalPermissionAt,
+    });
+    expect(validateCandidateCurrentState).toHaveBeenCalledWith(expect.objectContaining({
+      candidateId: "candidate-a",
+      expectedVersion: 3,
+      permissionAttestedAt: finalPermissionAt,
+      at: finalPermissionAt,
+    }));
+  });
+
+  it("blocks when permission is revoked between preparation and the final send gate", async () => {
+    const canReadSource = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const provider = createKnowledgeConflictAnswerProvider({
+      repository: repository(),
+      documentSources: { async findSourceById() { return source(); } },
+      permissionChecker: { canReadSource },
+      now: () => answerAt,
+    });
+
+    await expect(provider.validateForSend({
+      candidateId: "candidate-a",
+      groupId: "group-a",
+      sources: [answerSourceIdentity()],
+    })).resolves.toEqual({ status: "blocked" });
+  });
 });
 
 function providerReturning(currentCandidate: KnowledgeConflictCandidate | undefined) {
   return createKnowledgeConflictAnswerProvider({
-    repository: { findCurrentOverlap: vi.fn(async () => currentCandidate) },
+    repository: repository({ findCurrentOverlap: vi.fn(async () => currentCandidate) }),
     documentSources: { async findSourceById() { return source(); } },
     permissionChecker: { async canReadSource() { return true; } },
     now: () => answerAt,
@@ -135,7 +277,7 @@ function fragment(overrides: Partial<RetrievedDocumentFragment> = {}): Retrieved
   };
 }
 
-function source(): DocumentSource {
+function source(overrides: Partial<DocumentSource> = {}): DocumentSource {
   return {
     id: "source-a", sourceType: "authorized_wiki_document",
     sourceUri: "https://example.invalid/wiki/source-a", authorizedSpaceId: "space-a",
@@ -144,6 +286,28 @@ function source(): DocumentSource {
     updatedAt: new Date("2026-08-14T01:00:00.000Z"),
     evidence: [{ kind: "admin_authorization", sourceUri: "https://example.invalid/wiki/source-a",
       spaceId: "space-a", observedAt: answerAt }],
+    ...overrides,
+  };
+}
+
+function repository(overrides: Record<string, unknown> = {}) {
+  return {
+    findCurrentOverlap: vi.fn(async () => candidate()),
+    getCandidate: vi.fn(async () => candidate()),
+    validateCandidateCurrentState: vi.fn(async () => ({
+      status: "current" as const,
+      candidate: candidate(),
+    })),
+    ...overrides,
+  };
+}
+
+function answerSourceIdentity() {
+  return {
+    documentSourceId: "source-a",
+    documentSnapshotId: "snapshot-a",
+    fragmentId: "fragment-a",
+    contentHash: "b".repeat(64),
   };
 }
 

@@ -23,6 +23,10 @@ import type {
   AnswerSourcePermissionDecision,
   AnswerSourcePermissionVerifier,
 } from "./answer-source-permission-verifier.js";
+import type {
+  KnowledgeConflictAnswerSourceIdentity,
+  KnowledgeConflictAnswerValidationResult,
+} from "../knowledge-conflicts/knowledge-conflict-answer-provider.js";
 
 export const ANSWER_PERMISSION_CHANGED_NOTICE =
   "资料权限已变化，我没有发送原答案。请重新提问。";
@@ -37,6 +41,11 @@ export type AnswerReplyDeliveryRequest = {
     blockedDocumentSourceIds: readonly string[];
     checkedAt: Date;
   }>;
+  validateKnowledgeConflictForSend?(input: {
+    candidateId: string;
+    groupId: string;
+    sources: readonly KnowledgeConflictAnswerSourceIdentity[];
+  }): Promise<KnowledgeConflictAnswerValidationResult>;
   prepareAnswer(): Promise<{
     renderedText: string;
     sourceTraces: AnswerReplySourceTraceInput[];
@@ -136,7 +145,7 @@ export function createAnswerReplyDeliveryService({
         return sendOrResumeSafeNotice(receipt);
       case "prepared":
       case "sending":
-        return verifyThenSendPreparedAnswer(receipt);
+        return verifyThenSendPreparedAnswer(input, receipt);
     }
   }
 
@@ -259,6 +268,7 @@ export function createAnswerReplyDeliveryService({
   }
 
   async function verifyThenSendPreparedAnswer(
+    input: AnswerReplyDeliveryRequest,
     receipt: AnswerReplyReceipt,
   ): Promise<{ replyMessageId?: string }> {
     const documentSourceIds = uniqueDocumentSourceIds(receipt);
@@ -268,19 +278,17 @@ export function createAnswerReplyDeliveryService({
     );
 
     if (blockedDocumentSourceIds.length > 0) {
-      const at = now();
-      const blocked = requireBlockForPermissionReceipt(
-        await repository.blockForPermission({
-          deliveryId: receipt.delivery.id,
-          expectedVersion: receipt.delivery.version,
-          documentSourceIds: blockedDocumentSourceIds,
-          at,
-        }),
-        receipt,
-        at,
-        blockedDocumentSourceIds,
-      );
-      return sendOrResumeSafeNotice(blocked);
+      return blockPreparedAnswer(receipt, blockedDocumentSourceIds);
+    }
+
+    if (receipt.delivery.knowledgeConflictCandidateId !== undefined) {
+      const validation = await safelyValidateKnowledgeConflictForSend(input, receipt);
+      if (validation.status !== "current") {
+        if (documentSourceIds.length === 0) {
+          throw contractError();
+        }
+        return blockPreparedAnswer(receipt, documentSourceIds);
+      }
     }
 
     const beginAt = now();
@@ -314,6 +322,46 @@ export function createAnswerReplyDeliveryService({
       completeAt,
     );
     return optionalReplyId(sent.delivery.replyMessageId);
+  }
+
+  async function safelyValidateKnowledgeConflictForSend(
+    input: AnswerReplyDeliveryRequest,
+    receipt: AnswerReplyReceipt,
+  ): Promise<KnowledgeConflictAnswerValidationResult> {
+    if (input.validateKnowledgeConflictForSend === undefined) {
+      return { status: "blocked" };
+    }
+    try {
+      const result: unknown = await input.validateKnowledgeConflictForSend({
+        candidateId: receipt.delivery.knowledgeConflictCandidateId!,
+        groupId: receipt.delivery.chatId,
+        sources: toKnowledgeConflictAnswerSourceIdentities(receipt),
+      });
+      return isKnowledgeConflictAnswerValidationResult(result)
+        ? result
+        : { status: "blocked" };
+    } catch {
+      return { status: "blocked" };
+    }
+  }
+
+  async function blockPreparedAnswer(
+    receipt: AnswerReplyReceipt,
+    documentSourceIds: readonly string[],
+  ): Promise<{ replyMessageId?: string }> {
+    const at = now();
+    const blocked = requireBlockForPermissionReceipt(
+      await repository.blockForPermission({
+        deliveryId: receipt.delivery.id,
+        expectedVersion: receipt.delivery.version,
+        documentSourceIds: [...documentSourceIds],
+        at,
+      }),
+      receipt,
+      at,
+      documentSourceIds,
+    );
+    return sendOrResumeSafeNotice(blocked);
   }
 
   async function findBlockedDocumentSourceIds(
@@ -589,6 +637,29 @@ function uniqueDocumentSourceIds(receipt: AnswerReplyReceipt): string[] {
     }
   }
   return result;
+}
+
+function toKnowledgeConflictAnswerSourceIdentities(
+  receipt: AnswerReplyReceipt,
+): KnowledgeConflictAnswerSourceIdentity[] {
+  return receipt.sources.map((source) => ({
+    documentSourceId: source.documentSourceId,
+    documentSnapshotId: source.documentSnapshotId,
+    fragmentId: source.fragmentId,
+    contentHash: source.contentHash,
+  }));
+}
+
+function isKnowledgeConflictAnswerValidationResult(
+  value: unknown,
+): value is KnowledgeConflictAnswerValidationResult {
+  return isRecord(value)
+    && (
+      value.status === "blocked"
+      || value.status === "current"
+        && value.permissionAttestedAt instanceof Date
+        && Number.isFinite(value.permissionAttestedAt.getTime())
+    );
 }
 
 function hasExactPermissionDecisions(

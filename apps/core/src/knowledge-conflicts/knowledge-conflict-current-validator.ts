@@ -35,6 +35,7 @@ export function createKnowledgeConflictCurrentValidator(dependencies: {
   documentSources: { findSourceById(id: string): Promise<DocumentSource | undefined> };
   permissionChecker: FeishuDocumentPermissionChecker;
   now?: () => Date;
+  isEligibleSource?: (source: DocumentSource) => boolean;
 }): KnowledgeConflictCurrentValidator {
   const now = dependencies.now ?? (() => new Date());
   return {
@@ -51,6 +52,9 @@ export function createKnowledgeConflictCurrentValidator(dependencies: {
           documentSources: dependencies.documentSources,
           permissionChecker: dependencies.permissionChecker,
           now,
+          ...(dependencies.isEligibleSource === undefined
+            ? {}
+            : { isEligibleSource: dependencies.isEligibleSource }),
         });
         if (permission.status === "stale" && permission.permissionAttestedAt === undefined) {
           return { status: "superseded", candidate, reason: permission.reason };
@@ -62,7 +66,10 @@ export function createKnowledgeConflictCurrentValidator(dependencies: {
         if (permissionAttestedAt === undefined) {
           throw new KnowledgeConflictPermissionUnavailableError();
         }
-        const at = new Date(permissionAttestedAt);
+        const at = now();
+        if (!(at instanceof Date) || Number.isNaN(at.getTime())) {
+          throw new KnowledgeConflictPermissionUnavailableError();
+        }
         const result = await dependencies.repository.validateCandidateCurrentState({
           candidateId: candidate.id,
           expectedVersion,

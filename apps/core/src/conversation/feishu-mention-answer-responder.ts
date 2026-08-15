@@ -45,7 +45,10 @@ export type FeishuMentionAnswerResponder = {
 export type FeishuMentionAnswerResponderDependencies = {
   botOpenId: string;
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">
-    & Partial<Pick<AnswerDraftOrchestrator, "inspectPromptPermissions">>;
+    & Partial<Pick<
+      AnswerDraftOrchestrator,
+      "inspectPromptPermissions" | "validateKnowledgeConflictForSend"
+    >>;
   answerReplyDeliveryService: Pick<AnswerReplyDeliveryService, "respond">;
   replier: Pick<FeishuMessageReplier, "replyText">;
   now?: () => Date;
@@ -321,6 +324,8 @@ export function createFeishuMentionAnswerResponder({
           }],
         };
         try {
+          const validateKnowledgeConflictForSend =
+            answerDraftOrchestrator.validateKnowledgeConflictForSend;
           const result = toRepliedResult(
             await answerReplyDeliveryService.respond({
               provider: "feishu",
@@ -328,6 +333,12 @@ export function createFeishuMentionAnswerResponder({
               chatId: input.chatId,
               replyUuid,
               safeNoticeUuid: createAnswerReplySafeNoticeUuid(input.messageId),
+              ...(validateKnowledgeConflictForSend === undefined
+                ? {}
+                : {
+                    validateKnowledgeConflictForSend: (validationInput) =>
+                      validateKnowledgeConflictForSend(validationInput),
+                  }),
               inspectPromptPermissions: async () => {
                 if (answerDraftOrchestrator.inspectPromptPermissions === undefined) {
                   throw new Error("answer prompt permission inspection is unavailable");
