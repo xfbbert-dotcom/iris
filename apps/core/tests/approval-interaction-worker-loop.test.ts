@@ -65,6 +65,22 @@ describe("ApprovalInteractionWorkerLoop", () => {
     expect(stopped).toBe(true);
   });
 
+  it("stops before the next poll so queued callbacks remain unclaimed", async () => {
+    vi.useFakeTimers();
+    const worker = { processBatch: vi.fn(async () => []) };
+    const loop = createApprovalInteractionWorkerLoop({
+      worker,
+      intervalMs: 1000,
+      batchLimit: 10,
+    });
+
+    loop.start();
+    await loop.stop();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(worker.processBatch).not.toHaveBeenCalled();
+  });
+
   it("records a content-free error category and continues polling", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-19T03:00:00.000Z"));

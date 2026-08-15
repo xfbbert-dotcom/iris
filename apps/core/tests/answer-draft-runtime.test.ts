@@ -14,6 +14,7 @@ import {
   createAnswerDraftRuntime as createProductionAnswerDraftRuntime,
 } from "../src/runtime/answer-draft-runtime.js";
 import {
+  createCompanyFactReasoningDoubles,
   createCompanyFactReasoningRuntimeDependencies,
   createDirectTaskReasoningDoubles,
 } from "./answer-reasoning-test-doubles.js";
@@ -123,6 +124,137 @@ describe("createAnswerDraftRuntime", () => {
 
     await runtime?.close();
     expect(pool.end).toHaveBeenCalled();
+  });
+
+  it("keeps persisted conflict lookup out of ordinary answers unless a gated provider is supplied", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn(),
+      end: vi.fn(async () => undefined),
+    };
+    const persistedConflictProvider = {
+      findConflictPlan: vi.fn(async () => undefined),
+      validateForSend: vi.fn(async () => ({
+        status: "current" as const,
+        permissionAttestedAt: new Date("2026-08-15T08:00:00.000Z"),
+      })),
+    };
+    const reasoning = createCompanyFactReasoningDoubles();
+    const runtime = createProductionAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+      },
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createGroupMemoryRepository: vi.fn(() => ({
+          listActiveByGroup: vi.fn(async () => []),
+        }) as unknown as GroupMemoryRepository),
+        createGroupMemoryService: vi.fn(() => ({ service: true }) as unknown as GroupMemoryService),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => ({ findSourceById: vi.fn() })),
+        createConversationMessageRepository: vi.fn(() => ({ listRecentByChat: vi.fn(async () => []) })),
+        createLiveChatContextProvider: vi.fn(() => ({ loadRecentMessages: vi.fn(async () => []) })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Ordinary answer" })),
+        })),
+        createEvidencePlanner: vi.fn(() => reasoning.planner),
+        createGroundedAnswerRenderer: vi.fn(() => reasoning.renderer),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+        createFeishuTenantAccessTokenProvider: vi.fn(() => ({
+          getTenantAccessToken: vi.fn(async () => "tenant-token"),
+        })),
+        createFeishuDocumentPermissionChecker: vi.fn(() => ({
+          canReadSource: vi.fn(async () => true),
+        })),
+        createKnowledgeConflictRepository: vi.fn(() => ({ persistedCandidate: true }) as never),
+        createKnowledgeConflictAnswerProvider: vi.fn(() => persistedConflictProvider),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What is the current company policy?",
+      chatId: "group-outside-conflict-allowlist",
+      liveChatMessages: [],
+    });
+
+    expect(result?.knowledgeConflictCandidateId).toBeUndefined();
+    expect(reasoning.planner.plan).toHaveBeenCalledOnce();
+    expect(persistedConflictProvider.findConflictPlan).not.toHaveBeenCalled();
+    await expect(runtime!.answerDraftOrchestrator.validateKnowledgeConflictForSend!({
+      candidateId: "persisted-current-candidate",
+      groupId: "group-outside-conflict-allowlist",
+      sources: [],
+    })).resolves.toEqual({ status: "blocked" });
+    expect(persistedConflictProvider.validateForSend).not.toHaveBeenCalled();
+
+    await runtime?.close();
+  });
+
+  it("keeps standalone conflict composition behind an explicit opt-in", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn(),
+      end: vi.fn(async () => undefined),
+    };
+    const validateForSend = vi.fn(async () => ({
+      status: "current" as const,
+      permissionAttestedAt: new Date("2026-08-15T08:00:00.000Z"),
+    }));
+    const runtime = createProductionAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+      },
+      enableStandaloneKnowledgeConflictAnswerProvider: true,
+      dependencies: {
+        createPostgresPool: vi.fn(() => pool),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => ({ findSourceById: vi.fn() })),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Ordinary answer" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+        createFeishuTenantAccessTokenProvider: vi.fn(() => ({
+          getTenantAccessToken: vi.fn(async () => "tenant-token"),
+        })),
+        createFeishuDocumentPermissionChecker: vi.fn(() => ({
+          canReadSource: vi.fn(async () => true),
+        })),
+        createKnowledgeConflictRepository: vi.fn(() => ({ persistedCandidate: true }) as never),
+        createKnowledgeConflictAnswerProvider: vi.fn(() => ({
+          findConflictPlan: vi.fn(async () => undefined),
+          validateForSend,
+        })),
+      },
+    });
+
+    await expect(runtime!.answerDraftOrchestrator.validateKnowledgeConflictForSend!({
+      candidateId: "persisted-current-candidate",
+      groupId: "standalone-test-group",
+      sources: [],
+    })).resolves.toEqual({
+      status: "current",
+      permissionAttestedAt: new Date("2026-08-15T08:00:00.000Z"),
+    });
+    expect(validateForSend).toHaveBeenCalledOnce();
+    await runtime?.close();
   });
 
   it("exposes a group memory service when the Postgres pool supports transactions", async () => {

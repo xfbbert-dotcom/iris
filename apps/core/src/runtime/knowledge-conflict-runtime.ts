@@ -86,7 +86,11 @@ import { observeStartupPromise } from "./startup-promise.js";
 const SCANNER_WORKER_ID = "knowledge-conflict-scanner";
 const DISPATCHER_WORKER_ID = "knowledge-conflict-dispatcher";
 const DETECTOR_CONTRACT_VERSION = "knowledge-conflict-v1";
-const MIGRATION_0046 = "0046_knowledge_conflict_candidates.sql";
+const REQUIRED_MIGRATIONS = {
+  migration0046Applied: "0046_knowledge_conflict_candidates.sql",
+  migration0047Applied: "0047_knowledge_conflict_callback_identities.sql",
+  migration0048Applied: "0048_knowledge_conflict_draft_reattestations.sql",
+} as const;
 
 type KnowledgeConflictRuntimeGate = Pick<RuntimeController,
   | "canProcessGroupMessage"
@@ -104,6 +108,8 @@ export type KnowledgeConflictRuntimeStatus = {
   enabled: true;
   running: boolean;
   migration0046Applied: boolean;
+  migration0047Applied: boolean;
+  migration0048Applied: boolean;
   enabledGroupCount: number;
   scanner: KnowledgeConflictScannerLoopSnapshot;
   dispatcher: KnowledgeConflictDispatcherLoopSnapshot;
@@ -138,7 +144,7 @@ export type KnowledgeConflictRuntimeComposition = {
   scannerLoop: KnowledgeConflictScannerLoop;
   dispatcherLoop: DispatcherLoop;
   prepare(): Promise<void>;
-  isMigration0046Applied(): Promise<boolean>;
+  getRequiredMigrationStatus(): Promise<KnowledgeConflictMigrationStatus>;
   canUseForEvidence(groupId: string): boolean;
   canUseForAnswer(groupId: string): boolean;
 };
@@ -156,6 +162,11 @@ export type KnowledgeConflictRuntimeCompositionInput = {
 type KnowledgeConflictPool = PostgresKnowledgeConflictDataSource & {
   end(): Promise<void>;
 };
+
+type KnowledgeConflictMigrationStatus = Pick<
+  KnowledgeConflictRuntimeStatus,
+  "migration0046Applied" | "migration0047Applied" | "migration0048Applied"
+>;
 
 export type KnowledgeConflictRuntimeDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => KnowledgeConflictPool;
@@ -245,12 +256,20 @@ export function createKnowledgeConflictRuntime({
       return composition!.answerProvider.validateForSend?.(input) ?? { status: "blocked" };
     },
   };
+  const interactionWorker: KnowledgeConflictInteractionDelegate = {
+    processInteraction(job) {
+      if (lifecycle !== "started") {
+        return Promise.resolve({ status: "retryable", code: "internal_error" });
+      }
+      return composition!.interactionWorker.processInteraction(job);
+    },
+  };
 
   return {
     repository: composition.repository,
     currentValidator: composition.currentValidator,
     answerProvider,
-    interactionWorker: composition.interactionWorker,
+    interactionWorker,
     canUseKnowledgeConflict: canUseForDelivery,
     start() {
       if (lifecycle === "closed") {
@@ -283,8 +302,9 @@ export function createKnowledgeConflictRuntime({
       try {
         const scanner = composition!.scannerLoop.getSnapshot();
         const dispatcher = composition!.dispatcherLoop.getSnapshot();
-        const migration0046Applied = await composition!.isMigration0046Applied();
-        const [scans, candidates, deliveries, interactions] = migration0046Applied
+        const migrations = await composition!.getRequiredMigrationStatus();
+        const requiredMigrationsApplied = Object.values(migrations).every((applied) => applied);
+        const [scans, candidates, deliveries, interactions] = requiredMigrationsApplied
           ? await Promise.all([
               composition!.repository.getScanStatusCounts(),
               composition!.repository.getCandidateStatusCounts(),
@@ -295,7 +315,7 @@ export function createKnowledgeConflictRuntime({
         return {
           enabled: true,
           running: lifecycle === "started" && scanner.running && dispatcher.running,
-          migration0046Applied,
+          ...migrations,
           enabledGroupCount: enabledGroups.size,
           scanner,
           dispatcher,
@@ -474,14 +494,20 @@ function createDefaultComposition(
         throw new Error("knowledge conflict dependency startup failed");
       }
     },
-    async isMigration0046Applied() {
-      const result = await input.pool.query<{ present: boolean }>(
-        `select exists (
-           select 1 from schema_migrations where name = $1
-         ) as present`,
-        [MIGRATION_0046],
+    async getRequiredMigrationStatus() {
+      const requiredNames = Object.values(REQUIRED_MIGRATIONS);
+      const result = await input.pool.query<{ name: string }>(
+        `select name
+           from schema_migrations
+          where name = any($1::text[])`,
+        [requiredNames],
       );
-      return result.rows[0]?.present === true;
+      const present = new Set(result.rows.map(({ name }) => name));
+      return {
+        migration0046Applied: present.has(REQUIRED_MIGRATIONS.migration0046Applied),
+        migration0047Applied: present.has(REQUIRED_MIGRATIONS.migration0047Applied),
+        migration0048Applied: present.has(REQUIRED_MIGRATIONS.migration0048Applied),
+      };
     },
   };
 }

@@ -419,6 +419,7 @@ describe("answer draft runtime wiring", () => {
     expect(createAnswerDraftRuntime).toHaveBeenCalledWith({
       dependencies: { auditLog },
       runtimeController: expect.any(Object),
+      knowledgeConflictAnswerProvider: null,
     });
   });
 

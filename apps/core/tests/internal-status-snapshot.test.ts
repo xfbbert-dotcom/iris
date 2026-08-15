@@ -392,6 +392,8 @@ describe("buildInternalStatusSnapshot", () => {
           enabled: true,
           running: true,
           migration0046Applied: true,
+          migration0047Applied: true,
+          migration0048Applied: true,
           enabledGroupCount: 1,
           scans: { pending: 1, processing: 0, retry: 0, completed: 2, deadLettered: 0 },
           candidates: {

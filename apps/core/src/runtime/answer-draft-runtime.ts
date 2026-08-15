@@ -213,12 +213,14 @@ export function createAnswerDraftRuntime({
   runtimeController,
   agentExecutionObserver,
   knowledgeConflictAnswerProvider: providedKnowledgeConflictAnswerProvider,
+  enableStandaloneKnowledgeConflictAnswerProvider = false,
 }: {
   env?: EnvLike;
   dependencies?: AnswerDraftRuntimeDependencies;
   runtimeController?: RuntimeRetrievalGate;
   agentExecutionObserver?: AgentExecutionObserver;
-  knowledgeConflictAnswerProvider?: KnowledgeConflictAnswerProvider;
+  knowledgeConflictAnswerProvider?: KnowledgeConflictAnswerProvider | null;
+  enableStandaloneKnowledgeConflictAnswerProvider?: boolean;
 } = {}): AnswerDraftRuntime | undefined {
   const runtimeConfig = readAnswerDraftRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
@@ -295,8 +297,10 @@ export function createAnswerDraftRuntime({
     runtimeConfig.permissionMode === "source-policy"
       ? createSources({ queryable: pool })
       : undefined;
-  const knowledgeConflictAnswerProvider = providedKnowledgeConflictAnswerProvider ??
-    (sourceRegistry !== undefined
+  const knowledgeConflictAnswerProvider = providedKnowledgeConflictAnswerProvider !== undefined
+    ? (providedKnowledgeConflictAnswerProvider ?? undefined)
+    : (enableStandaloneKnowledgeConflictAnswerProvider === true
+      && sourceRegistry !== undefined
       && livePermissionChecker !== undefined
       && isPostgresKnowledgeConflictDataSource(pool)
       ? createConflictAnswerProvider({

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeController } from "../src/admin/runtime-controller.js";
 import { createDefaultRuntimeConfig } from "../src/config/runtime-config.js";
+import { createApprovalInteractionWorker } from
+  "../src/knowledge-cards/approval-interaction-worker.js";
 import type { KnowledgeConflictRepository } from
   "../src/knowledge-conflicts/knowledge-conflict-repository.js";
 import {
@@ -53,6 +55,31 @@ describe("createKnowledgeConflictRuntime", () => {
     expect(composition.canUseForEvidence("group-a")).toBe(true);
   });
 
+  it("queries the shared answer provider only for started allowlisted groups", async () => {
+    const findConflictPlan = vi.fn(async () => undefined);
+    const composition = fakeComposition({ answerProvider: { findConflictPlan } });
+    const runtime = createKnowledgeConflictRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      getKnowledgeCardPresentationRuntime: () => undefined,
+      dependencies: runtimeDependencies(composition),
+    })!;
+    const answerInput = { usedGroupMemories: [], allowedFragments: [] };
+
+    await runtime.answerProvider.findConflictPlan({ groupId: "group-a", ...answerInput });
+    expect(findConflictPlan).not.toHaveBeenCalled();
+
+    await runtime.start();
+    await runtime.answerProvider.findConflictPlan({
+      groupId: "group-outside-allowlist",
+      ...answerInput,
+    });
+    expect(findConflictPlan).not.toHaveBeenCalled();
+
+    await runtime.answerProvider.findConflictPlan({ groupId: "group-a", ...answerInput });
+    expect(findConflictPlan).toHaveBeenCalledOnce();
+  });
+
   it("reports only content-free lifecycle and durable counts", async () => {
     const composition = fakeComposition();
     const runtime = createKnowledgeConflictRuntime({
@@ -69,6 +96,8 @@ describe("createKnowledgeConflictRuntime", () => {
       enabled: true,
       running: true,
       migration0046Applied: true,
+      migration0047Applied: true,
+      migration0048Applied: true,
       enabledGroupCount: 1,
       scans: { pending: 1, processing: 2, retry: 3, completed: 4, deadLettered: 0 },
       candidates: { pending_review: 1 },
@@ -98,12 +127,25 @@ describe("createKnowledgeConflictRuntime", () => {
     await expect(runtime.getStatus()).rejects.toThrow("knowledge conflict status unavailable");
   });
 
-  it("reports a missing migration without querying unavailable conflict tables", async () => {
+  it.each([
+    ["0046", { migration0046Applied: false }, "migration0046Applied"],
+    ["0047", { migration0047Applied: false }, "migration0047Applied"],
+    ["0048", { migration0048Applied: false }, "migration0048Applied"],
+  ] as const)("reports missing migration %s without querying conflict tables", async (
+    _migration,
+    override,
+    missingField,
+  ) => {
     const repository = fakeRepository();
     const composition = fakeComposition({
       repository,
-      isMigration0046Applied: vi.fn(async () => false),
-    });
+      getRequiredMigrationStatus: vi.fn(async () => ({
+        migration0046Applied: true,
+        migration0047Applied: true,
+        migration0048Applied: true,
+        ...override,
+      })),
+    } as never);
     const runtime = createKnowledgeConflictRuntime({
       env: enabledEnv(),
       runtimeController: runtimeController(),
@@ -113,7 +155,7 @@ describe("createKnowledgeConflictRuntime", () => {
     await runtime.start();
 
     await expect(runtime.getStatus()).resolves.toMatchObject({
-      migration0046Applied: false,
+      [missingField]: false,
       scans: { pending: 0, deadLettered: 0 },
       deliveries: { terminalFailed: 0, outcomeUnknown: 0 },
     });
@@ -121,6 +163,79 @@ describe("createKnowledgeConflictRuntime", () => {
     expect(repository.getCandidateStatusCounts).not.toHaveBeenCalled();
     expect(repository.getDeliveryStatusCounts).not.toHaveBeenCalled();
     expect(repository.getInteractionResultCounts).not.toHaveBeenCalled();
+  });
+
+  it("retains a callback during dependency preparation and applies it after startup", async () => {
+    const prepared = deferred<void>();
+    let dependencyReady = false;
+    const processInteraction = vi.fn(async () => dependencyReady
+      ? { status: "applied" as const, code: "conflict_dismissed" as const }
+      : { status: "denied" as const, code: "runtime_disabled" as const });
+    const composition = fakeComposition({
+      prepare: vi.fn(async () => {
+        await prepared.promise;
+        dependencyReady = true;
+      }),
+      interactionWorker: { processInteraction },
+    });
+    const runtime = createKnowledgeConflictRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      getKnowledgeCardPresentationRuntime: () => undefined,
+      dependencies: runtimeDependencies(composition),
+    })!;
+    const callback = conflictCallbackJob();
+    const queue = {
+      claimBatch: vi.fn(async () => [callback]),
+      acknowledge: vi.fn(async () => undefined),
+      handleFailure: vi.fn(async () => ({ action: "delayed" as const })),
+    };
+    const approvalWorker = createApprovalInteractionWorker({
+      queue,
+      repository: {
+        getPresentation: vi.fn(),
+        getPresentationContext: vi.fn(),
+        applyInteraction: vi.fn(),
+      },
+      membershipChecker: { isCurrentMember: vi.fn() },
+      cardClient: { updateCard: vi.fn() },
+      canUseKnowledgeCards: () => true,
+      botOpenId: "ou_iris",
+      workerId: "approval-worker-1",
+      leaseMs: 30_000,
+      now: () => new Date("2026-08-15T08:00:00.000Z"),
+      callbackIdentityStore: {
+        resolveIdentity: vi.fn(async () => ({
+          eventId: "event-1",
+          appId: "app-id",
+          actorOpenId: "ou_member",
+          chatId: "group-a",
+          messageId: "message-1",
+        })),
+      },
+      knowledgeConflictInteractionWorker: runtime.interactionWorker,
+    });
+
+    const startup = runtime.start();
+    await Promise.resolve();
+    expect(composition.prepare).toHaveBeenCalledOnce();
+
+    await expect(approvalWorker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "retrying",
+      idempotencyKey: callback.idempotencyKey,
+      code: "internal_error",
+    }]);
+    expect(queue.handleFailure).toHaveBeenCalledOnce();
+    expect(queue.acknowledge).not.toHaveBeenCalled();
+
+    prepared.resolve();
+    await startup;
+    await expect(approvalWorker.processBatch({ limit: 1 })).resolves.toEqual([{
+      status: "applied",
+      idempotencyKey: callback.idempotencyKey,
+      code: "conflict_dismissed",
+    }]);
+    expect(queue.acknowledge).toHaveBeenCalledOnce();
   });
 
   it("closes both loops before Postgres exactly once", async () => {
@@ -240,7 +355,11 @@ function fakeComposition(
     scannerLoop: fakeScannerLoop(),
     dispatcherLoop: fakeDispatcherLoop(),
     prepare: vi.fn(async () => undefined),
-    isMigration0046Applied: vi.fn(async () => true),
+    getRequiredMigrationStatus: vi.fn(async () => ({
+      migration0046Applied: true,
+      migration0047Applied: true,
+      migration0048Applied: true,
+    })),
     canUseForEvidence: vi.fn(() => false),
     canUseForAnswer: vi.fn(() => false),
     ...overrides,
@@ -299,6 +418,32 @@ function fakeRepository(
     })),
     ...overrides,
   } as KnowledgeConflictRepository;
+}
+
+function conflictCallbackJob() {
+  return {
+    kind: "knowledge_conflict_confirmation" as const,
+    idempotencyKey: "feishu-card:app-id:event-1",
+    callbackIdentityId: "callback-identity-1",
+    presentationId: "candidate-1",
+    candidateId: "candidate-1",
+    candidateVersion: 1,
+    groupId: "group-a",
+    nonce: "4eaf0d0d991a4cf19b5f84c0f6c120d4",
+    action: "not_a_conflict" as const,
+    receivedAt: new Date("2026-08-15T07:59:59.000Z"),
+    attempts: 0,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value?: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise as typeof resolve;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function runtimeController() {

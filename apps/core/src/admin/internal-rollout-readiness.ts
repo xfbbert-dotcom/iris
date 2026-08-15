@@ -67,6 +67,8 @@ type KnowledgeConflictReadinessStatus = {
   enabled: boolean;
   running: boolean;
   migration0046Applied?: boolean;
+  migration0047Applied?: boolean;
+  migration0048Applied?: boolean;
   scanner?: { running: boolean };
   dispatcher?: { running: boolean };
   scans?: {
@@ -498,8 +500,14 @@ const checkDefinitions: CheckDefinition[] = [
       if (status === undefined) {
         return fail("Knowledge-conflict runtime status is unavailable.");
       }
-      if (!status.ok && status.migration0046Applied === false) {
+      if (status.migration0046Applied === false) {
         return fail("Knowledge-conflict migration 0046 is not applied.");
+      }
+      if (status.migration0047Applied === false) {
+        return fail("Knowledge-conflict migration 0047 is not applied.");
+      }
+      if (status.migration0048Applied === false) {
+        return fail("Knowledge-conflict migration 0048 is not applied.");
       }
       if (!status.ok) return fail("Knowledge-conflict runtime status is unreadable.");
       if (!status.enabled) {
@@ -507,6 +515,12 @@ const checkDefinitions: CheckDefinition[] = [
       }
       if (status.migration0046Applied !== true) {
         return fail("Knowledge-conflict migration 0046 is not applied.");
+      }
+      if (status.migration0047Applied !== true) {
+        return fail("Knowledge-conflict migration 0047 is not applied.");
+      }
+      if (status.migration0048Applied !== true) {
+        return fail("Knowledge-conflict migration 0048 is not applied.");
       }
       if (
         !status.running ||

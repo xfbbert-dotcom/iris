@@ -415,9 +415,8 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
             ...(agentExecutionLedgerRuntime === undefined
               ? {}
               : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
-            ...(composedKnowledgeConflictRuntime === undefined
-              ? {}
-              : { knowledgeConflictAnswerProvider: composedKnowledgeConflictRuntime.answerProvider }),
+            knowledgeConflictAnswerProvider:
+              composedKnowledgeConflictRuntime?.answerProvider ?? null,
           })
         : undefined;
     answerDraftOrchestrator ??= answerDraftRuntime?.answerDraftOrchestrator;
@@ -1909,9 +1908,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       () => actionReviewRuntime?.close(),
       () => proactiveSignalDeliveryRuntime?.close(),
       () => proactiveSignalPlannerRuntime?.close(),
+      () => knowledgeCardRuntime?.close(),
       () => composedKnowledgeConflictRuntime?.close(),
       () => actionApprovalRuntime?.close(),
-      () => knowledgeCardRuntime?.close(),
       () => proactiveSignalRuntime?.close(),
       () => knowledgeDraftRuntime?.close(),
       () => agentExecutionLedgerRuntime?.close(),
@@ -1999,7 +1998,10 @@ async function getKnowledgeConflictStatus(runtime: KnowledgeConflictRuntime | un
   if (runtime === undefined) return { ok: true, enabled: false, running: false };
   try {
     const status = await runtime.getStatus();
-    const ok = status.running && status.migration0046Applied;
+    const ok = status.running &&
+      status.migration0046Applied &&
+      status.migration0047Applied &&
+      status.migration0048Applied;
     return {
       ok,
       ...status,
@@ -2249,9 +2251,9 @@ function scheduleRuntimeStartupCleanup({
     () => actionReviewRuntime?.close(),
     () => proactiveSignalDeliveryRuntime?.close(),
     () => proactiveSignalPlannerRuntime?.close(),
+    () => knowledgeCardRuntime?.close(),
     () => composedKnowledgeConflictRuntime?.close(),
     () => actionApprovalRuntime?.close(),
-    () => knowledgeCardRuntime?.close(),
     () => proactiveSignalRuntime?.close(),
     () => knowledgeDraftRuntime?.close(),
     () => agentExecutionLedgerRuntime?.close(),
