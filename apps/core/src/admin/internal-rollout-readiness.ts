@@ -53,6 +53,20 @@ type KnowledgeCardOutboxReadinessStatus = {
   outcome_unknown: number;
   terminalFailed: number;
 };
+type KnowledgeCardQueueReadinessStatus = {
+  pending: number;
+  processing: number;
+  delayed: number;
+  deadLetter: number;
+};
+type KnowledgeCardPresentationReadinessStatus = {
+  pending_send: number;
+  active: number;
+  superseded: number;
+  closed: number;
+  send_failed: number;
+  pendingSend: number;
+};
 type ActionApprovalOutboxReadinessStatus = {
   pending: number;
   processing: number;
@@ -107,6 +121,8 @@ export type InternalRolloutReadinessContext = {
     running: boolean;
     dispatcher?: { running: boolean };
     worker?: { running: boolean };
+    queue?: KnowledgeCardQueueReadinessStatus;
+    presentations?: KnowledgeCardPresentationReadinessStatus;
     outbox?: KnowledgeCardOutboxReadinessStatus;
     degradedReason?: string;
   };
@@ -396,7 +412,36 @@ const checkDefinitions: CheckDefinition[] = [
     evaluate(env, context) {
       const config = readKnowledgeCardRuntimeConfig(env);
       if (!config.enabled) {
-        return pass("Knowledge cards are safely disabled.");
+        const status = context.knowledgeCardStatus;
+        if (status === undefined) return pass("Knowledge cards are safely disabled.");
+        if (!status.ok) return fail("Knowledge-card disabled status is unreadable.");
+        if (status.enabled || status.running) {
+          return fail("Knowledge-card runtime is enabled while configured disabled.");
+        }
+        if (
+          !isValidKnowledgeCardQueueStatus(status.queue) ||
+          !isValidKnowledgeCardPresentationStatus(status.presentations) ||
+          !isValidKnowledgeCardOutboxStatus(status.outbox)
+        ) return fail("Knowledge-card disabled status counts are unavailable.");
+        const unresolvedCounts = [
+          status.queue.pending,
+          status.queue.processing,
+          status.queue.delayed,
+          status.queue.deadLetter,
+          status.presentations.pending_send,
+          status.presentations.active,
+          status.presentations.send_failed,
+          status.presentations.pendingSend,
+          status.outbox.pending,
+          status.outbox.processing,
+          status.outbox.external_attempting,
+          status.outbox.outcome_unknown,
+          status.outbox.terminalFailed,
+        ];
+        if (unresolvedCounts.some((count) => count !== 0)) {
+          return fail("Knowledge-card disabled state has unresolved durable work.");
+        }
+        return pass("Knowledge cards are safely disabled with empty durable work.");
       }
       const status = context.knowledgeCardStatus;
       if (status === undefined) {
@@ -633,6 +678,26 @@ function isValidKnowledgeCardOutboxStatus(
   ];
   return counts.every((count) => Number.isSafeInteger(count) && count >= 0) &&
     value.terminalFailed <= value.failed;
+}
+
+function isValidKnowledgeCardQueueStatus(
+  value: KnowledgeCardQueueReadinessStatus | undefined,
+): value is KnowledgeCardQueueReadinessStatus {
+  return value !== undefined &&
+    [value.pending, value.processing, value.delayed, value.deadLetter].every(isSafeCount);
+}
+
+function isValidKnowledgeCardPresentationStatus(
+  value: KnowledgeCardPresentationReadinessStatus | undefined,
+): value is KnowledgeCardPresentationReadinessStatus {
+  return value !== undefined && [
+    value.pending_send,
+    value.active,
+    value.superseded,
+    value.closed,
+    value.send_failed,
+    value.pendingSend,
+  ].every(isSafeCount) && value.pendingSend === value.pending_send;
 }
 
 function isValidKnowledgeConflictScanStatus(

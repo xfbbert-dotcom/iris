@@ -457,6 +457,67 @@ describe("buildInternalRolloutReadinessReport", () => {
     });
   });
 
+  it("passes disabled knowledge cards only when real durable counts are empty", () => {
+    const report = buildInternalRolloutReadinessReport(
+      readyRolloutEnv(),
+      { knowledgeCardStatus: disabledKnowledgeCardStatus() },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "pass",
+      detail: "Knowledge cards are safely disabled with empty durable work.",
+    });
+  });
+
+  it.each([
+    [
+      "Redis interaction job",
+      disabledKnowledgeCardStatus({
+        queue: { pending: 1, processing: 0, delayed: 0, deadLetter: 0 },
+      }),
+    ],
+    [
+      "active PostgreSQL presentation",
+      disabledKnowledgeCardStatus({
+        presentations: {
+          pending_send: 0,
+          active: 1,
+          superseded: 0,
+          closed: 0,
+          send_failed: 0,
+          pendingSend: 0,
+        },
+      }),
+    ],
+  ])("blocks disabled knowledge cards with a residual %s", (_case, status) => {
+    const report = buildInternalRolloutReadinessReport(
+      readyRolloutEnv(),
+      { knowledgeCardStatus: status },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card disabled state has unresolved durable work.",
+    });
+  });
+
+  it("blocks disabled knowledge cards when real count reads fail", () => {
+    const report = buildInternalRolloutReadinessReport(
+      readyRolloutEnv(),
+      { knowledgeCardStatus: {
+        ok: false,
+        enabled: false,
+        running: false,
+        degradedReason: "knowledge_card_status_unavailable",
+      } },
+    );
+
+    expect(checksById(report).knowledgeCards).toMatchObject({
+      status: "fail",
+      detail: "Knowledge-card disabled status is unreadable.",
+    });
+  });
+
   it("passes enabled knowledge cards only while both loops and status are healthy", () => {
     const report = buildInternalRolloutReadinessReport(
       knowledgeCardEnabledEnv(),
@@ -668,6 +729,17 @@ function knowledgeConflictStatus() {
     interactions: { applied: 0, alreadyApplied: 0, rejected: 0 },
     reconciliation: { terminalFailed: 0, outcomeUnknown: 0 },
   };
+}
+
+function disabledKnowledgeCardStatus(overrides: Record<string, unknown> = {}) {
+  return knowledgeCardStatus({
+    enabled: false,
+    running: false,
+    enabledGroupCount: 0,
+    dispatcher: undefined,
+    worker: undefined,
+    ...overrides,
+  });
 }
 
 function readyRolloutEnv(overrides: EnvLike = {}): EnvLike {

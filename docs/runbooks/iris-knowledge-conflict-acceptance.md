@@ -28,15 +28,18 @@ durably disables the complete nonpilot set.
 
 Before fixture creation, the controller stops Caddy, requires the conflict flag off and allowlist
 empty, disables global/group runtime and write-related capabilities, checks current readiness, and
-records content-free queue/outbox and append-only fact counts. Pending/retry/processing work, DLQs,
-outcome-unknown deliveries, and terminal failures must all be zero.
+records real content-free PostgreSQL presentation/outbox, Redis interaction/DLQ, and append-only
+fact counts even though card processing is disabled. An unreadable count fails closed. Pending,
+active, retry, or processing work, DLQs, outcome-unknown deliveries, and terminal failures must all
+be zero.
 
 ## Step 4: Establish Controlled Chronology
 
 While the feature is still off, create or select one controlled authorized Wiki source and current
 snapshot. In the pilot group, reach a normal incompatible conclusion strictly after the snapshot's
 `fetched_at`. Put only IDs, versions, hashes, and timestamps into the private evidence JSON. The
-controller proves the message time is later than the snapshot time; it never reads or emits either
+controller proves every production message `sent_at` is later than the exact source and snapshot
+times; database ingestion `created_at` is irrelevant. It never reads or emits either
 statement.
 
 ## Step 5: Enable Only The Pilot Privately
@@ -418,11 +421,15 @@ function Assert-MultiMessageChronologyFacts {
   $actualIds = @($rows | ForEach-Object { Assert-Reference -Name 'chronology result message ID' -Value ([string](Get-RequiredProperty $_ 'id')) })
   Assert-ExactStringSet -Expected $expectedIds -Actual $actualIds -Label 'chronology message IDs'
   if ([long](Get-RequiredProperty $Facts 'sourceSnapshotCount') -ne 1) { throw "Exact synchronized source/snapshot binding failed" }
+  $sourceUpdatedAt = [DateTimeOffset](Assert-IsoTimestamp -Name 'chronology source updatedAt' -Value (Get-RequiredProperty $Facts 'sourceUpdatedAt'))
+  $snapshotFetchedAt = [DateTimeOffset](Assert-IsoTimestamp -Name 'chronology snapshot fetchedAt' -Value (Get-RequiredProperty $Facts 'snapshotFetchedAt'))
   foreach ($row in $rows) {
     $messageId = [string](Get-RequiredProperty $row 'id')
     foreach ($name in @('rowCount','pilotCount','strictlyLaterCount')) {
       if ([long](Get-RequiredProperty $row $name) -ne 1) { throw "Chronology failed for $messageId at $name" }
     }
+    $sentAt = [DateTimeOffset](Assert-IsoTimestamp -Name "chronology sentAt for $messageId" -Value (Get-RequiredProperty $row 'sentAt'))
+    if ($sentAt -le $sourceUpdatedAt -or $sentAt -le $snapshotFetchedAt) { throw "Production sentAt is not strictly later for $messageId" }
   }
 }
 
@@ -430,7 +437,7 @@ function Assert-DrainedDurableStates {
   param([Parameter(Mandatory)][object]$Counts)
   foreach ($name in @(
     'answerPrepared','answerSending','answerReconciliationRequired',
-    'draftPresentationUnresolved','draftOutboxUnresolved',
+    'draftPresentationUnresolved','draftPresentationActive','draftOutboxUnresolved',
     'actionProposalUnresolved','actionRequirementPending','actionPresentationUnresolved','actionPresentationActive',
     'actionOutboxUnresolved','actionExecutionUnresolved','actionExecutionFailed',
     'publishedDraftMissingPublication','succeededProposalMissingPublication',
@@ -518,7 +525,8 @@ SELECT json_build_object(
   'answerPrepared', (SELECT count(*) FROM answer_reply_deliveries WHERE state = 'prepared'),
   'answerSending', (SELECT count(*) FROM answer_reply_deliveries WHERE state = 'sending'),
   'answerReconciliationRequired', (SELECT count(*) FROM answer_reply_deliveries WHERE state = 'reconciliation_required'),
-  'draftPresentationUnresolved', (SELECT count(*) FROM knowledge_draft_presentations WHERE state IN ('pending_send','send_failed')),
+  'draftPresentationUnresolved', (SELECT count(*) FROM knowledge_draft_presentations WHERE state IN ('pending_send','active','send_failed')),
+  'draftPresentationActive', (SELECT count(*) FROM knowledge_draft_presentations WHERE state = 'active'),
   'draftOutboxUnresolved', (SELECT count(*) FROM knowledge_draft_presentation_outbox WHERE state IN ('pending','processing','external_attempting','failed','outcome_unknown')),
   'actionProposalUnresolved', (SELECT count(*) FROM action_proposals WHERE status IN ('pending_approval','approved','executing','reconciliation_required')),
   'actionRequirementPending', (SELECT count(*) FROM action_approval_requirements WHERE state = 'pending'),
@@ -850,12 +858,13 @@ WITH expected(id) AS (
   SELECT expected.id,
     count(message.id) AS row_count,
     count(message.id) FILTER (WHERE message.chat_id = '$pilot') AS pilot_count,
+    max(message.sent_at) AS sent_at,
     count(message.id) FILTER (
       WHERE message.chat_id = '$pilot'
         AND EXISTS (
           SELECT 1 FROM source_snapshot
-          WHERE message.created_at > source_snapshot.updated_at
-            AND message.created_at > source_snapshot.fetched_at
+          WHERE message.sent_at > source_snapshot.updated_at
+            AND message.sent_at > source_snapshot.fetched_at
         )
     ) AS strictly_later_count
   FROM expected
@@ -864,8 +873,11 @@ WITH expected(id) AS (
 )
 SELECT json_build_object(
   'sourceSnapshotCount', (SELECT count(*) FROM source_snapshot),
+  'sourceUpdatedAt', (SELECT updated_at FROM source_snapshot),
+  'snapshotFetchedAt', (SELECT fetched_at FROM source_snapshot),
   'messages', (SELECT json_agg(json_build_object(
     'id', id,
+    'sentAt', sent_at,
     'rowCount', row_count,
     'pilotCount', pilot_count,
     'strictlyLaterCount', strictly_later_count

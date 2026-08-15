@@ -8,7 +8,7 @@ import {
   readProactiveFeedbackConfig,
   type EnvLike,
 } from "../config/env.js";
-import type { DatabaseConfig } from "../database/database-config.js";
+import { readDatabaseConfig, type DatabaseConfig } from "../database/database-config.js";
 import { createPostgresPool } from "../database/postgres.js";
 import {
   createFeishuRequestVerifier,
@@ -111,6 +111,25 @@ export type KnowledgeCardRuntimeStatus = {
   outbox: KnowledgeCardOutboxStatusCounts;
 };
 
+export type KnowledgeCardStatusReaderStatus = {
+  enabled: false;
+  running: false;
+  enabledGroupCount: 0;
+  queue: {
+    pending: number;
+    processing: number;
+    delayed: number;
+    deadLetter: number;
+  };
+  presentations: KnowledgeCardStatusCounts;
+  outbox: KnowledgeCardOutboxStatusCounts;
+};
+
+export type KnowledgeCardStatusReader = {
+  getStatus(): Promise<KnowledgeCardStatusReaderStatus>;
+  close(): Promise<void>;
+};
+
 export type KnowledgeCardRuntime = {
   gateway: ReturnType<typeof createFeishuCardActionGateway>;
   repository: KnowledgeCardRuntimeRepository;
@@ -163,6 +182,84 @@ export type KnowledgeCardRuntimeDependencies = {
   onCardAuthenticationDiagnostic?: (diagnostic: FeishuCallbackAuthenticationDiagnostic) => void;
   onStartupCleanup?: (cleanup: Promise<void>) => void;
 };
+
+export type KnowledgeCardStatusReaderDependencies = {
+  createPostgresPool?: (config: DatabaseConfig) => KnowledgeCardPool;
+  createRedisClient?: (url: string) => KnowledgeCardRedisClient;
+  createKnowledgeCardRepository?: (input: {
+    dataSource: PostgresKnowledgeDraftDataSource;
+  }) => Pick<KnowledgeCardRepository, "getStatusCounts" | "getOutboxStatusCounts">;
+  createApprovalInteractionQueue?: (input: {
+    client: RedisApprovalInteractionQueueClient;
+  }) => Pick<ApprovalInteractionQueue, "getCounts">;
+  onStartupCleanup?: (cleanup: Promise<void>) => void;
+};
+
+export function createKnowledgeCardStatusReader({
+  env = process.env,
+  dependencies = {},
+}: {
+  env?: EnvLike;
+  dependencies?: KnowledgeCardStatusReaderDependencies;
+} = {}): KnowledgeCardStatusReader | undefined {
+  const config = readKnowledgeCardStatusResourceConfig(env);
+  if (config === undefined) return undefined;
+  const createPool = dependencies.createPostgresPool ?? createPostgresPool;
+  const createRedis = dependencies.createRedisClient ??
+    ((url: string) => createClient({ url }) as unknown as KnowledgeCardRedisClient);
+  const createRepository = dependencies.createKnowledgeCardRepository ??
+    createPostgresKnowledgeCardRepository;
+  const createQueue = dependencies.createApprovalInteractionQueue ??
+    createRedisApprovalInteractionQueue;
+
+  let pool: KnowledgeCardPool | undefined;
+  let redisClient: KnowledgeCardRedisClient | undefined;
+  let redisConnection: Promise<KnowledgeCardRedisClient> | undefined;
+  try {
+    pool = createPool({ databaseUrl: config.databaseUrl });
+    redisClient = createRedis(config.redisUrl);
+    redisConnection = observeStartupPromise(Promise.resolve().then(async () => {
+      await redisClient!.connect();
+      return redisClient!;
+    }));
+    const queue = createQueue({ client: createLazyRedisQueueClient(redisConnection) });
+    const repository = createRepository({ dataSource: pool });
+    let closePromise: Promise<void> | undefined;
+    return {
+      async getStatus() {
+        const [queueCounts, presentations, outbox] = await Promise.all([
+          queue.getCounts(),
+          repository.getStatusCounts(),
+          repository.getOutboxStatusCounts(),
+        ]);
+        return {
+          enabled: false,
+          running: false,
+          enabledGroupCount: 0,
+          queue: queueCounts,
+          presentations,
+          outbox,
+        };
+      },
+      close() {
+        closePromise ??= observeStartupPromise(closeRuntimeResources([
+          () => closeRedisClient(redisClient!, redisConnection!),
+          () => pool!.end(),
+        ]));
+        return closePromise;
+      },
+    };
+  } catch (error) {
+    const cleanup = observeStartupPromise(closeRuntimeResources([
+      ...(redisClient === undefined || redisConnection === undefined
+        ? []
+        : [() => closeRedisClient(redisClient!, redisConnection!)]),
+      ...(pool === undefined ? [] : [() => pool!.end()]),
+    ]));
+    dependencies.onStartupCleanup?.(cleanup);
+    throw error;
+  }
+}
 
 export function createKnowledgeCardRuntime({
   env = process.env,
@@ -528,6 +625,25 @@ function createLazyRedisQueueClient(
       return redis.eval(script, options);
     },
   };
+}
+
+function readKnowledgeCardStatusResourceConfig(
+  env: EnvLike,
+): { databaseUrl: string; redisUrl: string } | undefined {
+  const databaseUrl = env.DATABASE_URL?.trim();
+  const redisUrl = env.REDIS_URL?.trim();
+  if (!databaseUrl || !redisUrl) return undefined;
+  let parsedRedisUrl: URL;
+  const databaseConfig = readDatabaseConfig(env);
+  try {
+    parsedRedisUrl = new URL(redisUrl);
+  } catch {
+    throw new Error("REDIS_URL must be a redis URL");
+  }
+  if (parsedRedisUrl.protocol !== "redis:" && parsedRedisUrl.protocol !== "rediss:") {
+    throw new Error("REDIS_URL must be a redis URL");
+  }
+  return { databaseUrl: databaseConfig.databaseUrl, redisUrl };
 }
 
 function readCallbackAppId(request: FeishuCardActionCallbackRequest): string | undefined {

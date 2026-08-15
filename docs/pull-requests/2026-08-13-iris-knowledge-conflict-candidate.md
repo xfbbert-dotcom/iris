@@ -64,8 +64,8 @@ source text, prompts, rendered card text, callback payloads, authorization mater
 | --- | --- | --- |
 | 1 | exact commit SHA, image digest, timestamp | Pending |
 | 2 | pilot/control/known group IDs and counts | Pending |
-| 3 | all three off flags/empty allowlists, disabled runtime status, queue/DLQ/outbox counts | Pending |
-| 4 | exact source/snapshot IDs, hashes, versions/timestamps and every later pilot message ID | Pending |
+| 3 | all three off flags/empty allowlists, disabled runtime status, real PostgreSQL presentation/outbox and Redis queue/DLQ zero counts | Pending |
+| 4 | exact source/snapshot IDs, hashes, versions/timestamps and every pilot message ID with production `sent_at` strictly later | Pending |
 | 5 | runtime revision, enabled group count, readiness pass/fail | Pending |
 | 6 | exact scan/candidate plus every evidence row ID/timestamp/hash and bidirectional diff counts | Pending |
 | 7 | answer delivery/candidate IDs and observed pass/fail | Pending |

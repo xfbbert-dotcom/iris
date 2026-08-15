@@ -5,6 +5,8 @@ import type { KnowledgeDraft } from "../src/knowledge-governance/knowledge-draft
 import type {
   KnowledgeCardRuntime,
   KnowledgeCardRuntimeRepository,
+  KnowledgeCardStatusReader,
+  KnowledgeCardStatusReaderStatus,
 } from "../src/runtime/knowledge-card-runtime.js";
 import type { KnowledgeDraftPresentation } from "../src/knowledge-cards/knowledge-card-repository.js";
 import { KnowledgeCardOperationConflictError } from "../src/knowledge-cards/postgres-knowledge-card-repository.js";
@@ -327,7 +329,8 @@ describe("knowledge card API", () => {
   });
 
   it("keeps disabled knowledge-card status present with readable zero active counts", async () => {
-    const app = await createApp(undefined);
+    const statusReader = knowledgeCardStatusReader();
+    const app = await createApp(undefined, { statusReader });
     const response = await app.inject({
       method: "GET",
       url: "/internal/status",
@@ -335,6 +338,7 @@ describe("knowledge card API", () => {
     });
 
     expect(response.statusCode).toBe(200);
+    expect(statusReader.getStatus).toHaveBeenCalledOnce();
     expect(response.json()).toMatchObject({
       knowledgeCards: {
         ok: true,
@@ -352,6 +356,84 @@ describe("knowledge card API", () => {
         },
       },
     });
+    await app.close();
+    expect(statusReader.close).toHaveBeenCalledOnce();
+  });
+
+  it("reports real disabled residual card work and blocks live readiness", async () => {
+    const statusReader = knowledgeCardStatusReader({
+      queue: { pending: 1, processing: 0, delayed: 0, deadLetter: 0 },
+      presentations: {
+        pending_send: 0,
+        active: 1,
+        superseded: 0,
+        closed: 0,
+        send_failed: 0,
+        pendingSend: 0,
+      },
+    });
+    const app = await createApp(undefined, {
+      statusReader,
+      readinessEnv: { IRIS_KNOWLEDGE_CARD_ENABLED: "false" },
+    });
+
+    const status = (await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: authorization,
+    })).json();
+    const readiness = (await app.inject({
+      method: "GET",
+      url: "/internal/readiness",
+      headers: authorization,
+    })).json();
+
+    expect(status.knowledgeCards).toMatchObject({
+      ok: true,
+      enabled: false,
+      queue: { pending: 1 },
+      presentations: { active: 1 },
+    });
+    expect(readiness.checks).toContainEqual(expect.objectContaining({
+      id: "knowledgeCards",
+      status: "fail",
+      detail: "Knowledge-card disabled state has unresolved durable work.",
+    }));
+    expect(JSON.stringify(status.knowledgeCards)).not.toMatch(/draft-|message-|content|token/iu);
+    await app.close();
+  });
+
+  it("fails disabled status and readiness closed when real count reads fail", async () => {
+    const statusReader = knowledgeCardStatusReader();
+    statusReader.getStatus.mockRejectedValue(new Error("sensitive datastore failure"));
+    const app = await createApp(undefined, {
+      statusReader,
+      readinessEnv: { IRIS_KNOWLEDGE_CARD_ENABLED: "false" },
+    });
+
+    const status = (await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: authorization,
+    })).json();
+    const readiness = (await app.inject({
+      method: "GET",
+      url: "/internal/readiness",
+      headers: authorization,
+    })).json();
+
+    expect(status.knowledgeCards).toEqual({
+      ok: false,
+      enabled: false,
+      running: false,
+      degradedReason: "knowledge_card_status_unavailable",
+    });
+    expect(readiness.checks).toContainEqual(expect.objectContaining({
+      id: "knowledgeCards",
+      status: "fail",
+      detail: "Knowledge-card disabled status is unreadable.",
+    }));
+    expect(JSON.stringify(status.knowledgeCards)).not.toContain("sensitive datastore failure");
     await app.close();
   });
 
@@ -555,7 +637,10 @@ describe("knowledge card API", () => {
 
 async function createApp(
   runtime: KnowledgeCardRuntime | undefined,
-  overrides: { readinessEnv?: Record<string, string | undefined> } = {},
+  overrides: {
+    readinessEnv?: Record<string, string | undefined>;
+    statusReader?: ReturnType<typeof knowledgeCardStatusReader>;
+  } = {},
 ) {
   return await buildApp({
     internalApiToken: "operator-secret",
@@ -568,8 +653,43 @@ async function createApp(
     createConversationStateInspectionRuntime: () => undefined,
     createKnowledgeDraftRuntime: () => undefined,
     createKnowledgeCardRuntime: () => runtime,
-    ...overrides,
+    ...(overrides.readinessEnv === undefined ? {} : { readinessEnv: overrides.readinessEnv }),
+    ...(overrides.statusReader === undefined
+      ? {}
+      : { createKnowledgeCardStatusReader: () => overrides.statusReader }),
   });
+}
+
+function knowledgeCardStatusReader(
+  overrides: Partial<KnowledgeCardStatusReaderStatus> = {},
+) {
+  return {
+    getStatus: vi.fn(async (): Promise<KnowledgeCardStatusReaderStatus> => ({
+      enabled: false as const,
+      running: false,
+      enabledGroupCount: 0,
+      queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
+      presentations: {
+        pending_send: 0,
+        active: 0,
+        superseded: 0,
+        closed: 0,
+        send_failed: 0,
+        pendingSend: 0,
+      },
+      outbox: {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 0,
+        outcome_unknown: 0,
+        terminalFailed: 0,
+      },
+      ...overrides,
+    })),
+    close: vi.fn(async () => undefined),
+  } satisfies KnowledgeCardStatusReader;
 }
 
 function runtimeFixture(): KnowledgeCardRuntime {

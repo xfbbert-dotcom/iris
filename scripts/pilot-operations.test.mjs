@@ -228,9 +228,25 @@ test("knowledge-conflict exact evidence gate rejects duplicate and unrelated row
 test("knowledge-conflict chronology proves every exact pilot message is strictly later", () => {
   const valid = {
     sourceSnapshotCount: 1,
+    sourceUpdatedAt: "2026-08-15T01:02:03.000Z",
+    snapshotFetchedAt: "2026-08-15T01:02:03.500Z",
     messages: [
-      { id: "message_c1", rowCount: 1, pilotCount: 1, strictlyLaterCount: 1 },
-      { id: "message_c2", rowCount: 1, pilotCount: 1, strictlyLaterCount: 1 },
+      {
+        id: "message_c1",
+        sentAt: "2026-08-15T01:02:04.000Z",
+        createdAt: "2026-08-15T01:02:05.000Z",
+        rowCount: 1,
+        pilotCount: 1,
+        strictlyLaterCount: 1,
+      },
+      {
+        id: "message_c2",
+        sentAt: "2026-08-15T01:02:04.500Z",
+        createdAt: "2026-08-15T01:02:06.000Z",
+        rowCount: 1,
+        pilotCount: 1,
+        strictlyLaterCount: 1,
+      },
     ],
   };
   const command = `Assert-MultiMessageChronologyFacts -Facts $inputValue.facts -ExpectedMessageIds @($inputValue.expectedMessageIds)`;
@@ -243,7 +259,12 @@ test("knowledge-conflict chronology proves every exact pilot message is strictly
       ...valid,
       messages: [
         valid.messages[0],
-        { ...valid.messages[1], strictlyLaterCount: 0 },
+        {
+          ...valid.messages[1],
+          sentAt: "2026-08-15T01:02:02.000Z",
+          createdAt: "2026-08-15T01:02:06.000Z",
+          strictlyLaterCount: 1,
+        },
       ],
     },
     expectedMessageIds: ["message_c1", "message_c2"],
@@ -267,12 +288,13 @@ test("knowledge-conflict chronology proves every exact pilot message is strictly
   const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
   for (const marker of [
     "Assert-MultiMessageChronologyFacts",
-    "message.created_at > source_snapshot.updated_at",
-    "message.created_at > source_snapshot.fetched_at",
+    "message.sent_at > source_snapshot.updated_at",
+    "message.sent_at > source_snapshot.fetched_at",
     "json_agg",
   ]) {
     assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
   }
+  assert.doesNotMatch(runbook, /message\.created_at\s*>\s*source_snapshot\./u);
 });
 
 test("knowledge-conflict approved-card gate rejects false or missing metadata proof", () => {
@@ -358,6 +380,7 @@ test("knowledge-conflict final drain includes answer and governed-action durable
     answerSending: 0,
     answerReconciliationRequired: 0,
     draftPresentationUnresolved: 0,
+    draftPresentationActive: 0,
     draftOutboxUnresolved: 0,
     actionProposalUnresolved: 0,
     actionRequirementPending: 0,
@@ -385,6 +408,11 @@ test("knowledge-conflict final drain includes answer and governed-action durable
   assertPowerShellRunbookGate(
     `Assert-DrainedDurableStates -Counts $inputValue`,
     { ...valid, actionRequirementPending: 0, actionPresentationActive: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, draftPresentationActive: 1 },
     false,
   );
   assertPowerShellRunbookGate(

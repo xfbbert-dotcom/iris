@@ -107,7 +107,9 @@ import {
 } from "./runtime/knowledge-draft-runtime.js";
 import {
   createKnowledgeCardRuntime as createDefaultKnowledgeCardRuntime,
+  createKnowledgeCardStatusReader as createDefaultKnowledgeCardStatusReader,
   type KnowledgeCardRuntime,
+  type KnowledgeCardStatusReader,
 } from "./runtime/knowledge-card-runtime.js";
 import {
   createKnowledgeConflictRuntime as createDefaultKnowledgeConflictRuntime,
@@ -204,6 +206,9 @@ export type BuildAppDependencies = {
   createKnowledgeCardRuntime?: (
     input?: Parameters<typeof createDefaultKnowledgeCardRuntime>[0],
   ) => KnowledgeCardRuntime | undefined;
+  createKnowledgeCardStatusReader?: (
+    input?: Parameters<typeof createDefaultKnowledgeCardStatusReader>[0],
+  ) => KnowledgeCardStatusReader | undefined;
   createKnowledgeConflictRuntime?: (
     input: Parameters<typeof createDefaultKnowledgeConflictRuntime>[0],
   ) => KnowledgeConflictRuntime | undefined;
@@ -376,6 +381,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   let proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
   let knowledgeDraftRuntime: KnowledgeDraftRuntime | undefined;
   let knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
+  let knowledgeCardStatusReader: KnowledgeCardStatusReader | undefined;
   let actionApprovalRuntime: ActionApprovalRuntime | undefined;
   let actionReviewRuntime: ActionReviewRuntime | undefined;
   let proactiveSignalPlannerRuntime: ProactiveSignalPlannerRuntime | undefined;
@@ -447,6 +453,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       proactiveSignalRepository:
         dependencies.proactiveSignalRepository ?? proactiveSignalRuntime?.repository,
     });
+    knowledgeCardStatusReader = knowledgeCardRuntime === undefined
+      ? (dependencies.createKnowledgeCardStatusReader ?? createDefaultKnowledgeCardStatusReader)()
+      : undefined;
     if (composedKnowledgeConflictRuntime !== undefined) {
       if (knowledgeCardRuntime === undefined) {
         throw new Error("knowledge conflict runtime requires the knowledge-card runtime");
@@ -761,7 +770,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       controller: runtimeController,
       service: runtimeControlService,
     });
-    const knowledgeCards = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const knowledgeCards = await getKnowledgeCardStatus(
+      knowledgeCardRuntime,
+      knowledgeCardStatusReader,
+    );
     const knowledgeConflicts = await getKnowledgeConflictStatus(composedKnowledgeConflictRuntime);
     const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
     const proactiveSignals = await getProactiveSignalsStatus({
@@ -816,7 +828,10 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   app.get("/internal/readiness", async () => {
-    const knowledgeCardStatus = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const knowledgeCardStatus = await getKnowledgeCardStatus(
+      knowledgeCardRuntime,
+      knowledgeCardStatusReader,
+    );
     const knowledgeConflictStatus = await getKnowledgeConflictStatus(
       composedKnowledgeConflictRuntime,
     );
@@ -1909,6 +1924,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       () => proactiveSignalDeliveryRuntime?.close(),
       () => proactiveSignalPlannerRuntime?.close(),
       () => knowledgeCardRuntime?.close(),
+      () => knowledgeCardStatusReader?.close(),
       () => composedKnowledgeConflictRuntime?.close(),
       () => actionApprovalRuntime?.close(),
       () => proactiveSignalRuntime?.close(),
@@ -1935,6 +1951,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       proactiveSignalPlannerRuntime,
       composedKnowledgeConflictRuntime,
       knowledgeCardRuntime,
+      knowledgeCardStatusReader,
       actionApprovalRuntime,
       actionReviewRuntime,
       proactiveSignalDeliveryRuntime,
@@ -1980,39 +1997,18 @@ function getAgentExecutionLedgerStatus(
   };
 }
 
-async function getKnowledgeCardStatus(runtime: KnowledgeCardRuntime | undefined) {
-  if (runtime === undefined) {
-    return {
-      ok: true,
-      enabled: false,
-      running: false,
-      enabledGroupCount: 0,
-      queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
-      presentations: {
-        pending_send: 0,
-        active: 0,
-        superseded: 0,
-        closed: 0,
-        send_failed: 0,
-        pendingSend: 0,
-      },
-      outbox: {
-        pending: 0,
-        processing: 0,
-        external_attempting: 0,
-        sent: 0,
-        failed: 0,
-        outcome_unknown: 0,
-        terminalFailed: 0,
-      },
-    };
-  }
+async function getKnowledgeCardStatus(
+  runtime: KnowledgeCardRuntime | undefined,
+  statusReader: KnowledgeCardStatusReader | undefined,
+) {
+  const statusSource = runtime ?? statusReader;
+  if (statusSource === undefined) return undefined;
   try {
-    return { ok: true, ...(await runtime.getStatus()) };
+    return { ok: true, ...(await statusSource.getStatus()) };
   } catch {
     return {
       ok: false,
-      enabled: true,
+      enabled: runtime !== undefined,
       running: false,
       degradedReason: "knowledge_card_status_unavailable" as const,
     };
@@ -2242,6 +2238,7 @@ function scheduleRuntimeStartupCleanup({
   proactiveSignalPlannerRuntime,
   composedKnowledgeConflictRuntime,
   knowledgeCardRuntime,
+  knowledgeCardStatusReader,
   actionApprovalRuntime,
   actionReviewRuntime,
   proactiveSignalDeliveryRuntime,
@@ -2260,6 +2257,7 @@ function scheduleRuntimeStartupCleanup({
   proactiveSignalPlannerRuntime: ProactiveSignalPlannerRuntime | undefined;
   composedKnowledgeConflictRuntime: KnowledgeConflictRuntime | undefined;
   knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
+  knowledgeCardStatusReader: KnowledgeCardStatusReader | undefined;
   actionApprovalRuntime: ActionApprovalRuntime | undefined;
   actionReviewRuntime: ActionReviewRuntime | undefined;
   proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
@@ -2277,6 +2275,7 @@ function scheduleRuntimeStartupCleanup({
     () => proactiveSignalDeliveryRuntime?.close(),
     () => proactiveSignalPlannerRuntime?.close(),
     () => knowledgeCardRuntime?.close(),
+    () => knowledgeCardStatusReader?.close(),
     () => composedKnowledgeConflictRuntime?.close(),
     () => actionApprovalRuntime?.close(),
     () => proactiveSignalRuntime?.close(),
