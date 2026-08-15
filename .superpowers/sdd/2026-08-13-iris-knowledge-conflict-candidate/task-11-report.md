@@ -124,3 +124,73 @@
   Compose, smoke, default-off, and mocked public-boundary contracts passed.
 - The loop remains pending live acceptance and produces a governed update draft, not an in-place
   Wiki edit.
+
+## Fix Round 2: Chronology, Publication, Status, And Baseline Closure
+
+### Result
+
+- Implementation/tests/docs commit: `1190592621a09fe7a21d900a928a19c682b5b9a6`.
+- Step 4 now validates the complete exact `pilotMessageIds` set. Every ID must resolve exactly once,
+  belong to the pilot group, and have `created_at` strictly later than both the exact synchronized
+  source `updated_at` and snapshot `fetched_at`. Duplicate, missing, nonpilot, pre-snapshot, and
+  equal-timestamp rows fail. The metadata-only source/snapshot/message binding is pinned through
+  Step 6 so the evidence file cannot substitute a different message set after chronology passes.
+- The final durable drain now treats active action-approval presentations as unresolved even when
+  their requirements are already satisfied. It also requires exact immutable publication bindings
+  for every pilot-path published draft and succeeded proposal/execution. Deliberately
+  pre-publication drafts remain valid without a publication fact; missing or mismatched facts fail.
+- Disabled Core status now always emits a content-free top-level `knowledgeCards` surface with
+  readable zero active counts. Baseline and rollback gates require that surface, zero enabled groups,
+  zero queue/presentation/outbox safety counts, and safely disabled conflict and action-approval
+  components; missing properties fail closed.
+- Step 3 now attests all conflict/card/action-approval flags as false, all three allowlists as empty,
+  exact PostgreSQL-backed desired/live global and group policy, disabled capabilities, and disabled
+  component status before any enablement.
+- Live pilot: not run and not claimed. Task 12 remains the owner of exact-SHA live acceptance.
+
+### TDD RED
+
+- `npm run test:pilot`: 156 tests, 151 pass, 4 fail, 1 skip. The four expected failures were the
+  absent multi-message chronology and disabled-baseline functions, acceptance of active/missing-
+  publication drain facts, and acceptance of a rollback status with no `knowledgeCards` object.
+- `npm exec --workspace apps/core -- vitest run tests/knowledge-card-api.test.ts`: 12 tests,
+  11 pass and 1 fail. The expected failure proved `/internal/status` omitted `knowledgeCards` when
+  the runtime was disabled.
+- The skip was the existing executable pinned-Caddy boundary probe and accurately reported that the
+  Docker daemon was unavailable.
+
+### GREEN Verification
+
+- Focused pilot operations contracts: 41/41 pass, including executable PowerShell fixtures for a
+  later C1 plus pre/equal-snapshot C2, nonpilot/missing/duplicate message IDs, an active presentation
+  with no pending requirement, missing/mismatched publication, missing status properties, and each
+  card/action flag/allowlist boundary.
+- Fresh final `npm run test:pilot`: 156 tests, 155 pass, 0 fail, 1 Docker-daemon-unavailable skip.
+- Core config/readiness/card regression set: 57/57 pass.
+- Consolidated status/readiness API regressions: 24/24 pass.
+- `npm run readiness -- --env-file deploy/pilot/ci.env`: 17/17 pass; conflict, card, and action
+  approval checks each reported safely disabled.
+- `npm run typecheck`: exit `0`.
+- `npm run build`: exit `0`.
+- `npm run pilot:config`: exit `0`; rendered Core has all three feature flags false and all three
+  allowlists empty.
+- Extracted PowerShell controller parse: pass, 6,770 tokens.
+- `git diff --check`: exit `0` before the implementation commit; line-ending notices only.
+
+### Artifact SHA-256
+
+- Runbook: `ae20dfd9b2cf1b92e9a849cbd9867829188f662d5f8cf92f30eafe2f9c322537`.
+- PR evidence template: `b3343ff83f875ff0dc6c57cb993e2ae5da787c98d0519dffc5ca1ee219320494`.
+- Pilot operations contracts: `5290c9a7c23a9471f204c9db2af83802ad9dacb91491e40500f4e25d0b29925f`.
+- Core status implementation: `162916d5e1cc19976c5c5aa2770d16a960bc8a0ac17b10bc7914e51fe0f71804`.
+- Core status contract: `20229bcf61198b0906833c001f16dd06e4a9a9c96a54c4d4f4672d3a0f8233c0`.
+
+### Residual Risk
+
+- SQL was checked against migrations `0012`, `0030`-`0032`, `0035`-`0036`, and the publication
+  repository's atomic version transitions, but no live PostgreSQL query was executed in this round.
+- No Redis worker, Feishu callback/card, model request, Wiki read, credential, or real pilot mutation
+  was used. Docker remained unavailable for the executable Caddy container probe; static Caddy,
+  Compose, smoke, and mocked boundary contracts passed.
+- The product loop remains pending live acceptance and produces only a governed update draft, never
+  an in-place Wiki edit.
