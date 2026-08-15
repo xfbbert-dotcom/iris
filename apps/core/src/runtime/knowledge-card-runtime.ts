@@ -1,4 +1,4 @@
-import { createClient } from "redis";
+import { ClientClosedError, createClient } from "redis";
 
 import type { RuntimeController } from "../admin/runtime-controller.js";
 import {
@@ -80,7 +80,6 @@ const DISPATCHER_WORKER_ID = "knowledge-card-dispatcher";
 const INTERACTION_WORKER_ID = "approval-interaction-worker";
 const EXTERNAL_LEASE_MS = 30_000;
 const SEND_RETRY_DELAY_MS = 1_000;
-const STATUS_READER_REDIS_GRACEFUL_CLOSE_TIMEOUT_MS = 250;
 export const KNOWLEDGE_CARD_TARGET_DISPLAY_NAME = "Unapproved suggested publication location";
 
 type KnowledgeCardPool = PostgresKnowledgeDraftDataSource & { end(): Promise<void> };
@@ -88,8 +87,12 @@ type KnowledgeCardRedisClient = RedisApprovalInteractionQueueClient & {
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
 };
-type KnowledgeCardStatusRedisClient = KnowledgeCardRedisClient & {
+type KnowledgeCardStatusRedisClient = RedisApprovalInteractionQueueClient & {
+  readonly isOpen: boolean;
+  connect(): Promise<unknown>;
   destroy(): void;
+  on?(event: "error", listener: (error: Error) => void): unknown;
+  on?(event: "connect", listener: () => void): unknown;
 };
 type KnowledgeCardRuntimeGate = Pick<
   RuntimeController,
@@ -218,34 +221,107 @@ export function createKnowledgeCardStatusReader({
 
   let pool: KnowledgeCardPool | undefined;
   let redisClient: KnowledgeCardStatusRedisClient | undefined;
-  let redisConnection: Promise<KnowledgeCardRedisClient> | undefined;
   let closeRedis: (() => Promise<void>) | undefined;
   try {
     pool = createPool({ databaseUrl: config.databaseUrl });
     redisClient = createRedis(config.redisUrl);
-    let connectionState: "pending" | "ready" | "failed" = "pending";
+    let lifecycle: "idle" | "connecting" | "ready" | "failed" | "closing" | "closed" =
+      "idle";
+    let transportConnected = false;
+    let redisConnection: Promise<KnowledgeCardStatusRedisClient> | undefined;
+    let redisConnectOutcomeSettlement: Promise<void> | undefined;
+    let rejectClosedConnection!: (error: Error) => void;
+    const closedConnection = observeStartupPromise(new Promise<never>((_resolve, reject) => {
+      rejectClosedConnection = reject;
+    }));
     let destroyAttempted = false;
-    const destroyOnce = () => {
-      if (destroyAttempted) return;
+    let destroyError: unknown;
+    let resolveDestroyed!: () => void;
+    const destroyed = new Promise<void>((resolve) => {
+      resolveDestroyed = resolve;
+    });
+    const destroyIfOpen = () => {
+      if (!redisClient!.isOpen) return;
+      if (destroyAttempted) {
+        throw new Error("knowledge-card status Redis client remained open after destroy");
+      }
       destroyAttempted = true;
-      redisClient!.destroy();
-    };
-    closeRedis = () => closeKnowledgeCardStatusRedisClient(
-      redisClient!,
-      () => connectionState,
-      destroyOnce,
-    );
-    redisConnection = observeStartupPromise(Promise.resolve().then(async () => {
       try {
-        await redisClient!.connect();
-        connectionState = "ready";
-        return redisClient!;
+        redisClient!.destroy();
       } catch (error) {
-        connectionState = "failed";
+        if (error instanceof ClientClosedError && !redisClient!.isOpen) {
+          resolveDestroyed();
+          return;
+        }
         throw error;
       }
-    }));
-    const queue = createQueue({ client: createLazyRedisQueueClient(redisConnection) });
+      if (redisClient!.isOpen) {
+        throw new Error("knowledge-card status Redis client remained open after destroy");
+      }
+      resolveDestroyed();
+    };
+    redisClient.on?.("error", () => undefined);
+    redisClient.on?.("connect", () => {
+      transportConnected = true;
+      if (lifecycle !== "closing" && lifecycle !== "closed") return;
+      // node-redis emits `connect` immediately before it queues protocol startup
+      // commands. Let that stack finish so destroy() can reject those commands too.
+      queueMicrotask(() => {
+        if (lifecycle !== "closing" && lifecycle !== "closed") return;
+        try {
+          destroyIfOpen();
+        } catch (error) {
+          destroyError = error;
+        }
+      });
+    });
+    const getRedisClient = (): Promise<KnowledgeCardStatusRedisClient> => {
+      if (lifecycle === "closing" || lifecycle === "closed") {
+        return observeStartupPromise(Promise.reject(
+          new Error("knowledge-card status Redis client is closed"),
+        ));
+      }
+      if (redisConnection !== undefined) return redisConnection;
+      lifecycle = "connecting";
+      let connectResult: Promise<unknown>;
+      try {
+        connectResult = redisClient!.connect();
+      } catch (error) {
+        connectResult = Promise.reject(error);
+      }
+      const connectOutcome = observeStartupPromise(Promise.resolve(connectResult).then(
+        () => {
+          if (lifecycle === "closing" || lifecycle === "closed") {
+            throw new Error("knowledge-card status Redis client closed during connect");
+          }
+          lifecycle = "ready";
+          return redisClient!;
+        },
+        (error: unknown) => {
+          if (lifecycle !== "closing" && lifecycle !== "closed") lifecycle = "failed";
+          throw error;
+        },
+      ));
+      redisConnectOutcomeSettlement = connectOutcome.then(
+        () => undefined,
+        () => undefined,
+      );
+      redisConnection = observeStartupPromise(Promise.race([connectOutcome, closedConnection]));
+      return redisConnection;
+    };
+    closeRedis = async () => {
+      const connectionWasStarting = lifecycle === "connecting";
+      lifecycle = "closing";
+      rejectClosedConnection(new Error("knowledge-card status Redis client is closed"));
+      if (!connectionWasStarting || transportConnected) destroyIfOpen();
+      if (redisConnectOutcomeSettlement !== undefined && !destroyAttempted) {
+        await Promise.race([redisConnectOutcomeSettlement, destroyed]);
+      }
+      if (destroyError !== undefined) throw destroyError;
+      destroyIfOpen();
+      lifecycle = "closed";
+    };
+    const queue = createQueue({ client: createDeferredRedisQueueClient(getRedisClient) });
     const repository = createRepository({ dataSource: pool });
     let closePromise: Promise<void> | undefined;
     return {
@@ -639,55 +715,23 @@ async function closeRedisClient(
   if (connectionFailed) throw connectionError;
 }
 
-async function closeKnowledgeCardStatusRedisClient(
-  redisClient: KnowledgeCardStatusRedisClient,
-  getConnectionState: () => "pending" | "ready" | "failed",
-  destroyOnce: () => void,
-): Promise<void> {
-  if (getConnectionState() !== "ready") {
-    destroyOnce();
-    return;
-  }
-
-  try {
-    await waitForKnowledgeCardStatusRedisClose(redisClient.quit());
-  } catch {
-    destroyOnce();
-  }
-}
-
-function waitForKnowledgeCardStatusRedisClose(promise: Promise<unknown>): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error("knowledge-card status Redis graceful close timed out"));
-    }, STATUS_READER_REDIS_GRACEFUL_CLOSE_TIMEOUT_MS);
-    timer.unref();
-    void promise.then(
-      () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve();
-      },
-      (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
 function createLazyRedisQueueClient(
   redisConnection: Promise<KnowledgeCardRedisClient>,
 ): RedisApprovalInteractionQueueClient {
   return {
     async eval(script, options) {
       const redis = await redisConnection;
+      return redis.eval(script, options);
+    },
+  };
+}
+
+function createDeferredRedisQueueClient(
+  getRedisClient: () => Promise<KnowledgeCardStatusRedisClient>,
+): RedisApprovalInteractionQueueClient {
+  return {
+    async eval(script, options) {
+      const redis = await getRedisClient();
       return redis.eval(script, options);
     },
   };

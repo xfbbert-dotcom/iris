@@ -1,3 +1,4 @@
+import { ClientClosedError } from "redis";
 import { describe, expect, it, vi } from "vitest";
 
 import * as knowledgeCardRuntimeModule from "../src/runtime/knowledge-card-runtime.js";
@@ -53,8 +54,8 @@ describe("KnowledgeCardStatusReader", () => {
     await firstClose;
     expect(reader!.close()).toBe(firstClose);
     expect(dependencies.redis.connect).toHaveBeenCalledOnce();
-    expect(dependencies.redis.quit).toHaveBeenCalledOnce();
-    expect(dependencies.redis.destroy).not.toHaveBeenCalled();
+    expect(dependencies.redis.quit).not.toHaveBeenCalled();
+    expect(dependencies.redis.destroy).toHaveBeenCalledOnce();
     expect(dependencies.pool.end).toHaveBeenCalledOnce();
   });
 
@@ -89,36 +90,42 @@ describe("KnowledgeCardStatusReader", () => {
     expect(reader!.close()).toBe(firstClose);
     await expectSettlesWithin(reader!.close());
     expect(dependencies.redis.quit).not.toHaveBeenCalled();
-    expect(dependencies.redis.destroy).toHaveBeenCalledOnce();
+    expect(dependencies.redis.destroy).not.toHaveBeenCalled();
     expect(dependencies.pool.end).toHaveBeenCalledOnce();
   });
 
-  it("falls back to destroy when graceful Redis quit rejects", async () => {
+  it("accepts ClientClosedError only after destroy made the client not open", async () => {
     const factory = getStatusReaderFactory();
     if (factory === undefined) return;
     const dependencies = statusReaderDependencies();
-    dependencies.redis.quit.mockRejectedValue(new Error("redis quit failed"));
+    dependencies.redis.destroy.mockImplementation(() => {
+      dependencies.setRedisOpen(false);
+      throw new ClientClosedError();
+    });
     const reader = factory({ env: disabledStatusEnv(), dependencies });
 
     await reader?.getStatus();
     await expectSettlesWithin(reader!.close());
-    expect(dependencies.redis.quit).toHaveBeenCalledOnce();
+    expect(dependencies.redis.quit).not.toHaveBeenCalled();
     expect(dependencies.redis.destroy).toHaveBeenCalledOnce();
     expect(dependencies.pool.end).toHaveBeenCalledOnce();
   });
 
-  it("bounds a hanging graceful Redis quit and destroys the client", async () => {
+  it("fails closed when destroy throws and the client remains open", async () => {
     const factory = getStatusReaderFactory();
     if (factory === undefined) return;
     const dependencies = statusReaderDependencies();
-    dependencies.redis.quit.mockImplementation(() => new Promise(() => undefined));
+    dependencies.redis.destroy.mockImplementation(() => {
+      throw new ClientClosedError();
+    });
     const reader = factory({ env: disabledStatusEnv(), dependencies });
 
     await reader?.getStatus();
-    await expectSettlesWithin(reader!.close());
-    expect(dependencies.redis.quit).toHaveBeenCalledOnce();
+    await expect(reader!.close()).rejects.toBeInstanceOf(ClientClosedError);
+    expect(dependencies.redis.quit).not.toHaveBeenCalled();
     expect(dependencies.redis.destroy).toHaveBeenCalledOnce();
     expect(dependencies.pool.end).toHaveBeenCalledOnce();
+    dependencies.setRedisOpen(false);
   });
 
   it("acquires no resources when status datastores are not configured", () => {
@@ -136,8 +143,6 @@ describe("KnowledgeCardStatusReader", () => {
     if (factory === undefined) return;
     const cleanups: Promise<void>[] = [];
     const dependencies = statusReaderDependencies();
-    dependencies.redis.connect.mockImplementation(() => new Promise(() => undefined));
-    dependencies.redis.quit.mockImplementation(() => new Promise(() => undefined));
     dependencies.createKnowledgeCardRepository.mockImplementation(() => {
       throw new Error("status repository composition failed");
     });
@@ -148,8 +153,9 @@ describe("KnowledgeCardStatusReader", () => {
     );
     expect(cleanups).toHaveLength(1);
     await expectSettlesWithin(cleanups[0]);
+    expect(dependencies.redis.connect).not.toHaveBeenCalled();
     expect(dependencies.redis.quit).not.toHaveBeenCalled();
-    expect(dependencies.redis.destroy).toHaveBeenCalledOnce();
+    expect(dependencies.redis.destroy).not.toHaveBeenCalled();
     expect(dependencies.pool.end).toHaveBeenCalledOnce();
   });
 });
@@ -175,11 +181,30 @@ function statusReaderDependencies() {
     query: vi.fn(),
     end: vi.fn(async () => undefined),
   };
+  let redisOpen = false;
+  const listeners = {
+    error: [] as Array<(error: Error) => void>,
+    connect: [] as Array<() => void>,
+  };
   const redis = {
-    connect: vi.fn(async () => redis),
+    get isOpen() {
+      return redisOpen;
+    },
+    connect: vi.fn(async () => {
+      redisOpen = true;
+      for (const listener of listeners.connect) listener();
+      return redis;
+    }),
     quit: vi.fn(async () => undefined),
-    destroy: vi.fn(),
-    eval: vi.fn(),
+    destroy: vi.fn(() => {
+      redisOpen = false;
+    }),
+    eval: vi.fn(async () => 0),
+    on: vi.fn((event: "error" | "connect", listener: ((error: Error) => void) | (() => void)) => {
+      if (event === "error") listeners.error.push(listener as (error: Error) => void);
+      else listeners.connect.push(listener as () => void);
+      return redis;
+    }),
   };
   const repository = {
     getStatusCounts: vi.fn(async () => ({
@@ -207,12 +232,25 @@ function statusReaderDependencies() {
     createPostgresPool: vi.fn(() => pool),
     createRedisClient: vi.fn(() => redis),
     createKnowledgeCardRepository: vi.fn(() => repository),
-    createApprovalInteractionQueue: vi.fn(() => queue),
+    createApprovalInteractionQueue: vi.fn((input: {
+      client: { eval(
+        script: string,
+        options: { keys: string[]; arguments: string[] },
+      ): Promise<unknown> };
+    }) => ({
+      getCounts: vi.fn(async () => {
+        await input.client.eval("status-counts", { keys: [], arguments: [] });
+        return queue.getCounts();
+      }),
+    })),
     onStartupCleanup: undefined as ((cleanup: Promise<void>) => void) | undefined,
     pool,
     redis,
     repository,
     queue,
+    setRedisOpen(value: boolean) {
+      redisOpen = value;
+    },
   };
 }
 
