@@ -120,3 +120,72 @@ whitespace errors.
 - No live Feishu mention answer, permission recheck, or receipt inspection flow was exercised.
 - Task 10 must complete the feature-enabled/allowlisted runtime lifecycle and readiness wiring before
   this capability is pilot-ready.
+
+## Fix Round 1/5: Final-Send Currentness And Permission Time
+
+### Disposition
+
+Both independent P1 review findings are fixed in implementation commit
+`97896c8edfde0946d52e5dafd58593e3ac742bf1`.
+
+- Conflict receipts now invoke a candidate-bound final gate after the ordinary source-permission
+  verifier and directly before the existing append-only `send_started` / `beginAnswerSend`
+  transition. The gate reloads the candidate, rejects dismissed/superseded or foreign group state,
+  matches the receipt's exact source/snapshot/fragment/content-hash identity, rechecks live
+  permission, and runs durable current-state validation for memory, message, source, latest snapshot,
+  and fragment evidence. Version conflicts, validation errors, missing validators, and malformed
+  results fail closed to the content-free safe-notice path; ordinary answers bypass this gate.
+- Answer-time conflict selection now requires the exact target fragment, not only its source and
+  snapshot. The final exact target is live-rechecked again before conflict text is injected into the
+  draft, and multi-fragment documents retain the correct `D*` citation binding.
+- Permission attestation is captured immediately after each successful live permission check.
+  Multi-source operations carry the conservative earliest actual completion time, while repository
+  freshness receives a separately captured validation/lookup time. An aged earlier check can no
+  longer be represented as a fresh later timestamp.
+- The final gate is threaded through the answer orchestrator, production answer runtime, event-worker
+  composition, mention responder, and delivery request without adding Task 10 runtime-control or
+  readiness behavior. No migration was added or modified.
+
+### Review RED
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-answer-provider.test.ts answer-reply-delivery-service.test.ts feishu-mention-answer-responder.test.ts answer-draft-orchestrator.test.ts
+```
+
+Exit 1: 2 files failed and 2 passed; 17 expected tests failed and 220 passed. The failures proved the
+late shared permission timestamp, absent provider final-currentness API, and absent delivery gate and
+ordering.
+
+### Fix GREEN And Final Gates
+
+```powershell
+npm --workspace apps/core test -- knowledge-conflict-answer-provider.test.ts knowledge-conflict-current-validator.test.ts answer-reply-delivery-service.test.ts feishu-mention-answer-responder.test.ts answer-draft-orchestrator.test.ts answer-draft-runtime.test.ts event-worker-runtime.test.ts
+```
+
+Exit 0: 7 files passed; 294 tests passed. These include race oracles for dismissal, supersession,
+memory/source/latest-snapshot/fragment change, permission revocation at the final boundary,
+missing/throwing/malformed final validators, exact multi-fragment citation binding, ordinary-answer
+bypass, and advancing-clock multi-document attestation.
+
+```powershell
+npm --workspace apps/core test
+npm --workspace apps/core run typecheck
+npm --workspace apps/core run build
+git diff --check
+git diff --cached --check
+```
+
+All exited 0. Full Core: 184 files passed and 3 conditional files skipped; 3,320 tests passed and 250
+skipped (3,570 total). Diff checks reported only the repository's LF-to-CRLF checkout warnings and no
+whitespace errors.
+
+### Remaining Environmental Concerns
+
+- `IRIS_TEST_DATABASE_URL` was unset. The 250 skipped tests include conditional PostgreSQL cases, so
+  the final gate's durable repository validation and answer receipt state transitions were verified
+  with unit/contract doubles but not a live PostgreSQL service in this round.
+- No live Feishu permission or reply call was made. The ordering and fail-closed disclosure behavior
+  are covered locally; no live integration claim is made.
+- The last safe application boundary is intentionally immediately before the auditable send-start
+  transition. It does not hold a database lock across the external Feishu request; outcome-unknown
+  sends continue to use the existing `reconciliation_required` receipt semantics.
