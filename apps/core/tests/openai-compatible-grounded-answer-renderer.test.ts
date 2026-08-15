@@ -10,6 +10,44 @@ import {
 } from "../src/model/openai-compatible-grounded-answer-renderer.js";
 
 describe("OpenAICompatibleGroundedAnswerRenderer", () => {
+  it("renders conflict with the bounded no-resolution instruction and exact confidence", async () => {
+    const client = { complete: vi.fn(async (
+      _messages: readonly OpenAICompatibleChatMessage[],
+      _options?: OpenAICompatibleChatCompletionOptions,
+    ) => JSON.stringify({
+      answerText:
+        "Possible conflict: current synchronized knowledge says 5,000; group evidence says 10,000. A reviewed update draft can be created; no winner is selected.",
+      evidenceState: "conflict",
+      confidence: "high",
+    })) };
+
+    const result = await createOpenAICompatibleGroundedAnswerRenderer({ client }).render({
+      question: "What is the approval threshold?",
+      plan: {
+        taskMode: "company_fact",
+        evidenceState: "conflict",
+        premises: [
+          { citationRef: "M1", statement: "Group conclusion is 10,000." },
+          { citationRef: "D1", statement: "Current synchronized knowledge says 5,000." },
+        ],
+        proposedAnswer: "Possible conflict; no winner selected.",
+        missingInformation: [],
+        confidence: "high",
+      },
+      evidence: [
+        { citationRef: "M1", source: "group_memory:memory-a", text: "10,000" },
+        { citationRef: "D1", source: "https://example.invalid/wiki/a", text: "5,000" },
+      ],
+      liveChatMessages: [],
+    });
+
+    expect(result).toMatchObject({ evidenceState: "conflict", confidence: "high" });
+    const messages = client.complete.mock.calls[0]?.[0] ?? [];
+    expect(messages[0]?.content).toContain("Label this as a possible conflict");
+    expect(messages[0]?.content).toContain("Do not select a winner");
+    expect(messages[0]?.content).toContain("reviewed update-draft path");
+  });
+
   it("accepts a partial answer only when state and confidence echo the plan", async () => {
     const client = {
       complete: vi.fn(async (_messages: readonly OpenAICompatibleChatMessage[]) => JSON.stringify({

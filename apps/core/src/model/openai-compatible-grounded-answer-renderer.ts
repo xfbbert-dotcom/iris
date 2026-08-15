@@ -34,6 +34,7 @@ const GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT = [
   "For complete_inference, visibly say the conclusion is inferred from the available material and explain only the bounded conclusion.",
   "For partial, the answer must first name the missing information, then clearly say that the following conclusion is a conjecture based on current evidence, and state the supplied confidence.",
   "For none, state that the knowledge base gives no basis for a company-factual conjecture and identify the needed information.",
+  "For conflict: Label this as a possible conflict. State the current synchronized knowledge and the newer group conclusion separately, describe the material difference, and offer the reviewed update-draft path. Do not select a winner, merge the statements, or increase confidence.",
   "Never present a conjecture as a quotation, explicit source statement, or certain company fact.",
 ].join(" ");
 
@@ -197,7 +198,8 @@ function readEvidenceState(value: unknown): EvidenceState {
     value !== "explicit" &&
     value !== "complete_inference" &&
     value !== "partial" &&
-    value !== "none"
+    value !== "none" &&
+    value !== "conflict"
   ) {
     throw new Error("grounded answer state is invalid");
   }

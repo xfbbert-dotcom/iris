@@ -52,6 +52,7 @@ describe("answer reply inspection API", () => {
         state: "sent",
         renderedReplyFingerprint: "rendered-fingerprint",
         semanticFingerprint: "semantic-fingerprint",
+        knowledgeConflictCandidateId: "candidate-answer-a",
         replyMessageId: "om_reply",
         safeNoticeMessageId: "om_notice",
         attemptCount: 2,
@@ -96,6 +97,7 @@ describe("answer reply inspection API", () => {
     expect(response.body).not.toContain("SENSITIVE_PROMPT");
     expect(response.body).not.toContain("SENSITIVE_TOKEN");
     expect(response.body).not.toContain("SENSITIVE_PROVIDER_BODY");
+    expect(response.body).not.toContain("SENSITIVE_CANDIDATE_TEXT");
     expect(response.body).not.toContain("arbitraryDeliveryProperty");
     expect(response.body).not.toContain("arbitrarySourceProperty");
     expect(response.body).not.toContain("arbitraryEventProperty");
@@ -278,6 +280,7 @@ function receipt(): AnswerReplyReceipt {
       preparedReplyText: "SENSITIVE_PREPARED_ANSWER",
       renderedReplyFingerprint: "rendered-fingerprint",
       semanticFingerprint: "semantic-fingerprint",
+      knowledgeConflictCandidateId: "candidate-answer-a",
       replyMessageId: "om_reply",
       safeNoticeMessageId: "om_notice",
       attemptCount: 2,
@@ -288,6 +291,7 @@ function receipt(): AnswerReplyReceipt {
       sentAt: updatedAt,
       safeNoticeSentAt: new Date("2026-08-02T01:03:05.000Z"),
       arbitraryDeliveryProperty: "SENSITIVE_TOKEN",
+      candidateText: "SENSITIVE_CANDIDATE_TEXT",
     },
     sources: [{
       id: "source-trace-1",

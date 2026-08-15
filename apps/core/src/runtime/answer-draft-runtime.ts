@@ -104,6 +104,16 @@ import {
   createChatKnowledgeDraftGenerator,
   type ChatKnowledgeDraftGenerator,
 } from "../knowledge-governance/chat-knowledge-draft-generator.js";
+import {
+  createKnowledgeConflictAnswerProvider,
+  type KnowledgeConflictAnswerProvider,
+} from "../knowledge-conflicts/knowledge-conflict-answer-provider.js";
+import type { KnowledgeConflictRepository } from
+  "../knowledge-conflicts/knowledge-conflict-repository.js";
+import {
+  createPostgresKnowledgeConflictRepository,
+  type PostgresKnowledgeConflictDataSource,
+} from "../knowledge-conflicts/postgres-knowledge-conflict-repository.js";
 
 export type AnswerDraftRuntime = {
   answerDraftOrchestrator: Pick<AnswerDraftOrchestrator, "generateDraft">
@@ -163,6 +173,14 @@ export type AnswerDraftRuntimeDependencies = {
   createConversationStateContextProvider?: (dependencies: {
     dataSource: PostgresConversationStateDataSource;
   }) => ConversationStateContextProvider;
+  createKnowledgeConflictRepository?: (dependencies: {
+    dataSource: PostgresKnowledgeConflictDataSource;
+  }) => Pick<KnowledgeConflictRepository, "findCurrentOverlap">;
+  createKnowledgeConflictAnswerProvider?: (dependencies: {
+    repository: Pick<KnowledgeConflictRepository, "findCurrentOverlap">;
+    documentSources: Pick<AsyncDocumentSourceRegistry, "findSourceById">;
+    permissionChecker: Pick<FeishuDocumentPermissionChecker, "canReadSource">;
+  }) => KnowledgeConflictAnswerProvider;
   auditLog?: AuditLog;
 };
 
@@ -231,6 +249,10 @@ export function createAnswerDraftRuntime({
     dependencies.createGroupMemoryService ?? createGroupMemoryService;
   const createConversationState =
     dependencies.createConversationStateContextProvider ?? createConversationStateContextProvider;
+  const createConflictRepository =
+    dependencies.createKnowledgeConflictRepository ?? createPostgresKnowledgeConflictRepository;
+  const createConflictAnswerProvider =
+    dependencies.createKnowledgeConflictAnswerProvider ?? createKnowledgeConflictAnswerProvider;
 
   const livePermissionChecker =
     runtimeConfig.permissionMode === "source-policy"
@@ -261,6 +283,16 @@ export function createAnswerDraftRuntime({
   const sourceRegistry =
     runtimeConfig.permissionMode === "source-policy"
       ? createSources({ queryable: pool })
+      : undefined;
+  const knowledgeConflictAnswerProvider =
+    sourceRegistry !== undefined
+      && livePermissionChecker !== undefined
+      && isPostgresKnowledgeConflictDataSource(pool)
+      ? createConflictAnswerProvider({
+          repository: createConflictRepository({ dataSource: pool }),
+          documentSources: sourceRegistry,
+          permissionChecker: livePermissionChecker,
+        })
       : undefined;
   const conversationMessages = createConversationMessages({ queryable: pool });
   const liveChatContextProvider = createRuntimeGatedLiveChatContextProvider({
@@ -356,6 +388,7 @@ export function createAnswerDraftRuntime({
         model,
         planner,
         renderer,
+        knowledgeConflictAnswerProvider,
         liveChatContextProvider,
         agentExecutionObserver,
         provider: modelProvider,
@@ -506,6 +539,12 @@ function isPostgresGroupMemoryDataSource(
 function isPostgresConversationStateDataSource(
   value: Queryable,
 ): value is Queryable & PostgresConversationStateDataSource {
+  return "connect" in value && typeof value.connect === "function";
+}
+
+function isPostgresKnowledgeConflictDataSource(
+  value: Queryable,
+): value is Queryable & PostgresKnowledgeConflictDataSource {
   return "connect" in value && typeof value.connect === "function";
 }
 

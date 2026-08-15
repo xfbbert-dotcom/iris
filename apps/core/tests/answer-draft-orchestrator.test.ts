@@ -609,6 +609,133 @@ describe("AnswerDraftOrchestrator", () => {
     expect(result.citedSourceRefs).toEqual(["D1"]);
   });
 
+  it("forces an exact current conflict before planner sampling and records its candidate ID", async () => {
+    const observe = vi.fn<AgentExecutionObserver["observe"]>(async () => undefined);
+    const allowedFragment = {
+      ...retrievedFragment("conflict", "Current KB threshold is 5,000.", 0),
+      documentSourceId: "source-conflict",
+      documentSnapshotId: "snapshot-conflict",
+    };
+    const usedGroupMemory = {
+      id: "memory-conflict",
+      scope: "group" as const,
+      category: "decision" as const,
+      content: "New group threshold is 10,000.",
+      evidenceMessageIds: ["message-conflict"],
+    };
+    const planner: EvidencePlanner = { plan: vi.fn() };
+    const renderer: GroundedAnswerRenderer = {
+      render: vi.fn(async (
+        input: Parameters<GroundedAnswerRenderer["render"]>[0],
+      ) => {
+        expect(input.plan).toEqual({
+          taskMode: "company_fact",
+          evidenceState: "conflict",
+          premises: [
+            { citationRef: "M1", statement: "New group threshold is 10,000." },
+            { citationRef: "D1", statement: "Current KB threshold is 5,000." },
+          ],
+          proposedAnswer: "Possible conflict. This answer does not select a winner.",
+          missingInformation: [],
+          confidence: "high",
+        });
+        expect(input.evidence.map(({ citationRef }) => citationRef)).toEqual(["M1", "D1"]);
+        return {
+          answerText:
+            "Possible conflict: current KB says 5,000; group evidence says 10,000; no winner selected.",
+          evidenceState: "conflict" as const,
+          confidence: "high" as const,
+        };
+      }),
+    };
+    const knowledgeConflictAnswerProvider = {
+      findConflictPlan: vi.fn(async () => ({
+        candidateId: "candidate-conflict",
+        plan: {
+          taskMode: "company_fact" as const,
+          evidenceState: "conflict" as const,
+          premises: [
+            { citationRef: "M1", statement: "New group threshold is 10,000." },
+            { citationRef: "D1", statement: "Current KB threshold is 5,000." },
+          ],
+          proposedAnswer: "Possible conflict. This answer does not select a winner.",
+          missingInformation: [],
+          confidence: "high" as const,
+        },
+      })),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder: {
+        buildContext: vi.fn(async () => ({
+          promptContext: "<background_documents></background_documents>",
+          allowedFragments: [allowedFragment],
+          deniedDocumentIds: [],
+          retrievedFragmentCount: 1,
+          usedGroupMemories: [usedGroupMemory],
+        })),
+      },
+      model: { generateAnswerDraft: vi.fn() },
+      planner,
+      renderer,
+      knowledgeConflictAnswerProvider,
+      agentExecutionObserver: { observe },
+    });
+
+    const result = await orchestrator.generateDraft({
+      executionId: "answer-conflict",
+      question: "What is the current approval threshold?",
+      chatId: "group-a",
+      liveChatMessages: [],
+    });
+
+    expect(knowledgeConflictAnswerProvider.findConflictPlan).toHaveBeenCalledWith({
+      groupId: "group-a",
+      usedGroupMemories: [usedGroupMemory],
+      allowedFragments: [allowedFragment],
+    });
+    expect(planner.plan).not.toHaveBeenCalled();
+    expect(renderer.render).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      knowledgeConflictCandidateId: "candidate-conflict",
+      citedSourceRefs: ["D1"],
+    });
+    expect(observe.mock.calls
+      .map(([event]) => event)
+      .find(({ eventType }) => eventType === "turn_completed")?.metadata)
+      .toEqual(expect.objectContaining({
+        evidenceState: "conflict",
+        confidence: "high",
+        knowledgeConflictCandidateId: "candidate-conflict",
+      }));
+  });
+
+  it("falls through to the ordinary planner when no current exact conflict exists", async () => {
+    const reasoning = createCompanyFactReasoningDoubles();
+    const knowledgeConflictAnswerProvider = {
+      findConflictPlan: vi.fn(async () => undefined),
+    };
+    const orchestrator = createAnswerDraftOrchestrator({
+      contextBuilder: {
+        buildContext: vi.fn(async () => ({
+          promptContext: "<background_documents></background_documents>",
+          allowedFragments: [retrievedFragment("ordinary", "Ordinary evidence", 0)],
+          deniedDocumentIds: [], retrievedFragmentCount: 1, usedGroupMemories: [],
+        })),
+      },
+      model: { generateAnswerDraft: vi.fn() },
+      ...reasoning,
+      knowledgeConflictAnswerProvider,
+    });
+
+    const result = await orchestrator.generateDraft({
+      question: "What is the ordinary company fact?", chatId: "group-a", liveChatMessages: [],
+    });
+
+    expect(knowledgeConflictAnswerProvider.findConflictPlan).toHaveBeenCalledOnce();
+    expect(reasoning.planner.plan).toHaveBeenCalledOnce();
+    expect(result.knowledgeConflictCandidateId).toBeUndefined();
+  });
+
   it("keeps stale earlier chat out of document retrieval while preserving prompt context", async () => {
     const contextBuilder = {
       buildContext: vi.fn(async (_input: {

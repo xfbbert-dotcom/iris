@@ -41,6 +41,7 @@ export type AnswerReplyDeliveryRequest = {
     renderedText: string;
     sourceTraces: AnswerReplySourceTraceInput[];
     blockedDocumentSourceIds?: readonly string[];
+    knowledgeConflictCandidateId?: string;
     preparedAt: Date;
   }>;
 };
@@ -189,6 +190,12 @@ export function createAnswerReplyDeliveryService({
       renderedText: receipt.delivery.preparedReplyText,
       sourceTraces: toPreparedSourceTraceInputs(receipt),
       blockedDocumentSourceIds,
+      ...(receipt.delivery.knowledgeConflictCandidateId === undefined
+        ? {}
+        : {
+            knowledgeConflictCandidateId:
+              receipt.delivery.knowledgeConflictCandidateId,
+          }),
       preparedAt: inspection.checkedAt,
     };
     const result: unknown = await repository.prepare({
@@ -200,6 +207,9 @@ export function createAnswerReplyDeliveryService({
       renderedText: prepared.renderedText,
       sourceTraces: prepared.sourceTraces,
       blockedDocumentSourceIds,
+      ...(prepared.knowledgeConflictCandidateId === undefined
+        ? {}
+        : { knowledgeConflictCandidateId: prepared.knowledgeConflictCandidateId }),
       at: prepared.preparedAt,
     });
     if (
@@ -233,6 +243,9 @@ export function createAnswerReplyDeliveryService({
       renderedText: prepared.renderedText,
       sourceTraces: prepared.sourceTraces,
       ...(blockedDocumentSourceIds.length === 0 ? {} : { blockedDocumentSourceIds }),
+      ...(prepared.knowledgeConflictCandidateId === undefined
+        ? {}
+        : { knowledgeConflictCandidateId: prepared.knowledgeConflictCandidateId }),
       at: prepared.preparedAt,
     });
     if (
@@ -417,6 +430,7 @@ function requirePreparedReceipt(
     incomingMessageId: input.incomingMessageId,
     chatId: input.chatId,
     renderedReplyFingerprint,
+    knowledgeConflictCandidateId: prepared.knowledgeConflictCandidateId,
     sourceTraces: prepared.sourceTraces,
   });
   const blockedDocumentSourceIds = prepared.blockedDocumentSourceIds ?? [];
@@ -455,6 +469,8 @@ function requirePreparedReceipt(
   if (
     receipt.delivery.renderedReplyFingerprint !== renderedReplyFingerprint
     || receipt.delivery.semanticFingerprint !== semanticFingerprint
+    || receipt.delivery.knowledgeConflictCandidateId
+      !== prepared.knowledgeConflictCandidateId
     || (
       receipt.delivery.preparedReplyText !== undefined
       && receipt.delivery.preparedReplyText !== prepared.renderedText

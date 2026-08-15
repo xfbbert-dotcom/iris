@@ -86,6 +86,7 @@ function toResponse(receipt: AnswerReplyReceipt) {
       state: receipt.delivery.state,
       renderedReplyFingerprint: receipt.delivery.renderedReplyFingerprint,
       semanticFingerprint: receipt.delivery.semanticFingerprint,
+      knowledgeConflictCandidateId: receipt.delivery.knowledgeConflictCandidateId,
       replyMessageId: receipt.delivery.replyMessageId,
       safeNoticeMessageId: receipt.delivery.safeNoticeMessageId,
       attemptCount: receipt.delivery.attemptCount,

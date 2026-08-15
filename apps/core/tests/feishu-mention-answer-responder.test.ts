@@ -423,6 +423,7 @@ describe("FeishuMentionAnswerResponder", () => {
       generateDraft: vi.fn(async () => ({
         answerText: "Grounded answer.",
         citedSourceRefs: ["D1"],
+        knowledgeConflictCandidateId: "candidate-answer-a",
         promptContext: "<document_context></document_context>",
         allowedFragments: [allowedFragment],
         deniedDocumentIds: ["source-revoked"],
@@ -495,6 +496,7 @@ describe("FeishuMentionAnswerResponder", () => {
         initialPermissionCheckedAt: preparedAt,
       }],
       blockedDocumentSourceIds: ["source-revoked"],
+      knowledgeConflictCandidateId: "candidate-answer-a",
       preparedAt,
     });
   });

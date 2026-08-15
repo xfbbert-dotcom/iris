@@ -284,6 +284,19 @@ export function createPostgresAnswerReplyRepository(input: {
           ],
         );
 
+        if (normalized.knowledgeConflictCandidateId !== undefined) {
+          await client.query(
+            `INSERT INTO answer_reply_knowledge_conflicts (
+               delivery_id, candidate_id, created_at
+             ) VALUES ($1, $2, $3)`,
+            [
+              normalized.deliveryId,
+              normalized.knowledgeConflictCandidateId,
+              normalized.at,
+            ],
+          );
+        }
+
         for (const trace of normalized.sourceTraces) {
           await insertSourceTrace(client, normalized.deliveryId, trace);
         }
@@ -801,7 +814,7 @@ function normalizePrepareInput(input: PrepareAnswerReplyInput): NormalizedPrepar
     throw new Error("safeNoticeUuid is invalid");
   }
   const renderedText = requireExactString("renderedText", input.renderedText, MAX_REPLY_CHARS);
-  const knowledgeConflictCandidateId = normalizeOptionalReference(
+  const knowledgeConflictCandidateId = normalizeOptionalExactReference(
     "knowledgeConflictCandidateId",
     input.knowledgeConflictCandidateId,
   );
@@ -1153,6 +1166,24 @@ function requireReference(name: string, value: unknown): string {
 
 function normalizeOptionalReference(name: string, value: unknown): string | undefined {
   return value === undefined ? undefined : requireReference(name, value);
+}
+
+function normalizeOptionalExactReference(
+  name: string,
+  value: unknown,
+): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > MAX_REFERENCE_CHARS
+    || value.trim() !== value
+  ) {
+    throw new Error(`${name} is invalid`);
+  }
+  return value;
 }
 
 function requireBoundedString(name: string, value: unknown, maxChars: number): string {

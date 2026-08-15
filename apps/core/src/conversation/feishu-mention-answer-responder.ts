@@ -361,6 +361,12 @@ export function createFeishuMentionAnswerResponder({
                   ...(answer.deniedDocumentIds.length === 0
                     ? {}
                     : { blockedDocumentSourceIds: [...answer.deniedDocumentIds] }),
+                  ...(answer.knowledgeConflictCandidateId === undefined
+                    ? {}
+                    : {
+                        knowledgeConflictCandidateId:
+                          answer.knowledgeConflictCandidateId,
+                      }),
                   preparedAt,
                 };
               },

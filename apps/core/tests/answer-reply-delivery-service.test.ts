@@ -39,6 +39,20 @@ const preparedReplyUuid = createAnswerReplyUuid(incomingMessageId);
 const safeNoticeUuid = createAnswerReplySafeNoticeUuid(incomingMessageId);
 
 describe("AnswerReplyDeliveryService", () => {
+  it("binds the knowledge-conflict candidate to preparation and receipt identity", async () => {
+    const harness = createHarness();
+
+    await harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      knowledgeConflictCandidateId: "candidate-answer-a",
+    }))));
+
+    expect(harness.repository.prepare).toHaveBeenCalledWith(expect.objectContaining({
+      knowledgeConflictCandidateId: "candidate-answer-a",
+    }));
+    expect(harness.repository.receipt?.delivery.knowledgeConflictCandidateId)
+      .toBe("candidate-answer-a");
+  });
+
   it("persists the prepared payload exactly and retries the stored answer and UUID", async () => {
     const harness = createHarness({
       replyResults: [new Error("Feishu unavailable"), { replyMessageId: "reply-1" }],
@@ -1302,6 +1316,7 @@ function receipt(
       incomingMessageId: receiptIncomingMessageId,
       chatId: receiptChatId,
       renderedReplyFingerprint,
+      knowledgeConflictCandidateId: deliveryOverrides.knowledgeConflictCandidateId,
       sourceTraces,
     });
   return {
@@ -1613,6 +1628,7 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
         safeNoticeUuid: input.safeNoticeUuid,
         preparedReplyText: input.renderedText,
         renderedReplyFingerprint: createAnswerReplyRenderedFingerprint(input.renderedText),
+        knowledgeConflictCandidateId: input.knowledgeConflictCandidateId,
         createdAt: input.at,
         updatedAt: input.at,
       }, [...input.sourceTraces]);

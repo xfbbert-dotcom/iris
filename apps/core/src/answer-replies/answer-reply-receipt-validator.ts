@@ -115,7 +115,7 @@ function validateReceipt(value: unknown): AnswerReplyReceipt {
     || !isOptionalExactText(delivery.preparedReplyText, MAX_REPLY_CHARS)
     || !isFingerprint(delivery.renderedReplyFingerprint)
     || !isFingerprint(delivery.semanticFingerprint)
-    || !isOptionalBoundedString(
+    || !isOptionalExactReference(
       delivery.knowledgeConflictCandidateId,
       MAX_REFERENCE_CHARS,
     )
@@ -528,6 +528,14 @@ function isBoundedString(value: unknown, maxChars: number): value is string {
 
 function isOptionalBoundedString(value: unknown, maxChars: number): boolean {
   return value === undefined || isBoundedString(value, maxChars);
+}
+
+function isOptionalExactReference(value: unknown, maxChars: number): boolean {
+  return value === undefined
+    || (
+      isBoundedString(value, maxChars)
+      && value.trim() === value
+    );
 }
 
 function isOptionalExactText(value: unknown, maxChars: number): boolean {

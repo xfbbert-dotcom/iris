@@ -666,6 +666,13 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     )).resolves.toMatchObject({
       rows: [{ knowledge_conflict_candidate_id: candidateId }],
     });
+    await expect(pool!.query<{ delivery_id: string; candidate_id: string }>(
+      `SELECT delivery_id, candidate_id
+       FROM answer_reply_knowledge_conflicts WHERE delivery_id = $1`,
+      [first.receipt.delivery.id],
+    )).resolves.toMatchObject({
+      rows: [{ delivery_id: first.receipt.delivery.id, candidate_id: candidateId }],
+    });
 
     await expect(repository.prepare({
       ...input,
@@ -688,6 +695,10 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     })).resolves.toMatchObject({
       delivery: { knowledgeConflictCandidateId: candidateId },
     });
+    await expect(pool!.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM answer_reply_knowledge_conflicts WHERE delivery_id = $1",
+      [first.receipt.delivery.id],
+    )).resolves.toMatchObject({ rows: [{ count: "1" }] });
   });
 
   it("rejects changed rendered text or source facts as a semantic conflict", async () => {
