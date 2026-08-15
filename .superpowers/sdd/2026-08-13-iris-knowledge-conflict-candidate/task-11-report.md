@@ -266,3 +266,65 @@
   smoke, default-off, and mocked boundary contracts passed.
 - The loop remains pending live acceptance and produces only a governed update draft, never an
   in-place Wiki edit.
+
+## Fix Round 4: Bounded Disabled Status-Reader Cleanup
+
+### Result
+
+- Implementation/tests commit: `f537d731af929a04699c79ca02af27f763dde28a`.
+- The disabled knowledge-card status reader now tracks Redis connection readiness independently of
+  the enabled processing runtime. Pending or failed connections use the Node Redis destructive
+  close primitive immediately and never await a graceful command on an unready transport.
+- A ready client still receives one graceful `quit`. Rejection or a 250 ms bound triggers one
+  `destroy` fallback; the timer is unreferenced and cleared when graceful close settles.
+- Concurrent and sequential `close()` calls reuse one settled promise. PostgreSQL and Redis cleanup
+  each run exactly once, including startup composition failure. The enabled knowledge-card runtime
+  close path and its existing failure semantics were not changed.
+- Live pilot: not run and not claimed. Task 12 remains the owner of exact-SHA live acceptance.
+
+### TDD RED
+
+- Command:
+  `npm exec --workspace apps/core -- vitest run tests/knowledge-card-status-reader.test.ts`.
+- Result before implementation: 7 tests, 3 pass and 4 expected fail.
+- A production-faithful refused-connection fixture and a startup-composition fixture both exceeded
+  the deterministic 400 ms test bound because cleanup awaited connection/`quit` forever. A ready
+  client with hanging `quit` also exceeded the bound, while a ready client with rejected `quit`
+  propagated that rejection instead of completing the safe fallback.
+- Root cause: the shared runtime close helper always awaited the Redis connection promise and then
+  always invoked `quit`; it had no connection-state branch or destructive fallback.
+
+### GREEN Verification
+
+- Focused status-reader close contracts: 7/7 pass, including refused/unready, rejected quit,
+  hanging quit, normal graceful close, repeated close, exact resource counts, and startup cleanup.
+- Consolidated reader/runtime/startup/readiness/resource-close regressions: 137/137 pass.
+- Full Core `npm test`: 3,376 pass, 0 fail, 250 environment-gated skips; 186 test files passed and
+  3 were skipped.
+- Pilot operations contracts: 41/41 pass.
+- Fresh full `npm run test:pilot`: 156 tests, 155 pass, 0 fail, 1 skip. The sole skip accurately
+  reports that the Docker daemon is unavailable for the executable pinned-Caddy boundary probe;
+  no container result is claimed.
+- `npm run readiness -- --env-file deploy/pilot/ci.env`: 17/17 pass in static disabled-env mode.
+- `npm run typecheck`: exit `0`.
+- `npm run build`: exit `0`.
+- `npm run pilot:config`: exit `0`; rendered default-off boundaries remain unchanged.
+- Extracted PowerShell controller parse: pass, 6,856 tokens.
+- `git diff --check`: exit `0` before the implementation commit; line-ending notices only.
+
+### Artifact SHA-256
+
+- Knowledge-card runtime/status reader: `788532b88242d0905fa889faa2b16b534515f84f96bf027bd3991b4e6bf878b3`.
+- Status-reader close contracts: `92bb21568464f4d35f307ed30bb03b9315ed387709e6d5adb38d13cc2496c93c`.
+
+### Residual Risk
+
+- No live PostgreSQL query, Redis queue, Feishu callback/card, model request, Wiki read, credential,
+  or pilot mutation was used in this fix round.
+- The destructive fallback intentionally prioritizes bounded shutdown over completing content-free
+  status reads on a failed or slow Redis transport. The status reader performs no writes or worker
+  processing.
+- Docker remained unavailable for the executable Caddy container probe. Static Caddy, Compose,
+  smoke, default-off, and mocked boundary contracts passed.
+- The loop remains pending live acceptance and produces only a governed update draft, never an
+  in-place Wiki edit.
