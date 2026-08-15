@@ -194,3 +194,75 @@
   Compose, smoke, and mocked boundary contracts passed.
 - The product loop remains pending live acceptance and produces only a governed update draft, never
   an in-place Wiki edit.
+
+## Fix Round 3: Production Chronology And Disabled Durable-Work Attestation
+
+### Result
+
+- Implementation/tests/docs commit: `131bcc70d248c55b9b0fb9bbfc478db856b37700`.
+- Step 4 now queries `conversation_messages.sent_at`, returns the exact source, snapshot, and
+  message timestamps, and independently requires every pinned pilot message `sent_at` to be
+  strictly later than both synchronized source times. Database ingestion `created_at` is ignored.
+- Disabled knowledge-card status no longer fabricates zero counts. A separately owned read-only
+  status reader reuses the existing PostgreSQL presentation/outbox repository and Redis approval-
+  interaction queue adapters. It creates no dispatcher, worker, polling loop, callback gateway, or
+  card-processing path, and closes its PostgreSQL pool and Redis client on normal or failed startup.
+- Live disabled readiness and rollback now fail closed when those counts are unreadable or when
+  Redis pending/processing/delayed/DLQ work, active/pending-send/send-failed draft presentations,
+  or unresolved/outcome-unknown/terminal-failed presentation outbox work remains.
+- The direct Step 10 drain additionally treats an active `knowledge_draft_presentations` row as
+  unresolved, even when every other aggregate is zero.
+- Live pilot: not run and not claimed. Task 12 remains the owner of exact-SHA live acceptance.
+
+### TDD RED
+
+- Initial pilot operations command: `node --test scripts/pilot-operations.test.mjs`.
+  Result: 41 tests, 39 pass and 2 expected fail. The failures proved the chronology SQL still used
+  ingestion `created_at` and the durable drain accepted an active knowledge-draft presentation.
+- Initial Core command:
+  `npm exec --workspace apps/core -- vitest run tests/internal-rollout-readiness.test.ts tests/knowledge-card-api.test.ts tests/knowledge-card-status-reader.test.ts`.
+  Result: 54 tests, 42 pass and 12 expected fail. Disabled API/readiness still returned synthetic
+  zero, ignored injected residual counts and read errors, and had no read-only status-reader factory.
+- A stronger executable chronology fixture then supplied a pre-snapshot `sentAt`, a later
+  `createdAt`, and a forged positive aggregate. It produced 40 pass and 1 expected fail before the
+  controller began comparing the returned production timestamps itself.
+
+### GREEN Verification
+
+- Final pilot operations contracts: 41/41 pass, including the stronger pre-snapshot `sentAt` /
+  later-ingestion fixture and the active-draft-presentation drain fixture.
+- Final focused Core status/readiness/reader set: 54/54 pass.
+- Consolidated Core status, readiness, knowledge-card runtime, startup, snapshot, and resource-close
+  regressions: 130/130 pass.
+- Fresh full `npm run test:pilot`: 156 tests, 155 pass, 0 fail, 1 skip. The sole skip accurately
+  reports that the Docker daemon is unavailable for the executable pinned-Caddy boundary probe;
+  no container result is claimed.
+- `npm run readiness -- --env-file deploy/pilot/ci.env`: 17/17 pass in static disabled-env mode.
+- `npm run typecheck`: exit `0`.
+- `npm run build`: exit `0`.
+- `npm run pilot:config`: exit `0`; rendered Core retains conflict/card/action-approval flags false
+  and all three allowlists empty.
+- Extracted PowerShell controller parse: pass, 6,856 tokens.
+- `git diff --check`: exit `0` before the implementation commit; line-ending notices only.
+
+### Artifact SHA-256
+
+- Runbook: `0ac1f6add359cddb1543bc22a7ba43be8a47cd823efd1fd9fdcd8554f8b92375`.
+- PR evidence template: `cd3e87b9d0cfb1378b27ae290f8dc86ceefdd37703593a0cf9bc2c923819b027`.
+- Pilot operations contracts: `acbd28d2b3b1c849c33846cff1f0a608eb44512fc5616dcb854c997d5ac60a83`.
+- Knowledge-card status reader: `3868e44742cee55875563553b8c3f045e179e7634038280b43d50dc48f2bcf0b`.
+- Core status composition: `7485d21ee973532f84da0c7a5772e254338acd2772bd68a26cb4c36fb09ea424`.
+- Disabled readiness gate: `096a41cd0963e0bb8048128ad8914764a7ff8ce97b86dd39677e468d0efbf42b`.
+- Status-reader contract: `5d6845cb96aa179983d6871e7eeed859ecd9afbf31d4657ec4d59f41f625f185`.
+
+### Residual Risk
+
+- No live PostgreSQL query, Redis queue, Feishu callback/card, model request, Wiki read, credential,
+  or pilot mutation was used in this fix round.
+- A disabled Core with both status stores configured now owns one read-only Redis client and one
+  lazy PostgreSQL pool so it can attest durable work. Storage/count failure intentionally degrades
+  live readiness and rollback; no processing loop is enabled.
+- Docker remained unavailable for the executable Caddy container probe. Static Caddy, Compose,
+  smoke, default-off, and mocked boundary contracts passed.
+- The loop remains pending live acceptance and produces only a governed update draft, never an
+  in-place Wiki edit.
