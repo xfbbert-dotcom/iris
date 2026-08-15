@@ -49,9 +49,10 @@ requires status and readiness to pass before starting Caddy. `writeKnowledgeBase
 ## Step 6: Prove One Exact Scan And Candidate
 
 After one eligible memory is produced, record the scan, memory, candidate, document source,
-snapshot, source version, and content hash identities. The controller requires exactly one scan and
-one candidate for that binding and exact conversation-message, memory, source, and snapshot
-evidence rows.
+snapshot, source version, source/fragment timestamps, and content hashes. Record every expected
+evidence row using the actual `knowledge_conflict_evidence` columns. The controller requires exact
+cardinality and uses bidirectional `EXCEPT ALL`; a duplicate, omitted, or unrelated row fails even
+when all five evidence types are present.
 
 ## Step 7: Prove The Ordinary Answer Shows Both Sides
 
@@ -63,31 +64,41 @@ delivery to the exact candidate.
 ## Step 8: Approve Exactly One Delivery
 
 Before operator approval, record that no conflict card was sent. The controller approves the exact
-candidate version once with a stable operation key, then requires exactly one delivery row. Record
-the resulting delivery/message IDs and card observation; never record rendered card text.
+candidate version once with a stable operation key, then requires exactly one sent delivery bound
+to the recorded message. Record only the card hash and per-field pass/fail/count facts proving both
+sides, material difference, proposed update, uncertainty label, and at least one currently readable
+safe link with zero unsafe/denied links; never record rendered card text.
 
 ## Step 9: Exercise Callback And Negative Controls
 
 Using the same live window, exercise: current-member draft creation; duplicate delivery and exact
-callback replay; a no-conflict memory; a related-subject memory; nonmember denial; permission
-revocation; and snapshot replacement before action. The evidence JSON records only involved IDs
-and one pass/fail flag per check. No duplicate message or draft is allowed, unrelated evidence must
-not substitute, and revocation must prevent disclosure or creation.
+callback replay; a no-conflict memory; a related-subject memory; nonmember denial; and all six
+permission/snapshot-change × pre-answer/pre-delivery/pre-callback revocation cases. Each revocation
+entry is stage-labelled and binds an exact candidate/version, attempted operation, timestamp,
+prospective draft, and callback identity when applicable. Snapshot change additionally requires
+the exact superseding event; permission denial requires no candidate mutation. SQL/API facts must
+prove zero answer binding or
+disclosure, zero post-revocation delivery/message effect, zero applied interaction/draft mutation,
+and one rejected callback only for the pre-callback cases.
 
 ## Step 10: Prove The Governed Draft And Drain
 
 Require exactly one `knowledge_conflict` draft at `medium` risk, in the existing confirmation,
 review, and publication path. This is a governed update draft and does not edit the existing Wiki
-page in place. All conflict queues/outboxes must drain, no unknown or terminal failure may remain,
-and every nonpilot group must retain its Step 3 fact counts.
+page in place. All conflict, answer-delivery, draft-presentation, approval, execution,
+reconciliation, publication, and related outbox states must drain; unreadable tables fail closed.
+No unknown or terminal failure may remain, and every nonpilot group must retain its Step 3 fact
+counts.
 
 ## Step 11: Disable Unless A Separate Daily Decision Exists
 
 This runbook always disables at exit. A later daily-pilot decision requires a separately reviewed
 record and a new invocation; it is not an option in this acceptance controller. Rollback order is:
 stop Caddy; restore the conflict/card/approval flags and allowlists to off/empty; durable-disable all
-known groups, global runtime, and read/draft/proactive/write capabilities; recreate Core; prove no
-new scan/outbox activity; and retain all append-only PostgreSQL facts.
+known groups, global runtime, and read/draft/proactive/write capabilities; recreate Core; re-attest
+the exact group inventory plus durable/live global, group, capability, conflict/card/approval, and
+empty-allowlist policy; prove every mutable table fingerprint unchanged; and retain all append-only
+PostgreSQL facts.
 
 ## Step 12: Record Metadata-Only Evidence
 
@@ -122,11 +133,56 @@ $script:BaselineActivity = $null
 $script:BaselineAppendOnlyFacts = $null
 $script:BaselineGroupFacts = @{}
 $script:RollbackErrors = @()
+$script:InitialCurrentBotGroupIds = @()
 
 function Assert-Reference {
   param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Value)
   if ($Value -cnotmatch '^[A-Za-z0-9:_-]{1,512}$') { throw "$Name is missing or unsafe" }
   return $Value
+}
+
+function Assert-Hash {
+  param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Value)
+  if ($Value -cnotmatch '^[0-9a-f]{64}$') { throw "$Name is not a lowercase SHA-256 hash" }
+  return $Value
+}
+
+function Assert-IsoTimestamp {
+  param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][object]$Value)
+  if ($Value -is [DateTimeOffset]) { return $Value.ToUniversalTime().ToString('o') }
+  if ($Value -is [DateTime]) { return ([DateTimeOffset]$Value).ToUniversalTime().ToString('o') }
+  $textValue = [string]$Value
+  $parsed = [DateTimeOffset]::MinValue
+  if ($textValue -cnotmatch '^\d{4}-\d{2}-\d{2}T' -or -not [DateTimeOffset]::TryParse(
+    $textValue,
+    [Globalization.CultureInfo]::InvariantCulture,
+    [Globalization.DateTimeStyles]::RoundtripKind,
+    [ref]$parsed
+  )) { throw "$Name is not an ISO timestamp" }
+  return $parsed.ToUniversalTime().ToString('o')
+}
+
+function Get-RequiredProperty {
+  param([Parameter(Mandatory)][object]$Value, [Parameter(Mandatory)][string]$Name)
+  if ($Value -is [Collections.IDictionary]) {
+    if (-not $Value.Contains($Name)) { throw "Missing required property $Name" }
+    return $Value[$Name]
+  }
+  if ($Value.PSObject.Properties.Name -notcontains $Name) { throw "Missing required property $Name" }
+  return $Value.$Name
+}
+
+function Assert-ExactStringSet {
+  param(
+    [Parameter(Mandatory)][object[]]$Expected,
+    [Parameter(Mandatory)][object[]]$Actual,
+    [Parameter(Mandatory)][string]$Label
+  )
+  $expectedValues = @($Expected | ForEach-Object { [string]$_ } | Sort-Object -Unique)
+  $actualValues = @($Actual | ForEach-Object { [string]$_ } | Sort-Object -Unique)
+  if ((@($expectedValues | Where-Object { $_.Length -eq 0 })).Count -ne 0 -or (@($actualValues | Where-Object { $_.Length -eq 0 })).Count -ne 0) { throw "$Label contains an empty value" }
+  if ($expectedValues.Count -ne $Expected.Count -or $actualValues.Count -ne $Actual.Count) { throw "$Label contains duplicates" }
+  if (($expectedValues -join "`n") -cne ($actualValues -join "`n")) { throw "$Label is not the exact expected set" }
 }
 
 function Get-PilotEnvValue {
@@ -180,6 +236,218 @@ function Get-Evidence {
   return (Get-Content -LiteralPath $EvidencePath -Raw | ConvertFrom-Json)
 }
 
+function ConvertTo-SqlNullableReference {
+  param([string]$Name, [AllowNull()][object]$Value)
+  if ($null -eq $Value) { return "NULL::text" }
+  $safeValue = Assert-Reference -Name $Name -Value ([string]$Value)
+  return "'$safeValue'::text"
+}
+
+function ConvertTo-SqlNullableHash {
+  param([string]$Name, [AllowNull()][object]$Value)
+  if ($null -eq $Value) { return "NULL::text" }
+  $safeValue = Assert-Hash -Name $Name -Value ([string]$Value)
+  return "'$safeValue'::text"
+}
+
+function ConvertTo-SqlNullableTimestamp {
+  param([string]$Name, [AllowNull()][object]$Value)
+  if ($null -eq $Value) { return "NULL::timestamptz" }
+  $safeValue = Assert-IsoTimestamp -Name $Name -Value $Value
+  return "'$safeValue'::timestamptz"
+}
+
+function Get-ExpectedEvidenceSqlRows {
+  param(
+    [Parameter(Mandatory)][object[]]$Rows,
+    [Parameter(Mandatory)][object]$Evidence,
+    [Parameter(Mandatory)][string]$PilotGroupId
+  )
+  $requiredFields = @(
+    'evidenceType','referenceId','groupId','conversationMessageId','groupMemoryId',
+    'sourceUpdatedAt','documentSourceId','documentSnapshotId','documentFragmentId',
+    'snapshotContentHash','contentHash'
+  )
+  if ($Rows.Count -lt 5) { throw "Exact evidence rows are incomplete" }
+  $pilotMessageIds = @((Get-RequiredProperty $Evidence 'pilotMessageIds') | ForEach-Object {
+    Assert-Reference -Name 'pilot message ID' -Value ([string]$_)
+  })
+  if ($pilotMessageIds.Count -lt 1) { throw "Pilot message evidence is empty" }
+  Assert-ExactStringSet -Expected $pilotMessageIds -Actual $pilotMessageIds -Label 'pilot message IDs'
+  $memoryId = Assert-Reference -Name 'memoryId' -Value ([string](Get-RequiredProperty $Evidence 'memoryId'))
+  $memoryUpdatedAt = Assert-IsoTimestamp -Name 'memoryUpdatedAt' -Value (Get-RequiredProperty $Evidence 'memoryUpdatedAt')
+  $documentSourceId = Assert-Reference -Name 'documentSourceId' -Value ([string](Get-RequiredProperty $Evidence 'documentSourceId'))
+  $documentSourceUpdatedAt = Assert-IsoTimestamp -Name 'documentSourceUpdatedAt' -Value (Get-RequiredProperty $Evidence 'documentSourceUpdatedAt')
+  $snapshotId = Assert-Reference -Name 'snapshotId' -Value ([string](Get-RequiredProperty $Evidence 'snapshotId'))
+  $snapshotHash = Assert-Hash -Name 'contentHash' -Value ([string](Get-RequiredProperty $Evidence 'contentHash'))
+  $expectedFragments = @((Get-RequiredProperty $Evidence 'documentFragments'))
+  if ($expectedFragments.Count -lt 1) { throw "Document fragment evidence is empty" }
+
+  $messageRows = @()
+  $fragmentKeys = @()
+  $sourceCount = 0
+  $snapshotCount = 0
+  $memoryCount = 0
+  $sqlRows = @()
+  foreach ($row in $Rows) {
+    $actualFields = @($row.PSObject.Properties.Name | Sort-Object)
+    if (($actualFields -join "`n") -cne (@($requiredFields | Sort-Object) -join "`n")) { throw "Evidence row has missing or extra fields" }
+    $type = [string]$row.evidenceType
+    if ($type -notin @('conversation_message','group_memory','document_source','document_snapshot','document_fragment')) { throw "Evidence type is invalid" }
+    $referenceId = Assert-Reference -Name 'evidence referenceId' -Value ([string]$row.referenceId)
+    if ($type -eq 'conversation_message') {
+      if ([string]$row.groupId -cne $PilotGroupId -or $null -eq $row.conversationMessageId) { throw "Conversation evidence is not pilot-bound" }
+      $messageRows += Assert-Reference -Name 'conversationMessageId' -Value ([string]$row.conversationMessageId)
+    } elseif ($type -eq 'group_memory') {
+      $memoryCount += 1
+      if ([string]$row.groupId -cne $PilotGroupId -or [string]$row.groupMemoryId -cne $memoryId -or (Assert-IsoTimestamp -Name 'evidence memory updatedAt' -Value $row.sourceUpdatedAt) -cne $memoryUpdatedAt) { throw "Group-memory evidence is not exact" }
+    } elseif ($type -eq 'document_source') {
+      $sourceCount += 1
+      if ([string]$row.documentSourceId -cne $documentSourceId -or (Assert-IsoTimestamp -Name 'evidence source updatedAt' -Value $row.sourceUpdatedAt) -cne $documentSourceUpdatedAt) { throw "Document-source evidence is not exact" }
+    } elseif ($type -eq 'document_snapshot') {
+      $snapshotCount += 1
+      if ([string]$row.documentSourceId -cne $documentSourceId -or [string]$row.documentSnapshotId -cne $snapshotId -or [string]$row.snapshotContentHash -cne $snapshotHash -or [string]$row.contentHash -cne $snapshotHash) { throw "Document-snapshot evidence is not exact" }
+    } else {
+      $fragmentId = Assert-Reference -Name 'documentFragmentId' -Value ([string]$row.documentFragmentId)
+      $fragmentHash = Assert-Hash -Name 'fragment contentHash' -Value ([string]$row.contentHash)
+      if ([string]$row.documentSourceId -cne $documentSourceId -or [string]$row.documentSnapshotId -cne $snapshotId -or [string]$row.snapshotContentHash -cne $snapshotHash) { throw "Document-fragment evidence is not snapshot-bound" }
+      $fragmentKeys += "$referenceId`0$fragmentId`0$fragmentHash"
+    }
+    $sqlValues = @(
+      (ConvertTo-SqlNullableReference 'evidenceType' $type),
+      (ConvertTo-SqlNullableReference 'referenceId' $referenceId),
+      (ConvertTo-SqlNullableReference 'groupId' $row.groupId),
+      (ConvertTo-SqlNullableReference 'conversationMessageId' $row.conversationMessageId),
+      (ConvertTo-SqlNullableReference 'groupMemoryId' $row.groupMemoryId),
+      (ConvertTo-SqlNullableTimestamp 'sourceUpdatedAt' $row.sourceUpdatedAt),
+      (ConvertTo-SqlNullableReference 'documentSourceId' $row.documentSourceId),
+      (ConvertTo-SqlNullableReference 'documentSnapshotId' $row.documentSnapshotId),
+      (ConvertTo-SqlNullableReference 'documentFragmentId' $row.documentFragmentId),
+      (ConvertTo-SqlNullableHash 'snapshotContentHash' $row.snapshotContentHash),
+      (ConvertTo-SqlNullableHash 'contentHash' $row.contentHash)
+    )
+    $sqlRows += "(" + ($sqlValues -join ',') + ")"
+  }
+  Assert-ExactStringSet -Expected $pilotMessageIds -Actual $messageRows -Label 'conversation evidence IDs'
+  if ($memoryCount -ne 1 -or $sourceCount -ne 1 -or $snapshotCount -ne 1) { throw "Evidence singleton cardinality is not exact" }
+  $expectedFragmentKeys = @($expectedFragments | ForEach-Object {
+    $ref = Assert-Reference -Name 'fragment referenceId' -Value ([string](Get-RequiredProperty $_ 'referenceId'))
+    $id = Assert-Reference -Name 'fragment ID' -Value ([string](Get-RequiredProperty $_ 'id'))
+    $hash = Assert-Hash -Name 'fragment hash' -Value ([string](Get-RequiredProperty $_ 'contentHash'))
+    "$ref`0$id`0$hash"
+  })
+  Assert-ExactStringSet -Expected $expectedFragmentKeys -Actual $fragmentKeys -Label 'fragment evidence identities'
+  return $sqlRows
+}
+
+function Assert-ExactEvidenceBindingFacts {
+  param([Parameter(Mandatory)][object]$Facts)
+  foreach ($name in @('scanCount','candidateCount')) {
+    if ([long](Get-RequiredProperty $Facts $name) -ne 1) { throw "Exact evidence binding failed at $name" }
+  }
+  foreach ($name in @('missingEvidenceCount','unexpectedEvidenceCount','duplicateExpectedCount')) {
+    if ([long](Get-RequiredProperty $Facts $name) -ne 0) { throw "Exact evidence binding failed at $name" }
+  }
+  $expectedCount = [long](Get-RequiredProperty $Facts 'expectedEvidenceCount')
+  $actualCount = [long](Get-RequiredProperty $Facts 'actualEvidenceCount')
+  if ($expectedCount -lt 5 -or $expectedCount -ne $actualCount) { throw "Exact evidence cardinality failed" }
+}
+
+function Assert-ApprovedCardProof {
+  param(
+    [Parameter(Mandatory)][object]$Proof,
+    [Parameter(Mandatory)][string]$CandidateId,
+    [Parameter(Mandatory)][string]$DeliveryId,
+    [Parameter(Mandatory)][string]$MessageId
+  )
+  if ([string](Get-RequiredProperty $Proof 'candidateId') -cne $CandidateId -or
+      [string](Get-RequiredProperty $Proof 'deliveryId') -cne $DeliveryId -or
+      [string](Get-RequiredProperty $Proof 'messageId') -cne $MessageId) { throw "Observed card identity is not exact" }
+  $null = Assert-Hash -Name 'cardHash' -Value ([string](Get-RequiredProperty $Proof 'cardHash'))
+  foreach ($name in @('currentKnowledgeShown','newerGroupConclusionShown','materialDifferenceShown','proposedUpdateShown','uncertaintyLabelShown')) {
+    if ((Get-RequiredProperty $Proof $name) -ne $true) { throw "Observed card proof failed at $name" }
+  }
+  foreach ($name in @('currentKnowledgeEvidenceCount','newerGroupEvidenceCount','safeReadableCurrentLinkCount')) {
+    if ([long](Get-RequiredProperty $Proof $name) -lt 1) { throw "Observed card metadata is empty at $name" }
+  }
+  if ([long](Get-RequiredProperty $Proof 'unsafeOrDeniedLinkCount') -ne 0) { throw "Observed card contains an unsafe or denied link" }
+}
+
+function Assert-RevocationFacts {
+  param([Parameter(Mandatory)][object[]]$Facts)
+  $expectedCases = @(
+    'permission/pre_answer','snapshot/pre_answer',
+    'permission/pre_delivery','snapshot/pre_delivery',
+    'permission/pre_callback','snapshot/pre_callback'
+  )
+  $actualCases = @()
+  foreach ($fact in $Facts) {
+    $stage = [string](Get-RequiredProperty $fact 'stage')
+    $cause = [string](Get-RequiredProperty $fact 'cause')
+    $case = "$cause/$stage"
+    $actualCases += $case
+    $null = Assert-Reference -Name 'revoked candidate ID' -Value ([string](Get-RequiredProperty $fact 'candidateId'))
+    $null = Assert-Reference -Name 'revocation operation key' -Value ([string](Get-RequiredProperty $fact 'operationKey'))
+    $null = Assert-IsoTimestamp -Name 'revokedAt' -Value (Get-RequiredProperty $fact 'revokedAt')
+    if ([long](Get-RequiredProperty $fact 'exactCandidateCount') -ne 1) { throw "Revocation candidate binding failed at $case" }
+    $expectedEventCount = if ($cause -ceq 'snapshot') { 1 } else { 0 }
+    if ([long](Get-RequiredProperty $fact 'revocationEventCount') -ne $expectedEventCount) { throw "Revocation event binding failed at $case" }
+    if ([long](Get-RequiredProperty $fact 'operationRejectedCount') -ne 1) { throw "Revocation operation was not rejected at $case" }
+    $expectedResultCode = if ($cause -ceq 'permission') { 'permission_blocked' } elseif ($stage -ceq 'pre_answer') { 'snapshot_stale' } elseif ($stage -ceq 'pre_delivery') { 'stale_candidate' } else { 'evidence_invalidated' }
+    if ([string](Get-RequiredProperty $fact 'operationResultCode') -cne $expectedResultCode) { throw "Revocation API/result code failed at $case" }
+    foreach ($name in @('answerConflictBindingCount','answerDisclosureCount','deliveryCreatedCount','sentMessageCount','appliedInteractionCount','draftMutationCount')) {
+      if ([long](Get-RequiredProperty $fact $name) -ne 0) { throw "Revocation side effect exists at $case/$name" }
+    }
+    $expectedCallbackCount = if ($stage -ceq 'pre_callback') { 1 } else { 0 }
+    foreach ($name in @('callbackRejectedCount','callbackIdentityCount')) {
+      if ([long](Get-RequiredProperty $fact $name) -ne $expectedCallbackCount) { throw "Revocation callback proof failed at $case/$name" }
+    }
+  }
+  Assert-ExactStringSet -Expected $expectedCases -Actual $actualCases -Label 'revocation stage/cause cases'
+}
+
+function Assert-DrainedDurableStates {
+  param([Parameter(Mandatory)][object]$Counts)
+  foreach ($name in @(
+    'answerPrepared','answerSending','answerReconciliationRequired',
+    'draftPresentationUnresolved','draftOutboxUnresolved',
+    'actionProposalUnresolved','actionRequirementPending','actionPresentationUnresolved',
+    'actionOutboxUnresolved','actionExecutionUnresolved','actionExecutionFailed'
+  )) {
+    if ([long](Get-RequiredProperty $Counts $name) -ne 0) { throw "Durable state is not drained at $name" }
+  }
+}
+
+function Assert-FingerprintUnchanged {
+  param([Parameter(Mandatory)][object]$Before, [Parameter(Mandatory)][object]$After, [Parameter(Mandatory)][string]$Label)
+  $beforeJson = $Before | ConvertTo-Json -Compress -Depth 20
+  $afterJson = $After | ConvertTo-Json -Compress -Depth 20
+  if ($beforeJson -cne $afterJson) { throw "$Label state fingerprint changed" }
+}
+
+function Assert-RollbackRuntimeAttestation {
+  param(
+    [Parameter(Mandatory)][object]$Runtime,
+    [Parameter(Mandatory)][object]$Status,
+    [Parameter(Mandatory)][object]$Environment,
+    [Parameter(Mandatory)][object[]]$ExpectedGroupIds
+  )
+  if ($Runtime.globalEnabled -ne $false -or $Runtime.desiredGlobalEnabled -ne $false -or $Runtime.activationRequired -ne $false) { throw "Rollback global desired/live policy is not disabled" }
+  if ($Runtime.persistence.ok -ne $true -or $Runtime.persistence.storage -cne 'postgres') { throw "Rollback durable policy is not readable from PostgreSQL" }
+  Assert-ExactStringSet -Expected $ExpectedGroupIds -Actual @($Runtime.disabledGroupIds) -Label 'rollback disabled groups'
+  foreach ($name in @('readGroupDocuments','retrieveKnowledgeBase','proactiveSpeech','generateKnowledgeDrafts','writeKnowledgeBase')) {
+    if ((Get-RequiredProperty $Runtime.capabilities $name) -ne $false) { throw "Rollback capability remains enabled at $name" }
+  }
+  foreach ($name in @('IRIS_KNOWLEDGE_CONFLICT_ENABLED','IRIS_KNOWLEDGE_CARD_ENABLED','IRIS_APPROVAL_ACTIONS_ENABLED')) {
+    if ([string](Get-RequiredProperty $Environment $name) -cne 'false') { throw "Rollback feature flag remains enabled at $name" }
+  }
+  foreach ($name in @('IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST','IRIS_KNOWLEDGE_CARD_GROUP_IDS','IRIS_APPROVAL_ACTION_GROUP_IDS')) {
+    if ([string](Get-RequiredProperty $Environment $name) -cne '') { throw "Rollback allowlist remains populated at $name" }
+  }
+  if ($Status.components.knowledgeConflicts.enabled -ne $false -or $Status.components.actionApprovals.enabled -ne $false) { throw "Rollback conflict or approval runtime is enabled" }
+  if ($Status.PSObject.Properties.Name -contains 'knowledgeCards' -and $Status.knowledgeCards.enabled -ne $false) { throw "Rollback knowledge-card runtime is enabled" }
+}
+
 function Get-KnowledgeConflictActivityCounts {
   return Invoke-JsonSql -Sql @"
 SELECT json_build_object(
@@ -189,6 +457,43 @@ SELECT json_build_object(
   'deliveryOutcomeUnknown', (SELECT count(*) FROM knowledge_conflict_delivery_outbox WHERE status = 'outcome_unknown'),
   'deliveryTerminalFailed', (SELECT count(*) FROM knowledge_conflict_delivery_outbox WHERE status = 'failed' AND retryable = FALSE)
 ) FROM knowledge_conflict_scan_inbox;
+"@
+}
+
+function Get-GovernedUnresolvedCounts {
+  return Invoke-JsonSql -Sql @"
+SELECT json_build_object(
+  'answerPrepared', (SELECT count(*) FROM answer_reply_deliveries WHERE state = 'prepared'),
+  'answerSending', (SELECT count(*) FROM answer_reply_deliveries WHERE state = 'sending'),
+  'answerReconciliationRequired', (SELECT count(*) FROM answer_reply_deliveries WHERE state = 'reconciliation_required'),
+  'draftPresentationUnresolved', (SELECT count(*) FROM knowledge_draft_presentations WHERE state IN ('pending_send','send_failed')),
+  'draftOutboxUnresolved', (SELECT count(*) FROM knowledge_draft_presentation_outbox WHERE state IN ('pending','processing','external_attempting','failed','outcome_unknown')),
+  'actionProposalUnresolved', (SELECT count(*) FROM action_proposals WHERE status IN ('pending_approval','approved','executing','reconciliation_required')),
+  'actionRequirementPending', (SELECT count(*) FROM action_approval_requirements WHERE state = 'pending'),
+  'actionPresentationUnresolved', (SELECT count(*) FROM action_approval_presentations WHERE state IN ('pending_send','send_failed')),
+  'actionOutboxUnresolved', (SELECT count(*) FROM action_approval_presentation_outbox WHERE state IN ('pending','processing','external_attempting','failed','outcome_unknown')),
+  'actionExecutionUnresolved', (SELECT count(*) FROM action_executions WHERE state IN ('pending','executing','outcome_unknown','reconciliation_required')),
+  'actionExecutionFailed', (SELECT count(*) FROM action_executions WHERE state = 'failed')
+);
+"@
+}
+
+function Get-DurableActivityFingerprint {
+  return Invoke-JsonSql -Sql @"
+SELECT json_build_object(
+  'scanInbox', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,status,attempt_count,COALESCE(terminal_outcome,''),updated_at::text),E'\n' ORDER BY id),''))) FROM knowledge_conflict_scan_inbox),
+  'candidates', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,status,version,updated_at::text),E'\n' ORDER BY id),''))) FROM knowledge_conflict_candidates),
+  'conflictOutbox', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,status,retryable,attempt_count,COALESCE(sent_message_id,''),updated_at::text),E'\n' ORDER BY id),''))) FROM knowledge_conflict_delivery_outbox),
+  'answerDeliveries', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,state,attempt_count,safe_notice_attempt_count,version,COALESCE(reply_message_id,''),COALESCE(safe_notice_message_id,''),updated_at::text),E'\n' ORDER BY id),''))) FROM answer_reply_deliveries),
+  'drafts', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,status,current_revision_number,version,updated_at::text),E'\n' ORDER BY id),''))) FROM knowledge_drafts),
+  'draftPresentations', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,state,version,COALESCE(message_id,'')),E'\n' ORDER BY id),''))) FROM knowledge_draft_presentations),
+  'draftOutbox', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,state,attempts,updated_at::text),E'\n' ORDER BY id),''))) FROM knowledge_draft_presentation_outbox),
+  'actionProposals', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,status,version,updated_at::text),E'\n' ORDER BY id),''))) FROM action_proposals),
+  'actionRequirements', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,state,version,updated_at::text),E'\n' ORDER BY id),''))) FROM action_approval_requirements),
+  'actionPresentations', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,state,version,COALESCE(message_id,'')),E'\n' ORDER BY id),''))) FROM action_approval_presentations),
+  'actionOutbox', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,state,attempts,updated_at::text),E'\n' ORDER BY id),''))) FROM action_approval_presentation_outbox),
+  'actionExecutions', (SELECT json_build_object('count',count(*),'stateHash',md5(COALESCE(string_agg(concat_ws('|',id,state,version,updated_at::text),E'\n' ORDER BY id),''))) FROM action_executions)
+);
 "@
 }
 
@@ -203,7 +508,20 @@ SELECT json_build_object(
   'answerBindings', (SELECT count(*) FROM answer_reply_knowledge_conflicts),
   'callbackIdentities', (SELECT count(*) FROM knowledge_conflict_callback_identities),
   'draftAttestations', (SELECT count(*) FROM knowledge_conflict_draft_governance_attestations),
-  'draftEvents', (SELECT count(*) FROM knowledge_draft_events)
+  'draftRevisions', (SELECT count(*) FROM knowledge_draft_revisions),
+  'draftRevisionEvidence', (SELECT count(*) FROM knowledge_draft_revision_evidence),
+  'draftEvents', (SELECT count(*) FROM knowledge_draft_events),
+  'draftPresentationEvents', (SELECT count(*) FROM knowledge_draft_presentation_events),
+  'draftConfirmations', (SELECT count(*) FROM knowledge_draft_group_confirmations),
+  'answerSourceTraces', (SELECT count(*) FROM answer_reply_source_traces),
+  'answerDeliveryEvents', (SELECT count(*) FROM answer_reply_delivery_events),
+  'actionTargetPolicyOperations', (SELECT count(*) FROM action_target_policy_operations),
+  'actionRoleGrantOperations', (SELECT count(*) FROM action_role_grant_operations),
+  'actionApprovals', (SELECT count(*) FROM action_approvals),
+  'actionEvents', (SELECT count(*) FROM action_events),
+  'actionPresentationEvents', (SELECT count(*) FROM action_approval_presentation_events),
+  'actionExecutionEvents', (SELECT count(*) FROM action_execution_events),
+  'publications', (SELECT count(*) FROM knowledge_publications)
 );
 "@
 }
@@ -297,18 +615,24 @@ function Invoke-KnowledgeConflictRollback {
     if ($LASTEXITCODE -ne 0) { throw "Core rollback recreate failed" }
   }
   Invoke-RollbackStep -Label "rollback quiescence" -Action {
-    $activityBeforeWait = Get-KnowledgeConflictActivityCounts
+    $fingerprintBeforeWait = Get-DurableActivityFingerprint
     $factsBeforeWait = Get-AppendOnlyFactCounts
     Start-Sleep -Seconds 5
-    $activityAfterWait = Get-KnowledgeConflictActivityCounts
-    Assert-CountsUnchanged -Before $activityBeforeWait -After $activityAfterWait -Label "Disabled scan/outbox activity"
+    $fingerprintAfterWait = Get-DurableActivityFingerprint
+    Assert-FingerprintUnchanged -Before $fingerprintBeforeWait -After $fingerprintAfterWait -Label "Disabled durable activity"
     $factsAfterRollback = Get-AppendOnlyFactCounts
     Assert-CountsUnchanged -Before $factsBeforeWait -After $factsAfterRollback -Label "Disabled append-only activity"
     Assert-AppendOnlyFactsPreserved -Before $script:BaselineAppendOnlyFacts -After $factsAfterRollback
+    Assert-DrainedActivity (Get-KnowledgeConflictActivityCounts)
+    Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts)
+    $postRollbackCurrentBotGroupIds = @(Get-Content -LiteralPath $BotGroupInventoryPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | ForEach-Object { Assert-Reference -Name "post-rollback inventory group" -Value $_ } | Sort-Object -Unique)
+    Assert-ExactStringSet -Expected $script:InitialCurrentBotGroupIds -Actual $postRollbackCurrentBotGroupIds -Label "current bot group inventory"
+    $postRollbackDatabaseGroupIds = @(Invoke-PilotSql -Sql "SELECT group_id FROM (SELECT chat_id AS group_id FROM conversation_messages UNION SELECT group_id FROM group_memories UNION SELECT group_id FROM knowledge_conflict_candidates) groups WHERE group_id IS NOT NULL AND group_id <> '' ORDER BY group_id;" | ForEach-Object { Assert-Reference -Name "post-rollback database group" -Value $_.Trim() })
+    $postRollbackKnownGroupIds = @($postRollbackCurrentBotGroupIds + $postRollbackDatabaseGroupIds | Sort-Object -Unique)
+    Assert-ExactStringSet -Expected $script:KnownGroupIds -Actual $postRollbackKnownGroupIds -Label "known group inventory"
     $runtime = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/status
-    if ($runtime.globalEnabled -ne $false -or $runtime.desiredGlobalEnabled -ne $false) { throw "Rollback runtime is not disabled" }
     $status = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/status
-    if ($status.components.knowledgeConflicts.enabled -ne $false) { throw "Rollback conflict runtime is still enabled" }
+    Assert-RollbackRuntimeAttestation -Runtime $runtime -Status $status -Environment (Get-PilotEnv) -ExpectedGroupIds $script:KnownGroupIds
   }
 }
 
@@ -326,6 +650,7 @@ function Invoke-KnowledgeConflictAcceptance {
   $pilot = Assert-Reference -Name "pilot group" -Value $PilotGroupId
   if (-not (Test-Path -LiteralPath $BotGroupInventoryPath)) { throw "Current bot group inventory is unavailable" }
   $currentBotGroupIds = @(Get-Content -LiteralPath $BotGroupInventoryPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | ForEach-Object { Assert-Reference -Name "inventory group" -Value $_ } | Sort-Object -Unique)
+  $script:InitialCurrentBotGroupIds = @($currentBotGroupIds)
   if ($currentBotGroupIds -notcontains $pilot -or $ControlGroupIds.Count -lt 1) { throw "Pilot or nonpilot control inventory is incomplete" }
   foreach ($control in $ControlGroupIds) {
     $null = Assert-Reference -Name "control group" -Value $control
@@ -351,6 +676,7 @@ function Invoke-KnowledgeConflictAcceptance {
   Assert-CoreQueuesDrained $disabledStatus
   $script:BaselineActivity = Get-KnowledgeConflictActivityCounts
   Assert-DrainedActivity $script:BaselineActivity
+  Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts)
   $script:BaselineAppendOnlyFacts = Get-AppendOnlyFactCounts
   foreach ($groupId in $nonPilotGroupIds) { $script:BaselineGroupFacts[$groupId] = Get-GroupFactCounts $groupId }
 
@@ -390,9 +716,41 @@ function Invoke-KnowledgeConflictAcceptance {
   $script:FailedStep = 6
   Confirm-ObservedPass "Wait for exactly one scan and candidate, then update the metadata evidence file"
   $evidence = Get-Evidence
-  foreach ($field in @('scanId','candidateId','memoryId','documentSourceId','snapshotId','contentHash','sourceVersion')) { $null = Assert-Reference -Name $field -Value ([string]$evidence.$field) }
-  $binding = Invoke-JsonSql -Sql "SELECT json_build_object('scanCount',(SELECT count(*) FROM knowledge_conflict_scan_inbox WHERE id='$($evidence.scanId)' AND group_id='$pilot' AND group_memory_id='$($evidence.memoryId)' AND terminal_outcome='conflict'),'candidateCount',(SELECT count(*) FROM knowledge_conflict_candidates WHERE id='$($evidence.candidateId)' AND group_id='$pilot' AND group_memory_id='$($evidence.memoryId)' AND target_document_source_id='$($evidence.documentSourceId)' AND target_snapshot_id='$($evidence.snapshotId)' AND target_content_hash='$($evidence.contentHash)' AND target_source_version='$($evidence.sourceVersion)'),'evidenceKinds',(SELECT count(DISTINCT evidence_type) FROM knowledge_conflict_evidence WHERE candidate_id='$($evidence.candidateId)'));"
-  if ([long]$binding.scanCount -ne 1 -or [long]$binding.candidateCount -ne 1 -or [long]$binding.evidenceKinds -ne 5) { throw "Exact scan/candidate evidence binding failed" }
+  foreach ($field in @('scanId','candidateId','groupMessageId','memoryId','documentSourceId','snapshotId','sourceVersion')) { $null = Assert-Reference -Name $field -Value ([string](Get-RequiredProperty $evidence $field)) }
+  $null = Assert-Hash -Name 'contentHash' -Value ([string](Get-RequiredProperty $evidence 'contentHash'))
+  $memoryUpdatedAt = Assert-IsoTimestamp -Name 'memoryUpdatedAt' -Value (Get-RequiredProperty $evidence 'memoryUpdatedAt')
+  $documentSourceUpdatedAt = Assert-IsoTimestamp -Name 'documentSourceUpdatedAt' -Value (Get-RequiredProperty $evidence 'documentSourceUpdatedAt')
+  $pilotMessageIds = @((Get-RequiredProperty $evidence 'pilotMessageIds') | ForEach-Object { [string]$_ })
+  if ($pilotMessageIds -notcontains [string]$evidence.groupMessageId) { throw "Candidate source message is absent from recorded pilot message IDs" }
+  $expectedEvidenceRows = @((Get-RequiredProperty $evidence 'exactEvidenceRows'))
+  $expectedEvidenceSqlRows = @(Get-ExpectedEvidenceSqlRows -Rows $expectedEvidenceRows -Evidence $evidence -PilotGroupId $pilot)
+  $expectedEvidenceValues = $expectedEvidenceSqlRows -join ",`n    "
+  $binding = Invoke-JsonSql -Sql @"
+WITH expected(
+  evidence_type, reference_id, group_id, conversation_message_id, group_memory_id,
+  source_updated_at, document_source_id, document_snapshot_id, document_fragment_id,
+  snapshot_content_hash, content_hash
+) AS (
+  VALUES
+    $expectedEvidenceValues
+), actual AS (
+  SELECT evidence_type, reference_id, group_id, conversation_message_id, group_memory_id,
+    source_updated_at, document_source_id, document_snapshot_id, document_fragment_id,
+    snapshot_content_hash, content_hash
+  FROM knowledge_conflict_evidence
+  WHERE candidate_id = '$($evidence.candidateId)'
+)
+SELECT json_build_object(
+  'scanCount', (SELECT count(*) FROM knowledge_conflict_scan_inbox WHERE id='$($evidence.scanId)' AND group_id='$pilot' AND group_memory_id='$($evidence.memoryId)' AND memory_updated_at='$memoryUpdatedAt'::timestamptz AND status='completed' AND terminal_outcome='conflict'),
+  'candidateCount', (SELECT count(*) FROM knowledge_conflict_candidates WHERE id='$($evidence.candidateId)' AND group_id='$pilot' AND group_memory_id='$($evidence.memoryId)' AND memory_updated_at='$memoryUpdatedAt'::timestamptz AND source_message_id='$($evidence.groupMessageId)' AND target_document_source_id='$($evidence.documentSourceId)' AND target_source_updated_at='$documentSourceUpdatedAt'::timestamptz AND target_snapshot_id='$($evidence.snapshotId)' AND target_content_hash='$($evidence.contentHash)' AND target_source_version='$($evidence.sourceVersion)'),
+  'expectedEvidenceCount', (SELECT count(*) FROM expected),
+  'actualEvidenceCount', (SELECT count(*) FROM actual),
+  'missingEvidenceCount', (SELECT count(*) FROM (SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) missing),
+  'unexpectedEvidenceCount', (SELECT count(*) FROM (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected) unexpected),
+  'duplicateExpectedCount', (SELECT count(*) FROM expected) - (SELECT count(*) FROM (SELECT DISTINCT * FROM expected) unique_expected)
+);
+"@
+  Assert-ExactEvidenceBindingFacts $binding
 
   $script:FailedStep = 7
   Confirm-ObservedPass "Ask the ordinary question; verify both sides and no resolution; update pass/fail metadata"
@@ -410,25 +768,85 @@ function Invoke-KnowledgeConflictAcceptance {
   if ($approval.ok -ne $true -or $approval.outcome -notin @('applied','already_applied')) { throw "Exact candidate approval failed" }
   Confirm-ObservedPass "Observe exactly one approved conflict card and update delivery metadata"
   $evidence = Get-Evidence
-  $deliveryCount = @(Invoke-PilotSql -Sql "SELECT id FROM knowledge_conflict_delivery_outbox WHERE candidate_id='$($evidence.candidateId)' AND group_id='$pilot';")
-  if ($deliveryCount.Count -ne 1 -or $evidence.observed.oneApprovedCard -ne $true) { throw "Exactly one approved delivery was not proven" }
+  foreach ($field in @('deliveryId','cardMessageId')) { $null = Assert-Reference -Name $field -Value ([string](Get-RequiredProperty $evidence $field)) }
+  $approvedCard = Get-RequiredProperty $evidence 'approvedCard'
+  Assert-ApprovedCardProof -Proof $approvedCard -CandidateId ([string]$evidence.candidateId) -DeliveryId ([string]$evidence.deliveryId) -MessageId ([string]$evidence.cardMessageId)
+  $deliveryBinding = Invoke-JsonSql -Sql @"
+SELECT json_build_object(
+  'deliveryCount', (SELECT count(*) FROM knowledge_conflict_delivery_outbox WHERE id='$($evidence.deliveryId)' AND candidate_id='$($evidence.candidateId)' AND group_id='$pilot' AND status='sent' AND sent_message_id='$($evidence.cardMessageId)'),
+  'readableSourceCount', (SELECT count(*) FROM document_sources WHERE id='$($evidence.documentSourceId)' AND permission_state='readable' AND sync_state='synced' AND can_use_for_knowledge_drafts=TRUE AND source_uri ~ '^https://[^/?#]+([/?#]|$)' AND source_uri !~ '[[:space:][:cntrl:]]' AND position('@' in split_part(source_uri,'/',3))=0)
+);
+"@
+  if ([long]$deliveryBinding.deliveryCount -ne 1 -or [long]$deliveryBinding.readableSourceCount -ne 1 -or [long]$approvedCard.safeReadableCurrentLinkCount -ne [long]$deliveryBinding.readableSourceCount) { throw "Approved card delivery/source binding failed" }
 
   $script:FailedStep = 9
   Confirm-ObservedPass "Exercise member draft, duplicate delivery/callback, controls, nonmember denial, and permission/snapshot revocation"
   $evidence = Get-Evidence
-  foreach ($name in @('duplicateDeliveryNoEffect','duplicateCallbackNoEffect','noConflictControl','relatedSubjectControl','nonmemberDenied','permissionRevocationBlocked','snapshotRevocationBlocked')) {
+  foreach ($name in @('duplicateDeliveryNoEffect','duplicateCallbackNoEffect','noConflictControl','relatedSubjectControl','nonmemberDenied')) {
     if ($evidence.observed.$name -ne $true) { throw "Negative/control observation failed at $name" }
   }
   $interaction = Invoke-JsonSql -Sql "SELECT json_build_object('draftInteractions',count(*) FILTER (WHERE action='create_draft' AND result='applied'),'distinctDrafts',count(DISTINCT draft_id)) FROM knowledge_conflict_interactions WHERE candidate_id='$($evidence.candidateId)';"
   if ([long]$interaction.draftInteractions -ne 1 -or [long]$interaction.distinctDrafts -ne 1) { throw "Draft callback was not exactly-once" }
-  foreach ($field in @('noConflictMemoryId','relatedSubjectMemoryId','permissionRevokedCandidateId','snapshotRevokedCandidateId')) { $null = Assert-Reference -Name $field -Value ([string]$evidence.$field) }
-  $controls = Invoke-JsonSql -Sql "SELECT json_build_object('noConflictScans',(SELECT count(*) FROM knowledge_conflict_scan_inbox WHERE group_id='$pilot' AND group_memory_id='$($evidence.noConflictMemoryId)' AND terminal_outcome='no_conflict'),'noConflictCandidates',(SELECT count(*) FROM knowledge_conflict_candidates WHERE group_memory_id='$($evidence.noConflictMemoryId)'),'relatedScans',(SELECT count(*) FROM knowledge_conflict_scan_inbox WHERE group_id='$pilot' AND group_memory_id='$($evidence.relatedSubjectMemoryId)' AND terminal_outcome IN ('no_conflict','insufficient_evidence')),'relatedCandidates',(SELECT count(*) FROM knowledge_conflict_candidates WHERE group_memory_id='$($evidence.relatedSubjectMemoryId)'),'revokedCandidates',(SELECT count(*) FROM knowledge_conflict_candidates WHERE id IN ('$($evidence.permissionRevokedCandidateId)','$($evidence.snapshotRevokedCandidateId)') AND status='superseded'),'revokedDrafts',(SELECT count(*) FROM knowledge_conflict_interactions WHERE candidate_id IN ('$($evidence.permissionRevokedCandidateId)','$($evidence.snapshotRevokedCandidateId)') AND draft_id IS NOT NULL));"
-  if ([long]$controls.noConflictScans -ne 1 -or [long]$controls.noConflictCandidates -ne 0 -or [long]$controls.relatedScans -ne 1 -or [long]$controls.relatedCandidates -ne 0 -or [long]$controls.revokedCandidates -ne 2 -or [long]$controls.revokedDrafts -ne 0) { throw "Control or revocation facts failed" }
+  foreach ($field in @('noConflictMemoryId','relatedSubjectMemoryId')) { $null = Assert-Reference -Name $field -Value ([string]$evidence.$field) }
+  $controls = Invoke-JsonSql -Sql "SELECT json_build_object('noConflictScans',(SELECT count(*) FROM knowledge_conflict_scan_inbox WHERE group_id='$pilot' AND group_memory_id='$($evidence.noConflictMemoryId)' AND terminal_outcome='no_conflict'),'noConflictCandidates',(SELECT count(*) FROM knowledge_conflict_candidates WHERE group_memory_id='$($evidence.noConflictMemoryId)'),'relatedScans',(SELECT count(*) FROM knowledge_conflict_scan_inbox WHERE group_id='$pilot' AND group_memory_id='$($evidence.relatedSubjectMemoryId)' AND terminal_outcome IN ('no_conflict','insufficient_evidence')),'relatedCandidates',(SELECT count(*) FROM knowledge_conflict_candidates WHERE group_memory_id='$($evidence.relatedSubjectMemoryId)'));"
+  if ([long]$controls.noConflictScans -ne 1 -or [long]$controls.noConflictCandidates -ne 0 -or [long]$controls.relatedScans -ne 1 -or [long]$controls.relatedCandidates -ne 0) { throw "No-conflict or related-subject control facts failed" }
+
+  $revocationFacts = @()
+  foreach ($scenario in @((Get-RequiredProperty $evidence 'revocations'))) {
+    $stage = [string](Get-RequiredProperty $scenario 'stage')
+    $cause = [string](Get-RequiredProperty $scenario 'cause')
+    if ($stage -notin @('pre_answer','pre_delivery','pre_callback') -or $cause -notin @('permission','snapshot')) { throw "Revocation stage/cause is invalid" }
+    $candidateId = Assert-Reference -Name 'revoked candidate ID' -Value ([string](Get-RequiredProperty $scenario 'candidateId'))
+    $operationKey = Assert-Reference -Name 'revocation operation key' -Value ([string](Get-RequiredProperty $scenario 'operationKey'))
+    $draftId = Assert-Reference -Name 'revocation draft ID' -Value ([string](Get-RequiredProperty $scenario 'draftId'))
+    $revokedAt = Assert-IsoTimestamp -Name 'revokedAt' -Value (Get-RequiredProperty $scenario 'revokedAt')
+    $candidateVersionBefore = [long](Get-RequiredProperty $scenario 'candidateVersionBeforeRevocation')
+    $candidateVersionAfter = [long](Get-RequiredProperty $scenario 'candidateVersionAfterRevocation')
+    if ($candidateVersionBefore -lt 1 -or $candidateVersionAfter -lt $candidateVersionBefore -or ($cause -ceq 'snapshot' -and $candidateVersionAfter -ne $candidateVersionBefore + 1) -or ($cause -ceq 'permission' -and $candidateVersionAfter -ne $candidateVersionBefore)) { throw "Revocation candidate versions are invalid" }
+    $operationRejectedCount = [long](Get-RequiredProperty $scenario 'operationRejectedCount')
+    $operationResultCode = Assert-Reference -Name 'revocation result code' -Value ([string](Get-RequiredProperty $scenario 'operationResultCode'))
+    $callbackRejectedCount = [long](Get-RequiredProperty $scenario 'callbackRejectedCount')
+    if ($stage -ceq 'pre_callback') {
+      $callbackKey = Assert-Reference -Name 'revoked callback key' -Value ([string](Get-RequiredProperty $scenario 'callbackKey'))
+      $callbackEventId = Assert-Reference -Name 'revoked callback event ID' -Value ([string](Get-RequiredProperty $scenario 'callbackEventId'))
+      $callbackMessageId = Assert-Reference -Name 'revoked callback message ID' -Value ([string](Get-RequiredProperty $scenario 'callbackMessageId'))
+      $callbackIdentityPredicate = "callback_key='$callbackKey' AND event_id='$callbackEventId' AND message_id='$callbackMessageId' AND candidate_id='$candidateId' AND candidate_version=$candidateVersionBefore AND group_id='$pilot'"
+      $deliveryCreatedPredicate = "candidate_id='$candidateId' AND created_at >= '$revokedAt'::timestamptz"
+      $sentMessagePredicate = "candidate_id='$candidateId' AND sent_message_id IS NOT NULL AND updated_at >= '$revokedAt'::timestamptz"
+    } else {
+      $callbackIdentityPredicate = "candidate_id='$candidateId' AND received_at >= '$revokedAt'::timestamptz"
+      $deliveryCreatedPredicate = "candidate_id='$candidateId'"
+      $sentMessagePredicate = "candidate_id='$candidateId' AND sent_message_id IS NOT NULL"
+    }
+    $revocationFacts += Invoke-JsonSql -Sql @"
+SELECT json_build_object(
+  'stage','$stage',
+  'cause','$cause',
+  'candidateId','$candidateId',
+  'operationKey','$operationKey',
+  'revokedAt','$revokedAt',
+  'exactCandidateCount',(SELECT count(*) FROM knowledge_conflict_candidates WHERE id='$candidateId' AND group_id='$pilot' AND version=$candidateVersionAfter),
+  'revocationEventCount',(SELECT count(*) FROM knowledge_conflict_candidate_events WHERE candidate_id='$candidateId' AND operation_key='$operationKey' AND from_version=$candidateVersionBefore AND to_version=$candidateVersionAfter AND to_status='superseded' AND reason_code='snapshot_stale' AND created_at='$revokedAt'::timestamptz),
+  'operationRejectedCount',$operationRejectedCount,
+  'operationResultCode','$operationResultCode',
+  'answerConflictBindingCount',(SELECT count(*) FROM answer_reply_knowledge_conflicts WHERE candidate_id='$candidateId'),
+  'answerDisclosureCount',(SELECT count(*) FROM answer_reply_knowledge_conflicts binding JOIN answer_reply_deliveries delivery ON delivery.id=binding.delivery_id WHERE binding.candidate_id='$candidateId' AND (delivery.state='sent' OR delivery.reply_message_id IS NOT NULL OR delivery.safe_notice_message_id IS NOT NULL)),
+  'deliveryCreatedCount',(SELECT count(*) FROM knowledge_conflict_delivery_outbox WHERE $deliveryCreatedPredicate),
+  'sentMessageCount',(SELECT count(*) FROM knowledge_conflict_delivery_outbox WHERE $sentMessagePredicate),
+  'appliedInteractionCount',(SELECT count(*) FROM knowledge_conflict_interactions WHERE candidate_id='$candidateId' AND result IN ('applied','already_applied')),
+  'draftMutationCount',(SELECT count(*) FROM knowledge_drafts WHERE id='$draftId'),
+  'callbackRejectedCount',$callbackRejectedCount,
+  'callbackIdentityCount',(SELECT count(*) FROM knowledge_conflict_callback_identities WHERE $callbackIdentityPredicate)
+);
+"@
+  }
+  Assert-RevocationFacts -Facts $revocationFacts
 
   $script:FailedStep = 10
   $draft = Invoke-JsonSql -Sql "SELECT json_build_object('count',count(*),'riskCount',count(*) FILTER (WHERE revision.risk_level='medium'),'pathCount',count(*) FILTER (WHERE draft.status IN ('pending_confirmation','pending_review','needs_revision','rejected','published'))) FROM knowledge_drafts draft JOIN knowledge_draft_revisions revision ON revision.draft_id=draft.id AND revision.revision_number=draft.current_revision_number WHERE draft.id='$($evidence.draftId)' AND draft.source_group_id='$pilot' AND draft.origin_kind='knowledge_conflict';"
   if ([long]$draft.count -ne 1 -or [long]$draft.riskCount -ne 1 -or [long]$draft.pathCount -ne 1) { throw "Governed medium-risk update draft path failed" }
   Assert-DrainedActivity (Get-KnowledgeConflictActivityCounts)
+  Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts)
   $conflictStatus = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/knowledge-conflicts/status
   if ([long]$conflictStatus.scans.deadLettered -ne 0 -or [long]$conflictStatus.deliveries.outcomeUnknown -ne 0 -or [long]$conflictStatus.deliveries.terminalFailed -ne 0) { throw "Conflict runtime has unresolved terminal state" }
   Assert-CoreQueuesDrained (Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/status)
@@ -469,32 +887,206 @@ Minimum private evidence JSON shape (values shown are placeholders and must neve
 ```json
 {
   "documentSourceId": "source_id",
+  "documentSourceUpdatedAt": "2026-01-01T00:00:00.000Z",
   "snapshotId": "snapshot_id",
   "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "sourceVersion": "version_id",
   "groupMessageId": "message_id",
+  "pilotMessageIds": ["message_id"],
   "memoryId": "memory_id",
+  "memoryUpdatedAt": "2026-01-01T00:00:01.000Z",
   "scanId": "scan_id",
   "candidateId": "candidate_id",
+  "documentFragments": [
+    {
+      "referenceId": "D1",
+      "id": "fragment_id",
+      "contentHash": "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ],
+  "exactEvidenceRows": [
+    {
+      "evidenceType": "conversation_message",
+      "referenceId": "C1",
+      "groupId": "pilot_group_id",
+      "conversationMessageId": "message_id",
+      "groupMemoryId": null,
+      "sourceUpdatedAt": null,
+      "documentSourceId": null,
+      "documentSnapshotId": null,
+      "documentFragmentId": null,
+      "snapshotContentHash": null,
+      "contentHash": null
+    },
+    {
+      "evidenceType": "group_memory",
+      "referenceId": "M1",
+      "groupId": "pilot_group_id",
+      "conversationMessageId": null,
+      "groupMemoryId": "memory_id",
+      "sourceUpdatedAt": "2026-01-01T00:00:01.000Z",
+      "documentSourceId": null,
+      "documentSnapshotId": null,
+      "documentFragmentId": null,
+      "snapshotContentHash": null,
+      "contentHash": null
+    },
+    {
+      "evidenceType": "document_source",
+      "referenceId": "D1",
+      "groupId": null,
+      "conversationMessageId": null,
+      "groupMemoryId": null,
+      "sourceUpdatedAt": "2026-01-01T00:00:00.000Z",
+      "documentSourceId": "source_id",
+      "documentSnapshotId": null,
+      "documentFragmentId": null,
+      "snapshotContentHash": null,
+      "contentHash": null
+    },
+    {
+      "evidenceType": "document_snapshot",
+      "referenceId": "D1",
+      "groupId": null,
+      "conversationMessageId": null,
+      "groupMemoryId": null,
+      "sourceUpdatedAt": null,
+      "documentSourceId": "source_id",
+      "documentSnapshotId": "snapshot_id",
+      "documentFragmentId": null,
+      "snapshotContentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "contentHash": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "evidenceType": "document_fragment",
+      "referenceId": "D1",
+      "groupId": null,
+      "conversationMessageId": null,
+      "groupMemoryId": null,
+      "sourceUpdatedAt": null,
+      "documentSourceId": "source_id",
+      "documentSnapshotId": "snapshot_id",
+      "documentFragmentId": "fragment_id",
+      "snapshotContentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "contentHash": "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ],
   "answerDeliveryId": "answer_delivery_id",
   "deliveryId": "delivery_id",
+  "cardMessageId": "card_message_id",
+  "approvedCard": {
+    "candidateId": "candidate_id",
+    "deliveryId": "delivery_id",
+    "messageId": "card_message_id",
+    "cardHash": "2222222222222222222222222222222222222222222222222222222222222222",
+    "currentKnowledgeShown": false,
+    "newerGroupConclusionShown": false,
+    "materialDifferenceShown": false,
+    "proposedUpdateShown": false,
+    "uncertaintyLabelShown": false,
+    "currentKnowledgeEvidenceCount": 0,
+    "newerGroupEvidenceCount": 0,
+    "safeReadableCurrentLinkCount": 0,
+    "unsafeOrDeniedLinkCount": 0
+  },
   "draftId": "draft_id",
   "noConflictMemoryId": "no_conflict_memory_id",
   "relatedSubjectMemoryId": "related_subject_memory_id",
-  "permissionRevokedCandidateId": "permission_revoked_candidate_id",
-  "snapshotRevokedCandidateId": "snapshot_revoked_candidate_id",
+  "revocations": [
+    {
+      "stage": "pre_answer",
+      "cause": "permission",
+      "candidateId": "permission_pre_answer_candidate_id",
+      "operationKey": "permission_pre_answer_operation_key",
+      "draftId": "permission_pre_answer_draft_id",
+      "revokedAt": "2026-01-01T00:01:00.000Z",
+      "candidateVersionBeforeRevocation": 1,
+      "candidateVersionAfterRevocation": 1,
+      "operationRejectedCount": 1,
+      "operationResultCode": "permission_blocked",
+      "callbackRejectedCount": 0
+    },
+    {
+      "stage": "pre_answer",
+      "cause": "snapshot",
+      "candidateId": "snapshot_pre_answer_candidate_id",
+      "operationKey": "snapshot_pre_answer_operation_key",
+      "draftId": "snapshot_pre_answer_draft_id",
+      "revokedAt": "2026-01-01T00:02:00.000Z",
+      "candidateVersionBeforeRevocation": 1,
+      "candidateVersionAfterRevocation": 2,
+      "operationRejectedCount": 1,
+      "operationResultCode": "snapshot_stale",
+      "callbackRejectedCount": 0
+    },
+    {
+      "stage": "pre_delivery",
+      "cause": "permission",
+      "candidateId": "permission_pre_delivery_candidate_id",
+      "operationKey": "permission_pre_delivery_operation_key",
+      "draftId": "permission_pre_delivery_draft_id",
+      "revokedAt": "2026-01-01T00:03:00.000Z",
+      "candidateVersionBeforeRevocation": 1,
+      "candidateVersionAfterRevocation": 1,
+      "operationRejectedCount": 1,
+      "operationResultCode": "permission_blocked",
+      "callbackRejectedCount": 0
+    },
+    {
+      "stage": "pre_delivery",
+      "cause": "snapshot",
+      "candidateId": "snapshot_pre_delivery_candidate_id",
+      "operationKey": "snapshot_pre_delivery_operation_key",
+      "draftId": "snapshot_pre_delivery_draft_id",
+      "revokedAt": "2026-01-01T00:04:00.000Z",
+      "candidateVersionBeforeRevocation": 1,
+      "candidateVersionAfterRevocation": 2,
+      "operationRejectedCount": 1,
+      "operationResultCode": "stale_candidate",
+      "callbackRejectedCount": 0
+    },
+    {
+      "stage": "pre_callback",
+      "cause": "permission",
+      "candidateId": "permission_pre_callback_candidate_id",
+      "operationKey": "permission_pre_callback_operation_key",
+      "draftId": "permission_pre_callback_draft_id",
+      "revokedAt": "2026-01-01T00:05:00.000Z",
+      "candidateVersionBeforeRevocation": 1,
+      "candidateVersionAfterRevocation": 1,
+      "operationRejectedCount": 1,
+      "operationResultCode": "permission_blocked",
+      "callbackKey": "permission_pre_callback_key",
+      "callbackEventId": "permission_pre_callback_event_id",
+      "callbackMessageId": "permission_pre_callback_message_id",
+      "callbackRejectedCount": 1
+    },
+    {
+      "stage": "pre_callback",
+      "cause": "snapshot",
+      "candidateId": "snapshot_pre_callback_candidate_id",
+      "operationKey": "snapshot_pre_callback_operation_key",
+      "draftId": "snapshot_pre_callback_draft_id",
+      "revokedAt": "2026-01-01T00:06:00.000Z",
+      "candidateVersionBeforeRevocation": 1,
+      "candidateVersionAfterRevocation": 2,
+      "operationRejectedCount": 1,
+      "operationResultCode": "evidence_invalidated",
+      "callbackKey": "snapshot_pre_callback_key",
+      "callbackEventId": "snapshot_pre_callback_event_id",
+      "callbackMessageId": "snapshot_pre_callback_message_id",
+      "callbackRejectedCount": 1
+    }
+  ],
   "observed": {
     "answerBothSides": false,
     "answerNoResolution": false,
     "noCardBeforeApproval": false,
-    "oneApprovedCard": false,
     "duplicateDeliveryNoEffect": false,
     "duplicateCallbackNoEffect": false,
     "noConflictControl": false,
     "relatedSubjectControl": false,
-    "nonmemberDenied": false,
-    "permissionRevocationBlocked": false,
-    "snapshotRevocationBlocked": false
+    "nonmemberDenied": false
   }
 }
 ```

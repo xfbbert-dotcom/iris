@@ -26,7 +26,8 @@ Publication remains subject to the existing confirmation, review, approval, and 
 - [ ] Compose passes both exact values to Core.
 - [ ] Pilot smoke rejects effective enablement or a nonempty allowlist.
 - [ ] Public Caddy returns `404` for `/internal/knowledge-conflicts/*`.
-- [ ] Rollback proves scan/outbox counts stop changing and append-only facts remain present.
+- [ ] Rollback re-attests exact group/global/capability/flag/allowlist state, proves per-table state
+  fingerprints stop changing, and preserves append-only facts.
 
 ## Automated Evidence
 
@@ -66,20 +67,21 @@ source text, prompts, rendered card text, callback payloads, authorization mater
 | 3 | queue, DLQ, outbox, reconciliation counts | Pending |
 | 4 | source/snapshot/message IDs, hashes, versions, timestamps | Pending |
 | 5 | runtime revision, enabled group count, readiness pass/fail | Pending |
-| 6 | scan/candidate/evidence IDs and counts | Pending |
+| 6 | exact scan/candidate plus every evidence row ID/timestamp/hash and bidirectional diff counts | Pending |
 | 7 | answer delivery/candidate IDs and observed pass/fail | Pending |
-| 8 | candidate/delivery/message IDs and versions | Pending |
-| 9 | interaction/draft/control IDs and pass/fail flags | Pending |
-| 10 | draft ID/version/risk/status and drained counts | Pending |
-| 11 | rollback revision and before/after counts | Pending |
+| 8 | exact candidate/delivery/message/card hash plus field/link pass/fail/count facts | Pending |
+| 9 | six stage/cause-labelled revocation candidate/operation/draft/callback IDs plus exact zero counts | Pending |
+| 10 | draft ID/version/risk/status plus answer/action/reconciliation/publication/outbox zero counts | Pending |
+| 11 | exact group inventory, durable/live policy, empty allowlists, state hashes/counts/timestamps | Pending |
 | 12 | metadata artifact hash and timestamp | Pending |
 
 ## Mandatory Failure And Rollback Record
 
 If any post-enable step fails, record the failed step number and metadata artifact hash. Stop Caddy,
 restore off/empty feature defaults, durably disable all known groups/global/read-draft-proactive-write
-capabilities, recreate Core, and prove counts stop changing. Preserve every append-only PostgreSQL
-fact. A failed or incomplete live run leaves Release Status as Pending live acceptance.
+capabilities, recreate Core, re-attest the exact inventory and policies, and prove every mutable
+state fingerprint stops changing even when row counts are unchanged. Preserve every append-only
+PostgreSQL fact. A failed or incomplete live run leaves Release Status as Pending live acceptance.
 
 ## Explicit Non-Claims
 

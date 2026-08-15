@@ -75,7 +75,8 @@ test("knowledge-conflict rollback is unconditional after enablement and preserve
     "/internal/runtime-control/global",
     "/internal/runtime-control/capabilities",
     "--force-recreate --wait --wait-timeout 120 core",
-    "Get-KnowledgeConflictActivityCounts",
+    "Get-DurableActivityFingerprint",
+    "Assert-FingerprintUnchanged",
     "Assert-CountsUnchanged",
     "Assert-AppendOnlyFactsPreserved",
   ]);
@@ -106,6 +107,305 @@ test("knowledge-conflict PR evidence stays metadata-only and pending live accept
     assert.match(template, new RegExp(escapeRegExp(marker), "iu"));
   }
   assert.doesNotMatch(template, /message body|document body|credential value|access token/iu);
+});
+
+test("knowledge-conflict exact evidence gate rejects duplicate and unrelated rows", () => {
+  const snapshotHash = "0".repeat(64);
+  const fragmentHash = "1".repeat(64);
+  const row = (overrides) => ({
+    evidenceType: "conversation_message",
+    referenceId: "C1",
+    groupId: null,
+    conversationMessageId: null,
+    groupMemoryId: null,
+    sourceUpdatedAt: null,
+    documentSourceId: null,
+    documentSnapshotId: null,
+    documentFragmentId: null,
+    snapshotContentHash: null,
+    contentHash: null,
+    ...overrides,
+  });
+  const exactEvidence = {
+    pilotMessageIds: ["message_id"],
+    memoryId: "memory_id",
+    memoryUpdatedAt: "2026-08-15T01:02:03.000Z",
+    documentSourceId: "source_id",
+    documentSourceUpdatedAt: "2026-08-15T01:02:02.000Z",
+    snapshotId: "snapshot_id",
+    contentHash: snapshotHash,
+    documentFragments: [{ referenceId: "D1", id: "fragment_id", contentHash: fragmentHash }],
+    exactEvidenceRows: [
+      row({ groupId: "pilot_group", conversationMessageId: "message_id" }),
+      row({
+        evidenceType: "group_memory",
+        referenceId: "M1",
+        groupId: "pilot_group",
+        groupMemoryId: "memory_id",
+        sourceUpdatedAt: "2026-08-15T01:02:03.000Z",
+      }),
+      row({
+        evidenceType: "document_source",
+        referenceId: "D1",
+        documentSourceId: "source_id",
+        sourceUpdatedAt: "2026-08-15T01:02:02.000Z",
+      }),
+      row({
+        evidenceType: "document_snapshot",
+        referenceId: "D1",
+        documentSourceId: "source_id",
+        documentSnapshotId: "snapshot_id",
+        snapshotContentHash: snapshotHash,
+        contentHash: snapshotHash,
+      }),
+      row({
+        evidenceType: "document_fragment",
+        referenceId: "D1",
+        documentSourceId: "source_id",
+        documentSnapshotId: "snapshot_id",
+        documentFragmentId: "fragment_id",
+        snapshotContentHash: snapshotHash,
+        contentHash: fragmentHash,
+      }),
+    ],
+  };
+  const rowsCommand = `$rows = @(Get-ExpectedEvidenceSqlRows -Rows @($inputValue.exactEvidenceRows) -Evidence $inputValue -PilotGroupId 'pilot_group'); if ($rows.Count -ne 5 -or @($rows | Where-Object { $_ -notmatch '^\\(.*\\)$' }).Count -ne 0) { throw 'wrong SQL row shape' }`;
+  assertPowerShellRunbookGate(rowsCommand, exactEvidence, true);
+  assertPowerShellRunbookGate(rowsCommand, {
+    ...exactEvidence,
+    exactEvidenceRows: [
+      ...exactEvidence.exactEvidenceRows,
+      exactEvidence.exactEvidenceRows[0],
+    ],
+  }, false);
+  assertPowerShellRunbookGate(rowsCommand, {
+    ...exactEvidence,
+    exactEvidenceRows: exactEvidence.exactEvidenceRows.map((item, index) =>
+      index === 0 ? { ...item, conversationMessageId: "unrelated_message_id" } : item),
+  }, false);
+
+  const valid = {
+    scanCount: 1,
+    candidateCount: 1,
+    expectedEvidenceCount: 5,
+    actualEvidenceCount: 5,
+    missingEvidenceCount: 0,
+    unexpectedEvidenceCount: 0,
+    duplicateExpectedCount: 0,
+  };
+  assertPowerShellRunbookGate(
+    `Assert-ExactEvidenceBindingFacts -Facts $inputValue`,
+    valid,
+    true,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-ExactEvidenceBindingFacts -Facts $inputValue`,
+    { ...valid, duplicateExpectedCount: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-ExactEvidenceBindingFacts -Facts $inputValue`,
+    { ...valid, unexpectedEvidenceCount: 1 },
+    false,
+  );
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  for (const marker of [
+    "conversation_message_id",
+    "group_memory_id",
+    "source_updated_at",
+    "document_source_id",
+    "document_snapshot_id",
+    "document_fragment_id",
+    "snapshot_content_hash",
+    "content_hash",
+    "EXCEPT ALL",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
+  }
+});
+
+test("knowledge-conflict approved-card gate rejects false or missing metadata proof", () => {
+  const hash = "a".repeat(64);
+  const valid = {
+    candidateId: "candidate_id",
+    deliveryId: "delivery_id",
+    messageId: "message_id",
+    cardHash: hash,
+    currentKnowledgeShown: true,
+    newerGroupConclusionShown: true,
+    materialDifferenceShown: true,
+    proposedUpdateShown: true,
+    uncertaintyLabelShown: true,
+    currentKnowledgeEvidenceCount: 1,
+    newerGroupEvidenceCount: 1,
+    safeReadableCurrentLinkCount: 1,
+    unsafeOrDeniedLinkCount: 0,
+  };
+  const command = `Assert-ApprovedCardProof -Proof $inputValue -CandidateId 'candidate_id' -DeliveryId 'delivery_id' -MessageId 'message_id'`;
+  assertPowerShellRunbookGate(command, valid, true);
+  assertPowerShellRunbookGate(
+    command,
+    { ...valid, proposedUpdateShown: false },
+    false,
+  );
+  const missingProof = { ...valid };
+  delete missingProof.materialDifferenceShown;
+  assertPowerShellRunbookGate(command, missingProof, false);
+  assertPowerShellRunbookGate(
+    command,
+    { ...valid, unsafeOrDeniedLinkCount: 1 },
+    false,
+  );
+});
+
+test("knowledge-conflict revocation gate requires six exact stage/cause facts", () => {
+  const stages = ["pre_answer", "pre_delivery", "pre_callback"];
+  const causes = ["permission", "snapshot"];
+  const valid = stages.flatMap((stage) => causes.map((cause) => ({
+    stage,
+    cause,
+    candidateId: `${cause}_${stage}_candidate`,
+    operationKey: `${cause}_${stage}_operation`,
+    draftId: `${cause}_${stage}_draft`,
+    revokedAt: "2026-08-15T01:02:03.000Z",
+    exactCandidateCount: 1,
+    revocationEventCount: cause === "snapshot" ? 1 : 0,
+    operationRejectedCount: 1,
+    operationResultCode: cause === "permission"
+      ? "permission_blocked"
+      : stage === "pre_answer" ? "snapshot_stale"
+        : stage === "pre_delivery" ? "stale_candidate" : "evidence_invalidated",
+    answerConflictBindingCount: 0,
+    answerDisclosureCount: 0,
+    deliveryCreatedCount: 0,
+    sentMessageCount: 0,
+    appliedInteractionCount: 0,
+    draftMutationCount: 0,
+    callbackRejectedCount: stage === "pre_callback" ? 1 : 0,
+    callbackIdentityCount: stage === "pre_callback" ? 1 : 0,
+  })));
+  assertPowerShellRunbookGate(
+    `Assert-RevocationFacts -Facts @($inputValue)`,
+    valid,
+    true,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-RevocationFacts -Facts @($inputValue)`,
+    valid.map((item, index) => index === 0 ? { ...item, sentMessageCount: 1 } : item),
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-RevocationFacts -Facts @($inputValue)`,
+    valid.slice(1),
+    false,
+  );
+});
+
+test("knowledge-conflict final drain includes answer and governed-action durable states", () => {
+  const valid = {
+    answerPrepared: 0,
+    answerSending: 0,
+    answerReconciliationRequired: 0,
+    draftPresentationUnresolved: 0,
+    draftOutboxUnresolved: 0,
+    actionProposalUnresolved: 0,
+    actionRequirementPending: 0,
+    actionPresentationUnresolved: 0,
+    actionOutboxUnresolved: 0,
+    actionExecutionUnresolved: 0,
+    actionExecutionFailed: 0,
+  };
+  assertPowerShellRunbookGate(`Assert-DrainedDurableStates -Counts $inputValue`, valid, true);
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, answerPrepared: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, actionExecutionUnresolved: 1 },
+    false,
+  );
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  for (const marker of [
+    "answer_reply_deliveries",
+    "knowledge_draft_presentation_outbox",
+    "action_proposals",
+    "action_approval_requirements",
+    "action_approval_presentation_outbox",
+    "action_executions",
+    "reconciliation_required",
+    "outcome_unknown",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
+  }
+});
+
+test("knowledge-conflict rollback rejects enabled groups, allowlists, and same-count transitions", () => {
+  const validAttestation = {
+    runtime: {
+      globalEnabled: false,
+      desiredGlobalEnabled: false,
+      activationRequired: false,
+      disabledGroupIds: ["group_a", "group_b"],
+      capabilities: {
+        readGroupDocuments: false,
+        retrieveKnowledgeBase: false,
+        proactiveSpeech: false,
+        generateKnowledgeDrafts: false,
+        writeKnowledgeBase: false,
+      },
+      persistence: { ok: true, storage: "postgres" },
+    },
+    status: {
+      components: {
+        knowledgeConflicts: { enabled: false },
+        actionApprovals: { enabled: false },
+      },
+      knowledgeCards: { enabled: false },
+    },
+    environment: {
+      IRIS_KNOWLEDGE_CONFLICT_ENABLED: "false",
+      IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "",
+      IRIS_KNOWLEDGE_CARD_ENABLED: "false",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
+      IRIS_APPROVAL_ACTIONS_ENABLED: "false",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "",
+    },
+    expectedGroupIds: ["group_a", "group_b"],
+  };
+  const attestationCommand = `Assert-RollbackRuntimeAttestation -Runtime $inputValue.runtime -Status $inputValue.status -Environment $inputValue.environment -ExpectedGroupIds @($inputValue.expectedGroupIds)`;
+  assertPowerShellRunbookGate(attestationCommand, validAttestation, true);
+  assertPowerShellRunbookGate(attestationCommand, {
+    ...validAttestation,
+    runtime: { ...validAttestation.runtime, disabledGroupIds: ["group_a"] },
+  }, false);
+  assertPowerShellRunbookGate(attestationCommand, {
+    ...validAttestation,
+    environment: {
+      ...validAttestation.environment,
+      IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "group_a",
+    },
+  }, false);
+
+  assertPowerShellRunbookGate(
+    `Assert-FingerprintUnchanged -Before $inputValue.before -After $inputValue.after -Label 'quietness'`,
+    {
+      before: { scanInbox: { count: 1, stateHash: "aaa" } },
+      after: { scanInbox: { count: 1, stateHash: "aaa" } },
+    },
+    true,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-FingerprintUnchanged -Before $inputValue.before -After $inputValue.after -Label 'quietness'`,
+    {
+      before: { scanInbox: { count: 1, stateHash: "aaa" } },
+      after: { scanInbox: { count: 1, stateHash: "bbb" } },
+    },
+    false,
+  );
 });
 
 test("pilot shell scripts use LF endings for direct Linux execution", () => {
@@ -1061,6 +1361,29 @@ test("restore proves Caddy stopped before stopping Core or swapping databases", 
   assert.ok(stopCaddy < stopCore);
   assert.ok(stopCore < swapDatabase);
 });
+
+function assertPowerShellRunbookGate(command, input, expectedSuccess) {
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  const controllerStart = runbook.indexOf('$ErrorActionPreference = "Stop"');
+  const controllerEnd = runbook.indexOf("$acceptanceResult = $null", controllerStart);
+  assert.ok(controllerStart >= 0 && controllerEnd > controllerStart, "missing controller source");
+  const inputJson = JSON.stringify(input).replaceAll("'", "''");
+  const script = [
+    runbook.slice(controllerStart, controllerEnd),
+    `$inputValue = '${inputJson}' | ConvertFrom-Json`,
+    command,
+  ].join("\n");
+  const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"], {
+    encoding: "utf8",
+    input: script,
+    timeout: 10_000,
+  });
+  assert.equal(
+    result.status === 0,
+    expectedSuccess,
+    result.stderr || result.stdout || `PowerShell exited ${result.status}`,
+  );
+}
 
 function bashPath() {
   if (process.platform !== "win32") {
