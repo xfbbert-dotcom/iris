@@ -212,11 +212,13 @@ export function createAnswerDraftRuntime({
   dependencies = {},
   runtimeController,
   agentExecutionObserver,
+  knowledgeConflictAnswerProvider: providedKnowledgeConflictAnswerProvider,
 }: {
   env?: EnvLike;
   dependencies?: AnswerDraftRuntimeDependencies;
   runtimeController?: RuntimeRetrievalGate;
   agentExecutionObserver?: AgentExecutionObserver;
+  knowledgeConflictAnswerProvider?: KnowledgeConflictAnswerProvider;
 } = {}): AnswerDraftRuntime | undefined {
   const runtimeConfig = readAnswerDraftRuntimeConfig(env);
   if (!runtimeConfig.enabled) {
@@ -293,8 +295,8 @@ export function createAnswerDraftRuntime({
     runtimeConfig.permissionMode === "source-policy"
       ? createSources({ queryable: pool })
       : undefined;
-  const knowledgeConflictAnswerProvider =
-    sourceRegistry !== undefined
+  const knowledgeConflictAnswerProvider = providedKnowledgeConflictAnswerProvider ??
+    (sourceRegistry !== undefined
       && livePermissionChecker !== undefined
       && isPostgresKnowledgeConflictDataSource(pool)
       ? createConflictAnswerProvider({
@@ -302,7 +304,7 @@ export function createAnswerDraftRuntime({
           documentSources: sourceRegistry,
           permissionChecker: livePermissionChecker,
         })
-      : undefined;
+      : undefined);
   const conversationMessages = createConversationMessages({ queryable: pool });
   const liveChatContextProvider = createRuntimeGatedLiveChatContextProvider({
     delegate: createLiveChatContext({ repository: conversationMessages }),

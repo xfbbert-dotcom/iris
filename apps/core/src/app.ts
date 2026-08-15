@@ -110,6 +110,10 @@ import {
   type KnowledgeCardRuntime,
 } from "./runtime/knowledge-card-runtime.js";
 import {
+  createKnowledgeConflictRuntime as createDefaultKnowledgeConflictRuntime,
+  type KnowledgeConflictRuntime,
+} from "./runtime/knowledge-conflict-runtime.js";
+import {
   createActionApprovalRuntime as createDefaultActionApprovalRuntime,
   type ActionApprovalRuntime,
 } from "./runtime/action-approval-runtime.js";
@@ -200,6 +204,9 @@ export type BuildAppDependencies = {
   createKnowledgeCardRuntime?: (
     input?: Parameters<typeof createDefaultKnowledgeCardRuntime>[0],
   ) => KnowledgeCardRuntime | undefined;
+  createKnowledgeConflictRuntime?: (
+    input: Parameters<typeof createDefaultKnowledgeConflictRuntime>[0],
+  ) => KnowledgeConflictRuntime | undefined;
   createActionApprovalRuntime?: (
     input?: Parameters<typeof createDefaultActionApprovalRuntime>[0],
   ) => ActionApprovalRuntime | undefined;
@@ -358,6 +365,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     dependencies.runtimeControl?.service ??
     createInMemoryRuntimeControlService(runtimeController, now);
   let agentExecutionLedgerRuntime: AgentExecutionLedgerRuntime | undefined;
+  let composedKnowledgeConflictRuntime: KnowledgeConflictRuntime | undefined;
   let answerDraftRuntime: AnswerDraftRuntime | undefined;
   let answerDraftOrchestrator = dependencies.answerDraftOrchestrator;
   let reindexWorkerRuntime: ReindexWorkerRuntime | undefined;
@@ -374,6 +382,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   let proactiveSignalDeliveryRuntime: ProactiveSignalDeliveryRuntime | undefined;
   let knowledgeCardStartup: Promise<void> | undefined;
   let actionApprovalStartup: Promise<void> | undefined;
+  let knowledgeConflictStartup: Promise<void> | undefined;
   let proactiveSignalPlannerStartup: Promise<void> | undefined;
   let proactiveSignalDeliveryStartup: Promise<void> | undefined;
   let eventWorkerStartup: Promise<void> | undefined;
@@ -385,6 +394,19 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       dependencies.createAgentExecutionLedgerRuntime ??
       createDefaultAgentExecutionLedgerRuntime
     )({ now });
+    composedKnowledgeConflictRuntime = dependencies.knowledgeConflictRuntime === undefined
+      ? (dependencies.createKnowledgeConflictRuntime ?? createDefaultKnowledgeConflictRuntime)({
+          runtimeController,
+          getKnowledgeCardPresentationRuntime: () => knowledgeCardRuntime,
+          ...(dependencies.onRuntimeStartupCleanup === undefined
+            ? {}
+            : {
+                dependencies: {
+                  onStartupCleanup: dependencies.onRuntimeStartupCleanup,
+                },
+              }),
+        })
+      : undefined;
     answerDraftRuntime =
       answerDraftOrchestrator === undefined
         ? (dependencies.createAnswerDraftRuntime ?? createDefaultAnswerDraftRuntime)({
@@ -393,6 +415,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
             ...(agentExecutionLedgerRuntime === undefined
               ? {}
               : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
+            ...(composedKnowledgeConflictRuntime === undefined
+              ? {}
+              : { knowledgeConflictAnswerProvider: composedKnowledgeConflictRuntime.answerProvider }),
           })
         : undefined;
     answerDraftOrchestrator ??= answerDraftRuntime?.answerDraftOrchestrator;
@@ -423,6 +448,14 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       proactiveSignalRepository:
         dependencies.proactiveSignalRepository ?? proactiveSignalRuntime?.repository,
     });
+    if (composedKnowledgeConflictRuntime !== undefined) {
+      if (knowledgeCardRuntime === undefined) {
+        throw new Error("knowledge conflict runtime requires the knowledge-card runtime");
+      }
+      knowledgeCardRuntime.bindKnowledgeConflictInteractionWorker(
+        composedKnowledgeConflictRuntime.interactionWorker,
+      );
+    }
     actionApprovalRuntime = (
       dependencies.createActionApprovalRuntime ?? createDefaultActionApprovalRuntime
     )({
@@ -432,6 +465,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
         ? {}
         : { agentExecutionObserver: agentExecutionLedgerRuntime.observer }),
     });
+    if (composedKnowledgeConflictRuntime !== undefined && actionApprovalRuntime === undefined) {
+      throw new Error("knowledge conflict runtime requires the action-approval runtime");
+    }
     const chatKnowledgeDraftCommand =
       answerDraftRuntime?.chatKnowledgeDraftGenerator !== undefined &&
         knowledgeDraftRuntime !== undefined &&
@@ -474,10 +510,16 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       : observeStartupPromise(
           (knowledgeCardStartup ?? Promise.resolve()).then(() => actionApprovalRuntime!.start()),
         );
-    proactiveSignalPlannerStartup = proactiveSignalPlannerRuntime === undefined
+    knowledgeConflictStartup = composedKnowledgeConflictRuntime === undefined
       ? undefined
       : observeStartupPromise(
           (actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
+            .then(() => composedKnowledgeConflictRuntime!.start()),
+        );
+    proactiveSignalPlannerStartup = proactiveSignalPlannerRuntime === undefined
+      ? undefined
+      : observeStartupPromise(
+          (knowledgeConflictStartup ?? actionApprovalStartup ?? knowledgeCardStartup ?? Promise.resolve())
             .then(() => proactiveSignalPlannerRuntime!.start()),
         );
     proactiveSignalDeliveryStartup = proactiveSignalDeliveryRuntime === undefined
@@ -509,6 +551,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     const eventWorkerPrerequisite =
       proactiveSignalDeliveryStartup ??
       proactiveSignalPlannerStartup ??
+      knowledgeConflictStartup ??
       actionApprovalStartup ??
       knowledgeCardStartup;
     if (eventWorkerPrerequisite === undefined) {
@@ -556,6 +599,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   if (
     knowledgeCardStartup !== undefined ||
     actionApprovalStartup !== undefined ||
+    knowledgeConflictStartup !== undefined ||
     proactiveSignalPlannerStartup !== undefined ||
     proactiveSignalDeliveryStartup !== undefined ||
     eventWorkerStartup !== undefined
@@ -563,6 +607,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     app.addHook("onReady", async () => {
       await knowledgeCardStartup;
       await actionApprovalStartup;
+      await knowledgeConflictStartup;
       await proactiveSignalPlannerStartup;
       await proactiveSignalDeliveryStartup;
       await eventWorkerStartup;
@@ -634,10 +679,14 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   });
   registerActionReviewApi(app, actionReviewRuntime, { now });
   registerAgentExecutionLedgerApi(app, agentExecutionLedgerRuntime);
-  registerKnowledgeConflictApi(app, dependencies.knowledgeConflictRuntime, {
-    authenticationConfigured: internalApiToken !== undefined,
-    now,
-  });
+  registerKnowledgeConflictApi(
+    app,
+    dependencies.knowledgeConflictRuntime ?? composedKnowledgeConflictRuntime,
+    {
+      authenticationConfigured: internalApiToken !== undefined,
+      now,
+    },
+  );
 
   app.get("/admin", async (_request, reply) => (
     reply
@@ -714,6 +763,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       service: runtimeControlService,
     });
     const knowledgeCards = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const knowledgeConflicts = await getKnowledgeConflictStatus(composedKnowledgeConflictRuntime);
     const actionApprovals = await getActionApprovalStatus(actionApprovalRuntime);
     const proactiveSignals = await getProactiveSignalsStatus({
       planner: proactiveSignalPlannerRuntime,
@@ -758,6 +808,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       eventWorker: await getEventWorkerStatus(eventWorkerRuntime),
       documentSync: await getDocumentSyncStatus(documentSyncRuntime),
       reindex: await getReindexStatus(reindexWorkerRuntime),
+      knowledgeConflicts,
       actionApprovals: actionApprovals ?? { ok: true, enabled: false, running: false },
       proactiveSignals,
     };
@@ -767,11 +818,14 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
 
   app.get("/internal/readiness", async () => {
     const knowledgeCardStatus = await getKnowledgeCardStatus(knowledgeCardRuntime);
+    const knowledgeConflictStatus = await getKnowledgeConflictStatus(
+      composedKnowledgeConflictRuntime,
+    );
     const actionApprovalStatus = await getActionApprovalStatus(actionApprovalRuntime);
     const actionReviewStatus = await getActionReviewStatus(actionReviewRuntime);
     return buildInternalRolloutReadinessReport(
       dependencies.readinessEnv ?? process.env,
-      { knowledgeCardStatus, actionApprovalStatus, actionReviewStatus },
+      { knowledgeCardStatus, knowledgeConflictStatus, actionApprovalStatus, actionReviewStatus },
     );
   });
 
@@ -1855,6 +1909,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       () => actionReviewRuntime?.close(),
       () => proactiveSignalDeliveryRuntime?.close(),
       () => proactiveSignalPlannerRuntime?.close(),
+      () => composedKnowledgeConflictRuntime?.close(),
       () => actionApprovalRuntime?.close(),
       () => knowledgeCardRuntime?.close(),
       () => proactiveSignalRuntime?.close(),
@@ -1879,6 +1934,7 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
       conversationStateInspectionRuntime,
       proactiveSignalRuntime,
       proactiveSignalPlannerRuntime,
+      composedKnowledgeConflictRuntime,
       knowledgeCardRuntime,
       actionApprovalRuntime,
       actionReviewRuntime,
@@ -1935,6 +1991,26 @@ async function getKnowledgeCardStatus(runtime: KnowledgeCardRuntime | undefined)
       enabled: true,
       running: false,
       degradedReason: "knowledge_card_status_unavailable" as const,
+    };
+  }
+}
+
+async function getKnowledgeConflictStatus(runtime: KnowledgeConflictRuntime | undefined) {
+  if (runtime === undefined) return { ok: true, enabled: false, running: false };
+  try {
+    const status = await runtime.getStatus();
+    const ok = status.running && status.migration0046Applied;
+    return {
+      ok,
+      ...status,
+      ...(!ok ? { degradedReason: "knowledge_conflict_runtime_degraded" as const } : {}),
+    };
+  } catch {
+    return {
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "knowledge_conflict_status_unavailable" as const,
     };
   }
 }
@@ -2137,6 +2213,7 @@ function scheduleRuntimeStartupCleanup({
   conversationStateInspectionRuntime,
   proactiveSignalRuntime,
   proactiveSignalPlannerRuntime,
+  composedKnowledgeConflictRuntime,
   knowledgeCardRuntime,
   actionApprovalRuntime,
   actionReviewRuntime,
@@ -2154,6 +2231,7 @@ function scheduleRuntimeStartupCleanup({
   conversationStateInspectionRuntime: ConversationStateInspectionRuntime | undefined;
   proactiveSignalRuntime: ProactiveSignalRuntime | undefined;
   proactiveSignalPlannerRuntime: ProactiveSignalPlannerRuntime | undefined;
+  composedKnowledgeConflictRuntime: KnowledgeConflictRuntime | undefined;
   knowledgeCardRuntime: KnowledgeCardRuntime | undefined;
   actionApprovalRuntime: ActionApprovalRuntime | undefined;
   actionReviewRuntime: ActionReviewRuntime | undefined;
@@ -2171,6 +2249,7 @@ function scheduleRuntimeStartupCleanup({
     () => actionReviewRuntime?.close(),
     () => proactiveSignalDeliveryRuntime?.close(),
     () => proactiveSignalPlannerRuntime?.close(),
+    () => composedKnowledgeConflictRuntime?.close(),
     () => actionApprovalRuntime?.close(),
     () => knowledgeCardRuntime?.close(),
     () => proactiveSignalRuntime?.close(),

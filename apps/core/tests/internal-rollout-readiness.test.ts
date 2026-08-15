@@ -89,6 +89,43 @@ describe("buildInternalRolloutReadinessReport", () => {
     });
   });
 
+  it("treats knowledge conflicts as safely disabled by default", () => {
+    expect(checksById(buildInternalRolloutReadinessReport(readyRolloutEnv())).knowledgeConflicts)
+      .toMatchObject({
+        status: "pass",
+        detail: "Knowledge conflicts are safely disabled.",
+      });
+  });
+
+  it("passes enabled knowledge conflicts only with migration, loops, and safe durable counts", () => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeConflictEnabledEnv(),
+      { knowledgeConflictStatus: knowledgeConflictStatus() },
+    );
+
+    expect(checksById(report).knowledgeConflicts).toMatchObject({
+      status: "pass",
+      detail: "Knowledge-conflict scanner and dispatcher are running with safe durable state.",
+    });
+  });
+
+  it.each([
+    [undefined, "Knowledge-conflict runtime status is unavailable."],
+    [{ ...knowledgeConflictStatus(), ok: false }, "Knowledge-conflict runtime status is unreadable."],
+    [{ ...knowledgeConflictStatus(), migration0046Applied: false }, "Knowledge-conflict migration 0046 is not applied."],
+    [{ ...knowledgeConflictStatus(), scanner: { running: false }, running: false }, "Knowledge-conflict scanner and dispatcher must both be running."],
+    [{ ...knowledgeConflictStatus(), scans: { ...knowledgeConflictStatus().scans, deadLettered: 1 } }, "Knowledge-conflict scans have dead-lettered rows."],
+    [{ ...knowledgeConflictStatus(), deliveries: { ...knowledgeConflictStatus().deliveries, failed: 1, terminalFailed: 1 }, reconciliation: { terminalFailed: 1, outcomeUnknown: 0 } }, "Knowledge-conflict delivery has terminal failed rows."],
+    [{ ...knowledgeConflictStatus(), deliveries: { ...knowledgeConflictStatus().deliveries, outcomeUnknown: 1 }, reconciliation: { terminalFailed: 0, outcomeUnknown: 1 } }, "Knowledge-conflict delivery has unresolved outcome-unknown rows."],
+  ])("fails enabled knowledge-conflict readiness for unsafe runtime state %#", (status, detail) => {
+    const report = buildInternalRolloutReadinessReport(
+      knowledgeConflictEnabledEnv(),
+      status === undefined ? {} : { knowledgeConflictStatus: status },
+    );
+
+    expect(checksById(report).knowledgeConflicts).toMatchObject({ status: "fail", detail });
+  });
+
   it("blocks enabled action approvals when loops or durable outbox facts are unsafe", () => {
     const env = readyRolloutEnv({
       IRIS_APPROVAL_ACTIONS_ENABLED: "true",
@@ -581,6 +618,51 @@ function actionReviewStatus(overrides: Record<string, unknown> = {}) {
     running: true,
     migration0034Applied: true,
     ...overrides,
+  };
+}
+
+function knowledgeConflictEnabledEnv(): EnvLike {
+  return readyRolloutEnv({
+    IRIS_KNOWLEDGE_CONFLICT_ENABLED: "true",
+    IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "oc_pilot",
+    IRIS_KNOWLEDGE_CARD_ENABLED: "true",
+    IRIS_KNOWLEDGE_CARD_GROUP_IDS: "oc_pilot",
+    IRIS_APPROVAL_ACTIONS_ENABLED: "true",
+    IRIS_APPROVAL_ACTION_GROUP_IDS: "oc_pilot",
+    FEISHU_ENCRYPT_KEY: "knowledge-conflict-encrypt-key",
+  });
+}
+
+function knowledgeConflictStatus() {
+  return {
+    ok: true,
+    enabled: true as const,
+    running: true,
+    migration0046Applied: true,
+    enabledGroupCount: 1,
+    scanner: { running: true },
+    dispatcher: { running: true },
+    scans: { pending: 0, processing: 0, retry: 0, completed: 1, deadLettered: 0 },
+    candidates: {
+      pending_review: 0,
+      dismissed: 0,
+      approved_for_delivery: 0,
+      delivered: 1,
+      draft_created: 0,
+      superseded: 0,
+    },
+    deliveries: {
+      pending: 0,
+      processing: 0,
+      externalAttempting: 0,
+      sent: 1,
+      failed: 0,
+      terminalFailed: 0,
+      outcomeUnknown: 0,
+      cancelled: 0,
+    },
+    interactions: { applied: 0, alreadyApplied: 0, rejected: 0 },
+    reconciliation: { terminalFailed: 0, outcomeUnknown: 0 },
   };
 }
 

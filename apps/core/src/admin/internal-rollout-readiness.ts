@@ -8,6 +8,7 @@ import {
   readFeishuAuthConfig,
   readFeishuOpenApiConfig,
   readKnowledgeCardRuntimeConfig,
+  readKnowledgeConflictRuntimeConfig,
   readModelProviderConfig,
   readOptionalFeishuBotOpenId,
   readReindexWorkerRuntimeConfig,
@@ -61,6 +62,42 @@ type ActionApprovalOutboxReadinessStatus = {
   outcome_unknown: number;
   terminalFailed: number;
 };
+type KnowledgeConflictReadinessStatus = {
+  ok: boolean;
+  enabled: boolean;
+  running: boolean;
+  migration0046Applied?: boolean;
+  scanner?: { running: boolean };
+  dispatcher?: { running: boolean };
+  scans?: {
+    pending: number;
+    processing: number;
+    retry: number;
+    completed: number;
+    deadLettered: number;
+  };
+  candidates?: {
+    pending_review: number;
+    dismissed: number;
+    approved_for_delivery: number;
+    delivered: number;
+    draft_created: number;
+    superseded: number;
+  };
+  deliveries?: {
+    pending: number;
+    processing: number;
+    externalAttempting: number;
+    sent: number;
+    failed: number;
+    terminalFailed: number;
+    outcomeUnknown: number;
+    cancelled: number;
+  };
+  interactions?: { applied: number; alreadyApplied: number; rejected: number };
+  reconciliation?: { terminalFailed: number; outcomeUnknown: number };
+  degradedReason?: string;
+};
 export type InternalRolloutReadinessContext = {
   knowledgeCardStatus?: {
     ok: boolean;
@@ -80,6 +117,7 @@ export type InternalRolloutReadinessContext = {
     outbox?: ActionApprovalOutboxReadinessStatus;
     degradedReason?: string;
   };
+  knowledgeConflictStatus?: KnowledgeConflictReadinessStatus;
   actionReviewStatus?: {
     configured: boolean;
     running: boolean;
@@ -433,6 +471,86 @@ const checkDefinitions: CheckDefinition[] = [
     },
   },
   {
+    id: "knowledgeConflicts",
+    title: "Knowledge-conflict candidate runtime",
+    envVars: [
+      "IRIS_KNOWLEDGE_CONFLICT_ENABLED",
+      "IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST",
+      "IRIS_KNOWLEDGE_CONFLICT_SCANNER_INTERVAL_MS",
+      "IRIS_KNOWLEDGE_CONFLICT_SCANNER_BATCH_LIMIT",
+      "IRIS_KNOWLEDGE_CONFLICT_SCAN_LEASE_MS",
+      "IRIS_KNOWLEDGE_CONFLICT_SCAN_MAX_ATTEMPTS",
+      "IRIS_KNOWLEDGE_CONFLICT_DISPATCHER_INTERVAL_MS",
+      "IRIS_KNOWLEDGE_CONFLICT_DISPATCHER_BATCH_LIMIT",
+      "DATABASE_URL",
+      "REDIS_URL",
+      "IRIS_MODEL_PROVIDER",
+      "IRIS_EMBEDDING_PROVIDER",
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "IRIS_KNOWLEDGE_CARD_ENABLED",
+      "IRIS_APPROVAL_ACTIONS_ENABLED",
+    ],
+    evaluate(env, context) {
+      const config = readKnowledgeConflictRuntimeConfig(env);
+      if (!config.enabled) return pass("Knowledge conflicts are safely disabled.");
+      const status = context.knowledgeConflictStatus;
+      if (status === undefined) {
+        return fail("Knowledge-conflict runtime status is unavailable.");
+      }
+      if (!status.ok && status.migration0046Applied === false) {
+        return fail("Knowledge-conflict migration 0046 is not applied.");
+      }
+      if (!status.ok) return fail("Knowledge-conflict runtime status is unreadable.");
+      if (!status.enabled) {
+        return fail("Knowledge-conflict runtime is not available while configured enabled.");
+      }
+      if (status.migration0046Applied !== true) {
+        return fail("Knowledge-conflict migration 0046 is not applied.");
+      }
+      if (
+        !status.running ||
+        status.scanner?.running !== true ||
+        status.dispatcher?.running !== true
+      ) {
+        return fail("Knowledge-conflict scanner and dispatcher must both be running.");
+      }
+      if (!isValidKnowledgeConflictScanStatus(status.scans)) {
+        return fail("Knowledge-conflict scan status is unavailable.");
+      }
+      if (!isValidKnowledgeConflictCandidateStatus(status.candidates)) {
+        return fail("Knowledge-conflict candidate status is unavailable.");
+      }
+      if (!isValidKnowledgeConflictDeliveryStatus(status.deliveries)) {
+        return fail("Knowledge-conflict delivery status is unavailable.");
+      }
+      if (!isValidKnowledgeConflictInteractionStatus(status.interactions)) {
+        return fail("Knowledge-conflict interaction status is unavailable.");
+      }
+      if (!isValidKnowledgeConflictReconciliationStatus(status.reconciliation)) {
+        return fail("Knowledge-conflict reconciliation status is unavailable.");
+      }
+      if (
+        status.reconciliation.terminalFailed !== status.deliveries.terminalFailed ||
+        status.reconciliation.outcomeUnknown !== status.deliveries.outcomeUnknown
+      ) {
+        return fail("Knowledge-conflict reconciliation status is inconsistent.");
+      }
+      if (status.scans.deadLettered > 0) {
+        return fail("Knowledge-conflict scans have dead-lettered rows.");
+      }
+      if (status.deliveries.terminalFailed > 0) {
+        return fail("Knowledge-conflict delivery has terminal failed rows.");
+      }
+      if (status.deliveries.outcomeUnknown > 0) {
+        return fail("Knowledge-conflict delivery has unresolved outcome-unknown rows.");
+      }
+      return pass(
+        "Knowledge-conflict scanner and dispatcher are running with safe durable state.",
+      );
+    },
+  },
+  {
     id: "actionReviews",
     title: "Public action-review runtime",
     envVars: [
@@ -501,6 +619,62 @@ function isValidKnowledgeCardOutboxStatus(
   ];
   return counts.every((count) => Number.isSafeInteger(count) && count >= 0) &&
     value.terminalFailed <= value.failed;
+}
+
+function isValidKnowledgeConflictScanStatus(
+  value: KnowledgeConflictReadinessStatus["scans"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["scans"]> {
+  if (value === undefined) return false;
+  return [value.pending, value.processing, value.retry, value.completed, value.deadLettered]
+    .every(isSafeCount);
+}
+
+function isValidKnowledgeConflictDeliveryStatus(
+  value: KnowledgeConflictReadinessStatus["deliveries"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["deliveries"]> {
+  if (value === undefined) return false;
+  return [
+    value.pending,
+    value.processing,
+    value.externalAttempting,
+    value.sent,
+    value.failed,
+    value.terminalFailed,
+    value.outcomeUnknown,
+    value.cancelled,
+  ].every(isSafeCount) && value.terminalFailed <= value.failed;
+}
+
+function isValidKnowledgeConflictCandidateStatus(
+  value: KnowledgeConflictReadinessStatus["candidates"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["candidates"]> {
+  if (value === undefined) return false;
+  return [
+    value.pending_review,
+    value.dismissed,
+    value.approved_for_delivery,
+    value.delivered,
+    value.draft_created,
+    value.superseded,
+  ].every(isSafeCount);
+}
+
+function isValidKnowledgeConflictInteractionStatus(
+  value: KnowledgeConflictReadinessStatus["interactions"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["interactions"]> {
+  return value !== undefined &&
+    [value.applied, value.alreadyApplied, value.rejected].every(isSafeCount);
+}
+
+function isValidKnowledgeConflictReconciliationStatus(
+  value: KnowledgeConflictReadinessStatus["reconciliation"],
+): value is NonNullable<KnowledgeConflictReadinessStatus["reconciliation"]> {
+  return value !== undefined &&
+    [value.terminalFailed, value.outcomeUnknown].every(isSafeCount);
+}
+
+function isSafeCount(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 export function buildInternalRolloutReadinessReport(

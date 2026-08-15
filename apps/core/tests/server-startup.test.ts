@@ -28,6 +28,7 @@ import type { RuntimeControlRuntime } from "../src/runtime/runtime-control-runti
 import type { KnowledgeCardRuntime } from "../src/runtime/knowledge-card-runtime.js";
 import type { KnowledgeDraftRuntime } from "../src/runtime/knowledge-draft-runtime.js";
 import type { AnswerDraftRuntime } from "../src/runtime/answer-draft-runtime.js";
+import type { KnowledgeConflictRuntime } from "../src/runtime/knowledge-conflict-runtime.js";
 import type { AnswerSourcePermissionVerifier } from "../src/answer-replies/answer-source-permission-verifier.js";
 import { isolateEnvVar } from "./test-env.js";
 
@@ -685,6 +686,136 @@ describe("Core server startup", () => {
     expect(knowledgeCardRuntime.close).toHaveBeenCalledOnce();
   });
 
+  it("wires conflicts before answers, binds callbacks, and starts after cards and approvals", async () => {
+    const order: string[] = [];
+    const knowledgeCardRuntime = fakeKnowledgeCardRuntime({
+      start: vi.fn(async () => { order.push("cards"); }),
+      close: vi.fn(async () => { order.push("close-cards"); }),
+    });
+    const actionApprovalRuntime = fakeActionApprovalRuntime({
+      start: vi.fn(async () => { order.push("approvals"); }),
+      close: vi.fn(async () => { order.push("close-approvals"); }),
+    });
+    const knowledgeConflictRuntime = fakeKnowledgeConflictRuntime({
+      start: vi.fn(async () => { order.push("conflicts"); }),
+      close: vi.fn(async () => { order.push("close-conflicts"); }),
+    });
+    let presentationGetter: (() => unknown) | undefined;
+    const createKnowledgeConflictRuntime = vi.fn<NonNullable<
+      BuildAppDependencies["createKnowledgeConflictRuntime"]
+    >>((input) => {
+      presentationGetter = input.getKnowledgeCardPresentationRuntime;
+      expect(presentationGetter()).toBeUndefined();
+      return knowledgeConflictRuntime;
+    });
+    const createAnswerDraftRuntime = vi.fn(() => undefined);
+
+    const app = await buildApp({
+      createKnowledgeConflictRuntime,
+      createAnswerDraftRuntime,
+      createReindexWorkerRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => undefined,
+      createKnowledgeDraftRuntime: () => undefined,
+      createKnowledgeCardRuntime: () => knowledgeCardRuntime,
+      createActionApprovalRuntime: () => actionApprovalRuntime,
+      createActionReviewRuntime: () => undefined,
+      createProactiveSignalPlannerRuntime: () => undefined,
+      createProactiveSignalDeliveryRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+    await app.ready();
+
+    expect(createKnowledgeConflictRuntime).toHaveBeenCalledOnce();
+    expect(createAnswerDraftRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      knowledgeConflictAnswerProvider: knowledgeConflictRuntime.answerProvider,
+    }));
+    expect(knowledgeCardRuntime.bindKnowledgeConflictInteractionWorker).toHaveBeenCalledWith(
+      knowledgeConflictRuntime.interactionWorker,
+    );
+    expect(presentationGetter?.()).toBe(knowledgeCardRuntime);
+    expect(order).toEqual(["cards", "approvals", "conflicts"]);
+
+    await app.close();
+    expect(order).toEqual([
+      "cards", "approvals", "conflicts",
+      "close-conflicts", "close-approvals", "close-cards",
+    ]);
+  });
+
+  it("surfaces rejected knowledge-conflict startup through app readiness and server startup", async () => {
+    const startupError = new Error("knowledge conflict startup failed");
+    const runtime = fakeKnowledgeConflictRuntime({
+      start: vi.fn(async () => { throw startupError; }),
+      close: vi.fn(async () => undefined),
+    });
+    const runtimeDependencies = {
+      createKnowledgeConflictRuntime: () => runtime,
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => undefined,
+      createKnowledgeDraftRuntime: () => undefined,
+      createKnowledgeCardRuntime: () => fakeKnowledgeCardRuntime(),
+      createActionApprovalRuntime: () => fakeActionApprovalRuntime(),
+      createActionReviewRuntime: () => undefined,
+      createProactiveSignalPlannerRuntime: () => undefined,
+      createProactiveSignalDeliveryRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    } satisfies BuildAppDependencies;
+    const app = await buildApp(runtimeDependencies);
+    await expect(app.ready()).rejects.toBe(startupError);
+    await app.close();
+
+    const serverRuntime = fakeKnowledgeConflictRuntime({
+      start: vi.fn(async () => { throw startupError; }),
+      close: vi.fn(async () => undefined),
+    });
+    const runtimeControlRuntime = fakeRuntimeControlRuntime();
+    await expect(startServer({
+      createRuntimeControlRuntime: async () => runtimeControlRuntime,
+      appDependencies: {
+        ...runtimeDependencies,
+        createKnowledgeConflictRuntime: () => serverRuntime,
+      },
+    })).rejects.toBe(startupError);
+    expect(serverRuntime.close).toHaveBeenCalledOnce();
+    expect(runtimeControlRuntime.close).toHaveBeenCalledOnce();
+  });
+
+  it("degrades consolidated status without leaking a conflict count failure", async () => {
+    const runtime = fakeKnowledgeConflictRuntime({
+      getStatus: vi.fn(async () => { throw new Error("candidate-id raw database detail"); }),
+    });
+    const app = await buildApp({
+      createKnowledgeConflictRuntime: () => runtime,
+      createAnswerDraftRuntime: () => undefined,
+      createReindexWorkerRuntime: () => undefined,
+      createMemoryExtractionRuntime: () => undefined,
+      createKnowledgeDraftRuntime: () => undefined,
+      createKnowledgeCardRuntime: () => fakeKnowledgeCardRuntime(),
+      createActionApprovalRuntime: () => fakeActionApprovalRuntime(),
+      createActionReviewRuntime: () => undefined,
+      createProactiveSignalPlannerRuntime: () => undefined,
+      createProactiveSignalDeliveryRuntime: () => undefined,
+      createEventWorkerRuntime: () => undefined,
+      createDocumentSyncRuntime: () => undefined,
+    });
+    await app.ready();
+
+    const response = await app.inject({ method: "GET", url: "/internal/status" });
+    expect(response.json().components.knowledgeConflicts).toEqual({
+      status: "degraded",
+      ok: false,
+      enabled: true,
+      running: false,
+      degradedReason: "knowledge_conflict_status_unavailable",
+    });
+    expect(response.body).not.toContain("candidate-id");
+    expect(response.body).not.toContain("raw database detail");
+    await app.close();
+  });
+
   it("awaits extraction cleanup when event runtime composition fails", async () => {
     const compositionError = new Error("event composition failed");
     const order: string[] = [];
@@ -1173,6 +1304,50 @@ function fakeKnowledgeCardRuntime(
     ...overrides,
     bindKnowledgeConflictInteractionWorker:
       overrides.bindKnowledgeConflictInteractionWorker ?? vi.fn(),
+  };
+}
+
+function fakeKnowledgeConflictRuntime(
+  overrides: Partial<KnowledgeConflictRuntime> = {},
+): KnowledgeConflictRuntime {
+  return {
+    repository: {} as KnowledgeConflictRuntime["repository"],
+    currentValidator: {} as KnowledgeConflictRuntime["currentValidator"],
+    answerProvider: { findConflictPlan: vi.fn(async () => undefined) },
+    interactionWorker: { processInteraction: vi.fn() } as never,
+    canUseKnowledgeConflict: vi.fn(() => true),
+    start: vi.fn(async () => undefined),
+    getStatus: vi.fn(async () => ({
+      enabled: true as const,
+      running: true,
+      migration0046Applied: true,
+      enabledGroupCount: 1,
+      scanner: { running: true, intervalMs: 60_000, batchLimit: 10 },
+      dispatcher: { running: true, intervalMs: 1_000, batchLimit: 10 },
+      scans: { pending: 0, processing: 0, retry: 0, completed: 0, deadLettered: 0 },
+      candidates: {
+        pending_review: 0,
+        dismissed: 0,
+        approved_for_delivery: 0,
+        delivered: 0,
+        draft_created: 0,
+        superseded: 0,
+      },
+      deliveries: {
+        pending: 0,
+        processing: 0,
+        externalAttempting: 0,
+        sent: 0,
+        failed: 0,
+        terminalFailed: 0,
+        outcomeUnknown: 0,
+        cancelled: 0,
+      },
+      interactions: { applied: 0, alreadyApplied: 0, rejected: 0 },
+      reconciliation: { terminalFailed: 0, outcomeUnknown: 0 },
+    })),
+    close: vi.fn(async () => undefined),
+    ...overrides,
   };
 }
 

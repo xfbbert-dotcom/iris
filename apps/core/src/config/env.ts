@@ -1,5 +1,6 @@
 import type { FeishuAuthConfig } from "../feishu/feishu-auth.js";
 import { readDatabaseConfig } from "../database/database-config.js";
+import { assertSupportedRuntimeEmbeddingDimension } from "../model/embedding-profile-id.js";
 
 export type EnvLike = Record<string, string | undefined>;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -98,6 +99,26 @@ export type KnowledgeCardRuntimeConfig =
       intervalMs: number;
       batchLimit: number;
       botOpenId: string;
+    };
+
+export type KnowledgeConflictRuntimeConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      databaseUrl: string;
+      redisUrl: string;
+      enabledGroupIds: string[];
+      botOpenId: string;
+      scannerIntervalMs: number;
+      scannerBatchLimit: number;
+      scanLeaseMs: number;
+      scanMaxAttempts: number;
+      retryBaseDelayMs: number;
+      retryMaxDelayMs: number;
+      dispatcherIntervalMs: number;
+      dispatcherBatchLimit: number;
+      deliveryLeaseMs: number;
+      reconciliationDelayMs: number;
     };
 
 export type ProactiveFeedbackConfig = {
@@ -522,6 +543,119 @@ export function readKnowledgeCardRuntimeConfig(
       100,
     ),
     botOpenId,
+  };
+}
+
+export function readKnowledgeConflictRuntimeConfig(
+  env: EnvLike = process.env,
+): KnowledgeConflictRuntimeConfig {
+  if (env.IRIS_KNOWLEDGE_CONFLICT_ENABLED !== "true") {
+    return { enabled: false };
+  }
+
+  const enabledGroupIds = readRequiredUniqueGroupIdListEnv(
+    "IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST",
+    env.IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST,
+  );
+  const model = readModelProviderConfig(env);
+  if (model === undefined) {
+    throw new Error("IRIS_MODEL_PROVIDER is required when knowledge conflicts are enabled");
+  }
+  const embedding = readEmbeddingProviderConfig(env);
+  if (embedding === undefined) {
+    throw new Error("IRIS_EMBEDDING_PROVIDER is required when knowledge conflicts are enabled");
+  }
+  if (embedding.dimensions === undefined) {
+    throw new Error("IRIS_EMBEDDING_DIMENSIONS is required when knowledge conflicts are enabled");
+  }
+  assertSupportedRuntimeEmbeddingDimension(embedding.dimensions);
+
+  const knowledgeCards = readKnowledgeCardRuntimeConfig(env);
+  if (!knowledgeCards.enabled) {
+    throw new Error("knowledge conflicts require knowledge cards to be enabled");
+  }
+  const knowledgeCardGroups = new Set(knowledgeCards.enabledGroupIds);
+  if (enabledGroupIds.some((groupId) => !knowledgeCardGroups.has(groupId))) {
+    throw new Error(
+      "IRIS_KNOWLEDGE_CARD_GROUP_IDS must include every knowledge-conflict group",
+    );
+  }
+  const actionApprovals = readActionApprovalRuntimeConfig(env);
+  if (!actionApprovals.enabled) {
+    throw new Error("knowledge conflicts require action approvals to be enabled");
+  }
+  const actionApprovalGroups = new Set(actionApprovals.enabledGroupIds);
+  if (enabledGroupIds.some((groupId) => !actionApprovalGroups.has(groupId))) {
+    throw new Error(
+      "IRIS_APPROVAL_ACTION_GROUP_IDS must include every knowledge-conflict group",
+    );
+  }
+
+  const retryBaseDelayMs = readTimerDelayEnv(
+    "IRIS_KNOWLEDGE_CONFLICT_RETRY_BASE_DELAY_MS",
+    env.IRIS_KNOWLEDGE_CONFLICT_RETRY_BASE_DELAY_MS,
+    1_000,
+  );
+  const retryMaxDelayMs = readTimerDelayEnv(
+    "IRIS_KNOWLEDGE_CONFLICT_RETRY_MAX_DELAY_MS",
+    env.IRIS_KNOWLEDGE_CONFLICT_RETRY_MAX_DELAY_MS,
+    60_000,
+  );
+  if (retryMaxDelayMs < retryBaseDelayMs) {
+    throw new Error("knowledge conflict retry max delay must be at least the base delay");
+  }
+
+  return {
+    enabled: true,
+    databaseUrl: knowledgeCards.databaseUrl,
+    redisUrl: knowledgeCards.redisUrl,
+    enabledGroupIds,
+    botOpenId: knowledgeCards.botOpenId,
+    scannerIntervalMs: readTimerDelayEnv(
+      "IRIS_KNOWLEDGE_CONFLICT_SCANNER_INTERVAL_MS",
+      env.IRIS_KNOWLEDGE_CONFLICT_SCANNER_INTERVAL_MS,
+      60_000,
+    ),
+    scannerBatchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_KNOWLEDGE_CONFLICT_SCANNER_BATCH_LIMIT",
+      env.IRIS_KNOWLEDGE_CONFLICT_SCANNER_BATCH_LIMIT,
+      10,
+      50,
+    ),
+    scanLeaseMs: readTimerDelayEnv(
+      "IRIS_KNOWLEDGE_CONFLICT_SCAN_LEASE_MS",
+      env.IRIS_KNOWLEDGE_CONFLICT_SCAN_LEASE_MS,
+      30_000,
+    ),
+    scanMaxAttempts: readBoundedPositiveIntegerEnv(
+      "IRIS_KNOWLEDGE_CONFLICT_SCAN_MAX_ATTEMPTS",
+      env.IRIS_KNOWLEDGE_CONFLICT_SCAN_MAX_ATTEMPTS,
+      5,
+      10,
+    ),
+    retryBaseDelayMs,
+    retryMaxDelayMs,
+    dispatcherIntervalMs: readTimerDelayEnv(
+      "IRIS_KNOWLEDGE_CONFLICT_DISPATCHER_INTERVAL_MS",
+      env.IRIS_KNOWLEDGE_CONFLICT_DISPATCHER_INTERVAL_MS,
+      1_000,
+    ),
+    dispatcherBatchLimit: readBoundedPositiveIntegerEnv(
+      "IRIS_KNOWLEDGE_CONFLICT_DISPATCHER_BATCH_LIMIT",
+      env.IRIS_KNOWLEDGE_CONFLICT_DISPATCHER_BATCH_LIMIT,
+      10,
+      100,
+    ),
+    deliveryLeaseMs: readTimerDelayEnv(
+      "IRIS_KNOWLEDGE_CONFLICT_DELIVERY_LEASE_MS",
+      env.IRIS_KNOWLEDGE_CONFLICT_DELIVERY_LEASE_MS,
+      30_000,
+    ),
+    reconciliationDelayMs: readTimerDelayEnv(
+      "IRIS_KNOWLEDGE_CONFLICT_RECONCILIATION_DELAY_MS",
+      env.IRIS_KNOWLEDGE_CONFLICT_RECONCILIATION_DELAY_MS,
+      300_000,
+    ),
   };
 }
 
