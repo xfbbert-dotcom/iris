@@ -16,6 +16,10 @@ const proactiveFeedbackAutoclosePath = "deploy/pilot/proactive-feedback-autoclos
 const postgresInitPath = "deploy/pilot/postgres-init.sh";
 const pilotReadmePath = "deploy/pilot/README.md";
 const ciWorkflowPath = ".github/workflows/ci.yml";
+const knowledgeConflictAcceptancePath =
+  "docs/runbooks/iris-knowledge-conflict-acceptance.md";
+const knowledgeConflictPrPath =
+  "docs/pull-requests/2026-08-13-iris-knowledge-conflict-candidate.md";
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
   for (const scriptPath of [
@@ -32,6 +36,76 @@ test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined 
     const result = spawnSync(bashPath(), ["-n", scriptPath], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   }
+});
+
+test("knowledge-conflict acceptance runbook is executable and covers all twelve gates", () => {
+  assert.equal(existsSync(knowledgeConflictAcceptancePath), true);
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  for (let step = 1; step <= 12; step += 1) {
+    assert.match(runbook, new RegExp(`## Step ${step}:`, "u"), `missing acceptance step ${step}`);
+  }
+  for (const marker of [
+    "APPROVED_COMMIT_SHA",
+    "IRIS_APPROVED_IMAGE_DIGEST",
+    "$PilotGroupId",
+    "$ControlGroupIds",
+    "knowledge_conflict",
+    "medium",
+    "governed update draft",
+    "does not edit the existing Wiki page in place",
+    "Invoke-KnowledgeConflictAcceptance",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
+  }
+  assert.doesNotMatch(runbook, /https:\/\/[^\s`]*(?:wiki|docx)[^\s`]*/iu);
+});
+
+test("knowledge-conflict rollback is unconditional after enablement and preserves facts", () => {
+  assert.equal(existsSync(knowledgeConflictAcceptancePath), true);
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  const rollbackStart = runbook.indexOf("function Invoke-KnowledgeConflictRollback");
+  const rollbackEnd = runbook.indexOf("function Invoke-KnowledgeConflictAcceptance", rollbackStart);
+  assert.ok(rollbackStart >= 0 && rollbackEnd > rollbackStart, "rollback helper must be executable");
+  const rollback = runbook.slice(rollbackStart, rollbackEnd);
+  assertMarkersInOrder(rollback, [
+    "stop caddy",
+    "IRIS_KNOWLEDGE_CONFLICT_ENABLED=false",
+    "IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST=",
+    "/internal/runtime-control/groups/",
+    "/internal/runtime-control/global",
+    "/internal/runtime-control/capabilities",
+    "--force-recreate --wait --wait-timeout 120 core",
+    "Get-KnowledgeConflictActivityCounts",
+    "Assert-CountsUnchanged",
+    "Assert-AppendOnlyFactsPreserved",
+  ]);
+  assert.doesNotMatch(rollback, /\b(?:DELETE|TRUNCATE|DROP)\b/iu);
+
+  const wrapper = runbook.slice(rollbackEnd);
+  assert.match(wrapper, /\$EnableAttempted\s*=\s*\$true/u);
+  assert.match(wrapper, /try\s*\{/u);
+  assert.match(wrapper, /finally\s*\{[\s\S]*Invoke-KnowledgeConflictRollback/u);
+});
+
+test("knowledge-conflict PR evidence stays metadata-only and pending live acceptance", () => {
+  assert.equal(existsSync(knowledgeConflictPrPath), true);
+  const template = readFileSync(knowledgeConflictPrPath, "utf8");
+  for (const marker of [
+    "Pending live acceptance",
+    "exact commit SHA",
+    "image digest",
+    "IDs",
+    "versions",
+    "hashes",
+    "counts",
+    "timestamps",
+    "pass/fail",
+    "governed update draft",
+    "does not edit the existing Wiki page in place",
+  ]) {
+    assert.match(template, new RegExp(escapeRegExp(marker), "iu"));
+  }
+  assert.doesNotMatch(template, /message body|document body|credential value|access token/iu);
 });
 
 test("pilot shell scripts use LF endings for direct Linux execution", () => {
@@ -995,4 +1069,17 @@ function bashPath() {
 
   const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
   return existsSync(gitBash) ? gitBash : undefined;
+}
+
+function assertMarkersInOrder(value, markers) {
+  let previousIndex = -1;
+  for (const marker of markers) {
+    const markerIndex = value.indexOf(marker, previousIndex + 1);
+    assert.ok(markerIndex > previousIndex, `${marker} must appear in order`);
+    previousIndex = markerIndex;
+  }
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }

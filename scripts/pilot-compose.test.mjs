@@ -358,6 +358,22 @@ test("keeps knowledge cards disabled with an empty pilot allowlist", () => {
   }
 });
 
+test("keeps knowledge conflicts disabled with an empty pilot allowlist", () => {
+  const expectedValues = {
+    IRIS_KNOWLEDGE_CONFLICT_ENABLED: "false",
+    IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "",
+  };
+
+  for (const [name, expected] of Object.entries(expectedValues)) {
+    assert.equal(readEnvAssignment(pilotCiEnv, name), expected, `${name} must match in CI env`);
+    assert.equal(
+      compose.services.core.environment[name],
+      expected,
+      `${name} must survive Compose interpolation`,
+    );
+  }
+});
+
 test("keeps wiki space sync default-off with deterministic Compose wiring", () => {
   const expectedValues = {
     IRIS_WIKI_SPACE_SYNC_ENABLED: "false",
@@ -801,6 +817,7 @@ test("enforces the action-review boundary in the pinned Caddy runtime", async (t
       { method: "GET", path: "/admin/" },
       { method: "GET", path: "/admin/extra" },
       { method: "GET", path: "/internal/status" },
+      { method: "GET", path: "/internal/knowledge-conflicts/status" },
     ]) {
       const response = await fetch(`${origin}${request.path}`, {
         method: request.method,
@@ -812,6 +829,14 @@ test("enforces the action-review boundary in the pinned Caddy runtime", async (t
   } finally {
     spawnSync(docker, ["rm", "--force", name], { encoding: "utf8" });
   }
+});
+
+test("keeps the public knowledge-conflict API private", () => {
+  assert.doesNotMatch(
+    caddyfile,
+    /knowledge-conflicts|path\s+\/internal|handle_path\s+\/internal|@internal/iu,
+  );
+  assert.match(caddyfile, /handle\s*\{\s*respond 404\s*\}/su);
 });
 
 test("keeps action review default-off and does not track a review session secret", () => {

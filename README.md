@@ -38,6 +38,14 @@ The implemented internal-MVP loop includes:
 - durable runtime controls, fail-closed recovery, private local embeddings, and a lightweight Admin
   Console.
 
+The knowledge-conflict candidate loop is implemented behind production-default-off controls but is
+still pending its exact-SHA live acceptance. It can compare a newer group conclusion with current
+authorized Wiki evidence, require operator approval for a bounded conflict card, and create a
+governed update draft. It does not edit the existing Wiki page in place; the draft enters the
+existing confirmation, review, approval, and publication path. Until the dedicated one-group pilot
+and nonpilot-control runbook passes, this loop is not part of the accepted daily-pilot capability
+set.
+
 High-impact capabilities remain bounded: proactive deliveries require human review, knowledge-base
 writes open only for an intentional governed session, and every known non-pilot group remains
 disabled.

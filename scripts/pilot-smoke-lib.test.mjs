@@ -177,6 +177,8 @@ test("proves default-off knowledge-card readiness without exposing draft content
     assert.equal(checks.knowledgeCardReadiness, "safe-disabled");
     assert.equal(checks.knowledgeCardStatus, "unavailable-while-disabled");
     assert.equal(checks.knowledgeCardOutbox, "unavailable-while-disabled");
+    assert.equal(checks.knowledgeConflictDefaults, "disabled-empty-allowlist");
+    assert.equal(checks.knowledgeConflictReadiness, "safe-disabled");
     assert.doesNotMatch(result.stdout, /Full governed draft body|evidence-message-1|token-secret/u);
   } finally {
     result.cleanup();
@@ -194,12 +196,52 @@ test("probes both public callback paths while every public internal path stays h
     assert.equal(checks.publicInternalReadiness, 404);
     assert.equal(checks.publicIngressReadiness, 404);
     assert.equal(checks.publicAnswerReply, 404);
+    assert.equal(checks.publicKnowledgeConflictStatus, 404);
     assert.match(result.log, /public-feishu-events-boundary/u);
     assert.match(result.log, /public-feishu-card-actions-boundary/u);
     assert.match(result.log, /public-internal-status-404/u);
     assert.match(result.log, /public-internal-readiness-404/u);
     assert.match(result.log, /public-internal-ingress-readiness-404/u);
     assert.match(result.log, /public-answer-reply-404/u);
+    assert.match(result.log, /public-knowledge-conflict-status-404/u);
+  } finally {
+    result.cleanup();
+  }
+});
+
+test("rejects an enabled selected knowledge-conflict env when host values are unset", () => {
+  const result = runSmokeWithFetchMode("", {
+    envFileContents: [
+      "IRIS_KNOWLEDGE_CARD_ENABLED=false",
+      "IRIS_KNOWLEDGE_CARD_GROUP_IDS=",
+      "IRIS_KNOWLEDGE_CONFLICT_ENABLED=true",
+      "IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST=oc_pilot",
+      "",
+    ].join("\n"),
+    unsetKnowledgeConflictEnv: true,
+  });
+  try {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /IRIS_KNOWLEDGE_CONFLICT_ENABLED=false/u);
+  } finally {
+    result.cleanup();
+  }
+});
+
+test("rejects a nonempty selected knowledge-conflict allowlist while disabled", () => {
+  const result = runSmokeWithFetchMode("", {
+    envFileContents: [
+      "IRIS_KNOWLEDGE_CARD_ENABLED=false",
+      "IRIS_KNOWLEDGE_CARD_GROUP_IDS=",
+      "IRIS_KNOWLEDGE_CONFLICT_ENABLED=false",
+      "IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST=oc_pilot",
+      "",
+    ].join("\n"),
+    unsetKnowledgeConflictEnv: true,
+  });
+  try {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /empty IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST/u);
   } finally {
     result.cleanup();
   }
@@ -524,6 +566,8 @@ function runSmokeWithFetchMode(
     envFileContents,
     unsetKnowledgeCardEnv = false,
     hostKnowledgeCardEnv,
+    unsetKnowledgeConflictEnv = false,
+    hostKnowledgeConflictEnv,
   } = {},
 ) {
   const root = mkdtempSync(resolve(".tmp-iris-smoke-test-"));
@@ -552,6 +596,8 @@ function runSmokeWithFetchMode(
     IRIS_PILOT_CLEANUP_RETRY_DELAY_MS: "0",
     IRIS_KNOWLEDGE_CARD_ENABLED: "false",
     IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
+    IRIS_KNOWLEDGE_CONFLICT_ENABLED: "false",
+    IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "",
     ...(envFileContents === undefined ? {} : { IRIS_PILOT_ENV_FILE: envFilePath }),
   };
   if (unsetKnowledgeCardEnv) {
@@ -561,6 +607,14 @@ function runSmokeWithFetchMode(
   if (hostKnowledgeCardEnv !== undefined) {
     env.IRIS_KNOWLEDGE_CARD_ENABLED = hostKnowledgeCardEnv.enabled;
     env.IRIS_KNOWLEDGE_CARD_GROUP_IDS = hostKnowledgeCardEnv.groupIds;
+  }
+  if (unsetKnowledgeConflictEnv) {
+    delete env.IRIS_KNOWLEDGE_CONFLICT_ENABLED;
+    delete env.IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST;
+  }
+  if (hostKnowledgeConflictEnv !== undefined) {
+    env.IRIS_KNOWLEDGE_CONFLICT_ENABLED = hostKnowledgeConflictEnv.enabled;
+    env.IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST = hostKnowledgeConflictEnv.groupIds;
   }
 
   const startedAt = Date.now();
@@ -700,6 +754,11 @@ globalThis.fetch = async (input, init = {}) => {
       status: "ready",
       checks: [{ id: "knowledgeCards", status: "pass", detail: "Knowledge cards are safely disabled." }],
     };
+    body.checks.push({
+      id: "knowledgeConflicts",
+      status: "pass",
+      detail: "Knowledge conflicts are safely disabled.",
+    });
     if (mode === "readiness-nested-content") {
       body.checks[0].diagnostics = { draft: { body: "Full governed draft body" } };
     }
@@ -730,6 +789,13 @@ globalThis.fetch = async (input, init = {}) => {
       return json({ error: "not_found" }, 404);
     }
     throw new Error("Unexpected private answer-reply smoke URL");
+  }
+  if (url.pathname === "/internal/knowledge-conflicts/status") {
+    if (url.port !== "3000") {
+      log("public-knowledge-conflict-status-404");
+      return json({ error: "not_found" }, 404);
+    }
+    throw new Error("Unexpected private knowledge-conflict smoke URL");
   }
   if (url.pathname === "/internal/runtime-control/global") {
     const enabled = JSON.parse(init.body).enabled;
