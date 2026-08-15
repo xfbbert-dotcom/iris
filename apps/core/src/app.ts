@@ -1981,7 +1981,32 @@ function getAgentExecutionLedgerStatus(
 }
 
 async function getKnowledgeCardStatus(runtime: KnowledgeCardRuntime | undefined) {
-  if (runtime === undefined) return undefined;
+  if (runtime === undefined) {
+    return {
+      ok: true,
+      enabled: false,
+      running: false,
+      enabledGroupCount: 0,
+      queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
+      presentations: {
+        pending_send: 0,
+        active: 0,
+        superseded: 0,
+        closed: 0,
+        send_failed: 0,
+        pendingSend: 0,
+      },
+      outbox: {
+        pending: 0,
+        processing: 0,
+        external_attempting: 0,
+        sent: 0,
+        failed: 0,
+        outcome_unknown: 0,
+        terminalFailed: 0,
+      },
+    };
+  }
   try {
     return { ok: true, ...(await runtime.getStatus()) };
   } catch {

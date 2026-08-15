@@ -64,14 +64,14 @@ source text, prompts, rendered card text, callback payloads, authorization mater
 | --- | --- | --- |
 | 1 | exact commit SHA, image digest, timestamp | Pending |
 | 2 | pilot/control/known group IDs and counts | Pending |
-| 3 | queue, DLQ, outbox, reconciliation counts | Pending |
-| 4 | source/snapshot/message IDs, hashes, versions, timestamps | Pending |
+| 3 | all three off flags/empty allowlists, disabled runtime status, queue/DLQ/outbox counts | Pending |
+| 4 | exact source/snapshot IDs, hashes, versions/timestamps and every later pilot message ID | Pending |
 | 5 | runtime revision, enabled group count, readiness pass/fail | Pending |
 | 6 | exact scan/candidate plus every evidence row ID/timestamp/hash and bidirectional diff counts | Pending |
 | 7 | answer delivery/candidate IDs and observed pass/fail | Pending |
 | 8 | exact candidate/delivery/message/card hash plus field/link pass/fail/count facts | Pending |
 | 9 | six stage/cause-labelled revocation candidate/operation/draft/callback IDs plus exact zero counts | Pending |
-| 10 | draft ID/version/risk/status plus answer/action/reconciliation/publication/outbox zero counts | Pending |
+| 10 | draft ID/version/risk/status, active presentation zero, exact publication-binding and drain counts | Pending |
 | 11 | exact group inventory, durable/live policy, empty allowlists, state hashes/counts/timestamps | Pending |
 | 12 | metadata artifact hash and timestamp | Pending |
 

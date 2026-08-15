@@ -326,6 +326,35 @@ describe("knowledge card API", () => {
     await app.close();
   });
 
+  it("keeps disabled knowledge-card status present with readable zero active counts", async () => {
+    const app = await createApp(undefined);
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/status",
+      headers: authorization,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      knowledgeCards: {
+        ok: true,
+        enabled: false,
+        running: false,
+        enabledGroupCount: 0,
+        queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
+        presentations: { pending_send: 0, active: 0, send_failed: 0, pendingSend: 0 },
+        outbox: {
+          pending: 0,
+          processing: 0,
+          external_attempting: 0,
+          outcome_unknown: 0,
+          terminalFailed: 0,
+        },
+      },
+    });
+    await app.close();
+  });
+
   it("authenticates and bounds content-free DLQ list, replay, and delete operations", async () => {
     const runtime = runtimeFixture();
     vi.mocked(runtime.deadLetters.list).mockResolvedValue([

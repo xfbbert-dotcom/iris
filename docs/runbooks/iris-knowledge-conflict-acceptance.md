@@ -134,6 +134,8 @@ $script:BaselineAppendOnlyFacts = $null
 $script:BaselineGroupFacts = @{}
 $script:RollbackErrors = @()
 $script:InitialCurrentBotGroupIds = @()
+$script:ChronologyMessageIds = @()
+$script:ChronologySourceBinding = ""
 
 function Assert-Reference {
   param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Value)
@@ -406,13 +408,33 @@ function Assert-RevocationFacts {
   Assert-ExactStringSet -Expected $expectedCases -Actual $actualCases -Label 'revocation stage/cause cases'
 }
 
+function Assert-MultiMessageChronologyFacts {
+  param(
+    [Parameter(Mandatory)][object]$Facts,
+    [Parameter(Mandatory)][object[]]$ExpectedMessageIds
+  )
+  $expectedIds = @($ExpectedMessageIds | ForEach-Object { Assert-Reference -Name 'chronology message ID' -Value ([string]$_) })
+  $rows = @((Get-RequiredProperty $Facts 'messages'))
+  $actualIds = @($rows | ForEach-Object { Assert-Reference -Name 'chronology result message ID' -Value ([string](Get-RequiredProperty $_ 'id')) })
+  Assert-ExactStringSet -Expected $expectedIds -Actual $actualIds -Label 'chronology message IDs'
+  if ([long](Get-RequiredProperty $Facts 'sourceSnapshotCount') -ne 1) { throw "Exact synchronized source/snapshot binding failed" }
+  foreach ($row in $rows) {
+    $messageId = [string](Get-RequiredProperty $row 'id')
+    foreach ($name in @('rowCount','pilotCount','strictlyLaterCount')) {
+      if ([long](Get-RequiredProperty $row $name) -ne 1) { throw "Chronology failed for $messageId at $name" }
+    }
+  }
+}
+
 function Assert-DrainedDurableStates {
   param([Parameter(Mandatory)][object]$Counts)
   foreach ($name in @(
     'answerPrepared','answerSending','answerReconciliationRequired',
     'draftPresentationUnresolved','draftOutboxUnresolved',
-    'actionProposalUnresolved','actionRequirementPending','actionPresentationUnresolved',
-    'actionOutboxUnresolved','actionExecutionUnresolved','actionExecutionFailed'
+    'actionProposalUnresolved','actionRequirementPending','actionPresentationUnresolved','actionPresentationActive',
+    'actionOutboxUnresolved','actionExecutionUnresolved','actionExecutionFailed',
+    'publishedDraftMissingPublication','succeededProposalMissingPublication',
+    'succeededExecutionMissingPublication','publicationBindingMismatch'
   )) {
     if ([long](Get-RequiredProperty $Counts $name) -ne 0) { throw "Durable state is not drained at $name" }
   }
@@ -444,8 +466,36 @@ function Assert-RollbackRuntimeAttestation {
   foreach ($name in @('IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST','IRIS_KNOWLEDGE_CARD_GROUP_IDS','IRIS_APPROVAL_ACTION_GROUP_IDS')) {
     if ([string](Get-RequiredProperty $Environment $name) -cne '') { throw "Rollback allowlist remains populated at $name" }
   }
-  if ($Status.components.knowledgeConflicts.enabled -ne $false -or $Status.components.actionApprovals.enabled -ne $false) { throw "Rollback conflict or approval runtime is enabled" }
-  if ($Status.PSObject.Properties.Name -contains 'knowledgeCards' -and $Status.knowledgeCards.enabled -ne $false) { throw "Rollback knowledge-card runtime is enabled" }
+  $components = Get-RequiredProperty $Status 'components'
+  foreach ($componentName in @('knowledgeConflicts','actionApprovals')) {
+    $component = Get-RequiredProperty $components $componentName
+    if ((Get-RequiredProperty $component 'ok') -ne $true -or (Get-RequiredProperty $component 'enabled') -ne $false -or (Get-RequiredProperty $component 'running') -ne $false) { throw "Rollback component is not safely disabled at $componentName" }
+  }
+  $cards = Get-RequiredProperty $Status 'knowledgeCards'
+  if ((Get-RequiredProperty $cards 'ok') -ne $true -or (Get-RequiredProperty $cards 'enabled') -ne $false -or (Get-RequiredProperty $cards 'running') -ne $false) { throw "Rollback knowledge-card runtime is not safely disabled" }
+  if ([long](Get-RequiredProperty $cards 'enabledGroupCount') -ne 0) { throw "Rollback knowledge-card enabled group count is not zero" }
+  $cardQueue = Get-RequiredProperty $cards 'queue'
+  foreach ($name in @('pending','processing','delayed','deadLetter')) {
+    if ([long](Get-RequiredProperty $cardQueue $name) -ne 0) { throw "Rollback knowledge-card queue is not zero at $name" }
+  }
+  $cardPresentations = Get-RequiredProperty $cards 'presentations'
+  foreach ($name in @('pending_send','active','send_failed','pendingSend')) {
+    if ([long](Get-RequiredProperty $cardPresentations $name) -ne 0) { throw "Rollback knowledge-card presentation is not zero at $name" }
+  }
+  $cardOutbox = Get-RequiredProperty $cards 'outbox'
+  foreach ($name in @('pending','processing','external_attempting','outcome_unknown','terminalFailed')) {
+    if ([long](Get-RequiredProperty $cardOutbox $name) -ne 0) { throw "Rollback knowledge-card outbox is not zero at $name" }
+  }
+}
+
+function Assert-DisabledBaselineAttestation {
+  param(
+    [Parameter(Mandatory)][object]$Runtime,
+    [Parameter(Mandatory)][object]$Status,
+    [Parameter(Mandatory)][object]$Environment,
+    [Parameter(Mandatory)][object[]]$ExpectedGroupIds
+  )
+  Assert-RollbackRuntimeAttestation -Runtime $Runtime -Status $Status -Environment $Environment -ExpectedGroupIds $ExpectedGroupIds
 }
 
 function Get-KnowledgeConflictActivityCounts {
@@ -461,6 +511,8 @@ SELECT json_build_object(
 }
 
 function Get-GovernedUnresolvedCounts {
+  param([Parameter(Mandatory)][string]$GroupId)
+  $safeGroupId = Assert-Reference -Name 'governed drain group ID' -Value $GroupId
   return Invoke-JsonSql -Sql @"
 SELECT json_build_object(
   'answerPrepared', (SELECT count(*) FROM answer_reply_deliveries WHERE state = 'prepared'),
@@ -470,10 +522,84 @@ SELECT json_build_object(
   'draftOutboxUnresolved', (SELECT count(*) FROM knowledge_draft_presentation_outbox WHERE state IN ('pending','processing','external_attempting','failed','outcome_unknown')),
   'actionProposalUnresolved', (SELECT count(*) FROM action_proposals WHERE status IN ('pending_approval','approved','executing','reconciliation_required')),
   'actionRequirementPending', (SELECT count(*) FROM action_approval_requirements WHERE state = 'pending'),
-  'actionPresentationUnresolved', (SELECT count(*) FROM action_approval_presentations WHERE state IN ('pending_send','send_failed')),
+  'actionPresentationUnresolved', (SELECT count(*) FROM action_approval_presentations WHERE state IN ('pending_send','active','send_failed')),
+  'actionPresentationActive', (SELECT count(*) FROM action_approval_presentations WHERE state = 'active'),
   'actionOutboxUnresolved', (SELECT count(*) FROM action_approval_presentation_outbox WHERE state IN ('pending','processing','external_attempting','failed','outcome_unknown')),
   'actionExecutionUnresolved', (SELECT count(*) FROM action_executions WHERE state IN ('pending','executing','outcome_unknown','reconciliation_required')),
-  'actionExecutionFailed', (SELECT count(*) FROM action_executions WHERE state = 'failed')
+  'actionExecutionFailed', (SELECT count(*) FROM action_executions WHERE state = 'failed'),
+  'publishedDraftMissingPublication', (
+    SELECT count(*) FROM knowledge_drafts draft
+    WHERE draft.origin_kind = 'knowledge_conflict' AND draft.source_group_id = '$safeGroupId'
+      AND draft.status = 'published' AND NOT EXISTS (
+        SELECT 1 FROM knowledge_publications publication
+        JOIN action_proposals proposal ON proposal.id = publication.proposal_id
+        JOIN action_executions execution ON execution.id = publication.execution_id
+        WHERE publication.draft_id = draft.id
+          AND publication.revision_number = draft.current_revision_number
+          AND publication.draft_version + 1 = draft.version
+          AND publication.published_at = draft.published_at
+          AND proposal.subject_id = publication.draft_id
+          AND proposal.subject_revision = publication.revision_number
+          AND proposal.subject_version = publication.draft_version
+          AND proposal.target_policy_id = publication.target_policy_id
+          AND proposal.target_policy_version = publication.target_policy_version
+          AND proposal.status = 'succeeded'
+          AND execution.proposal_id = proposal.id AND execution.state = 'succeeded'
+      )
+  ),
+  'succeededProposalMissingPublication', (
+    SELECT count(*) FROM action_proposals proposal
+    JOIN knowledge_drafts draft ON draft.id = proposal.subject_id
+    WHERE draft.origin_kind = 'knowledge_conflict' AND draft.source_group_id = '$safeGroupId'
+      AND proposal.status = 'succeeded' AND NOT EXISTS (
+        SELECT 1 FROM knowledge_publications publication
+        JOIN action_executions execution ON execution.id = publication.execution_id
+        WHERE publication.proposal_id = proposal.id
+          AND publication.draft_id = proposal.subject_id
+          AND publication.revision_number = proposal.subject_revision
+          AND publication.draft_version = proposal.subject_version
+          AND publication.target_policy_id = proposal.target_policy_id
+          AND publication.target_policy_version = proposal.target_policy_version
+          AND execution.proposal_id = proposal.id AND execution.state = 'succeeded'
+      )
+  ),
+  'succeededExecutionMissingPublication', (
+    SELECT count(*) FROM action_executions execution
+    JOIN action_proposals proposal ON proposal.id = execution.proposal_id
+    JOIN knowledge_drafts draft ON draft.id = proposal.subject_id
+    WHERE draft.origin_kind = 'knowledge_conflict' AND draft.source_group_id = '$safeGroupId'
+      AND execution.state = 'succeeded' AND NOT EXISTS (
+        SELECT 1 FROM knowledge_publications publication
+        WHERE publication.execution_id = execution.id
+          AND publication.proposal_id = proposal.id
+          AND publication.draft_id = proposal.subject_id
+          AND publication.revision_number = proposal.subject_revision
+          AND publication.draft_version = proposal.subject_version
+          AND publication.target_policy_id = proposal.target_policy_id
+          AND publication.target_policy_version = proposal.target_policy_version
+      )
+  ),
+  'publicationBindingMismatch', (
+    SELECT count(*) FROM knowledge_publications publication
+    JOIN knowledge_drafts draft ON draft.id = publication.draft_id
+    LEFT JOIN action_proposals proposal ON proposal.id = publication.proposal_id
+    LEFT JOIN action_executions execution ON execution.id = publication.execution_id
+    WHERE draft.origin_kind = 'knowledge_conflict' AND draft.source_group_id = '$safeGroupId'
+      AND NOT (
+        draft.status = 'published'
+        AND publication.revision_number = draft.current_revision_number
+        AND publication.draft_version + 1 = draft.version
+        AND publication.published_at = draft.published_at
+        AND proposal.id IS NOT NULL AND proposal.status = 'succeeded'
+        AND proposal.subject_id = publication.draft_id
+        AND proposal.subject_revision = publication.revision_number
+        AND proposal.subject_version = publication.draft_version
+        AND proposal.target_policy_id = publication.target_policy_id
+        AND proposal.target_policy_version = publication.target_policy_version
+        AND execution.id IS NOT NULL AND execution.state = 'succeeded'
+        AND execution.proposal_id = proposal.id
+      )
+  )
 );
 "@
 }
@@ -570,9 +696,19 @@ function Assert-CoreQueuesDrained {
     $Status.components.reindex.pendingJobCount,
     $Status.components.reindex.deadLetterJobCount
   )
-  if ($Status.PSObject.Properties.Name -contains 'knowledgeCards') {
-    $counts += @($Status.knowledgeCards.queue.pending, $Status.knowledgeCards.queue.processing, $Status.knowledgeCards.queue.delayed, $Status.knowledgeCards.queue.deadLetter, $Status.knowledgeCards.outbox.pending, $Status.knowledgeCards.outbox.processing, $Status.knowledgeCards.outbox.external_attempting, $Status.knowledgeCards.outbox.outcome_unknown, $Status.knowledgeCards.outbox.terminalFailed)
-  }
+  $cards = Get-RequiredProperty $Status 'knowledgeCards'
+  $cardQueue = Get-RequiredProperty $cards 'queue'
+  $cardPresentations = Get-RequiredProperty $cards 'presentations'
+  $cardOutbox = Get-RequiredProperty $cards 'outbox'
+  $counts += @(
+    (Get-RequiredProperty $cardQueue 'pending'), (Get-RequiredProperty $cardQueue 'processing'),
+    (Get-RequiredProperty $cardQueue 'delayed'), (Get-RequiredProperty $cardQueue 'deadLetter'),
+    (Get-RequiredProperty $cardPresentations 'pending_send'), (Get-RequiredProperty $cardPresentations 'active'),
+    (Get-RequiredProperty $cardPresentations 'send_failed'), (Get-RequiredProperty $cardPresentations 'pendingSend'),
+    (Get-RequiredProperty $cardOutbox 'pending'), (Get-RequiredProperty $cardOutbox 'processing'),
+    (Get-RequiredProperty $cardOutbox 'external_attempting'), (Get-RequiredProperty $cardOutbox 'outcome_unknown'),
+    (Get-RequiredProperty $cardOutbox 'terminalFailed')
+  )
   if ($Status.components.actionApprovals.enabled -eq $true) {
     $counts += @($Status.components.actionApprovals.outbox.pending, $Status.components.actionApprovals.outbox.processing, $Status.components.actionApprovals.outbox.external_attempting, $Status.components.actionApprovals.outbox.outcome_unknown, $Status.components.actionApprovals.outbox.terminalFailed)
   }
@@ -624,7 +760,7 @@ function Invoke-KnowledgeConflictRollback {
     Assert-CountsUnchanged -Before $factsBeforeWait -After $factsAfterRollback -Label "Disabled append-only activity"
     Assert-AppendOnlyFactsPreserved -Before $script:BaselineAppendOnlyFacts -After $factsAfterRollback
     Assert-DrainedActivity (Get-KnowledgeConflictActivityCounts)
-    Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts)
+    Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts -GroupId $PilotGroupId)
     $postRollbackCurrentBotGroupIds = @(Get-Content -LiteralPath $BotGroupInventoryPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | ForEach-Object { Assert-Reference -Name "post-rollback inventory group" -Value $_ } | Sort-Object -Unique)
     Assert-ExactStringSet -Expected $script:InitialCurrentBotGroupIds -Actual $postRollbackCurrentBotGroupIds -Label "current bot group inventory"
     $postRollbackDatabaseGroupIds = @(Invoke-PilotSql -Sql "SELECT group_id FROM (SELECT chat_id AS group_id FROM conversation_messages UNION SELECT group_id FROM group_memories UNION SELECT group_id FROM knowledge_conflict_candidates) groups WHERE group_id IS NOT NULL AND group_id <> '' ORDER BY group_id;" | ForEach-Object { Assert-Reference -Name "post-rollback database group" -Value $_.Trim() })
@@ -663,7 +799,6 @@ function Invoke-KnowledgeConflictAcceptance {
   $script:FailedStep = 3
   & docker @compose stop caddy
   if ($LASTEXITCODE -ne 0) { throw "Caddy preflight stop failed" }
-  if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CONFLICT_ENABLED) -cne "false" -or (Get-PilotEnvValue IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST) -cne "") { throw "Conflict defaults are not off/empty" }
   foreach ($groupId in $script:KnownGroupIds) {
     Assert-DurableMutation (Invoke-RestMethod -Method Post -Headers $irisHeaders -Uri "http://localhost:3000/internal/runtime-control/groups/$groupId" -ContentType "application/json" -Body '{"enabled":false}') "Preflight group disable"
   }
@@ -671,12 +806,14 @@ function Invoke-KnowledgeConflictAcceptance {
   Assert-DurableMutation (Invoke-RestMethod -Method Patch -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/capabilities -ContentType "application/json" -Body '{"readGroupDocuments":false,"retrieveKnowledgeBase":false,"proactiveSpeech":false,"generateKnowledgeDrafts":false,"writeKnowledgeBase":false}') "Preflight capability disable"
   $readiness = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/readiness
   $disabledStatus = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/status
+  $disabledRuntime = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/status
   $conflictCheck = @($readiness.checks | Where-Object { $_.id -eq 'knowledgeConflicts' })
   if ($readiness.ok -ne $true -or $disabledStatus.status -cne 'healthy' -or $conflictCheck.Count -ne 1 -or $conflictCheck[0].detail -cne 'Knowledge conflicts are safely disabled.') { throw "Disabled readiness failed" }
+  Assert-DisabledBaselineAttestation -Runtime $disabledRuntime -Status $disabledStatus -Environment (Get-PilotEnv) -ExpectedGroupIds $script:KnownGroupIds
   Assert-CoreQueuesDrained $disabledStatus
   $script:BaselineActivity = Get-KnowledgeConflictActivityCounts
   Assert-DrainedActivity $script:BaselineActivity
-  Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts)
+  Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts -GroupId $pilot)
   $script:BaselineAppendOnlyFacts = Get-AppendOnlyFactCounts
   foreach ($groupId in $nonPilotGroupIds) { $script:BaselineGroupFacts[$groupId] = Get-GroupFactCounts $groupId }
 
@@ -686,9 +823,65 @@ function Invoke-KnowledgeConflictAcceptance {
   foreach ($field in @('documentSourceId','snapshotId','contentHash','sourceVersion','groupMessageId','memoryId')) {
     $null = Assert-Reference -Name $field -Value ([string]$fixture.$field)
   }
-  if ([string]$fixture.contentHash -cnotmatch '^[0-9a-f]{64}$') { throw "Fixture content hash is invalid" }
-  $chronology = Invoke-JsonSql -Sql "SELECT json_build_object('ordered', message.sent_at > snapshot.fetched_at) FROM conversation_messages message JOIN document_snapshots snapshot ON snapshot.id = '$($fixture.snapshotId)' AND snapshot.document_source_id = '$($fixture.documentSourceId)' WHERE message.id = '$($fixture.groupMessageId)' AND message.chat_id = '$pilot';"
-  if ($chronology.ordered -ne $true) { throw "Group evidence is not strictly later than the knowledge snapshot" }
+  $null = Assert-Hash -Name 'fixture content hash' -Value ([string]$fixture.contentHash)
+  $documentSourceUpdatedAt = Assert-IsoTimestamp -Name 'documentSourceUpdatedAt' -Value (Get-RequiredProperty $fixture 'documentSourceUpdatedAt')
+  $snapshotFetchedAt = Assert-IsoTimestamp -Name 'snapshotFetchedAt' -Value (Get-RequiredProperty $fixture 'snapshotFetchedAt')
+  $pilotMessageIds = @((Get-RequiredProperty $fixture 'pilotMessageIds') | ForEach-Object { Assert-Reference -Name 'pilot chronology message ID' -Value ([string]$_) })
+  Assert-ExactStringSet -Expected $pilotMessageIds -Actual $pilotMessageIds -Label 'pilot chronology message IDs'
+  if ($pilotMessageIds.Count -lt 1 -or $pilotMessageIds -notcontains [string]$fixture.groupMessageId) { throw "Candidate source message is absent from exact chronology messages" }
+  $expectedMessageValues = @($pilotMessageIds | ForEach-Object { "('$_')" }) -join ",`n    "
+  $chronology = Invoke-JsonSql -Sql @"
+WITH expected(id) AS (
+  VALUES
+    $expectedMessageValues
+), source_snapshot AS (
+  SELECT source.id AS document_source_id, source.updated_at, snapshot.id AS snapshot_id, snapshot.fetched_at
+  FROM document_sources source
+  JOIN document_snapshots snapshot ON snapshot.document_source_id = source.id
+  WHERE source.id = '$($fixture.documentSourceId)'
+    AND source.updated_at = '$documentSourceUpdatedAt'::timestamptz
+    AND source.permission_state = 'readable' AND source.sync_state = 'synced'
+    AND source.can_use_for_knowledge_drafts = TRUE
+    AND snapshot.id = '$($fixture.snapshotId)' AND snapshot.fetch_status = 'succeeded'
+    AND snapshot.fetched_at = '$snapshotFetchedAt'::timestamptz
+    AND snapshot.content_hash = '$($fixture.contentHash)'
+    AND snapshot.source_version = '$($fixture.sourceVersion)'
+), message_facts AS (
+  SELECT expected.id,
+    count(message.id) AS row_count,
+    count(message.id) FILTER (WHERE message.chat_id = '$pilot') AS pilot_count,
+    count(message.id) FILTER (
+      WHERE message.chat_id = '$pilot'
+        AND EXISTS (
+          SELECT 1 FROM source_snapshot
+          WHERE message.created_at > source_snapshot.updated_at
+            AND message.created_at > source_snapshot.fetched_at
+        )
+    ) AS strictly_later_count
+  FROM expected
+  LEFT JOIN conversation_messages message ON message.id = expected.id
+  GROUP BY expected.id
+)
+SELECT json_build_object(
+  'sourceSnapshotCount', (SELECT count(*) FROM source_snapshot),
+  'messages', (SELECT json_agg(json_build_object(
+    'id', id,
+    'rowCount', row_count,
+    'pilotCount', pilot_count,
+    'strictlyLaterCount', strictly_later_count
+  ) ORDER BY id) FROM message_facts)
+);
+"@
+  Assert-MultiMessageChronologyFacts -Facts $chronology -ExpectedMessageIds $pilotMessageIds
+  $script:ChronologyMessageIds = @($pilotMessageIds)
+  $script:ChronologySourceBinding = @(
+    [string]$fixture.documentSourceId,
+    $documentSourceUpdatedAt,
+    [string]$fixture.snapshotId,
+    $snapshotFetchedAt,
+    [string]$fixture.contentHash,
+    [string]$fixture.sourceVersion
+  ) -join "`n"
 
   $script:FailedStep = 5
   $EnableAttempted = $true
@@ -720,7 +913,18 @@ function Invoke-KnowledgeConflictAcceptance {
   $null = Assert-Hash -Name 'contentHash' -Value ([string](Get-RequiredProperty $evidence 'contentHash'))
   $memoryUpdatedAt = Assert-IsoTimestamp -Name 'memoryUpdatedAt' -Value (Get-RequiredProperty $evidence 'memoryUpdatedAt')
   $documentSourceUpdatedAt = Assert-IsoTimestamp -Name 'documentSourceUpdatedAt' -Value (Get-RequiredProperty $evidence 'documentSourceUpdatedAt')
-  $pilotMessageIds = @((Get-RequiredProperty $evidence 'pilotMessageIds') | ForEach-Object { [string]$_ })
+  $snapshotFetchedAt = Assert-IsoTimestamp -Name 'snapshotFetchedAt' -Value (Get-RequiredProperty $evidence 'snapshotFetchedAt')
+  $pilotMessageIds = @((Get-RequiredProperty $evidence 'pilotMessageIds') | ForEach-Object { Assert-Reference -Name 'candidate pilot message ID' -Value ([string]$_) })
+  Assert-ExactStringSet -Expected $script:ChronologyMessageIds -Actual $pilotMessageIds -Label 'candidate chronology message IDs'
+  $candidateSourceBinding = @(
+    [string]$evidence.documentSourceId,
+    $documentSourceUpdatedAt,
+    [string]$evidence.snapshotId,
+    $snapshotFetchedAt,
+    [string]$evidence.contentHash,
+    [string]$evidence.sourceVersion
+  ) -join "`n"
+  if ($candidateSourceBinding -cne $script:ChronologySourceBinding) { throw "Candidate source/snapshot binding changed after chronology proof" }
   if ($pilotMessageIds -notcontains [string]$evidence.groupMessageId) { throw "Candidate source message is absent from recorded pilot message IDs" }
   $expectedEvidenceRows = @((Get-RequiredProperty $evidence 'exactEvidenceRows'))
   $expectedEvidenceSqlRows = @(Get-ExpectedEvidenceSqlRows -Rows $expectedEvidenceRows -Evidence $evidence -PilotGroupId $pilot)
@@ -846,7 +1050,7 @@ SELECT json_build_object(
   $draft = Invoke-JsonSql -Sql "SELECT json_build_object('count',count(*),'riskCount',count(*) FILTER (WHERE revision.risk_level='medium'),'pathCount',count(*) FILTER (WHERE draft.status IN ('pending_confirmation','pending_review','needs_revision','rejected','published'))) FROM knowledge_drafts draft JOIN knowledge_draft_revisions revision ON revision.draft_id=draft.id AND revision.revision_number=draft.current_revision_number WHERE draft.id='$($evidence.draftId)' AND draft.source_group_id='$pilot' AND draft.origin_kind='knowledge_conflict';"
   if ([long]$draft.count -ne 1 -or [long]$draft.riskCount -ne 1 -or [long]$draft.pathCount -ne 1) { throw "Governed medium-risk update draft path failed" }
   Assert-DrainedActivity (Get-KnowledgeConflictActivityCounts)
-  Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts)
+  Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts -GroupId $pilot)
   $conflictStatus = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/knowledge-conflicts/status
   if ([long]$conflictStatus.scans.deadLettered -ne 0 -or [long]$conflictStatus.deliveries.outcomeUnknown -ne 0 -or [long]$conflictStatus.deliveries.terminalFailed -ne 0) { throw "Conflict runtime has unresolved terminal state" }
   Assert-CoreQueuesDrained (Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/status)
@@ -889,10 +1093,11 @@ Minimum private evidence JSON shape (values shown are placeholders and must neve
   "documentSourceId": "source_id",
   "documentSourceUpdatedAt": "2026-01-01T00:00:00.000Z",
   "snapshotId": "snapshot_id",
+  "snapshotFetchedAt": "2026-01-01T00:00:00.500Z",
   "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "sourceVersion": "version_id",
-  "groupMessageId": "message_id",
-  "pilotMessageIds": ["message_id"],
+  "groupMessageId": "message_c1_id",
+  "pilotMessageIds": ["message_c1_id", "message_c2_id"],
   "memoryId": "memory_id",
   "memoryUpdatedAt": "2026-01-01T00:00:01.000Z",
   "scanId": "scan_id",
@@ -909,7 +1114,20 @@ Minimum private evidence JSON shape (values shown are placeholders and must neve
       "evidenceType": "conversation_message",
       "referenceId": "C1",
       "groupId": "pilot_group_id",
-      "conversationMessageId": "message_id",
+      "conversationMessageId": "message_c1_id",
+      "groupMemoryId": null,
+      "sourceUpdatedAt": null,
+      "documentSourceId": null,
+      "documentSnapshotId": null,
+      "documentFragmentId": null,
+      "snapshotContentHash": null,
+      "contentHash": null
+    },
+    {
+      "evidenceType": "conversation_message",
+      "referenceId": "C2",
+      "groupId": "pilot_group_id",
+      "conversationMessageId": "message_c2_id",
       "groupMemoryId": null,
       "sourceUpdatedAt": null,
       "documentSourceId": null,

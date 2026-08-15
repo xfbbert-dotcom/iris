@@ -225,6 +225,56 @@ test("knowledge-conflict exact evidence gate rejects duplicate and unrelated row
   }
 });
 
+test("knowledge-conflict chronology proves every exact pilot message is strictly later", () => {
+  const valid = {
+    sourceSnapshotCount: 1,
+    messages: [
+      { id: "message_c1", rowCount: 1, pilotCount: 1, strictlyLaterCount: 1 },
+      { id: "message_c2", rowCount: 1, pilotCount: 1, strictlyLaterCount: 1 },
+    ],
+  };
+  const command = `Assert-MultiMessageChronologyFacts -Facts $inputValue.facts -ExpectedMessageIds @($inputValue.expectedMessageIds)`;
+  assertPowerShellRunbookGate(command, {
+    facts: valid,
+    expectedMessageIds: ["message_c1", "message_c2"],
+  }, true);
+  assertPowerShellRunbookGate(command, {
+    facts: {
+      ...valid,
+      messages: [
+        valid.messages[0],
+        { ...valid.messages[1], strictlyLaterCount: 0 },
+      ],
+    },
+    expectedMessageIds: ["message_c1", "message_c2"],
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    facts: {
+      ...valid,
+      messages: [valid.messages[0], { ...valid.messages[1], pilotCount: 0 }],
+    },
+    expectedMessageIds: ["message_c1", "message_c2"],
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    facts: valid,
+    expectedMessageIds: ["message_c1", "message_c1"],
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    facts: { ...valid, messages: valid.messages.slice(0, 1) },
+    expectedMessageIds: ["message_c1", "message_c2"],
+  }, false);
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  for (const marker of [
+    "Assert-MultiMessageChronologyFacts",
+    "message.created_at > source_snapshot.updated_at",
+    "message.created_at > source_snapshot.fetched_at",
+    "json_agg",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
+  }
+});
+
 test("knowledge-conflict approved-card gate rejects false or missing metadata proof", () => {
   const hash = "a".repeat(64);
   const valid = {
@@ -312,9 +362,14 @@ test("knowledge-conflict final drain includes answer and governed-action durable
     actionProposalUnresolved: 0,
     actionRequirementPending: 0,
     actionPresentationUnresolved: 0,
+    actionPresentationActive: 0,
     actionOutboxUnresolved: 0,
     actionExecutionUnresolved: 0,
     actionExecutionFailed: 0,
+    publishedDraftMissingPublication: 0,
+    succeededProposalMissingPublication: 0,
+    succeededExecutionMissingPublication: 0,
+    publicationBindingMismatch: 0,
   };
   assertPowerShellRunbookGate(`Assert-DrainedDurableStates -Counts $inputValue`, valid, true);
   assertPowerShellRunbookGate(
@@ -327,6 +382,21 @@ test("knowledge-conflict final drain includes answer and governed-action durable
     { ...valid, actionExecutionUnresolved: 1 },
     false,
   );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, actionRequirementPending: 0, actionPresentationActive: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, publishedDraftMissingPublication: 1 },
+    false,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-DrainedDurableStates -Counts $inputValue`,
+    { ...valid, publicationBindingMismatch: 1 },
+    false,
+  );
 
   const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
   for (const marker of [
@@ -334,8 +404,11 @@ test("knowledge-conflict final drain includes answer and governed-action durable
     "knowledge_draft_presentation_outbox",
     "action_proposals",
     "action_approval_requirements",
+    "action_approval_presentations",
     "action_approval_presentation_outbox",
     "action_executions",
+    "knowledge_publications",
+    "publishedDraftMissingPublication",
     "reconciliation_required",
     "outcome_unknown",
   ]) {
@@ -361,10 +434,24 @@ test("knowledge-conflict rollback rejects enabled groups, allowlists, and same-c
     },
     status: {
       components: {
-        knowledgeConflicts: { enabled: false },
-        actionApprovals: { enabled: false },
+        knowledgeConflicts: { ok: true, enabled: false, running: false },
+        actionApprovals: { ok: true, enabled: false, running: false },
       },
-      knowledgeCards: { enabled: false },
+      knowledgeCards: {
+        ok: true,
+        enabled: false,
+        running: false,
+        enabledGroupCount: 0,
+        queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
+        presentations: { pending_send: 0, active: 0, send_failed: 0, pendingSend: 0 },
+        outbox: {
+          pending: 0,
+          processing: 0,
+          external_attempting: 0,
+          outcome_unknown: 0,
+          terminalFailed: 0,
+        },
+      },
     },
     environment: {
       IRIS_KNOWLEDGE_CONFLICT_ENABLED: "false",
@@ -389,6 +476,21 @@ test("knowledge-conflict rollback rejects enabled groups, allowlists, and same-c
       IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "group_a",
     },
   }, false);
+  const missingKnowledgeCards = {
+    ...validAttestation,
+    status: { components: validAttestation.status.components },
+  };
+  assertPowerShellRunbookGate(attestationCommand, missingKnowledgeCards, false);
+  assertPowerShellRunbookGate(attestationCommand, {
+    ...validAttestation,
+    status: {
+      ...validAttestation.status,
+      knowledgeCards: {
+        ...validAttestation.status.knowledgeCards,
+        queue: { ...validAttestation.status.knowledgeCards.queue, pending: 1 },
+      },
+    },
+  }, false);
 
   assertPowerShellRunbookGate(
     `Assert-FingerprintUnchanged -Before $inputValue.before -After $inputValue.after -Label 'quietness'`,
@@ -406,6 +508,73 @@ test("knowledge-conflict rollback rejects enabled groups, allowlists, and same-c
     },
     false,
   );
+});
+
+test("knowledge-conflict disabled baseline attests every feature flag, allowlist, and runtime", () => {
+  const valid = {
+    runtime: {
+      globalEnabled: false,
+      desiredGlobalEnabled: false,
+      activationRequired: false,
+      disabledGroupIds: ["group_a", "group_b"],
+      capabilities: {
+        readGroupDocuments: false,
+        retrieveKnowledgeBase: false,
+        proactiveSpeech: false,
+        generateKnowledgeDrafts: false,
+        writeKnowledgeBase: false,
+      },
+      persistence: { ok: true, storage: "postgres" },
+    },
+    status: {
+      components: {
+        knowledgeConflicts: { ok: true, enabled: false, running: false },
+        actionApprovals: { ok: true, enabled: false, running: false },
+      },
+      knowledgeCards: {
+        ok: true,
+        enabled: false,
+        running: false,
+        enabledGroupCount: 0,
+        queue: { pending: 0, processing: 0, delayed: 0, deadLetter: 0 },
+        presentations: { pending_send: 0, active: 0, send_failed: 0, pendingSend: 0 },
+        outbox: {
+          pending: 0,
+          processing: 0,
+          external_attempting: 0,
+          outcome_unknown: 0,
+          terminalFailed: 0,
+        },
+      },
+    },
+    environment: {
+      IRIS_KNOWLEDGE_CONFLICT_ENABLED: "false",
+      IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST: "",
+      IRIS_KNOWLEDGE_CARD_ENABLED: "false",
+      IRIS_KNOWLEDGE_CARD_GROUP_IDS: "",
+      IRIS_APPROVAL_ACTIONS_ENABLED: "false",
+      IRIS_APPROVAL_ACTION_GROUP_IDS: "",
+    },
+    expectedGroupIds: ["group_a", "group_b"],
+  };
+  const command = `Assert-DisabledBaselineAttestation -Runtime $inputValue.runtime -Status $inputValue.status -Environment $inputValue.environment -ExpectedGroupIds @($inputValue.expectedGroupIds)`;
+  assertPowerShellRunbookGate(command, valid, true);
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    environment: { ...valid.environment, IRIS_KNOWLEDGE_CARD_ENABLED: "true" },
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    environment: { ...valid.environment, IRIS_KNOWLEDGE_CARD_GROUP_IDS: "group_a" },
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    environment: { ...valid.environment, IRIS_APPROVAL_ACTIONS_ENABLED: "true" },
+  }, false);
+  assertPowerShellRunbookGate(command, {
+    ...valid,
+    environment: { ...valid.environment, IRIS_APPROVAL_ACTION_GROUP_IDS: "group_a" },
+  }, false);
 });
 
 test("pilot shell scripts use LF endings for direct Linux execution", () => {
