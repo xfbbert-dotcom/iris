@@ -128,3 +128,84 @@ whitespace errors.
 - Readiness intentionally blocks enabled rollout on any missing migration, stopped loop, unreadable
   count, scan dead letter, terminal failure, or outcome-unknown row. Operational recovery guidance is
   outside Task 10 and remains for the subsequent runbook/deployment work.
+
+## Fix Round 1/5: Gated Answers, Required Migrations, And Callback Drain
+
+This section supersedes the original Task 10 statements about a single required migration and
+closing conflict resources before the knowledge-card callback consumer. All three independent P1
+findings were reproduced with tests and fixed without adding Task 11+ deployment or runbook scope.
+
+### Disposition
+
+- **Default-off and allowlist answer bypass — fixed.** Production app composition now always passes
+  the composed conflict runtime's gated provider, or an explicit `null` when that runtime is absent.
+  The answer runtime no longer interprets an omitted/nullish provider as authority to build an
+  ungated PostgreSQL conflict provider. Standalone composition remains available only through the
+  explicit `enableStandaloneKnowledgeConflictAnswerProvider: true` opt-in used by isolated callers
+  and tests. Regressions verify feature-off and non-allowlisted groups do not query persisted
+  conflicts, while a started allowlisted runtime does.
+- **Incomplete migration readiness — fixed.** Runtime status and fail-closed readiness now require
+  the exact Task 10 migration set: `0046_knowledge_conflict_candidates.sql`,
+  `0047_knowledge_conflict_callback_identities.sql`, and
+  `0048_knowledge_conflict_draft_reattestations.sql`. Missing any one produces a content-free
+  degraded status/readiness result and suppresses durable conflict-table count reads; disabled
+  configuration still passes.
+- **Durable callback startup/shutdown race — fixed.** A composed conflict interaction delegate now
+  returns retryable `internal_error` until its lifecycle is started, so the existing approval worker
+  invokes durable queue failure handling instead of acknowledging startup-transient callbacks. A
+  truly disabled feature still has no conflict delegate and retains the existing `runtime_disabled`
+  behavior. App shutdown and startup-failure cleanup now stop/drain the knowledge-card callback
+  consumer before closing conflict and action-approval resources. Deterministic tests cover retry
+  during deferred prepare, success after startup, an in-flight callback completing before pool
+  close, queued work remaining unclaimed after loop stop, close order, and close-once behavior.
+
+### RED Evidence
+
+```powershell
+npm --workspace apps/core test -- answer-draft-runtime.test.ts knowledge-conflict-runtime.test.ts internal-rollout-readiness.test.ts server-startup.test.ts internal-status-snapshot.test.ts
+```
+
+Exit 1: 4 files failed and 1 passed; 11 tests failed and 102 passed. Failures showed the standalone
+provider being constructed without an explicit opt-in, absent 0047/0048 status/readiness checks,
+startup callbacks being denied with non-retryable `runtime_disabled`, and conflict resources closing
+before the callback consumer drained.
+
+### GREEN Evidence
+
+Focused five-file rerun: exit 0, 5 files passed and 113 tests passed.
+
+```powershell
+npm --workspace apps/core test -- answer-draft-runtime.test.ts answer-draft-api.test.ts knowledge-conflict-runtime.test.ts knowledge-conflict-api.test.ts knowledge-conflict-answer-provider.test.ts knowledge-conflict-interaction-worker.test.ts approval-interaction-worker.test.ts approval-interaction-worker-loop.test.ts knowledge-card-runtime.test.ts server-startup.test.ts internal-status-snapshot.test.ts internal-rollout-readiness.test.ts internal-readiness-api.test.ts runtime-close.test.ts
+```
+
+Exit 0: 14 files passed; 435 tests passed with no failures or skips.
+
+```powershell
+npm --workspace apps/core test
+```
+
+Exit 0: 185 files passed and 3 conditional files skipped; 3,359 tests passed and 250 skipped
+(3,609 total).
+
+```powershell
+npm run typecheck
+npm run build
+git diff --check
+git diff --cached --check
+```
+
+All exited 0. Diff checks emitted only the repository's LF-to-CRLF checkout warnings and no
+whitespace errors.
+
+### Implementation Commit
+
+- `76c42ef9d272e08127222af25ac9c83577360856` —
+  `fix(core): harden knowledge conflict lifecycle`
+
+### Remaining Verification Boundaries
+
+- `IRIS_TEST_DATABASE_URL` was unset. The 250 skips include conditional PostgreSQL cases; no live
+  PostgreSQL migration or durable-row behavior is claimed by this fix round.
+- No live Redis or Feishu callback/card integration was exercised. Queue retention, callback drain,
+  permission gates, and shutdown ordering are covered by deterministic module/app tests only.
+- No deployment, pilot, or Task 11+ runbook claim is made.
