@@ -80,12 +80,16 @@ const DISPATCHER_WORKER_ID = "knowledge-card-dispatcher";
 const INTERACTION_WORKER_ID = "approval-interaction-worker";
 const EXTERNAL_LEASE_MS = 30_000;
 const SEND_RETRY_DELAY_MS = 1_000;
+const STATUS_READER_REDIS_GRACEFUL_CLOSE_TIMEOUT_MS = 250;
 export const KNOWLEDGE_CARD_TARGET_DISPLAY_NAME = "Unapproved suggested publication location";
 
 type KnowledgeCardPool = PostgresKnowledgeDraftDataSource & { end(): Promise<void> };
 type KnowledgeCardRedisClient = RedisApprovalInteractionQueueClient & {
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
+};
+type KnowledgeCardStatusRedisClient = KnowledgeCardRedisClient & {
+  destroy(): void;
 };
 type KnowledgeCardRuntimeGate = Pick<
   RuntimeController,
@@ -185,7 +189,7 @@ export type KnowledgeCardRuntimeDependencies = {
 
 export type KnowledgeCardStatusReaderDependencies = {
   createPostgresPool?: (config: DatabaseConfig) => KnowledgeCardPool;
-  createRedisClient?: (url: string) => KnowledgeCardRedisClient;
+  createRedisClient?: (url: string) => KnowledgeCardStatusRedisClient;
   createKnowledgeCardRepository?: (input: {
     dataSource: PostgresKnowledgeDraftDataSource;
   }) => Pick<KnowledgeCardRepository, "getStatusCounts" | "getOutboxStatusCounts">;
@@ -206,21 +210,40 @@ export function createKnowledgeCardStatusReader({
   if (config === undefined) return undefined;
   const createPool = dependencies.createPostgresPool ?? createPostgresPool;
   const createRedis = dependencies.createRedisClient ??
-    ((url: string) => createClient({ url }) as unknown as KnowledgeCardRedisClient);
+    ((url: string) => createClient({ url }) as unknown as KnowledgeCardStatusRedisClient);
   const createRepository = dependencies.createKnowledgeCardRepository ??
     createPostgresKnowledgeCardRepository;
   const createQueue = dependencies.createApprovalInteractionQueue ??
     createRedisApprovalInteractionQueue;
 
   let pool: KnowledgeCardPool | undefined;
-  let redisClient: KnowledgeCardRedisClient | undefined;
+  let redisClient: KnowledgeCardStatusRedisClient | undefined;
   let redisConnection: Promise<KnowledgeCardRedisClient> | undefined;
+  let closeRedis: (() => Promise<void>) | undefined;
   try {
     pool = createPool({ databaseUrl: config.databaseUrl });
     redisClient = createRedis(config.redisUrl);
+    let connectionState: "pending" | "ready" | "failed" = "pending";
+    let destroyAttempted = false;
+    const destroyOnce = () => {
+      if (destroyAttempted) return;
+      destroyAttempted = true;
+      redisClient!.destroy();
+    };
+    closeRedis = () => closeKnowledgeCardStatusRedisClient(
+      redisClient!,
+      () => connectionState,
+      destroyOnce,
+    );
     redisConnection = observeStartupPromise(Promise.resolve().then(async () => {
-      await redisClient!.connect();
-      return redisClient!;
+      try {
+        await redisClient!.connect();
+        connectionState = "ready";
+        return redisClient!;
+      } catch (error) {
+        connectionState = "failed";
+        throw error;
+      }
     }));
     const queue = createQueue({ client: createLazyRedisQueueClient(redisConnection) });
     const repository = createRepository({ dataSource: pool });
@@ -243,7 +266,7 @@ export function createKnowledgeCardStatusReader({
       },
       close() {
         closePromise ??= observeStartupPromise(closeRuntimeResources([
-          () => closeRedisClient(redisClient!, redisConnection!),
+          () => closeRedis!(),
           () => pool!.end(),
         ]));
         return closePromise;
@@ -251,9 +274,9 @@ export function createKnowledgeCardStatusReader({
     };
   } catch (error) {
     const cleanup = observeStartupPromise(closeRuntimeResources([
-      ...(redisClient === undefined || redisConnection === undefined
+      ...(closeRedis === undefined
         ? []
-        : [() => closeRedisClient(redisClient!, redisConnection!)]),
+        : [() => closeRedis!()]),
       ...(pool === undefined ? [] : [() => pool!.end()]),
     ]));
     dependencies.onStartupCleanup?.(cleanup);
@@ -614,6 +637,49 @@ async function closeRedisClient(
     if (!connectionFailed) throw error;
   }
   if (connectionFailed) throw connectionError;
+}
+
+async function closeKnowledgeCardStatusRedisClient(
+  redisClient: KnowledgeCardStatusRedisClient,
+  getConnectionState: () => "pending" | "ready" | "failed",
+  destroyOnce: () => void,
+): Promise<void> {
+  if (getConnectionState() !== "ready") {
+    destroyOnce();
+    return;
+  }
+
+  try {
+    await waitForKnowledgeCardStatusRedisClose(redisClient.quit());
+  } catch {
+    destroyOnce();
+  }
+}
+
+function waitForKnowledgeCardStatusRedisClose(promise: Promise<unknown>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("knowledge-card status Redis graceful close timed out"));
+    }, STATUS_READER_REDIS_GRACEFUL_CLOSE_TIMEOUT_MS);
+    timer.unref();
+    void promise.then(
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function createLazyRedisQueueClient(
