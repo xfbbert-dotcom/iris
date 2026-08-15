@@ -236,8 +236,14 @@ export function createKnowledgeConflictRuntime({
 
   let startupPromise: Promise<void> | undefined;
   let closePromise: Promise<void> | undefined;
-  const closeOwnedResources = (): Promise<void> => {
-    if (lifecycle !== "failed") lifecycle = "closed";
+  let lifecycleGeneration = 0;
+  const closeOwnedResources = ({ preserveFailure = false }: {
+    preserveFailure?: boolean;
+  } = {}): Promise<void> => {
+    if (!preserveFailure && lifecycle !== "closed") {
+      lifecycle = "closed";
+      lifecycleGeneration += 1;
+    }
     closePromise ??= observeStartupPromise(closeRuntimeResources([
       () => composition!.dispatcherLoop.stop(),
       () => composition!.scannerLoop.stop(),
@@ -277,23 +283,35 @@ export function createKnowledgeConflictRuntime({
       }
       if (startupPromise !== undefined) return startupPromise;
       lifecycle = "starting";
+      const startupGeneration = ++lifecycleGeneration;
       startupPromise = observeStartupPromise((async () => {
         try {
           await composition!.prepare();
+          requireCurrentStartup(lifecycle, lifecycleGeneration, startupGeneration);
           await composition!.scannerLoop.start();
+          requireCurrentStartup(lifecycle, lifecycleGeneration, startupGeneration);
           composition!.dispatcherLoop.start();
+          requireCurrentStartup(lifecycle, lifecycleGeneration, startupGeneration);
           lifecycle = "started";
         } catch (error) {
-          lifecycle = "failed";
+          const cancelled = !isCurrentStartup(
+            lifecycle,
+            lifecycleGeneration,
+            startupGeneration,
+          );
+          const startupError = cancelled
+            ? new Error("knowledge conflict runtime is closed")
+            : error;
+          if (!cancelled) lifecycle = "failed";
           try {
-            await closeOwnedResources();
+            await closeOwnedResources({ preserveFailure: !cancelled });
           } catch (cleanupError) {
             throw new AggregateError(
-              [error, ...flattenErrors(cleanupError)],
+              [startupError, ...flattenErrors(cleanupError)],
               "Knowledge conflict runtime startup and cleanup failed",
             );
           }
-          throw error;
+          throw startupError;
         }
       })());
       return startupPromise;
@@ -334,6 +352,24 @@ export function createKnowledgeConflictRuntime({
     },
     close: closeOwnedResources,
   };
+}
+
+function requireCurrentStartup(
+  lifecycle: "idle" | "starting" | "started" | "failed" | "closed",
+  lifecycleGeneration: number,
+  startupGeneration: number,
+): void {
+  if (!isCurrentStartup(lifecycle, lifecycleGeneration, startupGeneration)) {
+    throw new Error("knowledge conflict runtime is closed");
+  }
+}
+
+function isCurrentStartup(
+  lifecycle: "idle" | "starting" | "started" | "failed" | "closed",
+  lifecycleGeneration: number,
+  startupGeneration: number,
+): boolean {
+  return lifecycle === "starting" && lifecycleGeneration === startupGeneration;
 }
 
 function createDefaultComposition(

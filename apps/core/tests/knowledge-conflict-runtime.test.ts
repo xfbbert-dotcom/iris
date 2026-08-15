@@ -6,6 +6,10 @@ import { createApprovalInteractionWorker } from
   "../src/knowledge-cards/approval-interaction-worker.js";
 import type { KnowledgeConflictRepository } from
   "../src/knowledge-conflicts/knowledge-conflict-repository.js";
+import { createKnowledgeConflictDispatcherLoop } from
+  "../src/knowledge-conflicts/knowledge-conflict-dispatcher-loop.js";
+import { createKnowledgeConflictScannerLoop } from
+  "../src/knowledge-conflicts/knowledge-conflict-scanner-loop.js";
 import {
   createKnowledgeConflictRuntime,
   createPresentationAwareInteractionDelegate,
@@ -259,6 +263,160 @@ describe("createKnowledgeConflictRuntime", () => {
     expect(pool.end).toHaveBeenCalledOnce();
   });
 
+  it("lets close permanently win while the real scanner startup batch is in flight", async () => {
+    const scanEntered = deferred<void>();
+    const scanRelease = deferred<void>();
+    const scheduledDispatches: Array<() => void> = [];
+    let poolEnded = false;
+    let poolAfterCloseCalls = 0;
+    const pool = {
+      query: vi.fn(async () => {
+        if (poolEnded) poolAfterCloseCalls += 1;
+        return { rows: [] };
+      }),
+      end: vi.fn(async () => { poolEnded = true; }),
+    };
+    const scannerLoop = createKnowledgeConflictScannerLoop({
+      scanner: {
+        async scanBatch() {
+          scanEntered.resolve();
+          await scanRelease.promise;
+          return emptyScanBatch();
+        },
+      },
+      intervalMs: 60_000,
+      batchLimit: 10,
+    });
+    const dispatcherLoop = createKnowledgeConflictDispatcherLoop({
+      worker: {
+        async processBatch() {
+          await pool.query();
+          return [];
+        },
+      },
+      intervalMs: 1_000,
+      batchLimit: 10,
+      setTimeout: ((callback: () => void) => {
+        scheduledDispatches.push(callback);
+        return scheduledDispatches.length;
+      }) as never,
+      clearTimeout: vi.fn() as never,
+    });
+    const composition = fakeComposition({ scannerLoop, dispatcherLoop });
+    const runtime = createKnowledgeConflictRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      getKnowledgeCardPresentationRuntime: () => undefined,
+      dependencies: runtimeDependencies(composition, pool),
+    })!;
+
+    const startupOutcome = runtime.start().then(
+      () => ({ status: "resolved" as const }),
+      (error: unknown) => ({
+        status: "rejected" as const,
+        message: error instanceof Error ? error.message : "non_error",
+      }),
+    );
+    await scanEntered.promise;
+    const closing = Promise.all([runtime.close(), runtime.close()]);
+    scanRelease.resolve();
+    await closing;
+
+    for (const callback of [...scheduledDispatches]) callback();
+    await Promise.resolve();
+
+    await expect(startupOutcome).resolves.toEqual({
+      status: "rejected",
+      message: "knowledge conflict runtime is closed",
+    });
+    expect(dispatcherLoop.isRunning()).toBe(false);
+    expect(poolAfterCloseCalls).toBe(0);
+    expect(pool.end).toHaveBeenCalledOnce();
+    expect(runtime.canUseKnowledgeConflict("group-a")).toBe(false);
+    await expect(runtime.start()).rejects.toThrow("knowledge conflict runtime is closed");
+    await runtime.close();
+    expect(pool.end).toHaveBeenCalledOnce();
+  });
+
+  it("does not start either loop when close wins dependency preparation", async () => {
+    const prepareEntered = deferred<void>();
+    const prepareRelease = deferred<void>();
+    const pool = { end: vi.fn(async () => undefined) };
+    const scannerStart = vi.fn(async () => undefined);
+    const dispatcherStart = vi.fn(() => undefined);
+    const scannerLoop = fakeScannerLoop({ start: scannerStart });
+    const dispatcherLoop = fakeDispatcherLoop({ start: dispatcherStart });
+    const composition = fakeComposition({
+      async prepare() {
+        prepareEntered.resolve();
+        await prepareRelease.promise;
+      },
+      scannerLoop,
+      dispatcherLoop,
+    });
+    const runtime = createKnowledgeConflictRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      getKnowledgeCardPresentationRuntime: () => undefined,
+      dependencies: runtimeDependencies(composition, pool),
+    })!;
+
+    const startupOutcome = runtime.start().then(
+      () => "resolved",
+      (error: unknown) => error instanceof Error ? error.message : "non_error",
+    );
+    await prepareEntered.promise;
+    const closing = runtime.close();
+    prepareRelease.resolve();
+    await closing;
+
+    await expect(startupOutcome).resolves.toBe("knowledge conflict runtime is closed");
+    expect(scannerStart).not.toHaveBeenCalled();
+    expect(dispatcherStart).not.toHaveBeenCalled();
+    expect(runtime.canUseKnowledgeConflict("group-a")).toBe(false);
+    expect(pool.end).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the runtime closed when a racing scanner startup rejects", async () => {
+    const scanEntered = deferred<void>();
+    const scanRelease = deferred<void>();
+    const scannerLoop = createKnowledgeConflictScannerLoop({
+      scanner: {
+        async scanBatch() {
+          scanEntered.resolve();
+          await scanRelease.promise;
+          throw new Error("scanner dependency failed");
+        },
+      },
+      intervalMs: 60_000,
+      batchLimit: 10,
+    });
+    const dispatcherStart = vi.fn(() => undefined);
+    const dispatcherLoop = fakeDispatcherLoop({ start: dispatcherStart });
+    const pool = { end: vi.fn(async () => undefined) };
+    const runtime = createKnowledgeConflictRuntime({
+      env: enabledEnv(),
+      runtimeController: runtimeController(),
+      getKnowledgeCardPresentationRuntime: () => undefined,
+      dependencies: runtimeDependencies(
+        fakeComposition({ scannerLoop, dispatcherLoop }),
+        pool,
+      ),
+    })!;
+
+    const startup = runtime.start();
+    await scanEntered.promise;
+    const closing = runtime.close();
+    scanRelease.resolve();
+
+    await expect(startup).rejects.toThrow("knowledge conflict runtime is closed");
+    await closing;
+    expect(dispatcherStart).not.toHaveBeenCalled();
+    expect(runtime.canUseKnowledgeConflict("group-a")).toBe(false);
+    expect(pool.end).toHaveBeenCalledOnce();
+    await expect(runtime.start()).rejects.toThrow("knowledge conflict runtime is closed");
+  });
+
   it("closes earlier resources once when composition or startup fails", async () => {
     const compositionPool = { end: vi.fn(async () => undefined) };
     let compositionCleanup: Promise<void> | undefined;
@@ -433,6 +591,20 @@ function conflictCallbackJob() {
     action: "not_a_conflict" as const,
     receivedAt: new Date("2026-08-15T07:59:59.000Z"),
     attempts: 0,
+  };
+}
+
+function emptyScanBatch() {
+  return {
+    discovered: 0,
+    claimed: 0,
+    conflict: 0,
+    noConflict: 0,
+    insufficientEvidence: 0,
+    permissionBlocked: 0,
+    retrying: 0,
+    deadLettered: 0,
+    superseded: 0,
   };
 }
 
