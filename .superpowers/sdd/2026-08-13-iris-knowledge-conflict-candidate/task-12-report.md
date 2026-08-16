@@ -90,3 +90,36 @@
   outcome remain mandatory; local verification does not close the capability.
 - The product continues to create only a governed update draft and never edits the existing Wiki
   page in place.
+
+## Exact-SHA CI Follow-Up: Post-Restore Knowledge-Card Readiness
+
+- Failed CI evidence: PR #32 run `31957347139`, Core job `95189870218`, exact head
+  `82b44005809f43bf81f62ec4cc097e30bd8c7bb4`. The paired backup/restore drill reached
+  `npm run pilot:smoke -- --post-restore` and rejected the live readiness detail.
+- Root cause: the live smoke still required the legacy detail
+  `Knowledge cards are safely disabled.` while the restored application correctly returned the
+  stronger durable-state proof
+  `Knowledge cards are safely disabled with empty durable work.` after reading zero unresolved
+  PostgreSQL and Redis counts.
+- Implementation/tests commit: `f3014fa542f948e2e000a458e9d279c8e5934b0c`.
+- Scope stayed limited to the live smoke contract and its test fixture. Core product code and the
+  readiness implementation were not changed.
+
+### TDD And Verification
+
+- RED:
+  `node --test --test-name-pattern "default-off knowledge-card readiness|legacy weak knowledge-card" scripts/pilot-smoke-lib.test.mjs`
+  exited `1`: 2 tests failed. The strong detail was rejected and the legacy weak detail was
+  accepted.
+- GREEN: the same focused command passed 2/2, and
+  `node --test scripts/pilot-smoke-lib.test.mjs` passed 43/43.
+- Independent `npm run test:pilot`: exit `0`; 157 tests, 156 passed, 0 failed, 1 skipped. The only
+  skip was the executable pinned-Caddy boundary probe because the Docker daemon was unavailable.
+- Fresh `npm run verify`: exit `0`, including diff check, typecheck, build, Core tests, Python
+  tests, pilot tests, Compose config, readiness, and pilot config. Core passed 188 files and 3,395
+  tests with 3 files and 255 environment-conditional tests skipped because
+  `IRIS_TEST_DATABASE_URL` was unset; Python passed 181/181; pilot again passed 156/157 with the
+  same single Docker-daemon skip.
+- Final diff inspection found exactly the two intended smoke files, no Core product-code change,
+  no whitespace error, and zero bounded `.tmp-iris-*-test-*` fixture directories.
+- No push, PR mutation, or live pilot was performed in this follow-up.
