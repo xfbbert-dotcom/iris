@@ -6,96 +6,123 @@ import { describe, expect, it, vi } from "vitest";
 import { createKnowledgeCardStatusReader } from "../src/runtime/knowledge-card-runtime.js";
 
 describe("KnowledgeCardStatusReader real node-redis lifecycle", () => {
-  it("closes a refused default-reconnecting client before transport connection", async () => {
-    const client = createClient({
-      url: "redis://127.0.0.1:1",
-      RESP: 2,
-      disableClientInfo: true,
-      maintNotifications: "disabled",
-      socket: { connectTimeout: 50 },
-    });
-    client.on("error", () => undefined);
-    let closeSettled = false;
-    let reconnectsAfterClose = 0;
-    client.on("reconnecting", () => {
-      if (closeSettled) reconnectsAfterClose += 1;
-    });
-    const destroy = vi.spyOn(client, "destroy");
-    const fixture = readerFixture(client);
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      const statusOutcome = outcomeWithin(fixture.reader.getStatus());
-      await delay(20);
+  it("recovers a refused generation only on the next read and closes its accepted replacement", async () => {
+    for (let iteration = 0; iteration < 10; iteration += 1) {
+      const endpoint = await unusedTcpEndpoint();
+      const clients: Array<ReturnType<typeof realRedisClient>> = [];
+      const destroySpies: Array<ReturnType<typeof vi.spyOn>> = [];
+      const lateLifecycleEvents: string[] = [];
+      let closeSettled = false;
+      const fixture = readerFixtureWithFactory(endpoint.url, (url) => {
+        const client = realRedisClient(url, true);
+        for (const event of ["connect", "ready", "reconnecting"] as const) {
+          client.on(event, () => {
+            if (closeSettled) lateLifecycleEvents.push(event);
+          });
+        }
+        clients.push(client);
+        destroySpies.push(vi.spyOn(client, "destroy"));
+        return client;
+      });
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", onUnhandled);
+      let server: Awaited<ReturnType<typeof tcpHarness>> | undefined;
+      try {
+        expect((await outcomeWithin(fixture.reader.getStatus())).status).toBe("rejected");
+        server = await tcpHarness({ port: endpoint.port });
 
-      const firstClose = fixture.reader.close();
-      expect(fixture.reader.close()).toBe(firstClose);
-      await expect(outcomeWithin(firstClose, 750)).resolves.toEqual({ status: "fulfilled" });
-      closeSettled = true;
-      expect((await statusOutcome).status).toBe("rejected");
-      expect(fixture.reader.close()).toBe(firstClose);
-      expect(client.isOpen).toBe(false);
-      expect(client.isReady).toBe(false);
-      expect(destroy).toHaveBeenCalledOnce();
-      expect(fixture.pool.end).toHaveBeenCalledOnce();
-      await delay(300);
-      expect(client.isOpen).toBe(false);
-      expect(client.isReady).toBe(false);
-      expect(destroy).toHaveBeenCalledOnce();
-      expect(reconnectsAfterClose).toBe(0);
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-      closeClientIfOpen(client);
+        const recoveredStatus = outcomeWithin(fixture.reader.getStatus());
+        const concurrentRecoveredStatus = outcomeWithin(fixture.reader.getStatus());
+        await server.waitForConnectionCount(1);
+        const firstClose = fixture.reader.close();
+        expect(fixture.reader.close()).toBe(firstClose);
+        await expect(outcomeWithin(firstClose)).resolves.toEqual({ status: "fulfilled" });
+        closeSettled = true;
+        expect((await recoveredStatus).status).toBe("rejected");
+        expect((await concurrentRecoveredStatus).status).toBe("rejected");
+        expect(fixture.reader.close()).toBe(firstClose);
+        await server.waitForNoSockets();
+        await delay(350);
+
+        expect(clients).toHaveLength(2);
+        expect(clients.every((client) => !client.isOpen && !client.isReady)).toBe(true);
+        for (const client of clients) {
+          expect(client.listenerCount("error")).toBe(1);
+          expect(client.listenerCount("connect")).toBe(1);
+          expect(client.listenerCount("ready")).toBe(1);
+          expect(client.listenerCount("reconnecting")).toBe(1);
+        }
+        expect(destroySpies.reduce((count, spy) => count + spy.mock.calls.length, 0)).toBe(1);
+        expect(fixture.pool.end).toHaveBeenCalledOnce();
+        expect(server.socketCount).toBe(0);
+        expect(lateLifecycleEvents).toEqual([]);
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+        for (const client of clients) closeClientIfOpen(client);
+        await server?.close();
+      }
     }
   });
 
-  it("finishes default reconnect shutdown before an accepted pending handshake can reconnect", async () => {
-    const server = await tcpHarness();
-    const client = createClient({
-      url: server.url,
-      RESP: 2,
-      disableClientInfo: true,
-      maintNotifications: "disabled",
-      socket: { connectTimeout: 250 },
-    });
-    client.on("error", () => undefined);
-    let closeSettled = false;
-    let reconnectsAfterClose = 0;
-    client.on("reconnecting", () => {
-      if (closeSettled) reconnectsAfterClose += 1;
-    });
-    const destroy = vi.spyOn(client, "destroy");
-    const fixture = readerFixture(client);
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      const statusOutcome = outcomeWithin(fixture.reader.getStatus());
-      await server.waitForConnection();
+  it("recovers a disconnected ready generation only on the next read and closes its accepted replacement", async () => {
+    for (let iteration = 0; iteration < 10; iteration += 1) {
+      const server = await tcpHarness({ replyToEvalConnections: 1 });
+      const clients: Array<ReturnType<typeof realRedisClient>> = [];
+      const destroySpies: Array<ReturnType<typeof vi.spyOn>> = [];
+      const lateLifecycleEvents: string[] = [];
+      let closeSettled = false;
+      const fixture = readerFixtureWithFactory(server.url, (url) => {
+        const client = realRedisClient(url, true);
+        for (const event of ["connect", "ready", "reconnecting"] as const) {
+          client.on(event, () => {
+            if (closeSettled) lateLifecycleEvents.push(event);
+          });
+        }
+        clients.push(client);
+        destroySpies.push(vi.spyOn(client, "destroy"));
+        return client;
+      });
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", onUnhandled);
+      try {
+        expect((await outcomeWithin(fixture.reader.getStatus())).status).toBe("fulfilled");
+        expect(clients).toHaveLength(1);
+        expect(clients[0].isReady).toBe(true);
+        server.destroySockets();
+        await waitForCondition(() => !clients[0].isOpen && !clients[0].isReady);
 
-      const firstClose = fixture.reader.close();
-      expect(fixture.reader.close()).toBe(firstClose);
-      await expect(outcomeWithin(firstClose)).resolves.toEqual({ status: "fulfilled" });
-      closeSettled = true;
-      expect((await statusOutcome).status).toBe("rejected");
-      expect(fixture.reader.close()).toBe(firstClose);
-      await server.waitForNoSockets();
-      expect(client.isOpen).toBe(false);
-      expect(client.isReady).toBe(false);
-      expect(destroy).toHaveBeenCalledOnce();
-      expect(fixture.pool.end).toHaveBeenCalledOnce();
-      await delay(350);
-      expect(reconnectsAfterClose).toBe(0);
-      expect(client.isOpen).toBe(false);
-      expect(client.isReady).toBe(false);
-      expect(destroy).toHaveBeenCalledOnce();
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-      closeClientIfOpen(client);
-      await server.close();
+        const recoveredStatus = outcomeWithin(fixture.reader.getStatus());
+        await server.waitForConnectionCount(2);
+        const firstClose = fixture.reader.close();
+        expect(fixture.reader.close()).toBe(firstClose);
+        await expect(outcomeWithin(firstClose)).resolves.toEqual({ status: "fulfilled" });
+        closeSettled = true;
+        expect((await recoveredStatus).status).toBe("rejected");
+        expect(fixture.reader.close()).toBe(firstClose);
+        await server.waitForNoSockets();
+        await delay(350);
+
+        expect(clients).toHaveLength(2);
+        expect(clients.every((client) => !client.isOpen && !client.isReady)).toBe(true);
+        for (const client of clients) {
+          expect(client.listenerCount("error")).toBe(1);
+          expect(client.listenerCount("connect")).toBe(1);
+          expect(client.listenerCount("ready")).toBe(1);
+          expect(client.listenerCount("reconnecting")).toBe(1);
+        }
+        expect(destroySpies.reduce((count, spy) => count + spy.mock.calls.length, 0)).toBe(1);
+        expect(fixture.pool.end).toHaveBeenCalledOnce();
+        expect(server.socketCount).toBe(0);
+        expect(lateLifecycleEvents).toEqual([]);
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+        for (const client of clients) closeClientIfOpen(client);
+        await server.close();
+      }
     }
   });
 
@@ -247,12 +274,19 @@ function realRedisClient(url: string, disableClientInfo: boolean) {
 }
 
 function readerFixture(client: ReturnType<typeof realRedisClient>) {
+  return readerFixtureWithFactory("redis://127.0.0.1:1", () => client);
+}
+
+function readerFixtureWithFactory(
+  redisUrl: string,
+  createRedisClient: (url: string) => ReturnType<typeof realRedisClient>,
+) {
   const pool = poolFixture();
   const reader = createKnowledgeCardStatusReader({
-    env: statusEnv("redis://127.0.0.1:1"),
+    env: statusEnv(redisUrl),
     dependencies: {
       createPostgresPool: () => pool as never,
-      createRedisClient: () => client as never,
+      createRedisClient: (url) => createRedisClient(url) as never,
       createKnowledgeCardRepository: () => ({
         getStatusCounts: vi.fn(async () => ({
           pending_send: 0,
@@ -293,7 +327,13 @@ function statusEnv(redisUrl: string) {
   };
 }
 
-async function tcpHarness({ replyToEval = false }: { replyToEval?: boolean } = {}) {
+async function tcpHarness({
+  replyToEval = false,
+  replyToEvalConnections,
+  port = 0,
+}: { replyToEval?: boolean; replyToEvalConnections?: number; port?: number } = {}) {
+  const evalReplyConnectionLimit = replyToEvalConnections ??
+    (replyToEval ? Number.POSITIVE_INFINITY : 0);
   const sockets = new Set<Socket>();
   let received = "";
   let connectionCount = 0;
@@ -308,7 +348,8 @@ async function tcpHarness({ replyToEval = false }: { replyToEval?: boolean } = {
     let evalReplied = false;
     socket.on("data", (chunk) => {
       received += chunk.toString("utf8");
-      if (replyToEval && !evalReplied && received.includes("$4\r\nEVAL\r\n")) {
+      if (connectionCount <= evalReplyConnectionLimit &&
+        !evalReplied && received.includes("$4\r\nEVAL\r\n")) {
         evalReplied = true;
         socket.write("*4\r\n:0\r\n:0\r\n:0\r\n:0\r\n");
       }
@@ -317,7 +358,7 @@ async function tcpHarness({ replyToEval = false }: { replyToEval?: boolean } = {
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(port, "127.0.0.1", () => {
       server.off("error", reject);
       resolve();
     });
@@ -332,8 +373,16 @@ async function tcpHarness({ replyToEval = false }: { replyToEval?: boolean } = {
     get connectionCount() {
       return connectionCount;
     },
+    get socketCount() {
+      return sockets.size;
+    },
     waitForConnection: () => outcomeValueWithin(firstConnection),
+    waitForConnectionCount: (expected: number) =>
+      waitForCondition(() => connectionCount >= expected),
     waitForNoSockets: () => waitForCondition(() => sockets.size === 0),
+    destroySockets() {
+      for (const socket of sockets) socket.destroy();
+    },
     async close() {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve, reject) => {
@@ -341,6 +390,25 @@ async function tcpHarness({ replyToEval = false }: { replyToEval?: boolean } = {
       });
     },
   };
+}
+
+async function unusedTcpEndpoint(): Promise<{ url: string; port: number }> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("TCP test address unavailable");
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => error === undefined ? resolve() : reject(error));
+  });
+  return { url: `redis://127.0.0.1:${address.port}`, port: address.port };
 }
 
 async function outcomeWithin<T>(promise: Promise<T>, timeoutMs = 1_000): Promise<

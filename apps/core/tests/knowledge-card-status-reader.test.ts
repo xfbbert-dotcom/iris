@@ -1,7 +1,12 @@
-import { ClientClosedError } from "redis";
+import { ClientClosedError, createClient } from "redis";
 import { describe, expect, it, vi } from "vitest";
 
 import * as knowledgeCardRuntimeModule from "../src/runtime/knowledge-card-runtime.js";
+
+vi.mock("redis", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("redis")>();
+  return { ...actual, createClient: vi.fn(actual.createClient) };
+});
 
 type StatusReaderFactory = (input: {
   env: Record<string, string | undefined>;
@@ -12,6 +17,30 @@ type StatusReaderFactory = (input: {
 } | undefined;
 
 describe("KnowledgeCardStatusReader", () => {
+  it("constructs its production Redis client without background reconnect", async () => {
+    const factory = getStatusReaderFactory();
+    if (factory === undefined) return;
+    const dependencies = statusReaderDependencies();
+    vi.mocked(createClient).mockClear();
+
+    const reader = factory({
+      env: disabledStatusEnv(),
+      dependencies: {
+        ...dependencies,
+        createRedisClient: undefined,
+      } as unknown as ReturnType<typeof statusReaderDependencies>,
+    });
+
+    expect(reader).toBeDefined();
+    expect(createClient).toHaveBeenCalledOnce();
+    expect(createClient).toHaveBeenCalledWith(expect.objectContaining({
+      url: "redis://redis:6379",
+      socket: expect.objectContaining({ reconnectStrategy: false }),
+    }));
+    await reader?.close();
+    expect(dependencies.pool.end).toHaveBeenCalledOnce();
+  });
+
   it("reads content-free PostgreSQL and Redis counts while card processing is disabled", async () => {
     const factory = getStatusReaderFactory();
     if (factory === undefined) return;
@@ -57,6 +86,8 @@ describe("KnowledgeCardStatusReader", () => {
     expect(dependencies.redis.quit).not.toHaveBeenCalled();
     expect(dependencies.redis.destroy).toHaveBeenCalledOnce();
     expect(dependencies.pool.end).toHaveBeenCalledOnce();
+    expect(dependencies.redisListenerCount("error")).toBe(0);
+    expect(dependencies.redisListenerCount("connect")).toBe(0);
   });
 
   it("propagates count-read failures without returning synthetic zero", async () => {
@@ -182,6 +213,7 @@ function statusReaderDependencies() {
     end: vi.fn(async () => undefined),
   };
   let redisOpen = false;
+  let redisReady = false;
   const listeners = {
     error: [] as Array<(error: Error) => void>,
     connect: [] as Array<() => void>,
@@ -190,19 +222,30 @@ function statusReaderDependencies() {
     get isOpen() {
       return redisOpen;
     },
+    get isReady() {
+      return redisReady;
+    },
     connect: vi.fn(async () => {
       redisOpen = true;
       for (const listener of listeners.connect) listener();
+      redisReady = true;
       return redis;
     }),
     quit: vi.fn(async () => undefined),
     destroy: vi.fn(() => {
       redisOpen = false;
+      redisReady = false;
     }),
     eval: vi.fn(async () => 0),
     on: vi.fn((event: "error" | "connect", listener: ((error: Error) => void) | (() => void)) => {
       if (event === "error") listeners.error.push(listener as (error: Error) => void);
       else listeners.connect.push(listener as () => void);
+      return redis;
+    }),
+    off: vi.fn((event: "error" | "connect", listener: ((error: Error) => void) | (() => void)) => {
+      const eventListeners = listeners[event] as Array<typeof listener>;
+      const index = eventListeners.indexOf(listener);
+      if (index !== -1) eventListeners.splice(index, 1);
       return redis;
     }),
   };
@@ -250,6 +293,10 @@ function statusReaderDependencies() {
     queue,
     setRedisOpen(value: boolean) {
       redisOpen = value;
+      if (!value) redisReady = false;
+    },
+    redisListenerCount(event: "error" | "connect") {
+      return listeners[event].length;
     },
   };
 }

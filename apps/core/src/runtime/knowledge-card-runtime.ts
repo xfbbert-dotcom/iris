@@ -80,8 +80,6 @@ const DISPATCHER_WORKER_ID = "knowledge-card-dispatcher";
 const INTERACTION_WORKER_ID = "approval-interaction-worker";
 const EXTERNAL_LEASE_MS = 30_000;
 const SEND_RETRY_DELAY_MS = 1_000;
-// Node Redis 6.1 defaults its first reconnect to 50 ms plus at most 199 ms of jitter.
-const STATUS_REDIS_INITIAL_RECONNECT_BOUND_MS = 300;
 export const KNOWLEDGE_CARD_TARGET_DISPLAY_NAME = "Unapproved suggested publication location";
 
 type KnowledgeCardPool = PostgresKnowledgeDraftDataSource & { end(): Promise<void> };
@@ -91,10 +89,26 @@ type KnowledgeCardRedisClient = RedisApprovalInteractionQueueClient & {
 };
 type KnowledgeCardStatusRedisClient = RedisApprovalInteractionQueueClient & {
   readonly isOpen: boolean;
+  readonly isReady: boolean;
   connect(): Promise<unknown>;
   destroy(): void;
   on?(event: "error", listener: (error: Error) => void): unknown;
-  on?(event: "connect" | "reconnecting", listener: () => void): unknown;
+  on?(event: "connect", listener: () => void): unknown;
+  off?(event: "error", listener: (error: Error) => void): unknown;
+  off?(event: "connect", listener: () => void): unknown;
+};
+type KnowledgeCardStatusRedisGeneration = {
+  client: KnowledgeCardStatusRedisClient;
+  state: "idle" | "connecting" | "ready" | "failed" | "closed";
+  connection?: Promise<KnowledgeCardStatusRedisClient>;
+  connectionSettlement?: Promise<void>;
+  transportConnected: boolean;
+  transportObserved: Promise<void>;
+  resolveTransportObserved(): void;
+  destroyAttempted: boolean;
+  listenersDetached: boolean;
+  onError(error: Error): void;
+  onConnect(): void;
 };
 type KnowledgeCardRuntimeGate = Pick<
   RuntimeController,
@@ -215,157 +229,181 @@ export function createKnowledgeCardStatusReader({
   if (config === undefined) return undefined;
   const createPool = dependencies.createPostgresPool ?? createPostgresPool;
   const createRedis = dependencies.createRedisClient ??
-    ((url: string) => createClient({ url }) as unknown as KnowledgeCardStatusRedisClient);
+    ((url: string) => createClient({
+      url,
+      socket: { reconnectStrategy: false },
+    }) as unknown as KnowledgeCardStatusRedisClient);
   const createRepository = dependencies.createKnowledgeCardRepository ??
     createPostgresKnowledgeCardRepository;
   const createQueue = dependencies.createApprovalInteractionQueue ??
     createRedisApprovalInteractionQueue;
 
   let pool: KnowledgeCardPool | undefined;
-  let redisClient: KnowledgeCardStatusRedisClient | undefined;
   let closeRedis: (() => Promise<void>) | undefined;
   try {
     pool = createPool({ databaseUrl: config.databaseUrl });
-    redisClient = createRedis(config.redisUrl);
-    let lifecycle: "idle" | "connecting" | "ready" | "failed" | "closing" | "closed" =
-      "idle";
-    let transportAttemptPending = false;
-    let redisConnection: Promise<KnowledgeCardStatusRedisClient> | undefined;
-    let redisConnectOutcomeSettlement: Promise<void> | undefined;
+    let lifecycle: "open" | "closing" | "closed" = "open";
     let rejectClosedConnection!: (error: Error) => void;
     const closedConnection = observeStartupPromise(new Promise<never>((_resolve, reject) => {
       rejectClosedConnection = reject;
     }));
-    let destroyAttempted = false;
-    let destroyError: unknown;
-    let awaitConnectSettlementAfterDestroy = false;
-    let resolveDestroyed!: () => void;
-    const destroyed = new Promise<void>((resolve) => {
-      resolveDestroyed = resolve;
-    });
-    let resolveReconnectObserved!: () => void;
-    const reconnectObserved = new Promise<void>((resolve) => {
-      resolveReconnectObserved = resolve;
-    });
-    const destroyIfOpen = () => {
-      if (!redisClient!.isOpen) return;
-      if (destroyAttempted) {
+    const generations = new Set<KnowledgeCardStatusRedisGeneration>();
+    const detachGenerationListeners = (generation: KnowledgeCardStatusRedisGeneration) => {
+      if (generation.listenersDetached) return;
+      generation.listenersDetached = true;
+      generation.client.off?.("error", generation.onError);
+      generation.client.off?.("connect", generation.onConnect);
+    };
+    const releaseClosedGeneration = (generation: KnowledgeCardStatusRedisGeneration) => {
+      if (generation.client.isOpen) return;
+      detachGenerationListeners(generation);
+      generations.delete(generation);
+    };
+    const destroyGenerationIfOpen = (generation: KnowledgeCardStatusRedisGeneration) => {
+      if (!generation.client.isOpen) return;
+      if (generation.destroyAttempted) {
         throw new Error("knowledge-card status Redis client remained open after destroy");
       }
-      destroyAttempted = true;
+      generation.destroyAttempted = true;
       try {
-        redisClient!.destroy();
+        generation.client.destroy();
       } catch (error) {
-        if (error instanceof ClientClosedError && !redisClient!.isOpen) {
-          resolveDestroyed();
-          return;
-        }
+        if (error instanceof ClientClosedError && !generation.client.isOpen) return;
         throw error;
       }
-      if (redisClient!.isOpen) {
+      if (generation.client.isOpen) {
         throw new Error("knowledge-card status Redis client remained open after destroy");
       }
-      resolveDestroyed();
     };
-    redisClient.on?.("error", () => {
-      transportAttemptPending = false;
-      if (lifecycle !== "closing" && lifecycle !== "closed") return;
-      awaitConnectSettlementAfterDestroy = true;
-      try {
-        destroyIfOpen();
-      } catch (error) {
-        destroyError = error;
-      }
-    });
-    redisClient.on?.("reconnecting", () => {
-      resolveReconnectObserved();
-      if (lifecycle === "closing" || lifecycle === "closed") return;
-      transportAttemptPending = true;
-    });
-    redisClient.on?.("connect", () => {
-      transportAttemptPending = false;
-      if (lifecycle !== "closing" && lifecycle !== "closed") return;
-      // node-redis emits `connect` immediately before it queues protocol startup
-      // commands. Let that stack finish so destroy() can reject those commands too.
-      queueMicrotask(() => {
-        if (lifecycle !== "closing" && lifecycle !== "closed") return;
-        try {
-          destroyIfOpen();
-        } catch (error) {
-          destroyError = error;
-        }
+    const createGeneration = (): KnowledgeCardStatusRedisGeneration => {
+      const client = createRedis(config.redisUrl);
+      let resolveTransportObserved!: () => void;
+      const transportObserved = new Promise<void>((resolve) => {
+        resolveTransportObserved = resolve;
       });
-    });
-    const getRedisClient = (): Promise<KnowledgeCardStatusRedisClient> => {
-      if (lifecycle === "closing" || lifecycle === "closed") {
-        return observeStartupPromise(Promise.reject(
-          new Error("knowledge-card status Redis client is closed"),
-        ));
-      }
-      if (redisConnection !== undefined) return redisConnection;
-      lifecycle = "connecting";
-      transportAttemptPending = true;
+      let generation!: KnowledgeCardStatusRedisGeneration;
+      const onError = () => {
+        queueMicrotask(() => {
+          if (client.isOpen) return;
+          if (generation.state === "connecting" || generation.state === "ready") {
+            generation.state = "failed";
+          }
+          releaseClosedGeneration(generation);
+        });
+      };
+      const onConnect = () => {
+        generation.transportConnected = true;
+        if (lifecycle !== "closing") {
+          resolveTransportObserved();
+          return;
+        }
+        // Node Redis assigns its private socket immediately before emitting `connect`,
+        // then queues protocol startup commands after listeners return. Destroy on the
+        // close continuation after the next microtask so both are cancellable.
+        queueMicrotask(resolveTransportObserved);
+      };
+      generation = {
+        client,
+        state: "idle",
+        transportConnected: false,
+        transportObserved,
+        resolveTransportObserved,
+        destroyAttempted: false,
+        listenersDetached: false,
+        onError,
+        onConnect,
+      };
+      client.on?.("error", onError);
+      client.on?.("connect", onConnect);
+      generations.add(generation);
+      return generation;
+    };
+    let currentGeneration = createGeneration();
+    const connectGeneration = (
+      generation: KnowledgeCardStatusRedisGeneration,
+    ): Promise<KnowledgeCardStatusRedisClient> => {
+      generation.state = "connecting";
       let connectResult: Promise<unknown>;
       try {
-        connectResult = redisClient!.connect();
+        connectResult = generation.client.connect();
       } catch (error) {
         connectResult = Promise.reject(error);
       }
       const connectOutcome = observeStartupPromise(Promise.resolve(connectResult).then(
         () => {
-          if (lifecycle === "closing" || lifecycle === "closed") {
+          if (lifecycle !== "open") {
             throw new Error("knowledge-card status Redis client closed during connect");
           }
-          lifecycle = "ready";
-          return redisClient!;
+          generation.state = "ready";
+          return generation.client;
         },
         (error: unknown) => {
-          if (lifecycle !== "closing" && lifecycle !== "closed") lifecycle = "failed";
+          generation.state = lifecycle === "open" ? "failed" : "closed";
+          releaseClosedGeneration(generation);
           throw error;
         },
       ));
-      redisConnectOutcomeSettlement = connectOutcome.then(
+      generation.connectionSettlement = connectOutcome.then(
         () => undefined,
         () => undefined,
       );
-      redisConnection = observeStartupPromise(Promise.race([connectOutcome, closedConnection]));
-      return redisConnection;
+      generation.connection = observeStartupPromise(Promise.race([
+        connectOutcome,
+        closedConnection,
+      ]));
+      return generation.connection;
+    };
+    const getRedisClient = (): Promise<KnowledgeCardStatusRedisClient> => {
+      if (lifecycle !== "open") {
+        return observeStartupPromise(Promise.reject(
+          new Error("knowledge-card status Redis client is closed"),
+        ));
+      }
+      if (currentGeneration.state === "connecting") {
+        return currentGeneration.connection!;
+      }
+      if (currentGeneration.state === "ready" && currentGeneration.client.isReady) {
+        return Promise.resolve(currentGeneration.client);
+      }
+      if (currentGeneration.state !== "idle") {
+        destroyGenerationIfOpen(currentGeneration);
+        detachGenerationListeners(currentGeneration);
+        generations.delete(currentGeneration);
+        currentGeneration.state = "closed";
+        currentGeneration = createGeneration();
+      }
+      return connectGeneration(currentGeneration);
+    };
+    const closeGeneration = async (generation: KnowledgeCardStatusRedisGeneration) => {
+      try {
+        if (generation.state === "idle") return;
+        if (generation.state === "connecting" && !generation.transportConnected) {
+          await Promise.race([
+            generation.connectionSettlement!,
+            generation.transportObserved,
+          ]);
+        }
+        destroyGenerationIfOpen(generation);
+        if (generation.connectionSettlement !== undefined) {
+          await generation.connectionSettlement;
+        }
+      } finally {
+        generation.state = "closed";
+        detachGenerationListeners(generation);
+        generations.delete(generation);
+      }
     };
     closeRedis = async () => {
-      const connectionWasStarting = lifecycle === "connecting";
-      const connectionWasInRetryBackoff = connectionWasStarting && !transportAttemptPending;
-      const transportTerminalPending = connectionWasStarting && transportAttemptPending;
       lifecycle = "closing";
       rejectClosedConnection(new Error("knowledge-card status Redis client is closed"));
-      if (connectionWasInRetryBackoff) awaitConnectSettlementAfterDestroy = true;
-      if (!transportTerminalPending) destroyIfOpen();
-      if (redisConnectOutcomeSettlement !== undefined && !destroyAttempted) {
-        await Promise.race([redisConnectOutcomeSettlement, destroyed]);
+      try {
+        await closeRuntimeResources(Array.from(
+          generations,
+          (generation) => () => closeGeneration(generation),
+        ));
+      } finally {
+        lifecycle = "closed";
       }
-      if (redisConnectOutcomeSettlement !== undefined && transportTerminalPending &&
-        destroyAttempted && !awaitConnectSettlementAfterDestroy) {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const reconnectBound = new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, STATUS_REDIS_INITIAL_RECONNECT_BOUND_MS);
-          timer.unref();
-        });
-        try {
-          await Promise.race([
-            redisConnectOutcomeSettlement,
-            reconnectObserved,
-            reconnectBound,
-          ]);
-        } finally {
-          if (timer !== undefined) clearTimeout(timer);
-        }
-      }
-      if (redisConnectOutcomeSettlement !== undefined &&
-        awaitConnectSettlementAfterDestroy) {
-        await redisConnectOutcomeSettlement;
-      }
-      if (destroyError !== undefined) throw destroyError;
-      destroyIfOpen();
-      lifecycle = "closed";
     };
     const queue = createQueue({ client: createDeferredRedisQueueClient(getRedisClient) });
     const repository = createRepository({ dataSource: pool });
