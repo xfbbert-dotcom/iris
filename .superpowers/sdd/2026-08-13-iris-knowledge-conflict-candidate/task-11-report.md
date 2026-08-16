@@ -494,3 +494,87 @@
   smoke, default-off, and mocked public-boundary contracts passed.
 - The product loop remains pending live acceptance and produces only a governed update draft,
   never an in-place Wiki edit.
+
+## Exception Fix Round 7: Accepted Pending-Handshake Reconnect Closure
+
+### Result
+
+- Implementation/tests commit: `d945ef09afd8072a546931d3637d161699b50a82`.
+- The disabled knowledge-card status reader now coordinates destruction with three terminal signals
+  when shutdown starts during an accepted but not yet internally assigned Redis handshake: connect
+  outcome settlement, the final reconnect bookkeeping event, or a 300 ms bounded timer. The timer
+  exceeds the installed Node Redis 6.1 default first retry maximum of 249 ms and is both unreferenced
+  and cleared after an earlier terminal signal.
+- This closes the race in which the destruction signal won before the later Redis error handler
+  classified the connect outcome. `close()` can no longer fulfill before Node Redis emits its final
+  `reconnecting` bookkeeping event, and it never substitutes an unbounded reconnect outcome for a
+  shutdown bound.
+- Default-refused connection, reconnect-disabled pending handshake/private socket assignment,
+  synchronous composition failure, close-before-first-read, lazy connection, no-`QUIT` shutdown,
+  exact-once Redis/PostgreSQL cleanup, and shared concurrent/repeated close promise contracts remain
+  intact. The enabled knowledge-card runtime and its graceful close semantics were not changed.
+- Live pilot: not run and not claimed. Task 12 was not started.
+
+### TDD RED
+
+- Command:
+  `npm exec --workspace apps/core -- vitest run tests/knowledge-card-status-reader-real-redis.test.ts -t "accepted pending handshake"`.
+- Initial result: 1 failed and 6 skipped. The production-real test used installed `redis@6.1.0`,
+  omitted `reconnectStrategy` to retain the production default, and connected to an ephemeral local
+  TCP server that accepted the socket but sent no RESP. It began `getStatus()`, waited only for the
+  server-side accept, and immediately called `close()`.
+- `close()` fulfilled and all resource cleanup assertions passed, but after a 350 ms observation
+  window the test saw one late `reconnecting` event (`expected 1 to be 0`). That window exceeds the
+  default first retry delay of 50 ms plus up to 199 ms jitter.
+- Root cause: the prior destruction promise could win the close race before the handshake rejection
+  reached the Redis error handler. At that instant `awaitConnectSettlementAfterDestroy` was still
+  false, so close returned; the later handler then classified the outcome and Node Redis emitted its
+  delayed final reconnect event after close settlement.
+- A one-turn settlement hypothesis remained RED. Moving the wait classification into the connect
+  listener made the new case pass but regressed the reconnect-disabled pending-handshake contract
+  by waiting on an outcome that can remain pending, so that hypothesis was reverted.
+
+### GREEN Verification
+
+- Exact accepted pending-handshake default-reconnect test: pass; 10 independent process repetitions
+  passed 10/10 with zero reconnect events after close settlement.
+- Production-real Node Redis lifecycle suite: 7/7 pass. It covers default-reconnect refusal, the
+  accepted pending handshake with default reconnect, reconnect-disabled refusal and pending
+  handshake, connected no-`QUIT` close, synchronous composition failure, and close-before-first-read.
+- Production-real plus mocked status-reader lifecycle suites: 14/14 pass.
+- Consolidated status reader, enabled runtime, startup, readiness, API, and resource-close set:
+  135/135 pass across 9 files.
+- Full Core `npm --workspace apps/core test`: 3,383 pass, 0 fail, 250 environment-gated skips;
+  187 test files passed and 3 were skipped.
+- Pilot operations `node --test scripts/pilot-operations.test.mjs`: 41/41 pass.
+- Fresh full `npm run test:pilot`: 156 tests, 155 pass, 0 fail, 1 skip in 388,382 ms. The sole skip
+  accurately reports the unavailable Docker daemon for the executable pinned-Caddy boundary probe;
+  static Compose, Caddy, smoke, and rollback contracts passed.
+- `npm run readiness -- --env-file deploy/pilot/ci.env`: 17/17 pass in static disabled-env mode.
+- `npm run typecheck`: exit `0`.
+- `npm run build`: exit `0`.
+- `npm run pilot:config`: exit `0`; parsed Core configuration has conflict/card/action-approval
+  flags `false` and all three corresponding allowlist lengths `0`.
+- Full executable PowerShell controller parse: pass, 7,006 tokens and 0 parse errors.
+- `git diff --check`: exit `0` before the implementation commit; line-ending notices only.
+- Direct `docker info --format '{{.ServerVersion}}'` exited `1` because the Docker Desktop Linux
+  daemon pipe does not exist. No container execution or live-service result is claimed.
+
+### Artifact SHA-256
+
+- Knowledge-card runtime/status reader: `0c07792b9641b7f5d7b090f55c6aa1efbf35dce5355e71018dd58046a90d2cc4`.
+- Production-real Node Redis lifecycle contract:
+  `d393974bb2b180d3eac48ef4ab1c420511bba16d93ba51e9db48df1f41c045f2`.
+
+### Residual Risk
+
+- No live PostgreSQL query, Redis service/queue, Feishu callback/card, model request, Wiki read,
+  credential, or pilot mutation was used. The real Redis tests use only port 1 refusal and an
+  ephemeral local TCP server that accepts a metadata-free connection without a protocol reply.
+- The 300 ms terminal bound is deliberately coupled to the installed Node Redis 6.1 default first
+  retry upper bound of 249 ms. A dependency reconnect-policy change must update this contract; the
+  bound prevents an infinite shutdown wait even if no terminal bookkeeping signal arrives.
+- Docker remained unavailable for the executable Caddy container probe. Static Caddy, Compose,
+  smoke, default-off, and mocked public-boundary contracts passed.
+- The product loop remains pending live acceptance and produces only a governed update draft,
+  never an in-place Wiki edit.
