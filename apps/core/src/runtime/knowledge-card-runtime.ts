@@ -80,6 +80,8 @@ const DISPATCHER_WORKER_ID = "knowledge-card-dispatcher";
 const INTERACTION_WORKER_ID = "approval-interaction-worker";
 const EXTERNAL_LEASE_MS = 30_000;
 const SEND_RETRY_DELAY_MS = 1_000;
+// Node Redis 6.1 defaults its first reconnect to 50 ms plus at most 199 ms of jitter.
+const STATUS_REDIS_INITIAL_RECONNECT_BOUND_MS = 300;
 export const KNOWLEDGE_CARD_TARGET_DISPLAY_NAME = "Unapproved suggested publication location";
 
 type KnowledgeCardPool = PostgresKnowledgeDraftDataSource & { end(): Promise<void> };
@@ -241,6 +243,10 @@ export function createKnowledgeCardStatusReader({
     const destroyed = new Promise<void>((resolve) => {
       resolveDestroyed = resolve;
     });
+    let resolveReconnectObserved!: () => void;
+    const reconnectObserved = new Promise<void>((resolve) => {
+      resolveReconnectObserved = resolve;
+    });
     const destroyIfOpen = () => {
       if (!redisClient!.isOpen) return;
       if (destroyAttempted) {
@@ -272,6 +278,7 @@ export function createKnowledgeCardStatusReader({
       }
     });
     redisClient.on?.("reconnecting", () => {
+      resolveReconnectObserved();
       if (lifecycle === "closing" || lifecycle === "closed") return;
       transportAttemptPending = true;
     });
@@ -325,15 +332,32 @@ export function createKnowledgeCardStatusReader({
       return redisConnection;
     };
     closeRedis = async () => {
-      const connectionWasInRetryBackoff = lifecycle === "connecting" &&
-        !transportAttemptPending;
-      const transportTerminalPending = lifecycle === "connecting" && transportAttemptPending;
+      const connectionWasStarting = lifecycle === "connecting";
+      const connectionWasInRetryBackoff = connectionWasStarting && !transportAttemptPending;
+      const transportTerminalPending = connectionWasStarting && transportAttemptPending;
       lifecycle = "closing";
       rejectClosedConnection(new Error("knowledge-card status Redis client is closed"));
       if (connectionWasInRetryBackoff) awaitConnectSettlementAfterDestroy = true;
       if (!transportTerminalPending) destroyIfOpen();
       if (redisConnectOutcomeSettlement !== undefined && !destroyAttempted) {
         await Promise.race([redisConnectOutcomeSettlement, destroyed]);
+      }
+      if (redisConnectOutcomeSettlement !== undefined && transportTerminalPending &&
+        destroyAttempted && !awaitConnectSettlementAfterDestroy) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const reconnectBound = new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, STATUS_REDIS_INITIAL_RECONNECT_BOUND_MS);
+          timer.unref();
+        });
+        try {
+          await Promise.race([
+            redisConnectOutcomeSettlement,
+            reconnectObserved,
+            reconnectBound,
+          ]);
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+        }
       }
       if (redisConnectOutcomeSettlement !== undefined &&
         awaitConnectSettlementAfterDestroy) {
