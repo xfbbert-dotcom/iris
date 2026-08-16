@@ -680,3 +680,95 @@
   smoke, default-off, and mocked public-boundary contracts passed.
 - The product loop remains pending live acceptance and produces only a governed update draft,
   never an in-place Wiki edit.
+
+## Exception Fix Round 9: Release Completed Redis Generation Ownership
+
+### Result
+
+- Implementation/tests commit: `60301f8690d568f1bdd6397ebea34f235bf7c4cb`.
+- The disabled, read-only knowledge-card status reader no longer races every connection generation
+  against one reader-scoped pending close promise. Each connect attempt now owns an idempotent
+  terminal signal that is released after its outer connection race settles normally or
+  exceptionally, and is also released on generation replacement or reader close.
+- Releasing a terminal signal clears the generation's release callback before settling the signal.
+  Consequently, a successful old connection does not retain its client through a pending
+  reader-lifetime promise, and repeated terminal paths remain harmless.
+- A pending status request still fails closed immediately when close begins. The close path retains
+  the Round 8 finite no-reconnect transport protocol, exact-once cleanup, terminal no-new-generation
+  state, shared concurrent/repeated close promise, and no-`QUIT` behavior.
+- No timer or Redis backoff assumption was introduced. Production status clients remain
+  `reconnectStrategy: false` and recover on the next request with a fresh generation. The enabled
+  knowledge-card runtime and its graceful Redis close semantics were not changed.
+- Live pilot: not run and not claimed. Task 12 was not started.
+
+### TDD RED
+
+- Command:
+  `npm exec --workspace apps/core -- vitest run tests/knowledge-card-status-reader-ownership.test.ts`.
+- Initial product result: 1 failed, exit `1`. The ordinary Vitest test launched a dedicated
+  `node --expose-gc --import tsx` child fixture so the ownership assertion does not depend on the
+  main Vitest worker exposing garbage collection.
+- The fixture completed 50 ready -> unexpected disconnect -> next-request recovery cycles. Before
+  garbage collection it deterministically observed 51 created clients, exactly one open client,
+  and exactly two reader listeners on the current client. Its bounded forced-GC check then failed
+  with `completed Redis generations remained strongly owned before reader close: 51/51 alive`.
+- Root cause: every `Promise.race([connectOutcome, closedConnection])` installed a reaction on the
+  same reader-scoped `closedConnection` promise. Because that promise stayed pending until reader
+  close, its reaction retained the already-settled race and successful generation/client. Listener
+  detachment and removal from the owned generation set could not release that independent promise
+  ownership chain.
+- A first child-runner attempt was discarded before the product RED because Node's `--expose-gc`
+  flag reached the Vitest coordinator but not its worker. The final regression executes the
+  TypeScript fixture directly in the forced-GC child and remains part of ordinary Core test runs.
+
+### GREEN Verification
+
+- Isolated forced-GC ownership regression: 1/1 pass. Fifty completed old generations are released
+  before reader close, with at most the current generation alive; close then leaves zero open
+  clients, zero reader listeners, no new generation, no unhandled rejection, one current-client
+  destroy, one PostgreSQL end, and the same concurrent/repeated close promise.
+- Production-real plus mocked plus ownership status-reader suites: 16/16 pass across 3 files. The
+  production-real A/B tests each passed all 10 iterations and continued to prove zero post-close
+  `connect`, `ready`, or `reconnecting` signals, zero sockets, no unhandled rejection, exact cleanup,
+  and shared close settlement.
+- Consolidated ownership, status reader, enabled runtime, startup, readiness, API, and
+  resource-close set: 137/137 pass across 10 files.
+- Full Core `npm test --workspace apps/core`: 3,385 pass, 0 fail, 250 environment-gated skips;
+  188 test files passed and 3 were skipped.
+- Pilot operations `node --test scripts/pilot-operations.test.mjs`: 41/41 pass in 48,486 ms.
+- Fresh full `npm run test:pilot`: 156 tests, 155 pass, 0 fail, 1 skip in 309,719 ms. The sole skip
+  accurately reports the unavailable Docker daemon for the executable pinned-Caddy boundary probe;
+  static Compose, Caddy, smoke, backup, restore, and rollback contracts passed.
+- `npm run readiness -- --env-file deploy/pilot/ci.env`: 17/17 pass in static disabled-env mode.
+- `npm run typecheck`: exit `0`.
+- `npm run build`: exit `0`.
+- `npm run pilot:config`: exit `0`; parsed Core configuration has conflict/card/action-approval
+  flags `false` and all three corresponding allowlist lengths `0`.
+- Full executable PowerShell controller parse: pass, 7,006 tokens and 0 parse errors.
+- `git diff --check`: exit `0` before the implementation commit; line-ending notices only.
+- Direct `docker info --format '{{.ServerVersion}}'` exited `1` because the Docker Desktop Linux
+  daemon pipe does not exist. No container execution or live-service result is claimed.
+
+### Artifact SHA-256
+
+- Knowledge-card runtime/status reader: `936dd49fbd2affa19f90e57ab696eb862255e0b2f9efcceba26c712bf7d61c15`.
+- Ownership Vitest wrapper: `a00c36c05f3df78d11c07196c5463ba1c32ec0847cf3e561ee30d3372bd920a2`.
+- Forced-GC ownership fixture: `413c4d384a0f97f603b9ca61ffc1caf0d292ce459e119b0595f37c11cbdd5456`.
+- Production-real Node Redis lifecycle contract:
+  `cf7cb770ed3571897650e28e3afdb238d199f71d4b9531ff6e446b545a1e459e`.
+- Mocked status-reader lifecycle contract:
+  `5e8e74902849e6df1a4fcf385779da3acb844ac430b25176fbebff36fbb137fe`.
+
+### Residual Risk
+
+- JavaScript garbage collection is inherently nondeterministic. The regression isolates the test in
+  a forced-GC process, removes loop-frame ownership before measuring, bounds collection attempts,
+  and first proves deterministic client/open/listener counts. It permits only the current generation
+  to remain alive rather than relying on an exact incidental collection turn.
+- No live PostgreSQL query, Redis service/queue, Feishu callback/card, model request, Wiki read,
+  credential, or pilot mutation was used. The real Redis tests use only local ephemeral TCP servers
+  and metadata-free RESP2 fixtures.
+- Docker remained unavailable for the executable Caddy container probe. Static Caddy, Compose,
+  smoke, default-off, and mocked public-boundary contracts passed.
+- The product loop remains pending live acceptance and produces only a governed update draft,
+  never an in-place Wiki edit.
