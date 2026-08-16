@@ -307,7 +307,7 @@ async function assertKnowledgeCardReadiness() {
     readiness?.ok !== true ||
     readiness?.status !== "ready" ||
     knowledgeCards?.status !== "pass" ||
-    knowledgeCards?.detail !== "Knowledge cards are safely disabled."
+    knowledgeCards?.detail !== "Knowledge cards are safely disabled with empty durable work."
   ) {
     throw new Error("Expected knowledge-card readiness to prove the default-off configuration");
   }

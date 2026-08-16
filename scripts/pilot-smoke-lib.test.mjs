@@ -228,6 +228,16 @@ test("rejects an enabled selected knowledge-conflict env when host values are un
   }
 });
 
+test("rejects the legacy weak knowledge-card disabled readiness detail", () => {
+  const result = runSmokeWithFetchMode("legacy-weak-readiness-detail");
+  try {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Expected knowledge-card readiness to prove the default-off configuration/u);
+  } finally {
+    result.cleanup();
+  }
+});
+
 test("rejects a nonempty selected knowledge-conflict allowlist while disabled", () => {
   const result = runSmokeWithFetchMode("", {
     envFileContents: [
@@ -752,7 +762,13 @@ globalThis.fetch = async (input, init = {}) => {
     const body = {
       ok: true,
       status: "ready",
-      checks: [{ id: "knowledgeCards", status: "pass", detail: "Knowledge cards are safely disabled." }],
+      checks: [{
+        id: "knowledgeCards",
+        status: "pass",
+        detail: mode === "legacy-weak-readiness-detail"
+          ? "Knowledge cards are safely disabled."
+          : "Knowledge cards are safely disabled with empty durable work.",
+      }],
     };
     body.checks.push({
       id: "knowledgeConflicts",
