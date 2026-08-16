@@ -102,6 +102,7 @@ type KnowledgeCardStatusRedisGeneration = {
   state: "idle" | "connecting" | "ready" | "failed" | "closed";
   connection?: Promise<KnowledgeCardStatusRedisClient>;
   connectionSettlement?: Promise<void>;
+  releaseConnectionTerminal?(): void;
   transportConnected: boolean;
   transportObserved: Promise<void>;
   resolveTransportObserved(): void;
@@ -243,10 +244,6 @@ export function createKnowledgeCardStatusReader({
   try {
     pool = createPool({ databaseUrl: config.databaseUrl });
     let lifecycle: "open" | "closing" | "closed" = "open";
-    let rejectClosedConnection!: (error: Error) => void;
-    const closedConnection = observeStartupPromise(new Promise<never>((_resolve, reject) => {
-      rejectClosedConnection = reject;
-    }));
     const generations = new Set<KnowledgeCardStatusRedisGeneration>();
     const detachGenerationListeners = (generation: KnowledgeCardStatusRedisGeneration) => {
       if (generation.listenersDetached) return;
@@ -347,10 +344,28 @@ export function createKnowledgeCardStatusReader({
         () => undefined,
         () => undefined,
       );
+      let connectionTerminalSettled = false;
+      let resolveConnectionTerminal!: () => void;
+      const connectionTerminal = new Promise<void>((resolve) => {
+        resolveConnectionTerminal = resolve;
+      });
+      const releaseConnectionTerminal = () => {
+        if (connectionTerminalSettled) return;
+        connectionTerminalSettled = true;
+        generation.releaseConnectionTerminal = undefined;
+        resolveConnectionTerminal();
+      };
+      generation.releaseConnectionTerminal = releaseConnectionTerminal;
       generation.connection = observeStartupPromise(Promise.race([
         connectOutcome,
-        closedConnection,
+        connectionTerminal.then<never>(() => {
+          throw new Error("knowledge-card status Redis client is closed");
+        }),
       ]));
+      void generation.connection.then(
+        releaseConnectionTerminal,
+        releaseConnectionTerminal,
+      );
       return generation.connection;
     };
     const getRedisClient = (): Promise<KnowledgeCardStatusRedisClient> => {
@@ -366,6 +381,7 @@ export function createKnowledgeCardStatusReader({
         return Promise.resolve(currentGeneration.client);
       }
       if (currentGeneration.state !== "idle") {
+        currentGeneration.releaseConnectionTerminal?.();
         destroyGenerationIfOpen(currentGeneration);
         detachGenerationListeners(currentGeneration);
         generations.delete(currentGeneration);
@@ -376,6 +392,7 @@ export function createKnowledgeCardStatusReader({
     };
     const closeGeneration = async (generation: KnowledgeCardStatusRedisGeneration) => {
       try {
+        generation.releaseConnectionTerminal?.();
         if (generation.state === "idle") return;
         if (generation.state === "connecting" && !generation.transportConnected) {
           await Promise.race([
@@ -395,7 +412,6 @@ export function createKnowledgeCardStatusReader({
     };
     closeRedis = async () => {
       lifecycle = "closing";
-      rejectClosedConnection(new Error("knowledge-card status Redis client is closed"));
       try {
         await closeRuntimeResources(Array.from(
           generations,
