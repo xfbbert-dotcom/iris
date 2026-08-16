@@ -6,6 +6,51 @@ import { describe, expect, it, vi } from "vitest";
 import { createKnowledgeCardStatusReader } from "../src/runtime/knowledge-card-runtime.js";
 
 describe("KnowledgeCardStatusReader real node-redis lifecycle", () => {
+  it("closes a refused default-reconnecting client before transport connection", async () => {
+    const client = createClient({
+      url: "redis://127.0.0.1:1",
+      RESP: 2,
+      disableClientInfo: true,
+      maintNotifications: "disabled",
+      socket: { connectTimeout: 50 },
+    });
+    client.on("error", () => undefined);
+    let closeSettled = false;
+    let reconnectsAfterClose = 0;
+    client.on("reconnecting", () => {
+      if (closeSettled) reconnectsAfterClose += 1;
+    });
+    const destroy = vi.spyOn(client, "destroy");
+    const fixture = readerFixture(client);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const statusOutcome = outcomeWithin(fixture.reader.getStatus());
+      await delay(20);
+
+      const firstClose = fixture.reader.close();
+      expect(fixture.reader.close()).toBe(firstClose);
+      await expect(outcomeWithin(firstClose, 750)).resolves.toEqual({ status: "fulfilled" });
+      closeSettled = true;
+      expect((await statusOutcome).status).toBe("rejected");
+      expect(fixture.reader.close()).toBe(firstClose);
+      expect(client.isOpen).toBe(false);
+      expect(client.isReady).toBe(false);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(fixture.pool.end).toHaveBeenCalledOnce();
+      await delay(300);
+      expect(client.isOpen).toBe(false);
+      expect(client.isReady).toBe(false);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(reconnectsAfterClose).toBe(0);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      closeClientIfOpen(client);
+    }
+  });
+
   it("closes a refused non-reconnecting client without reopening or leaking rejection", async () => {
     const client = realRedisClient("redis://127.0.0.1:1", true);
     const destroy = vi.spyOn(client, "destroy");
@@ -291,4 +336,8 @@ function closeClientIfOpen(client: ReturnType<typeof realRedisClient>): void {
 
 function nextTurn(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

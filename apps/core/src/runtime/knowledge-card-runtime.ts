@@ -92,7 +92,7 @@ type KnowledgeCardStatusRedisClient = RedisApprovalInteractionQueueClient & {
   connect(): Promise<unknown>;
   destroy(): void;
   on?(event: "error", listener: (error: Error) => void): unknown;
-  on?(event: "connect", listener: () => void): unknown;
+  on?(event: "connect" | "reconnecting", listener: () => void): unknown;
 };
 type KnowledgeCardRuntimeGate = Pick<
   RuntimeController,
@@ -227,7 +227,7 @@ export function createKnowledgeCardStatusReader({
     redisClient = createRedis(config.redisUrl);
     let lifecycle: "idle" | "connecting" | "ready" | "failed" | "closing" | "closed" =
       "idle";
-    let transportConnected = false;
+    let transportAttemptPending = false;
     let redisConnection: Promise<KnowledgeCardStatusRedisClient> | undefined;
     let redisConnectOutcomeSettlement: Promise<void> | undefined;
     let rejectClosedConnection!: (error: Error) => void;
@@ -236,6 +236,7 @@ export function createKnowledgeCardStatusReader({
     }));
     let destroyAttempted = false;
     let destroyError: unknown;
+    let awaitConnectSettlementAfterDestroy = false;
     let resolveDestroyed!: () => void;
     const destroyed = new Promise<void>((resolve) => {
       resolveDestroyed = resolve;
@@ -260,9 +261,22 @@ export function createKnowledgeCardStatusReader({
       }
       resolveDestroyed();
     };
-    redisClient.on?.("error", () => undefined);
+    redisClient.on?.("error", () => {
+      transportAttemptPending = false;
+      if (lifecycle !== "closing" && lifecycle !== "closed") return;
+      awaitConnectSettlementAfterDestroy = true;
+      try {
+        destroyIfOpen();
+      } catch (error) {
+        destroyError = error;
+      }
+    });
+    redisClient.on?.("reconnecting", () => {
+      if (lifecycle === "closing" || lifecycle === "closed") return;
+      transportAttemptPending = true;
+    });
     redisClient.on?.("connect", () => {
-      transportConnected = true;
+      transportAttemptPending = false;
       if (lifecycle !== "closing" && lifecycle !== "closed") return;
       // node-redis emits `connect` immediately before it queues protocol startup
       // commands. Let that stack finish so destroy() can reject those commands too.
@@ -283,6 +297,7 @@ export function createKnowledgeCardStatusReader({
       }
       if (redisConnection !== undefined) return redisConnection;
       lifecycle = "connecting";
+      transportAttemptPending = true;
       let connectResult: Promise<unknown>;
       try {
         connectResult = redisClient!.connect();
@@ -310,12 +325,19 @@ export function createKnowledgeCardStatusReader({
       return redisConnection;
     };
     closeRedis = async () => {
-      const connectionWasStarting = lifecycle === "connecting";
+      const connectionWasInRetryBackoff = lifecycle === "connecting" &&
+        !transportAttemptPending;
+      const transportTerminalPending = lifecycle === "connecting" && transportAttemptPending;
       lifecycle = "closing";
       rejectClosedConnection(new Error("knowledge-card status Redis client is closed"));
-      if (!connectionWasStarting || transportConnected) destroyIfOpen();
+      if (connectionWasInRetryBackoff) awaitConnectSettlementAfterDestroy = true;
+      if (!transportTerminalPending) destroyIfOpen();
       if (redisConnectOutcomeSettlement !== undefined && !destroyAttempted) {
         await Promise.race([redisConnectOutcomeSettlement, destroyed]);
+      }
+      if (redisConnectOutcomeSettlement !== undefined &&
+        awaitConnectSettlementAfterDestroy) {
+        await redisConnectOutcomeSettlement;
       }
       if (destroyError !== undefined) throw destroyError;
       destroyIfOpen();
