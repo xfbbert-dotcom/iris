@@ -578,3 +578,105 @@
   smoke, default-off, and mocked public-boundary contracts passed.
 - The product loop remains pending live acceptance and produces only a governed update draft,
   never an in-place Wiki edit.
+
+## Exception Fix Round 8: Request-Driven Redis Connection Generations
+
+### Result
+
+- Implementation/tests commit: `91faec289f16ab8cfb52c60219a77d65d7edab51`.
+- The disabled, read-only knowledge-card status reader now constructs its production Redis clients
+  with `reconnectStrategy: false`. It owns no background reconnect loop and no retry timer.
+- A refused connection or a disconnected ready connection fails the current status request closed.
+  The next `getStatus()` creates a fresh client generation and explicitly reconnects; concurrent
+  reads share the same connecting or ready generation. This preserves transient recovery without
+  allowing work to outlive a request generation.
+- Close first enters a terminal reader state, so no later request can create a generation. It then
+  closes every still-open owned generation, waits only for a no-retry dial to fail or expose its
+  assigned transport, destroys the assigned transport, detaches reader-owned listeners, and closes
+  PostgreSQL once. Concurrent and repeated close calls retain the same settled promise.
+- Failed and disconnected closed generations remove their reader listeners and leave the owned set;
+  already-closed clients do not receive a fabricated `destroy()`. Every client still open at close
+  is destroyed exactly once.
+- The one-shot `reconnectObserved` signal and fixed 300 ms Node Redis backoff bound were removed.
+  The enabled knowledge-card runtime and its graceful Redis close semantics were not changed.
+- Live pilot: not run and not claimed. Task 12 was not started.
+
+### Design Decision
+
+- A single no-reconnect client was rejected because the previous memoized `redisConnection` kept
+  its first rejection forever and would make all later readiness/status calls permanently fail.
+- Reusing that same client after a ready disconnect was also rejected because it retains stale queue
+  and listener state. Fresh request-driven generations give failure isolation and a clear owner.
+- A custom abortable Node Redis socket factory was rejected as disproportionate and dependent on
+  private library behavior. The selected protocol uses only public `connect`, `destroy`, lifecycle
+  events, and `isOpen`/`isReady` state.
+
+### TDD RED
+
+- Production-real A/B command:
+  `npm exec --workspace apps/core -- vitest run tests/knowledge-card-status-reader-real-redis.test.ts -t "recovers a (refused|disconnected)"`.
+- Initial result: 2 failed and 7 skipped. Both tests timed out at `condition did not settle within
+  test bound` while waiting for the replacement TCP connection. The prior one-shot connection
+  promise prevented the next request from creating a generation after either refusal or disconnect.
+- Scenario A uses a refused first request, starts a server on the same ephemeral endpoint, issues
+  two concurrent recovery reads, waits for their one shared replacement connection to be accepted,
+  and closes before the client transport event completes.
+- Scenario B completes an initial real status read, destroys the server-side ready socket, waits for
+  the client to become closed/not-ready, starts the next read, waits for its replacement connection
+  to be accepted, and immediately closes before the second handshake completes.
+- Each scenario runs 10 iterations and, after close settles, observes another 350 ms while requiring
+  zero late `connect`, `ready`, or `reconnecting` events, zero server sockets, no open/ready clients,
+  no unhandled rejection, one aggregate Redis destroy, one PostgreSQL end, restored listener counts,
+  and the same concurrent/repeated close promise.
+- Production factory command:
+  `npm exec --workspace apps/core -- vitest run tests/knowledge-card-status-reader.test.ts -t "without background reconnect"`.
+- Initial result: 1 failed and 7 skipped. The factory received only `{ url }`, while the new contract
+  expected a socket configuration with `reconnectStrategy: false`.
+
+### GREEN Verification
+
+- Both production-real generation races: 2/2 pass across 10 iterations each. Scenario A's two
+  concurrent recovery reads create only one replacement generation, and both scenarios retain only
+  two total clients after the post-close observation window.
+- Production-real Node Redis lifecycle suite: 7/7 pass. The previous injected default-background-
+  reconnect tests were replaced by the approved production no-reconnect recovery generations.
+- Production-real plus mocked status-reader suites: 15/15 pass. The mocked suite includes the
+  production factory option and reader-listener cleanup contracts.
+- Consolidated status reader, enabled runtime, startup, readiness, API, and resource-close set:
+  136/136 pass across 9 files.
+- Full Core `npm --workspace apps/core test`: 3,384 pass, 0 fail, 250 environment-gated skips;
+  187 test files passed and 3 were skipped.
+- Pilot operations `node --test scripts/pilot-operations.test.mjs`: 41/41 pass in 52,061 ms.
+- Fresh full `npm run test:pilot`: 156 tests, 155 pass, 0 fail, 1 skip in 412,217 ms. The sole skip
+  accurately reports the unavailable Docker daemon for the executable pinned-Caddy boundary probe;
+  static Compose, Caddy, smoke, backup, restore, and rollback contracts passed.
+- `npm run readiness -- --env-file deploy/pilot/ci.env`: 17/17 pass in static disabled-env mode.
+- `npm run typecheck`: exit `0`.
+- `npm run build`: exit `0`.
+- `npm run pilot:config`: exit `0`; parsed Core configuration has conflict/card/action-approval
+  flags `false` and all three corresponding allowlist lengths `0`.
+- Full executable PowerShell controller parse: pass, 7,006 tokens and 0 parse errors.
+- `git diff --check`: exit `0` before the implementation commit; line-ending notices only.
+- Direct `docker info --format '{{.ServerVersion}}'` exited `1` because the Docker Desktop Linux
+  daemon pipe does not exist. No container execution or live-service result is claimed.
+
+### Artifact SHA-256
+
+- Knowledge-card runtime/status reader: `366ba75ec8eab4ef20ac3de548a19c65217e35edf36a9e9ee4fcd4beaed4c3b8`.
+- Production-real Node Redis lifecycle contract:
+  `cf7cb770ed3571897650e28e3afdb238d199f71d4b9531ff6e446b545a1e459e`.
+- Mocked status-reader lifecycle contract:
+  `5e8e74902849e6df1a4fcf385779da3acb844ac430b25176fbebff36fbb137fe`.
+
+### Residual Risk
+
+- No live PostgreSQL query, Redis service/queue, Feishu callback/card, model request, Wiki read,
+  credential, or pilot mutation was used. The real Redis tests use only local ephemeral TCP servers
+  and metadata-free RESP2 fixtures.
+- Before a transport is assigned, public Node Redis cannot cancel its private in-progress socket.
+  Close therefore waits for the configured finite connection timeout or transport exposure; it no
+  longer waits for an unbounded reconnect loop or a guessed backoff interval.
+- Docker remained unavailable for the executable Caddy container probe. Static Caddy, Compose,
+  smoke, default-off, and mocked public-boundary contracts passed.
+- The product loop remains pending live acceptance and produces only a governed update draft,
+  never an in-place Wiki edit.
