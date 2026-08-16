@@ -1,4 +1,10 @@
 import { normalizeFeishuDocumentSourceUri } from "../documents/feishu-document-body-fetcher.js";
+import {
+  KnowledgeConflictNotFoundError,
+  KnowledgeConflictStaleEvidenceError,
+  KnowledgeConflictVersionConflictError,
+  lockCurrentKnowledgeConflictCandidateForAnswerSend,
+} from "../knowledge-conflicts/postgres-knowledge-conflict-repository.js";
 import type { AnswerReplySourceTraceInput } from "./answer-source-citation-renderer.js";
 import {
   createAnswerReplyEventId,
@@ -125,6 +131,12 @@ type EventRow = {
   created_at: unknown;
 };
 
+type KnowledgeConflictBindingRow = {
+  delivery_id: string;
+  candidate_id: string;
+  candidate_version: string | number;
+};
+
 type NormalizedPrepareInput = {
   provider: AnswerReplyProvider;
   incomingMessageId: string;
@@ -195,6 +207,13 @@ export function createPostgresAnswerReplyRepository(input: {
           client,
           `${normalized.provider}:${normalized.incomingMessageId}`,
         );
+        const lockedCandidate = normalized.knowledgeConflictCandidateId === undefined
+          ? undefined
+          : await requireCurrentAnswerCandidate(client, {
+              candidateId: normalized.knowledgeConflictCandidateId,
+              expectedGroupId: normalized.chatId,
+              errorKind: "preparation",
+            });
         const existingResult = await client.query<DeliveryRow>(
           `SELECT ${DELIVERY_COLUMNS}
            FROM answer_reply_deliveries
@@ -285,13 +304,15 @@ export function createPostgresAnswerReplyRepository(input: {
         );
 
         if (normalized.knowledgeConflictCandidateId !== undefined) {
+          if (lockedCandidate === undefined) throw new AnswerReplyPreparationConflictError();
           await client.query(
             `INSERT INTO answer_reply_knowledge_conflicts (
-               delivery_id, candidate_id, created_at
-             ) VALUES ($1, $2, $3)`,
+               delivery_id, candidate_id, candidate_version, created_at
+             ) VALUES ($1, $2, $3, $4)`,
             [
               normalized.deliveryId,
               normalized.knowledgeConflictCandidateId,
+              lockedCandidate.candidateVersion,
               normalized.at,
             ],
           );
@@ -329,7 +350,28 @@ export function createPostgresAnswerReplyRepository(input: {
 
     async beginAnswerSend(transitionInput) {
       const normalized = normalizeTransitionInput(transitionInput);
-      return withLockedDelivery(dataSource, normalized, async (client, delivery, sources) => {
+      return withTransaction(dataSource, async (client) => {
+        await acquireAdvisoryLock(client, normalized.deliveryId);
+        const binding = await loadKnowledgeConflictBinding(client, normalized.deliveryId);
+        const lockedCandidate = binding === undefined
+          ? undefined
+          : await requireCurrentAnswerCandidate(client, {
+              candidateId: binding.candidate_id,
+              expectedVersion: requireDatabaseInteger(binding.candidate_version, 1),
+              errorKind: "transition",
+            });
+        const { delivery, sources } = await lockDeliveryInTransaction(client, normalized);
+        if ((delivery.knowledgeConflictCandidateId === undefined) !== (binding === undefined)) {
+          throw new AnswerReplyTransitionError();
+        }
+        if (binding !== undefined && (
+          lockedCandidate === undefined
+          || binding.delivery_id !== delivery.id
+          || binding.candidate_id !== delivery.knowledgeConflictCandidateId
+          || lockedCandidate.groupId !== delivery.chatId
+        )) {
+          throw new AnswerReplyTransitionError();
+        }
         if (delivery.state !== "prepared" && delivery.state !== "sending") {
           throw new AnswerReplyTransitionError();
         }
@@ -551,24 +593,27 @@ async function withLockedDelivery<T>(
 ): Promise<T> {
   return withTransaction(dataSource, async (client) => {
     await acquireAdvisoryLock(client, input.deliveryId);
-    const result = await client.query<DeliveryRow>(
-      `SELECT ${DELIVERY_COLUMNS}
-       FROM answer_reply_deliveries
-       WHERE id = $1
-       FOR UPDATE`,
-      [input.deliveryId],
-    );
-    const row = result.rows[0];
-    if (row === undefined) {
-      throw new AnswerReplyNotFoundError();
-    }
-    const delivery = mapDelivery(row);
-    if (delivery.version !== input.expectedVersion) {
-      throw new AnswerReplyVersionConflictError();
-    }
-    const sources = await loadSources(client, delivery.id);
+    const { delivery, sources } = await lockDeliveryInTransaction(client, input);
     return operation(client, delivery, sources);
   });
+}
+
+async function lockDeliveryInTransaction(
+  client: AnswerReplyTransactionClient,
+  input: VersionedTransitionInput,
+): Promise<{ delivery: AnswerReplyDelivery; sources: AnswerReplySourceTrace[] }> {
+  const result = await client.query<DeliveryRow>(
+    `SELECT ${DELIVERY_COLUMNS}
+     FROM answer_reply_deliveries
+     WHERE id = $1
+     FOR UPDATE`,
+    [input.deliveryId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new AnswerReplyNotFoundError();
+  const delivery = mapDelivery(row);
+  if (delivery.version !== input.expectedVersion) throw new AnswerReplyVersionConflictError();
+  return { delivery, sources: await loadSources(client, delivery.id) };
 }
 
 async function loadReceiptById(
@@ -592,11 +637,58 @@ async function loadReceipt(
   queryable: AnswerReplyQueryable,
   delivery: AnswerReplyDelivery,
 ): Promise<AnswerReplyReceipt> {
-  const [sources, events] = await Promise.all([
+  const [sources, events, binding] = await Promise.all([
     loadSources(queryable, delivery.id),
     loadEvents(queryable, delivery.id),
+    loadKnowledgeConflictBinding(queryable, delivery.id),
   ]);
+  if (
+    (delivery.knowledgeConflictCandidateId === undefined) !== (binding === undefined)
+    || (binding !== undefined && (
+      binding.delivery_id !== delivery.id
+      || binding.candidate_id !== delivery.knowledgeConflictCandidateId
+      || requireDatabaseInteger(binding.candidate_version, 1) < 1
+    ))
+  ) throw new Error("answer reply knowledge conflict binding is invalid");
   return requireValidAnswerReplyReceipt({ delivery, sources, events });
+}
+
+async function loadKnowledgeConflictBinding(
+  queryable: AnswerReplyQueryable,
+  deliveryId: string,
+): Promise<KnowledgeConflictBindingRow | undefined> {
+  const result = await queryable.query<KnowledgeConflictBindingRow>(
+    `SELECT delivery_id, candidate_id, candidate_version
+     FROM answer_reply_knowledge_conflicts
+     WHERE delivery_id = $1`,
+    [deliveryId],
+  );
+  if (result.rows.length > 1) throw new Error("answer reply knowledge conflict binding is invalid");
+  return result.rows[0];
+}
+
+async function requireCurrentAnswerCandidate(
+  client: AnswerReplyTransactionClient,
+  input: {
+    candidateId: string;
+    expectedVersion?: number;
+    expectedGroupId?: string;
+    errorKind: "preparation" | "transition";
+  },
+) {
+  try {
+    return await lockCurrentKnowledgeConflictCandidateForAnswerSend(client, input);
+  } catch (error) {
+    if (
+      error instanceof KnowledgeConflictNotFoundError
+      || error instanceof KnowledgeConflictStaleEvidenceError
+      || error instanceof KnowledgeConflictVersionConflictError
+    ) {
+      if (input.errorKind === "preparation") throw new AnswerReplyPreparationConflictError();
+      throw new AnswerReplyTransitionError();
+    }
+    throw error;
+  }
 }
 
 async function loadSources(

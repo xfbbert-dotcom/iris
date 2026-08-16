@@ -262,6 +262,12 @@ const MAX_SCAN_ATTEMPTS = 5;
 const MAX_REFERENCE_CHARS = 512;
 const MAX_ERROR_CODE_CHARS = 128;
 const DEFAULT_MAX_PERMISSION_ATTESTATION_AGE_MS = 60_000;
+const ANSWER_VISIBLE_CANDIDATE_STATUSES = new Set<KnowledgeConflictCandidateStatus>([
+  "pending_review",
+  "approved_for_delivery",
+  "delivered",
+  "draft_created",
+]);
 
 export function createPostgresKnowledgeConflictRepository({
   dataSource,
@@ -368,6 +374,36 @@ export function createPostgresKnowledgeConflictRepository({
       return getInteractionResultCounts(dataSource);
     },
   };
+}
+
+export async function lockCurrentKnowledgeConflictCandidateForAnswerSend(
+  client: PostgresKnowledgeConflictTransactionClient,
+  input: {
+    candidateId: string;
+    expectedVersion?: number;
+    expectedGroupId?: string;
+  },
+): Promise<{ candidateId: string; candidateVersion: number; groupId: string }> {
+  const candidateId = requireReference("candidateId", input.candidateId);
+  const expectedGroupId = input.expectedGroupId === undefined
+    ? undefined
+    : requireReference("expectedGroupId", input.expectedGroupId);
+  const expectedVersion = input.expectedVersion === undefined
+    ? undefined
+    : requirePositiveSafeInteger("expectedVersion", input.expectedVersion);
+  const candidate = await lockCandidateMemoryBeforeCandidate(client, candidateId);
+  const candidateVersion = requirePositiveSafeInteger("candidate version", Number(candidate.version));
+  if (
+    (expectedGroupId !== undefined && candidate.group_id !== expectedGroupId)
+    || (expectedVersion !== undefined && candidateVersion !== expectedVersion)
+    || !ANSWER_VISIBLE_CANDIDATE_STATUSES.has(candidate.status)
+  ) {
+    throw new KnowledgeConflictVersionConflictError();
+  }
+  const evidence = await loadEvidence(client, candidateId);
+  const staleReason = await findStaleReason(client, candidate, evidence);
+  if (staleReason !== undefined) throw new KnowledgeConflictStaleEvidenceError(staleReason);
+  return { candidateId, candidateVersion, groupId: candidate.group_id };
 }
 
 async function discoverEligibleScans(
@@ -932,8 +968,8 @@ async function validateDetectionFingerprint(
     (item): item is Extract<KnowledgeConflictEvidenceReference, { type: "conversation_message" }> =>
       item.type === "conversation_message",
   );
-  const messageResult = await client.query<{ id: string; chat_id: string }>(
-    `SELECT message.id, message.chat_id
+  const messageResult = await client.query<{ id: string; chat_id: string; sent_at: Date }>(
+    `SELECT message.id, message.chat_id, message.sent_at
      FROM conversation_messages message
      JOIN group_memory_message_evidence memory_evidence
        ON memory_evidence.conversation_message_id = message.id
@@ -987,6 +1023,7 @@ async function validateDetectionFingerprint(
     (item): item is Extract<KnowledgeConflictEvidenceReference, { type: "document_snapshot" }> =>
       item.type === "document_snapshot",
   ).sort((left, right) => left.documentSourceId.localeCompare(right.documentSourceId));
+  const snapshotFetchedAts: Date[] = [];
   for (const expectedSnapshot of snapshots) {
     const snapshotResult = await client.query<SnapshotValidationRow>(
       `SELECT id, document_source_id, fetch_status, content_hash, source_version, fetched_at
@@ -1007,6 +1044,10 @@ async function validateDetectionFingerprint(
       || (expectedSnapshot.documentSourceId === input.targetDocumentSourceId
         && (snapshot.source_version ?? undefined) !== input.targetSourceVersion)
     ) throw new KnowledgeConflictStaleEvidenceError("snapshot_stale");
+    snapshotFetchedAts.push(snapshot.fetched_at);
+  }
+  if (!hasStrictMessageAfterSnapshotChronology(messageResult.rows, snapshotFetchedAts)) {
+    throw new KnowledgeConflictStaleEvidenceError("chronology_stale");
   }
 
   const fragments = input.evidence.filter(
@@ -1191,6 +1232,7 @@ async function supersedeCompetingCandidates(
     [input.groupMemoryId, input.targetDocumentSourceId, input.idempotencyKey],
   );
   for (const row of result.rows) {
+    await assertAnswerAttemptsAllowCandidateTransition(client, row.id, "superseded");
     const deliveryResult = await client.query<DeliveryRow>(
       `SELECT * FROM knowledge_conflict_delivery_outbox
        WHERE candidate_id = $1
@@ -1594,6 +1636,7 @@ async function transitionCandidateInTransaction(
   const row = await lockCandidate(client, input.candidateId);
   if (Number(row.version) !== input.expectedVersion) throw new KnowledgeConflictVersionConflictError();
   requireCandidateTransition(row.status, input.toStatus);
+  await assertAnswerAttemptsAllowCandidateTransition(client, row.id, input.toStatus);
   await assertDeliveryAllowsCandidateTransition(client, row, input.toStatus);
   const result = await client.query<CandidateRow>(
     `UPDATE knowledge_conflict_candidates
@@ -1775,6 +1818,7 @@ async function transitionLockedCandidate(
   input: ReturnType<typeof normalizeTransition>,
 ): Promise<KnowledgeConflictMutationResult> {
   requireCandidateTransition(row.status, input.toStatus);
+  await assertAnswerAttemptsAllowCandidateTransition(client, row.id, input.toStatus);
   await assertDeliveryAllowsCandidateTransition(client, row, input.toStatus);
   const result = await client.query<CandidateRow>(
     `UPDATE knowledge_conflict_candidates
@@ -1816,6 +1860,25 @@ async function assertDeliveryAllowsCandidateTransition(
   if (delivery?.status === "external_attempting" || delivery?.status === "outcome_unknown") {
     throw new KnowledgeConflictDeliveryConflictError();
   }
+}
+
+async function assertAnswerAttemptsAllowCandidateTransition(
+  client: PostgresKnowledgeConflictTransactionClient,
+  candidateId: string,
+  toStatus: KnowledgeConflictCandidateStatus,
+): Promise<void> {
+  if (toStatus !== "dismissed" && toStatus !== "superseded") return;
+  const result = await client.query<{ id: string }>(
+    `SELECT delivery.id
+     FROM answer_reply_knowledge_conflicts binding
+     JOIN answer_reply_deliveries delivery ON delivery.id = binding.delivery_id
+     WHERE binding.candidate_id = $1
+       AND delivery.state IN ('sending', 'reconciliation_required')
+     ORDER BY delivery.id
+     FOR UPDATE OF delivery`,
+    [candidateId],
+  );
+  if (result.rows.length > 0) throw new KnowledgeConflictDeliveryConflictError();
 }
 
 async function validateCandidateCurrentState(
@@ -1890,8 +1953,8 @@ async function findStaleReason(
     (item): item is Extract<KnowledgeConflictEvidenceReference, { type: "conversation_message" }> =>
       item.type === "conversation_message",
   ).map((item) => item.conversationMessageId);
-  const messages = await client.query<{ id: string }>(
-    `SELECT message.id FROM conversation_messages message
+  const messages = await client.query<{ id: string; sent_at: Date }>(
+    `SELECT message.id, message.sent_at FROM conversation_messages message
      JOIN group_memory_message_evidence memory_evidence
        ON memory_evidence.conversation_message_id = message.id
       AND memory_evidence.memory_id = $3
@@ -1940,6 +2003,7 @@ async function findStaleReason(
     (item): item is Extract<KnowledgeConflictEvidenceReference, { type: "document_snapshot" }> =>
       item.type === "document_snapshot",
   ).sort((left, right) => left.documentSourceId.localeCompare(right.documentSourceId));
+  const snapshotFetchedAts: Date[] = [];
   for (const expectedSnapshot of snapshots) {
     const snapshot = await client.query<SnapshotValidationRow>(
       `SELECT id, document_source_id, fetch_status, content_hash, source_version, fetched_at
@@ -1957,6 +2021,10 @@ async function findStaleReason(
         && (currentSnapshot.source_version ?? null) !== candidate.target_source_version)) {
       return "snapshot_stale";
     }
+    snapshotFetchedAts.push(currentSnapshot.fetched_at);
+  }
+  if (!hasStrictMessageAfterSnapshotChronology(messages.rows, snapshotFetchedAts)) {
+    return "chronology_stale";
   }
   const fragments = evidence.filter(
     (item): item is Extract<KnowledgeConflictEvidenceReference, { type: "document_fragment" }> =>
@@ -1982,6 +2050,19 @@ async function findStaleReason(
     })) return "fragment_stale";
   }
   return undefined;
+}
+
+function hasStrictMessageAfterSnapshotChronology(
+  messages: readonly { sent_at: Date }[],
+  snapshotFetchedAts: readonly Date[],
+): boolean {
+  if (messages.length === 0 || snapshotFetchedAts.length === 0) return false;
+  const latestSnapshotTime = Math.max(...snapshotFetchedAts.map((value) => value.getTime()));
+  return Number.isFinite(latestSnapshotTime) && messages.every(({ sent_at: sentAt }) => (
+    sentAt instanceof Date
+    && Number.isFinite(sentAt.getTime())
+    && sentAt.getTime() > latestSnapshotTime
+  ));
 }
 
 async function lockAuthorizingPublicationPolicy(

@@ -378,6 +378,38 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       .rejects.toMatchObject({ reasonCode: "message_stale" });
   });
 
+  it("rejects a candidate when authoritative message chronology changed before persistence", async () => {
+    const client = candidateClient({
+      messageSentAt: new Date("2026-08-13T00:59:59.000Z"),
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.recordDetectionResult(conflictDetectionInput()))
+      .rejects.toMatchObject({
+        name: "KnowledgeConflictStaleEvidenceError",
+        reasonCode: "chronology_stale",
+      });
+    expect(client.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO knowledge_conflict_candidates"),
+      expect.anything(),
+    );
+  });
+
+  it.each(["sending", "reconciliation_required"] as const)(
+    "does not supersede a competing candidate while its answer is %s",
+    async (answerState) => {
+      const client = candidateClient({ competingCandidate: true, answerState });
+      const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+      await expect(repository.recordDetectionResult(conflictDetectionInput()))
+        .rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+      expect(client.query).not.toHaveBeenCalledWith(
+        expect.stringContaining("INSERT INTO knowledge_conflict_candidates"),
+        expect.anything(),
+      );
+    },
+  );
+
   it("rejects document snapshots that have no exact document-source evidence fact", async () => {
     const input = conflictDetectionInput({
       evidence: [
@@ -579,6 +611,51 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     })).resolves.toMatchObject({ status: "current", candidate: { id: "candidate-1" } });
   });
 
+  it("supersedes a persisted candidate when authoritative message chronology changes", async () => {
+    const repository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(memoryBeforeCandidateClient({
+        messageSentAt: new Date("2026-08-13T00:59:59.000Z"),
+        superseded: true,
+      })),
+    });
+
+    await expect(repository.validateCandidateCurrentState({
+      candidateId: "candidate-1",
+      expectedVersion: 1,
+      permissionAttestedAt: at,
+      operationKey: "validate-chronology-mutation",
+      at,
+    })).resolves.toMatchObject({
+      status: "superseded",
+      reasonCode: "chronology_stale",
+      candidate: { status: "superseded", version: 2 },
+    });
+  });
+
+  it.each(["sending", "reconciliation_required"] as const)(
+    "preserves a chronology-stale candidate while its answer is %s",
+    async (answerState) => {
+      const client = memoryBeforeCandidateClient({
+        messageSentAt: new Date("2026-08-13T00:59:59.000Z"),
+        superseded: true,
+        answerState,
+      });
+      const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+      await expect(repository.validateCandidateCurrentState({
+        candidateId: "candidate-1",
+        expectedVersion: 1,
+        permissionAttestedAt: at,
+        operationKey: `validate-chronology-during-answer-${answerState}`,
+        at,
+      })).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+      expect(client.query).not.toHaveBeenCalledWith(
+        expect.stringContaining("UPDATE knowledge_conflict_candidates"),
+        expect.anything(),
+      );
+    },
+  );
+
   it("claims, begins, completes, fails, and reconciles one delivery lifecycle", async () => {
     const claimRepository = createPostgresKnowledgeConflictRepository({
       dataSource: dataSource(routedClient((sql) => sql.includes("WITH claimable")
@@ -754,6 +831,28 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       expect.anything(),
     );
   });
+
+  it.each(["sending", "reconciliation_required"] as const)(
+    "blocks dismissal while a candidate-bound answer is %s",
+    async (answerState) => {
+      const client = transitionClient({ toStatus: "dismissed", answerState });
+      const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+      await expect(repository.dismissCandidate({
+        candidateId: "candidate-1",
+        expectedVersion: 1,
+        operationKey: `dismiss-during-answer-${answerState}`,
+        actorType: "admin_role",
+        actorRef: "knowledge-admin",
+        reasonCode: "not_current_policy",
+        at,
+      })).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+      expect(client.query).not.toHaveBeenCalledWith(
+        expect.stringContaining("UPDATE knowledge_conflict_candidates"),
+        expect.anything(),
+      );
+    },
+  );
 
   it("locks the candidate before the delivery for completion and reconciliation", async () => {
     const completeOrder: string[] = [];
@@ -1016,8 +1115,8 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
         }
         if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
         if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
-        if (sql.includes("SELECT message.id FROM conversation_messages")) {
-          return { rows: [{ id: "message-1" }] };
+        if (sql.includes("FROM conversation_messages")) {
+          return { rows: [{ id: "message-1", sent_at: at }] };
         }
         if (sql.includes("FROM knowledge_publication_target_policies")) {
           return { rows: [{ id: "policy-1" }] };
@@ -1056,8 +1155,8 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       if (sql.includes("FROM knowledge_conflict_candidates")) return { rows: [candidateRow()] };
       if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
       if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
-      if (sql.includes("SELECT message.id FROM conversation_messages")) {
-        return { rows: [{ id: "message-1" }] };
+      if (sql.includes("FROM conversation_messages")) {
+        return { rows: [{ id: "message-1", sent_at: at }] };
       }
       if (sql.includes("FROM knowledge_publication_target_policies")) {
         return { rows: [{ id: "policy-1" }] };
@@ -1091,8 +1190,8 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       if (sql.includes("FROM knowledge_conflict_candidates")) return { rows: [candidateRow()] };
       if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
       if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
-      if (sql.includes("SELECT message.id FROM conversation_messages")) {
-        return { rows: [{ id: "message-1" }] };
+      if (sql.includes("FROM conversation_messages")) {
+        return { rows: [{ id: "message-1", sent_at: at }] };
       }
       if (sql.includes("FROM knowledge_publication_target_policies")) return { rows: [] };
       if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
@@ -1126,8 +1225,8 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
         return { rows: [candidateRow()] };
       }
       if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
-      if (sql.includes("SELECT message.id FROM conversation_messages")) {
-        return { rows: [{ id: "message-1" }] };
+      if (sql.includes("FROM conversation_messages")) {
+        return { rows: [{ id: "message-1", sent_at: at }] };
       }
       if (sql.includes("FROM knowledge_publication_target_policies")) {
         return { rows: [{ id: "policy-1" }] };
@@ -1161,8 +1260,8 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       }
       if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
       if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
-      if (sql.includes("SELECT message.id FROM conversation_messages")) {
-        return { rows: [{ id: "message-1" }] };
+      if (sql.includes("FROM conversation_messages")) {
+        return { rows: [{ id: "message-1", sent_at: at }] };
       }
       if (sql.includes("FROM knowledge_publication_target_policies")) {
         return { rows: [{ id: "policy-1" }] };
@@ -1204,8 +1303,8 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       }
       if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
       if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
-      if (sql.includes("SELECT message.id FROM conversation_messages")) {
-        return { rows: [{ id: "message-1" }] };
+      if (sql.includes("FROM conversation_messages")) {
+        return { rows: [{ id: "message-1", sent_at: at }] };
       }
       if (sql.includes("FROM document_sources")) {
         return { rows: [sourceRow({ updated_at: new Date(at.getTime() + 1) })] };
@@ -1237,7 +1336,7 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
         return { rows: [memoryRow()] };
       }
       if (sql.includes("FROM conversation_messages")) {
-        return { rows: [{ id: "message-1", chat_id: "group-1" }] };
+        return { rows: [{ id: "message-1", chat_id: "group-1", sent_at: at }] };
       }
       if (sql.includes("FROM document_sources") && sql.includes("FOR UPDATE")) {
         return { rows: [sourceRow()] };
@@ -1460,6 +1559,46 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       }),
     };
   }
+
+  it("rejects a real detection when message chronology mutates after evidence planning", async () => {
+    const fixture = await insertDetectionFixture("chronology-before-persistence");
+    await pool!.query(
+      "UPDATE conversation_messages SET sent_at = $2 WHERE id = $1",
+      [fixture.messageId, new Date("2026-08-13T00:59:59.000Z")],
+    );
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+
+    await expect(repository.recordDetectionResult(fixture.input)).rejects.toMatchObject({
+      name: "KnowledgeConflictStaleEvidenceError",
+      reasonCode: "chronology_stale",
+    });
+    await expect(pool!.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM knowledge_conflict_candidates WHERE id = $1",
+      [fixture.candidateId],
+    )).resolves.toMatchObject({ rows: [{ count: "0" }] });
+  });
+
+  it("supersedes a real persisted candidate after message chronology mutates", async () => {
+    const fixture = await insertDetectionFixture("chronology-after-persistence");
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+    await repository.recordDetectionResult(fixture.input);
+    await pool!.query(
+      "UPDATE conversation_messages SET sent_at = $2 WHERE id = $1",
+      [fixture.messageId, new Date("2026-08-13T00:59:59.000Z")],
+    );
+
+    await expect(repository.validateCandidateCurrentState({
+      candidateId: fixture.candidateId,
+      expectedVersion: 1,
+      permissionAttestedAt: at,
+      operationKey: `chronology-after-persistence-validation-${suffix}`,
+      at,
+    })).resolves.toMatchObject({
+      status: "superseded",
+      reasonCode: "chronology_stale",
+      candidate: { status: "superseded", version: 2 },
+    });
+  });
 
   async function runOverlapAgainstCandidateOperation(
     label: string,
@@ -2996,6 +3135,10 @@ function candidateClient(input: {
   existingCandidate?: boolean;
   completedScan?: boolean;
   authorizedPolicy?: boolean;
+  messageSentAt?: Date;
+  snapshotFetchedAt?: Date;
+  competingCandidate?: boolean;
+  answerState?: "sending" | "reconciliation_required";
 } = {}) {
   return routedClient((sql) => {
     if (sql.includes("FROM knowledge_conflict_scan_inbox") && sql.includes("FOR UPDATE")) {
@@ -3005,14 +3148,28 @@ function candidateClient(input: {
         terminal_outcome: input.completedScan ? "conflict" : null,
       })] };
     }
-    if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("idempotency_key")) {
+    if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("idempotency_key = $1")) {
       return { rows: input.existingCandidate ? [candidateRow()] : [] };
+    }
+    if (sql.includes("FROM knowledge_conflict_candidates") && sql.includes("idempotency_key <> $3")) {
+      return { rows: input.competingCandidate
+        ? [candidateRow({ id: "candidate-competing", idempotency_key: "competing-key" })]
+        : [] };
+    }
+    if (sql.includes("FROM answer_reply_knowledge_conflicts")) {
+      expect(sql).toContain("delivery.state IN ('sending', 'reconciliation_required')");
+      expect(sql).toContain("FOR UPDATE OF delivery");
+      return { rows: input.answerState === undefined ? [] : [{ id: "answer-delivery-1" }] };
     }
     if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
       return { rows: [memoryRow()] };
     }
     if (sql.includes("FROM conversation_messages")) {
-      return { rows: [{ id: "message-1", chat_id: "group-1" }] };
+      return { rows: [{
+        id: "message-1",
+        chat_id: "group-1",
+        sent_at: input.messageSentAt ?? at,
+      }] };
     }
     if (sql.includes("FROM document_sources") && sql.includes("FOR UPDATE")) {
       return { rows: [sourceRow()] };
@@ -3021,7 +3178,8 @@ function candidateClient(input: {
       return { rows: input.authorizedPolicy === false ? [] : [{ id: "policy-1" }] };
     }
     if (sql.includes("FROM document_snapshots") && sql.includes("FOR UPDATE")) {
-      return { rows: [snapshotRow()] };
+      return { rows: [snapshotRow({ fetched_at: input.snapshotFetchedAt
+        ?? new Date("2026-08-13T01:00:00.000Z") })] };
     }
     if (sql.includes("FROM document_fragments")) {
       return { rows: [{
@@ -3048,15 +3206,21 @@ function transitionClient(input: {
   delivery?: boolean;
   currentVersion?: number;
   targetPolicy?: ReturnType<typeof policyRow>;
+  answerState?: "sending" | "reconciliation_required";
 }) {
   return routedClient((sql) => {
+    if (sql.includes("FROM answer_reply_knowledge_conflicts")) {
+      expect(sql).toContain("delivery.state IN ('sending', 'reconciliation_required')");
+      expect(sql).toContain("FOR UPDATE OF delivery");
+      return { rows: input.answerState === undefined ? [] : [{ id: "answer-delivery-1" }] };
+    }
     if (sql.includes("FROM knowledge_conflict_interactions")) return { rows: [] };
     if (sql.includes("INSERT INTO knowledge_conflict_interactions")) {
       return { rows: [interactionRow({ callback_operation_key: "callback-atomic-1" })] };
     }
     if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
-    if (sql.includes("SELECT message.id FROM conversation_messages")) {
-      return { rows: [{ id: "message-1" }] };
+    if (sql.includes("FROM conversation_messages")) {
+      return { rows: [{ id: "message-1", sent_at: at }] };
     }
     if (sql.includes("FROM knowledge_publication_target_policies")) {
       return { rows: [input.targetPolicy ?? policyRow()] };
@@ -3103,7 +3267,13 @@ function policyRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function memoryBeforeCandidateClient(input: { approval?: boolean } = {}) {
+function memoryBeforeCandidateClient(input: {
+  approval?: boolean;
+  messageSentAt?: Date;
+  snapshotFetchedAt?: Date;
+  superseded?: boolean;
+  answerState?: "sending" | "reconciliation_required";
+} = {}) {
   let memoryLocked = false;
   return routedClient((sql) => {
     if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
@@ -3116,17 +3286,25 @@ function memoryBeforeCandidateClient(input: { approval?: boolean } = {}) {
       }
       return { rows: [candidateRow()] };
     }
+    if (sql.includes("FROM answer_reply_knowledge_conflicts")) {
+      expect(sql).toContain("delivery.state IN ('sending', 'reconciliation_required')");
+      expect(sql).toContain("FOR UPDATE OF delivery");
+      return { rows: input.answerState === undefined ? [] : [{ id: "answer-delivery-1" }] };
+    }
     if (sql.includes("FROM knowledge_conflict_delivery_outbox")) return { rows: [] };
     if (sql.includes("FROM knowledge_conflict_candidate_events")) return { rows: [] };
     if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
-    if (sql.includes("SELECT message.id FROM conversation_messages")) {
-      return { rows: [{ id: "message-1" }] };
+    if (sql.includes("FROM conversation_messages")) {
+      return { rows: [{ id: "message-1", sent_at: input.messageSentAt ?? at }] };
     }
     if (sql.includes("FROM document_sources")) return { rows: [sourceRow()] };
     if (sql.includes("FROM knowledge_publication_target_policies")) {
       return { rows: [{ id: "policy-1" }] };
     }
-    if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
+    if (sql.includes("FROM document_snapshots")) {
+      return { rows: [snapshotRow({ fetched_at: input.snapshotFetchedAt
+        ?? new Date("2026-08-13T01:00:00.000Z") })] };
+    }
     if (sql.includes("FROM document_fragments")) {
       return { rows: [{
         id: "fragment-1",
@@ -3136,7 +3314,10 @@ function memoryBeforeCandidateClient(input: { approval?: boolean } = {}) {
       }] };
     }
     if (sql.includes("UPDATE knowledge_conflict_candidates")) {
-      return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
+      return { rows: [candidateRow({
+        status: input.superseded ? "superseded" : "approved_for_delivery",
+        version: 2,
+      })] };
     }
     if (sql.includes("INSERT INTO knowledge_conflict_delivery_outbox")) {
       return { rows: input.approval ? [deliveryRow()] : [] };

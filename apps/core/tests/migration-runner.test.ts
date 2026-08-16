@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readdir } from "node:fs/promises";
@@ -44,6 +44,26 @@ describe("runMigrations", () => {
     )?.[1];
     expect(reconciliationTable).toContain("attempt_count integer not null");
     expect(reconciliationTable).toContain("actor_ref text not null");
+  });
+
+  it("defines an exact auditable candidate-version backfill without weakening append-only guards", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0049_answer_reply_knowledge_conflict_candidate_version.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("add column candidate_version bigint");
+    expect(normalized).not.toMatch(/candidate_version bigint default/iu);
+    expect(normalized).toContain(
+      "update answer_reply_knowledge_conflicts binding set candidate_version = candidate.version "
+      + "from knowledge_conflict_candidates candidate where candidate.id = binding.candidate_id",
+    );
+    expect(normalized).toContain("alter column candidate_version set not null");
+    expect(normalized).toContain("check (candidate_version >= 1)");
+    expect(normalized).toContain("drop trigger answer_reply_knowledge_conflicts_append_only");
+    expect(normalized).toContain("create trigger answer_reply_knowledge_conflicts_append_only");
+    expect(normalized).not.toContain("drop trigger answer_reply_knowledge_conflicts_truncate_guard");
   });
 
   it("defines bounded append-only answer source citation receipts", async () => {
@@ -1357,6 +1377,115 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
       `)).rejects.toMatchObject({
         constraint: "knowledge_conflict_evidence_snapshot_identity_fkey",
       });
+    } finally {
+      await client.query("RESET search_path").catch(() => undefined);
+      await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      client.release();
+      await pool.end();
+    }
+  });
+
+  it("backfills exact candidate versions and restores append-only binding guards in 0049", async () => {
+    const stagedMigrations = await mkdtemp(join(tmpdir(), "iris-candidate-version-migrations-"));
+    const migrationNames = await readdir(defaultMigrationsDir());
+    for (const migrationName of migrationNames.filter((name) => name < "0049_")) {
+      await copyFile(
+        join(defaultMigrationsDir(), migrationName),
+        join(stagedMigrations, migrationName),
+      );
+    }
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    const schema = `answer_candidate_version_0049_${randomUUID().replaceAll("-", "")}`;
+    try {
+      await client.query(`CREATE SCHEMA ${schema}`);
+      await client.query(`SET search_path TO ${schema}, public`);
+      await runMigrations({ client, migrationsDir: stagedMigrations });
+      await client.query(`
+        INSERT INTO conversation_messages (
+          id, provider, provider_message_id, chat_id, message_type,
+          sent_at, raw_event_idempotency_key, created_at
+        ) VALUES ('binding-message', 'feishu', 'binding-provider-message', 'binding-group',
+          'text', NOW(), 'binding-raw-event', NOW());
+        INSERT INTO group_memories (
+          id, group_id, memory_scope, category, content, importance, confidence,
+          status, idempotency_key, origin, created_by, request_fingerprint
+        ) VALUES ('binding-memory', 'binding-group', 'group', 'decision', 'Current', 5, 0.95,
+          'active', 'binding-memory-key', 'system', 'iris', repeat('b', 64));
+        INSERT INTO document_sources (
+          id, source_type, source_uri, permission_state, sync_state,
+          can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
+        ) VALUES ('binding-source', 'authorized_wiki_document',
+          'https://example.com/binding-source', 'readable', 'synced', TRUE, TRUE, NOW(), NOW());
+        INSERT INTO document_snapshots (
+          id, document_source_id, source_uri, fetch_status, body_text,
+          content_hash, fetched_at, created_at
+        ) VALUES ('binding-snapshot', 'binding-source', 'https://example.com/binding-source',
+          'succeeded', 'Prior', repeat('a', 64), NOW(), NOW());
+        INSERT INTO knowledge_conflict_candidates (
+          id, idempotency_key, group_id, group_memory_id, memory_updated_at,
+          source_message_id, target_document_source_id, target_source_updated_at,
+          target_snapshot_id, target_content_hash, detector_contract_version, status, subject,
+          knowledge_base_statement, group_conclusion_statement, difference,
+          suggested_update, target_document_ref, confidence, version
+        ) VALUES ('binding-candidate', 'binding-candidate-key', 'binding-group',
+          'binding-memory', (SELECT updated_at FROM group_memories WHERE id = 'binding-memory'),
+          'binding-message', 'binding-source',
+          (SELECT updated_at FROM document_sources WHERE id = 'binding-source'),
+          'binding-snapshot', repeat('a', 64), 'v1', 'pending_review', 'Subject',
+          'Prior', 'Current', 'Difference', 'Update', 'D1', 'high', 7);
+        INSERT INTO answer_reply_deliveries (
+          id, provider, incoming_message_id, chat_id, reply_uuid, safe_notice_uuid,
+          state, prepared_reply_text, rendered_reply_fingerprint, semantic_fingerprint,
+          knowledge_conflict_candidate_id, created_at, updated_at
+        ) VALUES ('binding-answer', 'feishu', 'binding-incoming', 'binding-group',
+          'binding-reply', 'binding-safe', 'prepared', 'Answer', repeat('c', 64),
+          repeat('d', 64), 'binding-candidate', NOW(), NOW());
+        INSERT INTO answer_reply_knowledge_conflicts (delivery_id, candidate_id, created_at)
+        VALUES ('binding-answer', 'binding-candidate', NOW());
+      `);
+
+      const migration0049 = "0049_answer_reply_knowledge_conflict_candidate_version.sql";
+      await copyFile(
+        join(defaultMigrationsDir(), migration0049),
+        join(stagedMigrations, migration0049),
+      );
+      await expect(runMigrations({ client, migrationsDir: stagedMigrations })).resolves.toMatchObject({
+        applied: [migration0049],
+      });
+      await expect(client.query(
+        "SELECT candidate_version FROM answer_reply_knowledge_conflicts WHERE delivery_id = 'binding-answer'",
+      )).resolves.toMatchObject({ rows: [{ candidate_version: "7" }] });
+      await expect(client.query<{ is_nullable: string }>(`
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'answer_reply_knowledge_conflicts'
+          AND column_name = 'candidate_version'
+      `)).resolves.toMatchObject({ rows: [{ is_nullable: "NO" }] });
+      await expect(client.query(
+        "UPDATE answer_reply_knowledge_conflicts SET candidate_version = 8 WHERE delivery_id = 'binding-answer'",
+      )).rejects.toThrow(/append-only/iu);
+      await expect(client.query(
+        "DELETE FROM answer_reply_knowledge_conflicts WHERE delivery_id = 'binding-answer'",
+      )).rejects.toThrow(/append-only/iu);
+      await expect(client.query(
+        "TRUNCATE answer_reply_knowledge_conflicts",
+      )).rejects.toThrow(/append-only/iu);
+      const triggerCatalog = await client.query<{ tgname: string; definition: string }>(`
+        SELECT tgname, pg_get_triggerdef(oid) AS definition
+        FROM pg_trigger
+        WHERE tgrelid = 'answer_reply_knowledge_conflicts'::regclass
+          AND NOT tgisinternal
+        ORDER BY tgname
+      `);
+      expect(triggerCatalog.rows.map(({ tgname }) => tgname)).toEqual([
+        "answer_reply_knowledge_conflicts_append_only",
+        "answer_reply_knowledge_conflicts_truncate_guard",
+      ]);
+      expect(triggerCatalog.rows.find(({ tgname }) => tgname.endsWith("append_only"))?.definition)
+        .toMatch(/before (?:update or delete|delete or update)/iu);
+      expect(triggerCatalog.rows.find(({ tgname }) => tgname.endsWith("truncate_guard"))?.definition)
+        .toMatch(/before truncate/iu);
     } finally {
       await client.query("RESET search_path").catch(() => undefined);
       await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

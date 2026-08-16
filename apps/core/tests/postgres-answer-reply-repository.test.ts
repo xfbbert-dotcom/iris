@@ -16,6 +16,11 @@ import {
   createPostgresAnswerReplyRepository,
   type PostgresAnswerReplyDataSource,
 } from "../src/answer-replies/postgres-answer-reply-repository.js";
+import {
+  KnowledgeConflictDeliveryConflictError,
+  createPostgresKnowledgeConflictRepository,
+  type PostgresKnowledgeConflictDataSource,
+} from "../src/knowledge-conflicts/postgres-knowledge-conflict-repository.js";
 import { defaultMigrationsDir, runMigrations } from "../src/database/migrate.js";
 
 const databaseUrl = process.env.IRIS_TEST_DATABASE_URL?.trim();
@@ -292,6 +297,29 @@ describe("answer reply assembled receipt validation", () => {
     await expect(findTestReceipt(repository)).rejects.toThrow(
       "answer reply persistence failed",
     );
+  });
+});
+
+describe("answer reply knowledge-conflict send boundary", () => {
+  it("locks and validates the receipt-bound candidate before the answer delivery", async () => {
+    const order: string[] = [];
+    const fixture = candidateAwareBeginDataSource(order);
+    const repository = createPostgresAnswerReplyRepository({ dataSource: fixture.dataSource });
+
+    await expect(repository.beginAnswerSend({
+      deliveryId: fixture.deliveryId,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    })).resolves.toMatchObject({
+      delivery: {
+        knowledgeConflictCandidateId: "candidate-boundary",
+        state: "sending",
+        attemptCount: 1,
+        version: 2,
+      },
+    });
+    expect(order.indexOf("candidate")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("candidate")).toBeLessThan(order.indexOf("delivery"));
   });
 });
 
@@ -652,9 +680,17 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
   it("persists the knowledge-conflict candidate as exact preparation identity", async () => {
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const candidateId = `answer-candidate-${randomUUID()}`;
-    await insertKnowledgeConflictCandidateFixture(pool!, candidateId);
+    const candidate = await insertKnowledgeConflictCandidateFixture(pool!, candidateId);
     const input = prepareInput(`candidate-${randomUUID()}`, {
+      chatId: candidate.groupId,
       knowledgeConflictCandidateId: candidateId,
+      sourceTraces: [sourceTrace({
+        documentSourceId: candidate.sourceId,
+        documentSnapshotId: candidate.snapshotId,
+        fragmentId: candidate.fragmentId,
+        sourceUri: candidate.sourceUri,
+        contentHash: candidate.fragmentContentHash,
+      })],
     });
 
     const first = await repository.prepare(input);
@@ -666,12 +702,17 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     )).resolves.toMatchObject({
       rows: [{ knowledge_conflict_candidate_id: candidateId }],
     });
-    await expect(pool!.query<{ delivery_id: string; candidate_id: string }>(
-      `SELECT delivery_id, candidate_id
+    await expect(pool!.query<{
+      delivery_id: string;
+      candidate_id: string;
+      candidate_version: string;
+    }>(
+      `SELECT delivery_id, candidate_id, candidate_version
        FROM answer_reply_knowledge_conflicts WHERE delivery_id = $1`,
       [first.receipt.delivery.id],
     )).resolves.toMatchObject({
-      rows: [{ delivery_id: first.receipt.delivery.id, candidate_id: candidateId }],
+      rows: [{ delivery_id: first.receipt.delivery.id, candidate_id: candidateId,
+        candidate_version: "1" }],
     });
 
     await expect(repository.prepare({
@@ -699,6 +740,140 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
       "SELECT count(*)::text AS count FROM answer_reply_knowledge_conflicts WHERE delivery_id = $1",
       [first.receipt.delivery.id],
     )).resolves.toMatchObject({ rows: [{ count: "1" }] });
+  });
+
+  it("serializes a candidate-bound answer begin against dismissal", async () => {
+    const candidateId = `answer-dismiss-race-${randomUUID()}`;
+    const candidate = await insertKnowledgeConflictCandidateFixture(pool!, candidateId);
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput(`answer-dismiss-race-${randomUUID()}`, {
+      chatId: candidate.groupId,
+      knowledgeConflictCandidateId: candidateId,
+      sourceTraces: [sourceTrace({
+        documentSourceId: candidate.sourceId,
+        documentSnapshotId: candidate.snapshotId,
+        fragmentId: candidate.fragmentId,
+        sourceUri: candidate.sourceUri,
+        contentHash: candidate.fragmentContentHash,
+      })],
+    }));
+    const answerUpdated = deferred<void>();
+    const releaseAnswer = deferred<void>();
+    const beginRepository = createPostgresAnswerReplyRepository({
+      dataSource: instrumentedAnswerDataSource(pool!, async (sql, execute) => {
+        const result = await execute();
+        if (sql.startsWith("UPDATE answer_reply_deliveries SET state = 'sending'")) {
+          answerUpdated.resolve();
+          await releaseAnswer.promise;
+        }
+        return result;
+      }),
+    });
+    const dismissalPid = deferred<number>();
+    const conflictRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: instrumentedKnowledgeDataSource(pool!, (pid) => dismissalPid.resolve(pid)),
+    });
+
+    const begin = beginRepository.beginAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    });
+    await answerUpdated.promise;
+    const dismissal = conflictRepository.dismissCandidate({
+      candidateId,
+      expectedVersion: 1,
+      operationKey: `answer-dismiss-race-operation-${randomUUID()}`,
+      actorType: "admin_role",
+      actorRef: "knowledge-admin",
+      reasonCode: "not_a_conflict",
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    });
+    try {
+      await waitForPostgresLock(pool!, await dismissalPid.promise);
+      releaseAnswer.resolve();
+      await expect(begin).resolves.toMatchObject({ delivery: { state: "sending", version: 2 } });
+      await expect(dismissal).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+    } finally {
+      releaseAnswer.resolve();
+      await Promise.allSettled([begin, dismissal]);
+    }
+    await repository.completeAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: 2,
+      at: new Date("2026-08-02T00:02:00.000Z"),
+    });
+  });
+
+  it("serializes a candidate-bound answer begin against stale supersession", async () => {
+    const candidateId = `answer-supersede-race-${randomUUID()}`;
+    const candidate = await insertKnowledgeConflictCandidateFixture(pool!, candidateId);
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput(`answer-supersede-race-${randomUUID()}`, {
+      chatId: candidate.groupId,
+      knowledgeConflictCandidateId: candidateId,
+      sourceTraces: [sourceTrace({
+        documentSourceId: candidate.sourceId,
+        documentSnapshotId: candidate.snapshotId,
+        fragmentId: candidate.fragmentId,
+        sourceUri: candidate.sourceUri,
+        contentHash: candidate.fragmentContentHash,
+      })],
+    }));
+    const answerUpdated = deferred<void>();
+    const releaseAnswer = deferred<void>();
+    const beginRepository = createPostgresAnswerReplyRepository({
+      dataSource: instrumentedAnswerDataSource(pool!, async (sql, execute) => {
+        const result = await execute();
+        if (sql.startsWith("UPDATE answer_reply_deliveries SET state = 'sending'")) {
+          answerUpdated.resolve();
+          await releaseAnswer.promise;
+        }
+        return result;
+      }),
+    });
+
+    const begin = beginRepository.beginAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    });
+    await answerUpdated.promise;
+    const mutationClient = await pool!.connect();
+    const mutationPid = (await mutationClient.query<{ pid: number }>(
+      "SELECT pg_backend_pid() AS pid",
+    )).rows[0]!.pid;
+    const mutateChronology = mutationClient.query(
+      "UPDATE conversation_messages SET sent_at = $2 WHERE id = $1",
+      [candidate.messageId, new Date("2026-08-01T22:59:59.000Z")],
+    ).finally(() => mutationClient.release());
+    await waitForPostgresLock(pool!, mutationPid);
+    const validationPid = deferred<number>();
+    const conflictRepository = createPostgresKnowledgeConflictRepository({
+      dataSource: instrumentedKnowledgeDataSource(pool!, (pid) => validationPid.resolve(pid)),
+    });
+    const validation = conflictRepository.validateCandidateCurrentState({
+      candidateId,
+      expectedVersion: 1,
+      permissionAttestedAt: new Date("2026-08-02T00:01:00.000Z"),
+      operationKey: `answer-supersede-race-operation-${randomUUID()}`,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    });
+    try {
+      await waitForPostgresLock(pool!, await validationPid.promise);
+      releaseAnswer.resolve();
+      await expect(begin).resolves.toMatchObject({ delivery: { state: "sending", version: 2 } });
+      await mutateChronology;
+      await expect(validation).rejects.toBeInstanceOf(KnowledgeConflictDeliveryConflictError);
+    } finally {
+      releaseAnswer.resolve();
+      await Promise.allSettled([begin, mutateChronology, validation]);
+    }
+    await repository.completeAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: 2,
+      at: new Date("2026-08-02T00:02:00.000Z"),
+    });
   });
 
   it("rejects changed rendered text or source facts as a semantic conflict", async () => {
@@ -1236,6 +1411,202 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
   });
 });
 
+function candidateAwareBeginDataSource(order: string[]): {
+  dataSource: PostgresAnswerReplyDataSource;
+  deliveryId: string;
+} {
+  const candidateId = "candidate-boundary";
+  const incomingMessageId = "incoming-candidate-boundary";
+  const deliveryId = createAnswerReplyDeliveryId("feishu", incomingMessageId);
+  const boundaryAt = new Date("2026-08-02T00:00:00.000Z");
+  let currentDelivery: Record<string, unknown> = deliveryRow({
+    id: deliveryId,
+    incoming_message_id: incomingMessageId,
+    chat_id: "chat-a",
+    reply_uuid: createAnswerReplyUuid(incomingMessageId),
+    safe_notice_uuid: createAnswerReplySafeNoticeUuid(incomingMessageId),
+    knowledge_conflict_candidate_id: candidateId,
+  });
+  const sources = [sourceTraceRow({
+    id: testSourceTraceId(deliveryId, 1),
+    delivery_id: deliveryId,
+  })];
+  currentDelivery.semantic_fingerprint = testSemanticFingerprintForRows(currentDelivery, sources);
+  const events: Array<Record<string, unknown>> = [eventRow({
+    id: testEventId(deliveryId, 1),
+    delivery_id: deliveryId,
+  })];
+  let candidateLocked = false;
+
+  const query = async (sql: string, values?: unknown[]) => {
+    const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
+      || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+    if (normalized.includes("FROM answer_reply_knowledge_conflicts")) {
+      return { rows: [{
+        delivery_id: deliveryId,
+        candidate_id: candidateId,
+        candidate_version: 1,
+      }] };
+    }
+    if (normalized.includes("FROM group_memories") && normalized.includes("FOR UPDATE")) {
+      return { rows: [{ id: "memory-boundary" }] };
+    }
+    if (normalized.includes("FROM knowledge_conflict_candidates")
+      && normalized.includes("FOR UPDATE")) {
+      order.push("candidate");
+      candidateLocked = true;
+      return { rows: [answerCandidateRow()] };
+    }
+    if (normalized.includes("FROM knowledge_conflict_candidates")) {
+      return { rows: [answerCandidateRow()] };
+    }
+    if (normalized.includes("FROM knowledge_conflict_evidence")) {
+      return { rows: answerCandidateEvidenceRows() };
+    }
+    if (normalized.includes("FROM conversation_messages")) {
+      return { rows: [{ id: "message-boundary", sent_at: boundaryAt }] };
+    }
+    if (normalized.includes("FROM document_sources")) {
+      return { rows: [{
+        id: "source-a",
+        authorized_space_id: "space-boundary",
+        source_type: "authorized_wiki_document",
+        permission_state: "readable",
+        sync_state: "synced",
+        can_use_for_knowledge_drafts: true,
+        updated_at: boundaryAt,
+      }] };
+    }
+    if (normalized.includes("FROM knowledge_publication_target_policies")) {
+      return { rows: [{ id: "policy-boundary" }] };
+    }
+    if (normalized.includes("FROM document_snapshots")) {
+      return { rows: [{
+        id: "snapshot-a",
+        document_source_id: "source-a",
+        fetch_status: "succeeded",
+        content_hash: "a".repeat(64),
+        source_version: "revision-boundary",
+        fetched_at: new Date("2026-08-01T23:00:00.000Z"),
+      }] };
+    }
+    if (normalized.includes("FROM document_fragments")) {
+      return { rows: [{
+        id: "fragment-a",
+        document_source_id: "source-a",
+        document_snapshot_id: "snapshot-a",
+        content_hash: "c".repeat(64),
+      }] };
+    }
+    if (normalized.includes("FROM answer_reply_deliveries")
+      && normalized.includes("FOR UPDATE")) {
+      if (!candidateLocked) throw new Error("delivery locked before candidate");
+      order.push("delivery");
+      expect(values).toEqual([deliveryId]);
+      return { rows: [currentDelivery] };
+    }
+    if (normalized.startsWith("UPDATE answer_reply_deliveries")) {
+      currentDelivery = {
+        ...currentDelivery,
+        state: "sending",
+        attempt_count: 1,
+        version: 2,
+        updated_at: new Date("2026-08-02T00:01:00.000Z"),
+        last_send_started_at: new Date("2026-08-02T00:01:00.000Z"),
+      };
+      return { rows: [{ id: deliveryId }] };
+    }
+    if (normalized.startsWith("INSERT INTO answer_reply_delivery_events")) {
+      events.push(eventRow({
+        id: testEventId(deliveryId, 2),
+        delivery_id: deliveryId,
+        sequence: 2,
+        event_type: "send_started",
+        attempt_number: 1,
+        created_at: new Date("2026-08-02T00:01:00.000Z"),
+      }));
+      return { rows: [] };
+    }
+    if (normalized.includes("FROM answer_reply_deliveries")) {
+      return { rows: [currentDelivery] };
+    }
+    if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
+    if (normalized.includes("FROM answer_reply_delivery_events")) return { rows: events };
+    return { rows: [] };
+  };
+  return {
+    deliveryId,
+    dataSource: {
+      query,
+      async connect() {
+        return { query, release() {} };
+      },
+    } as PostgresAnswerReplyDataSource,
+  };
+}
+
+function answerCandidateRow(): Record<string, unknown> {
+  const boundaryAt = new Date("2026-08-02T00:00:00.000Z");
+  return {
+    id: "candidate-boundary",
+    idempotency_key: "candidate-boundary-operation",
+    group_id: "chat-a",
+    group_memory_id: "memory-boundary",
+    memory_updated_at: boundaryAt,
+    source_message_id: "message-boundary",
+    target_document_source_id: "source-a",
+    target_source_updated_at: boundaryAt,
+    target_source_version: "revision-boundary",
+    target_snapshot_id: "snapshot-a",
+    target_content_hash: "a".repeat(64),
+    detector_contract_version: "v1",
+    status: "pending_review",
+    subject: "Boundary subject",
+    knowledge_base_statement: "Old statement",
+    group_conclusion_statement: "New statement",
+    difference: "Material difference",
+    suggested_update: "Use new statement",
+    target_document_ref: "D1",
+    confidence: "high",
+    version: 1,
+    created_at: boundaryAt,
+    updated_at: boundaryAt,
+  };
+}
+
+function answerCandidateEvidenceRows(): Array<Record<string, unknown>> {
+  const boundaryAt = new Date("2026-08-02T00:00:00.000Z");
+  return [
+    { evidence_type: "conversation_message", reference_id: "C1", group_id: "chat-a",
+      conversation_message_id: "message-boundary" },
+    { evidence_type: "group_memory", reference_id: "M1", group_id: "chat-a",
+      group_memory_id: "memory-boundary", source_updated_at: boundaryAt },
+    { evidence_type: "document_source", reference_id: "D1", document_source_id: "source-a",
+      source_updated_at: boundaryAt },
+    { evidence_type: "document_snapshot", reference_id: "D1", document_source_id: "source-a",
+      document_snapshot_id: "snapshot-a", snapshot_content_hash: "a".repeat(64),
+      content_hash: "a".repeat(64) },
+    { evidence_type: "document_fragment", reference_id: "D1", document_source_id: "source-a",
+      document_snapshot_id: "snapshot-a", document_fragment_id: "fragment-a",
+      snapshot_content_hash: "a".repeat(64), content_hash: "c".repeat(64) },
+  ].map((row, index) => ({
+    id: index + 1,
+    candidate_id: "candidate-boundary",
+    group_id: null,
+    conversation_message_id: null,
+    group_memory_id: null,
+    source_updated_at: null,
+    document_source_id: null,
+    document_snapshot_id: null,
+    document_fragment_id: null,
+    snapshot_content_hash: null,
+    content_hash: null,
+    created_at: boundaryAt,
+    ...row,
+  }));
+}
+
 function prepareInput(
   suffix: string,
   overrides: Partial<PrepareAnswerReplyInput> = {},
@@ -1574,22 +1945,37 @@ function testSemanticFingerprintForRows(
 async function insertKnowledgeConflictCandidateFixture(
   pool: pg.Pool,
   candidateId: string,
-): Promise<void> {
+): Promise<{
+  groupId: string;
+  messageId: string;
+  memoryId: string;
+  sourceId: string;
+  snapshotId: string;
+  fragmentId: string;
+  sourceUri: string;
+  fragmentContentHash: string;
+}> {
   const groupId = `${candidateId}-group`;
   const messageId = `${candidateId}-message`;
   const memoryId = `${candidateId}-memory`;
   const sourceId = `${candidateId}-source`;
   const snapshotId = `${candidateId}-snapshot`;
+  const fragmentId = `${candidateId}-fragment`;
   const contentHash = "e".repeat(64);
-  const sourceUri = `https://example.com/${candidateId}`;
+  const fragmentContentHash = "f".repeat(64);
+  const sourceUri = `https://tenant.feishu.cn/wiki/${candidateId}`;
+  const sourceUpdatedAt = new Date("2026-08-02T00:00:00.000Z");
+  const snapshotFetchedAt = new Date("2026-08-01T23:00:00.000Z");
+  const messageSentAt = new Date("2026-08-02T00:00:00.000Z");
   await pool.query(
     `
     INSERT INTO conversation_messages (
       id, provider, provider_message_id, chat_id, message_type,
       sent_at, raw_event_idempotency_key, created_at
-    ) VALUES ($1, 'feishu', $2, $3, 'text', NOW(), $4, NOW())
+    ) VALUES ($1, 'feishu', $2, $3, 'text', $4, $5, $4)
     `,
-    [messageId, `${candidateId}-provider-message`, groupId, `${candidateId}-raw-event`],
+    [messageId, `${candidateId}-provider-message`, groupId, messageSentAt,
+      `${candidateId}-raw-event`],
   );
   await pool.query(
     `
@@ -1604,39 +1990,61 @@ async function insertKnowledgeConflictCandidateFixture(
     [memoryId, groupId, `${candidateId}-memory-key`],
   );
   await pool.query(
+    `INSERT INTO group_memory_message_evidence (memory_id, conversation_message_id)
+     VALUES ($1, $2)`,
+    [memoryId, messageId],
+  );
+  await pool.query(
     `
     INSERT INTO document_sources (
-      id, source_type, source_uri, permission_state, sync_state,
+      id, source_type, source_uri, authorized_space_id, permission_state, sync_state,
       can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
     ) VALUES (
-      $1, 'authorized_wiki_document', $2, 'readable', 'synced',
-      TRUE, TRUE, NOW(), NOW()
+      $1, 'authorized_wiki_document', $2, $3, 'readable', 'synced',
+      TRUE, TRUE, $4, $4
     )
     `,
-    [sourceId, sourceUri],
+    [sourceId, sourceUri, `${candidateId}-space`, sourceUpdatedAt],
+  );
+  await pool.query(
+    `INSERT INTO knowledge_publication_target_policies (
+       id, space_id, display_name, allowed_group_ids, allowed_risk_levels,
+       enabled, operation_key, operation_fingerprint, created_by, updated_by,
+       created_at, updated_at
+     ) VALUES ($1, $2, 'Answer candidate policy', ARRAY[$3]::text[],
+       ARRAY['medium']::text[], TRUE, $4, $5, 'tester', 'tester', $6, $6)`,
+    [`${candidateId}-policy`, `${candidateId}-space`, groupId,
+      `${candidateId}-policy-operation`, "d".repeat(64), sourceUpdatedAt],
   );
   await pool.query(
     `
     INSERT INTO document_snapshots (
       id, document_source_id, source_uri, fetch_status, body_text,
-      content_hash, fetched_at, created_at
-    ) VALUES ($1, $2, $3, 'succeeded', 'Prior statement', $4, NOW(), NOW())
+      content_hash, source_version, fetched_at, created_at
+    ) VALUES ($1, $2, $3, 'succeeded', 'Prior statement', $4, $5, $6, $6)
     `,
-    [snapshotId, sourceId, sourceUri, contentHash],
+    [snapshotId, sourceId, sourceUri, contentHash, `${candidateId}-revision`, snapshotFetchedAt],
+  );
+  await pool.query(
+    `INSERT INTO document_fragments (
+       id, document_source_id, document_snapshot_id, source_uri, chunk_index,
+       text, content_hash, created_at, embedding_profile_id
+     ) VALUES ($1, $2, $3, $4, 0, 'Prior statement', $5, $6, 'static-dev-6d')`,
+    [fragmentId, sourceId, snapshotId, sourceUri, fragmentContentHash, snapshotFetchedAt],
   );
   await pool.query(
     `
     INSERT INTO knowledge_conflict_candidates (
       id, idempotency_key, group_id, group_memory_id, memory_updated_at,
       source_message_id, target_document_source_id, target_source_updated_at,
-      target_snapshot_id,
+      target_source_version, target_snapshot_id,
       target_content_hash, detector_contract_version, status, subject,
       knowledge_base_statement, group_conclusion_statement, difference,
       suggested_update, target_document_ref, confidence
     ) VALUES (
       $1, $2, $3, $4, (SELECT updated_at FROM group_memories WHERE id = $4),
       $5, $6, (SELECT updated_at FROM document_sources WHERE id = $6),
-      $7, $8, 'v1', 'pending_review', 'Subject', 'Prior statement',
+      $7, $8, $9, 'v1', 'pending_review', 'Subject', 'Prior statement',
       'Current conclusion', 'Difference', 'Suggested update', 'D1', 'high'
     )
     `,
@@ -1647,10 +2055,28 @@ async function insertKnowledgeConflictCandidateFixture(
       memoryId,
       messageId,
       sourceId,
+      `${candidateId}-revision`,
       snapshotId,
       contentHash,
     ],
   );
+  await pool.query(
+    `INSERT INTO knowledge_conflict_evidence (
+       candidate_id, evidence_type, reference_id, group_id, conversation_message_id,
+       group_memory_id, source_updated_at, document_source_id, document_snapshot_id,
+       document_fragment_id, snapshot_content_hash, content_hash, created_at
+     ) VALUES
+       ($1, 'conversation_message', 'C1', $2, $3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, $4),
+       ($1, 'group_memory', 'M1', $2, NULL, $5,
+         (SELECT updated_at FROM group_memories WHERE id = $5), NULL, NULL, NULL, NULL, NULL, $4),
+       ($1, 'document_source', 'D1', NULL, NULL, NULL, $6, $7, NULL, NULL, NULL, NULL, $4),
+       ($1, 'document_snapshot', 'D1', NULL, NULL, NULL, NULL, $7, $8, NULL, $9, $9, $4),
+       ($1, 'document_fragment', 'D1', NULL, NULL, NULL, NULL, $7, $8, $10, $9, $11, $4)`,
+    [candidateId, groupId, messageId, sourceUpdatedAt, memoryId, sourceUpdatedAt,
+      sourceId, snapshotId, contentHash, fragmentId, fragmentContentHash],
+  );
+  return { groupId, messageId, memoryId, sourceId, snapshotId, fragmentId, sourceUri,
+    fragmentContentHash };
 }
 
 function testFingerprint(value: unknown): string {
@@ -1726,4 +2152,99 @@ function receiptReadBarrier(pool: pg.Pool): {
       resumeRead?.();
     },
   };
+}
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve(value?: T): void;
+} {
+  let resolvePromise: ((value: T | PromiseLike<T>) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve(value?: T) {
+      resolvePromise?.(value as T);
+    },
+  };
+}
+
+function instrumentedAnswerDataSource(
+  pool: pg.Pool,
+  intercept: (
+    normalizedSql: string,
+    execute: () => Promise<{ rows: Array<Record<string, unknown>> }>,
+  ) => Promise<{ rows: Array<Record<string, unknown>> }>,
+): PostgresAnswerReplyDataSource {
+  return {
+    query<T extends Record<string, unknown> = Record<string, unknown>>(
+      sql: string,
+      values?: unknown[],
+    ) {
+      return pool.query<T>(sql, values);
+    },
+    async connect() {
+      const client = await pool.connect();
+      return {
+        async query<T extends Record<string, unknown> = Record<string, unknown>>(
+          sql: string,
+          values?: unknown[],
+        ) {
+          const normalizedSql = sql.replace(/\s+/gu, " ").trim();
+          return await intercept(
+            normalizedSql,
+            () => client.query(sql, values),
+          ) as { rows: T[] };
+        },
+        release() {
+          client.release();
+        },
+      };
+    },
+  };
+}
+
+function instrumentedKnowledgeDataSource(
+  pool: pg.Pool,
+  onConnect: (pid: number) => void,
+): PostgresKnowledgeConflictDataSource {
+  return {
+    query<T extends Record<string, unknown> = Record<string, unknown>>(
+      sql: string,
+      values?: unknown[],
+    ) {
+      return pool.query<T>(sql, values);
+    },
+    async connect() {
+      const client = await pool.connect();
+      const pid = (await client.query<{ pid: number }>(
+        "SELECT pg_backend_pid() AS pid",
+      )).rows[0]!.pid;
+      onConnect(pid);
+      return {
+        query<T extends Record<string, unknown> = Record<string, unknown>>(
+          sql: string,
+          values?: unknown[],
+        ) {
+          return client.query<T>(sql, values);
+        },
+        release() {
+          client.release();
+        },
+      };
+    },
+  };
+}
+
+async function waitForPostgresLock(pool: pg.Pool, pid: number): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const activity = await pool.query<{ wait_event_type: string | null }>(
+      "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+      [pid],
+    );
+    if (activity.rows[0]?.wait_event_type === "Lock") return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`PostgreSQL backend ${pid} did not wait on a lock`);
 }
