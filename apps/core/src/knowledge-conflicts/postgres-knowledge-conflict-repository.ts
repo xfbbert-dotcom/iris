@@ -246,6 +246,8 @@ type SourceValidationRow = {
   sync_state: string;
   can_use_for_knowledge_drafts: boolean;
   updated_at: Date;
+  evidence_timestamp_current: boolean;
+  candidate_timestamp_current: boolean;
 };
 
 type SnapshotValidationRow = {
@@ -1967,10 +1969,22 @@ async function findStaleReason(
   evidence: readonly KnowledgeConflictEvidenceReference[],
 ): Promise<string | undefined> {
   const memory = await client.query<{ id: string }>(
-    `SELECT id FROM group_memories
-     WHERE id = $1 AND group_id = $2 AND status = 'active' AND updated_at = $3
-     FOR UPDATE`,
-    [candidate.group_memory_id, candidate.group_id, candidate.memory_updated_at],
+    `SELECT memory.id
+     FROM group_memories memory
+     JOIN knowledge_conflict_candidates persisted_candidate
+       ON persisted_candidate.id = $3
+      AND persisted_candidate.group_memory_id = memory.id
+      AND persisted_candidate.group_id = memory.group_id
+      AND persisted_candidate.memory_updated_at = memory.updated_at
+     JOIN knowledge_conflict_evidence memory_evidence
+       ON memory_evidence.candidate_id = persisted_candidate.id
+      AND memory_evidence.evidence_type = 'group_memory'
+      AND memory_evidence.group_memory_id = memory.id
+      AND memory_evidence.group_id = memory.group_id
+      AND memory_evidence.source_updated_at = memory.updated_at
+     WHERE memory.id = $1 AND memory.group_id = $2 AND memory.status = 'active'
+     FOR UPDATE OF memory`,
+    [candidate.group_memory_id, candidate.group_id, candidate.id],
   );
   if (memory.rows[0] === undefined) return "memory_stale";
   const messageIds = evidence.filter(
@@ -2000,11 +2014,23 @@ async function findStaleReason(
     const source = await client.query<SourceValidationRow>(
       `SELECT source.id, source.authorized_space_id, source.source_type,
          source.permission_state, source.sync_state,
-         source.can_use_for_knowledge_drafts, source.updated_at
+         source.can_use_for_knowledge_drafts, source.updated_at,
+         source.updated_at = source_evidence.source_updated_at
+           AS evidence_timestamp_current,
+         (source.id <> persisted_candidate.target_document_source_id
+           OR source.updated_at = persisted_candidate.target_source_updated_at)
+           AS candidate_timestamp_current
        FROM document_sources source
+       JOIN knowledge_conflict_candidates persisted_candidate
+         ON persisted_candidate.id = $2
+       JOIN knowledge_conflict_evidence source_evidence
+         ON source_evidence.candidate_id = persisted_candidate.id
+        AND source_evidence.evidence_type = 'document_source'
+        AND source_evidence.reference_id = $3
+        AND source_evidence.document_source_id = source.id
        WHERE source.id = $1
        FOR UPDATE OF source`,
-      [expectedSource.documentSourceId],
+      [expectedSource.documentSourceId, candidate.id, expectedSource.referenceId],
     );
     const currentSource = source.rows[0];
     if (currentSource === undefined
@@ -2013,7 +2039,8 @@ async function findStaleReason(
       || currentSource.sync_state !== "synced"
       || !["unknown", "readable"].includes(currentSource.permission_state)
       || !currentSource.can_use_for_knowledge_drafts
-      || currentSource.updated_at.getTime() !== expectedSource.expectedUpdatedAt.getTime()) {
+      || !currentSource.evidence_timestamp_current
+      || !currentSource.candidate_timestamp_current) {
       return "source_stale";
     }
     if (currentSource.authorized_space_id === null

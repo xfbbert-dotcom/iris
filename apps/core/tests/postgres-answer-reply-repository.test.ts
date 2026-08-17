@@ -1476,6 +1476,8 @@ function candidateAwareBeginDataSource(order: string[]): {
         sync_state: "synced",
         can_use_for_knowledge_drafts: true,
         updated_at: boundaryAt,
+        evidence_timestamp_current: true,
+        candidate_timestamp_current: true,
       }] };
     }
     if (normalized.includes("FROM knowledge_publication_target_policies")) {

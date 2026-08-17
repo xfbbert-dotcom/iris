@@ -1166,7 +1166,9 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
           return { rows: [candidateRow()] };
         }
         if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
-        if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+        if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
+          return { rows: [{ id: "memory-1" }] };
+        }
         if (sql.includes("FROM conversation_messages")) {
           return { rows: [{ id: "message-1", sent_at: at }] };
         }
@@ -1206,7 +1208,9 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     const client = routedClient((sql) => {
       if (sql.includes("FROM knowledge_conflict_candidates")) return { rows: [candidateRow()] };
       if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
-      if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+      if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
+        return { rows: [{ id: "memory-1" }] };
+      }
       if (sql.includes("FROM conversation_messages")) {
         return { rows: [{ id: "message-1", sent_at: at }] };
       }
@@ -1237,11 +1241,52 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
     expect(source.connect).toHaveBeenCalledOnce();
   });
 
+  it("revalidates persisted memory and source timestamps inside PostgreSQL", async () => {
+    const client = routedClient((sql) => {
+      if (sql.includes("FROM knowledge_conflict_candidates")) return { rows: [candidateRow()] };
+      if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
+      if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
+        if (sql.includes("id = ANY($2::text[])")) return { rows: [{ id: "memory-1" }] };
+        expect(sql).toContain("persisted_candidate.memory_updated_at = memory.updated_at");
+        expect(sql).toContain("memory_evidence.source_updated_at = memory.updated_at");
+        return { rows: [{ id: "memory-1" }] };
+      }
+      if (sql.includes("FROM conversation_messages")) {
+        return { rows: [{ id: "message-1", sent_at: at }] };
+      }
+      if (sql.includes("FROM knowledge_publication_target_policies")) {
+        return { rows: [{ id: "policy-1" }] };
+      }
+      if (sql.includes("FROM document_sources")) {
+        expect(sql).toContain("source.updated_at = source_evidence.source_updated_at");
+        expect(sql).toContain("source.updated_at = persisted_candidate.target_source_updated_at");
+        return { rows: [sourceRow()] };
+      }
+      if (sql.includes("FROM document_snapshots")) return { rows: [snapshotRow()] };
+      if (sql.includes("FROM document_fragments")) {
+        return { rows: [{ id: "fragment-1", document_source_id: "source-1",
+          document_snapshot_id: "snapshot-1", content_hash: "c".repeat(64) }] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await expect(repository.findCurrentOverlap({
+      groupId: "group-1",
+      groupMemoryIds: ["memory-1"],
+      documents: [{ sourceId: "source-1", snapshotId: "snapshot-1" }],
+      permissionAttestedAt: at,
+      at,
+    })).resolves.toMatchObject({ id: "candidate-1" });
+  });
+
   it("denies overlap when no enabled policy explicitly allows the source group", async () => {
     const client = routedClient((sql) => {
       if (sql.includes("FROM knowledge_conflict_candidates")) return { rows: [candidateRow()] };
       if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
-      if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+      if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
+        return { rows: [{ id: "memory-1" }] };
+      }
       if (sql.includes("FROM conversation_messages")) {
         return { rows: [{ id: "message-1", sent_at: at }] };
       }
@@ -1311,7 +1356,9 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
         return { rows: [candidateRow({ status: "pending_review", version: 1 })] };
       }
       if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
-      if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+      if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
+        return { rows: [{ id: "memory-1" }] };
+      }
       if (sql.includes("FROM conversation_messages")) {
         return { rows: [{ id: "message-1", sent_at: at }] };
       }
@@ -1354,12 +1401,18 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
         return { rows: [candidateRow({ status: "approved_for_delivery", version: 2 })] };
       }
       if (sql.includes("FROM knowledge_conflict_evidence")) return { rows: evidenceRows() };
-      if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+      if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
+        return { rows: [{ id: "memory-1" }] };
+      }
       if (sql.includes("FROM conversation_messages")) {
         return { rows: [{ id: "message-1", sent_at: at }] };
       }
       if (sql.includes("FROM document_sources")) {
-        return { rows: [sourceRow({ updated_at: new Date(at.getTime() + 1) })] };
+        return { rows: [sourceRow({
+          updated_at: new Date(at.getTime() + 1),
+          evidence_timestamp_current: false,
+          candidate_timestamp_current: false,
+        })] };
       }
       if (sql.includes("FROM knowledge_conflict_delivery_outbox") && sql.includes("FOR UPDATE")) {
         return { rows: [deliveryRow({ status: "outcome_unknown",
@@ -1681,6 +1734,26 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
           source_evidence_exact: true,
         }],
       });
+
+      await expect(repository.findCurrentOverlap({
+        groupId,
+        groupMemoryIds: [fixture.memoryId],
+        documents: [{ sourceId, snapshotId }],
+        permissionAttestedAt: at,
+        at,
+      })).resolves.toMatchObject({ id: fixture.candidateId });
+
+      await pool!.query(
+        "UPDATE document_sources SET updated_at = updated_at + interval '111 microseconds' WHERE id = $1",
+        [sourceId],
+      );
+      await expect(repository.findCurrentOverlap({
+        groupId,
+        groupMemoryIds: [fixture.memoryId],
+        documents: [{ sourceId, snapshotId }],
+        permissionAttestedAt: at,
+        at,
+      })).resolves.toBeUndefined();
     } finally {
       await pool!.query("UPDATE document_sources SET updated_at = $2 WHERE id = $1", [sourceId, at]);
     }
@@ -3236,6 +3309,8 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     sync_state: "synced",
     can_use_for_knowledge_drafts: true,
     updated_at: at,
+    evidence_timestamp_current: true,
+    candidate_timestamp_current: true,
     ...overrides,
   };
 }
@@ -3372,7 +3447,9 @@ function transitionClient(input: {
     if (sql.includes("INSERT INTO knowledge_conflict_interactions")) {
       return { rows: [interactionRow({ callback_operation_key: "callback-atomic-1" })] };
     }
-    if (sql.includes("SELECT id FROM group_memories")) return { rows: [{ id: "memory-1" }] };
+    if (sql.includes("FROM group_memories") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: "memory-1" }] };
+    }
     if (sql.includes("FROM conversation_messages")) {
       return { rows: [{ id: "message-1", sent_at: at }] };
     }
