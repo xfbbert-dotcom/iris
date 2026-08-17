@@ -595,11 +595,11 @@ runIfDatabase("document source group grants with PostgreSQL", () => {
       constraint: "answer_reply_source_traces_cross_group_grant_shape_check",
     });
     await expect(pool.query(
-      "UPDATE document_source_group_grant_events SET actor_ref = 'changed'",
+      `UPDATE ${schema}.document_source_group_grant_events SET actor_ref = 'changed'`,
     )).rejects.toThrow(/append-only/iu);
-    await expect(pool.query("DELETE FROM document_source_group_grant_events"))
+    await expect(pool.query(`DELETE FROM ${schema}.document_source_group_grant_events`))
       .rejects.toThrow(/append-only/iu);
-    await expect(pool.query("TRUNCATE document_source_group_grant_events"))
+    await expect(pool.query(`TRUNCATE ${schema}.document_source_group_grant_events`))
       .rejects.toThrow(/append-only/iu);
   });
 });
