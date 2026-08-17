@@ -1075,7 +1075,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
             WHERE namespace_row.nspname = current_schema()
               AND table_row.relname LIKE 'knowledge_conflict%'
             ORDER BY constraint_row.conname
-          ) AS constraints,
+          )::text[] AS constraints,
           ARRAY(
             SELECT index_row.relname
             FROM pg_class index_row
@@ -1084,7 +1084,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
               AND index_row.relkind = 'i'
               AND index_row.relname LIKE 'knowledge_conflict%'
             ORDER BY index_row.relname
-          ) AS indexes,
+          )::text[] AS indexes,
           ARRAY(
             SELECT trigger_row.tgname
             FROM pg_trigger trigger_row
@@ -1095,7 +1095,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
               AND (table_row.relname LIKE 'knowledge_conflict%'
                 OR table_row.relname = 'answer_reply_knowledge_conflicts')
             ORDER BY trigger_row.tgname
-          ) AS triggers,
+          )::text[] AS triggers,
           (
             SELECT COUNT(*)::int
             FROM pg_constraint constraint_row
