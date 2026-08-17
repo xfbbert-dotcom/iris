@@ -669,8 +669,8 @@ describe("AnswerDraftOrchestrator", () => {
         buildContext: vi.fn(async () => ({
           promptContext: "<background_documents></background_documents>",
           allowedFragments: [allowedFragment],
-          deniedDocumentIds: [],
-          retrievedFragmentCount: 1,
+          deniedDocumentIds: ["source-denied-unrelated"],
+          retrievedFragmentCount: 2,
           usedGroupMemories: [usedGroupMemory],
         })),
       },
@@ -698,6 +698,7 @@ describe("AnswerDraftOrchestrator", () => {
     expect(result).toMatchObject({
       knowledgeConflictCandidateId: "candidate-conflict",
       citedSourceRefs: ["D1"],
+      deniedDocumentIds: ["source-denied-unrelated"],
     });
     expect(observe.mock.calls
       .map(([event]) => event)

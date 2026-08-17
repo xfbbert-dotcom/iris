@@ -228,7 +228,23 @@ export function createAnswerDraftOrchestrator({
           confidence?: NonNullable<EvidencePlan["confidence"]>;
           knowledgeConflictCandidateId?: string;
         } | undefined;
-        if (context.deniedDocumentIds.length > 0) {
+        let conflictPlan: Awaited<ReturnType<
+          KnowledgeConflictAnswerProvider["findConflictPlan"]
+        >>;
+        if (directTaskRoute === undefined && input.chatId !== undefined) {
+          try {
+            conflictPlan = await knowledgeConflictAnswerProvider?.findConflictPlan({
+              groupId: input.chatId,
+              usedGroupMemories: context.usedGroupMemories,
+              allowedFragments: context.allowedFragments,
+            });
+          } catch (error) {
+            if (context.deniedDocumentIds.length === 0) {
+              throw error;
+            }
+          }
+        }
+        if (context.deniedDocumentIds.length > 0 && conflictPlan === undefined) {
           answerText = PERMISSION_BLOCKED_ANSWER_DRAFT;
         } else {
           const providerObservation = {
@@ -258,13 +274,6 @@ export function createAnswerDraftOrchestrator({
             citedSourceRefs = [];
           } else {
             const evidence = buildPlanningEvidence(question, context);
-            const conflictPlan = input.chatId === undefined
-              ? undefined
-              : await knowledgeConflictAnswerProvider?.findConflictPlan({
-                  groupId: input.chatId,
-                  usedGroupMemories: context.usedGroupMemories,
-                  allowedFragments: context.allowedFragments,
-                });
             const plan = conflictPlan?.plan ?? await runObservedProviderRequest({
               observer: agentExecutionObserver,
               providerObservation,

@@ -235,13 +235,16 @@ export function createAnswerReplyDeliveryService({
     input: AnswerReplyDeliveryRequest,
   ): Promise<AnswerReplyReceipt> {
     const preparedCandidate = await input.prepareAnswer();
-    const blockedDocumentSourceIds = normalizePreflightBlockedDocumentSourceIds(
+    const inspectedBlockedDocumentSourceIds = normalizePreflightBlockedDocumentSourceIds(
       preparedCandidate.blockedDocumentSourceIds,
       preparedCandidate.sourceTraces,
     );
+    const blockedDocumentSourceIds = preparedCandidate.knowledgeConflictCandidateId === undefined
+      ? inspectedBlockedDocumentSourceIds
+      : [];
     const prepared: PreparedAnswer = {
       ...preparedCandidate,
-      ...(blockedDocumentSourceIds.length === 0 ? {} : { blockedDocumentSourceIds }),
+      blockedDocumentSourceIds,
     };
     const result: unknown = await repository.prepare({
       provider: input.provider,

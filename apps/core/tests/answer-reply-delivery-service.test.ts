@@ -57,6 +57,28 @@ describe("AnswerReplyDeliveryService", () => {
       .toBe("candidate-answer-a");
   });
 
+  it("does not let an unrelated denied source starve an exact candidate-bound answer", async () => {
+    const harness = createHarness();
+    const validateKnowledgeConflictForSend = vi.fn(async () => ({
+      status: "current" as const,
+      permissionAttestedAt: transitionAt,
+    }));
+
+    await harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      knowledgeConflictCandidateId: "candidate-answer-a",
+      blockedDocumentSourceIds: ["source-denied-unrelated"],
+    })), { validateKnowledgeConflictForSend }));
+
+    expect(harness.repository.prepare).toHaveBeenCalledWith(
+      expect.not.objectContaining({ blockedDocumentSourceIds: expect.anything() }),
+    );
+    expect(validateKnowledgeConflictForSend).toHaveBeenCalledOnce();
+    expect(harness.repository.receipt?.delivery.state).toBe("sent");
+    expect(harness.replier.replyText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: preparedText }),
+    );
+  });
+
   it.each([
     "dismissed candidate",
     "superseded candidate",
