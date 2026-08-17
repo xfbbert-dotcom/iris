@@ -57,11 +57,70 @@ test("cross-group document grant acceptance is executable and default-deny", () 
     "/internal/runtime-control/groups/",
     "/internal/runtime-control/global",
     "/internal/runtime-control/capabilities",
-    "Assert-CrossGroupDrainCounts",
+    "Wait-CrossGroupDrain",
     "Assert-CrossGroupRollbackAttestation",
   ]);
   assert.doesNotMatch(rollback, /\b(?:DELETE|TRUNCATE|DROP)\b/iu);
-  assert.match(runbook.slice(acceptanceStart), /finally\s*\{[\s\S]*Invoke-CrossGroupDocumentGrantRollback/u);
+  const acceptance = runbook.slice(acceptanceStart);
+  assertMarkersInOrder(acceptance, [
+    "Invoke-Compose @(\"stop\", \"caddy\")",
+    "Assert-ReviewedBuild $context",
+    "./deploy/pilot/backup.sh",
+    "$enableAttempted = $true",
+    "Get-KnownGroupIds $context",
+    "preflight group disable",
+  ]);
+  assert.match(acceptance, /finally\s*\{[\s\S]*Invoke-CrossGroupDocumentGrantRollback/u);
+  assert.match(runbook, /function Wait-CrossGroupDrain[\s\S]*Attempts = 60[\s\S]*DelayMilliseconds = 500/iu);
+  assert.match(runbook, /gh run view[\s\S]*headSha[\s\S]*Test Postgres integrations/iu);
+  assert.match(runbook, /docker image inspect[\s\S]*ApprovedImageDigest/iu);
+  assert.match(runbook, /Invoke-JsonSql/u);
+  assert.match(runbook, /Get-FreshCrossGroupEvidence/u);
+  assert.doesNotMatch(runbook, /\$artifact\.facts/iu);
+});
+
+test("cross-group document grant CI executes real migration and concurrency coverage", () => {
+  const workflow = readFileSync(ciWorkflowPath, "utf8");
+  for (const testFile of [
+    "migration-runner.test.ts",
+    "postgres-document-source-group-grant-repository.test.ts",
+    "postgres-answer-reply-repository.test.ts",
+  ]) {
+    assert.match(workflow, new RegExp(escapeRegExp(testFile), "u"));
+  }
+});
+
+test("cross-group document grant evidence is exact-SHA, image, stage, and time bound", () => {
+  const commitSha = "a".repeat(40);
+  const imageDigest = `sha256:${"b".repeat(64)}`;
+  const valid = {
+    stage: "preGrant",
+    recordedAt: "2026-08-18T02:00:01.000Z",
+    approvedCommitSha: commitSha,
+    approvedImageDigest: imageDigest,
+    observations: {
+      granteeIncomingMessageId: "om_grantee_pregrant",
+      controlIncomingMessageId: "om_control_pregrant",
+      granteeDisclosedSource: false,
+      controlDisclosedSource: false,
+    },
+  };
+  const command = [
+    "$notBefore = [DateTimeOffset]'2026-08-18T02:00:00.000Z'",
+    "$notAfter = [DateTimeOffset]'2026-08-18T02:01:00.000Z'",
+    `Assert-FreshCrossGroupEvidence -Evidence $inputValue -ExpectedStage 'preGrant' -ExpectedCommitSha '${commitSha}' -ExpectedImageDigest '${imageDigest}' -NotBefore $notBefore -NotAfter $notAfter`,
+  ].join("; ");
+  assertPowerShellRunbookGate(command, valid, true, crossGroupGrantAcceptancePath);
+  for (const invalid of [
+    { ...valid, stage: "granted" },
+    { ...valid, recordedAt: "2026-08-18T01:59:59.000Z" },
+    { ...valid, recordedAt: "2026-08-18T02:01:01.000Z" },
+    { ...valid, approvedCommitSha: "c".repeat(40) },
+    { ...valid, approvedImageDigest: `sha256:${"d".repeat(64)}` },
+    { ...valid, observations: { ...valid.observations, nested: { replyText: "forbidden" } } },
+  ]) {
+    assertPowerShellRunbookGate(command, invalid, false, crossGroupGrantAcceptancePath);
+  }
 });
 
 test("cross-group document grant gates reject false-positive facts", () => {

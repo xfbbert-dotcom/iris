@@ -21,14 +21,14 @@ deployment, real Feishu behavior, or pilot completion.
 
 ## Automated Evidence
 
-Populate after fresh exact-SHA verification.
+Local verification is complete; exact-SHA CI and live acceptance remain release gates.
 
 | Gate | Result | Metadata-only note |
 | --- | --- | --- |
-| Focused Core | Pending | counts and environment-gated skips |
-| Full verification | Pending | counts and exit status |
-| PostgreSQL migration/concurrency | Pending | pass/fail and skip reason |
-| Pilot contracts | Pending | counts and exact Docker skip reason |
+| Focused Core | Pass | 438 passed, 49 environment-gated PostgreSQL skips |
+| Full verification | Pass | `npm run verify` exited 0; Core 3462 passed/260 skipped; Python 181 passed |
+| PostgreSQL migration/concurrency | Pending CI | Tests collected locally; `IRIS_TEST_DATABASE_URL` is unset, so real-PostgreSQL cases skipped |
+| Pilot contracts | Pass | 166 passed; 1 executable Caddy probe skipped because the Docker daemon is unavailable |
 | Exact-SHA CI | Pending | SHA and check URLs |
 
 ## Live Acceptance Evidence
