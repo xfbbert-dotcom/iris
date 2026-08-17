@@ -3,6 +3,8 @@ import type {
   RetrievedDocumentFragment,
 } from "../documents/document-fragment-repository.js";
 import type { DocumentSourceType } from "../documents/document-source-registry.js";
+import type { DocumentSourceGroupGrantRepository } from
+  "../documents/document-source-group-grant.js";
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
 import type { AuditLog } from "../audit/audit-log.js";
 import {
@@ -54,6 +56,11 @@ export interface DocumentRetrievalContextBuilder {
   buildContext(input: DocumentRetrievalContextInput): Promise<DocumentRetrievalContextResult>;
 }
 
+export type DocumentAccessContext = {
+  hasCrossGroupGrantBinding: boolean;
+  crossGroupGrantValidated: boolean;
+};
+
 export function createDocumentRetrievalContextBuilder({
   embeddingProfileId,
   embedder,
@@ -64,6 +71,7 @@ export function createDocumentRetrievalContextBuilder({
   groupMemoryContextProvider,
   conversationStateGroupId,
   conversationStateContextProvider,
+  crossGroupGrantValidator,
   canReadDocument,
   onPermissionDecision,
   auditLog,
@@ -78,7 +86,11 @@ export function createDocumentRetrievalContextBuilder({
   groupMemoryContextProvider?: GroupMemoryContextProvider;
   conversationStateGroupId?: string;
   conversationStateContextProvider?: ConversationStateContextProvider;
-  canReadDocument: (documentId: string) => Promise<boolean>;
+  crossGroupGrantValidator?: Pick<DocumentSourceGroupGrantRepository, "validateExact">;
+  canReadDocument: (
+    documentId: string,
+    accessContext?: DocumentAccessContext,
+  ) => Promise<boolean>;
   onPermissionDecision?: (decision: PermissionGuardDecision) => Promise<void>;
   auditLog?: AuditLog;
 }): DocumentRetrievalContextBuilder {
@@ -143,9 +155,27 @@ export function createDocumentRetrievalContextBuilder({
       });
       const promptRankedDocumentIds = uniqueDocumentSourceIds(promptRankedFragments);
 
+      const grantPolicyByDocumentId = await resolveCrossGroupGrantPolicies({
+        fragments: meaningfulFragments,
+        currentGroupId: groupId,
+        validator: crossGroupGrantValidator,
+      });
+
       const permissionGuardResult = await filterFragmentsByLivePermission({
         fragments: meaningfulFragments.map(toPermissionGuardFragment),
-        canReadDocument,
+        canReadDocument: async (documentId) => {
+          const grantPolicy = grantPolicyByDocumentId.get(documentId);
+          if (grantPolicy?.outcome === "denied") {
+            if (grantPolicy.error !== undefined) {
+              throw grantPolicy.error;
+            }
+            return false;
+          }
+          if (grantPolicy?.outcome === "validated") {
+            return canReadDocument(documentId, grantPolicy.accessContext);
+          }
+          return canReadDocument(documentId);
+        },
         onPermissionDecision,
         auditLog,
       });
@@ -193,6 +223,130 @@ export function createDocumentRetrievalContextBuilder({
       };
     },
   };
+}
+
+type ExactCrossGroupGrantBinding = {
+  grantId: string;
+  version: number;
+  grantorGroupId: string;
+  granteeGroupId: string;
+};
+
+type GrantPolicyResolution =
+  | { outcome: "unbound" }
+  | { outcome: "validated"; accessContext: DocumentAccessContext }
+  | { outcome: "denied"; error?: unknown };
+
+async function resolveCrossGroupGrantPolicies({
+  fragments,
+  currentGroupId,
+  validator,
+}: {
+  fragments: RetrievedDocumentFragment[];
+  currentGroupId: string | undefined;
+  validator: Pick<DocumentSourceGroupGrantRepository, "validateExact"> | undefined;
+}): Promise<Map<string, GrantPolicyResolution>> {
+  const fragmentsBySource = new Map<string, RetrievedDocumentFragment[]>();
+  for (const fragment of fragments) {
+    const sourceFragments = fragmentsBySource.get(fragment.documentSourceId) ?? [];
+    sourceFragments.push(fragment);
+    fragmentsBySource.set(fragment.documentSourceId, sourceFragments);
+  }
+
+  const entries = await Promise.all([...fragmentsBySource].map(async (
+    [documentSourceId, items],
+  ): Promise<readonly [string, GrantPolicyResolution]> => {
+    const bindings = items.map(readCrossGroupGrantBinding);
+    if (bindings.every((binding) => binding === undefined)) {
+      return [documentSourceId, { outcome: "unbound" }] as const;
+    }
+    if (bindings.some((binding) => binding === undefined || binding === "invalid")) {
+      return [documentSourceId, { outcome: "denied" }] as const;
+    }
+
+    const exactBindings = bindings as ExactCrossGroupGrantBinding[];
+    const binding = exactBindings[0]!;
+    if (
+      items.some((fragment) => fragment.sourceType !== "feishu_group_document") ||
+      exactBindings.some((candidate) => !sameGrantBinding(candidate, binding)) ||
+      currentGroupId === undefined ||
+      binding.granteeGroupId !== currentGroupId ||
+      binding.grantorGroupId === binding.granteeGroupId ||
+      validator === undefined
+    ) {
+      return [documentSourceId, { outcome: "denied" }] as const;
+    }
+
+    try {
+      const valid = await validator.validateExact({
+        grantId: binding.grantId,
+        version: binding.version,
+        documentSourceId,
+        grantorGroupId: binding.grantorGroupId,
+        granteeGroupId: binding.granteeGroupId,
+      });
+      return [
+        documentSourceId,
+        valid
+          ? {
+              outcome: "validated",
+              accessContext: {
+                hasCrossGroupGrantBinding: true,
+                crossGroupGrantValidated: true,
+              },
+            }
+          : { outcome: "denied" },
+      ] as const;
+    } catch (error) {
+      return [documentSourceId, { outcome: "denied", error }] as const;
+    }
+  }));
+
+  return new Map<string, GrantPolicyResolution>(entries);
+}
+
+function readCrossGroupGrantBinding(
+  fragment: RetrievedDocumentFragment,
+): ExactCrossGroupGrantBinding | "invalid" | undefined {
+  const values = [
+    fragment.crossGroupGrantId,
+    fragment.crossGroupGrantVersion,
+    fragment.crossGroupGrantorGroupId,
+    fragment.crossGroupGranteeGroupId,
+  ];
+  if (values.every((value) => value === undefined)) {
+    return undefined;
+  }
+  if (
+    !isNonBlankReference(fragment.crossGroupGrantId) ||
+    !Number.isSafeInteger(fragment.crossGroupGrantVersion) ||
+    fragment.crossGroupGrantVersion === undefined ||
+    fragment.crossGroupGrantVersion < 1 ||
+    !isNonBlankReference(fragment.crossGroupGrantorGroupId) ||
+    !isNonBlankReference(fragment.crossGroupGranteeGroupId)
+  ) {
+    return "invalid";
+  }
+  return {
+    grantId: fragment.crossGroupGrantId,
+    version: fragment.crossGroupGrantVersion,
+    grantorGroupId: fragment.crossGroupGrantorGroupId,
+    granteeGroupId: fragment.crossGroupGranteeGroupId,
+  };
+}
+
+function isNonBlankReference(value: string | undefined): value is string {
+  return value !== undefined && value.trim().length > 0;
+}
+
+function sameGrantBinding(
+  left: ExactCrossGroupGrantBinding,
+  right: ExactCrossGroupGrantBinding,
+): boolean {
+  return left.grantId === right.grantId &&
+    left.version === right.version &&
+    left.grantorGroupId === right.grantorGroupId &&
+    left.granteeGroupId === right.granteeGroupId;
 }
 
 function uniqueDocumentSourceIds(

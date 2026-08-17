@@ -30,6 +30,12 @@ import {
   type DocumentFragmentRepository,
   type Queryable,
 } from "../documents/document-fragment-repository.js";
+import type { DocumentSourceGroupGrantRepository } from
+  "../documents/document-source-group-grant.js";
+import {
+  createPostgresDocumentSourceGroupGrantRepository,
+  type PostgresDocumentSourceGroupGrantDataSource,
+} from "../documents/postgres-document-source-group-grant-repository.js";
 import {
   createPostgresDocumentSourceRegistry,
   type AsyncDocumentSourceRegistry,
@@ -45,7 +51,10 @@ import {
   type EmbeddingProfileRepository,
 } from "../documents/embedding-profile-repository.js";
 import type { EmbeddingProvider } from "../documents/document-semantic-indexer.js";
-import { createDocumentRetrievalContextBuilder } from "../memory/document-retrieval-context.js";
+import {
+  createDocumentRetrievalContextBuilder,
+  type DocumentAccessContext,
+} from "../memory/document-retrieval-context.js";
 import {
   createFeishuDocumentPermissionChecker,
   type FeishuDocumentPermissionChecker,
@@ -137,6 +146,9 @@ export type AnswerDraftRuntimeDependencies = {
   createDocumentSourceRegistry?: (dependencies: {
     queryable: Queryable;
   }) => Pick<AsyncDocumentSourceRegistry, "findSourceById">;
+  createDocumentSourceGroupGrantRepository?: (dependencies: {
+    dataSource: PostgresDocumentSourceGroupGrantDataSource;
+  }) => Pick<DocumentSourceGroupGrantRepository, "validateExact">;
   createConversationMessageRepository?: (dependencies: {
     queryable: ConversationMessageQueryable;
   }) => Pick<ConversationMessageRepository, "listRecentByChat">;
@@ -240,6 +252,9 @@ export function createAnswerDraftRuntime({
       createPostgresDocumentSourceRegistry(
         queryable as Parameters<typeof createPostgresDocumentSourceRegistry>[0],
       ));
+  const createSourceGroupGrants =
+    dependencies.createDocumentSourceGroupGrantRepository ??
+    createPostgresDocumentSourceGroupGrantRepository;
   const createConversationMessages =
     dependencies.createConversationMessageRepository ?? createPostgresConversationMessageRepository;
   const createLiveChatContext =
@@ -296,6 +311,11 @@ export function createAnswerDraftRuntime({
   const sourceRegistry =
     runtimeConfig.permissionMode === "source-policy"
       ? createSources({ queryable: pool })
+      : undefined;
+  const crossGroupGrantValidator =
+    runtimeConfig.permissionMode === "source-policy" &&
+    isPostgresDocumentSourceGroupGrantDataSource(pool)
+      ? createSourceGroupGrants({ dataSource: pool })
       : undefined;
   const knowledgeConflictAnswerProvider = providedKnowledgeConflictAnswerProvider !== undefined
     ? (providedKnowledgeConflictAnswerProvider ?? undefined)
@@ -383,6 +403,7 @@ export function createAnswerDraftRuntime({
                 conversationStateGroupId: currentGroupId,
                 conversationStateContextProvider,
               }),
+          ...(crossGroupGrantValidator === undefined ? {} : { crossGroupGrantValidator }),
           canReadDocument: createCanReadDocument({
             permissionMode,
             sourceRegistry,
@@ -569,6 +590,12 @@ function isPostgresKnowledgeConflictDataSource(
   return "connect" in value && typeof value.connect === "function";
 }
 
+function isPostgresDocumentSourceGroupGrantDataSource(
+  value: Queryable,
+): value is Queryable & PostgresDocumentSourceGroupGrantDataSource {
+  return "connect" in value && typeof value.connect === "function";
+}
+
 function createRuntimeGatedConversationStateContextProvider({
   delegate,
   runtimeController,
@@ -645,18 +672,22 @@ function createCanReadDocument({
   runtimeController?: RuntimeRetrievalGate;
   livePermissionChecker?: Pick<FeishuDocumentPermissionChecker, "canReadSource">;
   currentGroupId?: string;
-}): (documentSourceId: string, chatId?: string) => Promise<boolean> {
+}): (
+  documentSourceId: string,
+  scope?: string | DocumentAccessContext,
+) => Promise<boolean> {
   if (permissionMode === "allow-indexed") {
     return async () => true;
   }
 
-  return (documentSourceId, chatId = currentGroupId) =>
+  return (documentSourceId, scope = currentGroupId) =>
     canReadBySourcePolicy(
       documentSourceId,
       sourceRegistry,
       runtimeController,
       livePermissionChecker,
-      normalizeCurrentGroupId(chatId),
+      normalizeCurrentGroupId(typeof scope === "string" ? scope : currentGroupId),
+      typeof scope === "object" ? scope : undefined,
     );
 }
 
@@ -666,6 +697,7 @@ async function canReadBySourcePolicy(
   runtimeController: RuntimeRetrievalGate | undefined,
   livePermissionChecker: Pick<FeishuDocumentPermissionChecker, "canReadSource"> | undefined,
   currentGroupId: string | undefined,
+  accessContext: DocumentAccessContext | undefined,
 ): Promise<boolean> {
   if (sourceRegistry === undefined) {
     return false;
@@ -679,7 +711,12 @@ async function canReadBySourcePolicy(
   const locallyAllowed =
     source.canUseForAnswering &&
     (source.permissionState === "unknown" || source.permissionState === "readable") &&
-    canUseSourceByRuntimeCapabilities(source, runtimeController, currentGroupId);
+    canUseSourceByRuntimeCapabilities(
+      source,
+      runtimeController,
+      currentGroupId,
+      accessContext,
+    );
   if (!locallyAllowed) {
     return false;
   }
@@ -736,9 +773,15 @@ function canUseSourceByRuntimeCapabilities(
   source: DocumentSource,
   runtimeController: RuntimeRetrievalGate | undefined,
   currentGroupId: string | undefined,
+  accessContext: DocumentAccessContext | undefined,
 ): boolean {
   if (source.sourceType === "group_visible_document") {
-    return canUseGroupVisibleSource(source, runtimeController, currentGroupId);
+    return canUseGroupVisibleSource(
+      source,
+      runtimeController,
+      currentGroupId,
+      accessContext,
+    );
   }
   if (source.sourceType === "authorized_wiki_document") {
     return runtimeController?.canRetrieveKnowledgeBase() ?? true;
@@ -780,6 +823,7 @@ function canUseGroupVisibleSource(
   source: DocumentSource,
   runtimeController: RuntimeRetrievalGate | undefined,
   currentGroupId: string | undefined,
+  accessContext: DocumentAccessContext | undefined,
 ): boolean {
   if (currentGroupId === undefined) {
     return false;
@@ -789,9 +833,12 @@ function canUseGroupVisibleSource(
   }
 
   const sourceGroupIds = collectSourceGroupIds(source);
-  if (!sourceGroupIds.includes(currentGroupId)) {
-    return false;
-  }
+  const isLocalSource = sourceGroupIds.includes(currentGroupId);
+  const isAllowedByGroupBoundary = isLocalSource
+    ? accessContext?.hasCrossGroupGrantBinding !== true
+    : accessContext?.hasCrossGroupGrantBinding === true &&
+      accessContext.crossGroupGrantValidated === true;
+  if (!isAllowedByGroupBoundary) return false;
 
   return runtimeController?.canProcessGroupMessage?.(currentGroupId) ?? true;
 }

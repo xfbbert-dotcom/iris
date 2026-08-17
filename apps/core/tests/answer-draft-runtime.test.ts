@@ -456,11 +456,13 @@ describe("createAnswerDraftRuntime", () => {
         },
       ]),
     };
+    const createDocumentSourceGroupGrantRepository = vi.fn();
     const runtime = createAnswerDraftRuntime({
       env: enabledEnv(),
       dependencies: {
         createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
         createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceGroupGrantRepository,
         createModelProvider: vi.fn(() => model),
         createEmbeddingProfileRepository: vi.fn(() => ({
           getStaticDevelopmentProfile: vi.fn(async () => profile()),
@@ -482,6 +484,7 @@ describe("createAnswerDraftRuntime", () => {
       limit: 24,
     });
     expect(model.generateAnswerDraft).not.toHaveBeenCalled();
+    expect(createDocumentSourceGroupGrantRepository).not.toHaveBeenCalled();
   });
 
   it("recovers production-ranked Quello evidence and returns planner-owned citations", async () => {
@@ -1142,6 +1145,108 @@ describe("createAnswerDraftRuntime", () => {
     );
     expect(runtimeController.canProcessGroupMessage).toHaveBeenCalledWith("chat-current");
     expect(runtimeController.canProcessGroupMessage).not.toHaveBeenCalledWith("chat-other");
+  });
+
+  it("uses an exact cross-group document grant while rejecting redundant local bindings", async () => {
+    const model = {
+      generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+    };
+    const fragments = {
+      searchSimilarFragments: vi.fn(async () => [
+        fragment({
+          id: "fragment-cross-group",
+          documentSourceId: "source-cross-group",
+          text: "Explicitly granted cross-group document text",
+          sourceType: "feishu_group_document",
+          crossGroupGrantId: "grant-cross-group",
+          crossGroupGrantVersion: 4,
+          crossGroupGrantorGroupId: "chat-owner",
+          crossGroupGranteeGroupId: "chat-reader",
+        }),
+        fragment({
+          id: "fragment-local-redundant",
+          documentSourceId: "source-local-redundant",
+          text: "Local document with redundant grant text",
+          sourceType: "feishu_group_document",
+          crossGroupGrantId: "grant-local-redundant",
+          crossGroupGrantVersion: 2,
+          crossGroupGrantorGroupId: "chat-other",
+          crossGroupGranteeGroupId: "chat-reader",
+        }),
+      ]),
+    };
+    const sources: Record<string, DocumentSource | undefined> = {
+      "source-cross-group": source({
+        id: "source-cross-group",
+        sourceType: "group_visible_document",
+        originGroupId: "chat-owner",
+        permissionState: "readable",
+      }),
+      "source-local-redundant": source({
+        id: "source-local-redundant",
+        sourceType: "group_visible_document",
+        originGroupId: "chat-reader",
+        permissionState: "readable",
+      }),
+    };
+    const sourceRegistry = {
+      findSourceById: vi.fn(async (id: string) => sources[id]),
+    };
+    const validateExact = vi.fn(async () => true);
+    const createDocumentSourceGroupGrantRepository = vi.fn(() => ({ validateExact }));
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({
+          query: vi.fn(),
+          connect: vi.fn(),
+          end: vi.fn(async () => undefined),
+        })),
+        createDocumentFragmentRepository: vi.fn(() => fragments),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createDocumentSourceGroupGrantRepository,
+        createGroupMemoryRepository: vi.fn(() => ({
+          listActiveByGroup: vi.fn(async () => []),
+        }) as unknown as GroupMemoryRepository),
+        createLiveChatContextProvider: vi.fn(() => ({
+          loadRecentMessages: vi.fn(async () => []),
+        })),
+        createModelProvider: vi.fn(() => model),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    const result = await runtime?.answerDraftOrchestrator.generateDraft({
+      question: "What was explicitly shared with this group?",
+      chatId: "chat-reader",
+      liveChatMessages: [],
+    });
+
+    expect(result?.promptContext).toContain("Explicitly granted cross-group document text");
+    expect(result?.promptContext).not.toContain("Local document with redundant grant text");
+    expect(result?.allowedFragments.map((item) => item.id)).toEqual(["fragment-cross-group"]);
+    expect(result?.deniedDocumentIds).toEqual(["source-local-redundant"]);
+    expect(createDocumentSourceGroupGrantRepository).toHaveBeenCalledTimes(1);
+    expect(validateExact).toHaveBeenCalledWith({
+      grantId: "grant-cross-group",
+      version: 4,
+      documentSourceId: "source-cross-group",
+      grantorGroupId: "chat-owner",
+      granteeGroupId: "chat-reader",
+    });
   });
 
   it.each([
