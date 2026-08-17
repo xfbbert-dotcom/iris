@@ -198,6 +198,10 @@ function toResponse(receipt: AnswerReplyReceipt) {
       contentHash: source.contentHash,
       embeddingProfileId: source.embeddingProfileId,
       initialPermissionCheckedAt: source.initialPermissionCheckedAt,
+      crossGroupGrantId: source.crossGroupGrantId,
+      crossGroupGrantVersion: source.crossGroupGrantVersion,
+      crossGroupGrantorGroupId: source.crossGroupGrantorGroupId,
+      crossGroupGranteeGroupId: source.crossGroupGranteeGroupId,
     })),
     events: receipt.events.map((event) => ({
       id: event.id,

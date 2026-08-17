@@ -133,6 +133,13 @@ export class AnswerReplyVersionConflictError extends Error {
   }
 }
 
+export class AnswerReplyGrantStaleError extends Error {
+  constructor() {
+    super("answer reply cross-group grant stale");
+    this.name = "AnswerReplyGrantStaleError";
+  }
+}
+
 export function createAnswerReplyDeliveryId(
   provider: AnswerReplyProvider,
   incomingMessageId: string,

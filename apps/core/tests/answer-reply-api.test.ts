@@ -168,6 +168,35 @@ describe("answer reply inspection API", () => {
     await app.close();
   });
 
+  it("exposes only the exact cross-group grant binding on an authorized receipt trace", async () => {
+    const granted = receipt();
+    Object.assign(granted.sources[0]!, {
+      sourceType: "feishu_group_document",
+      crossGroupGrantId: "grant-a",
+      crossGroupGrantVersion: 3,
+      crossGroupGrantorGroupId: "group-owner",
+      crossGroupGranteeGroupId: "oc_1",
+    });
+    const app = await createApp({ findByIncomingMessage: vi.fn(async () => granted) });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/internal/answer-replies/feishu/om_1",
+      headers: authorization,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().sources[0]).toMatchObject({
+      crossGroupGrantId: "grant-a",
+      crossGroupGrantVersion: 3,
+      crossGroupGrantorGroupId: "group-owner",
+      crossGroupGranteeGroupId: "oc_1",
+    });
+    expect(response.body).not.toContain("createdBy");
+    expect(response.body).not.toContain("operationKey");
+    await app.close();
+  });
+
   it("rejects invalid route parameters with a bounded 400 response", async () => {
     const repository = {
       findByIncomingMessage: vi.fn(async () => receipt()),

@@ -1638,6 +1638,70 @@ describe("createAnswerDraftRuntime", () => {
     await runtime?.close();
   });
 
+  it("allows a receipt-bound cross-group source recheck for the exact grantee only", async () => {
+    const groupSource = source({
+      id: "source-group-granted",
+      sourceType: "group_visible_document",
+      originGroupId: "oc_owner",
+      permissionState: "readable",
+    });
+    const sourceRegistry = { findSourceById: vi.fn(async () => groupSource) };
+    const runtimeController = {
+      canReadDocuments: vi.fn(() => true),
+      canRetrieveKnowledgeBase: vi.fn(() => true),
+      canProcessGroupMessage: vi.fn(() => true),
+    };
+    const runtime = createAnswerDraftRuntime({
+      env: {
+        ...enabledEnv(),
+        IRIS_INTERNAL_DRAFT_PERMISSION_MODE: "source-policy",
+      },
+      runtimeController,
+      dependencies: {
+        createPostgresPool: vi.fn(() => ({ query: vi.fn(), end: vi.fn(async () => undefined) })),
+        createDocumentFragmentRepository: vi.fn(() => ({
+          searchSimilarFragments: vi.fn(async () => []),
+        })),
+        createDocumentSourceRegistry: vi.fn(() => sourceRegistry),
+        createModelProvider: vi.fn(() => ({
+          generateAnswerDraft: vi.fn(async () => ({ answerText: "Runtime draft" })),
+        })),
+        createEmbeddingProfileRepository: vi.fn(() => ({
+          getStaticDevelopmentProfile: vi.fn(async () => profile()),
+          findOrCreateProfile: vi.fn(),
+          getProfileById: vi.fn(),
+        })),
+      },
+    });
+
+    await expect(runtime!.answerSourcePermissionVerifier.verify({
+      chatId: "oc_reader",
+      documentSourceIds: ["source-group-granted"],
+      crossGroupGrantBindings: [{
+        documentSourceId: "source-group-granted",
+        grantId: "grant-a",
+        version: 2,
+        grantorGroupId: "oc_owner",
+        granteeGroupId: "oc_reader",
+      }],
+    })).resolves.toEqual([{ documentSourceId: "source-group-granted", outcome: "allowed" }]);
+
+    await expect(runtime!.answerSourcePermissionVerifier.verify({
+      chatId: "oc_other",
+      documentSourceIds: ["source-group-granted"],
+      crossGroupGrantBindings: [{
+        documentSourceId: "source-group-granted",
+        grantId: "grant-a",
+        version: 2,
+        grantorGroupId: "oc_owner",
+        granteeGroupId: "oc_reader",
+      }],
+    })).resolves.toEqual([{ documentSourceId: "source-group-granted", outcome: "error" }]);
+    expect(sourceRegistry.findSourceById).toHaveBeenCalledTimes(1);
+
+    await runtime?.close();
+  });
+
   it("allows group-visible source rechecks for the matching chat scope", async () => {
     const groupSource = source({
       id: "source-group-current",

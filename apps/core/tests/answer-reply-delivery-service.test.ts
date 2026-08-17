@@ -19,6 +19,7 @@ import type {
   VersionedTransitionInput,
 } from "../src/answer-replies/answer-reply-repository.js";
 import {
+  AnswerReplyGrantStaleError,
   createAnswerReplyDeliveryId,
   createAnswerReplySafeNoticeUuid,
   createAnswerReplyUuid,
@@ -979,6 +980,46 @@ describe("AnswerReplyDeliveryService", () => {
       uuid: reconciled.delivery.safeNoticeUuid,
       replyInThread: true,
     });
+  });
+
+  it("maps an atomic stale-grant send rejection to the permission-blocked notice", async () => {
+    const harness = createHarness();
+    harness.repository.beginAnswerSend.mockRejectedValueOnce(
+      new AnswerReplyGrantStaleError(),
+    );
+
+    const response = harness.service.respond(request(vi.fn(async () => preparedAnswer({
+      sourceTraces: [sourceTrace({
+        sourceType: "feishu_group_document",
+        crossGroupGrantId: "grant-a",
+        crossGroupGrantVersion: 1,
+        crossGroupGrantorGroupId: "group-owner",
+        crossGroupGranteeGroupId: "oc_1",
+      })],
+    }))));
+    await expect(response).resolves.toEqual({ replyMessageId: "reply-default" });
+
+    expect(harness.verifier.verify).toHaveBeenCalledWith({
+      chatId: "oc_1",
+      documentSourceIds: ["source-a"],
+      crossGroupGrantBindings: [{
+        documentSourceId: "source-a",
+        grantId: "grant-a",
+        version: 1,
+        grantorGroupId: "group-owner",
+        granteeGroupId: "oc_1",
+      }],
+    });
+    expect(harness.repository.blockForPermission).toHaveBeenCalledWith({
+      deliveryId: preparedDeliveryId,
+      expectedVersion: 1,
+      documentSourceIds: ["source-a"],
+      at: transitionAt,
+    });
+    expect(harness.replier.replyText).toHaveBeenCalledOnce();
+    expect(harness.replier.replyText).toHaveBeenCalledWith(expect.objectContaining({
+      text: ANSWER_PERMISSION_CHANGED_NOTICE,
+    }));
   });
 
   it.each([

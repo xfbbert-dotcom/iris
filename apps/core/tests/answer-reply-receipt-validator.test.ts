@@ -24,6 +24,40 @@ const firstSendAt = new Date("2026-08-02T02:01:00.000Z");
 const transitionAt = new Date("2026-08-02T02:02:00.000Z");
 
 describe("AnswerReplyReceiptValidator", () => {
+  it("binds the exact cross-group grant facts into semantic identity", () => {
+    const renderedReplyFingerprint = createAnswerReplyRenderedFingerprint(renderedText);
+    const base = {
+      provider: "feishu" as const,
+      incomingMessageId,
+      chatId,
+      renderedReplyFingerprint,
+    };
+    const unbound = createAnswerReplySemanticFingerprint({
+      ...base,
+      sourceTraces: [sourceTrace()],
+    });
+    const bound = createAnswerReplySemanticFingerprint({
+      ...base,
+      sourceTraces: [sourceTrace({
+        sourceType: "feishu_group_document",
+        crossGroupGrantId: "grant-a",
+        crossGroupGrantVersion: 5,
+        crossGroupGrantorGroupId: "group-owner",
+        crossGroupGranteeGroupId: "group-reader",
+      })],
+    });
+
+    expect(bound).not.toBe(unbound);
+  });
+
+  it("rejects partial cross-group grant facts in a persisted receipt", () => {
+    const malformed = preparedReceipt();
+    malformed.sources[0]!.crossGroupGrantId = "grant-a";
+    expect(() => requireValidAnswerReplyReceipt(malformed)).toThrow(
+      "answer reply receipt invalid",
+    );
+  });
+
   it("includes the knowledge-conflict candidate in semantic preparation identity", () => {
     const trace = sourceTrace();
     const renderedReplyFingerprint = createAnswerReplyRenderedFingerprint(renderedText);
@@ -349,7 +383,9 @@ function event(
   };
 }
 
-function sourceTrace(): AnswerReplySourceTraceInput {
+function sourceTrace(
+  overrides: Partial<AnswerReplySourceTraceInput> = {},
+): AnswerReplySourceTraceInput {
   return {
     promptRank: 1,
     citationRank: 1,
@@ -363,6 +399,7 @@ function sourceTrace(): AnswerReplySourceTraceInput {
     contentHash: "a".repeat(64),
     embeddingProfileId: "embedding-profile-a",
     initialPermissionCheckedAt: new Date("2026-08-02T01:59:00.000Z"),
+    ...overrides,
   };
 }
 

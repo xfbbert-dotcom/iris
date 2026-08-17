@@ -675,19 +675,20 @@ function createCanReadDocument({
 }): (
   documentSourceId: string,
   scope?: string | DocumentAccessContext,
+  explicitAccessContext?: DocumentAccessContext,
 ) => Promise<boolean> {
   if (permissionMode === "allow-indexed") {
     return async () => true;
   }
 
-  return (documentSourceId, scope = currentGroupId) =>
+  return (documentSourceId, scope = currentGroupId, explicitAccessContext) =>
     canReadBySourcePolicy(
       documentSourceId,
       sourceRegistry,
       runtimeController,
       livePermissionChecker,
       normalizeCurrentGroupId(typeof scope === "string" ? scope : currentGroupId),
-      typeof scope === "object" ? scope : undefined,
+      explicitAccessContext ?? (typeof scope === "object" ? scope : undefined),
     );
 }
 

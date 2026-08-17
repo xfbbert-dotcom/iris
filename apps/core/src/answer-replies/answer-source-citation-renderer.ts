@@ -35,6 +35,10 @@ export type AnswerReplySourceTraceInput = {
   contentHash: string;
   embeddingProfileId: string;
   initialPermissionCheckedAt: Date;
+  crossGroupGrantId?: string;
+  crossGroupGrantVersion?: number;
+  crossGroupGrantorGroupId?: string;
+  crossGroupGranteeGroupId?: string;
 };
 
 type NormalizedDocumentMetadata = {
@@ -43,6 +47,10 @@ type NormalizedDocumentMetadata = {
   sourceUri: string;
   sourceTitle?: string;
   citationRank?: number;
+  crossGroupGrantId?: string;
+  crossGroupGrantVersion?: number;
+  crossGroupGrantorGroupId?: string;
+  crossGroupGranteeGroupId?: string;
 };
 
 export function renderAnswerWithSourceCitations(input: {
@@ -75,13 +83,15 @@ export function renderAnswerWithSourceCitations(input: {
     }
 
     const sourceTitle = normalizeSourceTitle(fragment.sourceTitle);
+    const grantBinding = normalizeCrossGroupGrantBinding(fragment);
     const existing = documents.get(fragment.documentSourceId);
     if (existing !== undefined) {
       if (
         existing.documentSnapshotId !== fragment.documentSnapshotId ||
         existing.sourceType !== fragment.sourceType ||
         existing.sourceUri !== sourceUri ||
-        existing.sourceTitle !== sourceTitle
+        existing.sourceTitle !== sourceTitle ||
+        !hasSameGrantBinding(existing, grantBinding)
       ) {
         throw new Error(`conflicting metadata for document source ${fragment.documentSourceId}`);
       }
@@ -94,6 +104,7 @@ export function renderAnswerWithSourceCitations(input: {
         ...(citedDocumentRanks.get(fragment.documentSourceId) === undefined
           ? {}
           : { citationRank: citedDocumentRanks.get(fragment.documentSourceId) }),
+        ...grantBinding,
       });
     }
 
@@ -117,6 +128,7 @@ export function renderAnswerWithSourceCitations(input: {
       contentHash: fragment.contentHash,
       embeddingProfileId: fragment.embeddingProfileId,
       initialPermissionCheckedAt: new Date(input.initialPermissionCheckedAt.getTime()),
+      ...grantBinding,
     });
   });
 
@@ -145,6 +157,58 @@ export function renderAnswerWithSourceCitations(input: {
     renderedText: `${answerBody}\n\n${footer}`,
     sourceTraces,
   };
+}
+
+type CrossGroupGrantBinding = Pick<
+  AnswerReplySourceTraceInput,
+  | "crossGroupGrantId"
+  | "crossGroupGrantVersion"
+  | "crossGroupGrantorGroupId"
+  | "crossGroupGranteeGroupId"
+>;
+
+function normalizeCrossGroupGrantBinding(
+  fragment: RetrievedDocumentFragment,
+): CrossGroupGrantBinding {
+  const fields = [
+    fragment.crossGroupGrantId,
+    fragment.crossGroupGrantVersion,
+    fragment.crossGroupGrantorGroupId,
+    fragment.crossGroupGranteeGroupId,
+  ];
+  if (fields.every((value) => value === undefined)) return {};
+  if (
+    fragment.sourceType !== "feishu_group_document" ||
+    !isBoundedGrantReference(fragment.crossGroupGrantId) ||
+    !Number.isSafeInteger(fragment.crossGroupGrantVersion) ||
+    fragment.crossGroupGrantVersion === undefined ||
+    fragment.crossGroupGrantVersion < 1 ||
+    !isBoundedGrantReference(fragment.crossGroupGrantorGroupId) ||
+    !isBoundedGrantReference(fragment.crossGroupGranteeGroupId) ||
+    fragment.crossGroupGrantorGroupId === fragment.crossGroupGranteeGroupId
+  ) {
+    throw new Error(`invalid cross-group grant metadata for ${fragment.documentSourceId}`);
+  }
+  return {
+    crossGroupGrantId: fragment.crossGroupGrantId,
+    crossGroupGrantVersion: fragment.crossGroupGrantVersion,
+    crossGroupGrantorGroupId: fragment.crossGroupGrantorGroupId,
+    crossGroupGranteeGroupId: fragment.crossGroupGranteeGroupId,
+  };
+}
+
+function isBoundedGrantReference(value: string | undefined): value is string {
+  return value !== undefined && value.trim().length > 0 && value.length <= 512;
+}
+
+function hasSameGrantBinding(
+  left: CrossGroupGrantBinding,
+  right: CrossGroupGrantBinding,
+): boolean {
+  return left.crossGroupGrantId === right.crossGroupGrantId &&
+    left.crossGroupGrantVersion === right.crossGroupGrantVersion &&
+    left.crossGroupGrantorGroupId === right.crossGroupGrantorGroupId &&
+    left.crossGroupGranteeGroupId === right.crossGroupGranteeGroupId;
 }
 
 function resolveCitedDocumentRanks(

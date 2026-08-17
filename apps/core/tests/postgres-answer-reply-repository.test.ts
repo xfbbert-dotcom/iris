@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { AnswerReplySourceTraceInput } from "../src/answer-replies/answer-source-citation-renderer.js";
 import {
+  AnswerReplyGrantStaleError,
   AnswerReplyPreparationConflictError,
   AnswerReplyVersionConflictError,
   createAnswerReplyDeliveryId,
@@ -16,6 +17,10 @@ import {
   createPostgresAnswerReplyRepository,
   type PostgresAnswerReplyDataSource,
 } from "../src/answer-replies/postgres-answer-reply-repository.js";
+import {
+  DocumentSourceGroupGrantConflictError,
+  createPostgresDocumentSourceGroupGrantRepository,
+} from "../src/documents/postgres-document-source-group-grant-repository.js";
 import {
   KnowledgeConflictDeliveryConflictError,
   createPostgresKnowledgeConflictRepository,
@@ -320,6 +325,94 @@ describe("answer reply knowledge-conflict send boundary", () => {
     });
     expect(order.indexOf("candidate")).toBeGreaterThanOrEqual(0);
     expect(order.indexOf("candidate")).toBeLessThan(order.indexOf("delivery"));
+  });
+});
+
+describe("answer reply cross-group grant boundary", () => {
+  it("locks grant bindings in stable order during prepare and fails before delivery persistence", async () => {
+    const lockedGrantIds: string[] = [];
+    const query = async (sql: string, values?: unknown[]) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
+        || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+      if (normalized.includes("FROM document_sources") && normalized.includes("FOR KEY SHARE")) {
+        return { rows: [{ id: values?.[0] }] };
+      }
+      if (normalized.includes("FROM document_source_group_grants")) {
+        lockedGrantIds.push(String(values?.[0]));
+        return lockedGrantIds.length === 1 ? { rows: [{ id: values?.[0] }] } : { rows: [] };
+      }
+      throw new Error(`unexpected query: ${normalized}`);
+    };
+    const repository = createPostgresAnswerReplyRepository({
+      dataSource: {
+        query,
+        async connect() { return { query, release() {} }; },
+      } as PostgresAnswerReplyDataSource,
+    });
+    const grants = (grantId: string, promptRank: number) => sourceTrace({
+      promptRank,
+      documentSourceId: `source-${grantId}`,
+      documentSnapshotId: `snapshot-${grantId}`,
+      fragmentId: `fragment-${grantId}`,
+      sourceType: "feishu_group_document",
+      sourceUri: `https://tenant.feishu.cn/docx/${grantId}`,
+      crossGroupGrantId: grantId,
+      crossGroupGrantVersion: 1,
+      crossGroupGrantorGroupId: "chat-owner",
+      crossGroupGranteeGroupId: "chat-a",
+    });
+
+    await expect(repository.prepare(prepareInput("grant-order", {
+      sourceTraces: [grants("grant-z", 1), grants("grant-a", 2)],
+    }))).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+
+    expect(lockedGrantIds).toEqual(["grant-a", "grant-z"]);
+  });
+
+  it("rejects a stale bound grant before locking or mutating the delivery at send start", async () => {
+    const incomingMessageId = "incoming-stale-grant";
+    const deliveryId = createAnswerReplyDeliveryId("feishu", incomingMessageId);
+    const sources = [sourceTraceRow({
+      id: testSourceTraceId(deliveryId, 1),
+      delivery_id: deliveryId,
+      document_source_id: "source-granted",
+      source_type: "feishu_group_document",
+      source_uri: "https://tenant.feishu.cn/docx/granted",
+      cross_group_grant_id: "grant-stale",
+      cross_group_grant_version: 2,
+      cross_group_grantor_group_id: "chat-owner",
+      cross_group_grantee_group_id: "chat-a",
+    })];
+    let deliveryLocked = false;
+    const query = async (sql: string) => {
+      const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
+        || normalized.includes("pg_advisory_xact_lock")) return { rows: [] };
+      if (normalized.includes("FROM answer_reply_source_traces")) return { rows: sources };
+      if (normalized.includes("FROM document_sources") && normalized.includes("FOR KEY SHARE")) {
+        return { rows: [{ id: "source-granted" }] };
+      }
+      if (normalized.includes("FROM document_source_group_grants")) return { rows: [] };
+      if (normalized.includes("FROM answer_reply_deliveries")
+        && normalized.includes("FOR UPDATE")) {
+        deliveryLocked = true;
+      }
+      return { rows: [] };
+    };
+    const repository = createPostgresAnswerReplyRepository({
+      dataSource: {
+        query,
+        async connect() { return { query, release() {} }; },
+      } as PostgresAnswerReplyDataSource,
+    });
+
+    await expect(repository.beginAnswerSend({
+      deliveryId,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    })).rejects.toBeInstanceOf(AnswerReplyGrantStaleError);
+    expect(deliveryLocked).toBe(false);
   });
 });
 
@@ -675,6 +768,99 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
       first.receipt.events.map(({ id }) => id),
     );
     expect(replay.receipt.events).toHaveLength(1);
+  });
+
+  it("round-trips an exact grant binding and serializes send start against revoke", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const documentSourceId = `grant-source-${suffix}`;
+    const grantorGroupId = `grant-owner-${suffix}`;
+    const granteeGroupId = `grant-reader-${suffix}`;
+    const snapshotId = `grant-snapshot-${suffix}`;
+    const fragmentId = `grant-fragment-${suffix}`;
+    const sourceUri = `https://tenant.feishu.cn/docx/${suffix}`;
+    const at = new Date("2026-08-02T00:00:00.000Z");
+    await pool!.query(
+      `INSERT INTO document_sources (
+         id, source_type, source_uri, origin_group_id, permission_state, sync_state,
+         can_use_for_answering, can_use_for_knowledge_drafts, created_at, updated_at
+       ) VALUES ($1, 'group_visible_document', $2, $3, 'readable', 'synced',
+         TRUE, TRUE, $4, $4)`,
+      [documentSourceId, sourceUri, grantorGroupId, at],
+    );
+    await pool!.query(
+      `INSERT INTO document_snapshots (
+         id, document_source_id, source_uri, fetch_status, body_text,
+         content_hash, source_version, fetched_at, created_at
+       ) VALUES ($1, $2, $3, 'succeeded', 'Granted body', $4, 'v1', $5, $5)`,
+      [snapshotId, documentSourceId, sourceUri, "a".repeat(64), at],
+    );
+    await pool!.query(
+      `INSERT INTO document_fragments (
+         id, document_source_id, document_snapshot_id, source_uri, chunk_index,
+         text, content_hash, created_at, embedding_profile_id
+       ) VALUES ($1, $2, $3, $4, 0, 'Granted body', $5, $6, 'static-dev-6d')`,
+      [fragmentId, documentSourceId, snapshotId, sourceUri, "b".repeat(64), at],
+    );
+    let createdGrantFactCount = 0;
+    const grantRepository = createPostgresDocumentSourceGroupGrantRepository({
+      dataSource: pool!,
+      createId: () => `grant-${suffix}-${++createdGrantFactCount}`,
+    });
+    const granted = await grantRepository.grant({
+      documentSourceId,
+      grantorGroupId,
+      granteeGroupId,
+      expectedVersion: 0,
+      operationKey: `grant-op-${suffix}`,
+      actorRef: "test-operator",
+      at,
+    });
+    const answerRepository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const input = prepareInput(`grant-race-${suffix}`, {
+      chatId: granteeGroupId,
+      sourceTraces: [sourceTrace({
+        documentSourceId,
+        documentSnapshotId: snapshotId,
+        fragmentId,
+        sourceType: "feishu_group_document",
+        sourceUri,
+        contentHash: "b".repeat(64),
+        crossGroupGrantId: granted.grant.id,
+        crossGroupGrantVersion: granted.grant.version,
+        crossGroupGrantorGroupId: grantorGroupId,
+        crossGroupGranteeGroupId: granteeGroupId,
+      })],
+    });
+    const prepared = await answerRepository.prepare(input);
+    expect(prepared.receipt.sources[0]).toMatchObject({
+      crossGroupGrantId: granted.grant.id,
+      crossGroupGrantVersion: 1,
+      crossGroupGrantorGroupId: grantorGroupId,
+      crossGroupGranteeGroupId: granteeGroupId,
+    });
+
+    const [send, revoke] = await Promise.allSettled([
+      answerRepository.beginAnswerSend({
+        deliveryId: prepared.receipt.delivery.id,
+        expectedVersion: prepared.receipt.delivery.version,
+        at: new Date("2026-08-02T00:01:00.000Z"),
+      }),
+      grantRepository.revoke({
+        grantId: granted.grant.id,
+        expectedVersion: granted.grant.version,
+        operationKey: `revoke-op-${suffix}`,
+        actorRef: "test-operator",
+        at: new Date("2026-08-02T00:01:00.000Z"),
+      }),
+    ]);
+
+    const safeSendWon = send.status === "fulfilled"
+      && revoke.status === "rejected"
+      && revoke.reason instanceof DocumentSourceGroupGrantConflictError;
+    const safeRevokeWon = revoke.status === "fulfilled"
+      && send.status === "rejected"
+      && send.reason instanceof AnswerReplyGrantStaleError;
+    expect(safeSendWon || safeRevokeWon).toBe(true);
   });
 
   it("persists the knowledge-conflict candidate as exact preparation identity", async () => {
@@ -1782,6 +1968,10 @@ function sourceTraceRow(overrides: Record<string, unknown> = {}) {
     content_hash: "c".repeat(64),
     embedding_profile_id: "embedding-profile-a",
     initial_permission_checked_at: new Date("2026-08-02T00:00:00.000Z"),
+    cross_group_grant_id: null,
+    cross_group_grant_version: null,
+    cross_group_grantor_group_id: null,
+    cross_group_grantee_group_id: null,
     ...overrides,
   };
 }
@@ -1902,9 +2092,12 @@ async function insertRawReceipt(pool: pg.Pool, fixture: RawReceiptFixture): Prom
          id, delivery_id, prompt_rank, citation_rank, document_source_id,
          document_snapshot_id, fragment_id, chunk_index, source_type,
          source_uri, source_title, content_hash, embedding_profile_id,
-         initial_permission_checked_at
+         initial_permission_checked_at, cross_group_grant_id,
+         cross_group_grant_version, cross_group_grantor_group_id,
+         cross_group_grantee_group_id
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+         $15, $16, $17, $18
        )`,
       [
         source.id,
@@ -1921,6 +2114,10 @@ async function insertRawReceipt(pool: pg.Pool, fixture: RawReceiptFixture): Prom
         source.content_hash,
         source.embedding_profile_id,
         source.initial_permission_checked_at,
+        source.cross_group_grant_id ?? null,
+        source.cross_group_grant_version ?? null,
+        source.cross_group_grantor_group_id ?? null,
+        source.cross_group_grantee_group_id ?? null,
       ],
     );
   }
@@ -1978,6 +2175,10 @@ function testSemanticFingerprintForRows(
       sourceTitle: source.source_title ?? undefined,
       contentHash: source.content_hash,
       embeddingProfileId: source.embedding_profile_id,
+      crossGroupGrantId: source.cross_group_grant_id ?? undefined,
+      crossGroupGrantVersion: source.cross_group_grant_version ?? undefined,
+      crossGroupGrantorGroupId: source.cross_group_grantor_group_id ?? undefined,
+      crossGroupGranteeGroupId: source.cross_group_grantee_group_id ?? undefined,
     })),
   });
 }

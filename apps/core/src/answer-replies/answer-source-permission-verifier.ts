@@ -9,12 +9,27 @@ export interface AnswerSourcePermissionVerifier {
   verify(input: {
     chatId: string;
     documentSourceIds: readonly string[];
+    crossGroupGrantBindings?: readonly AnswerSourcePermissionGrantBinding[];
   }): Promise<AnswerSourcePermissionDecision[]>;
+};
+
+export type AnswerSourcePermissionGrantBinding = {
+  documentSourceId: string;
+  grantId: string;
+  version: number;
+  grantorGroupId: string;
+  granteeGroupId: string;
+};
+
+export type AnswerSourcePermissionAccessContext = {
+  hasCrossGroupGrantBinding: boolean;
+  crossGroupGrantValidated: boolean;
 };
 
 type AnswerSourcePermissionChecker = (
   documentSourceId: string,
   chatId: string,
+  accessContext?: AnswerSourcePermissionAccessContext,
 ) => Promise<boolean>;
 
 type NormalizedSourceId = {
@@ -29,9 +44,22 @@ export function createAnswerSourcePermissionVerifier({
   canReadDocument: AnswerSourcePermissionChecker;
 }): AnswerSourcePermissionVerifier {
   return {
-    async verify({ chatId, documentSourceIds }) {
+    async verify({ chatId, documentSourceIds, crossGroupGrantBindings }) {
       const decisions: AnswerSourcePermissionDecision[] = [];
       const seen = new Set<string>();
+      const grantBoundDocumentSourceIds = normalizeGrantBoundDocumentSourceIds({
+        chatId,
+        documentSourceIds,
+        crossGroupGrantBindings,
+      });
+      if (grantBoundDocumentSourceIds === undefined) {
+        return documentSourceIds.map((documentSourceId) => ({
+          documentSourceId: typeof documentSourceId === "string"
+            ? documentSourceId
+            : invalidSourceId(`type:${typeof documentSourceId}`).documentSourceId,
+          outcome: "error" as const,
+        }));
+      }
 
       for (const documentSourceId of documentSourceIds) {
         const normalized = normalizeSourceId(documentSourceId);
@@ -46,7 +74,16 @@ export function createAnswerSourcePermissionVerifier({
         }
 
         try {
-          const allowed = await canReadDocument(normalized.documentSourceId, chatId);
+          const allowed = await canReadDocument(
+            normalized.documentSourceId,
+            chatId,
+            grantBoundDocumentSourceIds.has(normalized.documentSourceId)
+              ? {
+                  hasCrossGroupGrantBinding: true,
+                  crossGroupGrantValidated: true,
+                }
+              : undefined,
+          );
           decisions.push({
             documentSourceId: normalized.documentSourceId,
             outcome: allowed ? "allowed" : "denied",
@@ -59,6 +96,35 @@ export function createAnswerSourcePermissionVerifier({
       return decisions;
     },
   };
+}
+
+function normalizeGrantBoundDocumentSourceIds(input: {
+  chatId: string;
+  documentSourceIds: readonly string[];
+  crossGroupGrantBindings: readonly AnswerSourcePermissionGrantBinding[] | undefined;
+}): Set<string> | undefined {
+  if (input.crossGroupGrantBindings === undefined) return new Set();
+  if (!Array.isArray(input.crossGroupGrantBindings)) return undefined;
+  const requested = new Set(input.documentSourceIds);
+  const result = new Set<string>();
+  for (const binding of input.crossGroupGrantBindings) {
+    if (
+      binding === null || typeof binding !== "object" ||
+      typeof binding.documentSourceId !== "string" ||
+      !requested.has(binding.documentSourceId) ||
+      typeof binding.grantId !== "string" || binding.grantId.trim().length === 0 ||
+      !Number.isSafeInteger(binding.version) || binding.version < 1 ||
+      typeof binding.grantorGroupId !== "string" || binding.grantorGroupId.trim().length === 0 ||
+      typeof binding.granteeGroupId !== "string" ||
+      binding.granteeGroupId !== input.chatId ||
+      binding.grantorGroupId === binding.granteeGroupId ||
+      result.has(binding.documentSourceId)
+    ) {
+      return undefined;
+    }
+    result.add(binding.documentSourceId);
+  }
+  return result;
 }
 
 export function createUnavailableAnswerSourcePermissionVerifier(): AnswerSourcePermissionVerifier {
