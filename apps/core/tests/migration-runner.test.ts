@@ -1223,15 +1223,15 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         );
         INSERT INTO document_fragments (
           id, document_source_id, document_snapshot_id, source_uri,
-          chunk_index, text, content_hash, embedding, created_at
+          chunk_index, text, content_hash, embedding, embedding_profile_id, created_at
         ) VALUES
         (
           'fragment-1', 'document-1', 'snapshot-1', 'https://example.com/document-1',
-          0, 'CNY 5,000', repeat('c', 64), '[0,0,0,0,0,0]', NOW()
+          0, 'CNY 5,000', repeat('c', 64), '[0,0,0,0,0,0]', 'static-dev-6d', NOW()
         ),
         (
           'fragment-2', 'document-2', 'snapshot-2', 'https://example.com/document-2',
-          0, 'CNY 20,000', repeat('e', 64), '[0,0,0,0,0,0]', NOW()
+          0, 'CNY 20,000', repeat('e', 64), '[0,0,0,0,0,0]', 'static-dev-6d', NOW()
         );
         INSERT INTO knowledge_drafts (
           id, source_group_id, origin_kind, status, current_revision_number,
