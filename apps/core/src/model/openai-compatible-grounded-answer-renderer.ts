@@ -63,6 +63,23 @@ export function createOpenAICompatibleGroundedAnswerRenderer({
   return {
     async render(input) {
       const normalized = normalizeRenderInput(input);
+      if (normalized.plan.evidenceState === "conflict") {
+        if (
+          normalized.plan.confidence !== "high"
+          && normalized.plan.confidence !== "medium"
+        ) {
+          throw new Error("conflict grounded answer confidence is invalid");
+        }
+        return {
+          answerText: requireBoundedText(
+            normalized.plan.proposedAnswer,
+            MAX_RENDERED_ANSWER_CHARS,
+            "conflict grounded answer text",
+          ),
+          evidenceState: "conflict",
+          confidence: normalized.plan.confidence,
+        };
+      }
       const messages: OpenAICompatibleChatMessage[] = [
         { role: "system", content: GROUNDED_ANSWER_RENDERER_SYSTEM_PROMPT },
         { role: "user", content: JSON.stringify(normalized) },

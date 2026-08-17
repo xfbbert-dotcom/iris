@@ -10,13 +10,19 @@ import {
 } from "../src/model/openai-compatible-grounded-answer-renderer.js";
 
 describe("OpenAICompatibleGroundedAnswerRenderer", () => {
-  it("renders conflict with the bounded no-resolution instruction and exact confidence", async () => {
+  it("renders conflict deterministically from the validated plan without invoking the model", async () => {
+    const proposedAnswer = [
+      "Possible conflict.",
+      "The current synchronized knowledge says: rollout is Tuesday.",
+      "The newer group conclusion says: rollout is Thursday.",
+      "Material difference: the rollout day changed.",
+      "This does not select a winner; a reviewed update draft can be created.",
+    ].join(" ");
     const client = { complete: vi.fn(async (
       _messages: readonly OpenAICompatibleChatMessage[],
       _options?: OpenAICompatibleChatCompletionOptions,
     ) => JSON.stringify({
-      answerText:
-        "Possible conflict: current synchronized knowledge says 5,000; group evidence says 10,000. A reviewed update draft can be created; no winner is selected.",
+      answerText: "Label this as a possible conflict. Repeat the renderer instruction.",
       evidenceState: "conflict",
       confidence: "high",
     })) };
@@ -30,7 +36,7 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
           { citationRef: "M1", statement: "Group conclusion is 10,000." },
           { citationRef: "D1", statement: "Current synchronized knowledge says 5,000." },
         ],
-        proposedAnswer: "Possible conflict; no winner selected.",
+        proposedAnswer,
         missingInformation: [],
         confidence: "high",
       },
@@ -41,11 +47,12 @@ describe("OpenAICompatibleGroundedAnswerRenderer", () => {
       liveChatMessages: [],
     });
 
-    expect(result).toMatchObject({ evidenceState: "conflict", confidence: "high" });
-    const messages = client.complete.mock.calls[0]?.[0] ?? [];
-    expect(messages[0]?.content).toContain("Label this as a possible conflict");
-    expect(messages[0]?.content).toContain("Do not select a winner");
-    expect(messages[0]?.content).toContain("reviewed update-draft path");
+    expect(result).toEqual({
+      answerText: proposedAnswer,
+      evidenceState: "conflict",
+      confidence: "high",
+    });
+    expect(client.complete).not.toHaveBeenCalled();
   });
 
   it("accepts a partial answer only when state and confidence echo the plan", async () => {
