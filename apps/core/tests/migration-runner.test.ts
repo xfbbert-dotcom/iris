@@ -1056,8 +1056,8 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         { table_name: "knowledge_conflict_delivery_outbox" },
         { table_name: "knowledge_conflict_evidence" },
         { table_name: "knowledge_conflict_interactions" },
-        { table_name: "knowledge_conflict_scan_operations" },
         { table_name: "knowledge_conflict_scan_inbox" },
+        { table_name: "knowledge_conflict_scan_operations" },
       ] });
 
       const catalog = await client.query<{
