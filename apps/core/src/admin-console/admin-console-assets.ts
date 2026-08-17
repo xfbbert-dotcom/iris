@@ -150,6 +150,27 @@ export function renderAdminConsoleHtml(): string {
         </table>
       </div>
       <div id="document-source-empty" class="empty-state">Connect to load document sources.</div>
+      <aside id="document-source-group-grants" class="document-source-group-grants" aria-live="polite">
+        <div class="panel-heading">
+          <div>
+            <h3>Cross-group grants</h3>
+            <p id="document-source-grant-selection">Select Grants on one document source.</p>
+          </div>
+        </div>
+        <form id="document-source-grant-form" class="source-filters">
+          <label>Grantor group id<input id="document-source-grantor-group" placeholder="source group id"></label>
+          <label>Grantee group id<input id="document-source-grantee-group" placeholder="reader group id"></label>
+          <label>Expected version<input id="document-source-grant-version" inputmode="numeric" placeholder="0 for first grant"></label>
+          <button id="document-source-grant-submit" type="submit" class="secondary">Grant / regrant</button>
+        </form>
+        <div class="table-wrap">
+          <table class="document-source-grant-table">
+            <thead><tr><th>Grant</th><th>Grantor group</th><th>Grantee group</th><th>State</th><th>Version</th><th>Updated</th><th>Actions</th></tr></thead>
+            <tbody id="document-source-grant-rows"></tbody>
+          </table>
+        </div>
+        <div id="document-source-grant-empty" class="empty-state">No source selected.</div>
+      </aside>
     </section>
 
     <section class="wiki-space-panel" aria-labelledby="wiki-spaces-heading">
@@ -1026,6 +1047,16 @@ td.source-title {
   color: var(--muted);
 }
 
+.document-source-group-grants {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.document-source-grant-table {
+  table-layout: fixed;
+}
+
 @media (max-width: 880px) {
   .operator-panel,
   .status-grid,
@@ -1069,6 +1100,14 @@ const userDocumentSubmitter = document.getElementById("user-document-submitter")
 const userDocumentSubmit = document.getElementById("user-document-submit");
 const documentSourceRows = document.getElementById("document-source-rows");
 const documentSourceEmpty = document.getElementById("document-source-empty");
+const documentSourceGrantSelection = document.getElementById("document-source-grant-selection");
+const documentSourceGrantForm = document.getElementById("document-source-grant-form");
+const documentSourceGrantorGroup = document.getElementById("document-source-grantor-group");
+const documentSourceGranteeGroup = document.getElementById("document-source-grantee-group");
+const documentSourceGrantVersion = document.getElementById("document-source-grant-version");
+const documentSourceGrantSubmit = document.getElementById("document-source-grant-submit");
+const documentSourceGrantRows = document.getElementById("document-source-grant-rows");
+const documentSourceGrantEmpty = document.getElementById("document-source-grant-empty");
 const wikiSpaceRefresh = document.getElementById("wiki-space-refresh");
 const wikiSpaceForm = document.getElementById("wiki-space-form");
 const wikiSpaceRootSourceUri = document.getElementById("wiki-space-root-source-uri");
@@ -1135,6 +1174,7 @@ let resolveWikiSpaceMutationsIdle;
 let knowledgeConflictRefreshGeneration = 0;
 let knowledgeConflictDetailGeneration = 0;
 let knowledgeConflictSelection;
+let selectedDocumentSourceId;
 const documentSourceListBasePath = "/internal/document-sync/sources?includeLatestSnapshot=true";
 const userSubmittedDocumentPath = "/internal/document-sync/user-submitted-documents";
 const wikiSpaceListPath = "/internal/document-sync/wiki-spaces?limit=20";
@@ -1336,12 +1376,115 @@ function renderDocumentSources(sources) {
       }
     });
     actions.append(syncButton);
+    const grantsButton = document.createElement("button");
+    grantsButton.type = "button";
+    grantsButton.className = "secondary";
+    grantsButton.textContent = "Grants";
+    grantsButton.addEventListener("click", async () => {
+      selectedDocumentSourceId = source.id;
+      documentSourceGrantSelection.textContent = "Source " + source.id;
+      try {
+        await refreshDocumentSourceGroupGrants();
+      } catch (error) {
+        addEvent("Grant lookup failed: " + error.message);
+        setConnection("Request failed", "warn");
+      }
+    });
+    actions.append(grantsButton);
     actionsCell.append(actions);
 
     row.append(sourceCell, typeCell, syncCell, permissionCell, answeringCell, draftsCell, actionsCell);
     documentSourceRows.append(row);
   }
   documentSourceEmpty.textContent = visibleSources.length === 0 ? "No document sources match the current filters." : "";
+}
+
+function documentSourceGroupGrantPath(sourceId, suffix = "") {
+  return "/internal/document-sync/sources/" + encodeURIComponent(sourceId) + "/group-grants" + suffix;
+}
+
+function createOpaqueOperationKey() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return "grant-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+}
+
+function renderDocumentSourceGroupGrants(grants) {
+  documentSourceGrantRows.replaceChildren();
+  for (const grant of grants || []) {
+    const row = document.createElement("tr");
+    for (const value of [
+      grant.id,
+      grant.grantorGroupId,
+      grant.granteeGroupId,
+      grant.state,
+      grant.version,
+      grant.updatedAt,
+    ]) {
+      const cell = document.createElement("td");
+      cell.textContent = text(value);
+      row.append(cell);
+    }
+    const actionCell = document.createElement("td");
+    if (grant.state === "active") {
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.className = "danger";
+      revoke.textContent = "Revoke";
+      revoke.addEventListener("click", async () => {
+        if (selectedDocumentSourceId !== grant.documentSourceId) return;
+        const confirmation = "Revoke grant " + grant.id + " for source " + grant.documentSourceId +
+          " from " + grant.grantorGroupId + " to " + grant.granteeGroupId +
+          " at version " + grant.version + "?";
+        if (!window.confirm(confirmation)) return;
+        revoke.disabled = true;
+        try {
+          await requestJson(documentSourceGroupGrantPath(grant.documentSourceId, "/" +
+            encodeURIComponent(grant.id) + "/revoke"), {
+            method: "POST",
+            body: JSON.stringify({
+              expectedVersion: grant.version,
+              operationKey: createOpaqueOperationKey(),
+            }),
+          });
+          addEvent("Grant revoked for " + grant.documentSourceId);
+        } catch (error) {
+          addEvent("Grant revoke failed: " + error.message);
+          setConnection("Request failed", "warn");
+        } finally {
+          await refreshDocumentSourceGroupGrantsAfterMutation();
+          revoke.disabled = false;
+        }
+      });
+      actionCell.append(revoke);
+    }
+    row.append(actionCell);
+    documentSourceGrantRows.append(row);
+  }
+  documentSourceGrantEmpty.textContent = (grants || []).length === 0
+    ? "No grants recorded for this source."
+    : "";
+}
+
+async function refreshDocumentSourceGroupGrants() {
+  if (!selectedDocumentSourceId) {
+    renderDocumentSourceGroupGrants([]);
+    documentSourceGrantEmpty.textContent = "No source selected.";
+    return;
+  }
+  const body = await requestJson("/internal/document-sync/sources/" +
+    encodeURIComponent(selectedDocumentSourceId) + "/group-grants?limit=20");
+  renderDocumentSourceGroupGrants(body.grants || []);
+}
+
+async function refreshDocumentSourceGroupGrantsAfterMutation() {
+  try {
+    await refreshDocumentSourceGroupGrants();
+  } catch (error) {
+    addEvent("Grant refresh failed: " + error.message);
+    setConnection("Request failed", "warn");
+  }
 }
 
 async function refreshDocumentSources() {
@@ -2669,6 +2812,50 @@ documentSourceRefresh.addEventListener("click", async () => {
     addEvent("Document source refresh failed: " + error.message);
   } finally {
     documentSourceRefresh.disabled = false;
+  }
+});
+
+documentSourceGrantForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!selectedDocumentSourceId) {
+    addEvent("Select a document source before granting access");
+    return;
+  }
+  const grantorGroupId = documentSourceGrantorGroup.value.trim();
+  const granteeGroupId = documentSourceGranteeGroup.value.trim();
+  const expectedVersion = Number(documentSourceGrantVersion.value);
+  if (
+    grantorGroupId.length === 0 ||
+    granteeGroupId.length === 0 ||
+    grantorGroupId === granteeGroupId ||
+    !Number.isSafeInteger(expectedVersion) ||
+    expectedVersion < 0
+  ) {
+    addEvent("Exact grantor, grantee, and expected version are required");
+    return;
+  }
+  const confirmation = "Grant source " + selectedDocumentSourceId + " from " +
+    grantorGroupId + " to " + granteeGroupId + " at expected version " +
+    expectedVersion + "?";
+  if (!window.confirm(confirmation)) return;
+  documentSourceGrantSubmit.disabled = true;
+  try {
+    await requestJson(documentSourceGroupGrantPath(selectedDocumentSourceId), {
+      method: "POST",
+      body: JSON.stringify({
+        grantorGroupId,
+        granteeGroupId,
+        expectedVersion,
+        operationKey: createOpaqueOperationKey(),
+      }),
+    });
+    addEvent("Grant updated for " + selectedDocumentSourceId);
+  } catch (error) {
+    addEvent("Grant update failed: " + error.message);
+    setConnection("Request failed", "warn");
+  } finally {
+    await refreshDocumentSourceGroupGrantsAfterMutation();
+    documentSourceGrantSubmit.disabled = false;
   }
 });
 

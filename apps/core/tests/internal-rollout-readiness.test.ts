@@ -4,6 +4,43 @@ import { buildInternalRolloutReadinessReport } from "../src/admin/internal-rollo
 import type { EnvLike } from "../src/config/env.js";
 
 describe("buildInternalRolloutReadinessReport", () => {
+  it("requires readable cross-group grant facts when live document status is supplied", () => {
+    const healthy = buildInternalRolloutReadinessReport(readyRolloutEnv(), {
+      documentSyncStatus: {
+        ok: true,
+        groupGrants: {
+          migration0051Applied: true,
+          active: 1,
+          revoked: 2,
+          latestUpdatedAt: "2026-08-18T05:00:00.000Z",
+        },
+      },
+    });
+    expect(checksById(healthy).documentSourceGroupGrants).toMatchObject({
+      status: "pass",
+      detail: "Cross-group document grants are readable with migration 0051 applied.",
+    });
+
+    const missingMigration = buildInternalRolloutReadinessReport(readyRolloutEnv(), {
+      documentSyncStatus: {
+        ok: true,
+        groupGrants: { migration0051Applied: false },
+      },
+    });
+    expect(checksById(missingMigration).documentSourceGroupGrants).toMatchObject({
+      status: "fail",
+      detail: "Cross-group document grant migration 0051 is not applied.",
+    });
+
+    const unreadable = buildInternalRolloutReadinessReport(readyRolloutEnv(), {
+      documentSyncStatus: { ok: false },
+    });
+    expect(checksById(unreadable).documentSourceGroupGrants).toMatchObject({
+      status: "fail",
+      detail: "Cross-group document grant counts are unavailable.",
+    });
+  });
+
   it("treats action reviews as disabled without requiring review credentials", () => {
     const report = buildInternalRolloutReadinessReport(readyRolloutEnv());
 

@@ -135,6 +135,35 @@ describe("createPostgresDocumentSourceGroupGrantRepository", () => {
     expect(fake.queries).toEqual([]);
   });
 
+  it("reports migration presence and content-free grant counts", async () => {
+    const fake = createSequentialDataSource([
+      { rows: [{ applied: true }] },
+      { rows: [{ active: "3", revoked: "2", latest_updated_at: at }] },
+    ]);
+    const repository = createPostgresDocumentSourceGroupGrantRepository({
+      dataSource: fake.dataSource,
+    });
+
+    await expect(repository.getStatus()).resolves.toEqual({
+      migration0051Applied: true,
+      active: 3,
+      revoked: 2,
+      latestUpdatedAt: at,
+    });
+    expect(fake.queries[0]?.values).toEqual(["0051_document_source_group_grants.sql"]);
+    expect(normalizeSql(fake.queries[1]!.sql)).toContain("filter (where state = 'active')");
+  });
+
+  it("does not query the projection when migration 0051 is absent", async () => {
+    const fake = createSequentialDataSource([{ rows: [{ applied: false }] }]);
+    const repository = createPostgresDocumentSourceGroupGrantRepository({
+      dataSource: fake.dataSource,
+    });
+
+    await expect(repository.getStatus()).resolves.toEqual({ migration0051Applied: false });
+    expect(fake.queries).toHaveLength(1);
+  });
+
   it("locks source before projection and appends one event when granting", async () => {
     const fake = createSequentialDataSource([
       { rows: [] },

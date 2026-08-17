@@ -223,6 +223,17 @@ function documentSyncDependencies({ connect }: { connect: ReturnType<typeof vi.f
       registerAuthorizedWikiDocument: vi.fn(),
       registerUserSubmittedDocument: vi.fn(),
     })),
+    createDocumentSourceGroupGrantRepository: vi.fn(() => ({
+      getStatus: vi.fn(async () => ({
+        migration0051Applied: true,
+        active: 0,
+        revoked: 0,
+      })),
+      listForSource: vi.fn(async () => []),
+      findById: vi.fn(async () => undefined),
+      grant: vi.fn(),
+      revoke: vi.fn(),
+    })),
     createDocumentSnapshotRepository: vi.fn(() => ({
       insertSucceededSnapshot: vi.fn(),
       insertFailedSnapshot: vi.fn(),

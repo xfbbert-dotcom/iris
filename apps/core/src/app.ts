@@ -834,6 +834,9 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
   });
 
   app.get("/internal/readiness", async () => {
+    const documentSyncStatus = documentSyncRuntime === undefined
+      ? undefined
+      : await getDocumentSyncStatus(documentSyncRuntime);
     const knowledgeCardStatus = await getKnowledgeCardStatus(
       knowledgeCardRuntime,
       knowledgeCardStatusReader,
@@ -845,7 +848,13 @@ export async function buildApp(dependencies: BuildAppDependencies = {}) {
     const actionReviewStatus = await getActionReviewStatus(actionReviewRuntime);
     return buildInternalRolloutReadinessReport(
       dependencies.readinessEnv ?? process.env,
-      { knowledgeCardStatus, knowledgeConflictStatus, actionApprovalStatus, actionReviewStatus },
+      {
+        ...(documentSyncStatus === undefined ? {} : { documentSyncStatus }),
+        knowledgeCardStatus,
+        knowledgeConflictStatus,
+        actionApprovalStatus,
+        actionReviewStatus,
+      },
     );
   });
 

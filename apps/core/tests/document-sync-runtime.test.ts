@@ -219,6 +219,17 @@ describe("createDocumentSyncRuntime", () => {
       createPostgresPool: vi.fn(() => pool),
       createRedisClient: vi.fn(() => redisClient),
       createDocumentSourceRegistry: vi.fn(() => documentSources),
+      createDocumentSourceGroupGrantRepository: vi.fn(() => ({
+        getStatus: vi.fn(async () => ({
+          migration0051Applied: true,
+          active: 0,
+          revoked: 0,
+        })),
+        listForSource: vi.fn(async () => []),
+        findById: vi.fn(async () => undefined),
+        grant: vi.fn(),
+        revoke: vi.fn(),
+      })),
       createDocumentSnapshotRepository: vi.fn(() => ({})),
       createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
       createFeishuDocumentBodyFetcher: vi.fn(() => ({ fetch: vi.fn() })),
@@ -453,6 +464,12 @@ describe("createDocumentSyncRuntime", () => {
       updatedAt: new Date("2026-07-03T03:00:00.000Z"),
     };
     const groupGrants = {
+      getStatus: vi.fn(async () => ({
+        migration0051Applied: true,
+        active: 1,
+        revoked: 0,
+        latestUpdatedAt: new Date("2026-07-03T03:00:00.000Z"),
+      })),
       listForSource: vi.fn(async () => [groupGrant]),
       findById: vi.fn(async () => groupGrant),
       grant: vi.fn(async () => ({ outcome: "applied" as const, grant: groupGrant })),
@@ -654,7 +671,14 @@ describe("createDocumentSyncRuntime", () => {
       pendingJobCount: 3,
       deadLetterJobCount: 2,
       latestBatch,
+      groupGrants: {
+        migration0051Applied: true,
+        active: 1,
+        revoked: 0,
+        latestUpdatedAt: new Date("2026-07-03T03:00:00.000Z"),
+      },
     });
+    expect(groupGrants.getStatus).toHaveBeenCalledOnce();
 
     await expect(runtime?.deadLetters.list({ limit: 10 })).resolves.toEqual([
       {

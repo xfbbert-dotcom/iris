@@ -18,7 +18,15 @@ export type DocumentSourceGroupGrantMutationResult = {
   grant: DocumentSourceGroupGrant;
 };
 
+export type DocumentSourceGroupGrantStatus = {
+  migration0051Applied: boolean;
+  active?: number;
+  revoked?: number;
+  latestUpdatedAt?: Date;
+};
+
 export type DocumentSourceGroupGrantRepository = {
+  getStatus(): Promise<DocumentSourceGroupGrantStatus>;
   grant(input: {
     documentSourceId: string;
     grantorGroupId: string;

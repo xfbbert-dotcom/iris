@@ -8,6 +8,7 @@ import {
   type DocumentSourceGroupGrantMutationResult,
   type DocumentSourceGroupGrantRepository,
   type DocumentSourceGroupGrantState,
+  type DocumentSourceGroupGrantStatus,
 } from "./document-source-group-grant.js";
 
 export {
@@ -78,6 +79,7 @@ export function createPostgresDocumentSourceGroupGrantRepository({
   createId?: () => string;
 }): DocumentSourceGroupGrantRepository {
   return {
+    getStatus: async () => getStatus(dataSource),
     grant: async (input) => grant(dataSource, createId, normalizeGrantInput(input)),
     revoke: async (input) => revoke(dataSource, createId, normalizeRevokeInput(input)),
     findActiveForSourceAndGrantee: async (input) => findActiveForSourceAndGrantee(dataSource, {
@@ -96,6 +98,44 @@ export function createPostgresDocumentSourceGroupGrantRepository({
       grantorGroupId: requireReference("grantorGroupId", input.grantorGroupId),
       granteeGroupId: requireReference("granteeGroupId", input.granteeGroupId),
     }),
+  };
+}
+
+async function getStatus(
+  queryable: PostgresDocumentSourceGroupGrantQueryable,
+): Promise<DocumentSourceGroupGrantStatus> {
+  const migration = await queryable.query<{ applied: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM schema_migrations WHERE name = $1
+     ) AS applied`,
+    ["0051_document_source_group_grants.sql"],
+  );
+  if (migration.rows[0]?.applied !== true) {
+    return { migration0051Applied: false };
+  }
+
+  const result = await queryable.query<{
+    active: string | number;
+    revoked: string | number;
+    latest_updated_at: Date | string | null;
+  }>(
+    `SELECT
+       COUNT(*) FILTER (WHERE state = 'active') AS active,
+       COUNT(*) FILTER (WHERE state = 'revoked') AS revoked,
+       MAX(updated_at) AS latest_updated_at
+     FROM document_source_group_grants`,
+  );
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new DocumentSourceGroupGrantValidationError("grant status row is missing");
+  }
+  return {
+    migration0051Applied: true,
+    active: requireNonNegativeCount("active grant count", row.active),
+    revoked: requireNonNegativeCount("revoked grant count", row.revoked),
+    ...(row.latest_updated_at === null
+      ? {}
+      : { latestUpdatedAt: requireDateValue("latest grant update", row.latest_updated_at) }),
   };
 }
 
@@ -598,6 +638,14 @@ function requirePositiveVersion(name: string, value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);
   if (!Number.isSafeInteger(numeric) || numeric < 1) {
     throw new DocumentSourceGroupGrantValidationError(`${name} must be a positive integer`);
+  }
+  return numeric;
+}
+
+function requireNonNegativeCount(name: string, value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(numeric) || numeric < 0) {
+    throw new DocumentSourceGroupGrantValidationError(`${name} must be a non-negative integer`);
   }
   return numeric;
 }

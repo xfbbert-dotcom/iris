@@ -115,6 +115,15 @@ type KnowledgeConflictReadinessStatus = {
   degradedReason?: string;
 };
 export type InternalRolloutReadinessContext = {
+  documentSyncStatus?: {
+    ok: boolean;
+    groupGrants?: {
+      migration0051Applied: boolean;
+      active?: number;
+      revoked?: number;
+      latestUpdatedAt?: Date | string;
+    };
+  };
   knowledgeCardStatus?: {
     ok: boolean;
     enabled: boolean;
@@ -515,6 +524,32 @@ const checkDefinitions: CheckDefinition[] = [
         return fail("Action-approval outbox has terminal failed rows.");
       }
       return pass("Action-proposal planner and approval dispatcher are running.");
+    },
+  },
+  {
+    id: "documentSourceGroupGrants",
+    title: "Cross-group document grants",
+    envVars: ["DATABASE_URL", "IRIS_DOCUMENT_SYNC_WORKER_ENABLED"],
+    evaluate(_env, context) {
+      const status = context.documentSyncStatus;
+      if (status === undefined) {
+        return pass("Cross-group document grant facts require live runtime verification.");
+      }
+      if (!status.ok || status.groupGrants === undefined) {
+        return fail("Cross-group document grant counts are unavailable.");
+      }
+      if (!status.groupGrants.migration0051Applied) {
+        return fail("Cross-group document grant migration 0051 is not applied.");
+      }
+      if (
+        !Number.isSafeInteger(status.groupGrants.active) ||
+        (status.groupGrants.active ?? -1) < 0 ||
+        !Number.isSafeInteger(status.groupGrants.revoked) ||
+        (status.groupGrants.revoked ?? -1) < 0
+      ) {
+        return fail("Cross-group document grant counts are unavailable.");
+      }
+      return pass("Cross-group document grants are readable with migration 0051 applied.");
     },
   },
   {

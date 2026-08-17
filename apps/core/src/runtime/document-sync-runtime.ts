@@ -59,6 +59,7 @@ import type {
   DocumentSourceGroupGrant,
   DocumentSourceGroupGrantMutationResult,
   DocumentSourceGroupGrantRepository,
+  DocumentSourceGroupGrantStatus,
 } from "../documents/document-source-group-grant.js";
 import {
   DocumentSourceGroupGrantNotFoundError,
@@ -220,6 +221,7 @@ export type DocumentSyncRuntimeStatus = {
   deadLetterJobCount: number;
   latestBatch?: DocumentSyncWorkerBatchSnapshot;
   wikiSpaces?: WikiSpaceSyncRuntimeStatus;
+  groupGrants?: DocumentSourceGroupGrantStatus;
 };
 
 export type WikiSpaceSyncRuntimeStatus = {
@@ -293,7 +295,7 @@ export type DocumentSyncRuntimeDependencies = {
   }) => Pick<
     DocumentSourceGroupGrantRepository,
     "listForSource" | "findById" | "grant" | "revoke"
-  >;
+  > & Partial<Pick<DocumentSourceGroupGrantRepository, "getStatus">>;
   createDocumentSnapshotRepository?: (dependencies: {
     queryable: Queryable;
   }) => DocumentSyncRuntimeSnapshots;
@@ -530,6 +532,9 @@ function createEnabledDocumentSyncRuntime({
       const loopSnapshot = loop.getSnapshot();
       const pendingJobCount = await queue.getPendingCount();
       const deadLetterJobCount = await queue.getDeadLetterCount();
+      const groupGrantStatus = sourceGroupGrants.getStatus === undefined
+        ? undefined
+        : await sourceGroupGrants.getStatus();
       const wikiSpaceStatus = await getWikiSpaceRuntimeStatus({
         repository: wikiSpaceRepository,
         loop: wikiSpaceLoop,
@@ -545,6 +550,7 @@ function createEnabledDocumentSyncRuntime({
         ...(loopSnapshot.latestBatch === undefined
           ? {}
           : { latestBatch: loopSnapshot.latestBatch }),
+        ...(groupGrantStatus === undefined ? {} : { groupGrants: groupGrantStatus }),
         ...(wikiSpaceStatus === undefined ? {} : { wikiSpaces: wikiSpaceStatus }),
       };
     },
