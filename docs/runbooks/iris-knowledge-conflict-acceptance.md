@@ -784,7 +784,7 @@ function Invoke-KnowledgeConflictAcceptance {
   $script:FailedStep = 1
   if ($ApprovedCommitSha -cnotmatch '^[0-9a-f]{40}$') { throw "APPROVED_COMMIT_SHA is invalid" }
   if ($ApprovedImageDigest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "IRIS_APPROVED_IMAGE_DIGEST is invalid" }
-  if ((git status --porcelain --untracked-files=all).Count -ne 0) { throw "Reviewed checkout is not clean" }
+  if (@(git status --porcelain --untracked-files=all).Count -ne 0) { throw "Reviewed checkout is not clean" }
   if ((git rev-parse HEAD).Trim() -cne $ApprovedCommitSha) { throw "Local SHA differs from approved SHA" }
   if ((Get-PilotEnvValue IRIS_IMAGE_TAG) -cne $ApprovedCommitSha) { throw "IRIS_IMAGE_TAG is not the exact approved SHA" }
   $imageId = (& docker image inspect "iris-core:$ApprovedCommitSha" --format '{{.Id}}').Trim()

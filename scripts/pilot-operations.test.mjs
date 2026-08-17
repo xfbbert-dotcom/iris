@@ -60,6 +60,14 @@ test("knowledge-conflict acceptance runbook is executable and covers all twelve 
   assert.doesNotMatch(runbook, /https:\/\/[^\s`]*(?:wiki|docx)[^\s`]*/iu);
 });
 
+test("knowledge-conflict clean-worktree gate is safe under strict PowerShell mode", () => {
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  assert.match(
+    runbook,
+    /if \(@\(git status --porcelain --untracked-files=all\)\.Count -ne 0\) \{ throw "Reviewed checkout is not clean" \}/u,
+  );
+});
+
 test("knowledge-conflict rollback is unconditional after enablement and preserves facts", () => {
   assert.equal(existsSync(knowledgeConflictAcceptancePath), true);
   const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
