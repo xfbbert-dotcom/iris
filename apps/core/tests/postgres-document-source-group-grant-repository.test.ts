@@ -89,6 +89,52 @@ function operationKinds(queries: RecordedQuery[]): string[] {
 }
 
 describe("createPostgresDocumentSourceGroupGrantRepository", () => {
+  it("lists bounded grant metadata and finds an exact grant without a transaction", async () => {
+    const fake = createSequentialDataSource([
+      { rows: [grantRow(), grantRow({ id: "grant-2", state: "revoked", version: "2" })] },
+      { rows: [grantRow({ id: "grant-2", state: "revoked", version: "2" })] },
+      { rows: [] },
+    ]);
+    const repository = createPostgresDocumentSourceGroupGrantRepository({
+      dataSource: fake.dataSource,
+    });
+
+    await expect(repository.listForSource({
+      documentSourceId: "source-1",
+      limit: 10,
+    })).resolves.toMatchObject([
+      { id: "grant-1", state: "active", version: 1 },
+      { id: "grant-2", state: "revoked", version: 2 },
+    ]);
+    await expect(repository.findById("grant-2")).resolves.toMatchObject({
+      id: "grant-2",
+      state: "revoked",
+      version: 2,
+    });
+    await expect(repository.findById("missing-grant")).resolves.toBeUndefined();
+
+    expect(fake.queries.map(({ values }) => values)).toEqual([
+      ["source-1", 10],
+      ["grant-2"],
+      ["missing-grant"],
+    ]);
+    expect(fake.release).not.toHaveBeenCalled();
+    expect(fake.remaining).toHaveLength(0);
+  });
+
+  it("returns an empty bounded list without querying storage", async () => {
+    const fake = createSequentialDataSource([]);
+    const repository = createPostgresDocumentSourceGroupGrantRepository({
+      dataSource: fake.dataSource,
+    });
+
+    await expect(repository.listForSource({
+      documentSourceId: "source-1",
+      limit: 0,
+    })).resolves.toEqual([]);
+    expect(fake.queries).toEqual([]);
+  });
+
   it("locks source before projection and appends one event when granting", async () => {
     const fake = createSequentialDataSource([
       { rows: [] },

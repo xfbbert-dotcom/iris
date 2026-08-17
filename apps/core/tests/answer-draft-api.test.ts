@@ -10,6 +10,10 @@ import {
   type BuildAppDependencies,
 } from "../src/app.js";
 import { readFeishuAuthConfig } from "../src/config/env.js";
+import {
+  DocumentSourceGroupGrantConflictError,
+  DocumentSourceGroupGrantNotFoundError,
+} from "../src/documents/document-source-group-grant.js";
 import type { RawEvent } from "../src/events/raw-event-queue.js";
 import type { DocumentSyncRuntime } from "../src/runtime/document-sync-runtime.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
@@ -3887,6 +3891,192 @@ describe("document sync source inventory API", () => {
   });
 });
 
+describe("document source cross-group grant API", () => {
+  const at = new Date("2026-08-18T01:00:00.000Z");
+  const grant = {
+    id: "grant-1",
+    documentSourceId: "source-1",
+    grantorGroupId: "group-owner",
+    granteeGroupId: "group-reader",
+    state: "active" as const,
+    version: 1,
+    createdBy: "SENSITIVE_OPERATOR",
+    updatedBy: "SENSITIVE_OPERATOR",
+    createdAt: at,
+    updatedAt: at,
+  };
+
+  it("lists, grants, and revokes exact metadata behind the operator boundary", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const groupGrants = runtime.sources.groupGrants!;
+    groupGrants.list = vi.fn(async () => [grant]);
+    groupGrants.grant = vi.fn(async () => ({ outcome: "applied" as const, grant }));
+    groupGrants.revoke = vi.fn(async () => ({
+      outcome: "applied" as const,
+      grant: { ...grant, state: "revoked" as const, version: 2, updatedAt: at },
+    }));
+    const app = await buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+      now: () => at,
+    });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/internal/document-sync/sources/source-1/group-grants?limit=10",
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual({
+      ok: true,
+      grants: [{
+        id: "grant-1",
+        documentSourceId: "source-1",
+        grantorGroupId: "group-owner",
+        granteeGroupId: "group-reader",
+        state: "active",
+        version: 1,
+        createdAt: at.toISOString(),
+        updatedAt: at.toISOString(),
+      }],
+    });
+    expect(listed.body).not.toContain("SENSITIVE_OPERATOR");
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/source-1/group-grants",
+      headers: { "x-iris-operator": "operator-a" },
+      payload: {
+        grantorGroupId: "group-owner",
+        granteeGroupId: "group-reader",
+        expectedVersion: 0,
+        operationKey: "grant-operation-1",
+      },
+    });
+    expect(created.statusCode).toBe(200);
+    expect(groupGrants.grant).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
+      grantorGroupId: "group-owner",
+      granteeGroupId: "group-reader",
+      expectedVersion: 0,
+      operationKey: "grant-operation-1",
+      actorRef: "operator-a",
+      at,
+    });
+    expect(created.json()).toMatchObject({ ok: true, outcome: "applied", grant: { id: "grant-1" } });
+    expect(created.body).not.toContain("SENSITIVE_OPERATOR");
+    expect(created.body).not.toContain("grant-operation-1");
+
+    const revoked = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/source-1/group-grants/grant-1/revoke",
+      headers: { "x-iris-operator": "operator-a" },
+      payload: { expectedVersion: 1, operationKey: "revoke-operation-1" },
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect(groupGrants.revoke).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
+      grantId: "grant-1",
+      expectedVersion: 1,
+      operationKey: "revoke-operation-1",
+      actorRef: "operator-a",
+      at,
+    });
+    expect(revoked.json()).toMatchObject({
+      ok: true,
+      outcome: "applied",
+      grant: { id: "grant-1", state: "revoked", version: 2 },
+    });
+    await app.close();
+  });
+
+  it("rejects missing operators and non-exact bodies before grant mutation", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const groupGrants = runtime.sources.groupGrants!;
+    const app = await buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const missingOperator = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/source-1/group-grants",
+      payload: {
+        grantorGroupId: "group-owner",
+        granteeGroupId: "group-reader",
+        expectedVersion: 0,
+        operationKey: "grant-operation-1",
+      },
+    });
+    expect(missingOperator.statusCode).toBe(400);
+    expect(missingOperator.json()).toEqual({ ok: false, error: "invalid_operator" });
+
+    const extraField = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/source-1/group-grants",
+      headers: { "x-iris-operator": "operator-a" },
+      payload: {
+        grantorGroupId: "group-owner",
+        granteeGroupId: "group-reader",
+        expectedVersion: 0,
+        operationKey: "grant-operation-1",
+        unexpected: true,
+      },
+    });
+    expect(extraField.statusCode).toBe(400);
+    expect(extraField.json()).toEqual({ ok: false, error: "invalid_request" });
+    expect(groupGrants.grant).not.toHaveBeenCalled();
+    expect(groupGrants.revoke).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("maps grant conflicts and source-bound revoke misses without disclosing details", async () => {
+    const runtime = fakeDocumentSyncRuntime();
+    const groupGrants = runtime.sources.groupGrants!;
+    groupGrants.grant = vi.fn(async () => {
+      throw new DocumentSourceGroupGrantConflictError("sensitive conflict detail");
+    });
+    groupGrants.revoke = vi.fn(async () => {
+      throw new DocumentSourceGroupGrantNotFoundError("sensitive source mismatch");
+    });
+    const app = await buildApp({
+      createAnswerDraftRuntime: () => undefined,
+      createDocumentSyncRuntime: () => runtime,
+    });
+
+    const conflict = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/source-1/group-grants",
+      headers: { "x-iris-operator": "operator-a" },
+      payload: {
+        grantorGroupId: "group-owner",
+        granteeGroupId: "group-reader",
+        expectedVersion: 0,
+        operationKey: "grant-operation-conflict",
+      },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toEqual({
+      ok: false,
+      error: "document_source_group_grant_conflict",
+    });
+    expect(conflict.body).not.toContain("sensitive conflict detail");
+
+    const missing = await app.inject({
+      method: "POST",
+      url: "/internal/document-sync/sources/source-1/group-grants/grant-other/revoke",
+      headers: { "x-iris-operator": "operator-a" },
+      payload: { expectedVersion: 1, operationKey: "revoke-operation-missing" },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({
+      ok: false,
+      error: "document_source_group_grant_not_found",
+    });
+    expect(missing.body).not.toContain("sensitive source mismatch");
+    await app.close();
+  });
+});
+
 describe("document sync source policy API", () => {
   it("returns 503 when updating source policy without document sync runtime", async () => {
     const app = await buildApp({
@@ -5572,6 +5762,11 @@ function fakeDocumentSyncRuntime(
       getSnapshot: vi.fn(async () => undefined),
       getLatestSnapshot: vi.fn(async () => undefined),
       getLatestSnapshots: vi.fn(async () => new Map()),
+      groupGrants: {
+        list: vi.fn(async () => undefined),
+        grant: vi.fn(async () => { throw new Error("not configured"); }),
+        revoke: vi.fn(async () => { throw new Error("not configured"); }),
+      },
     },
     deadLetters: {
       list: vi.fn(async () => []),

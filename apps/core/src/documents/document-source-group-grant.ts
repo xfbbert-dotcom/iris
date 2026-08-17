@@ -39,6 +39,11 @@ export type DocumentSourceGroupGrantRepository = {
     documentSourceId: string;
     granteeGroupId: string;
   }): Promise<DocumentSourceGroupGrant | undefined>;
+  listForSource(input: {
+    documentSourceId: string;
+    limit: number;
+  }): Promise<DocumentSourceGroupGrant[]>;
+  findById(grantId: string): Promise<DocumentSourceGroupGrant | undefined>;
   validateExact(input: {
     grantId: string;
     version: number;

@@ -84,6 +84,11 @@ export function createPostgresDocumentSourceGroupGrantRepository({
       documentSourceId: requireReference("documentSourceId", input.documentSourceId),
       granteeGroupId: requireReference("granteeGroupId", input.granteeGroupId),
     }),
+    listForSource: async (input) => listForSource(dataSource, {
+      documentSourceId: requireReference("documentSourceId", input.documentSourceId),
+      limit: requireListLimit(input.limit),
+    }),
+    findById: async (grantId) => findById(dataSource, requireReference("grantId", grantId)),
     validateExact: async (input) => validateExact(dataSource, {
       grantId: requireReference("grantId", input.grantId),
       version: requirePositiveVersion("version", input.version),
@@ -262,6 +267,32 @@ async function findActiveForSourceAndGrantee(
          )
        )`,
     [input.documentSourceId, input.granteeGroupId],
+  );
+  return result.rows[0] === undefined ? undefined : mapGrant(result.rows[0]);
+}
+
+async function listForSource(
+  queryable: PostgresDocumentSourceGroupGrantQueryable,
+  input: { documentSourceId: string; limit: number },
+): Promise<DocumentSourceGroupGrant[]> {
+  if (input.limit === 0) return [];
+  const result = await queryable.query<GrantRow>(
+    `SELECT * FROM document_source_group_grants
+     WHERE document_source_id = $1
+     ORDER BY updated_at DESC, id ASC
+     LIMIT $2`,
+    [input.documentSourceId, input.limit],
+  );
+  return result.rows.map(mapGrant);
+}
+
+async function findById(
+  queryable: PostgresDocumentSourceGroupGrantQueryable,
+  grantId: string,
+): Promise<DocumentSourceGroupGrant | undefined> {
+  const result = await queryable.query<GrantRow>(
+    "SELECT * FROM document_source_group_grants WHERE id = $1",
+    [grantId],
   );
   return result.rows[0] === undefined ? undefined : mapGrant(result.rows[0]);
 }
@@ -549,6 +580,16 @@ function requireNonNegativeVersion(name: string, value: unknown): number {
   const numeric = typeof value === "number" ? value : Number.NaN;
   if (!Number.isSafeInteger(numeric) || numeric < 0) {
     throw new DocumentSourceGroupGrantValidationError(`${name} must be a non-negative integer`);
+  }
+  return numeric;
+}
+
+function requireListLimit(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isSafeInteger(numeric) || numeric < 0 || numeric > 100) {
+    throw new DocumentSourceGroupGrantValidationError(
+      "limit must be an integer between 0 and 100",
+    );
   }
   return numeric;
 }

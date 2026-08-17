@@ -440,6 +440,27 @@ describe("createDocumentSyncRuntime", () => {
       registerAuthorizedWikiDocument: vi.fn(async () => inventorySource),
       registerUserSubmittedDocument: vi.fn(async () => userSubmittedSource),
     };
+    const groupGrant = {
+      id: "grant-1",
+      documentSourceId: "source-1",
+      grantorGroupId: "group-owner",
+      granteeGroupId: "group-reader",
+      state: "active" as const,
+      version: 1,
+      createdBy: "operator-a",
+      updatedBy: "operator-a",
+      createdAt: new Date("2026-07-03T03:00:00.000Z"),
+      updatedAt: new Date("2026-07-03T03:00:00.000Z"),
+    };
+    const groupGrants = {
+      listForSource: vi.fn(async () => [groupGrant]),
+      findById: vi.fn(async () => groupGrant),
+      grant: vi.fn(async () => ({ outcome: "applied" as const, grant: groupGrant })),
+      revoke: vi.fn(async () => ({
+        outcome: "applied" as const,
+        grant: { ...groupGrant, state: "revoked" as const, version: 2 },
+      })),
+    };
     const snapshots = {
       insertSucceededSnapshot: vi.fn(),
       insertFailedSnapshot: vi.fn(),
@@ -528,6 +549,7 @@ describe("createDocumentSyncRuntime", () => {
       createPostgresPool: vi.fn(() => pool),
       createRedisClient: vi.fn(() => redisClient),
       createDocumentSourceRegistry: vi.fn(() => documentSources),
+      createDocumentSourceGroupGrantRepository: vi.fn(() => groupGrants),
       createDocumentSnapshotRepository: vi.fn(() => snapshots),
       createFeishuTenantAccessTokenProvider: vi.fn(() => tokenProvider),
       createFeishuDocumentBodyFetcher: vi.fn(() => fetcher),
@@ -551,6 +573,9 @@ describe("createDocumentSyncRuntime", () => {
     });
     expect(dependencies.createRedisClient).toHaveBeenCalledWith("redis://localhost:6379");
     expect(dependencies.createDocumentSourceRegistry).toHaveBeenCalledWith(pool);
+    expect(dependencies.createDocumentSourceGroupGrantRepository).toHaveBeenCalledWith({
+      dataSource: pool,
+    });
     expect(dependencies.createDocumentSnapshotRepository).toHaveBeenCalledWith({
       queryable: pool,
     });
@@ -824,6 +849,45 @@ describe("createDocumentSyncRuntime", () => {
     expect(documentSources.listSourcesByAnsweringEnabled).toHaveBeenCalledWith(false);
     await expect(runtime?.sources.get("source-1")).resolves.toEqual(inventorySource);
     expect(documentSources.findSourceById).toHaveBeenCalledWith("source-1");
+    const runtimeGroupGrants = runtime!.sources.groupGrants!;
+    await expect(runtimeGroupGrants.list({
+      documentSourceId: "source-1",
+      limit: 10,
+    })).resolves.toEqual([groupGrant]);
+    expect(groupGrants.listForSource).toHaveBeenCalledWith({
+      documentSourceId: "source-1",
+      limit: 10,
+    });
+    await expect(runtimeGroupGrants.grant({
+      documentSourceId: "source-1",
+      grantorGroupId: "group-owner",
+      granteeGroupId: "group-reader",
+      expectedVersion: 0,
+      operationKey: "grant-op-1",
+      actorRef: "operator-a",
+      at: new Date("2026-07-03T03:00:00.000Z"),
+    })).resolves.toEqual({ outcome: "applied", grant: groupGrant });
+    await expect(runtimeGroupGrants.revoke({
+      documentSourceId: "source-1",
+      grantId: "grant-1",
+      expectedVersion: 1,
+      operationKey: "revoke-op-1",
+      actorRef: "operator-a",
+      at: new Date("2026-07-03T04:00:00.000Z"),
+    })).resolves.toMatchObject({ outcome: "applied", grant: { state: "revoked", version: 2 } });
+    groupGrants.findById.mockResolvedValueOnce({
+      ...groupGrant,
+      documentSourceId: "source-other",
+    });
+    await expect(runtimeGroupGrants.revoke({
+      documentSourceId: "source-1",
+      grantId: "grant-1",
+      expectedVersion: 1,
+      operationKey: "revoke-op-wrong-source",
+      actorRef: "operator-a",
+      at: new Date("2026-07-03T04:30:00.000Z"),
+    })).rejects.toThrow("document source group grant not found");
+    expect(groupGrants.revoke).toHaveBeenCalledTimes(1);
     await expect(
       runtime?.sources.updatePolicy({
         id: "source-1",
