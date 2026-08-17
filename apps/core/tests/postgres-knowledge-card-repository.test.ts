@@ -241,6 +241,106 @@ describe("knowledge card migration contract", () => {
     expect(presentationLock).toBeGreaterThan(draftLock);
     expect(queries.at(-1)).toBe("ROLLBACK");
   });
+
+  it("validates conflict group memory and fresh unknown-source attestation before presentation", async () => {
+    const queries: string[] = [];
+    const draftId = id("draft-scripted-conflict-evidence");
+    const messageId = id("message-scripted-conflict-evidence");
+    const memoryId = id("memory-scripted-conflict-evidence");
+    const sourceId = id("source-scripted-conflict-evidence");
+    const evidenceUpdatedAt = new Date(at);
+    const stopAfterEvidence = new Error("stop after conflict evidence validation");
+    const client = {
+      release: vi.fn(),
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        const normalized = sql.replaceAll(/\s+/gu, " ").trim();
+        queries.push(normalized);
+        if (normalized.includes("FROM knowledge_drafts WHERE id = $1 FOR UPDATE")) {
+          return {
+            rows: [{
+              id: draftId,
+              source_group_id: sourceGroupId,
+              status: "pending_confirmation",
+              current_revision_number: 1,
+              version: 1,
+            }],
+          };
+        }
+        if (normalized.includes("FROM knowledge_draft_revision_evidence")) {
+          return {
+            rows: [
+              {
+                evidence_type: "conversation_message",
+                reference_id: messageId,
+                source_group_id: sourceGroupId,
+                entity_version: null,
+                source_updated_at: null,
+              },
+              {
+                evidence_type: "group_memory",
+                reference_id: memoryId,
+                source_group_id: sourceGroupId,
+                entity_version: null,
+                source_updated_at: evidenceUpdatedAt,
+              },
+              {
+                evidence_type: "document_source",
+                reference_id: sourceId,
+                source_group_id: null,
+                entity_version: null,
+                source_updated_at: evidenceUpdatedAt,
+              },
+            ],
+          };
+        }
+        if (normalized.includes("FROM conversation_messages WHERE id = $1")) {
+          return { rows: [{ chat_id: sourceGroupId, deleted: false }] };
+        }
+        if (normalized.includes("FROM group_memories WHERE id = $1")) {
+          return {
+            rows: [{
+              group_id: sourceGroupId,
+              status: "active",
+              updated_at: evidenceUpdatedAt,
+            }],
+          };
+        }
+        if (normalized.includes("FROM document_sources") && params?.[0] === sourceId) {
+          return {
+            rows: [{
+              source_type: "authorized_wiki_document",
+              permission_state: "unknown",
+              sync_state: "synced",
+              can_use_for_knowledge_drafts: true,
+              updated_at: evidenceUpdatedAt,
+              exact_group_evidence: false,
+            }],
+          };
+        }
+        if (normalized.includes("FROM knowledge_conflict_draft_governance_attestations")) {
+          return { rows: [{ permission_attested_at: at }] };
+        }
+        if (normalized.includes("FROM knowledge_draft_presentations presentation")) {
+          throw stopAfterEvidence;
+        }
+        return { rows: [] };
+      }),
+    };
+    const dataSource = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(async () => ({ rows: [] })),
+    } as unknown as PostgresKnowledgeDraftDataSource;
+
+    await expect(createPostgresKnowledgeCardRepository({ dataSource }).createPresentation({
+      ...presentationInput("scripted-conflict-evidence", draftId),
+      at,
+    })).rejects.toBe(stopAfterEvidence);
+
+    expect(queries.some((sql) => sql.includes("FROM group_memories WHERE id = $1"))).toBe(true);
+    expect(queries.some((sql) =>
+      sql.includes("FROM knowledge_conflict_draft_governance_attestations")
+    )).toBe(true);
+  });
 });
 
 runIfDatabase("PostgresKnowledgeCardRepository with Postgres", () => {

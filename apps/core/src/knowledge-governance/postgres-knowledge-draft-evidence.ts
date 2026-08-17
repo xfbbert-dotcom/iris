@@ -5,6 +5,8 @@ export type KnowledgeDraftEvidenceQueryable = {
   query<T = unknown>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
 };
 
+export const KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS = 60_000;
+
 type MessageStateRow = { chat_id: string | null; deleted: boolean };
 type VersionedStateRow = { group_id: string; version: string | number };
 type DocumentStateRow = {

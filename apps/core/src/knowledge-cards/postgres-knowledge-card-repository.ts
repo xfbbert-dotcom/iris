@@ -25,7 +25,10 @@ import {
   type KnowledgeDraftTransactionClient,
   type PostgresKnowledgeDraftDataSource,
 } from "../knowledge-governance/postgres-knowledge-draft-repository.js";
-import { validateCurrentKnowledgeDraftEvidence } from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
+import {
+  KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
+  validateCurrentKnowledgeDraftEvidence,
+} from "../knowledge-governance/postgres-knowledge-draft-evidence.js";
 import { validateKnowledgeDraftTransition } from "../knowledge-governance/knowledge-draft-state-machine.js";
 
 type PresentationRow = {
@@ -52,7 +55,12 @@ type DraftHeaderRow = {
 };
 
 type EvidenceRow = {
-  evidence_type: "conversation_message" | "discussion_thread" | "action_item" | "document_source";
+  evidence_type:
+    | "conversation_message"
+    | "discussion_thread"
+    | "action_item"
+    | "group_memory"
+    | "document_source";
   reference_id: string;
   source_group_id: string | null;
   entity_version: string | number | null;
@@ -298,7 +306,7 @@ async function applyInteraction(
       Number(draft.current_revision_number) !== normalized.revisionNumber ||
       Number(draft.version) !== normalized.draftVersion
     ) throw new KnowledgeCardPersistenceConflictError();
-    await validateDraftEvidence(client, draft);
+    await validateDraftEvidence(client, draft, normalized.at);
 
     const eventTypes = KNOWLEDGE_CARD_ACTION_EVENT_TYPES[normalized.action];
     const draftStatus = normalized.action === "confirm"
@@ -451,7 +459,7 @@ async function createPresentation(
       Number(draft.version) !== normalized.expectedDraftVersion ||
       Number(draft.current_revision_number) !== normalized.expectedRevisionNumber
     ) throw new KnowledgeCardPersistenceConflictError();
-    await validateDraftEvidence(client, draft);
+    await validateDraftEvidence(client, draft, normalized.at);
 
     const supersessionCandidates = await client.query<Pick<PresentationRow, "id" | "version">>(
       `SELECT presentation.id, presentation.version
@@ -1144,12 +1152,20 @@ async function lockOwnedOutbox(
 async function validateDraftEvidence(
   client: KnowledgeDraftTransactionClient,
   draft: DraftHeaderRow,
+  validationAt: Date,
 ): Promise<void> {
-  const evidence = await loadDraftEvidence(client, draft.id, Number(draft.current_revision_number));
+  const revisionNumber = Number(draft.current_revision_number);
+  const evidence = await loadDraftEvidence(client, draft.id, revisionNumber);
   await validateCurrentKnowledgeDraftEvidence({
     queryable: client,
     sourceGroupId: draft.source_group_id ?? undefined,
     evidence,
+    draftIdentity: {
+      draftId: draft.id,
+      revisionNumber,
+      validationAt,
+      maxAgeMs: KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
+    },
   });
 }
 
@@ -1179,6 +1195,14 @@ async function loadDraftEvidence(
         id: row.reference_id,
         groupId: requireDatabaseValue(row.source_group_id),
         entityVersion: Number(requireDatabaseValue(row.entity_version)),
+      };
+    }
+    if (row.evidence_type === "group_memory") {
+      return {
+        type: "group_memory",
+        id: row.reference_id,
+        groupId: requireDatabaseValue(row.source_group_id),
+        expectedUpdatedAt: requireDate(requireDatabaseValue(row.source_updated_at)),
       };
     }
     return {

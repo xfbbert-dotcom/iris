@@ -14,6 +14,7 @@ import {
 } from "./knowledge-draft.js";
 import {
   findInvalidKnowledgeDraftEvidence,
+  KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
   KnowledgeDraftEvidenceError,
   type KnowledgeDraftEvidenceQueryable,
   validateCurrentKnowledgeDraftEvidence,
@@ -41,8 +42,6 @@ export type KnowledgeDraftTransactionClient = KnowledgeDraftEvidenceQueryable & 
 export type PostgresKnowledgeDraftDataSource = KnowledgeDraftEvidenceQueryable & {
   connect(): Promise<KnowledgeDraftTransactionClient>;
 };
-
-const DEFAULT_KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS = 60_000;
 
 type DraftRevisionRow = {
   id: string;
@@ -145,7 +144,7 @@ export class KnowledgeDraftTransitionError extends Error {
 export function createPostgresKnowledgeDraftRepository({
   dataSource,
   knowledgeConflictPermissionAttestationMaxAgeMs =
-    DEFAULT_KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
+    KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
 }: {
   dataSource: PostgresKnowledgeDraftDataSource;
   knowledgeConflictPermissionAttestationMaxAgeMs?: number;
@@ -716,7 +715,7 @@ async function loadDraft(
   queryable: KnowledgeDraftEvidenceQueryable,
   id: string,
   validationAt = new Date(),
-  permissionAgeMs = DEFAULT_KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
+  permissionAgeMs = KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
 ): Promise<KnowledgeDraft | undefined> {
   const result = await queryable.query<DraftRevisionRow>(
     `${draftRevisionSelect()} WHERE draft.id = $1`,
@@ -830,7 +829,7 @@ async function requireDraft(
   queryable: KnowledgeDraftEvidenceQueryable,
   id: string,
   validationAt = new Date(),
-  permissionAgeMs = DEFAULT_KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
+  permissionAgeMs = KNOWLEDGE_CONFLICT_PERMISSION_ATTESTATION_MAX_AGE_MS,
 ): Promise<KnowledgeDraft> {
   const draft = await loadDraft(queryable, id, validationAt, permissionAgeMs);
   if (draft === undefined) throw new KnowledgeDraftNotFoundError();
