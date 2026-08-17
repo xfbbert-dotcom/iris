@@ -773,26 +773,26 @@ async function lockCurrentSourceGrantBindings(
   for (const binding of [...bindings].sort((left, right) =>
     left.grantId.localeCompare(right.grantId))) {
     const result = await client.query<{ id: string }>(
-      `SELECT grant.id
-       FROM document_source_group_grants grant
-       JOIN document_sources source ON source.id = grant.document_source_id
-       WHERE grant.id = $1
-         AND grant.version = $2
-         AND grant.document_source_id = $3
-         AND grant.grantor_group_id = $4
-         AND grant.grantee_group_id = $5
-         AND grant.state = 'active'
+      `SELECT group_grant.id
+       FROM document_source_group_grants group_grant
+       JOIN document_sources source ON source.id = group_grant.document_source_id
+       WHERE group_grant.id = $1
+         AND group_grant.version = $2
+         AND group_grant.document_source_id = $3
+         AND group_grant.grantor_group_id = $4
+         AND group_grant.grantee_group_id = $5
+         AND group_grant.state = 'active'
          AND source.source_type = 'group_visible_document'
          AND (
-           source.origin_group_id = grant.grantor_group_id
+           source.origin_group_id = group_grant.grantor_group_id
            OR EXISTS (
              SELECT 1 FROM document_source_evidence evidence
              WHERE evidence.document_source_id = source.id
                AND evidence.kind = 'group_message'
-               AND evidence.group_id = grant.grantor_group_id
+               AND evidence.group_id = group_grant.grantor_group_id
            )
          )
-       FOR UPDATE OF grant`,
+       FOR UPDATE OF group_grant`,
       [
         binding.grantId,
         binding.version,

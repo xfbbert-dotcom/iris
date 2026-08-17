@@ -485,13 +485,15 @@ runIfDatabase("document source group grants with PostgreSQL", () => {
       ) VALUES (
         'source-1', 'group_visible_document', 'https://example.com/group-document',
         'group-source', 'message-source', 'readable', 'synced', TRUE, TRUE, $1, $1
-      );
+      )
+    `, [at]);
+    await pool.query(`
       INSERT INTO document_source_evidence (
         document_source_id, kind, source_uri, group_id, message_id, observed_at, created_at
       ) VALUES (
         'source-1', 'group_message', 'https://example.com/group-document',
         'group-source', 'message-source', $1, $1
-      );
+      )
     `, [at]);
   });
 

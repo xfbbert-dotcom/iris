@@ -1177,7 +1177,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
           AND table_name = 'knowledge_conflict_candidates'
           AND column_name IN ('target_source_updated_at', 'target_source_version')
         ORDER BY column_name
-      `)).resolves.toEqual({ rows: [
+      `)).resolves.toMatchObject({ rows: [
         { column_name: "target_source_updated_at", is_nullable: "NO" },
         { column_name: "target_source_version", is_nullable: "YES" },
       ] });
