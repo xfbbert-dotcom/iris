@@ -23,6 +23,8 @@ import { createEmbeddingProfileRepository } from
   "../documents/embedding-profile-repository.js";
 import { createPostgresDocumentSourceRegistry } from
   "../documents/postgres-document-source-registry.js";
+import { createFeishuBotChatAccessChecker } from
+  "../feishu/feishu-bot-chat-access-checker.js";
 import { createFeishuGroupMembershipChecker } from
   "../feishu/feishu-group-membership-checker.js";
 import { createFeishuInteractiveCardClient } from
@@ -409,6 +411,10 @@ function createDefaultComposition(
     baseUrl: feishuConfig.baseUrl,
     tokenProvider,
   });
+  const botChatAccessChecker = createFeishuBotChatAccessChecker({
+    baseUrl: feishuConfig.baseUrl,
+    tokenProvider,
+  });
   const membershipChecker = createFeishuGroupMembershipChecker({
     baseUrl: feishuConfig.baseUrl,
     tokenProvider,
@@ -467,10 +473,7 @@ function createDefaultComposition(
         generateKnowledgeDrafts: open,
       };
     },
-    isBotCurrentMember: (groupId) => membershipChecker.isCurrentMember({
-      chatId: groupId,
-      openId: input.config.botOpenId,
-    }),
+    isBotCurrentMember: (groupId) => botChatAccessChecker.canAccessChat({ chatId: groupId }),
     workerId: DISPATCHER_WORKER_ID,
     leaseMs: input.config.deliveryLeaseMs,
     retryBaseDelayMs: input.config.retryBaseDelayMs,
