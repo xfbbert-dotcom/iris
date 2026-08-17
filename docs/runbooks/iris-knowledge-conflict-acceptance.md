@@ -751,6 +751,42 @@ function Invoke-RollbackStep {
   try { & $Action } catch { $script:RollbackErrors += "$Label failed" }
 }
 
+function Wait-EnabledConflictRuntimeReady {
+  param(
+    [Parameter(Mandatory)][hashtable]$Headers,
+    [Parameter(Mandatory)][string]$PilotGroupId,
+    [Parameter(Mandatory)][object[]]$NonPilotGroupIds,
+    [int]$MaxAttempts = 60,
+    [int]$PollIntervalMilliseconds = 500
+  )
+  if ($MaxAttempts -lt 1 -or $MaxAttempts -gt 120 -or $PollIntervalMilliseconds -lt 1 -or $PollIntervalMilliseconds -gt 5000) {
+    throw "Enabled runtime convergence bounds are invalid"
+  }
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt += 1) {
+    try {
+      $readiness = Invoke-RestMethod -Headers $Headers -Uri http://localhost:3000/internal/readiness
+      $status = Invoke-RestMethod -Headers $Headers -Uri http://localhost:3000/internal/status
+      $runtime = Invoke-RestMethod -Headers $Headers -Uri http://localhost:3000/internal/runtime-control/status
+      $missingNonPilotGroups = @($NonPilotGroupIds | Where-Object { $runtime.disabledGroupIds -notcontains $_ })
+      if (
+        $readiness.ok -eq $true -and
+        $status.status -ceq 'healthy' -and
+        $status.components.knowledgeConflicts.running -eq $true -and
+        $runtime.globalEnabled -eq $true -and
+        $runtime.desiredGlobalEnabled -eq $true -and
+        $runtime.disabledGroupIds -notcontains $PilotGroupId -and
+        $missingNonPilotGroups.Count -eq 0
+      ) {
+        return @{ readiness = $readiness; status = $status; runtime = $runtime }
+      }
+    } catch {
+      if ($attempt -eq $MaxAttempts) { throw }
+    }
+    if ($attempt -lt $MaxAttempts) { Start-Sleep -Milliseconds $PollIntervalMilliseconds }
+  }
+  throw "Enabled conflict runtime is not ready after bounded convergence"
+}
+
 function Invoke-KnowledgeConflictRollback {
   Invoke-RollbackStep -Label "stop caddy" -Action { & docker @compose stop caddy; if ($LASTEXITCODE -ne 0) { throw "stop caddy failed" } }
   Invoke-RollbackStep -Label "disable conflict env" -Action {
@@ -938,11 +974,10 @@ SELECT json_build_object(
   Assert-DurableMutation (Invoke-RestMethod -Method Patch -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/capabilities -ContentType "application/json" -Body '{"readGroupDocuments":true,"retrieveKnowledgeBase":true,"proactiveSpeech":true,"generateKnowledgeDrafts":true,"writeKnowledgeBase":false}') "Pilot capability enable"
   Assert-DurableMutation (Invoke-RestMethod -Method Post -Headers $irisHeaders -Uri "http://localhost:3000/internal/runtime-control/groups/$pilot" -ContentType "application/json" -Body '{"enabled":true}') "Pilot group enable"
   Assert-DurableMutation (Invoke-RestMethod -Method Post -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/global -ContentType "application/json" -Body '{"enabled":true}') "Pilot global enable"
-  $enabledReadiness = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/readiness
-  $enabledStatus = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/status
-  $enabledRuntime = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/runtime-control/status
-  if ($enabledReadiness.ok -ne $true -or $enabledStatus.components.knowledgeConflicts.running -ne $true -or $enabledRuntime.globalEnabled -ne $true -or $enabledRuntime.desiredGlobalEnabled -ne $true) { throw "Enabled conflict runtime is not ready" }
-  if ($enabledRuntime.disabledGroupIds -contains $pilot -or (@($nonPilotGroupIds | Where-Object { $enabledRuntime.disabledGroupIds -notcontains $_ })).Count -ne 0) { throw "Pilot/nonpilot runtime isolation failed" }
+  $enabledState = Wait-EnabledConflictRuntimeReady -Headers $irisHeaders -PilotGroupId $pilot -NonPilotGroupIds $nonPilotGroupIds -MaxAttempts 60 -PollIntervalMilliseconds 500
+  $enabledReadiness = $enabledState.readiness
+  $enabledStatus = $enabledState.status
+  $enabledRuntime = $enabledState.runtime
   if ((Get-PilotEnvValue IRIS_KNOWLEDGE_CONFLICT_ENABLED) -cne 'true' -or (Get-PilotEnvValue IRIS_KNOWLEDGE_CONFLICT_GROUP_ALLOWLIST) -cne $pilot) { throw "Pilot conflict allowlist is not exact" }
   & docker @compose up --detach --wait --wait-timeout 120 caddy
   if ($LASTEXITCODE -ne 0) { throw "Caddy start failed" }

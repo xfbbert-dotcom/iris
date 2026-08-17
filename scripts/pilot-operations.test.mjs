@@ -96,6 +96,40 @@ test("knowledge-conflict rollback is unconditional after enablement and preserve
   assert.match(wrapper, /finally\s*\{[\s\S]*Invoke-KnowledgeConflictRollback/u);
 });
 
+test("knowledge-conflict enabled readiness tolerates bounded startup convergence", () => {
+  assertPowerShellRunbookGate(
+    `
+$script:readinessAttempt = 0
+function Start-Sleep { param([int]$Milliseconds) }
+function Invoke-RestMethod {
+  param([hashtable]$Headers, [string]$Uri)
+  if ($Uri -like '*/internal/readiness') {
+    $script:readinessAttempt += 1
+    return @{ ok = ($script:readinessAttempt -ge 2) }
+  }
+  if ($Uri -like '*/internal/status') {
+    return @{ status = 'healthy'; components = @{ knowledgeConflicts = @{ running = ($script:readinessAttempt -ge 2) } } }
+  }
+  if ($Uri -like '*/internal/runtime-control/status') {
+    return @{ globalEnabled = $true; desiredGlobalEnabled = $true; disabledGroupIds = @('control-group') }
+  }
+  throw "unexpected URI"
+}
+$result = Wait-EnabledConflictRuntimeReady -Headers @{} -PilotGroupId 'pilot-group' -NonPilotGroupIds @('control-group') -MaxAttempts 3 -PollIntervalMilliseconds 1
+if ($script:readinessAttempt -ne 2 -or $result.status.components.knowledgeConflicts.running -ne $true) { throw 'bounded readiness did not converge' }
+`,
+    {},
+    true,
+  );
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  assert.match(runbook, /Wait-EnabledConflictRuntimeReady[\s\S]*-MaxAttempts 60[\s\S]*-PollIntervalMilliseconds 500/u);
+  assert.doesNotMatch(
+    runbook,
+    /\$enabledReadiness\s*=\s*Invoke-RestMethod[\s\S]{0,500}Enabled conflict runtime is not ready/u,
+  );
+});
+
 test("knowledge-conflict PR evidence stays metadata-only and pending live acceptance", () => {
   assert.equal(existsSync(knowledgeConflictPrPath), true);
   const template = readFileSync(knowledgeConflictPrPath, "utf8");
