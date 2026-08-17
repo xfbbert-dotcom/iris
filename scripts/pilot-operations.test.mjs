@@ -396,7 +396,7 @@ test("knowledge-conflict final drain includes answer and governed-action durable
     actionPresentationActive: 0,
     actionOutboxUnresolved: 0,
     actionExecutionUnresolved: 0,
-    actionExecutionFailed: 0,
+    actionExecutionFailed: 4,
     publishedDraftMissingPublication: 0,
     succeededProposalMissingPublication: 0,
     succeededExecutionMissingPublication: 0,
@@ -433,6 +433,22 @@ test("knowledge-conflict final drain includes answer and governed-action durable
     { ...valid, publicationBindingMismatch: 1 },
     false,
   );
+  assertPowerShellRunbookGate(
+    `Assert-TerminalGovernedCountsUnchanged -Before $inputValue.before -After $inputValue.after`,
+    {
+      before: { actionExecutionFailed: 4 },
+      after: { actionExecutionFailed: 4 },
+    },
+    true,
+  );
+  assertPowerShellRunbookGate(
+    `Assert-TerminalGovernedCountsUnchanged -Before $inputValue.before -After $inputValue.after`,
+    {
+      before: { actionExecutionFailed: 4 },
+      after: { actionExecutionFailed: 5 },
+    },
+    false,
+  );
 
   const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
   for (const marker of [
@@ -450,6 +466,14 @@ test("knowledge-conflict final drain includes answer and governed-action durable
   ]) {
     assert.match(runbook, new RegExp(escapeRegExp(marker), "u"));
   }
+  assert.match(
+    runbook,
+    /knowledge_draft_presentation_outbox outbox[\s\S]*JOIN knowledge_draft_presentations presentation[\s\S]*presentation\.state IN \('pending_send','active','send_failed'\)/u,
+  );
+  assert.match(
+    runbook,
+    /action_approval_presentation_outbox outbox[\s\S]*JOIN action_approval_presentations presentation[\s\S]*presentation\.state IN \('pending_send','active','send_failed'\)/u,
+  );
 });
 
 test("knowledge-conflict rollback rejects enabled groups, allowlists, and same-count transitions", () => {

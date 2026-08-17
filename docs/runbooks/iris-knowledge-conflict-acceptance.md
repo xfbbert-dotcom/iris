@@ -133,6 +133,7 @@ $script:EnableAttempted = $false
 $script:FailedStep = 0
 $script:KnownGroupIds = @()
 $script:BaselineActivity = $null
+$script:BaselineGovernedCounts = $null
 $script:BaselineAppendOnlyFacts = $null
 $script:BaselineGroupFacts = @{}
 $script:RollbackErrors = @()
@@ -439,11 +440,23 @@ function Assert-DrainedDurableStates {
     'answerPrepared','answerSending','answerReconciliationRequired',
     'draftPresentationUnresolved','draftPresentationActive','draftOutboxUnresolved',
     'actionProposalUnresolved','actionRequirementPending','actionPresentationUnresolved','actionPresentationActive',
-    'actionOutboxUnresolved','actionExecutionUnresolved','actionExecutionFailed',
+    'actionOutboxUnresolved','actionExecutionUnresolved',
     'publishedDraftMissingPublication','succeededProposalMissingPublication',
     'succeededExecutionMissingPublication','publicationBindingMismatch'
   )) {
     if ([long](Get-RequiredProperty $Counts $name) -ne 0) { throw "Durable state is not drained at $name" }
+  }
+}
+
+function Assert-TerminalGovernedCountsUnchanged {
+  param(
+    [Parameter(Mandatory)][object]$Before,
+    [Parameter(Mandatory)][object]$After
+  )
+  foreach ($name in @('actionExecutionFailed')) {
+    if ([long](Get-RequiredProperty $Before $name) -ne [long](Get-RequiredProperty $After $name)) {
+      throw "Terminal governed state changed at $name"
+    }
   }
 }
 
@@ -527,12 +540,22 @@ SELECT json_build_object(
   'answerReconciliationRequired', (SELECT count(*) FROM answer_reply_deliveries WHERE state = 'reconciliation_required'),
   'draftPresentationUnresolved', (SELECT count(*) FROM knowledge_draft_presentations WHERE state IN ('pending_send','active','send_failed')),
   'draftPresentationActive', (SELECT count(*) FROM knowledge_draft_presentations WHERE state = 'active'),
-  'draftOutboxUnresolved', (SELECT count(*) FROM knowledge_draft_presentation_outbox WHERE state IN ('pending','processing','external_attempting','failed','outcome_unknown')),
+  'draftOutboxUnresolved', (
+    SELECT count(*) FROM knowledge_draft_presentation_outbox outbox
+    JOIN knowledge_draft_presentations presentation ON presentation.id = outbox.presentation_id
+    WHERE outbox.state IN ('pending','processing','external_attempting','failed','outcome_unknown')
+      AND presentation.state IN ('pending_send','active','send_failed')
+  ),
   'actionProposalUnresolved', (SELECT count(*) FROM action_proposals WHERE status IN ('pending_approval','approved','executing','reconciliation_required')),
   'actionRequirementPending', (SELECT count(*) FROM action_approval_requirements WHERE state = 'pending'),
   'actionPresentationUnresolved', (SELECT count(*) FROM action_approval_presentations WHERE state IN ('pending_send','active','send_failed')),
   'actionPresentationActive', (SELECT count(*) FROM action_approval_presentations WHERE state = 'active'),
-  'actionOutboxUnresolved', (SELECT count(*) FROM action_approval_presentation_outbox WHERE state IN ('pending','processing','external_attempting','failed','outcome_unknown')),
+  'actionOutboxUnresolved', (
+    SELECT count(*) FROM action_approval_presentation_outbox outbox
+    JOIN action_approval_presentations presentation ON presentation.id = outbox.presentation_id
+    WHERE outbox.state IN ('pending','processing','external_attempting','failed','outcome_unknown')
+      AND presentation.state IN ('pending_send','active','send_failed')
+  ),
   'actionExecutionUnresolved', (SELECT count(*) FROM action_executions WHERE state IN ('pending','executing','outcome_unknown','reconciliation_required')),
   'actionExecutionFailed', (SELECT count(*) FROM action_executions WHERE state = 'failed'),
   'publishedDraftMissingPublication', (
@@ -768,7 +791,11 @@ function Invoke-KnowledgeConflictRollback {
     Assert-CountsUnchanged -Before $factsBeforeWait -After $factsAfterRollback -Label "Disabled append-only activity"
     Assert-AppendOnlyFactsPreserved -Before $script:BaselineAppendOnlyFacts -After $factsAfterRollback
     Assert-DrainedActivity (Get-KnowledgeConflictActivityCounts)
-    Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts -GroupId $PilotGroupId)
+    $postRollbackGovernedCounts = Get-GovernedUnresolvedCounts -GroupId $PilotGroupId
+    Assert-DrainedDurableStates $postRollbackGovernedCounts
+    if ($null -ne $script:BaselineGovernedCounts) {
+      Assert-TerminalGovernedCountsUnchanged -Before $script:BaselineGovernedCounts -After $postRollbackGovernedCounts
+    }
     $postRollbackCurrentBotGroupIds = @(Get-Content -LiteralPath $BotGroupInventoryPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" } | ForEach-Object { Assert-Reference -Name "post-rollback inventory group" -Value $_ } | Sort-Object -Unique)
     Assert-ExactStringSet -Expected $script:InitialCurrentBotGroupIds -Actual $postRollbackCurrentBotGroupIds -Label "current bot group inventory"
     $postRollbackDatabaseGroupIds = @(Invoke-PilotSql -Sql "SELECT group_id FROM (SELECT chat_id AS group_id FROM conversation_messages UNION SELECT group_id FROM group_memories UNION SELECT group_id FROM knowledge_conflict_candidates) groups WHERE group_id IS NOT NULL AND group_id <> '' ORDER BY group_id;" | ForEach-Object { Assert-Reference -Name "post-rollback database group" -Value $_.Trim() })
@@ -821,7 +848,8 @@ function Invoke-KnowledgeConflictAcceptance {
   Assert-CoreQueuesDrained $disabledStatus
   $script:BaselineActivity = Get-KnowledgeConflictActivityCounts
   Assert-DrainedActivity $script:BaselineActivity
-  Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts -GroupId $pilot)
+  $script:BaselineGovernedCounts = Get-GovernedUnresolvedCounts -GroupId $pilot
+  Assert-DrainedDurableStates $script:BaselineGovernedCounts
   $script:BaselineAppendOnlyFacts = Get-AppendOnlyFactCounts
   foreach ($groupId in $nonPilotGroupIds) { $script:BaselineGroupFacts[$groupId] = Get-GroupFactCounts $groupId }
 
@@ -1062,7 +1090,9 @@ SELECT json_build_object(
   $draft = Invoke-JsonSql -Sql "SELECT json_build_object('count',count(*),'riskCount',count(*) FILTER (WHERE revision.risk_level='medium'),'pathCount',count(*) FILTER (WHERE draft.status IN ('pending_confirmation','pending_review','needs_revision','rejected','published'))) FROM knowledge_drafts draft JOIN knowledge_draft_revisions revision ON revision.draft_id=draft.id AND revision.revision_number=draft.current_revision_number WHERE draft.id='$($evidence.draftId)' AND draft.source_group_id='$pilot' AND draft.origin_kind='knowledge_conflict';"
   if ([long]$draft.count -ne 1 -or [long]$draft.riskCount -ne 1 -or [long]$draft.pathCount -ne 1) { throw "Governed medium-risk update draft path failed" }
   Assert-DrainedActivity (Get-KnowledgeConflictActivityCounts)
-  Assert-DrainedDurableStates (Get-GovernedUnresolvedCounts -GroupId $pilot)
+  $finalGovernedCounts = Get-GovernedUnresolvedCounts -GroupId $pilot
+  Assert-DrainedDurableStates $finalGovernedCounts
+  Assert-TerminalGovernedCountsUnchanged -Before $script:BaselineGovernedCounts -After $finalGovernedCounts
   $conflictStatus = Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/knowledge-conflicts/status
   if ([long]$conflictStatus.scans.deadLettered -ne 0 -or [long]$conflictStatus.deliveries.outcomeUnknown -ne 0 -or [long]$conflictStatus.deliveries.terminalFailed -ne 0) { throw "Conflict runtime has unresolved terminal state" }
   Assert-CoreQueuesDrained (Invoke-RestMethod -Headers $irisHeaders -Uri http://localhost:3000/internal/status)
