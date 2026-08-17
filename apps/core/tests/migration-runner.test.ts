@@ -1166,7 +1166,7 @@ runIfDatabase("conversation-state extraction migration upgrade with Postgres", (
         }),
       ]));
       const scanOutcomeDefinition = definitions.rows.find((row) =>
-        row.definition.includes("terminal_outcome"));
+        row.conname === "knowledge_conflict_scan_inbox_terminal_outcome_check");
       expect(scanOutcomeDefinition?.definition).toContain("superseded");
       expect(scanOutcomeDefinition?.definition).toContain("permission_blocked");
 
