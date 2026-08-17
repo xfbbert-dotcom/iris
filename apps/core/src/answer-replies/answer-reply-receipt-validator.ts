@@ -23,6 +23,7 @@ const DELIVERY_STATES = new Set<AnswerReplyDeliveryState>([
   "sent",
   "permission_blocked",
   "reconciliation_required",
+  "not_sent_reconciled",
 ]);
 const EVENT_TYPES = new Set<AnswerReplyDeliveryEventType>([
   "prepared",
@@ -30,6 +31,7 @@ const EVENT_TYPES = new Set<AnswerReplyDeliveryEventType>([
   "sent",
   "permission_blocked",
   "reconciliation_required",
+  "not_sent_reconciled",
   "safe_notice_send_started",
   "safe_notice_sent",
 ]);
@@ -228,7 +230,8 @@ function requireDeliveryContract(delivery: AnswerReplyDelivery): void {
 
   const hasPreparedText = delivery.preparedReplyText !== undefined;
   const isSafeNoticeState = delivery.state === "permission_blocked"
-    || delivery.state === "reconciliation_required";
+    || delivery.state === "reconciliation_required"
+    || delivery.state === "not_sent_reconciled";
   if (
     !isSafeNoticeState
     && (
@@ -267,12 +270,19 @@ function requireDeliveryContract(delivery: AnswerReplyDelivery): void {
             && delivery.sentAt === undefined
             && delivery.permissionBlockedAt !== undefined
             && delivery.reconciliationRequiredAt === undefined
-          : !hasPreparedText
-            && delivery.attemptCount > 0
-            && delivery.replyMessageId === undefined
-            && delivery.sentAt === undefined
-            && delivery.permissionBlockedAt === undefined
-            && delivery.reconciliationRequiredAt !== undefined;
+          : delivery.state === "reconciliation_required"
+            ? !hasPreparedText
+              && delivery.attemptCount > 0
+              && delivery.replyMessageId === undefined
+              && delivery.sentAt === undefined
+              && delivery.permissionBlockedAt === undefined
+              && delivery.reconciliationRequiredAt !== undefined
+            : !hasPreparedText
+              && delivery.attemptCount > 0
+              && delivery.replyMessageId === undefined
+              && delivery.sentAt === undefined
+              && delivery.permissionBlockedAt === undefined
+              && delivery.reconciliationRequiredAt === undefined;
   if (!validState) {
     throw new Error();
   }
@@ -401,10 +411,17 @@ function requireLedgerContract(receipt: AnswerReplyReceipt): void {
         ledgerState = "reconciliation_required";
         reconciliationRequiredAt = event.createdAt;
         break;
+      case "not_sent_reconciled":
+        if (ledgerState !== "sending" || answerAttemptCount < 1 || safeNoticeSent) {
+          throw new Error();
+        }
+        ledgerState = "not_sent_reconciled";
+        break;
       case "safe_notice_send_started":
         if (
           (ledgerState !== "permission_blocked"
-            && ledgerState !== "reconciliation_required")
+            && ledgerState !== "reconciliation_required"
+            && ledgerState !== "not_sent_reconciled")
           || safeNoticeSent
         ) {
           throw new Error();
@@ -417,7 +434,8 @@ function requireLedgerContract(receipt: AnswerReplyReceipt): void {
       case "safe_notice_sent":
         if (
           (ledgerState !== "permission_blocked"
-            && ledgerState !== "reconciliation_required")
+            && ledgerState !== "reconciliation_required"
+            && ledgerState !== "not_sent_reconciled")
           || safeNoticeAttemptCount < 1
           || safeNoticeSent
         ) {

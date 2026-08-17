@@ -65,6 +65,7 @@ const DELIVERY_STATES: readonly AnswerReplyDeliveryState[] = [
   "sent",
   "permission_blocked",
   "reconciliation_required",
+  "not_sent_reconciled",
 ];
 const EVENT_TYPES: readonly AnswerReplyDeliveryEventType[] = [
   "prepared",
@@ -72,6 +73,7 @@ const EVENT_TYPES: readonly AnswerReplyDeliveryEventType[] = [
   "sent",
   "permission_blocked",
   "reconciliation_required",
+  "not_sent_reconciled",
   "safe_notice_send_started",
   "safe_notice_sent",
 ];
@@ -160,14 +162,14 @@ class AnswerReplyPersistenceError extends Error {
   }
 }
 
-class AnswerReplyTransitionError extends Error {
+export class AnswerReplyTransitionError extends Error {
   constructor() {
     super("answer reply transition invalid");
     this.name = "AnswerReplyTransitionError";
   }
 }
 
-class AnswerReplyNotFoundError extends Error {
+export class AnswerReplyNotFoundError extends Error {
   constructor() {
     super("answer reply delivery not found");
     this.name = "AnswerReplyNotFoundError";
@@ -483,6 +485,38 @@ export function createPostgresAnswerReplyRepository(input: {
       });
     },
 
+    async reconcileNotSent(transitionInput) {
+      const normalized = normalizeTransitionInput(transitionInput);
+      return withLockedDelivery(dataSource, normalized, async (client, delivery, sources) => {
+        if (
+          delivery.state !== "sending"
+          || delivery.attemptCount < 1
+          || delivery.replyMessageId !== undefined
+        ) {
+          throw new AnswerReplyTransitionError();
+        }
+        const nextVersion = delivery.version + 1;
+        await requireSingleRow(client.query<{ id: string }>(
+          `UPDATE answer_reply_deliveries
+           SET state = 'not_sent_reconciled', prepared_reply_text = NULL,
+               version = version + 1, updated_at = $3
+           WHERE id = $1 AND version = $2 AND state = 'sending'
+             AND attempt_count > 0 AND reply_message_id IS NULL
+           RETURNING id`,
+          [delivery.id, delivery.version, normalized.at],
+        ));
+        await insertEvent(client, {
+          deliveryId: delivery.id,
+          sequence: nextVersion,
+          eventType: "not_sent_reconciled",
+          sourceCount: sources.length,
+          documentSourceIds: uniqueDocumentSourceIds(sources),
+          at: normalized.at,
+        });
+        return loadReceiptById(client, delivery.id);
+      });
+    },
+
     async beginSafeNoticeSend(transitionInput) {
       const normalized = normalizeTransitionInput(transitionInput);
       return withLockedDelivery(dataSource, normalized, async (client, delivery, sources) => {
@@ -494,7 +528,7 @@ export function createPostgresAnswerReplyRepository(input: {
            SET safe_notice_attempt_count = safe_notice_attempt_count + 1,
                version = version + 1, updated_at = $3
            WHERE id = $1 AND version = $2
-             AND state IN ('permission_blocked', 'reconciliation_required')
+             AND state IN ('permission_blocked', 'reconciliation_required', 'not_sent_reconciled')
              AND safe_notice_sent_at IS NULL
            RETURNING id`,
           [delivery.id, delivery.version, normalized.at],
@@ -529,7 +563,7 @@ export function createPostgresAnswerReplyRepository(input: {
            SET safe_notice_message_id = $3, safe_notice_sent_at = $4,
                version = version + 1, updated_at = $4
            WHERE id = $1 AND version = $2
-             AND state IN ('permission_blocked', 'reconciliation_required')
+             AND state IN ('permission_blocked', 'reconciliation_required', 'not_sent_reconciled')
              AND safe_notice_attempt_count > 0 AND safe_notice_sent_at IS NULL
            RETURNING id`,
           [delivery.id, delivery.version, safeNoticeMessageId ?? null, normalized.at],
@@ -556,7 +590,7 @@ export function createPostgresAnswerReplyRepository(input: {
           `SELECT
              COUNT(*) FILTER (WHERE state IN ('prepared', 'sending')) AS unresolved_count,
              COUNT(*) FILTER (
-               WHERE state IN ('permission_blocked', 'reconciliation_required')
+               WHERE state IN ('permission_blocked', 'reconciliation_required', 'not_sent_reconciled')
                  AND safe_notice_sent_at IS NULL
              ) AS pending_safe_notice_count,
              COUNT(*) FILTER (
@@ -1082,7 +1116,9 @@ function requireAuthoritativeDocumentSourceIds(
 
 function requireSafeNoticePending(delivery: AnswerReplyDelivery): void {
   if (
-    (delivery.state !== "permission_blocked" && delivery.state !== "reconciliation_required")
+    (delivery.state !== "permission_blocked"
+      && delivery.state !== "reconciliation_required"
+      && delivery.state !== "not_sent_reconciled")
     || delivery.safeNoticeSentAt !== undefined
   ) {
     throw new AnswerReplyTransitionError();

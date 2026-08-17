@@ -91,6 +91,11 @@ describe("AnswerReplyReceiptValidator", () => {
       undefined,
       ["source-a"],
     );
+    const notSentReconciled = appendTransition(
+      sending,
+      "not_sent_reconciled",
+      transitionAt,
+    );
 
     for (const receipt of [
       prepared,
@@ -100,6 +105,13 @@ describe("AnswerReplyReceiptValidator", () => {
       permissionNoticeStarted,
       appendTransition(permissionNoticeStarted, "safe_notice_sent", transitionAt),
       reconciliationRequired,
+      notSentReconciled,
+      appendTransition(
+        notSentReconciled,
+        "safe_notice_send_started",
+        new Date("2026-08-02T02:03:00.000Z"),
+        1,
+      ),
     ]) {
       expect(requireValidAnswerReplyReceipt(receipt)).toBe(receipt);
     }
@@ -290,6 +302,12 @@ function appendTransition(
         state: "reconciliation_required",
         preparedReplyText: undefined,
         reconciliationRequiredAt: at,
+      });
+      break;
+    case "not_sent_reconciled":
+      Object.assign(delivery, {
+        state: "not_sent_reconciled",
+        preparedReplyText: undefined,
       });
       break;
     case "safe_notice_send_started":

@@ -5,9 +5,73 @@ import { buildApp, type BuildAppDependencies } from "../src/app.js";
 import type { EventWorkerRuntime } from "../src/runtime/event-worker-runtime.js";
 
 const authorization = { authorization: "Bearer operator-secret" };
-type AnswerReplyInspectionRepository = NonNullable<EventWorkerRuntime["answerReplies"]>;
+type AnswerReplyInspectionRepository = Pick<
+  NonNullable<EventWorkerRuntime["answerReplies"]>,
+  "findByIncomingMessage"
+> & Partial<Pick<
+  NonNullable<EventWorkerRuntime["answerReplies"]>,
+  "reconcileNotSent"
+>>;
 
 describe("answer reply inspection API", () => {
+  it("records an authorized exact-version not-sent reconciliation without accepting content", async () => {
+    const reconciled = receipt();
+    reconciled.delivery.state = "not_sent_reconciled" as never;
+    reconciled.delivery.version = 8;
+    const repository = {
+      findByIncomingMessage: vi.fn(async () => receipt()),
+      reconcileNotSent: vi.fn(async () => reconciled),
+    };
+    const app = await createApp(repository, () => new Date("2026-08-02T02:03:04.000Z"));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/internal/answer-replies/feishu/om_1/reconcile-not-sent",
+      headers: authorization,
+      payload: { expectedVersion: 7, unexpectedText: "SENSITIVE_OPERATOR_INPUT" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(repository.findByIncomingMessage).toHaveBeenCalledWith({
+      provider: "feishu",
+      incomingMessageId: "om_1",
+    });
+    expect(repository.reconcileNotSent).toHaveBeenCalledWith({
+      deliveryId: "answer-reply-1",
+      expectedVersion: 7,
+      at: new Date("2026-08-02T02:03:04.000Z"),
+    });
+    expect(response.json()).toMatchObject({
+      ok: true,
+      delivery: { id: "answer-reply-1", state: "not_sent_reconciled", version: 8 },
+    });
+    expect(response.body).not.toContain("SENSITIVE_OPERATOR_INPUT");
+    expect(response.body).not.toContain("SENSITIVE_PREPARED_ANSWER");
+    await app.close();
+  });
+
+  it("rejects malformed not-sent reconciliation versions before mutation", async () => {
+    const repository = {
+      findByIncomingMessage: vi.fn(async () => receipt()),
+      reconcileNotSent: vi.fn(async () => receipt()),
+    };
+    const app = await createApp(repository);
+
+    for (const payload of [{}, { expectedVersion: 0 }, { expectedVersion: 1.5 }]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/internal/answer-replies/feishu/om_1/reconcile-not-sent",
+        headers: authorization,
+        payload,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ ok: false, error: "invalid_request" });
+    }
+    expect(repository.findByIncomingMessage).not.toHaveBeenCalled();
+    expect(repository.reconcileNotSent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("requires the existing internal bearer token before inspecting a receipt", async () => {
     const repository = {
       findByIncomingMessage: vi.fn(async () => receipt()),
@@ -192,11 +256,13 @@ describe("answer reply inspection API", () => {
 
 async function createApp(
   repository: AnswerReplyInspectionRepository | undefined,
+  now?: () => Date,
 ) {
   return await buildApp({
     ...disabledRuntimeFactories(),
     internalApiToken: "operator-secret",
     createEventWorkerRuntime: () => fakeEventWorkerRuntime(repository),
+    ...(now === undefined ? {} : { now }),
   });
 }
 
@@ -237,7 +303,14 @@ function fakeEventWorkerRuntime(
   answerReplies: AnswerReplyInspectionRepository | undefined,
 ): EventWorkerRuntime {
   return {
-    answerReplies,
+    answerReplies: answerReplies === undefined
+      ? undefined
+      : {
+          findByIncomingMessage: answerReplies.findByIncomingMessage,
+          reconcileNotSent: answerReplies.reconcileNotSent ?? vi.fn(async () => {
+            throw new Error("not configured");
+          }),
+        },
     deadLetters: {
       list: vi.fn(async () => []),
       replay: vi.fn(async () => "not_found" as const),

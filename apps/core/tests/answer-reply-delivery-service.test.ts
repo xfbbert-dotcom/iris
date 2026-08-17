@@ -956,6 +956,31 @@ describe("AnswerReplyDeliveryService", () => {
     },
   );
 
+  it("resumes a confirmed-not-sent receipt with the existing safe notice flow", async () => {
+    const harness = createHarness();
+    const reconciled = notSentReconciledReceipt(
+      beginAnswerReceipt(receipt(), preparedAt),
+      transitionAt,
+    );
+    harness.repository.receipt = reconciled;
+
+    await expect(harness.service.respond(request(vi.fn()))).resolves.toEqual({
+      replyMessageId: "reply-default",
+    });
+
+    expect(harness.repository.beginSafeNoticeSend).toHaveBeenCalledWith({
+      deliveryId: reconciled.delivery.id,
+      expectedVersion: reconciled.delivery.version,
+      at: transitionAt,
+    });
+    expect(harness.replier.replyText).toHaveBeenCalledWith({
+      messageId: reconciled.delivery.incomingMessageId,
+      text: ANSWER_PERMISSION_CHANGED_NOTICE,
+      uuid: reconciled.delivery.safeNoticeUuid,
+      replyInThread: true,
+    });
+  });
+
   it.each([
     ["prepared answer attempts", () => receipt({ attemptCount: 1 })],
     ["prepared safe-notice attempts", () => receipt({ safeNoticeAttemptCount: 1 })],
@@ -1539,6 +1564,19 @@ function blockedReceipt(
   return appendEvent(updated, prior, state, at, { documentSourceIds });
 }
 
+function notSentReconciledReceipt(
+  prior: AnswerReplyReceipt,
+  at = transitionAt,
+): AnswerReplyReceipt {
+  const updated = withDelivery(prior, {
+    state: "not_sent_reconciled",
+    preparedReplyText: undefined,
+    version: prior.delivery.version + 1,
+    updatedAt: at,
+  });
+  return appendEvent(updated, prior, "not_sent_reconciled", at);
+}
+
 function beginSafeNoticeReceipt(
   prior: AnswerReplyReceipt,
   at = transitionAt,
@@ -1794,6 +1832,15 @@ class RecordingAnswerReplyRepository implements AnswerReplyRepository {
   ): Promise<AnswerReplyReceipt> => {
     const current = this.requireReceipt(input.deliveryId);
     const updated = blockedReceipt(current, input.documentSourceIds, input.at);
+    this.storeReceipt(updated);
+    return updated;
+  });
+
+  reconcileNotSent = vi.fn(async (
+    input: VersionedTransitionInput,
+  ): Promise<AnswerReplyReceipt> => {
+    const current = this.requireReceipt(input.deliveryId);
+    const updated = notSentReconciledReceipt(current, input.at);
     this.storeReceipt(updated);
     return updated;
   });

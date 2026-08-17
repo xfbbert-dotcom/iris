@@ -393,7 +393,10 @@ describe("createEventWorkerRuntime", () => {
       }),
     );
     expect(runtime?.answerReplies).toBeDefined();
-    expect(Object.keys(runtime?.answerReplies ?? {})).toEqual(["findByIncomingMessage"]);
+    expect(Object.keys(runtime?.answerReplies ?? {})).toEqual([
+      "findByIncomingMessage",
+      "reconcileNotSent",
+    ]);
     expect(runtime?.answerReplies).not.toHaveProperty("prepare");
     const status = await runtime?.getStatus();
     expect(status).toMatchObject({
@@ -627,6 +630,7 @@ function fakeAnswerReplyRepository() {
     beginAnswerSend: vi.fn(),
     completeAnswerSend: vi.fn(),
     blockForPermission: vi.fn(),
+    reconcileNotSent: vi.fn(),
     beginSafeNoticeSend: vi.fn(),
     completeSafeNoticeSend: vi.fn(),
     getStatus: vi.fn(async () => ({

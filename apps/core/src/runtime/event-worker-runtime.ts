@@ -79,7 +79,10 @@ export type EventWorkerRuntime = {
     delete(id: string): Promise<"deleted" | "not_found" | "unsupported_legacy_item">;
     replayBatch(input: { ids: string[] }): Promise<ReplayRawEventDeadLettersResult>;
   };
-  answerReplies?: Pick<AnswerReplyRepository, "findByIncomingMessage">;
+  answerReplies?: Pick<
+    AnswerReplyRepository,
+    "findByIncomingMessage" | "reconcileNotSent"
+  >;
   getStatus(): Promise<EventWorkerRuntimeStatus>;
   start(): void;
   close(): Promise<void>;
@@ -327,6 +330,9 @@ async function createEnabledEventWorkerRuntime({
       answerReplies: {
         findByIncomingMessage(input) {
           return answerReplyRepository.findByIncomingMessage(input);
+        },
+        reconcileNotSent(input) {
+          return answerReplyRepository.reconcileNotSent(input);
         },
       },
       deadLetters: {

@@ -66,6 +66,21 @@ describe("runMigrations", () => {
     expect(normalized).not.toContain("drop trigger answer_reply_knowledge_conflicts_truncate_guard");
   });
 
+  it("adds an explicit not-sent reconciliation state and immutable event in 0050", async () => {
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0050_answer_reply_not_sent_reconciliation.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+
+    expect(normalized).toContain("not_sent_reconciled");
+    expect(normalized).toContain("answer_reply_deliveries_state_check");
+    expect(normalized).toContain("answer_reply_deliveries_content_shape_check");
+    expect(normalized).toContain("answer_reply_delivery_events_event_type_check");
+    expect(normalized).not.toContain("drop trigger");
+    expect(normalized).not.toContain("disable trigger");
+  });
+
   it("defines bounded append-only answer source citation receipts", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0045_answer_source_citations.sql"),

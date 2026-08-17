@@ -1041,6 +1041,44 @@ runIfDatabase("PostgresAnswerReplyRepository with isolated Postgres", () => {
     expect(blocked.events.at(-1)?.eventType).toBe("reconciliation_required");
   });
 
+  it("records a confirmed-not-sent terminal fact after an attempted delivery", async () => {
+    const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
+    const prepared = await repository.prepare(prepareInput("not-sent-reconciled"));
+    const sending = await repository.beginAnswerSend({
+      deliveryId: prepared.receipt.delivery.id,
+      expectedVersion: 1,
+      at: new Date("2026-08-02T00:01:00.000Z"),
+    });
+    const reconciled = await repository.reconcileNotSent({
+      deliveryId: sending.delivery.id,
+      expectedVersion: 2,
+      at: new Date("2026-08-02T00:02:00.000Z"),
+    });
+
+    expect(reconciled.delivery).toMatchObject({
+      state: "not_sent_reconciled",
+      attemptCount: 1,
+      version: 3,
+    });
+    expect(reconciled.delivery.preparedReplyText).toBeUndefined();
+    expect(reconciled.events.at(-1)).toMatchObject({
+      sequence: 3,
+      eventType: "not_sent_reconciled",
+      documentSourceIds: ["source-a"],
+    });
+
+    const noticeStarted = await repository.beginSafeNoticeSend({
+      deliveryId: reconciled.delivery.id,
+      expectedVersion: 3,
+      at: new Date("2026-08-02T00:03:00.000Z"),
+    });
+    expect(noticeStarted.delivery).toMatchObject({
+      state: "not_sent_reconciled",
+      safeNoticeAttemptCount: 1,
+      version: 4,
+    });
+  });
+
   it("retries a safe notice without restoring blocked answer text", async () => {
     const repository = createPostgresAnswerReplyRepository({ dataSource: pool! });
     const prepared = await repository.prepare(prepareInput("safe-notice"));

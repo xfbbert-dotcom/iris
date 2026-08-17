@@ -142,6 +142,7 @@ export function createAnswerReplyDeliveryService({
         return optionalReplyId(receipt.delivery.replyMessageId);
       case "permission_blocked":
       case "reconciliation_required":
+      case "not_sent_reconciled":
         return sendOrResumeSafeNotice(receipt);
       case "prepared":
       case "sending":
@@ -762,6 +763,7 @@ function requireBlockedState(receipt: AnswerReplyReceipt): void {
   if (
     receipt.delivery.state !== "permission_blocked"
     && receipt.delivery.state !== "reconciliation_required"
+    && receipt.delivery.state !== "not_sent_reconciled"
   ) {
     throw contractError();
   }
