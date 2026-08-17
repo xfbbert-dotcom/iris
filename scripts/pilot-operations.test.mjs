@@ -305,6 +305,20 @@ test("knowledge-conflict chronology proves every exact pilot message is strictly
   assert.doesNotMatch(runbook, /message\.created_at\s*>\s*source_snapshot\./u);
 });
 
+test("knowledge-conflict source-version binding accepts exact nullable production facts", () => {
+  const command = `$actual = ConvertTo-SqlNullableReference -Name 'sourceVersion' -Value $inputValue.value; if ($actual -cne $inputValue.expected) { throw 'unexpected source-version SQL value' }`;
+  assertPowerShellRunbookGate(command, { value: null, expected: "NULL::text" }, true);
+  assertPowerShellRunbookGate(command, { value: "v123", expected: "'v123'::text" }, true);
+
+  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+  assert.equal(
+    (runbook.match(/source_version IS NOT DISTINCT FROM \$sourceVersionSql/gu) ?? []).length,
+    2,
+  );
+  assert.doesNotMatch(runbook, /source_version\s*=\s*'\$\([^\n]*sourceVersion[^\n]*\)'/u);
+  assert.match(runbook, /"sourceVersion": null/u);
+});
+
 test("knowledge-conflict approved-card gate rejects false or missing metadata proof", () => {
   const hash = "a".repeat(64);
   const valid = {

@@ -856,10 +856,11 @@ function Invoke-KnowledgeConflictAcceptance {
   $script:FailedStep = 4
   Confirm-ObservedPass "Create the controlled authorized Wiki snapshot and strictly later incompatible pilot conclusion"
   $fixture = Get-Evidence
-  foreach ($field in @('documentSourceId','snapshotId','contentHash','sourceVersion','groupMessageId','memoryId')) {
+  foreach ($field in @('documentSourceId','snapshotId','contentHash','groupMessageId','memoryId')) {
     $null = Assert-Reference -Name $field -Value ([string]$fixture.$field)
   }
   $null = Assert-Hash -Name 'fixture content hash' -Value ([string]$fixture.contentHash)
+  $sourceVersionSql = ConvertTo-SqlNullableReference -Name 'sourceVersion' -Value (Get-RequiredProperty $fixture 'sourceVersion')
   $documentSourceUpdatedAt = Assert-IsoTimestamp -Name 'documentSourceUpdatedAt' -Value (Get-RequiredProperty $fixture 'documentSourceUpdatedAt')
   $snapshotFetchedAt = Assert-IsoTimestamp -Name 'snapshotFetchedAt' -Value (Get-RequiredProperty $fixture 'snapshotFetchedAt')
   $pilotMessageIds = @((Get-RequiredProperty $fixture 'pilotMessageIds') | ForEach-Object { Assert-Reference -Name 'pilot chronology message ID' -Value ([string]$_) })
@@ -881,7 +882,7 @@ WITH expected(id) AS (
     AND snapshot.id = '$($fixture.snapshotId)' AND snapshot.fetch_status = 'succeeded'
     AND snapshot.fetched_at = '$snapshotFetchedAt'::timestamptz
     AND snapshot.content_hash = '$($fixture.contentHash)'
-    AND snapshot.source_version = '$($fixture.sourceVersion)'
+    AND snapshot.source_version IS NOT DISTINCT FROM $sourceVersionSql
 ), message_facts AS (
   SELECT expected.id,
     count(message.id) AS row_count,
@@ -920,7 +921,7 @@ SELECT json_build_object(
     [string]$fixture.snapshotId,
     $snapshotFetchedAt,
     [string]$fixture.contentHash,
-    [string]$fixture.sourceVersion
+    $sourceVersionSql
   ) -join "`n"
 
   $script:FailedStep = 5
@@ -949,8 +950,9 @@ SELECT json_build_object(
   $script:FailedStep = 6
   Confirm-ObservedPass "Wait for exactly one scan and candidate, then update the metadata evidence file"
   $evidence = Get-Evidence
-  foreach ($field in @('scanId','candidateId','groupMessageId','memoryId','documentSourceId','snapshotId','sourceVersion')) { $null = Assert-Reference -Name $field -Value ([string](Get-RequiredProperty $evidence $field)) }
+  foreach ($field in @('scanId','candidateId','groupMessageId','memoryId','documentSourceId','snapshotId')) { $null = Assert-Reference -Name $field -Value ([string](Get-RequiredProperty $evidence $field)) }
   $null = Assert-Hash -Name 'contentHash' -Value ([string](Get-RequiredProperty $evidence 'contentHash'))
+  $sourceVersionSql = ConvertTo-SqlNullableReference -Name 'sourceVersion' -Value (Get-RequiredProperty $evidence 'sourceVersion')
   $memoryUpdatedAt = Assert-IsoTimestamp -Name 'memoryUpdatedAt' -Value (Get-RequiredProperty $evidence 'memoryUpdatedAt')
   $documentSourceUpdatedAt = Assert-IsoTimestamp -Name 'documentSourceUpdatedAt' -Value (Get-RequiredProperty $evidence 'documentSourceUpdatedAt')
   $snapshotFetchedAt = Assert-IsoTimestamp -Name 'snapshotFetchedAt' -Value (Get-RequiredProperty $evidence 'snapshotFetchedAt')
@@ -962,7 +964,7 @@ SELECT json_build_object(
     [string]$evidence.snapshotId,
     $snapshotFetchedAt,
     [string]$evidence.contentHash,
-    [string]$evidence.sourceVersion
+    $sourceVersionSql
   ) -join "`n"
   if ($candidateSourceBinding -cne $script:ChronologySourceBinding) { throw "Candidate source/snapshot binding changed after chronology proof" }
   if ($pilotMessageIds -notcontains [string]$evidence.groupMessageId) { throw "Candidate source message is absent from recorded pilot message IDs" }
@@ -986,7 +988,7 @@ WITH expected(
 )
 SELECT json_build_object(
   'scanCount', (SELECT count(*) FROM knowledge_conflict_scan_inbox WHERE id='$($evidence.scanId)' AND group_id='$pilot' AND group_memory_id='$($evidence.memoryId)' AND memory_updated_at='$memoryUpdatedAt'::timestamptz AND status='completed' AND terminal_outcome='conflict'),
-  'candidateCount', (SELECT count(*) FROM knowledge_conflict_candidates WHERE id='$($evidence.candidateId)' AND group_id='$pilot' AND group_memory_id='$($evidence.memoryId)' AND memory_updated_at='$memoryUpdatedAt'::timestamptz AND source_message_id='$($evidence.groupMessageId)' AND target_document_source_id='$($evidence.documentSourceId)' AND target_source_updated_at='$documentSourceUpdatedAt'::timestamptz AND target_snapshot_id='$($evidence.snapshotId)' AND target_content_hash='$($evidence.contentHash)' AND target_source_version='$($evidence.sourceVersion)'),
+  'candidateCount', (SELECT count(*) FROM knowledge_conflict_candidates WHERE id='$($evidence.candidateId)' AND group_id='$pilot' AND group_memory_id='$($evidence.memoryId)' AND memory_updated_at='$memoryUpdatedAt'::timestamptz AND source_message_id='$($evidence.groupMessageId)' AND target_document_source_id='$($evidence.documentSourceId)' AND target_source_updated_at='$documentSourceUpdatedAt'::timestamptz AND target_snapshot_id='$($evidence.snapshotId)' AND target_content_hash='$($evidence.contentHash)' AND target_source_version IS NOT DISTINCT FROM $sourceVersionSql),
   'expectedEvidenceCount', (SELECT count(*) FROM expected),
   'actualEvidenceCount', (SELECT count(*) FROM actual),
   'missingEvidenceCount', (SELECT count(*) FROM (SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) missing),
@@ -1137,7 +1139,7 @@ Minimum private evidence JSON shape (values shown are placeholders and must neve
   "snapshotId": "snapshot_id",
   "snapshotFetchedAt": "2026-01-01T00:00:00.500Z",
   "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
-  "sourceVersion": "version_id",
+  "sourceVersion": null,
   "groupMessageId": "message_c1_id",
   "pilotMessageIds": ["message_c1_id", "message_c2_id"],
   "memoryId": "memory_id",
