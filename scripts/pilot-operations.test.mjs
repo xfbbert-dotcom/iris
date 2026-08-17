@@ -20,6 +20,113 @@ const knowledgeConflictAcceptancePath =
   "docs/runbooks/iris-knowledge-conflict-acceptance.md";
 const knowledgeConflictPrPath =
   "docs/pull-requests/2026-08-13-iris-knowledge-conflict-candidate.md";
+const crossGroupGrantAcceptancePath =
+  "docs/runbooks/iris-cross-group-document-grants-acceptance.md";
+const crossGroupGrantPrPath =
+  "docs/pull-requests/2026-08-18-iris-cross-group-document-grants.md";
+
+test("cross-group document grant acceptance is executable and default-deny", () => {
+  assert.equal(existsSync(crossGroupGrantAcceptancePath), true);
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  for (let step = 1; step <= 8; step += 1) {
+    assert.match(runbook, new RegExp(`## Step ${step}:`, "u"), `missing grant step ${step}`);
+  }
+  for (const marker of [
+    "APPROVED_COMMIT_SHA",
+    "IRIS_APPROVED_IMAGE_DIGEST",
+    "$SourceGroupId",
+    "$GranteeGroupId",
+    "$ControlGroupId",
+    "0051_document_source_group_grants.sql",
+    "pre-grant denial",
+    "answer_reply_source_traces",
+    "permission_blocked",
+    "begin-send/revoke",
+    "Invoke-CrossGroupDocumentGrantAcceptance",
+    "Invoke-CrossGroupDocumentGrantRollback",
+  ]) {
+    assert.match(runbook, new RegExp(escapeRegExp(marker), "iu"));
+  }
+  const rollbackStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantRollback");
+  const acceptanceStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantAcceptance");
+  assert.ok(rollbackStart >= 0 && acceptanceStart > rollbackStart);
+  const rollback = runbook.slice(rollbackStart, acceptanceStart);
+  assertMarkersInOrder(rollback, [
+    "stop caddy",
+    "/group-grants/",
+    "/internal/runtime-control/groups/",
+    "/internal/runtime-control/global",
+    "/internal/runtime-control/capabilities",
+    "Assert-CrossGroupDrainCounts",
+    "Assert-CrossGroupRollbackAttestation",
+  ]);
+  assert.doesNotMatch(rollback, /\b(?:DELETE|TRUNCATE|DROP)\b/iu);
+  assert.match(runbook.slice(acceptanceStart), /finally\s*\{[\s\S]*Invoke-CrossGroupDocumentGrantRollback/u);
+});
+
+test("cross-group document grant gates reject false-positive facts", () => {
+  const valid = {
+    preGrant: { granteeTraceCount: 0, controlTraceCount: 0, promptGrantCount: 0 },
+    grant: { state: "active", version: 1, grantedEventCount: 1 },
+    grantee: { deliveryCount: 1, traceCount: 1, exactGrantBindingCount: 1 },
+    control: { traceCount: 0, sourceDisclosureCount: 0 },
+    revocation: { preparedCount: 1, permissionBlockedCount: 1, sendStartedCount: 0, sentCount: 0 },
+    regrant: { version: 3, grantedEventCount: 1, replayEventDelta: 0, deliveryCount: 1 },
+    race: { safeOutcomeCount: 1, sendAfterRevokeCount: 0 },
+  };
+  const command = "Assert-CrossGroupGrantFacts -Facts $inputValue";
+  assertPowerShellRunbookGate(command, valid, true, crossGroupGrantAcceptancePath);
+  for (const invalid of [
+    { ...valid, preGrant: { ...valid.preGrant, granteeTraceCount: 1 } },
+    { ...valid, grant: { ...valid.grant, grantedEventCount: 2 } },
+    { ...valid, grantee: { ...valid.grantee, exactGrantBindingCount: 0 } },
+    { ...valid, control: { ...valid.control, sourceDisclosureCount: 1 } },
+    { ...valid, revocation: { ...valid.revocation, sendStartedCount: 1 } },
+    { ...valid, regrant: { ...valid.regrant, replayEventDelta: 1 } },
+    { ...valid, race: { ...valid.race, sendAfterRevokeCount: 1 } },
+  ]) {
+    assertPowerShellRunbookGate(command, invalid, false, crossGroupGrantAcceptancePath);
+  }
+});
+
+test("cross-group document grant rollback rejects residual or lost durable facts", () => {
+  const valid = {
+    caddyRunning: false,
+    globalEnabled: false,
+    desiredGlobalEnabled: false,
+    disabledGroupCount: 3,
+    activePilotGrantCount: 0,
+    pendingCount: 0,
+    deadLetterCount: 0,
+    unresolvedDeliveryCount: 0,
+    mutableFingerprintBefore: "a".repeat(64),
+    mutableFingerprintAfter: "a".repeat(64),
+    appendOnlyEventCountBefore: 2,
+    appendOnlyEventCountAfter: 2,
+  };
+  const command = "Assert-CrossGroupRollbackAttestation -Facts $inputValue";
+  assertPowerShellRunbookGate(command, valid, true, crossGroupGrantAcceptancePath);
+  for (const invalid of [
+    { ...valid, caddyRunning: true },
+    { ...valid, activePilotGrantCount: 1 },
+    { ...valid, unresolvedDeliveryCount: 1 },
+    { ...valid, mutableFingerprintAfter: "b".repeat(64) },
+    { ...valid, appendOnlyEventCountAfter: 1 },
+  ]) {
+    assertPowerShellRunbookGate(command, invalid, false, crossGroupGrantAcceptancePath);
+  }
+});
+
+test("cross-group document grant PR remains pending and metadata-only", () => {
+  assert.equal(existsSync(crossGroupGrantPrPath), true);
+  const template = readFileSync(crossGroupGrantPrPath, "utf8");
+  assert.match(template, /## Release Status\s+Pending live acceptance/iu);
+  assert.match(template, /首个跨群文档回答闭环代码完成，真实验收待执行/u);
+  for (const marker of ["IDs", "versions", "hashes", "counts", "timestamps", "pass/fail", "default-deny", "rollback"]) {
+    assert.match(template, new RegExp(escapeRegExp(marker), "iu"));
+  }
+  assert.doesNotMatch(template, /document body|answer body|message body|access token|credential value/iu);
+});
 
 test("pilot operation scripts are valid Bash", { skip: bashPath() === undefined }, () => {
   for (const scriptPath of [
@@ -1641,8 +1748,13 @@ test("restore proves Caddy stopped before stopping Core or swapping databases", 
   assert.ok(stopCore < swapDatabase);
 });
 
-function assertPowerShellRunbookGate(command, input, expectedSuccess) {
-  const runbook = readFileSync(knowledgeConflictAcceptancePath, "utf8");
+function assertPowerShellRunbookGate(
+  command,
+  input,
+  expectedSuccess,
+  runbookPath = knowledgeConflictAcceptancePath,
+) {
+  const runbook = readFileSync(runbookPath, "utf8");
   const controllerStart = runbook.indexOf('$ErrorActionPreference = "Stop"');
   const controllerEnd = runbook.indexOf("$acceptanceResult = $null", controllerStart);
   assert.ok(controllerStart >= 0 && controllerEnd > controllerStart, "missing controller source");
