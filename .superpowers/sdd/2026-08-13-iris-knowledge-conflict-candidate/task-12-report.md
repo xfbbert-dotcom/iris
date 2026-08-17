@@ -123,3 +123,35 @@
 - Final diff inspection found exactly the two intended smoke files, no Core product-code change,
   no whitespace error, and zero bounded `.tmp-iris-*-test-*` fixture directories.
 - No push, PR mutation, or live pilot was performed in this follow-up.
+
+## Exact-SHA Live Acceptance
+
+- Accepted build: commit `dd7461459e476aa6843c5c34ea775855832c8a27`, image digest
+  `sha256:403366a17bd8baded6a561c38d35b873ae646709d6705af3e16173ec8424499b`.
+- The first live attempt correctly failed closed at Step 7. Its ordinary answer contained model
+  instruction leakage instead of the bounded deterministic conflict answer. The controller stopped
+  public ingress and completed the same default-off rollback before any retry.
+- A focused TDD regression proved the renderer defect. Commit
+  `dd7461459e476aa6843c5c34ea775855832c8a27` now returns the validated conflict plan's bounded
+  proposed answer without another model call; non-conflict rendering remains unchanged.
+- Pre-deployment `npm run verify` exited `0`: Core 3,417 passed / 258 environment-gated skipped,
+  Python 181 passed, pilot contracts 159 passed / 1 accurate local-Docker skip, plus typecheck,
+  build, Compose, readiness, pilot config, and diff checks.
+- The final controller run passed all twelve gates. It verified the exact source/snapshot/message
+  chronology, one current candidate, one card delivery, an ordinary two-sided/no-winner answer,
+  duplicate no-effect, one governed medium-risk draft, six stage/cause revocation cases, nonpilot
+  controls, zero unresolved delivery/presentation/action state, and append-only preservation.
+- The real member created the draft from the Feishu card and rejected it through the governed card
+  path. PostgreSQL ended with one applied draft interaction, one distinct draft, a terminal rejected
+  draft, a closed presentation, and zero unresolved answer or card delivery state.
+- Final rollback proof: all three feature flags false, all three allowlists empty, five sensitive
+  runtime capabilities false, global and desired-global runtime false, Caddy stopped, Core healthy,
+  conflict runtime stopped, card queue/presentation/outbox residual counts zero, and 14 known groups
+  durably disabled.
+- Controller summary: `result=pass`, `failedStep=null`, `rollbackPass=true`, recorded at
+  `2026-08-17T17:22:55.6594565Z`. Private evidence SHA-256 is
+  `3fd5f17401c49f50de25b6be76fbc28e46553d0f2f221daa1505e50632c9402d`; summary SHA-256 is
+  `f6ffa487b131179f7a38295cd4ff694524cd52bae96a0a1acf329586291e7f0e`.
+- The evidence committed here is metadata-only. Group IDs, source text, prompts, callback payloads,
+  credentials, and authorization material remain outside the repository. The capability stays
+  default-off; this result closes the first one-group acceptance, not a broad rollout.

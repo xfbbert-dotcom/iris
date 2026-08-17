@@ -1,7 +1,9 @@
 # Iris Knowledge-Conflict Candidate Acceptance And Rollback
 
-Status: pending live acceptance. This runbook is the only release gate for the first one-group
-knowledge-conflict pilot. It creates a governed update draft and does not edit the existing Wiki page in place.
+Status: first one-group live acceptance passed on 2026-08-18 at exact commit
+`dd7461459e476aa6843c5c34ea775855832c8a27`; the controller reported `result=pass`, no failed
+step, and a successful default-off rollback. This runbook remains the release gate for any future
+knowledge-conflict pilot or broader rollout. It creates a governed update draft and does not edit the existing Wiki page in place.
 Run it from the repository root with a clean reviewed checkout and a private
 `.env.pilot`. Never paste source text, prompts, credentials, or callback payloads into the evidence
 record.

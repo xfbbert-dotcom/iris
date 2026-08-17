@@ -130,11 +130,11 @@ if ($script:readinessAttempt -ne 2 -or $result.status.components.knowledgeConfli
   );
 });
 
-test("knowledge-conflict PR evidence stays metadata-only and pending live acceptance", () => {
+test("knowledge-conflict PR evidence records metadata-only live acceptance and default-off rollback", () => {
   assert.equal(existsSync(knowledgeConflictPrPath), true);
   const template = readFileSync(knowledgeConflictPrPath, "utf8");
+  assert.match(template, /## Release Status\s+Live acceptance passed/iu);
   for (const marker of [
-    "Pending live acceptance",
     "exact commit SHA",
     "image digest",
     "IDs",
@@ -145,6 +145,8 @@ test("knowledge-conflict PR evidence stays metadata-only and pending live accept
     "pass/fail",
     "governed update draft",
     "does not edit the existing Wiki page in place",
+    "default-off",
+    "rollback",
   ]) {
     assert.match(template, new RegExp(escapeRegExp(marker), "iu"));
   }
