@@ -236,16 +236,22 @@ export function createKnowledgeConflictEvidenceBuilder(
       }
 
       const permissionSourceIds = uniqueSourceIds(currentChronologicalCandidates);
+      const readableSourceIds = new Set<string>();
       for (const sourceId of permissionSourceIds) {
         const source = sources.get(sourceId)!;
         try {
-          if (!(await dependencies.permissionChecker.canReadSource(source))) {
-            return permissionBlocked("permission_denied");
+          if (await dependencies.permissionChecker.canReadSource(source)) {
+            readableSourceIds.add(sourceId);
           }
         } catch {
           return retryable("permission_check_failed");
         }
       }
+      if (readableSourceIds.size === 0) {
+        return permissionBlocked("permission_denied");
+      }
+      const permissionApprovedCandidates = currentChronologicalCandidates.filter((candidate) =>
+        readableSourceIds.has(candidate.documentSourceId));
       const permissionAttestedAt = now();
       if (!validDate(permissionAttestedAt)) {
         return retryable("permission_attestation_invalid");
@@ -254,11 +260,11 @@ export function createKnowledgeConflictEvidenceBuilder(
       let materializedFragments: RetrievedDocumentFragment[];
       try {
         const loaded = await dependencies.fragments.findFragmentsByIds({
-          ids: currentChronologicalCandidates.map((candidate) => candidate.id),
+          ids: permissionApprovedCandidates.map((candidate) => candidate.id),
         });
         const loadedById = new Map(loaded.map((fragment) => [fragment.id, fragment]));
         materializedFragments = [];
-        for (const candidate of currentChronologicalCandidates) {
+        for (const candidate of permissionApprovedCandidates) {
           const fragment = loadedById.get(candidate.id);
           if (fragment === undefined || !sameFragmentIdentity(candidate, fragment)) {
             return insufficient("document_evidence_stale");

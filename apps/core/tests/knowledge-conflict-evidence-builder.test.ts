@@ -176,7 +176,7 @@ describe("KnowledgeConflictEvidenceBuilder", () => {
     ]);
   });
 
-  it("fails closed without detector input when any selected source is denied", async () => {
+  it("fails closed without detector input when every current source is denied", async () => {
     const harness = createHarness({ canReadSource: async () => false });
 
     await expect(harness.builder.build({ memory: harness.memory })).resolves.toEqual({
@@ -185,6 +185,41 @@ describe("KnowledgeConflictEvidenceBuilder", () => {
     });
     expect(harness.dependencies.fragments.findFragmentsByIds).not.toHaveBeenCalled();
     expect(harness.dependencies.snapshots.findLatestSnapshotMetadataForSources).toHaveBeenCalled();
+  });
+
+  it("excludes a live-denied source before loading bodies without starving readable evidence", async () => {
+    const sources = [
+      source({ id: "source-denied" }),
+      source({ id: "source-readable" }),
+    ];
+    const snapshots = sources.map((item, index) => snapshot({
+      id: `snapshot-${index + 1}`,
+      documentSourceId: item.id,
+    }));
+    const fragments = sources.map((item, index) => fragment({
+      id: `fragment-${index + 1}`,
+      documentSourceId: item.id,
+      documentSnapshotId: snapshots[index]!.id,
+      text: index === 0 ? "Denied body must never load." : "Readable policy evidence.",
+    }));
+    const harness = createHarness({
+      sources,
+      snapshots,
+      fragments,
+      canReadSource: async (item) => item.id === "source-readable",
+    });
+
+    const result = await harness.builder.build({ memory: harness.memory });
+
+    expect(result.outcome).toBe("ready");
+    if (result.outcome !== "ready") throw new Error("expected ready evidence");
+    expect(result.input.documentEvidence).toEqual([
+      expect.objectContaining({ documentSourceId: "source-readable" }),
+    ]);
+    expect(harness.dependencies.fragments.findFragmentsByIds).toHaveBeenCalledWith({
+      ids: ["fragment-2"],
+    });
+    expect(JSON.stringify(result)).not.toContain("Denied body must never load.");
   });
 
   it("classifies permission-check exceptions without leaking provider details", async () => {
