@@ -848,7 +848,7 @@ async function recordDetectionResult(
     assertFreshPermission(candidateInput.permissionAttestedAt, at, maxPermissionAgeMs);
     await validateDetectionFingerprint(client, candidateInput);
     await supersedeCompetingCandidates(client, createId, candidateInput, at);
-    const inserted = await insertCandidateFacts(client, createId, candidateInput, at);
+    const inserted = await insertCandidateFacts(client, createId, scanId, candidateInput, at);
     const completed = await completeOwnedScan(client, scanId, workerId, "conflict", at);
     return {
       outcome: "applied",
@@ -1085,6 +1085,7 @@ async function validateDetectionFingerprint(
 async function insertCandidateFacts(
   client: PostgresKnowledgeConflictTransactionClient,
   createId: () => string,
+  scanId: string,
   input: NormalizedCandidateInput,
   at: Date,
 ): Promise<KnowledgeConflictCandidate> {
@@ -1097,18 +1098,24 @@ async function insertCandidateFacts(
        group_conclusion_statement, difference, suggested_update, target_document_ref,
        confidence, version, created_at, updated_at
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-       'pending_review', $13, $14, $15, $16, $17, $18, $19, 1, $20, $20
+       $1, $2, $3, $4,
+       (SELECT exact_scan.memory_updated_at
+        FROM knowledge_conflict_scan_inbox exact_scan
+        WHERE exact_scan.id = $19),
+       $5, $6,
+       (SELECT exact_source.updated_at
+        FROM document_sources exact_source
+        WHERE exact_source.id = $6),
+       $7, $8, $9, $10,
+       'pending_review', $11, $12, $13, $14, $15, $16, $17, 1, $18, $18
      ) RETURNING *`,
     [
       input.id,
       input.idempotencyKey,
       input.groupId,
       input.groupMemoryId,
-      input.memoryUpdatedAt,
       input.sourceMessageId,
       input.targetDocumentSourceId,
-      input.targetSourceUpdatedAt,
       input.targetSourceVersion ?? null,
       input.targetSnapshotId,
       input.targetContentHash,
@@ -1121,6 +1128,7 @@ async function insertCandidateFacts(
       input.plan.targetDocumentRef,
       input.plan.confidence,
       at,
+      scanId,
     ],
   );
   const row = result.rows[0];
@@ -1151,7 +1159,6 @@ async function insertEvidence(
   let groupId: string | null = null;
   let messageId: string | null = null;
   let memoryId: string | null = null;
-  let sourceUpdatedAt: Date | null = null;
   let sourceId: string | null = null;
   let snapshotId: string | null = null;
   let fragmentId: string | null = null;
@@ -1163,10 +1170,8 @@ async function insertEvidence(
   } else if (evidence.type === "group_memory") {
     groupId = evidence.groupId;
     memoryId = evidence.groupMemoryId;
-    sourceUpdatedAt = evidence.expectedUpdatedAt;
   } else if (evidence.type === "document_source") {
     sourceId = evidence.documentSourceId;
-    sourceUpdatedAt = evidence.expectedUpdatedAt;
   } else if (evidence.type === "document_snapshot") {
     sourceId = evidence.documentSourceId;
     snapshotId = evidence.documentSnapshotId;
@@ -1179,14 +1184,30 @@ async function insertEvidence(
     snapshotHash = evidence.snapshotContentHash;
     contentHash = evidence.contentHash;
   }
-  values.push(groupId, messageId, memoryId, sourceUpdatedAt, sourceId, snapshotId,
+  values.push(groupId, messageId, memoryId, sourceId, snapshotId,
     fragmentId, snapshotHash, contentHash, at);
   await client.query(
     `INSERT INTO knowledge_conflict_evidence (
        candidate_id, evidence_type, reference_id, group_id, conversation_message_id,
        group_memory_id, source_updated_at, document_source_id, document_snapshot_id,
        document_fragment_id, snapshot_content_hash, content_hash, created_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6,
+       CASE
+         WHEN $2 = 'group_memory' THEN (
+           SELECT candidate.memory_updated_at
+           FROM knowledge_conflict_candidates candidate
+           WHERE candidate.id = $1
+         )
+         WHEN $2 = 'document_source' THEN (
+           SELECT source.updated_at
+           FROM document_sources source
+           WHERE source.id = $7
+         )
+         ELSE NULL::timestamptz
+       END,
+       $7, $8, $9, $10, $11, $12
+     )`,
     values,
   );
 }

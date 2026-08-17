@@ -383,6 +383,29 @@ describe("PostgresKnowledgeConflictRepository candidate lifecycle", () => {
       .toMatchObject({ outcome: "already_applied", candidate: { id: "candidate-1" } });
   });
 
+  it("persists candidate and evidence timestamps from locked PostgreSQL facts", async () => {
+    const client = candidateClient();
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: dataSource(client) });
+
+    await repository.recordDetectionResult(conflictDetectionInput());
+
+    const candidateInsert = client.query.mock.calls.find(([sql]) =>
+      sql.includes("INSERT INTO knowledge_conflict_candidates"));
+    expect(candidateInsert?.[0]).toContain("exact_scan.memory_updated_at");
+    expect(candidateInsert?.[0]).toContain("FROM knowledge_conflict_scan_inbox exact_scan");
+    expect(candidateInsert?.[0]).toContain("exact_source.updated_at");
+    expect(candidateInsert?.[0]).toContain("FROM document_sources exact_source");
+    expect(candidateInsert?.[1]).toContain("scan-1");
+
+    const evidenceInserts = client.query.mock.calls.filter(([sql]) =>
+      sql.includes("INSERT INTO knowledge_conflict_evidence"));
+    expect(evidenceInserts).toHaveLength(conflictEvidence().length);
+    for (const [sql] of evidenceInserts) {
+      expect(sql).toContain("candidate.memory_updated_at");
+      expect(sql).toContain("source.updated_at");
+    }
+  });
+
   it("rejects a reused detection identity with different content", async () => {
     const repository = createPostgresKnowledgeConflictRepository({
       dataSource: dataSource(candidateClient({ existingCandidate: true, completedScan: true })),
@@ -1606,6 +1629,61 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
       "SELECT count(*)::text AS count FROM knowledge_conflict_candidates WHERE id = $1",
       [fixture.candidateId],
     )).resolves.toMatchObject({ rows: [{ count: "0" }] });
+  });
+
+  it("preserves sub-millisecond scan, memory, and source identities in candidate facts", async () => {
+    const fixture = await insertDetectionFixture("candidate-timestamp-precision");
+    await pool!.query(
+      "UPDATE group_memories SET updated_at = updated_at + interval '579 microseconds' WHERE id = $1",
+      [fixture.memoryId],
+    );
+    await pool!.query(
+      "UPDATE knowledge_conflict_scan_inbox SET memory_updated_at = memory_updated_at + interval '579 microseconds' WHERE id = $1",
+      [fixture.scanId],
+    );
+    await pool!.query(
+      "UPDATE document_sources SET updated_at = updated_at + interval '579 microseconds' WHERE id = $1",
+      [sourceId],
+    );
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+
+    try {
+      await expect(repository.recordDetectionResult(fixture.input)).resolves.toMatchObject({
+        outcome: "applied",
+      });
+      await expect(pool!.query<{
+        candidate_memory_exact: boolean;
+        memory_evidence_exact: boolean;
+        candidate_source_exact: boolean;
+        source_evidence_exact: boolean;
+      }>(
+        `SELECT
+           candidate.memory_updated_at = scan.memory_updated_at AS candidate_memory_exact,
+           memory_evidence.source_updated_at = scan.memory_updated_at AS memory_evidence_exact,
+           candidate.target_source_updated_at = source.updated_at AS candidate_source_exact,
+           source_evidence.source_updated_at = source.updated_at AS source_evidence_exact
+         FROM knowledge_conflict_candidates candidate
+         JOIN knowledge_conflict_scan_inbox scan ON scan.id = $2
+         JOIN document_sources source ON source.id = candidate.target_document_source_id
+         JOIN knowledge_conflict_evidence memory_evidence
+           ON memory_evidence.candidate_id = candidate.id
+          AND memory_evidence.evidence_type = 'group_memory'
+         JOIN knowledge_conflict_evidence source_evidence
+           ON source_evidence.candidate_id = candidate.id
+          AND source_evidence.evidence_type = 'document_source'
+         WHERE candidate.id = $1`,
+        [fixture.candidateId, fixture.scanId],
+      )).resolves.toMatchObject({
+        rows: [{
+          candidate_memory_exact: true,
+          memory_evidence_exact: true,
+          candidate_source_exact: true,
+          source_evidence_exact: true,
+        }],
+      });
+    } finally {
+      await pool!.query("UPDATE document_sources SET updated_at = $2 WHERE id = $1", [sourceId, at]);
+    }
   });
 
   it("supersedes a real persisted candidate after message chronology mutates", async () => {
