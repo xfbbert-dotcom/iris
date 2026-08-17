@@ -436,10 +436,13 @@ async function discoverEligibleScans(
         `INSERT INTO knowledge_conflict_scan_inbox (
            id, group_id, group_memory_id, memory_updated_at, status,
            attempt_count, next_attempt_at, created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, 'pending', 0, $5, $5, $5)
+         )
+         SELECT $1, gm.group_id, gm.id, gm.updated_at, 'pending', 0, $4, $4, $4
+         FROM group_memories gm
+         WHERE gm.id = $2 AND gm.group_id = $3
          ON CONFLICT (group_memory_id, memory_updated_at) DO NOTHING
          RETURNING id`,
-        [requireReference("scan id", createId()), row.group_id, row.id, row.updated_at, at],
+        [requireReference("scan id", createId()), row.id, row.group_id, at],
       );
       discovered += inserted.rows.length;
     }

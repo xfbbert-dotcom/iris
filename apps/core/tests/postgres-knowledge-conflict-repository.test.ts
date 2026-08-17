@@ -76,6 +76,35 @@ describe("PostgresKnowledgeConflictRepository scan lifecycle", () => {
     })).resolves.toEqual({ discovered: 0, existing: 1 });
   });
 
+  it("persists the authoritative database memory timestamp without a JavaScript round trip", async () => {
+    const eligible = memoryRow();
+    const client = routedClient((sql) => {
+      if (sql.includes("AS existing_count")) return { rows: [{ existing_count: "1" }] };
+      if (sql.includes("FROM group_memories gm") && sql.includes("knowledge_conflict_scan_inbox")) {
+        return { rows: [eligible] };
+      }
+      if (sql.includes("INSERT INTO knowledge_conflict_scan_inbox")) {
+        return { rows: [{ id: "scan-precision" }] };
+      }
+      return { rows: [] };
+    });
+    const repository = createPostgresKnowledgeConflictRepository({
+      dataSource: dataSource(client),
+      createId: () => "scan-precision",
+    });
+
+    await expect(repository.discoverEligibleScans({
+      groupIds: ["group-1"],
+      limit: 10,
+      at,
+    })).resolves.toEqual({ discovered: 1, existing: 0 });
+
+    const insert = client.query.mock.calls.find(([sql]) =>
+      sql.includes("INSERT INTO knowledge_conflict_scan_inbox"));
+    expect(insert?.[0]).toMatch(/SELECT \$1, gm\.group_id, gm\.id, gm\.updated_at/u);
+    expect(insert?.[1]).toEqual(["scan-precision", "memory-1", "group-1", at]);
+  });
+
   it("does not access Postgres when discovery has no allowlisted groups", async () => {
     const source = dataSource(routedClient(() => ({ rows: [] })));
     const repository = createPostgresKnowledgeConflictRepository({ dataSource: source });
@@ -1386,6 +1415,7 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
   const schema = `knowledge_conflict_repository_${suffix.replaceAll("-", "")}`;
   const groupId = `conflict-group-${suffix}`;
   const otherGroupId = `conflict-other-${suffix}`;
+  const precisionGroupId = `conflict-precision-${suffix}`;
   const messageIds = Array.from({ length: 10 }, (_, index) => `feishu:conflict-${index}-${suffix}`);
   const memoryIds = Array.from({ length: 10 }, (_, index) => `conflict-memory-${index}-${suffix}`);
   const sourceId = `conflict-source-${suffix}`;
@@ -1682,6 +1712,52 @@ runIfDatabase("PostgresKnowledgeConflictRepository scan behavior with Postgres",
     ]);
     await expect(repository.discoverEligibleScans({ groupIds: [groupId], limit: 20, at }))
       .resolves.toEqual({ discovered: 1, existing: 1 });
+  });
+
+  it("keeps PostgreSQL microseconds exact from discovery through claim", async () => {
+    const precisionMemoryId = `precision-memory-${suffix}`;
+    const precisionMessageId = `feishu:precision-message-${suffix}`;
+    const precisionTimestamp = "2026-08-13T02:06:00.000579Z";
+    await insertMessage(pool!, precisionMessageId, precisionGroupId);
+    await pool!.query(
+      `INSERT INTO group_memories (
+         id, group_id, memory_scope, category, content, importance, confidence,
+         status, idempotency_key, origin, created_by, created_at, updated_at
+       ) VALUES ($1, $2, 'group', 'decision', 'precision memory', 4, 0.9,
+         'active', $3, 'operator', 'tester', $4::timestamptz, $4::timestamptz)`,
+      [precisionMemoryId, precisionGroupId, `precision-memory-operation-${suffix}`,
+        precisionTimestamp],
+    );
+    await pool!.query(
+      `INSERT INTO group_memory_message_evidence (memory_id, conversation_message_id)
+       VALUES ($1, $2)`,
+      [precisionMemoryId, precisionMessageId],
+    );
+    const repository = createPostgresKnowledgeConflictRepository({ dataSource: pool! });
+
+    await expect(repository.discoverEligibleScans({
+      groupIds: [precisionGroupId],
+      limit: 10,
+      at,
+    })).resolves.toEqual({ discovered: 1, existing: 0 });
+    await expect(pool!.query<{ exact: boolean; difference_microseconds: string }>(
+      `SELECT inbox.memory_updated_at = memory.updated_at AS exact,
+         round(abs(extract(epoch FROM (inbox.memory_updated_at - memory.updated_at))) * 1000000)::text
+           AS difference_microseconds
+       FROM knowledge_conflict_scan_inbox inbox
+       JOIN group_memories memory ON memory.id = inbox.group_memory_id
+       WHERE inbox.group_memory_id = $1`,
+      [precisionMemoryId],
+    )).resolves.toMatchObject({ rows: [{ exact: true, difference_microseconds: "0" }] });
+    await expect(repository.claimNextScan({
+      groupIds: [precisionGroupId],
+      workerId: "precision-worker",
+      at,
+      leaseUntil,
+    })).resolves.toMatchObject({
+      scan: { groupMemoryId: precisionMemoryId, status: "processing", attemptCount: 1 },
+      memory: { id: precisionMemoryId, groupId: precisionGroupId },
+    });
   });
 
   it("skips a scan locked by another transaction and recovers an expired processing lease", async () => {
