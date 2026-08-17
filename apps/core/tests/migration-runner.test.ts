@@ -81,6 +81,41 @@ describe("runMigrations", () => {
     expect(normalized).not.toContain("disable trigger");
   });
 
+  it("defines ordered append-only cross-group document grants and exact receipt bindings in 0051", async () => {
+    const migrationNames = await readdir(defaultMigrationsDir());
+    expect(migrationNames.filter((name) => name.startsWith("0051_"))).toEqual([
+      "0051_document_source_group_grants.sql",
+    ]);
+    expect(migrationNames.indexOf("0051_document_source_group_grants.sql"))
+      .toBeGreaterThan(migrationNames.indexOf("0050_answer_reply_not_sent_reconciliation.sql"));
+
+    const sql = await readFile(
+      join(defaultMigrationsDir(), "0051_document_source_group_grants.sql"),
+      "utf8",
+    );
+    const normalized = sql.replace(/\s+/gu, " ").trim().toLowerCase();
+    const grantTable = normalized.match(
+      /create table document_source_group_grants \((.*?)\);/u,
+    )?.[1];
+    const eventTable = normalized.match(
+      /create table document_source_group_grant_events \((.*?)\);/u,
+    )?.[1];
+
+    expect(grantTable).toContain("document_source_id text not null");
+    expect(grantTable).toContain("grantor_group_id text not null");
+    expect(grantTable).toContain("grantee_group_id text not null");
+    expect(grantTable).toContain("unique (document_source_id, grantee_group_id)");
+    expect(eventTable).toContain("operation_key text not null unique");
+    expect(eventTable).toContain("operation_fingerprint text not null");
+    expect(normalized).toContain("document_source_group_grant_events_append_only");
+    expect(normalized).toContain("document_source_group_grant_events_truncate_guard");
+    expect(normalized).toContain("add column cross_group_grant_id text");
+    expect(normalized).toContain("add column cross_group_grant_version bigint");
+    expect(normalized).toContain("add column cross_group_grantor_group_id text");
+    expect(normalized).toContain("add column cross_group_grantee_group_id text");
+    expect(normalized).toContain("answer_reply_source_traces_cross_group_grant_shape_check");
+  });
+
   it("defines bounded append-only answer source citation receipts", async () => {
     const sql = await readFile(
       join(defaultMigrationsDir(), "0045_answer_source_citations.sql"),
