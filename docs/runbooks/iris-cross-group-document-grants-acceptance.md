@@ -199,6 +199,7 @@ function Assert-CrossGroupRollbackAttestation {
   if ([bool]$Facts.globalEnabled -or [bool]$Facts.desiredGlobalEnabled) {
     throw "global runtime must be durably disabled"
   }
+  if (-not [bool]$Facts.capabilitiesDisabled) { throw "every runtime capability must be disabled" }
   if ([int64]$Facts.disabledGroupCount -lt 3) { throw "all three groups must be disabled" }
   Assert-ExactInteger $Facts.activePilotGrantCount 0 "active pilot grant count"
   Assert-CrossGroupDrainCounts $Facts
@@ -512,8 +513,8 @@ function Assert-DenialStage {
   } else { "__none__" }
   $facts = Invoke-JsonSql -Sql @"
 SELECT json_build_object(
-  'granteeMessageCount',(SELECT count(*) FROM conversation_messages WHERE id='$granteeMessage' AND chat_id='$($Context.GranteeGroupId)'),
-  'controlMessageCount',(SELECT count(*) FROM conversation_messages WHERE id='$controlMessage' AND chat_id='$($Context.ControlGroupId)'),
+  'granteeMessageCount',(SELECT count(*) FROM conversation_messages WHERE provider_message_id='$granteeMessage' AND chat_id='$($Context.GranteeGroupId)'),
+  'controlMessageCount',(SELECT count(*) FROM conversation_messages WHERE provider_message_id='$controlMessage' AND chat_id='$($Context.ControlGroupId)'),
   'granteeTraceCount',(SELECT count(*) FROM answer_reply_deliveries delivery JOIN answer_reply_source_traces trace ON trace.delivery_id=delivery.id
     WHERE delivery.incoming_message_id='$granteeMessage' AND delivery.chat_id='$($Context.GranteeGroupId)' AND trace.document_source_id='$($Context.DocumentSourceId)'),
   'controlTraceCount',(SELECT count(*) FROM answer_reply_deliveries delivery JOIN answer_reply_source_traces trace ON trace.delivery_id=delivery.id
@@ -552,8 +553,8 @@ function Assert-GrantedAnswerStage {
   $controlMessage = Assert-Reference -Name "control message" -Value ([string](Get-StageObservation $Evidence "controlIncomingMessageId"))
   $facts = Invoke-JsonSql -Sql @"
 SELECT json_build_object(
-  'granteeMessageCount',(SELECT count(*) FROM conversation_messages WHERE id='$granteeMessage' AND chat_id='$($Context.GranteeGroupId)'),
-  'controlMessageCount',(SELECT count(*) FROM conversation_messages WHERE id='$controlMessage' AND chat_id='$($Context.ControlGroupId)'),
+  'granteeMessageCount',(SELECT count(*) FROM conversation_messages WHERE provider_message_id='$granteeMessage' AND chat_id='$($Context.GranteeGroupId)'),
+  'controlMessageCount',(SELECT count(*) FROM conversation_messages WHERE provider_message_id='$controlMessage' AND chat_id='$($Context.ControlGroupId)'),
   'deliveryCount',(SELECT count(*) FROM answer_reply_deliveries WHERE incoming_message_id='$granteeMessage' AND chat_id='$($Context.GranteeGroupId)' AND state='sent'),
   'traceCount',(SELECT count(*) FROM answer_reply_deliveries delivery JOIN answer_reply_source_traces trace ON trace.delivery_id=delivery.id
     WHERE delivery.incoming_message_id='$granteeMessage' AND trace.document_source_id='$($Context.DocumentSourceId)'),
@@ -624,6 +625,7 @@ function Invoke-CrossGroupDocumentGrantRollback {
   }
   Invoke-RollbackStep -Label "disable capabilities" -Action {
     $result = Invoke-CoreJson "PATCH" "/internal/runtime-control/capabilities" @{
+      readGroupContext = $false
       replyWhenMentioned = $false
       readGroupDocuments = $false
       retrieveKnowledgeBase = $false
@@ -645,10 +647,16 @@ function Invoke-CrossGroupDocumentGrantRollback {
     $activeGrantCount = [int64](Invoke-PilotSql -Sql "SELECT count(*) FROM document_source_group_grants WHERE document_source_id='$($Context.DocumentSourceId)' AND grantee_group_id='$($Context.GranteeGroupId)' AND state='active'")
     $caddyRunning = @(docker compose --env-file .env.pilot --file deploy/pilot/docker-compose.yml ps --status running --services caddy).Count -ne 0
     $disabledCount = @($script:KnownGroupIds | Where-Object { $runtime.disabledGroupIds -contains $_ }).Count
+    $capabilityNames = @(
+      "readGroupContext", "replyWhenMentioned", "readGroupDocuments", "retrieveKnowledgeBase",
+      "proactiveSpeech", "generateKnowledgeDrafts", "writeKnowledgeBase", "callExternalTools"
+    )
+    $capabilitiesDisabled = @($capabilityNames | Where-Object { $runtime.capabilities.$_ -ne $false }).Count -eq 0
     $facts = [pscustomobject]@{
       caddyRunning = $caddyRunning
       globalEnabled = [bool]$runtime.globalEnabled
       desiredGlobalEnabled = [bool]$runtime.desiredGlobalEnabled
+      capabilitiesDisabled = $capabilitiesDisabled
       disabledGroupCount = $disabledCount
       activePilotGrantCount = $activeGrantCount
       pendingCount = $drain.pendingCount
@@ -823,7 +831,9 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
       $summary.evidenceSha256 = (Get-FileHash -LiteralPath $context.EvidencePath -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$($context.EvidencePath).summary.json" -Encoding utf8
-    if ($script:RollbackErrors.Count -ne 0) { throw "rollback failed" }
+    if ($script:RollbackErrors.Count -ne 0) {
+      throw ("rollback failed: " + ($script:RollbackErrors -join "; "))
+    }
   }
 }
 

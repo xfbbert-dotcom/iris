@@ -153,6 +153,33 @@ test("cross-group ingress window preserves the live runtime activation", () => {
   }
 });
 
+test("cross-group stage evidence uses provider message IDs and rollback closes every read gate", () => {
+  const runbook = readFileSync(crossGroupGrantAcceptancePath, "utf8");
+  const denialStart = runbook.indexOf("function Assert-DenialStage");
+  const projectionStart = runbook.indexOf("function Assert-GrantProjection", denialStart);
+  const grantedStart = runbook.indexOf("function Assert-GrantedAnswerStage", projectionStart);
+  const fingerprintStart = runbook.indexOf("function Get-CrossGroupMutableFingerprint", grantedStart);
+  const rollbackStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantRollback");
+  const acceptanceStart = runbook.indexOf("function Invoke-CrossGroupDocumentGrantAcceptance", rollbackStart);
+  assert.ok(
+    denialStart >= 0 && projectionStart > denialStart && grantedStart > projectionStart &&
+      fingerprintStart > grantedStart && rollbackStart > fingerprintStart && acceptanceStart > rollbackStart,
+  );
+
+  for (const stage of [
+    runbook.slice(denialStart, projectionStart),
+    runbook.slice(grantedStart, fingerprintStart),
+  ]) {
+    assert.match(stage, /conversation_messages\s+WHERE\s+provider_message_id='\$granteeMessage'/u);
+    assert.match(stage, /conversation_messages\s+WHERE\s+provider_message_id='\$controlMessage'/u);
+    assert.doesNotMatch(stage, /conversation_messages\s+WHERE\s+id='\$(?:grantee|control)Message'/u);
+  }
+
+  const rollback = runbook.slice(rollbackStart, acceptanceStart);
+  assert.match(rollback, /readGroupContext\s*=\s*\$false/u);
+  assert.match(runbook, /throw \("rollback failed: " \+ \(\$script:RollbackErrors -join "; "\)\)/u);
+});
+
 test("cross-group document grant CI executes real migration and concurrency coverage", () => {
   const workflow = readFileSync(ciWorkflowPath, "utf8");
   for (const testFile of [
@@ -227,6 +254,7 @@ test("cross-group document grant rollback rejects residual or lost durable facts
     caddyRunning: false,
     globalEnabled: false,
     desiredGlobalEnabled: false,
+    capabilitiesDisabled: true,
     disabledGroupCount: 3,
     activePilotGrantCount: 0,
     pendingCount: 0,
@@ -241,6 +269,7 @@ test("cross-group document grant rollback rejects residual or lost durable facts
   assertPowerShellRunbookGate(command, valid, true, crossGroupGrantAcceptancePath);
   for (const invalid of [
     { ...valid, caddyRunning: true },
+    { ...valid, capabilitiesDisabled: false },
     { ...valid, activePilotGrantCount: 1 },
     { ...valid, unresolvedDeliveryCount: 1 },
     { ...valid, mutableFingerprintAfter: "b".repeat(64) },
