@@ -324,6 +324,37 @@ function Assert-DurableMutation {
   if ((Get-RequiredProperty $Result "durable") -ne $true) { throw "$Label was not durable" }
 }
 
+function Assert-CrossGroupLiveActivation {
+  param([object]$Runtime, [object]$Context, [string[]]$KnownGroupIds)
+  if ($Runtime.persistence.storage -cne "postgres" -or $Runtime.persistence.ok -ne $true) {
+    throw "runtime policy is not durably readable"
+  }
+  if ($Runtime.globalEnabled -ne $true -or $Runtime.desiredGlobalEnabled -ne $true -or
+      $Runtime.activationRequired -ne $false) {
+    throw "runtime global activation is not live"
+  }
+  $selected = @($Context.SourceGroupId, $Context.GranteeGroupId, $Context.ControlGroupId)
+  if (@($selected | Where-Object { $Runtime.disabledGroupIds -contains $_ }).Count -ne 0) {
+    throw "selected group is disabled"
+  }
+  if (@($KnownGroupIds | Where-Object { $_ -notin $selected -and $Runtime.disabledGroupIds -notcontains $_ }).Count -ne 0) {
+    throw "non-selected known group is enabled"
+  }
+  foreach ($name in @("readGroupContext", "replyWhenMentioned", "readGroupDocuments", "retrieveKnowledgeBase")) {
+    if ($Runtime.capabilities.$name -ne $true) { throw "$name is not live" }
+  }
+  foreach ($name in @("proactiveSpeech", "generateKnowledgeDrafts", "writeKnowledgeBase", "callExternalTools")) {
+    if ($Runtime.capabilities.$name -ne $false) { throw "$name exceeds the answer-only window" }
+  }
+}
+
+function Start-CrossGroupIngressWindow {
+  param([object]$Context, [string[]]$KnownGroupIds)
+  Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "120", "--no-deps", "caddy")
+  $runtime = Invoke-CoreJson "GET" "/internal/runtime-control/status" $null
+  Assert-CrossGroupLiveActivation -Runtime $runtime -Context $Context -KnownGroupIds $KnownGroupIds
+}
+
 function Get-MetadataArtifact {
   param([string]$Path)
   $artifact = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
@@ -695,7 +726,7 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
 
     $script:FailedStep = 4
     $stageStartedAt = [DateTimeOffset]::UtcNow
-    Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "120", "caddy")
+    Start-CrossGroupIngressWindow -Context $context -KnownGroupIds $script:KnownGroupIds
     $preGrantEvidence = Get-FreshCrossGroupEvidence $context "preGrant" $stageStartedAt
     Invoke-Compose @("stop", "caddy")
     Assert-DenialStage -Context $context -Evidence $preGrantEvidence -IncludeControl $true
@@ -716,7 +747,7 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
     Assert-GrantProjection -Context $context -GrantId $grant.id -OperationKey $initialGrantKey -Version 1 -State "active" -EventType "granted"
 
     $stageStartedAt = [DateTimeOffset]::UtcNow
-    Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "120", "caddy")
+    Start-CrossGroupIngressWindow -Context $context -KnownGroupIds $script:KnownGroupIds
     $grantedEvidence = Get-FreshCrossGroupEvidence $context "granted" $stageStartedAt
     Invoke-Compose @("stop", "caddy")
     Assert-GrantedAnswerStage -Context $context -Evidence $grantedEvidence -GrantId $grant.id -GrantVersion 1
@@ -733,7 +764,7 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
     if ([int64]$grant.version -ne 2 -or $grant.state -cne "revoked") { throw "revoke failed" }
     Assert-GrantProjection -Context $context -GrantId $grant.id -OperationKey $revocationKey -Version 2 -State "revoked" -EventType "revoked"
     $stageStartedAt = [DateTimeOffset]::UtcNow
-    Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "120", "caddy")
+    Start-CrossGroupIngressWindow -Context $context -KnownGroupIds $script:KnownGroupIds
     $revokedEvidence = Get-FreshCrossGroupEvidence $context "revoked" $stageStartedAt
     Invoke-Compose @("stop", "caddy")
     Assert-DenialStage -Context $context -Evidence $revokedEvidence -IncludeControl $false
@@ -762,7 +793,7 @@ function Invoke-CrossGroupDocumentGrantAcceptance {
     }
     Assert-GrantProjection -Context $context -GrantId $grant.id -OperationKey $regrantKey -Version 3 -State "active" -EventType "granted"
     $stageStartedAt = [DateTimeOffset]::UtcNow
-    Invoke-Compose @("up", "--detach", "--wait", "--wait-timeout", "120", "caddy")
+    Start-CrossGroupIngressWindow -Context $context -KnownGroupIds $script:KnownGroupIds
     $regrantedEvidence = Get-FreshCrossGroupEvidence $context "regranted" $stageStartedAt
     Invoke-Compose @("stop", "caddy")
     Assert-GrantedAnswerStage -Context $context -Evidence $regrantedEvidence -GrantId $grant.id -GrantVersion 3

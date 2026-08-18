@@ -93,6 +93,66 @@ test("cross-group document grant source binding accepts live-checked unknown per
   assert.match(sourceBinding, /can_use_for_answering=TRUE/u);
 });
 
+test("cross-group ingress window preserves the live runtime activation", () => {
+  const valid = {
+    runtime: {
+      ok: true,
+      globalEnabled: true,
+      desiredGlobalEnabled: true,
+      activationRequired: false,
+      disabledGroupIds: ["oc_other"],
+      capabilities: {
+        readGroupContext: true,
+        replyWhenMentioned: true,
+        readGroupDocuments: true,
+        retrieveKnowledgeBase: true,
+        proactiveSpeech: false,
+        generateKnowledgeDrafts: false,
+        writeKnowledgeBase: false,
+        callExternalTools: false,
+      },
+      persistence: { storage: "postgres", ok: true },
+    },
+  };
+  const contextCommand = [
+    "$context = [pscustomobject]@{ SourceGroupId='oc_source'; GranteeGroupId='oc_grantee'; ControlGroupId='oc_control' }",
+    "$known = @('oc_source','oc_grantee','oc_control','oc_other')",
+  ];
+  const startCommand = [
+    ...contextCommand,
+    "$script:composeCalls = @()",
+    "function Invoke-Compose { param([string[]]$Arguments) $script:composeCalls += ,@($Arguments); if ($Arguments -notcontains '--no-deps') { $inputValue.runtime.globalEnabled = $false; $inputValue.runtime.activationRequired = $true } }",
+    "function Invoke-CoreJson { param([string]$Method, [string]$Path, [object]$Body) return $inputValue.runtime }",
+    "Start-CrossGroupIngressWindow -Context $context -KnownGroupIds $known",
+    "if ($script:composeCalls.Count -ne 1 -or ($script:composeCalls[0] -join ' ') -cne 'up --detach --wait --wait-timeout 120 --no-deps caddy') { throw 'ingress window did not isolate Caddy startup' }",
+  ].join("; ");
+  assertPowerShellRunbookGate(startCommand, structuredClone(valid), true, crossGroupGrantAcceptancePath);
+
+  const activationCommand = [
+    ...contextCommand,
+    "Assert-CrossGroupLiveActivation -Runtime $inputValue.runtime -Context $context -KnownGroupIds $known",
+  ].join("; ");
+  for (const invalidRuntime of [
+    { ...valid.runtime, globalEnabled: false, activationRequired: true },
+    { ...valid.runtime, desiredGlobalEnabled: false },
+    { ...valid.runtime, activationRequired: true },
+    { ...valid.runtime, disabledGroupIds: ["oc_grantee", "oc_other"] },
+    { ...valid.runtime, disabledGroupIds: [] },
+    { ...valid.runtime, capabilities: { ...valid.runtime.capabilities, readGroupContext: false } },
+    { ...valid.runtime, capabilities: { ...valid.runtime.capabilities, replyWhenMentioned: false } },
+    { ...valid.runtime, capabilities: { ...valid.runtime.capabilities, readGroupDocuments: false } },
+    { ...valid.runtime, capabilities: { ...valid.runtime.capabilities, retrieveKnowledgeBase: false } },
+    { ...valid.runtime, persistence: { storage: "postgres", ok: false } },
+  ]) {
+    assertPowerShellRunbookGate(
+      activationCommand,
+      { runtime: invalidRuntime },
+      false,
+      crossGroupGrantAcceptancePath,
+    );
+  }
+});
+
 test("cross-group document grant CI executes real migration and concurrency coverage", () => {
   const workflow = readFileSync(ciWorkflowPath, "utf8");
   for (const testFile of [
